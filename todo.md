@@ -37,8 +37,21 @@ Hosted website for the RELAY chat / voice / video application (Manus hosting).
 - [x] Add version number to footer on every deploy (RELAY · v1.0.2 visible bottom-right of the calling UI)
 
 ## Calls stuck on "Connecting…" between two real users (intermittent — reported by user on 3rd test)
-- [ ] Add free public TURN fallback (openrelay.metered.ca) on top of Google STUN so strict-NAT users can establish media without operator-run coturn
-- [ ] Surface per-peer WebRTC connection state and ICE state next to each video tile so failures are diagnosable
-- [ ] Add a "Diagnostics" overlay (toggle with `?` key) showing local/remote ICE candidates, selected candidate pair, and recent signaling messages
-- [ ] Verify in dev with two browser sessions before saving checkpoint
-- [ ] Bump version to v1.1.0 (per project preference, surface version on every deploy)
+- [x] Add free public TURN fallback (openrelay.metered.ca) on top of Google STUN so strict-NAT users can establish media without operator-run coturn
+- [x] Surface per-peer WebRTC connection state next to each video tile so failures are diagnosable (per-tile data-state attribute + colored "connecting/checking/reconnecting/failed" label)
+- [x] Add a "Diagnostics" overlay (toggle with `?` key or button bottom-left) showing per-peer ICE/conn/gather/signaling state and a rolling event log; Copy button to share logs
+- [x] Auto-trigger ICE restart on the offerer side when connection fails (rescues calls where a NAT mapping died mid-call)
+- [x] Verify in dev before saving checkpoint (manual smoke test passed; vitest 11/11)
+- [x] Bump version to v1.1.0 (visible bottom-right of the calling UI)
+
+## v1.2 — Camera UX, live filters, redesigned call bar
+- [ ] Self-preview no longer mirrors horizontally (was flipped, user reported it looked reversed)
+- [ ] Add a "Flip camera" button to swap between front (`facingMode: user`) and back (`facingMode: environment`) on devices that have both
+- [ ] Build a canvas-based local-camera processing pipeline that captures the raw `getUserMedia` track, runs filters per-frame on a hidden `<canvas>`, and republishes the canvas's `captureStream()` track as the local sender — preserves WebRTC track identity via `RTCRtpSender.replaceTrack`
+- [ ] Color filters: none / B&W / sepia / vivid / cool / warm (CSS-style adjustments applied via canvas filter property)
+- [ ] Background blur using MediaPipe Selfie Segmentation (lazy-load so non-filter users don't pay the bundle cost)
+- [ ] Face overlays using MediaPipe Face Detection: sunglasses, dog ears, hearts (lightweight image stickers anchored to detected face landmarks)
+- [ ] Snapchat-style horizontal scrollable filter picker at the bottom of the call screen (toggle on/off via button, scroll left/right to browse, tap to apply)
+- [ ] Redesign the in-call control bar — glassmorphic floating pill, frosted blur, smooth icon-based buttons; mic toggle, camera toggle, flip-camera, filters, chat, end-call
+- [ ] Verify in dev (camera flip works on a real phone if possible; filters render at ≥20 fps; remote peer receives the filtered stream)
+- [ ] Bump version to v1.2.0

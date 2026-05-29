@@ -13,6 +13,8 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { MediaPipeline, FILTERS, type FilterId, type FilterDef } from "./mediaPipeline";
+
 interface IceConfig { iceServers: Array<{ urls: string; username?: string; credential?: string }>; }
 interface PeerEntry {
   pc: RTCPeerConnection;
@@ -65,7 +67,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
   const wsOpenCbs: Array<() => void> = [];
   const me: { pin: string | null; name: string | null } = { pin: null, name: null };
   let iceConfig: IceConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
-  let localStream: MediaStream | null = null;
+  let localStream: MediaStream | null = null;        // RAW camera stream (input)
+  let processedStream: MediaStream | null = null;    // post-pipeline stream (sent to peers)
+  let pipeline: MediaPipeline | null = null;
+  let facingMode: "user" | "environment" = "user";
+  let activeFilter: FilterId = "none";
   let micOn = true, camOn = true;
   let inCall = false;
   let roomId: string | null = null;
@@ -233,13 +239,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
 
   // ---------- media ----------
-  async function ensureMedia() {
-    if (localStream) return localStream;
+  async function acquireRawStream(useFacingMode: "user" | "environment"): Promise<MediaStream> {
+    return navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        facingMode: useFacingMode,
+      },
+    });
+  }
+  async function ensureMedia(): Promise<MediaStream> {
+    if (processedStream) return processedStream;
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
-      });
+      localStream = await acquireRawStream(facingMode);
     } catch {
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -250,7 +263,97 @@ export function startRelay(root: HTMLElement): RelayHandle {
         throw e2;
       }
     }
-    return localStream;
+    if (localStream && localStream.getVideoTracks().length > 0) {
+      // Route through the canvas pipeline so filters / blur / overlays apply.
+      pipeline = new MediaPipeline({
+        onError: m => toast(m, true),
+        onLoading: l => {
+          const dot = $("filterLoading");
+          if (dot) dot.style.display = l ? "inline-block" : "none";
+        },
+      });
+      pipeline.setFacingMode(facingMode);
+      await pipeline.setInputStream(localStream);
+      processedStream = pipeline.getOutputStream();
+    } else {
+      // Audio-only fallback
+      processedStream = localStream;
+    }
+    return processedStream || localStream!;
+  }
+
+  /** Swap the camera between front and back. Re-acquires getUserMedia with
+   *  the opposite facingMode and hot-replaces the video track on every peer
+   *  via RTCRtpSender.replaceTrack — no re-negotiation needed. */
+  async function flipCamera() {
+    if (!localStream) { toast("Camera isn't active yet.", true); return; }
+    const next: "user" | "environment" = facingMode === "user" ? "environment" : "user";
+    let nu: MediaStream;
+    try {
+      nu = await acquireRawStream(next);
+    } catch {
+      toast("Couldn't switch camera — this device may only have one.", true);
+      return;
+    }
+    facingMode = next;
+    // Stop old VIDEO tracks (keep audio tracks running to avoid mic glitches)
+    if (localStream) {
+      localStream.getVideoTracks().forEach(t => t.stop());
+    }
+    if (pipeline) {
+      pipeline.setFacingMode(facingMode);
+      await pipeline.setInputStream(nu);
+    }
+    localStream = nu;
+    // Update the local self-tile's video (if shown)
+    const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
+    if (selfV) selfV.srcObject = processedStream || nu;
+    // back camera shouldn't be mirrored on self preview
+    const selfTile = $("tile-self");
+    if (selfTile) selfTile.classList.toggle("back-cam", facingMode === "environment");
+    toast(facingMode === "environment" ? "Switched to back camera" : "Switched to front camera");
+  }
+
+  /** Apply a filter; lazy-loads MediaPipe models if needed. */
+  async function applyFilter(id: FilterId) {
+    if (!pipeline) {
+      // Filter chosen before camera started — remember and apply on ensureMedia
+      activeFilter = id;
+      updateFilterStripUI();
+      return;
+    }
+    activeFilter = id;
+    await pipeline.setFilter(id);
+    updateFilterStripUI();
+  }
+  function updateFilterStripUI() {
+    const strip = $("filterStrip");
+    if (!strip) return;
+    strip.querySelectorAll(".relay-filter").forEach(el => {
+      const tile = el as HTMLElement;
+      tile.classList.toggle("active", tile.dataset.id === activeFilter);
+    });
+  }
+  function buildFilterStrip() {
+    const strip = $("filterStrip");
+    if (!strip) return;
+    strip.innerHTML = "";
+    FILTERS.forEach((f: FilterDef) => {
+      const tile = document.createElement("button");
+      tile.className = "relay-filter" + (f.id === activeFilter ? " active" : "");
+      tile.dataset.id = f.id;
+      tile.title = f.label;
+      tile.innerHTML = '<span class="emoji">' + f.emoji + '</span><span class="lbl">' + f.label + '</span>';
+      tile.onclick = () => applyFilter(f.id as FilterId);
+      strip.appendChild(tile);
+    });
+  }
+  function toggleFilterStrip() {
+    const dock = $("filterDock");
+    if (!dock) return;
+    if (!dock.dataset.built) { buildFilterStrip(); dock.dataset.built = "1"; }
+    dock.classList.toggle("open");
+    updateFilterStripUI();
   }
 
   // ---------- placing a call ----------
@@ -303,7 +406,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const pc = new RTCPeerConnection(iceConfig);
     const peer: PeerEntry = { pc, name: name || "Guest", dc: null, el: null, candQ: [], remoteSet: false, gotStream: false };
     peers[pin] = peer;
-    if (localStream) localStream.getTracks().forEach(t => pc.addTrack(t, localStream!));
+    // We send the PROCESSED stream to peers (so they see filters), but if
+    // there's no pipeline (audio-only) fall back to the raw stream.
+    const sendStream = processedStream || localStream;
+    if (sendStream) sendStream.getTracks().forEach(t => pc.addTrack(t, sendStream));
     pc.onicecandidate = e => {
       if (e.candidate) {
         sendWS({ type: "signal", to: pin, data: { candidate: e.candidate } });
@@ -481,9 +587,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const grid = $("videoGrid"); if (!grid) return;
     const t = document.createElement("div");
     t.className = "relay-tile you"; t.id = "tile-self";
+    if (facingMode === "environment") t.classList.add("back-cam");
     const v = document.createElement("video");
     v.autoplay = true; v.muted = true; v.playsInline = true;
-    if (localStream) v.srcObject = localStream;
+    // Show the PROCESSED stream in the self-tile so the user sees their filter
+    // exactly as the remote peer will see it.
+    v.srcObject = processedStream || localStream;
     t.appendChild(v);
     t.insertAdjacentHTML("beforeend", '<div class="nm">You</div>');
     grid.appendChild(t);
@@ -650,8 +759,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (timerInt) { clearInterval(timerInt); timerInt = null; }
     const log = $("chatLog"); if (log) log.innerHTML = "";
     $("chatPanel")?.classList.remove("open");
+    $("filterDock")?.classList.remove("open");
     unread = 0;
     const b = $("chatBadge"); if (b) b.style.display = "none";
+    if (pipeline) { try { pipeline.destroy(); } catch { /* */ } pipeline = null; }
     if (localStream) {
       localStream.getTracks().forEach(t => t.stop());
       localStream = null;
@@ -659,6 +770,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       $("micBtn")?.classList.remove("off");
       $("camBtn")?.classList.remove("off");
     }
+    processedStream = null;
     show("lobby"); renderRecents();
   }
 
@@ -714,6 +826,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("addBtn") as HTMLElement | null)?.addEventListener("click", openAddPad);
   ($("addGo") as HTMLElement | null)?.addEventListener("click", addToCall);
   ($("hangBtn") as HTMLElement | null)?.addEventListener("click", hangUp);
+  ($("flipCamBtn") as HTMLElement | null)?.addEventListener("click", () => { flipCamera(); });
+  ($("filterBtn") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
+  ($("filterClose") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("chatSend") as HTMLElement | null)?.addEventListener("click", sendChat);
   ($("chatField") as HTMLElement | null)?.addEventListener("keydown", onChatField as EventListener);
   ($("addInput") as HTMLElement | null)?.addEventListener("keydown", onAddInput as EventListener);

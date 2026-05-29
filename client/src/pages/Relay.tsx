@@ -89,27 +89,43 @@ const MARKUP = `
         </div>
       </div>
     </div>
+    <div id="filterDock" class="filter-dock">
+      <div class="filter-dock-head">
+        <span class="t">Filters <span id="filterLoading" class="loading-dot" style="display:none"></span></span>
+        <button id="filterClose" class="x" aria-label="Close filters">&times;</button>
+      </div>
+      <div id="filterStrip" class="filter-strip"></div>
+    </div>
+
     <div class="controls">
       <div class="addpad" id="addpad">
         <input id="addInput" maxlength="6" inputmode="numeric" placeholder="000000">
         <button id="addGo">Add to call</button>
       </div>
-      <button class="ctrl" id="micBtn" title="Mute">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/><path d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.9V21a1 1 0 1 0 2 0v-3.1A7 7 0 0 0 19 11z"/></svg>
-      </button>
-      <button class="ctrl" id="camBtn" title="Camera">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/></svg>
-      </button>
-      <button class="ctrl" id="addBtn" title="Add person">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      </button>
-      <button class="ctrl" id="chatBtn" title="Chat">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1z"/></svg>
-        <span class="badge" id="chatBadge" style="display:none">0</span>
-      </button>
-      <button class="ctrl hangup" id="hangBtn" title="Leave">
-        <svg viewBox="0 0 24 24" fill="currentColor" style="transform:rotate(135deg)"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>
-      </button>
+      <div class="ctrl-bar">
+        <button class="ctrl" id="micBtn" title="Mute">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/><path d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.9V21a1 1 0 1 0 2 0v-3.1A7 7 0 0 0 19 11z"/></svg>
+        </button>
+        <button class="ctrl" id="camBtn" title="Camera">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+        </button>
+        <button class="ctrl" id="flipCamBtn" title="Flip camera (front ↔ back)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
+        </button>
+        <button class="ctrl" id="filterBtn" title="Filters">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="7" r="4"/><circle cx="12" cy="16" r="4"/></svg>
+        </button>
+        <button class="ctrl" id="addBtn" title="Add person">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button class="ctrl" id="chatBtn" title="Chat">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1z"/></svg>
+          <span class="badge" id="chatBadge" style="display:none">0</span>
+        </button>
+        <button class="ctrl hangup" id="hangBtn" title="Leave">
+          <svg viewBox="0 0 24 24" fill="currentColor" style="transform:rotate(135deg)"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>
+        </button>
+      </div>
     </div>
   </section>
 </div>
@@ -148,7 +164,7 @@ const MARKUP = `
 
 <div class="boot" id="boot"><div class="spin"></div><div class="t">Connecting&hellip;</div></div>
 
-<div class="version-tag">RELAY &middot; v1.1.0</div>
+<div class="version-tag">RELAY &middot; v1.2.0</div>
 `;
 
 export default function Relay() {
@@ -344,16 +360,61 @@ const RELAY_CSS = `
 .relay-root .chat-input input:focus{border-color:var(--accent)}
 .relay-root .chat-input button{background:var(--grad);border:none;border-radius:11px;width:44px;color:#04201B;font-size:17px;cursor:pointer}
 
-.relay-root .controls{display:flex;align-items:center;justify-content:center;gap:14px;padding:16px;border-top:1px solid var(--border);position:relative}
-.relay-root .ctrl{width:52px;height:52px;border-radius:16px;background:var(--surface);border:1px solid var(--border);color:var(--text);
-  cursor:pointer;display:grid;place-items:center;transition:.14s;position:relative}
-.relay-root .ctrl:hover{background:var(--surface2);border-color:var(--border2)}
-.relay-root .ctrl.off{background:rgba(255,92,114,.16);border-color:rgba(255,92,114,.34);color:var(--danger)}
-.relay-root .ctrl svg{width:21px;height:21px}
-.relay-root .ctrl .badge{position:absolute;top:-5px;right:-5px;background:var(--accent);color:#04201B;font-size:10px;font-weight:700;
-  min-width:17px;height:17px;border-radius:9px;display:grid;place-items:center;padding:0 4px}
-.relay-root .ctrl.hangup{width:62px;background:var(--danger);border-color:var(--danger);color:#fff}
-.relay-root .ctrl.hangup:hover{background:#ff4259}
+/* Glassmorphic Gemini-inspired control bar */
+.relay-root .controls{display:flex;align-items:center;justify-content:center;gap:14px;padding:18px 16px 22px;position:relative;background:none;border-top:none}
+.relay-root .ctrl-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;
+  background:rgba(20,23,29,.72);border:1px solid rgba(255,255,255,.10);border-radius:24px;
+  box-shadow:0 16px 50px -18px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.06);
+  backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4)}
+.relay-root .ctrl{width:48px;height:48px;border-radius:50%;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);
+  color:var(--text);cursor:pointer;display:grid;place-items:center;transition:transform .16s cubic-bezier(0.23,1,0.32,1),background .16s,border-color .16s;position:relative}
+.relay-root .ctrl:hover{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.16);transform:translateY(-1px)}
+.relay-root .ctrl:active{transform:scale(.94)}
+.relay-root .ctrl.off{background:rgba(255,92,114,.18);border-color:rgba(255,92,114,.36);color:var(--danger)}
+.relay-root .ctrl svg{width:20px;height:20px}
+.relay-root .ctrl .badge{position:absolute;top:-4px;right:-4px;background:var(--accent);color:#04201B;font-size:10px;font-weight:700;
+  min-width:17px;height:17px;border-radius:9px;display:grid;place-items:center;padding:0 4px;border:2px solid var(--bg)}
+.relay-root .ctrl.hangup{width:66px;border-radius:26px;background:linear-gradient(135deg,#FF5C72,#FF3B5C);border-color:transparent;color:#fff;box-shadow:0 6px 22px -6px rgba(255,92,114,.6)}
+.relay-root .ctrl.hangup:hover{transform:translateY(-1px);box-shadow:0 10px 30px -8px rgba(255,92,114,.75)}
+.relay-root .ctrl.hangup:active{transform:scale(.96)}
+
+/* Self-tile camera handling: front cam mirrored locally so user feels natural,
+   back cam not mirrored, and outgoing stream NEVER mirrored. */
+.relay-root .relay-tile.you video{transform:scaleX(-1)}
+.relay-root .relay-tile.you.back-cam video{transform:none}
+
+/* Filter dock (Snapchat-style horizontal strip) */
+.relay-root .filter-dock{position:absolute;left:50%;bottom:96px;transform:translateX(-50%) translateY(12px);width:min(720px,94vw);
+  background:rgba(20,23,29,.78);border:1px solid rgba(255,255,255,.10);border-radius:22px;padding:14px 14px 16px;
+  box-shadow:0 24px 60px -22px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.05);
+  backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);
+  display:none;z-index:35}
+.relay-root .filter-dock.open{display:block;animation:relayFade .22s cubic-bezier(0.23,1,0.32,1) both}
+.relay-root .filter-dock-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:0 4px}
+.relay-root .filter-dock-head .t{font-family:"Bricolage Grotesque";font-weight:600;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px}
+.relay-root .filter-dock-head .x{background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1;padding:0 4px}
+.relay-root .filter-dock-head .x:hover{color:var(--text)}
+.relay-root .loading-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:relayPulse2 1.2s ease-in-out infinite}
+@keyframes relayPulse2{0%,100%{opacity:.4;transform:scale(.8)}50%{opacity:1;transform:scale(1.1)}}
+.relay-root .filter-strip{display:flex;gap:10px;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:var(--border2) transparent;padding:4px 2px 6px;scroll-snap-type:x mandatory}
+.relay-root .filter-strip::-webkit-scrollbar{height:6px}
+.relay-root .filter-strip::-webkit-scrollbar-track{background:transparent}
+.relay-root .filter-strip::-webkit-scrollbar-thumb{background:var(--border2);border-radius:99px}
+.relay-root .relay-filter{flex:0 0 auto;min-width:78px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);
+  border-radius:14px;padding:12px 6px 9px;color:var(--text);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;
+  font-family:inherit;transition:transform .15s cubic-bezier(0.23,1,0.32,1),background .15s,border-color .15s;scroll-snap-align:center}
+.relay-root .relay-filter:hover{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.14);transform:translateY(-2px)}
+.relay-root .relay-filter:active{transform:scale(.96)}
+.relay-root .relay-filter.active{background:linear-gradient(135deg,rgba(63,224,197,.22),rgba(110,231,255,.22));border-color:var(--accent);box-shadow:0 0 0 2px rgba(63,224,197,.18)}
+.relay-root .relay-filter .emoji{font-size:26px;line-height:1}
+.relay-root .relay-filter .lbl{font-size:11px;color:var(--muted);letter-spacing:.04em;font-weight:500}
+.relay-root .relay-filter.active .lbl{color:var(--accent)}
+@media (max-width:680px){
+  .relay-root .filter-dock{bottom:108px;width:96vw}
+  .relay-root .ctrl-bar{gap:8px;padding:8px 10px}
+  .relay-root .ctrl{width:44px;height:44px}
+  .relay-root .ctrl.hangup{width:58px}
+}
 
 .relay-root .relay-toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(20px);z-index:80;
   background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:13px 20px;border-radius:13px;
