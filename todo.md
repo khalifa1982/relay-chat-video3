@@ -28,4 +28,7 @@ Hosted website for the RELAY chat / voice / video application (Manus hosting).
 ## Quality & delivery
 - [x] Unit tests for the signaling logic (vitest, 9/9 passing)
 - [x] Verify `webdev_check_status` passes (LSP / TypeScript clean, dev server running)
-- [ ] Save checkpoint and provide preview link to user
+- [x] Save checkpoint and provide preview link to user
+
+## Bugs
+- [x] Clicking "Launch RELAY" shows a "Redirecting to /app/" plain text page instead of loading the calling UI in production (fixed: explicit GET /app and /app/ handlers registered ahead of express.static; redirect disabled on static middleware)

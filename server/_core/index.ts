@@ -32,12 +32,21 @@ function registerRelayApp(app: express.Express) {
     return;
   }
 
-  // /app/app.js, /app/static/whatever -> serve from relay dir.
-  app.use("/app", express.static(relayDir, { index: false }));
-  // /app and /app/ -> the calling UI.
-  app.get(["/app", "/app/"], (_req, res) => {
-    res.sendFile(path.join(relayDir, "index.html"));
-  });
+  // IMPORTANT: register the explicit /app and /app/ handlers BEFORE the
+  // static middleware. express.static will otherwise issue a 301 redirect
+  // from /app -> /app/ that some browsers / proxies render as the literal
+  // "Redirecting to /app/" page instead of following it.
+  const indexFile = path.join(relayDir, "index.html");
+  const sendIndex: express.RequestHandler = (_req, res) => res.sendFile(indexFile);
+  app.get("/app", sendIndex);
+  app.get("/app/", sendIndex);
+  // Static assets (app.js, etc). `redirect: false` stops the trailing-slash
+  // redirect for the directory itself, and `index: false` stops auto-serving
+  // index.html from a directory listing—we already handle both cases above.
+  app.use(
+    "/app",
+    express.static(relayDir, { index: false, redirect: false })
+  );
 }
 
 function isPortAvailable(port: number): Promise<boolean> {
