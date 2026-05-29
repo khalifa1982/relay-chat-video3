@@ -6,6 +6,8 @@
    ============================================================ */
 
 let ws = null, reconnectT = null, registeredOnce = false;
+var cid = (function(){ try { var a = new Uint8Array(16); (window.crypto||window.msCrypto).getRandomValues(a); return Array.from(a).map(function(b){return ('0'+b.toString(16)).slice(-2);}).join(''); } catch(_) { return String(Date.now())+Math.random().toString(16).slice(2); } })();
+var wsReady = false, wsOpenCbs = [];
 let me = { pin:null, name:null };
 let iceConfig = { iceServers:[ { urls:"stun:stun.l.google.com:19302" } ] };
 let localStream = null, micOn = true, camOn = true;
@@ -27,20 +29,52 @@ function fmtPin(p){ return String(p).replace(/(\d{3})(\d{3})/,"$1 $2"); }
 function nameOf(pin){ const p=peers[pin]; return p ? p.name : pin; }
 
 /* ============================================================
-   WEBSOCKET
+   TRANSPORT (Server-Sent Events + HTTP POST)
+
+   The production gateway in front of this app (Cloudflare→Cloud Run)
+   doesn't forward raw WebSocket upgrades on arbitrary paths, so we use
+   a pair of plain HTTP endpoints that behave like a WebSocket:
+
+     server -> client : GET /api/relay/stream?cid=<id>   (SSE)
+     client -> server : POST /api/relay/send             (JSON body)
    ============================================================ */
-function wsUrl(){ const proto = location.protocol==="https:" ? "wss" : "ws"; return proto + "://" + location.host + "/api/relay"; }
 function connectWS(){
-  try { ws = new WebSocket(wsUrl()); } catch(e){ toast("Can't reach the server.",true); return; }
-  ws.onopen = ()=>{
-    if(wantName){ sendWS({ type:"register", name:wantName, pin:me.pin || undefined }); }
+  try {
+    if (ws) { try { ws.close(); } catch(_){} }
+    ws = new EventSource("/api/relay/stream?cid=" + encodeURIComponent(cid));
+  } catch(e){ toast("Can't reach the server.",true); return; }
+  ws.onopen = function(){ /* SSE 'open' = TCP connected; we still wait for the `ready` event */ };
+  ws.onmessage = function(e){
+    var m; try { m = JSON.parse(e.data); } catch(_){ return; }
+    if (m && m.type === "ready") {
+      wsReady = true;
+      var cbs = wsOpenCbs.splice(0); cbs.forEach(function(fn){ try{ fn(); }catch(_){} });
+      if (wantName) { sendWS({ type:"register", name:wantName, pin: me.pin || undefined }); }
+      return;
+    }
+    handle(m);
   };
-  ws.onmessage = e=>{ let m; try{ m=JSON.parse(e.data); }catch(_){ return; } handle(m); };
-  ws.onclose = ()=>{ scheduleReconnect(); };
-  ws.onerror = ()=>{};
+  ws.onerror = function(){ wsReady = false; scheduleReconnect(); };
 }
-function scheduleReconnect(){ if(reconnectT) return; reconnectT=setTimeout(()=>{ reconnectT=null; connectWS(); }, 1500); }
-function sendWS(obj){ try{ if(ws && ws.readyState===1) ws.send(JSON.stringify(obj)); }catch(e){} }
+function scheduleReconnect(){
+  if (reconnectT) return;
+  reconnectT = setTimeout(function(){
+    reconnectT = null;
+    try { if (ws) ws.close(); } catch(_){}
+    connectWS();
+  }, 1500);
+}
+function sendWS(obj){
+  try {
+    var body = JSON.stringify({ cid: cid, message: obj });
+    fetch("/api/relay/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body,
+      keepalive: true
+    }).catch(function(){ /* drop — SSE error handler will reconnect */ });
+  } catch(e){}
+}
 
 function handle(m){
   switch(m.type){
@@ -374,7 +408,17 @@ document.addEventListener("keydown",e=>{
   else if(e.key==="Backspace"){ dialed=dialed.slice(0,-1); refreshDisplay(); }
   else if(e.key==="Enter" && /^\d{6}$/.test(dialed)) startCall();
 });
-window.addEventListener("beforeunload",()=>{ sendWS({ type:"leave" }); });
+window.addEventListener("beforeunload",()=>{
+  try {
+    var body = JSON.stringify({ cid: cid, message: { type: "leave" } });
+    // sendBeacon survives the page unload; falls back to fetch keepalive
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon("/api/relay/send", new Blob([body], { type: "application/json" }));
+    } else {
+      sendWS({ type: "leave" });
+    }
+  } catch(_){}
+});
 
 /* boot */
 $("boot").classList.add("hidden");

@@ -1,19 +1,26 @@
 /* ============================================================
-   RELAY — WebSocket signaling for self-hosted browser calling.
+   RELAY — HTTP-based signaling for self-hosted browser calling.
 
    Adapted from the standalone relay-server.zip the user supplied.
-   - Mounts on the existing HTTP server under path `/api/relay`
-     (so the platform gateway routes WebSocket upgrades to us).
-   - Server is authoritative about room membership (glare-free
-     mesh: only the newcomer sends WebRTC offers).
-   - Issues short-lived TURN credentials via HMAC-SHA1 when
-     `TURN_SECRET` and `TURN_HOST` are set; otherwise falls back
-     to public STUN servers.
+   The original ships used a raw WebSocket transport, but the Manus
+   production gateway (Cloudflare → Cloud Run) does not forward raw
+   WebSocket upgrades on arbitrary paths. We therefore use a pair of
+   plain HTTP endpoints that look like a WebSocket to the client:
+
+     GET  /api/relay/stream?cid=<id>   - SSE channel (server -> client)
+     POST /api/relay/send              - JSON messages (client -> server)
+                                         body: { cid, message }
+
+   Semantics are identical to the original WebSocket protocol:
+   register, invite, accept/reject, signal relay, leave, room/peer
+   events, plus authoritative room membership for a glare-free mesh.
+
+   STUN is enabled by default; TURN credentials are issued via the
+   coturn `use-auth-secret` flow when TURN_SECRET + TURN_HOST are set.
    ============================================================ */
 
 import crypto from "crypto";
-import type { Server as HttpServer, IncomingMessage } from "http";
-import { WebSocket, WebSocketServer } from "ws";
+import type { Request, Response, Express } from "express";
 
 const TURN_SECRET = process.env.TURN_SECRET || "";
 const TURN_HOST = process.env.TURN_HOST || "";
@@ -25,29 +32,41 @@ interface IceServer {
   credential?: string;
 }
 
+/**
+ * An open SSE channel that mimics a WebSocket's `send()` method.
+ * We keep this abstraction so the message-dispatch logic doesn't care
+ * about the underlying transport (which makes the unit tests easier).
+ */
+export interface RelaySocket {
+  send: (obj: unknown) => void;
+  close: () => void;
+}
+
 export interface RelayClient {
-  ws: WebSocket;
+  socket: RelaySocket;
   name: string;
   roomId: string | null;
 }
 
-interface RelayWebSocket extends WebSocket {
-  pin: string | null;
-  isAlive: boolean;
+export interface RelayConnection {
+  cid: string;          // opaque per-tab id chosen by the client
+  socket: RelaySocket;
+  pin: string | null;   // assigned 6-digit number after `register`
 }
 
 export interface RelayRegistry {
-  clients: Map<string, RelayClient>;
-  rooms: Map<string, Set<string>>;
+  clients: Map<string, RelayClient>;          // pin   -> client
+  rooms: Map<string, Set<string>>;            // rid   -> set<pin>
+  connections: Map<string, RelayConnection>;  // cid   -> connection
 }
 
 export function createRegistry(): RelayRegistry {
-  return { clients: new Map(), rooms: new Map() };
+  return { clients: new Map(), rooms: new Map(), connections: new Map() };
 }
 
-function safeSend(ws: WebSocket, obj: unknown) {
+function safeSend(socket: RelaySocket, obj: unknown) {
   try {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    socket.send(obj);
   } catch {
     /* ignore broken pipe */
   }
@@ -81,7 +100,8 @@ export function iceServers(userId: string): IceServer[] {
     { urls: "stun:stun1.l.google.com:19302" },
   ];
   if (TURN_SECRET && TURN_HOST) {
-    const username = Math.floor(Date.now() / 1000) + TURN_TTL + ":" + userId;
+    const username =
+      Math.floor(Date.now() / 1000) + TURN_TTL + ":" + userId;
     const credential = crypto
       .createHmac("sha1", TURN_SECRET)
       .update(username)
@@ -101,7 +121,7 @@ export function leaveRoom(reg: RelayRegistry, pin: string) {
     room.delete(pin);
     room.forEach(p => {
       const o = reg.clients.get(p);
-      if (o) safeSend(o.ws, { type: "peer-left", pin });
+      if (o) safeSend(o.socket, { type: "peer-left", pin });
     });
     if (room.size === 0) reg.rooms.delete(c.roomId);
   }
@@ -117,16 +137,21 @@ export interface RelayMessage {
   data?: unknown;
 }
 
+/**
+ * Protocol logic. Kept as a pure function over (registry, socket-state,
+ * message) so it's straightforward to unit-test without spinning up an
+ * HTTP server.
+ */
 export function handleMessage(
   reg: RelayRegistry,
-  ws: RelayWebSocket,
+  conn: { socket: RelaySocket; pin: string | null; setPin: (p: string) => void },
   msg: RelayMessage
 ) {
   const type = msg && msg.type;
 
   // register: assign (or reuse requested) 6-digit number.
   if (type === "register") {
-    if (ws.pin) return;
+    if (conn.pin) return;
     const name = String(msg.name || "Guest").slice(0, 24);
     let pin: string;
     if (
@@ -138,21 +163,21 @@ export function handleMessage(
     } else {
       pin = genPin(reg);
     }
-    ws.pin = pin;
-    reg.clients.set(pin, { ws, name, roomId: null });
-    safeSend(ws, { type: "registered", pin, name, iceServers: iceServers(pin) });
+    conn.setPin(pin);
+    reg.clients.set(pin, { socket: conn.socket, name, roomId: null });
+    safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin) });
     return;
   }
 
-  if (!ws.pin) return;
-  const self = reg.clients.get(ws.pin);
+  if (!conn.pin) return;
+  const self = reg.clients.get(conn.pin);
   if (!self) return;
 
   switch (type) {
     case "invite": {
       const to = String(msg.to || "");
-      if (to === ws.pin) {
-        safeSend(ws, {
+      if (to === conn.pin) {
+        safeSend(conn.socket, {
           type: "error",
           code: "self",
           message: "That's your own number.",
@@ -161,7 +186,7 @@ export function handleMessage(
       }
       const target = reg.clients.get(to);
       if (!target) {
-        safeSend(ws, {
+        safeSend(conn.socket, {
           type: "error",
           code: "offline",
           message: "That number isn't online.",
@@ -169,27 +194,27 @@ export function handleMessage(
         break;
       }
       if (target.roomId && target.roomId !== self.roomId) {
-        safeSend(ws, { type: "busy", from: to });
+        safeSend(conn.socket, { type: "busy", from: to });
         break;
       }
       if (!self.roomId) {
         const rid = newRoomId();
-        reg.rooms.set(rid, new Set([ws.pin]));
+        reg.rooms.set(rid, new Set([conn.pin]));
         self.roomId = rid;
-        safeSend(ws, { type: "room", roomId: rid });
+        safeSend(conn.socket, { type: "room", roomId: rid });
       }
       const room = reg.rooms.get(self.roomId!);
       if (room && room.size >= 6) {
-        safeSend(ws, {
+        safeSend(conn.socket, {
           type: "error",
           code: "full",
           message: "Call is full (6 max).",
         });
         break;
       }
-      safeSend(target.ws, {
+      safeSend(target.socket, {
         type: "ring",
-        from: ws.pin,
+        from: conn.pin,
         fromName: self.name,
         roomId: self.roomId,
       });
@@ -200,7 +225,7 @@ export function handleMessage(
       const roomId = String(msg.roomId || "");
       const room = reg.rooms.get(roomId);
       if (!room) {
-        safeSend(ws, {
+        safeSend(conn.socket, {
           type: "error",
           code: "gone",
           message: "That call has ended.",
@@ -208,7 +233,7 @@ export function handleMessage(
         break;
       }
       if (room.size >= 6) {
-        safeSend(ws, {
+        safeSend(conn.socket, {
           type: "error",
           code: "full",
           message: "Call is full (6 max).",
@@ -216,38 +241,47 @@ export function handleMessage(
         break;
       }
       const members = Array.from(room)
-        .filter(p => p !== ws.pin)
+        .filter(p => p !== conn.pin)
         .map(p => ({
           pin: p,
           name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest",
         }));
-      room.add(ws.pin);
+      room.add(conn.pin);
       self.roomId = roomId;
       // Newcomer learns existing members and will offer to each (only one
       // side ever offers, which avoids SDP glare in the mesh).
-      safeSend(ws, { type: "joined", roomId, members });
+      safeSend(conn.socket, { type: "joined", roomId, members });
       members.forEach(m => {
         const o = reg.clients.get(m.pin);
-        if (o) safeSend(o.ws, { type: "peer-joined", pin: ws.pin, name: self.name });
+        if (o)
+          safeSend(o.socket, {
+            type: "peer-joined",
+            pin: conn.pin,
+            name: self.name,
+          });
       });
       break;
     }
 
     case "reject": {
       const target = reg.clients.get(String(msg.to || ""));
-      if (target) safeSend(target.ws, { type: "rejected", from: ws.pin });
+      if (target) safeSend(target.socket, { type: "rejected", from: conn.pin });
       break;
     }
 
     case "signal": {
       const target = reg.clients.get(String(msg.to || ""));
       if (target)
-        safeSend(target.ws, { type: "signal", from: ws.pin, data: msg.data });
+        safeSend(target.socket, {
+          type: "signal",
+          from: conn.pin,
+          data: msg.data,
+        });
       break;
     }
 
     case "leave": {
-      leaveRoom(reg, ws.pin);
+      leaveRoom(reg, conn.pin);
       break;
     }
 
@@ -256,74 +290,129 @@ export function handleMessage(
   }
 }
 
-export function attachRelay(httpServer: HttpServer): RelayRegistry {
+/**
+ * Mount the HTTP signaling endpoints on an Express app.
+ *
+ * Returns the underlying registry so tests can poke at internal state.
+ */
+export function attachRelay(app: Express): RelayRegistry {
   const reg = createRegistry();
-  // `noServer: true` lets us share the HTTP listener with Express and
-  // dispatch only WebSocket upgrades whose URL begins with `/api/relay`.
-  const wss = new WebSocketServer({ noServer: true });
 
-  httpServer.on("upgrade", (req: IncomingMessage, socket, head) => {
-    const url = req.url || "";
-    if (!url.startsWith("/api/relay")) return; // let Vite HMR + others handle it
-    wss.handleUpgrade(req, socket, head, ws => {
-      wss.emit("connection", ws, req);
-    });
-  });
-
-  wss.on("connection", (rawWs: WebSocket) => {
-    const ws = rawWs as RelayWebSocket;
-    ws.pin = null;
-    ws.isAlive = true;
-    ws.on("pong", () => {
-      ws.isAlive = true;
-    });
-
-    ws.on("message", raw => {
-      let msg: RelayMessage;
+  // SSE channel: long-lived response that streams JSON-encoded server -> client
+  // messages. Each event line is `data: <json>\n\n`.
+  app.get("/api/relay/stream", (req: Request, res: Response) => {
+    const cid = String(req.query.cid || "");
+    if (!cid) {
+      res.status(400).json({ error: "missing cid" });
+      return;
+    }
+    // If the same cid reconnects (e.g. tab refresh), close the old channel.
+    const prev = reg.connections.get(cid);
+    if (prev) {
       try {
-        msg = JSON.parse(raw.toString());
-      } catch {
-        return;
-      }
-      handleMessage(reg, ws, msg);
-    });
-
-    ws.on("close", () => {
-      if (ws.pin) {
-        leaveRoom(reg, ws.pin);
-        reg.clients.delete(ws.pin);
-      }
-    });
-
-    ws.on("error", () => {
-      /* swallow socket errors; close handler still fires */
-    });
-  });
-
-  // Heartbeat — drop dead sockets after a missed ping/pong cycle.
-  const hb = setInterval(() => {
-    wss.clients.forEach(rawWs => {
-      const ws = rawWs as RelayWebSocket;
-      if (ws.isAlive === false) {
-        try {
-          ws.terminate();
-        } catch {
-          /* noop */
-        }
-        return;
-      }
-      ws.isAlive = false;
-      try {
-        ws.ping();
+        prev.socket.close();
       } catch {
         /* noop */
       }
-    });
-  }, 30000);
-  wss.on("close", () => clearInterval(hb));
+    }
+
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no"); // disable proxy buffering
+    res.flushHeaders?.();
+
+    let closed = false;
+    const socket: RelaySocket = {
+      send: (obj: unknown) => {
+        if (closed) return;
+        try {
+          res.write("data: " + JSON.stringify(obj) + "\n\n");
+        } catch {
+          /* noop */
+        }
+      },
+      close: () => {
+        if (closed) return;
+        closed = true;
+        try {
+          res.end();
+        } catch {
+          /* noop */
+        }
+      },
+    };
+
+    const conn: RelayConnection = { cid, socket, pin: null };
+    reg.connections.set(cid, conn);
+
+    // Send a ready event so the client can flip state.
+    safeSend(socket, { type: "ready" });
+
+    // Keep-alive heartbeat (comment line every 25s; passes through Cloudflare,
+    // Cloud Run, and most proxies without timing out).
+    const hb = setInterval(() => {
+      if (closed) return;
+      try {
+        res.write(": ping\n\n");
+      } catch {
+        /* noop */
+      }
+    }, 25_000);
+
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(hb);
+      const existing = reg.connections.get(cid);
+      if (existing === conn) reg.connections.delete(cid);
+      if (conn.pin) {
+        leaveRoom(reg, conn.pin);
+        reg.clients.delete(conn.pin);
+      }
+      try {
+        res.end();
+      } catch {
+        /* noop */
+      }
+    };
+
+    req.on("close", cleanup);
+    req.on("aborted", cleanup);
+    res.on("close", cleanup);
+  });
+
+  // Inbound messages from the client.
+  app.post("/api/relay/send", (req: Request, res: Response) => {
+    const body = req.body || {};
+    const cid = String(body.cid || "");
+    const message = body.message;
+    if (!cid || typeof message !== "object" || message === null) {
+      res.status(400).json({ error: "bad request" });
+      return;
+    }
+    const conn = reg.connections.get(cid);
+    if (!conn) {
+      res.status(404).json({ error: "channel not found" });
+      return;
+    }
+    handleMessage(
+      reg,
+      {
+        socket: conn.socket,
+        pin: conn.pin,
+        setPin: (p: string) => {
+          conn.pin = p;
+        },
+      },
+      message as RelayMessage
+    );
+    res.json({ ok: true });
+  });
 
   console.log(
-    "[relay] signaling ready on /api/relay — TURN " +
+    "[relay] HTTP signaling ready on /api/relay/{stream,send} — TURN " +
       (TURN_SECRET && TURN_HOST
         ? "enabled via " + TURN_HOST
         : "NOT configured (STUN only — works on most networks)")

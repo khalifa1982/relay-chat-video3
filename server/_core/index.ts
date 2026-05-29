@@ -76,8 +76,10 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
-  // RELAY signaling — WebSocket upgrades on /api/relay are dispatched here.
-  attachRelay(server);
+  // RELAY signaling — SSE + POST on /api/relay/{stream,send}. We use
+  // plain HTTP because the production gateway downgrades raw WebSocket
+  // upgrades on arbitrary paths.
+  attachRelay(app);
   // Standalone calling UI (original index.html + app.js) mounted at /app.
   registerRelayApp(app);
   // tRPC API

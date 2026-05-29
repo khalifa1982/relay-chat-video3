@@ -1,44 +1,47 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { EventEmitter } from "events";
 import {
   createRegistry,
   handleMessage,
   leaveRoom,
   iceServers,
   type RelayRegistry,
+  type RelaySocket,
 } from "./relay";
 
 /**
- * Minimal stub that mimics the parts of `ws.WebSocket` used by `relay.ts`:
- *   - `readyState === 1` so `safeSend` proceeds
- *   - `send(json)` captures the outbound message
- *   - extra fields (`pin`, `isAlive`) match the augmented type
+ * Minimal stub that mimics the `RelaySocket` shape (`send(obj)` + `close()`).
+ * The relay's protocol layer is transport-agnostic, so the test doubles can
+ * just collect outbound messages in an array.
  */
 type Sent = unknown;
-class FakeSocket extends EventEmitter {
-  readyState = 1;
-  pin: string | null = null;
-  isAlive = true;
+class FakeConn {
   outbox: Sent[] = [];
-  send(payload: string) {
-    try {
-      this.outbox.push(JSON.parse(payload));
-    } catch {
-      this.outbox.push(payload);
-    }
+  pin: string | null = null;
+  socket: RelaySocket;
+  constructor() {
+    this.socket = {
+      send: (obj: unknown) => {
+        this.outbox.push(obj);
+      },
+      close: () => {},
+    };
   }
-  ping() {}
-  terminate() {}
+  setPin = (p: string) => {
+    this.pin = p;
+  };
   last(): Sent | undefined {
     return this.outbox[this.outbox.length - 1];
+  }
+  asConn() {
+    return { socket: this.socket, pin: this.pin, setPin: this.setPin };
   }
 }
 
 function register(reg: RelayRegistry, name: string, requestedPin?: string) {
-  const ws = new FakeSocket();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  handleMessage(reg, ws as any, { type: "register", name, pin: requestedPin });
-  return ws;
+  const c = new FakeConn();
+  handleMessage(reg, c.asConn(), { type: "register", name, pin: requestedPin });
+  // `setPin` mutates the conn; pull it back out so subsequent calls see it.
+  return c;
 }
 
 describe("relay signaling", () => {
@@ -51,41 +54,39 @@ describe("relay signaling", () => {
   it("issues STUN-only ICE servers when TURN env vars are unset", () => {
     const list = iceServers("user-1");
     expect(list.length).toBeGreaterThanOrEqual(1);
-    // No TURN entry without TURN_HOST + TURN_SECRET.
-    expect(list.every(s => !s.urls.startsWith("turn:") && !s.urls.startsWith("turns:"))).toBe(
-      true
-    );
+    expect(
+      list.every(s => !s.urls.startsWith("turn:") && !s.urls.startsWith("turns:"))
+    ).toBe(true);
   });
 
   it("registers a client and assigns a 6-digit pin", () => {
-    const ws = register(reg, "Alice");
-    const last = ws.last() as { type: string; pin: string; name: string };
+    const c = register(reg, "Alice");
+    const last = c.last() as { type: string; pin: string; name: string };
     expect(last.type).toBe("registered");
     expect(last.name).toBe("Alice");
     expect(last.pin).toMatch(/^\d{6}$/);
     expect(reg.clients.has(last.pin)).toBe(true);
+    expect(c.pin).toBe(last.pin);
   });
 
-  it("ignores a duplicate register for the same socket", () => {
-    const ws = register(reg, "Alice");
-    const firstPin = (ws.last() as { pin: string }).pin;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    handleMessage(reg, ws as any, { type: "register", name: "Alice2" });
-    // Still only the original "registered" message (no second one).
-    const registers = ws.outbox.filter(
-      (m): m is { type: string } => typeof m === "object" && m !== null && (m as { type: string }).type === "registered"
+  it("ignores a duplicate register for the same connection", () => {
+    const c = register(reg, "Alice");
+    const firstPin = (c.last() as { pin: string }).pin;
+    handleMessage(reg, c.asConn(), { type: "register", name: "Alice2" });
+    const registers = c.outbox.filter(
+      (m): m is { type: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "registered"
     );
     expect(registers).toHaveLength(1);
     expect(reg.clients.get(firstPin)?.name).toBe("Alice");
   });
 
   it("rejects calling your own number", () => {
-    const ws = register(reg, "Alice");
-    const pin = (ws.last() as { pin: string }).pin;
-    ws.outbox.length = 0;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    handleMessage(reg, ws as any, { type: "invite", to: pin });
-    const last = ws.last() as { type: string; code: string };
+    const c = register(reg, "Alice");
+    const pin = (c.last() as { pin: string }).pin;
+    c.outbox.length = 0;
+    handleMessage(reg, c.asConn(), { type: "invite", to: pin });
+    const last = c.last() as { type: string; code: string };
     expect(last.type).toBe("error");
     expect(last.code).toBe("self");
   });
@@ -97,16 +98,13 @@ describe("relay signaling", () => {
     const bPin = (b.last() as { pin: string }).pin;
     a.outbox.length = 0;
     b.outbox.length = 0;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    handleMessage(reg, a as any, { type: "invite", to: bPin });
+    handleMessage(reg, a.asConn(), { type: "invite", to: bPin });
 
-    // Caller learns its room id.
     const room = a.outbox.find((m): m is { type: string; roomId: string } =>
       typeof m === "object" && m !== null && (m as { type: string }).type === "room"
     );
     expect(room?.roomId).toBeTruthy();
 
-    // Callee receives a ring.
     const ring = b.outbox.find((m): m is { type: string; from: string; roomId: string } =>
       typeof m === "object" && m !== null && (m as { type: string }).type === "ring"
     );
@@ -119,8 +117,7 @@ describe("relay signaling", () => {
     const b = register(reg, "Bob");
     const aPin = (a.last() as { pin: string }).pin;
     const bPin = (b.last() as { pin: string }).pin;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    handleMessage(reg, a as any, { type: "invite", to: bPin });
+    handleMessage(reg, a.asConn(), { type: "invite", to: bPin });
     const roomId = (a.outbox.find(
       (m): m is { type: string; roomId: string } =>
         typeof m === "object" && m !== null && (m as { type: string }).type === "room"
@@ -128,10 +125,13 @@ describe("relay signaling", () => {
 
     a.outbox.length = 0;
     b.outbox.length = 0;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    handleMessage(reg, b as any, { type: "accept", roomId });
+    handleMessage(reg, b.asConn(), { type: "accept", roomId });
 
-    const joined = b.last() as { type: string; roomId: string; members: { pin: string; name: string }[] };
+    const joined = b.last() as {
+      type: string;
+      roomId: string;
+      members: { pin: string; name: string }[];
+    };
     expect(joined.type).toBe("joined");
     expect(joined.roomId).toBe(roomId);
     expect(joined.members).toEqual([{ pin: aPin, name: "Alice" }]);
@@ -149,8 +149,7 @@ describe("relay signaling", () => {
     const bPin = (b.last() as { pin: string }).pin;
     a.outbox.length = b.outbox.length = c.outbox.length = 0;
     const sdp = { type: "offer", sdp: "v=0..." };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    handleMessage(reg, a as any, { type: "signal", to: bPin, data: { sdp } });
+    handleMessage(reg, a.asConn(), { type: "signal", to: bPin, data: { sdp } });
     expect(b.outbox).toHaveLength(1);
     expect(c.outbox).toHaveLength(0);
     const relayed = b.last() as { type: string; data: { sdp: { type: string } } };
@@ -165,24 +164,18 @@ describe("relay signaling", () => {
     const bPin = (b.last() as { pin: string }).pin;
     const cPin = (c.last() as { pin: string }).pin;
 
-    // A invites B, B accepts → A & B share a room.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    handleMessage(reg, a as any, { type: "invite", to: bPin });
+    handleMessage(reg, a.asConn(), { type: "invite", to: bPin });
     const roomId = (a.outbox.find(
       (m): m is { type: string; roomId: string } =>
         typeof m === "object" && m !== null && (m as { type: string }).type === "room"
     ) as { roomId: string }).roomId;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    handleMessage(reg, b as any, { type: "accept", roomId });
+    handleMessage(reg, b.asConn(), { type: "accept", roomId });
 
-    // C now invites B → should get busy.
     c.outbox.length = 0;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    handleMessage(reg, c as any, { type: "invite", to: bPin });
+    handleMessage(reg, c.asConn(), { type: "invite", to: bPin });
     const last = c.last() as { type: string; from: string };
     expect(last.type).toBe("busy");
     expect(last.from).toBe(bPin);
-    // And C still has their own pin available.
     expect(reg.clients.get(cPin)).toBeTruthy();
   });
 
@@ -191,21 +184,18 @@ describe("relay signaling", () => {
     const b = register(reg, "Bob");
     const aPin = (a.last() as { pin: string }).pin;
     const bPin = (b.last() as { pin: string }).pin;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    handleMessage(reg, a as any, { type: "invite", to: bPin });
+    handleMessage(reg, a.asConn(), { type: "invite", to: bPin });
     const roomId = (a.outbox.find(
       (m): m is { type: string; roomId: string } =>
         typeof m === "object" && m !== null && (m as { type: string }).type === "room"
     ) as { roomId: string }).roomId;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    handleMessage(reg, b as any, { type: "accept", roomId });
+    handleMessage(reg, b.asConn(), { type: "accept", roomId });
 
     a.outbox.length = 0;
     leaveRoom(reg, bPin);
     const left = a.last() as { type: string; pin: string };
     expect(left.type).toBe("peer-left");
     expect(left.pin).toBe(bPin);
-    // Room should still exist (Alice is in it) but with only A.
     expect(reg.rooms.get(roomId)?.size).toBe(1);
     expect(reg.rooms.get(roomId)?.has(aPin)).toBe(true);
   });
