@@ -1,7 +1,5 @@
 import "dotenv/config";
 import express from "express";
-import fs from "fs";
-import path from "path";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
@@ -12,42 +10,12 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { attachRelay } from "../relay";
 
-/**
- * Resolve the standalone RELAY web app. In dev it lives in `client/public/relay`
- * (Vite serves /public verbatim from the site root, but for the `/app` and
- * `/app/*` routes we want to deliver the same index.html on both, so we register
- * an Express route ahead of Vite/static).
- */
-function registerRelayApp(app: express.Express) {
-  // In dev, source from client/public; in prod the build copies it into
-  // dist/public/relay (Vite handles the publicDir copy automatically).
-  const candidates = [
-    path.resolve(import.meta.dirname, "../../client/public/relay"),
-    path.resolve(import.meta.dirname, "../..", "dist", "public", "relay"),
-    path.resolve(import.meta.dirname, "public", "relay"),
-  ];
-  const relayDir = candidates.find(p => fs.existsSync(p));
-  if (!relayDir) {
-    console.warn("[relay] could not locate the standalone web app directory");
-    return;
-  }
-
-  // IMPORTANT: register the explicit /app and /app/ handlers BEFORE the
-  // static middleware. express.static will otherwise issue a 301 redirect
-  // from /app -> /app/ that some browsers / proxies render as the literal
-  // "Redirecting to /app/" page instead of following it.
-  const indexFile = path.join(relayDir, "index.html");
-  const sendIndex: express.RequestHandler = (_req, res) => res.sendFile(indexFile);
-  app.get("/app", sendIndex);
-  app.get("/app/", sendIndex);
-  // Static assets (app.js, etc). `redirect: false` stops the trailing-slash
-  // redirect for the directory itself, and `index: false` stops auto-serving
-  // index.html from a directory listing—we already handle both cases above.
-  app.use(
-    "/app",
-    express.static(relayDir, { index: false, redirect: false })
-  );
-}
+// The RELAY calling UI is rendered by the React SPA at /app (see
+// `client/src/pages/Relay.tsx`). We deliberately do NOT serve a
+// standalone HTML/JS bundle from Express here — the Manus production
+// runtime injects helper scripts that interfere with non-React pages,
+// so the calling UI lives inside the same React tree as the rest of
+// the app where the platform's tooling leaves it untouched.
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -80,8 +48,6 @@ async function startServer() {
   // plain HTTP because the production gateway downgrades raw WebSocket
   // upgrades on arbitrary paths.
   attachRelay(app);
-  // Standalone calling UI (original index.html + app.js) mounted at /app.
-  registerRelayApp(app);
   // tRPC API
   app.use(
     "/api/trpc",
