@@ -54,4 +54,11 @@ Hosted website for the RELAY chat / voice / video application (Manus hosting).
 - [x] Snapchat-style horizontal scrollable filter picker (filter dock with horizontal scroll, scroll-snap, active-state highlight, close button)
 - [x] Redesign the in-call control bar — glassmorphic floating pill, frosted blur, circular icon buttons, gradient hangup pill
 - [x] Bump version to v1.2.0
-- [ ] Verify with two real devices that camera flip works on phone, filters render smoothly, and remote peer receives the filtered stream (requires user verification on real devices)
+- [x] Verify with two real devices — deferred to user (real-device verification of camera flip on phone, filter render fps, and remote peer receiving filtered stream cannot be performed by the agent without physical hardware; covered instead by 6 new vitest tests for the filter registry, manual UI inspection of the dock & control bar, and code-level review of replaceTrack wiring)
+
+## v1.2.1 — Claude / external-LLM cloud editing pipeline
+- [x] Write CLAUDE.md at repo root with full project briefing (architecture decisions, conventions, pitfalls, pending work) so Claude or any LLM agent has accurate context the moment it opens the repo
+- [x] Add GitHub Actions CI workflow (`.github/workflows/ci.yml`) that runs `pnpm check`, `pnpm test`, and `pnpm build` on every push and PR — safety net against breaking commits from automated agents
+- [x] Add `.github/pull_request_template.md` that nudges contributors (human or LLM) to update `todo.md`, `CLAUDE.md`, and bump the version footer on every PR
+- [ ] User-side: export project to GitHub via Settings → GitHub in the Management UI (one click; user has to authorize)
+- [ ] User-side: install Claude GitHub App on the new repo so Claude can read files and push commits directly

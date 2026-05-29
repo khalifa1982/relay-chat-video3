@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+# Cancel in-flight CI runs when a new commit is pushed to the same branch / PR.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Typecheck + Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm check
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build (sanity)
+        # We don't ship the build artifact from CI — Manus builds at deploy time.
+        # This step just catches build-time errors (e.g. broken imports, bad Vite config) early.
+        run: pnpm build
+        env:
+          # Provide dummy values for VITE_* envs so the production build doesn't fail on missing required ones.
+          # Real values are injected by Manus at deploy time.
+          VITE_APP_ID: ci-dummy
+          VITE_APP_TITLE: RELAY
+          VITE_OAUTH_PORTAL_URL: https://example.com/oauth
+          VITE_FRONTEND_FORGE_API_URL: https://example.com/forge
+          VITE_FRONTEND_FORGE_API_KEY: ci-dummy
+          VITE_ANALYTICS_ENDPOINT: https://example.com/analytics
+          VITE_ANALYTICS_WEBSITE_ID: ci-dummy
