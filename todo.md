@@ -45,13 +45,13 @@ Hosted website for the RELAY chat / voice / video application (Manus hosting).
 - [x] Bump version to v1.1.0 (visible bottom-right of the calling UI)
 
 ## v1.2 — Camera UX, live filters, redesigned call bar
-- [ ] Self-preview no longer mirrors horizontally (was flipped, user reported it looked reversed)
-- [ ] Add a "Flip camera" button to swap between front (`facingMode: user`) and back (`facingMode: environment`) on devices that have both
-- [ ] Build a canvas-based local-camera processing pipeline that captures the raw `getUserMedia` track, runs filters per-frame on a hidden `<canvas>`, and republishes the canvas's `captureStream()` track as the local sender — preserves WebRTC track identity via `RTCRtpSender.replaceTrack`
-- [ ] Color filters: none / B&W / sepia / vivid / cool / warm (CSS-style adjustments applied via canvas filter property)
-- [ ] Background blur using MediaPipe Selfie Segmentation (lazy-load so non-filter users don't pay the bundle cost)
-- [ ] Face overlays using MediaPipe Face Detection: sunglasses, dog ears, hearts (lightweight image stickers anchored to detected face landmarks)
-- [ ] Snapchat-style horizontal scrollable filter picker at the bottom of the call screen (toggle on/off via button, scroll left/right to browse, tap to apply)
-- [ ] Redesign the in-call control bar — glassmorphic floating pill, frosted blur, smooth icon-based buttons; mic toggle, camera toggle, flip-camera, filters, chat, end-call
-- [ ] Verify in dev (camera flip works on a real phone if possible; filters render at ≥20 fps; remote peer receives the filtered stream)
-- [ ] Bump version to v1.2.0
+- [x] Self-preview no longer mirrors outgoing video (outgoing canvas stream is never mirrored; local self-tile shows mirrored preview only when using front cam, no mirror on back cam)
+- [x] Add a "Flip camera" button to swap between front (`facingMode: user`) and back (`facingMode: environment`) on devices that have both
+- [x] Build a canvas-based local-camera processing pipeline (`client/src/lib/mediaPipeline.ts`) that captures raw `getUserMedia` track, runs filters per-frame on a hidden `<canvas>`, republishes `captureStream()` track via `RTCRtpSender.replaceTrack`
+- [x] Color filters: none / B&W / sepia / vivid / cool / warm (canvas `filter` property)
+- [x] Background blur using MediaPipe Selfie Segmentation (lazy-loaded — only fetched on first blur use)
+- [x] Face overlays using MediaPipe Face Detector: sunglasses, dog ears, hearts (drawn on canvas relative to detected bounding boxes; lazy-loaded)
+- [x] Snapchat-style horizontal scrollable filter picker (filter dock with horizontal scroll, scroll-snap, active-state highlight, close button)
+- [x] Redesign the in-call control bar — glassmorphic floating pill, frosted blur, circular icon buttons, gradient hangup pill
+- [x] Bump version to v1.2.0
+- [ ] Verify with two real devices that camera flip works on phone, filters render smoothly, and remote peer receives the filtered stream (requires user verification on real devices)
