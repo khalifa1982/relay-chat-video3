@@ -114,6 +114,24 @@ const MARKUP = `
   </section>
 </div>
 
+<button id="diagBtn" class="diag-btn" title="Diagnostics (?)" aria-label="Open diagnostics">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .8-1 1.7"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/></svg>
+</button>
+
+<div id="diagOverlay" class="diag-overlay">
+  <div class="diag-card">
+    <div class="diag-head">
+      <b>Diagnostics</b>
+      <div class="diag-actions">
+        <button id="diagCopy" class="diag-tool">Copy</button>
+        <button id="diagClose" class="diag-tool">Close</button>
+      </div>
+    </div>
+    <pre id="diagBody" class="diag-body">(open this while a call is connecting to see ICE/connection state per peer)</pre>
+    <p class="diag-foot">Tip: press <kbd>?</kbd> anywhere to toggle this panel.</p>
+  </div>
+</div>
+
 <div class="overlay" id="ringOverlay">
   <div class="ring-card">
     <div class="av" id="ringAv">?</div>
@@ -130,7 +148,7 @@ const MARKUP = `
 
 <div class="boot" id="boot"><div class="spin"></div><div class="t">Connecting&hellip;</div></div>
 
-<div class="version-tag">RELAY &middot; v1.0.2</div>
+<div class="version-tag">RELAY &middot; v1.1.0</div>
 `;
 
 export default function Relay() {
@@ -359,4 +377,24 @@ const RELAY_CSS = `
 .relay-root .boot .t{color:var(--muted);font-size:14px}
 
 .relay-root .version-tag{position:fixed;bottom:8px;right:12px;z-index:5;font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.06em;color:var(--faint);pointer-events:none;opacity:.7}
+
+.relay-root .diag-btn{position:fixed;bottom:14px;left:14px;z-index:60;width:36px;height:36px;border-radius:10px;background:var(--surface);border:1px solid var(--border);color:var(--muted);display:grid;place-items:center;cursor:pointer;transition:.15s}
+.relay-root .diag-btn:hover{background:var(--surface2);border-color:var(--border2);color:var(--accent)}
+.relay-root .diag-btn svg{width:18px;height:18px}
+.relay-root .diag-overlay{position:fixed;inset:0;z-index:95;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(6px)}
+.relay-root .diag-overlay.open{display:flex;animation:relayFade .2s ease both}
+.relay-root .diag-card{width:min(720px,96vw);max-height:80vh;background:var(--surface);border:1px solid var(--border2);border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 30px 80px -20px rgba(0,0,0,.7)}
+.relay-root .diag-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
+.relay-root .diag-head b{font-family:"Bricolage Grotesque";font-weight:700;font-size:15px}
+.relay-root .diag-actions{display:flex;gap:8px}
+.relay-root .diag-tool{background:var(--bg2);border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px;font-family:inherit}
+.relay-root .diag-tool:hover{border-color:var(--accent);color:var(--accent)}
+.relay-root .diag-body{flex:1;min-height:0;overflow:auto;padding:16px 18px;font-family:"JetBrains Mono",monospace;font-size:11.5px;line-height:1.55;color:var(--text);white-space:pre-wrap;background:var(--bg2)}
+.relay-root .diag-foot{padding:10px 18px;border-top:1px solid var(--border);color:var(--faint);font-size:12px}
+.relay-root .diag-foot kbd{background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-family:"JetBrains Mono";font-size:11px}
+
+.relay-root .relay-tile .connecting{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.55);color:#fff;padding:7px 14px;border-radius:99px;font-size:12px;letter-spacing:.04em;backdrop-filter:blur(4px);border:1px solid var(--border2)}
+.relay-root .relay-tile[data-state="failed"] .connecting{color:var(--danger);border-color:rgba(255,92,114,.5)}
+.relay-root .relay-tile[data-state="disconnected"] .connecting{color:var(--warn);border-color:rgba(255,180,84,.5)}
+.relay-root .relay-tile[data-state="connected"] .connecting{display:none!important}
 `;

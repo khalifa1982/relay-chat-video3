@@ -35,3 +35,10 @@ Hosted website for the RELAY chat / voice / video application (Manus hosting).
 - [x] App is stuck on "Connecting…" in production — the WebSocket to /api/relay isn't completing (fixed: switched signaling from raw WebSocket to Server-Sent Events + HTTP POST so it goes through Cloudflare/Cloud Run cleanly)
 - [x] Production /app still stuck on "Connecting…" — fixed by porting the standalone HTML/JS calling UI into a real React route at /app (`client/src/pages/Relay.tsx` + `client/src/lib/relayClient.ts`). SSE+POST signaling unchanged. Tests still 10/10.
 - [x] Add version number to footer on every deploy (RELAY · v1.0.2 visible bottom-right of the calling UI)
+
+## Calls stuck on "Connecting…" between two real users (intermittent — reported by user on 3rd test)
+- [ ] Add free public TURN fallback (openrelay.metered.ca) on top of Google STUN so strict-NAT users can establish media without operator-run coturn
+- [ ] Surface per-peer WebRTC connection state and ICE state next to each video tile so failures are diagnosable
+- [ ] Add a "Diagnostics" overlay (toggle with `?` key) showing local/remote ICE candidates, selected candidate pair, and recent signaling messages
+- [ ] Verify in dev with two browser sessions before saving checkpoint
+- [ ] Bump version to v1.1.0 (per project preference, surface version on every deploy)

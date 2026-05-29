@@ -51,12 +51,51 @@ describe("relay signaling", () => {
     reg = createRegistry();
   });
 
-  it("issues STUN-only ICE servers when TURN env vars are unset", () => {
-    const list = iceServers("user-1");
-    expect(list.length).toBeGreaterThanOrEqual(1);
-    expect(
-      list.every(s => !s.urls.startsWith("turn:") && !s.urls.startsWith("turns:"))
-    ).toBe(true);
+  it("includes both STUN and the free public TURN fallback when TURN env vars are unset", () => {
+    // Make sure env is clean for this case.
+    const prevSecret = process.env.TURN_SECRET;
+    const prevHost = process.env.TURN_HOST;
+    delete process.env.TURN_SECRET;
+    delete process.env.TURN_HOST;
+    try {
+      const list = iceServers("user-1");
+      // Should have at least one public STUN server.
+      expect(list.some(s => s.urls.startsWith("stun:"))).toBe(true);
+      // Should also include the free public TURN fallback so strict-NAT users
+      // can connect without operator-run coturn.
+      expect(list.some(s => s.urls.startsWith("turn:") || s.urls.startsWith("turns:")))
+        .toBe(true);
+      // Public TURN must come with credentials.
+      const anyTurn = list.find(s => s.urls.startsWith("turn:"));
+      expect(anyTurn?.username).toBeTruthy();
+      expect(anyTurn?.credential).toBeTruthy();
+    } finally {
+      if (prevSecret !== undefined) process.env.TURN_SECRET = prevSecret;
+      if (prevHost !== undefined) process.env.TURN_HOST = prevHost;
+    }
+  });
+
+  it("issues HMAC-signed short-lived TURN credentials when TURN_SECRET + TURN_HOST are set", () => {
+    const prevSecret = process.env.TURN_SECRET;
+    const prevHost = process.env.TURN_HOST;
+    process.env.TURN_SECRET = "test-secret";
+    process.env.TURN_HOST = "turn.example.com";
+    try {
+      const list = iceServers("user-42");
+      // At least one operator TURN entry must point at our host.
+      const ours = list.filter(s => s.urls.includes("turn.example.com"));
+      expect(ours.length).toBeGreaterThan(0);
+      // Each operator TURN entry has username + credential.
+      ours.forEach(s => {
+        expect(s.username).toBeTruthy();
+        expect(s.credential).toBeTruthy();
+        // Username format: <unix-ts>:<user>
+        expect(s.username).toMatch(/^\d+:user-42$/);
+      });
+    } finally {
+      if (prevSecret !== undefined) process.env.TURN_SECRET = prevSecret; else delete process.env.TURN_SECRET;
+      if (prevHost !== undefined) process.env.TURN_HOST = prevHost; else delete process.env.TURN_HOST;
+    }
   });
 
   it("registers a client and assigns a 6-digit pin", () => {

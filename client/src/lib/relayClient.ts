@@ -108,19 +108,22 @@ export function startRelay(root: HTMLElement): RelayHandle {
       toast("Can't reach the server.", true);
       return;
     }
+    ws.onopen = () => { diag("sse open"); };
     ws.onmessage = (e: MessageEvent) => {
       let m: Msg;
       try { m = JSON.parse(e.data); } catch { return; }
       if (m && m.type === "ready") {
         wsReady = true;
+        diag("sse ready");
         const cbs = wsOpenCbs.splice(0);
         cbs.forEach(fn => { try { fn(); } catch { /* */ } });
         if (wantName) sendWS({ type: "register", name: wantName, pin: me.pin || undefined });
         return;
       }
+      if (m && m.type) diag("recv " + m.type + (m.from ? " from " + m.from.slice(-4) : ""));
       handle(m);
     };
-    ws.onerror = () => { wsReady = false; scheduleReconnect(); };
+    ws.onerror = () => { wsReady = false; diag("sse error"); scheduleReconnect(); };
   }
   function scheduleReconnect() {
     if (destroyed || reconnectT) return;
@@ -301,16 +304,35 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const peer: PeerEntry = { pc, name: name || "Guest", dc: null, el: null, candQ: [], remoteSet: false, gotStream: false };
     peers[pin] = peer;
     if (localStream) localStream.getTracks().forEach(t => pc.addTrack(t, localStream!));
-    pc.onicecandidate = e => { if (e.candidate) sendWS({ type: "signal", to: pin, data: { candidate: e.candidate } }); };
-    pc.ontrack = e => attachRemote(pin, e.streams[0]);
+    pc.onicecandidate = e => {
+      if (e.candidate) {
+        sendWS({ type: "signal", to: pin, data: { candidate: e.candidate } });
+        diag("local cand " + pin.slice(-4) + " " + (e.candidate.candidate || "").split(" ")[7]);
+      } else {
+        diag("local cand-end " + pin.slice(-4));
+      }
+    };
+    pc.ontrack = e => { diag("ontrack from " + pin.slice(-4)); attachRemote(pin, e.streams[0]); };
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
-      if (peer.el) {
-        const c = peer.el.querySelector(".connecting") as HTMLElement | null;
-        if (c) c.style.display = st === "connected" ? "none" : "block";
+      diag("conn " + pin.slice(-4) + " " + st);
+      updateTileState(pin, st);
+      if (st === "failed" || st === "closed") {
+        // Don't blow away on transient failures from the offerer side; the
+        // remote may still come up. Only tear down if we *never* connected.
+        if (!peer.gotStream) removePeer(pin);
       }
-      if (st === "failed" || st === "closed") removePeer(pin);
     };
+    pc.oniceconnectionstatechange = () => {
+      diag("ice " + pin.slice(-4) + " " + pc.iceConnectionState);
+      // On 'failed' or 'disconnected', try an ICE restart from whichever side
+      // is the offerer. This rescues calls where a NAT mapping died mid-call.
+      if (pc.iceConnectionState === "failed" && initiator && peer.gotStream === false) {
+        diag("ice restart " + pin.slice(-4));
+        tryIceRestart(pin).catch(() => { /* */ });
+      }
+    };
+    pc.onicegatheringstatechange = () => diag("gather " + pin.slice(-4) + " " + pc.iceGatheringState);
     if (initiator) {
       const dc = pc.createDataChannel("chat");
       setupDC(pin, dc);
@@ -368,6 +390,75 @@ export function startRelay(root: HTMLElement): RelayHandle {
     delete peers[pin];
     layoutGrid();
     if (inCall) addSysMsg((nm || "Someone") + " left the call.");
+  }
+
+  // ---------- diagnostics ----------
+  const diagLog: string[] = [];
+  function diag(line: string) {
+    const ts = new Date().toISOString().slice(11, 23);
+    const entry = ts + "  " + line;
+    diagLog.push(entry);
+    if (diagLog.length > 200) diagLog.shift();
+    const box = $("diagBody");
+    if (box) {
+      box.textContent = diagLog.join("\n");
+      box.scrollTop = box.scrollHeight;
+    }
+  }
+  function updateTileState(pin: string, st: string) {
+    const peer = peers[pin];
+    if (!peer || !peer.el) return;
+    const c = peer.el.querySelector(".connecting") as HTMLElement | null;
+    if (c) {
+      if (st === "connected" || peer.gotStream) {
+        c.style.display = "none";
+      } else {
+        c.style.display = "block";
+        c.textContent = st === "failed" ? "connection failed" :
+                        st === "disconnected" ? "reconnecting…" :
+                        st === "checking" ? "checking network…" :
+                        "connecting…";
+      }
+    }
+    peer.el.dataset.state = st;
+  }
+  async function tryIceRestart(pin: string) {
+    const peer = peers[pin];
+    if (!peer) return;
+    try {
+      const offer = await peer.pc.createOffer({ iceRestart: true });
+      await peer.pc.setLocalDescription(offer);
+      sendWS({ type: "signal", to: pin, data: { sdp: peer.pc.localDescription } });
+    } catch (e) { console.warn("ice restart failed", e); }
+  }
+  function toggleDiag() {
+    const o = $("diagOverlay");
+    if (!o) return;
+    o.classList.toggle("open");
+    const box = $("diagBody");
+    if (box) {
+      const lines = [
+        "cid=" + cid,
+        "pin=" + (me.pin || "-"),
+        "name=" + (me.name || "-"),
+        "sse=" + (ws ? ["CONNECTING", "OPEN", "CLOSED"][ws.readyState] || "?" : "none"),
+        "ice servers=" + iceConfig.iceServers.map(s => s.urls).join(", "),
+        "peers=" + Object.keys(peers).length,
+        ...Object.entries(peers).map(([p, e]) =>
+          "  " + p + " name=" + e.name +
+          " conn=" + e.pc.connectionState +
+          " ice=" + e.pc.iceConnectionState +
+          " gather=" + e.pc.iceGatheringState +
+          " sig=" + e.pc.signalingState +
+          " remote=" + (e.remoteSet ? "y" : "n") +
+          " stream=" + (e.gotStream ? "y" : "n")),
+        "",
+        "--- recent events ---",
+        ...diagLog,
+      ];
+      box.textContent = lines.join("\n");
+      box.scrollTop = box.scrollHeight;
+    }
   }
 
   // ---------- video grid ----------
@@ -586,6 +677,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
   const onChatField = (e: KeyboardEvent) => { if (e.key === "Enter") sendChat(); };
   const onAddInput = (e: KeyboardEvent) => { if (e.key === "Enter") addToCall(); };
   const onDocKey = (e: KeyboardEvent) => {
+    // Diagnostics shortcut works on any screen (lower- and upper-case).
+    if (e.key === "?" || (e.shiftKey && e.key === "/")) {
+      e.preventDefault();
+      toggleDiag();
+      return;
+    }
     if (!$("lobby")?.classList.contains("active")) return;
     if (/^[0-9]$/.test(e.key)) pushDigit(e.key);
     else if (e.key === "Backspace") { dialed = dialed.slice(0, -1); refreshDisplay(); }
@@ -620,6 +717,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("chatSend") as HTMLElement | null)?.addEventListener("click", sendChat);
   ($("chatField") as HTMLElement | null)?.addEventListener("keydown", onChatField as EventListener);
   ($("addInput") as HTMLElement | null)?.addEventListener("keydown", onAddInput as EventListener);
+  ($("diagBtn") as HTMLElement | null)?.addEventListener("click", toggleDiag);
+  ($("diagClose") as HTMLElement | null)?.addEventListener("click", toggleDiag);
+  ($("diagCopy") as HTMLElement | null)?.addEventListener("click", () => {
+    const box = $("diagBody"); if (!box) return;
+    navigator.clipboard.writeText(box.textContent || "").then(() => toast("Diagnostics copied"));
+  });
   document.addEventListener("keydown", onDocKey);
   window.addEventListener("beforeunload", onUnload);
 

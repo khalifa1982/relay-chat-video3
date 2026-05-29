@@ -22,9 +22,9 @@
 import crypto from "crypto";
 import type { Request, Response, Express } from "express";
 
-const TURN_SECRET = process.env.TURN_SECRET || "";
-const TURN_HOST = process.env.TURN_HOST || "";
-const TURN_TTL = parseInt(process.env.TURN_TTL || "3600", 10);
+// TURN credentials are read on every call so the operator can add them via
+// `webdev_request_secrets` without restarting the server, and so unit tests
+// can override them via `process.env.TURN_SECRET = "..."`.
 
 interface IceServer {
   urls: string;
@@ -98,8 +98,13 @@ export function iceServers(userId: string): IceServer[] {
   const list: IceServer[] = [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun.cloudflare.com:3478" },
   ];
+  const TURN_SECRET = process.env.TURN_SECRET || "";
+  const TURN_HOST = process.env.TURN_HOST || "";
+  const TURN_TTL = parseInt(process.env.TURN_TTL || "3600", 10);
   if (TURN_SECRET && TURN_HOST) {
+    // Operator-supplied TURN (recommended for production).
     const username =
       Math.floor(Date.now() / 1000) + TURN_TTL + ":" + userId;
     const credential = crypto
@@ -109,6 +114,17 @@ export function iceServers(userId: string): IceServer[] {
     list.push({ urls: "turn:" + TURN_HOST + ":3478?transport=udp", username, credential });
     list.push({ urls: "turn:" + TURN_HOST + ":3478?transport=tcp", username, credential });
     list.push({ urls: "turns:" + TURN_HOST + ":5349?transport=tcp", username, credential });
+  } else if (process.env.RELAY_DISABLE_PUBLIC_TURN !== "1") {
+    // No operator TURN configured. Use OpenRelay's free public TURN as a
+    // safety net so users on strict/symmetric NAT can still connect.
+    // These credentials are public/shared (published by metered.ca) and
+    // intentionally not secret; they're rate-limited but fine for small
+    // groups and testing. Set RELAY_DISABLE_PUBLIC_TURN=1 to opt out.
+    const openRelay = { username: "openrelayproject", credential: "openrelayproject" };
+    list.push({ urls: "turn:openrelay.metered.ca:80", ...openRelay });
+    list.push({ urls: "turn:openrelay.metered.ca:443", ...openRelay });
+    list.push({ urls: "turn:openrelay.metered.ca:443?transport=tcp", ...openRelay });
+    list.push({ urls: "turns:openrelay.metered.ca:443?transport=tcp", ...openRelay });
   }
   return list;
 }
@@ -411,11 +427,15 @@ export function attachRelay(app: Express): RelayRegistry {
     res.json({ ok: true });
   });
 
+  const _ts = process.env.TURN_SECRET;
+  const _th = process.env.TURN_HOST;
   console.log(
     "[relay] HTTP signaling ready on /api/relay/{stream,send} — TURN " +
-      (TURN_SECRET && TURN_HOST
-        ? "enabled via " + TURN_HOST
-        : "NOT configured (STUN only — works on most networks)")
+      (_ts && _th
+        ? "enabled via operator coturn at " + _th
+        : process.env.RELAY_DISABLE_PUBLIC_TURN === "1"
+          ? "NOT configured (STUN only)"
+          : "using free public fallback (openrelay.metered.ca) — set TURN_SECRET+TURN_HOST for your own coturn")
   );
 
   return reg;
