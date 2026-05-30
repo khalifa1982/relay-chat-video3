@@ -262,14 +262,15 @@ User report: "The dialing pad is quite big — you have to scroll down to see it
 - [ ] **Action required from you**: click **Publish** in the Management UI to push v2.1.1 to `relaychat-lduywq6l.manus.space`.
 
 
-## v2.2.0 — Cinematic landing rebuild (in progress)
-- [ ] Confirm which Gemini image model the API exposes right now and pick the strongest one.
-- [ ] Generate the hero illustration set (chat, voice call, multi-party video grid, dial pad, glass UI in the wild, the launch climax). Each at ~1920×1200 with the RELAY dark cyan accent.
-- [ ] Generate 6–8 frames for the looping reel (group-call carousel).
-- [ ] Replace `client/src/pages/Home.tsx` with a long-scroll cinematic presentation: hero → narrative sections → looping reel → CTA. Sticky `Launch the app` button.
-- [ ] Reveal-on-scroll + subtle parallax + smooth section transitions, respect `prefers-reduced-motion`.
-- [ ] All generated images uploaded via `manus-upload-file --webdev` and referenced by returned URLs (per project rule).
-- [ ] Typecheck + vitest pass.
-- [ ] Bump in-app version footer to v2.2.0.
-- [ ] Save checkpoint.
-- [ ] **Action required from you**: click Publish in the Management UI to push v2.2.0.
+## v2.2.0 — Cinematic landing rebuild (delivered 2026-05-30)
+- [x] Confirmed `gemini-3.1-flash-image` as the active image model and used it for every illustration.
+- [x] Generated the hero illustration set (chat, voice call, multi-party video grid, dial pad close-up, plus the launch climax) at ~1920×1200 with the RELAY dark cyan accent.
+- [x] Generated 6 frames for the looping reel: Dial → Ringing → Connecting → Live → Group of six → Keep talking.
+- [x] Replaced `client/src/pages/Home.tsx` with a long-scroll cinematic presentation: hero parallax → narrative sections (Chat / Voice / Group / Dial pad / The honest version) → seamless 24 s loop reel → finale with the `Launch the app now` CTA. Sticky top bar appears after 480 px of scroll.
+- [x] Reveal-on-scroll via IntersectionObserver, hero parallax bound to `scrollY`, all motion gated behind `prefers-reduced-motion: no-preference`.
+- [x] All 12 generated images uploaded via `storagePut` and referenced through `/manus-storage/` paths (per project rule).
+- [x] TypeScript clean. 113/113 vitest pass (+5 new for loop-reel layout math and asset-path invariants).
+- [x] Bumped in-app version footer to v2.2.0.
+- [x] Saved checkpoint **79bcfc27** with the cinematic landing in place.
+- [x] **Page-title polish (follow-up):** replaced the lingering `{{project_title}}` placeholder in `client/index.html` with `RELAY — Browser-to-browser calling`, plus a meta description, theme color, and Open Graph tags for previewable shares.
+- [ ] **Action required from you**: click Publish in the Management UI to push v2.2.0 to `relaychat-lduywq6l.manus.space`.
