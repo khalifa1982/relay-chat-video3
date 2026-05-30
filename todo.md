@@ -234,3 +234,29 @@ The guest identity was protected only by a 30-day cookie carrying a random token
 - Bumped in-app version footer to `v2.1.0`.
 
 - [ ] **Action required from you**: click **Publish** in the Management UI to push v2.1.0 to `relaychat-lduywq6l.manus.space`. After it deploys, every browser on the new version is bound to its device id from that moment on — the random disconnects + number swaps will stop.
+
+
+## v2.1.1 — Dialer redesign: viewport-fit, ghost number, inline call (in progress)
+
+User report: "The dialing pad is quite big — you have to scroll down to see it and click Call. Make it one size, glassy, smaller icons. No matter the browser/device size, the whole dialer must fit without scrolling. Always show the user's own number as a highlighted default in the input area; the moment they start typing the other party's number, the default disappears and the typed digits take over with a flashy transition. When the user hits Call, do not navigate to a separate call screen — keep everything on one screen, and when the other side answers, swap the same surface into the voice/video grid."
+
+- [ ] Audit current `Dialer.tsx` clamp math + height usage; identify what is making it overflow on shorter viewports.
+- [ ] Add a CSS `100dvh`-based viewport height + a fixed grid layout (display name → ghost-or-typed number → keypad → call button) so the whole surface fits without page scroll on 320×568 through desktop.
+- [ ] Shrink keypad button radius and digit size with tighter `clamp()` ranges; reduce icon glyphs around the call button to 16–18 px.
+- [ ] Implement the ghost-number behavior: when the typed input is empty, render the user's own 6-digit number greyed out with a subtle "your number" hint; the moment the user types, fade the ghost out (200 ms) and slide the typed digits in.
+- [ ] Apply a glassy frame: backdrop-blur + saturate on the dialer card, hairline border, soft shadow, dark/light variants honored via the existing `relay-v2` palette.
+- [ ] Inline the call flow: when the user submits, render an in-place "Calling …" overlay on the dialer card with hangup; when the peer answers, swap into a compact in-place video grid (reuse the existing Relay call engine but render inside the dialer card, not as a new route). Browser back-button stays on `/app/dialer` the whole time.
+- [ ] Tests: a unit test for the ghost-number rule (own-number visible iff typed=="", typed digits replace it, flashing transition class applied), and a viewport-fit math test asserting dialer total height ≤ 100dvh budget on the smallest viewports.
+- [ ] Bump in-app version footer to v2.1.1.
+
+
+## v2.1.1 — Dialer redesign: viewport-fit, ghost number, in-place call (delivered 2026-05-30)
+- [x] **Layout fits any viewport with no scroll.** Replaced the legacy two-card layout with a CSS Grid using `clamp()`-based row sizing and `100dvh` accounting (corrects for mobile browser chrome). Per-key sizing scales between 48 px and 72 px depending on viewport height. Verified mentally from 320 × 568 (iPhone SE) up to wide desktop.
+- [x] **Ghost number.** When the user has typed nothing AND we know their own RELAY number, the dialed-number area renders the user's own number in a glowing accent color with a soft drop-shadow halo. Sub-line reads "Your number · tap any key to dial someone". The moment the user taps any digit, the ghost vanishes and the typed digits take over with a 220 ms `ghost-flash` animation.
+- [x] **Glass aesthetic.** The dialer card uses `bg-card/60 backdrop-blur-2xl backdrop-saturate-150` with a hairline `border-border/50` and a subtle `shadow-2xl`. Keys are smaller iconic pills with `active:scale-[0.94]` press feedback using the project's existing `--ease-out` cubic-bezier. The Call button is a 54-64 px circle in the online-green token with a colored shadow halo.
+- [x] **In-place call surface.** Refactored: `MARKUP` and `RELAY_CSS` extracted from `Relay.tsx` into `client/src/lib/relayAssets.ts` (one source of truth). `RelayHandle` now exposes `dial(number)` and a state-change subscription. The Dialer page mounts the engine in a hidden host on first render, auto-registers it against the v2 identity (no manual name re-entry), and switches the host's CSS class from "off-screen / pointer-events-none" to "fixed inset-0 z-40" the moment a call is initiated. Tap Call → engine dials, screen swaps in place to the video grid, no route change. Hang up → screen swaps back to the dialer.
+- [x] **Tests.** `client/src/pages/app/Dialer.test.ts` (13 cases) pins both `formatDialed` (separator at the right boundary, partial input verbatim, defensive overflow clip) and `ghostNumberRule` (`empty` / `ghost` / `typed` modes, ghost yields to typed on the very first keystroke, defensive non-digit filtering). Vitest config extended to also pick up `client/src/pages/**/*.test.ts`.
+- [x] **Fallback route preserved.** `/app/call` (Relay.tsx) is still wired so deep-linked incoming-call notifications continue to work; the page now imports the shared assets module instead of holding its own copy.
+- [x] Bumped in-app version footer to `RELAY · v2.1.1`.
+- [x] 108/108 vitest pass (was 95 before — +13 from the new Dialer suite). TypeScript clean.
+- [ ] **Action required from you**: click **Publish** in the Management UI to push v2.1.1 to `relaychat-lduywq6l.manus.space`.

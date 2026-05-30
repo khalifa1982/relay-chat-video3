@@ -43,8 +43,16 @@ interface Msg {
   code?: string;
 }
 
+export type RelayPhase = "idle" | "dialing" | "in-call";
+
 export interface RelayHandle {
   destroy: () => void;
+  /** Programmatic dial. Returns true if the engine accepted the request. */
+  dial: (number: string) => boolean;
+  /** Set/replace the engine-state callback. Fired whenever phase changes. */
+  setOnStateChange: (cb: ((phase: RelayPhase) => void) | null) => void;
+  /** Best-effort: cancel an in-flight call/leave the room. */
+  hangup: () => void;
 }
 
 export function startRelay(root: HTMLElement): RelayHandle {
@@ -363,9 +371,29 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (peers[dialed]) { toast("You're already connected to them.", true); return; }
     try { await ensureMedia(); } catch { return; }
     const target = dialed; dialed = ""; refreshDisplay(); closeAddPad();
-    if (!inCall) { inCall = true; enterCallUI("Calling…"); }
+    if (!inCall) { inCall = true; enterCallUI("Calling…"); emitPhase("dialing"); }
     sendWS({ type: "invite", to: target });
     toast("Calling " + target + "…");
+  }
+
+  // ---------- programmatic API for embedding hosts ----------
+  let onPhaseChange: ((p: RelayPhase) => void) | null = null;
+  let lastPhase: RelayPhase = "idle";
+  function emitPhase(p: RelayPhase) {
+    if (lastPhase === p) return;
+    lastPhase = p;
+    try { onPhaseChange?.(p); } catch { /* ignore subscriber errors */ }
+  }
+  async function programmaticDial(target: string): Promise<boolean> {
+    if (!/^\d{6}$/.test(target)) return false;
+    if (!me.pin) return false; // not registered yet — caller should retry
+    if (target === me.pin) { toast("That's your own number.", true); return false; }
+    if (peers[target]) { toast("You're already connected to them.", true); return false; }
+    try { await ensureMedia(); } catch { return false; }
+    if (!inCall) { inCall = true; enterCallUI("Calling…"); emitPhase("dialing"); }
+    sendWS({ type: "invite", to: target });
+    toast("Calling " + target + "…");
+    return true;
   }
 
   // ---------- incoming ----------
@@ -570,6 +598,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // ---------- video grid ----------
   function enterCallUI(label: string) {
     show("call");
+    if (label && /in call/i.test(label)) emitPhase("in-call");
     const lbl = $("callRoomLbl"); if (lbl) lbl.textContent = label || "In call";
     const grid = $("videoGrid"); if (grid) grid.innerHTML = "";
     addSelfTile();
@@ -756,6 +785,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     for (const id in peers) delete peers[id];
     inCall = false; roomId = null;
+    emitPhase("idle");
     if (timerInt) { clearInterval(timerInt); timerInt = null; }
     const log = $("chatLog"); if (log) log.innerHTML = "";
     $("chatPanel")?.classList.remove("open");
@@ -847,6 +877,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("nameInput") as HTMLInputElement | null)?.focus();
 
   return {
+    dial(target: string): boolean {
+      // returns true synchronously if validation passes; the actual call is async,
+      // but the host UI just needs to know whether to flip to in-call mode.
+      if (!/^\d{6}$/.test(target)) return false;
+      if (!me.pin) return false;
+      if (target === me.pin) return false;
+      // fire-and-forget the actual async call
+      void programmaticDial(target);
+      return true;
+    },
+    setOnStateChange(cb) { onPhaseChange = cb; },
+    hangup() {
+      try { ($("hangBtn") as HTMLButtonElement | null)?.click(); }
+      catch { /* swallow — engine handles its own cleanup */ }
+    },
     destroy() {
       destroyed = true;
       if (reconnectT) { clearTimeout(reconnectT); reconnectT = null; }
