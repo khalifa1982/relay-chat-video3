@@ -260,3 +260,16 @@ User report: "The dialing pad is quite big — you have to scroll down to see it
 - [x] Bumped in-app version footer to `RELAY · v2.1.1`.
 - [x] 108/108 vitest pass (was 95 before — +13 from the new Dialer suite). TypeScript clean.
 - [ ] **Action required from you**: click **Publish** in the Management UI to push v2.1.1 to `relaychat-lduywq6l.manus.space`.
+
+
+## v2.2.0 — Cinematic landing rebuild (in progress)
+- [ ] Confirm which Gemini image model the API exposes right now and pick the strongest one.
+- [ ] Generate the hero illustration set (chat, voice call, multi-party video grid, dial pad, glass UI in the wild, the launch climax). Each at ~1920×1200 with the RELAY dark cyan accent.
+- [ ] Generate 6–8 frames for the looping reel (group-call carousel).
+- [ ] Replace `client/src/pages/Home.tsx` with a long-scroll cinematic presentation: hero → narrative sections → looping reel → CTA. Sticky `Launch the app` button.
+- [ ] Reveal-on-scroll + subtle parallax + smooth section transitions, respect `prefers-reduced-motion`.
+- [ ] All generated images uploaded via `manus-upload-file --webdev` and referenced by returned URLs (per project rule).
+- [ ] Typecheck + vitest pass.
+- [ ] Bump in-app version footer to v2.2.0.
+- [ ] Save checkpoint.
+- [ ] **Action required from you**: click Publish in the Management UI to push v2.2.0.
