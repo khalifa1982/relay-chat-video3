@@ -78,17 +78,28 @@ function Inner({ children }: { children: React.ReactNode }) {
       {/* ── desktop / tablet sidebar ───────────────────────────── */}
       <aside className="hidden md:flex md:flex-col md:w-64 lg:w-72 border-r border-border bg-sidebar shrink-0">
         <div className="px-5 pt-6 pb-4">
-          <div className="flex items-center gap-3">
-            <div className="size-10 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold">
-              {initialsFrom(me.displayName)}
-            </div>
+          <Link
+            href="/app/profile"
+            className="flex items-center gap-3 group rounded-xl -mx-1 px-1 py-1 hover:bg-muted/40 transition-colors"
+          >
+            {me.avatarUrl ? (
+              <img
+                src={me.avatarUrl}
+                alt={me.displayName}
+                className="size-10 rounded-2xl object-cover border border-border"
+              />
+            ) : (
+              <div className="size-10 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold">
+                {initialsFrom(me.displayName)}
+              </div>
+            )}
             <div className="min-w-0">
-              <div className="font-semibold truncate">{me.displayName}</div>
+              <div className="font-semibold truncate group-hover:text-primary transition-colors">{me.displayName}</div>
               <div className="font-mono text-sm text-muted-foreground">
                 {formatNumber(me.number)}
               </div>
             </div>
-          </div>
+          </Link>
           {me.isGuest && (
             <div className="mt-4 rounded-xl border border-primary/30 bg-primary/5 p-3 text-xs leading-relaxed">
               <div className="flex items-center gap-2 text-primary font-semibold mb-1">
@@ -147,17 +158,28 @@ function Inner({ children }: { children: React.ReactNode }) {
       <main className="flex-1 flex flex-col min-w-0 min-h-svh">
         {/* mobile header */}
         <header className="md:hidden flex items-center justify-between px-4 py-3 border-b border-border bg-card">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="size-9 rounded-xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
-              {initialsFrom(me.displayName)}
-            </div>
+          <Link
+            href="/app/profile"
+            className="flex items-center gap-3 min-w-0 active:opacity-70 transition-opacity"
+          >
+            {me.avatarUrl ? (
+              <img
+                src={me.avatarUrl}
+                alt={me.displayName}
+                className="size-9 rounded-xl object-cover border border-border"
+              />
+            ) : (
+              <div className="size-9 rounded-xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
+                {initialsFrom(me.displayName)}
+              </div>
+            )}
             <div className="min-w-0">
               <div className="text-sm font-semibold truncate">{me.displayName}</div>
               <div className="font-mono text-xs text-muted-foreground">
                 {formatNumber(me.number)}
               </div>
             </div>
-          </div>
+          </Link>
           {me.isGuest ? (
             <a
               href={getLoginUrl()}

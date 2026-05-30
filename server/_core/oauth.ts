@@ -1,8 +1,10 @@
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import type { Express, Request, Response } from "express";
 import * as db from "../db";
+import * as v2db from "../v2db";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
+import { GUEST_COOKIE } from "./context";
 
 function getQueryParam(req: Request, key: string): string | undefined {
   const value = req.query[key];
@@ -36,6 +38,29 @@ export function registerOAuthRoutes(app: Express) {
         lastSignedIn: new Date(),
       });
 
+      // v2.0: bind the (just-created or just-updated) user to a phone-app
+      // identity. If a guest cookie is present, migrate that guest row in
+      // place so the user keeps their existing number, contacts, messages
+      // and call history. Otherwise allocate a fresh permanent identity.
+      try {
+        const user = await db.getUserByOpenId(userInfo.openId);
+        if (user) {
+          const guestToken =
+            (req.cookies?.[GUEST_COOKIE] as string | undefined) ?? null;
+          await v2db.ensureUserIdentity({
+            userId: user.id,
+            displayName: userInfo.name || "User",
+            guestToken,
+          });
+          // Clear the guest cookie regardless of whether the migration
+          // happened — from this point on the auth session is the source
+          // of truth, and a stale guest cookie would just create noise.
+          res.clearCookie(GUEST_COOKIE, { path: "/" });
+        }
+      } catch (mergeErr) {
+        console.warn("[OAuth] guest-identity merge failed (continuing)", mergeErr);
+      }
+
       const sessionToken = await sdk.createSessionToken(userInfo.openId, {
         name: userInfo.name || "",
         expiresInMs: ONE_YEAR_MS,
@@ -44,7 +69,7 @@ export function registerOAuthRoutes(app: Express) {
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
 
-      res.redirect(302, "/");
+      res.redirect(302, "/app");
     } catch (error) {
       console.error("[OAuth] Callback failed", error);
       res.status(500).json({ error: "OAuth callback failed" });

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { startRelay } from "@/lib/relayClient";
+import { trpc } from "@/lib/trpc";
 
 /**
  * The RELAY calling UI as a React page. We render the original
@@ -169,14 +170,59 @@ const MARKUP = `
 
 export default function Relay() {
   const ref = useRef<HTMLDivElement>(null);
+  // Read the v2.0 guest identity so we can auto-register and not ask the user
+  // for their name a second time. If whoami fails (e.g. cookie not set), we
+  // gracefully fall back to the existing manual register form.
+  const whoami = trpc.identity.whoami.useQuery(undefined, { staleTime: 30_000 });
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.innerHTML = MARKUP;
     const handle = startRelay(el);
-    return () => handle.destroy();
-  }, []);
+
+    // Auto-fill name + auto-click Join if we have a v2.0 identity.
+    // Auto-fill the dial pad with ?to=<6digits> if present in the URL.
+    const params = new URLSearchParams(window.location.search);
+    const to = (params.get("to") || "").replace(/\D+/g, "").slice(0, 6);
+    const me = whoami.data;
+    const autofill = () => {
+      const nameInput = el.querySelector<HTMLInputElement>("#nameInput");
+      if (nameInput && me?.displayName && !nameInput.value) {
+        nameInput.value = me.displayName;
+      }
+      // Auto-click join if we have a name pre-filled.
+      if (nameInput?.value) {
+        const btn = el.querySelector<HTMLButtonElement>("#joinBtn");
+        if (btn && !btn.disabled) btn.click();
+      }
+    };
+    if (me?.displayName) {
+      // The register UI is visible immediately on mount. Defer to give
+      // startRelay's event listeners a tick to attach.
+      window.setTimeout(autofill, 30);
+    }
+    // After the lobby appears, fill the dial pad if ?to= was provided.
+    let observer: MutationObserver | null = null;
+    if (to.length === 6) {
+      observer = new MutationObserver(() => {
+        const display = el.querySelector<HTMLElement>("#dialDisplay");
+        const lobby = el.querySelector<HTMLElement>("#lobby");
+        if (display && lobby?.classList.contains("active")) {
+          display.textContent = to;
+          display.classList.remove("empty");
+          observer?.disconnect();
+          observer = null;
+        }
+      });
+      observer.observe(el, { attributes: true, subtree: true, attributeFilter: ["class"] });
+    }
+
+    return () => {
+      observer?.disconnect();
+      handle.destroy();
+    };
+  }, [whoami.data?.displayName]);
 
   return (
     <>

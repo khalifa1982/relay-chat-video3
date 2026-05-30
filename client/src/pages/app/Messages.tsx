@@ -54,7 +54,8 @@ export default function MessagesPage() {
   const activeConvoId = activeConvoIdRaw ? parseInt(activeConvoIdRaw, 10) : null;
 
   const threads = trpc.messages.threads.useQuery(undefined, {
-    refetchInterval: 10_000,
+    refetchInterval: 4_000,
+    refetchIntervalInBackground: false,
     enabled: !!me,
   });
 
@@ -169,7 +170,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     { conversationId, limit: 100 },
     {
       enabled: !!me,
-      refetchInterval: 5_000,
+      refetchInterval: 2_000,
+      refetchIntervalInBackground: false,
     }
   );
 
