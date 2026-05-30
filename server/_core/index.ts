@@ -10,6 +10,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
+import { registerV2Events } from "../v2events";
 import { reapStalePresence } from "../v2db";
 
 // The RELAY calling UI is rendered by the React SPA at /app (see
@@ -52,6 +53,9 @@ async function startServer() {
   attachRelay(app);
   // v2.0 attachment upload (multipart-friendly JSON body)
   registerV2Upload(app);
+  // v2.0 push channel — SSE that routes message/presence/read events
+  // to the right identity. Production gateway is SSE-friendly.
+  registerV2Events(app);
   // Stale-presence sweep — once a minute, flip users whose heartbeat
   // expired to offline. Cheap UPDATE; safe to run from a single instance.
   setInterval(() => {

@@ -35,7 +35,9 @@ import {
   touchGuestExpiry,
   updateIdentityProfile,
   upsertContact,
+  getConversationParticipantIds,
 } from "./v2db";
+import { publishToIdentity, broadcastPresence } from "./v2events";
 
 const NumberSchema = z
   .string()
@@ -58,7 +60,12 @@ function guestCookieOptions(req: Parameters<typeof getSessionCookieOptions>[0]) 
  * Require any identity (guest or registered). Throws UNAUTHORIZED otherwise.
  */
 function requireIdentity(ctx: { identity: unknown }) {
-  const id = ctx.identity as { id: number } | null;
+  const id = ctx.identity as {
+    id: number;
+    number: string;
+    displayName: string;
+    isGuest: boolean;
+  } | null;
   if (!id) throw new TRPCError({ code: "UNAUTHORIZED", message: "No identity" });
   return id;
 }
@@ -185,6 +192,13 @@ export const v2DirectoryRouter = router({
   heartbeat: publicProcedure.mutation(async ({ ctx }) => {
     const me = requireIdentity(ctx);
     await markOnline(me.id, null);
+    // Notify other connected clients that this number is online now.
+    // Cheap fire-and-forget; failures don't affect the heartbeat result.
+    try {
+      broadcastPresence(me.number, true, new Date());
+    } catch {
+      /* ignore */
+    }
     return { ok: true, at: new Date() };
   }),
 
@@ -192,6 +206,11 @@ export const v2DirectoryRouter = router({
   goOffline: publicProcedure.mutation(async ({ ctx }) => {
     const me = requireIdentity(ctx);
     await markOffline(me.id);
+    try {
+      broadcastPresence(me.number, false, new Date());
+    } catch {
+      /* ignore */
+    }
     return { ok: true };
   }),
 });
@@ -391,6 +410,20 @@ export const v2MessagesRouter = router({
         attachmentId: input.attachmentId ?? null,
         replyToId: input.replyToId ?? null,
       });
+      // Fan out a push hint to every participant so their UIs refetch.
+      // Includes the sender so their other tabs also stay in sync.
+      try {
+        const peers = await getConversationParticipantIds(input.conversationId);
+        for (const pid of peers) {
+          publishToIdentity(pid, {
+            kind: "message",
+            conversationId: input.conversationId,
+            from: me.id,
+          });
+        }
+      } catch {
+        /* push is best-effort; polling is the safety net */
+      }
       return row;
     }),
 
@@ -402,6 +435,21 @@ export const v2MessagesRouter = router({
         conversationId: input.conversationId,
         identityId: me.id,
       });
+      // Notify the peer so their read-receipt ticks update.
+      try {
+        const peers = await getConversationParticipantIds(input.conversationId);
+        for (const pid of peers) {
+          if (pid !== me.id) {
+            publishToIdentity(pid, {
+              kind: "read",
+              conversationId: input.conversationId,
+              reader: me.id,
+            });
+          }
+        }
+      } catch {
+        /* ignore */
+      }
       return { ok: true };
     }),
 });

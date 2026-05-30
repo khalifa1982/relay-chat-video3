@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { getLoginUrl } from "@/const";
 import { useIdentity } from "./useIdentity";
 import { OnboardingGate } from "./OnboardingGate";
+import { useRealtime } from "./useRealtime";
 
 /**
  * Tab keys used by the bottom-nav / sidebar. We hard-code the routes here
@@ -51,6 +52,11 @@ function Inner({ children }: { children: React.ReactNode }) {
   const { me, signOut } = useIdentity();
   const [location] = useLocation();
   const utils = trpc.useUtils();
+
+  // Open the SSE push channel as soon as we know we have an identity.
+  // Server pushes message/read/presence/contact hints → hook invalidates the
+  // right tRPC queries so the UI feels near-instant without WebSockets.
+  useRealtime(Boolean(me));
 
   // Pre-fetch the threads & calls list once we have an identity so the
   // tab badges are warm by the time the user taps them.

@@ -111,9 +111,17 @@ Hosted website for the RELAY chat / voice / video application (Manus hosting).
 - [x] Footer bumped to v2.0.0
 - [x] All 25 vitest tests pass
 
+## v2.0.3 — Push channel (SSE) (delivered 2026-05-30)
+- [x] `server/v2events.ts` — in-process SSE bus with per-identity client sets, heartbeat every 25s, cleanup on close, `publishToIdentity` / `broadcastPresence` helpers
+- [x] `GET /api/v2/events` endpoint mounted in `server/_core/index.ts`. Production gateway is SSE-friendly (same approach as v1 signaling), so this deploys cleanly.
+- [x] `server/v2routers.ts` hooks: `messages.send` fans `{kind: "message"}` to all conversation participants; `messages.markRead` fans `{kind: "read"}` to the peer; `directory.heartbeat`/`goOffline` broadcast presence to everyone connected.
+- [x] Client hook `client/src/app/useRealtime.ts` opens an `EventSource` with `withCredentials`, exponential-backoff reconnect, and invalidates the right tRPC queries on each push (message/read/presence/contact)
+- [x] Wired into `AppShell` so the channel runs whenever an identity is present
+- [x] 2 new vitest specs (publisher no-op when no clients connected, `broadcastPresence` accepts Date and ISO string)
+- [x] All 31 vitest tests pass; TypeScript clean
+
 ### Deferred to v2.2
 - [ ] Replace v1 in-memory signaling with the DB-backed `signaling` mailbox table (table exists, helpers exist, integration deferred to avoid risking working calls)
-- [ ] WebSocket-driven messages (currently polling 2–4s — works well, but not push)
 - [ ] Real-device QA on mobile Safari + Chrome Android for dialer-clamp and voice-note recording
 
 ### Real-device QA carried forward from v1.2

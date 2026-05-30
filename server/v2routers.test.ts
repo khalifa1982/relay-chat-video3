@@ -185,3 +185,29 @@ describe("identity.signOutGuest cookie behavior", () => {
     expect(cleared.find((c) => c.name === "relay_guest")).toBeTruthy();
   });
 });
+
+/* ── v2 SSE event bus -------------------------------------------- */
+
+import { _connectedCount, publishToIdentity, broadcastPresence } from "./v2events";
+
+describe("v2 SSE event bus — publisher safety", () => {
+  it("publishToIdentity is a no-op when no clients are connected", () => {
+    expect(_connectedCount()).toBe(0);
+    // Should not throw with no subscribers — this is the production hot path
+    // when only one peer is online.
+    expect(() =>
+      publishToIdentity(99999, {
+        kind: "message",
+        conversationId: 1,
+        from: 1,
+      })
+    ).not.toThrow();
+  });
+
+  it("broadcastPresence accepts both Date and ISO string lastSeenAt", () => {
+    expect(() => broadcastPresence("123456", true, new Date())).not.toThrow();
+    expect(() =>
+      broadcastPresence("123456", false, new Date().toISOString())
+    ).not.toThrow();
+  });
+});

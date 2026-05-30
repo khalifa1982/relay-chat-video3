@@ -585,6 +585,18 @@ export async function sendMessage(input: {
   return rows[0];
 }
 
+export async function getConversationParticipantIds(
+  conversationId: number
+): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ id: conversationParticipants.identityId })
+    .from(conversationParticipants)
+    .where(eq(conversationParticipants.conversationId, conversationId));
+  return rows.map((r) => r.id);
+}
+
 export async function markThreadRead(input: { conversationId: number; identityId: number }) {
   const db = await getDb();
   if (!db) return;
