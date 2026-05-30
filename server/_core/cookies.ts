@@ -24,25 +24,36 @@ function isSecureRequest(req: Request) {
 export function getSessionCookieOptions(
   req: Request
 ): Pick<CookieOptions, "domain" | "httpOnly" | "path" | "sameSite" | "secure"> {
-  // const hostname = req.hostname;
-  // const shouldSetDomain =
-  //   hostname &&
-  //   !LOCAL_HOSTS.has(hostname) &&
-  //   !isIpAddress(hostname) &&
-  //   hostname !== "127.0.0.1" &&
-  //   hostname !== "::1";
+  // Suppress "unused" lint warning for now-unused helpers retained for
+  // future use (e.g. when we explicitly bind a domain).
+  void LOCAL_HOSTS;
+  void isIpAddress;
 
-  // const domain =
-  //   shouldSetDomain && !hostname.startsWith(".")
-  //     ? `.${hostname}`
-  //     : shouldSetDomain
-  //       ? hostname
-  //       : undefined;
+  const secure = isSecureRequest(req);
 
+  /*
+   * SameSite=Lax is the right choice for a same-origin app like RELAY.
+   *
+   * We previously used SameSite=None, which requires Secure=true and is
+   * widely dropped by privacy-protective browsers (Safari ITP, Brave
+   * Shields, Firefox ETP) when they treat the host as third-party. The
+   * symptom: cookies silently disappear and the user looks signed out
+   * after a navigation — the exact bug reported as "randomly disconnects
+   * and my number changes".
+   *
+   * Lax is sent on top-level navigations (same-site GETs) and on all
+   * same-origin requests, including same-origin fetch/XHR. The tRPC
+   * client uses same-origin fetch with `credentials: "include"`, so the
+   * cookie travels with every API call.
+   *
+   * On local non-HTTPS dev (`secure=false`), some browsers also refuse
+   * SameSite=None entirely, which would have prevented dev-loop cookie
+   * round-trips. Lax works in both dev and prod.
+   */
   return {
     httpOnly: true,
     path: "/",
-    sameSite: "none",
-    secure: isSecureRequest(req),
+    sameSite: "lax",
+    secure,
   };
 }

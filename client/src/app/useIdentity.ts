@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
+import { getDeviceId } from "@/lib/deviceId";
 
 /**
  * Hook for v2.0 phone-app identity.
@@ -27,7 +28,15 @@ export function useIdentity() {
   const goOfflineMutation = trpc.directory.goOffline.useMutation();
 
   const startGuest = useCallback(
-    (displayName: string) => startGuestMutation.mutateAsync({ displayName }),
+    (displayName: string) =>
+      startGuestMutation.mutateAsync({
+        displayName,
+        // Belt-and-suspenders: also pass the device id in the body. The
+        // tRPC client already attaches `x-relay-device-id`, but the
+        // explicit input lets the server log it and survives if a
+        // proxy ever strips custom headers.
+        deviceId: getDeviceId(),
+      }),
     [startGuestMutation]
   );
 

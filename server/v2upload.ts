@@ -19,9 +19,10 @@ import type { Express, Request, Response } from "express";
 import crypto from "crypto";
 import { sdk } from "./_core/sdk";
 import { storagePut } from "./storage";
-import { GUEST_COOKIE } from "./_core/context";
+import { extractDeviceId, GUEST_COOKIE } from "./_core/context";
 import {
   ensureUserIdentity,
+  getIdentityByDeviceId,
   getIdentityByGuestToken,
   recordAttachment,
 } from "./v2db";
@@ -49,6 +50,7 @@ export function registerV2Upload(app: Express) {
 
       let identityId: number | null = null;
       const guestToken: string | undefined = req.cookies?.[GUEST_COOKIE];
+      const deviceId = extractDeviceId(req);
       if (user) {
         const ident = await ensureUserIdentity({
           userId: user.id,
@@ -56,9 +58,17 @@ export function registerV2Upload(app: Express) {
           guestToken: guestToken ?? null,
         });
         identityId = ident.id;
-      } else if (guestToken) {
-        const ident = await getIdentityByGuestToken(guestToken);
-        if (ident) identityId = ident.id;
+      } else {
+        // Cookie first, device id as fallback. Same resolution order
+        // as the tRPC context resolver — see server/_core/context.ts.
+        if (guestToken) {
+          const ident = await getIdentityByGuestToken(guestToken);
+          if (ident) identityId = ident.id;
+        }
+        if (identityId == null && deviceId) {
+          const ident = await getIdentityByDeviceId(deviceId);
+          if (ident) identityId = ident.id;
+        }
       }
       if (identityId == null) {
         return res.status(401).json({ error: "No identity. Sign in or start a guest session." });

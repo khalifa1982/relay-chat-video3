@@ -15,9 +15,11 @@ import { router, publicProcedure } from "./_core/trpc";
 import { GUEST_COOKIE } from "./_core/context";
 import { getSessionCookieOptions } from "./_core/cookies";
 import {
+  bindDeviceIdToIdentity,
   createGuestIdentity,
   deleteContact,
   getAttachmentById,
+  getIdentityByDeviceId,
   getIdentityById,
   getIdentityByNumber,
   getOrCreateDmConversation,
@@ -120,15 +122,50 @@ export const v2AuthRouter = router({
   }),
 
   /**
-   * Start (or restart) a guest session. Issues a fresh 6-digit number and
-   * sets a 30-day HttpOnly cookie. Idempotent: if the same cookie still
-   * resolves to a valid identity we just return that.
+   * Start (or restart) a guest session.
+   *
+   * The resolution order is strict, and was completely reworked in
+   * v2.1.0 to fix the "my number changes randomly / accounts collide"
+   * class of bug:
+   *
+   *   1. Cookie or device-id already resolved to an identity in ctx?
+   *      Reuse it. The context resolver has already done the heavy
+   *      lifting; we just re-issue a fresh cookie so the 30-day window
+   *      doesn't drift.
+   *   2. No ctx identity, but the caller's device id maps to an
+   *      existing guest row? Return THAT row. This is the survival
+   *      path when the cookie was dropped between page loads but the
+   *      browser is the same as before.
+   *   3. Neither — mint a brand-new identity, bind the device id, and
+   *      issue a cookie.
+   *
+   * The displayName is now treated as a hint for case (3) only: in
+   * cases (1) and (2) we keep the existing row's displayName so a
+   * silent rename can't happen behind the user's back.
    */
   startGuest: publicProcedure
-    .input(z.object({ displayName: DisplayNameSchema }))
+    .input(
+      z.object({
+        displayName: DisplayNameSchema,
+        // Optional but strongly recommended — see context.ts for shape.
+        deviceId: z
+          .string()
+          .regex(/^[a-f0-9]{16,64}$/i)
+          .optional()
+          .nullable(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
-      // If already a registered or valid-guest identity, reuse it.
+      const deviceId =
+        input.deviceId?.toLowerCase() ?? ctx.deviceId ?? null;
+
+      // (1) Already authenticated via context.
       if (ctx.identity) {
+        if (ctx.identity.isGuest && deviceId) {
+          await bindDeviceIdToIdentity(ctx.identity.id, deviceId).catch(
+            () => {}
+          );
+        }
         await touchGuestExpiry(ctx.identity.id).catch(() => {});
         return {
           id: ctx.identity.id,
@@ -136,10 +173,46 @@ export const v2AuthRouter = router({
           displayName: ctx.identity.displayName,
           avatarUrl: ctx.identity.avatarUrl,
           isGuest: ctx.identity.isGuest,
+          reused: true as const,
         };
       }
+
+      // (2) Survival path — cookie was dropped but device id still
+      // points at a guest row. Reuse it and reissue the cookie.
+      if (deviceId) {
+        const byDevice = await getIdentityByDeviceId(deviceId).catch(
+          () => null
+        );
+        if (byDevice) {
+          // Re-mint a guest token so the user gets a fresh cookie
+          // (the old one is gone) without changing identity.
+          const freshToken = (await import("crypto")).randomBytes(24).toString(
+            "hex"
+          );
+          const expires = new Date(Date.now() + GUEST_DAYS_MS);
+          const db = await getDb();
+          if (db) {
+            await db
+              .update(identities)
+              .set({ guestToken: freshToken, guestExpiresAt: expires })
+              .where(eq(identities.id, byDevice.id));
+          }
+          ctx.res.cookie(GUEST_COOKIE, freshToken, guestCookieOptions(ctx.req));
+          return {
+            id: byDevice.id,
+            number: byDevice.number,
+            displayName: byDevice.displayName,
+            avatarUrl: byDevice.avatarUrl,
+            isGuest: true as const,
+            reused: true as const,
+          };
+        }
+      }
+
+      // (3) Fresh identity. Bind the device id now.
       const { identity, guestToken } = await createGuestIdentity({
         displayName: input.displayName,
+        deviceId,
       });
       ctx.res.cookie(GUEST_COOKIE, guestToken, guestCookieOptions(ctx.req));
       return {
@@ -148,6 +221,7 @@ export const v2AuthRouter = router({
         displayName: identity.displayName,
         avatarUrl: identity.avatarUrl,
         isGuest: identity.isGuest,
+        reused: false as const,
       };
     }),
 

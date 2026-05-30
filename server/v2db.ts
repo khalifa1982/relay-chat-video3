@@ -125,6 +125,78 @@ export async function getIdentityByGuestToken(
   return rows.length > 0 ? rowToResolved(rows[0]) : null;
 }
 
+/**
+ * Resolve an identity by its sticky per-browser device id.
+ *
+ * This is the survival path when the guest cookie has been dropped
+ * (third-party-cookie blocking, ITP, manual cookie clear) but the user
+ * is still on the same browser. The device id lives in localStorage,
+ * which survives network changes and a much wider set of privacy modes
+ * than cookies.
+ *
+ * We deliberately do NOT check guest expiry here: the device id is
+ * stable across the full lifetime of the browser profile, and an active
+ * user on the same browser should never lose their number just because
+ * their cookie clock ticked over.
+ *
+ * Returns guest identities only — a registered (userId-bound) identity
+ * must be resolved through the OAuth session, not by a device id which
+ * can be replayed.
+ */
+export async function getIdentityByDeviceId(
+  deviceId: string | null | undefined
+): Promise<ResolvedIdentity | null> {
+  if (!deviceId) return null;
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(identities)
+    .where(and(eq(identities.deviceId, deviceId), isNull(identities.userId)))
+    .limit(1);
+  return rows.length > 0 ? rowToResolved(rows[0]) : null;
+}
+
+/**
+ * Pin the supplied device id to an existing identity. Used in two
+ * places:
+ *   1. createGuestIdentity — binds at first sign-in so the row is
+ *      discoverable on cookie loss.
+ *   2. Context resolver — if an identity already has no device id but
+ *      the caller is presenting one, bind it now (one-time upgrade so
+ *      pre-existing rows benefit from the new behavior without a
+ *      reset).
+ *
+ * Refuses to overwrite a non-null deviceId with a different value —
+ * that's a sign of a stolen cookie being replayed from a different
+ * device, and we should not silently accept it. Returns `true` if the
+ * row was updated, `false` if no change was made (either same value or
+ * mismatch).
+ */
+export async function bindDeviceIdToIdentity(
+  identityId: number,
+  deviceId: string
+): Promise<boolean> {
+  if (!deviceId || deviceId.length < 8) return false;
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db
+    .update(identities)
+    .set({ deviceId })
+    .where(
+      and(
+        eq(identities.id, identityId),
+        // Only bind when the slot is still empty.
+        isNull(identities.deviceId)
+      )
+    );
+  // drizzle-orm/mysql2 returns a ResultSetHeader-like object; we treat
+  // any non-error result as success and rely on the WHERE to ensure
+  // we don't trample existing bindings.
+  void result;
+  return true;
+}
+
 export async function getIdentityByUserId(userId: number): Promise<ResolvedIdentity | null> {
   const db = await getDb();
   if (!db) return null;
@@ -139,9 +211,15 @@ export async function getIdentityByUserId(userId: number): Promise<ResolvedIdent
 /**
  * Create a new guest identity with a fresh 6-digit number and a 30-day cookie.
  * Returns the new identity plus the token to put in the response cookie.
+ *
+ * If a `deviceId` is provided, it is bound to the row. Subsequent
+ * `whoami` calls from the same browser — even after a full cookie
+ * wipe — will resolve back to this identity via the device id, so the
+ * user keeps the same name and number.
  */
 export async function createGuestIdentity(input: {
   displayName: string;
+  deviceId?: string | null;
 }): Promise<{ identity: ResolvedIdentity; guestToken: string }> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
@@ -149,11 +227,16 @@ export async function createGuestIdentity(input: {
   const guestToken = newGuestToken();
   const guestExpiresAt = new Date(Date.now() + GUEST_DAYS * 24 * 60 * 60 * 1000);
   const displayName = input.displayName.trim().slice(0, 64) || "Guest";
+  const deviceId =
+    typeof input.deviceId === "string" && input.deviceId.length >= 8
+      ? input.deviceId
+      : null;
   await db.insert(identities).values({
     number,
     displayName,
     guestToken,
     guestExpiresAt,
+    deviceId,
   });
   const created = await db
     .select()

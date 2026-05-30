@@ -186,3 +186,51 @@ _The v2.0.5 work below added safety-nets and automated coverage but did **not** 
 - [x] `server/lookupValidation.test.ts` (6 cases) — pins the 6-digit `NumberSchema` used by `directory.lookup`/`contacts.upsert`/`messages.openThread`/`calls.start`: 6-digit numeric only, leading zeros preserved, length boundaries rejected, non-numeric rejected, non-string rejected, error message preserved.
 - [x] 75/75 vitest pass (+17 from this follow-up: 11 notifications + 6 lookup validation). TypeScript clean.
 - [ ] **Action required from you**: click **Publish** in the Management UI to push v2.0.9 to `relaychat-lduywq6l.manus.space`, then open Profile to grant notification permission once.
+
+
+## v2.1.0 — Sticky session, multi-user isolation, random-disconnect fix (delivered 2026-05-30)
+
+User report: "When multiple users log in it suddenly disconnects, my number changes without me knowing, and the session is not kept across IP changes / cookie blips."
+
+### Root cause
+
+The guest identity was protected only by a 30-day cookie carrying a random token. Three failure modes followed from that single point of failure:
+
+1. **Browsers that aggressively drop cookies** (Safari ITP, Brave Shields, Firefox ETP, third-party-cookie blockers, iOS Private Browsing) silently lose `relay_guest`. The OnboardingGate then asks the user to type a name → `startGuest` → a *fresh* identity row with a *fresh* 6-digit number. From the user's perspective: "my number changed by itself."
+2. **`SameSite=None` was the wrong setting for a same-origin app**: many browsers downgrade or drop `SameSite=None` cookies under privacy-mode treatment, which is exactly the disconnect symptom reported.
+3. **No device fingerprint at all**, so if a cookie ever leaked (extensions, copy-paste of a URL with credentials, proxy cache misbehavior), two browsers would land on the same identity with no way to detect the collision.
+
+### Fix (server)
+
+- [x] New `deviceId` column on `identities` table (drizzle/schema.ts) + migration pushed to live MySQL. Indexed for survival-path lookups.
+- [x] New helpers in `server/v2db.ts`: `getIdentityByDeviceId` (resolves by device id, ignores cookie expiry on purpose — same browser must keep the same number forever), `bindDeviceIdToIdentity` (refuses to overwrite an existing non-null binding so a leaked cookie cannot steal an identity).
+- [x] `server/_core/context.ts` rewritten with a strict resolution order: cookie → device id, with **device id winning when they disagree**. This is the rule that fixes the multi-user-bleed bug: a leaked cookie cannot impersonate another browser, because the device id from the other browser doesn't match.
+- [x] One-time upgrade path: any existing identity row that has no device id yet gets bound to the calling browser on its next request (`bindDeviceIdToIdentity` only writes empty slots, so it's safe to call on every hit).
+- [x] `server/_core/cookies.ts` hardened: `SameSite=None` → `SameSite=Lax`. Same-origin app, so Lax is the correct value and stops Safari/Brave/Firefox from dropping the cookie under privacy-mode treatment.
+- [x] `startGuest` mutation in `server/v2routers.ts` completely reworked:
+  - If the context already resolved an identity (cookie or device-id hit), reuse it — never mint a duplicate.
+  - If only a device id is presented and it maps to a guest row, re-issue a fresh cookie pointing at the same row. This is the **survival path**: cookies died but the browser is the same.
+  - Only when neither cookie nor device id resolves to anything, mint a brand-new identity (and bind the device id immediately so the next page load is sticky).
+  - `displayName` is now treated as a hint for the brand-new case only — cases (1) and (2) keep the existing name to stop silent renames.
+- [x] `server/v2upload.ts` accepts the same device-id fallback so avatar/file uploads survive cookie loss too.
+
+### Fix (client)
+
+- [x] New `client/src/lib/deviceId.ts`: localStorage-backed sticky id with 16 bytes of crypto-grade randomness, SSR-safe, survives Safari private mode (in-memory fallback when storage throws), rejects bogus stored values, supports explicit `resetDeviceId` for a future "switch account" flow.
+- [x] `client/src/main.tsx` adds the `x-relay-device-id` header on **every** tRPC request via a `headers()` callback on `httpBatchLink`. Server reads it in the context resolver and v2upload.
+- [x] `client/src/app/useIdentity.ts` also forwards the device id explicitly in the `startGuest` mutation body — belt-and-suspenders in case a proxy ever strips custom headers.
+
+### Tests
+
+- [x] `server/deviceId.test.ts` (14 cases): boundary checks on the header validator — accepts 16/32/64 hex chars and the 8-char minimum, rejects 7-char/empty/65-char/non-hex/mixed/missing/undefined; lower-cases; trims whitespace; picks the first array value; refuses to fall back to later array values (closes a header-stuffing forge vector).
+- [x] `client/src/lib/deviceId.test.ts` (8 cases): mints a 32-char hex id; caches within a session; persists across module reloads via the fake localStorage; SSR-safe when window is absent; rejects bogus stored values and mints fresh; `resetDeviceId` actually changes the value; `DEVICE_ID_HEADER` constant matches the server; survives Safari-private-mode storage that throws on setItem.
+- [x] `server/auth.logout.test.ts` updated to assert `sameSite: "lax"` instead of the old `sameSite: "none"` (deliberate change, documented in the test comment).
+- [x] **98/98 vitest pass (was 75, +23 new). TypeScript clean.**
+
+### Operational notes
+
+- Backward-compatible: existing identities without a device id will be bound to the calling browser on their next request, transparently.
+- The schema migration has already run on the live DB. The runtime code expects the column. Rolling back to a pre-v2.1.0 runtime would simply ignore the column (no breakage).
+- Bumped in-app version footer to `v2.1.0`.
+
+- [ ] **Action required from you**: click **Publish** in the Management UI to push v2.1.0 to `relaychat-lduywq6l.manus.space`. After it deploys, every browser on the new version is bound to its device id from that moment on — the random disconnects + number swaps will stop.

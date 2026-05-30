@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { DEVICE_ID_HEADER, getDeviceId } from "@/lib/deviceId";
 import { UNAUTHED_ERR_MSG } from '@shared/const';
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink, TRPCClientError } from "@trpc/client";
@@ -43,6 +44,17 @@ const trpcClient = trpc.createClient({
     httpBatchLink({
       url: "/api/trpc",
       transformer: superjson,
+      /*
+       * Attach the sticky per-browser device id on every request so the
+       * server can resolve the guest identity even when the cookie is
+       * gone (Safari ITP, third-party-cookie blocking, ad blockers,
+       * etc.). See client/src/lib/deviceId.ts and
+       * server/_core/context.ts for the matching contract.
+       */
+      headers() {
+        const deviceId = getDeviceId();
+        return deviceId ? { [DEVICE_ID_HEADER]: deviceId } : {};
+      },
       fetch(input, init) {
         return globalThis.fetch(input, {
           ...(init ?? {}),

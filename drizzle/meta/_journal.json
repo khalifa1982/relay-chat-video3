@@ -15,6 +15,13 @@
       "when": 1780132632438,
       "tag": "0001_rapid_frightful_four",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1780144734179,
+      "tag": "0002_classy_stone_men",
+      "breakpoints": true
     }
   ]
 }

@@ -51,10 +51,14 @@ describe("auth.logout", () => {
     expect(result).toEqual({ success: true });
     expect(clearedCookies).toHaveLength(1);
     expect(clearedCookies[0]?.name).toBe(COOKIE_NAME);
+    // v2.1.0: cookie hardened from SameSite=None to SameSite=Lax to
+    // stop Safari/Brave/Firefox from silently dropping the session
+    // cookie under privacy-mode treatment. Same-origin app, so Lax
+    // is the correct value and matches every other field above.
     expect(clearedCookies[0]?.options).toMatchObject({
       maxAge: -1,
       secure: true,
-      sameSite: "none",
+      sameSite: "lax",
       httpOnly: true,
       path: "/",
     });
