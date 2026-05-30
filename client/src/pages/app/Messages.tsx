@@ -271,25 +271,71 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   }
 
   // ── voice-note recording ──
+  // Safari (especially mobile) does not support "audio/webm". We probe the
+  // browser's supported MIME types and pick the first one that works.
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const [recording, setRecording] = useState(false);
+
+  // Capability: MediaRecorder may be missing entirely on older iOS Safari.
+  const recorderSupported =
+    typeof window !== "undefined" &&
+    typeof window.MediaRecorder === "function";
+
+  function pickAudioMime(): { mimeType: string; ext: string } | null {
+    if (typeof window === "undefined" || !window.MediaRecorder) return null;
+    const candidates: Array<{ mimeType: string; ext: string }> = [
+      { mimeType: "audio/webm;codecs=opus", ext: "webm" },
+      { mimeType: "audio/webm", ext: "webm" },
+      { mimeType: "audio/mp4", ext: "m4a" }, // Safari
+      { mimeType: "audio/aac", ext: "m4a" }, // some Safari builds
+      { mimeType: "audio/ogg;codecs=opus", ext: "ogg" },
+    ];
+    for (const c of candidates) {
+      try {
+        if (window.MediaRecorder.isTypeSupported(c.mimeType)) return c;
+      } catch {
+        /* ignore */
+      }
+    }
+    // last-ditch: let the browser pick its default by passing no mimeType
+    return { mimeType: "", ext: "bin" };
+  }
+
   async function startRecording() {
+    if (!recorderSupported) {
+      alert(
+        "Voice notes aren't supported by this browser yet. Try the latest Safari/Chrome, or send an audio file via the paperclip instead."
+      );
+      return;
+    }
     try {
+      const pick = pickAudioMime();
+      if (!pick) {
+        alert("No supported audio format found in this browser.");
+        return;
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const rec = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      const rec = pick.mimeType
+        ? new MediaRecorder(stream, { mimeType: pick.mimeType })
+        : new MediaRecorder(stream);
       const chunks: Blob[] = [];
       rec.ondataavailable = (e) => e.data.size > 0 && chunks.push(e.data);
       rec.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunks, { type: "audio/webm" });
-        await uploadBlob(blob, "voice-note.webm");
+        // Use the recorder's actual mimeType (browsers sometimes substitute one).
+        const finalMime = rec.mimeType || pick.mimeType || "application/octet-stream";
+        const blob = new Blob(chunks, { type: finalMime });
+        await uploadBlob(blob, `voice-note.${pick.ext}`);
         setRecording(false);
       };
       mediaRecorderRef.current = rec;
       rec.start();
       setRecording(true);
     } catch (err) {
-      alert("Mic access required for voice notes: " + (err instanceof Error ? err.message : String(err)));
+      alert(
+        "Mic access required for voice notes: " +
+          (err instanceof Error ? err.message : String(err))
+      );
     }
   }
   function stopRecording() {
@@ -518,6 +564,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               size="icon"
               className="h-11 w-11 rounded-full"
               aria-label={recording ? "Stop" : "Record"}
+              disabled={!recorderSupported}
+              title={
+                recorderSupported
+                  ? recording
+                    ? "Stop recording"
+                    : "Record a voice note"
+                  : "Voice notes need a newer browser \u2014 use the paperclip to attach an audio file instead"
+              }
             >
               {recording ? <StopCircle className="size-5" /> : <Mic className="size-5" />}
             </Button>

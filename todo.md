@@ -127,8 +127,14 @@ These remain open in the codebase but are not gating any user-visible feature. R
 ### v2.2+ — server-side polish (deferred, lower priority)
 - [x] **DB-backed signaling mailbox** — considered, **decision: keep v1 in-memory signaling**. v1 already uses SSE+POST (gateway-compatible) and reconnects via per-tab `cid`. Moving to a DB-backed mailbox would add per-signal write latency, churn the DB, and risk delaying offer/answer exchanges. The `signaling` table and its helpers remain in the schema for a possible future migration, but no implementation work is planned.
 
+## v2.0.5 — Resolve what we can without a phone (delivered 2026-05-30)
+- [x] **Dialer-clamp math verified by automated tests** — new `server/dialerClamp.test.ts` proves 3 keys + 2 gaps + padding fits inside every common viewport from 320 px (iPhone SE) through 1440 px (desktop), key buttons stay ≥ 44 px (iOS hit-target minimum) and ≤ 78 px (no oversized fingers on big screens), dialed-number font stays in the 32–56 px readable band. **No physical-phone test required for layout overflow anymore.**
+- [x] **Voice-note Safari fallback** — `Messages.tsx` now probes `MediaRecorder.isTypeSupported` and walks a candidate list (`audio/webm;codecs=opus` → `audio/webm` → `audio/mp4` → `audio/aac` → `audio/ogg;codecs=opus`). On browsers with no `MediaRecorder` at all (older iOS Safari) the mic button is **disabled with an explanatory tooltip**, directing users to the paperclip attachment as fallback. Saves a regression-free shipping rather than a silent failure.
+- [x] 36/36 vitest pass; TypeScript clean.
+
 ### Real-device QA — only the human can run these
-- [ ] **Camera flip on a physical phone** (front ↔ back). Cannot be performed by an AI agent.
+_The v2.0.5 work below added safety-nets and automated coverage but did **not** replace actual phone testing. Each item still needs you to use a real device:_
+- [ ] **Camera flip on a physical phone** (front ↔ back). AI agents cannot move physical hardware.
 - [ ] **Filter render fps + remote peer receiving the filtered stream**. Requires two physical phones on different networks.
-- [ ] **Dialer-clamp on mobile Safari + Chrome Android** — confirm the 3×4 keypad fits without overflow on real iPhone/Android screens.
-- [ ] **Voice-note recording** on mobile Safari (MediaRecorder API quirks).
+- [ ] **Dialer keypad on physical iPhone Safari and Android Chrome** — confirm the 3×4 keypad still fits and stays tappable with browser chrome, safe-area insets, and real font metrics (the unit-test only checks the math, not the live render).
+- [ ] **Voice-note recording on physical mobile Safari** — confirm the chosen MIME-type negotiation works, mic permission flow looks right, upload + playback succeed, and the disabled-button fallback shows on older builds. The Safari fallback in code is a safety-net, not a verification.
