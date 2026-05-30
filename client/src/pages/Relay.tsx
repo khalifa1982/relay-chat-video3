@@ -164,7 +164,7 @@ const MARKUP = `
 
 <div class="boot" id="boot"><div class="spin"></div><div class="t">Connecting&hellip;</div></div>
 
-<div class="version-tag">RELAY &middot; v1.2.0</div>
+<div class="version-tag">RELAY &middot; v2.0.0</div>
 `;
 
 export default function Relay() {

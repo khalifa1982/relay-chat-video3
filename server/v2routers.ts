@@ -1,0 +1,512 @@
+/* ============================================================
+   v2.0 tRPC routers — the API surface for the phone-app shell.
+
+   Every router exported here is namespaced under appRouter as a
+   sibling of `auth` and `system`. See server/routers.ts for the
+   final composition.
+   ============================================================ */
+
+import { TRPCError } from "@trpc/server";
+import { z } from "zod";
+import { eq } from "drizzle-orm";
+import { getDb } from "./db";
+import { identities } from "../drizzle/schema";
+import { router, publicProcedure } from "./_core/trpc";
+import { GUEST_COOKIE } from "./_core/context";
+import { getSessionCookieOptions } from "./_core/cookies";
+import {
+  createGuestIdentity,
+  deleteContact,
+  getAttachmentById,
+  getIdentityById,
+  getIdentityByNumber,
+  getOrCreateDmConversation,
+  getPresenceForIds,
+  listCallHistory,
+  listContacts,
+  listMessages,
+  listThreads,
+  markOnline,
+  markOffline,
+  markThreadRead,
+  recordAttachment,
+  recordCallStart,
+  sendMessage,
+  touchGuestExpiry,
+  updateIdentityProfile,
+  upsertContact,
+} from "./v2db";
+
+const NumberSchema = z
+  .string()
+  .regex(/^\d{6}$/, { message: "Number must be 6 digits" });
+
+const DisplayNameSchema = z
+  .string()
+  .trim()
+  .min(1, "Name is required")
+  .max(64, "Name is too long");
+
+const GUEST_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+function guestCookieOptions(req: Parameters<typeof getSessionCookieOptions>[0]) {
+  const base = getSessionCookieOptions(req);
+  return { ...base, maxAge: GUEST_DAYS_MS };
+}
+
+/**
+ * Require any identity (guest or registered). Throws UNAUTHORIZED otherwise.
+ */
+function requireIdentity(ctx: { identity: unknown }) {
+  const id = ctx.identity as { id: number } | null;
+  if (!id) throw new TRPCError({ code: "UNAUTHORIZED", message: "No identity" });
+  return id;
+}
+
+/* ── auth/identity router ─────────────────────────────────────── */
+
+export const v2AuthRouter = router({
+  /**
+   * Return whatever identity is attached to the current request.
+   * Used by the client to decide between "show name input" and
+   * "show app shell" without a redirect.
+   */
+  whoami: publicProcedure.query(async ({ ctx }) => {
+    if (!ctx.identity) return null;
+    // Touch the guest cookie so 30-day countdown resets on activity.
+    if (ctx.identity.isGuest) {
+      try {
+        await touchGuestExpiry(ctx.identity.id);
+      } catch {
+        /* swallow */
+      }
+    }
+    return {
+      id: ctx.identity.id,
+      number: ctx.identity.number,
+      displayName: ctx.identity.displayName,
+      avatarUrl: ctx.identity.avatarUrl,
+      isGuest: ctx.identity.isGuest,
+      guestExpiresAt: ctx.identity.guestExpiresAt,
+    };
+  }),
+
+  /**
+   * Start (or restart) a guest session. Issues a fresh 6-digit number and
+   * sets a 30-day HttpOnly cookie. Idempotent: if the same cookie still
+   * resolves to a valid identity we just return that.
+   */
+  startGuest: publicProcedure
+    .input(z.object({ displayName: DisplayNameSchema }))
+    .mutation(async ({ ctx, input }) => {
+      // If already a registered or valid-guest identity, reuse it.
+      if (ctx.identity) {
+        await touchGuestExpiry(ctx.identity.id).catch(() => {});
+        return {
+          id: ctx.identity.id,
+          number: ctx.identity.number,
+          displayName: ctx.identity.displayName,
+          avatarUrl: ctx.identity.avatarUrl,
+          isGuest: ctx.identity.isGuest,
+        };
+      }
+      const { identity, guestToken } = await createGuestIdentity({
+        displayName: input.displayName,
+      });
+      ctx.res.cookie(GUEST_COOKIE, guestToken, guestCookieOptions(ctx.req));
+      return {
+        id: identity.id,
+        number: identity.number,
+        displayName: identity.displayName,
+        avatarUrl: identity.avatarUrl,
+        isGuest: identity.isGuest,
+      };
+    }),
+
+  /**
+   * Explicit sign-out for guest sessions (clears the guest cookie).
+   */
+  signOutGuest: publicProcedure.mutation(async ({ ctx }) => {
+    const opts = guestCookieOptions(ctx.req);
+    ctx.res.clearCookie(GUEST_COOKIE, { ...opts, maxAge: -1 });
+    return { ok: true };
+  }),
+
+  /**
+   * Update display name or avatar URL on the current identity.
+   */
+  updateProfile: publicProcedure
+    .input(
+      z.object({
+        displayName: DisplayNameSchema.optional(),
+        avatarUrl: z.string().url().nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      await updateIdentityProfile(me.id, input);
+      const fresh = await getIdentityById(me.id);
+      return fresh;
+    }),
+});
+
+/* ── directory (numbers / lookups) ────────────────────────────── */
+
+export const v2DirectoryRouter = router({
+  /** Look up a single number — returns null when unknown. */
+  lookup: publicProcedure
+    .input(z.object({ number: NumberSchema }))
+    .query(async ({ input }) => {
+      const id = await getIdentityByNumber(input.number);
+      if (!id) return null;
+      const [pres] = await getPresenceForIds([id.id]);
+      return {
+        id: id.id,
+        number: id.number,
+        displayName: id.displayName,
+        avatarUrl: id.avatarUrl,
+        isOnline: pres?.isOnline ?? false,
+        lastSeenAt: pres?.lastSeenAt ?? null,
+      };
+    }),
+
+  /** Get presence for an array of identity ids. */
+  presence: publicProcedure
+    .input(z.object({ ids: z.array(z.number().int().positive()).max(200) }))
+    .query(async ({ input }) => {
+      if (input.ids.length === 0) return [];
+      return getPresenceForIds(input.ids);
+    }),
+
+  /**
+   * Heartbeat: mark me online and bump my lastSeenAt. Client should call
+   * this every ~30s while the app is open.
+   */
+  heartbeat: publicProcedure.mutation(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    await markOnline(me.id, null);
+    return { ok: true, at: new Date() };
+  }),
+
+  /** Explicit "I'm leaving" beacon. */
+  goOffline: publicProcedure.mutation(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    await markOffline(me.id);
+    return { ok: true };
+  }),
+});
+
+/* ── contacts router ──────────────────────────────────────────── */
+
+export const v2ContactsRouter = router({
+  list: publicProcedure.query(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    const rows = await listContacts(me.id);
+    const ids: number[] = [];
+    const idByNumber = new Map<string, number>();
+    for (const r of rows) {
+      const ident = await getIdentityByNumber(r.number);
+      if (ident) {
+        ids.push(ident.id);
+        idByNumber.set(r.number, ident.id);
+      }
+    }
+    const presList = await getPresenceForIds(ids);
+    const presByIdentity = new Map(presList.map((p) => [p.identityId, p]));
+    return rows.map((r) => {
+      const ident = idByNumber.get(r.number);
+      const pres = ident != null ? presByIdentity.get(ident) : undefined;
+      return {
+        id: r.id,
+        number: r.number,
+        displayName: r.displayName,
+        avatarUrl: r.avatarUrl,
+        favourite: r.favourite,
+        notes: r.notes,
+        identityId: ident ?? null,
+        isOnline: pres?.isOnline ?? false,
+        lastSeenAt: pres?.lastSeenAt ?? null,
+      };
+    });
+  }),
+
+  upsert: publicProcedure
+    .input(
+      z.object({
+        number: NumberSchema,
+        displayName: z.string().trim().max(64).nullable().optional(),
+        avatarUrl: z.string().url().nullable().optional(),
+        favourite: z.boolean().optional(),
+        notes: z.string().max(2000).nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      if (input.number === ctx.identity!.number) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "You can't add yourself as a contact",
+        });
+      }
+      const row = await upsertContact({ ownerId: me.id, ...input });
+      return row;
+    }),
+
+  remove: publicProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      await deleteContact(me.id, input.id);
+      return { ok: true };
+    }),
+});
+
+/* ── messages router ──────────────────────────────────────────── */
+
+export const v2MessagesRouter = router({
+  threads: publicProcedure.query(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    const base = await listThreads(me.id);
+    if (base.length === 0) return [];
+    const pres = await getPresenceForIds(base.map((b) => b.otherIdentityId));
+    const byId = new Map(pres.map((p) => [p.identityId, p]));
+    return base.map((b) => {
+      const p = byId.get(b.otherIdentityId);
+      return {
+        conversationId: b.conversationId,
+        peerIdentityId: b.otherIdentityId,
+        peerNumber: b.otherNumber,
+        peerDisplayName: b.otherDisplayName,
+        peerAvatarUrl: b.otherAvatarUrl,
+        peerIsOnline: p?.isOnline ?? false,
+        peerLastSeenAt: p?.lastSeenAt ?? null,
+        lastMessageAt: b.lastMessageAt,
+        lastMessageBody: b.lastMessagePreview,
+        lastMessageKind: b.lastMessageKind,
+        unreadCount: b.unreadCount,
+      };
+    });
+  }),
+
+  /** Open or create a 1:1 conversation with the given number. */
+  openThread: publicProcedure
+    .input(z.object({ number: NumberSchema }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const other = await getIdentityByNumber(input.number);
+      if (!other) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "That number isn't a RELAY user yet",
+        });
+      }
+      if (other.id === me.id) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Can't message yourself",
+        });
+      }
+      const convo = await getOrCreateDmConversation(me.id, other.id);
+      return {
+        conversationId: convo.id,
+        otherIdentityId: other.id,
+        otherNumber: other.number,
+        otherDisplayName: other.displayName,
+        otherAvatarUrl: other.avatarUrl,
+      };
+    }),
+
+  list: publicProcedure
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        beforeId: z.number().int().positive().optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const rows = await listMessages({
+        conversationId: input.conversationId,
+        identityId: me.id,
+        beforeId: input.beforeId,
+        limit: input.limit,
+      });
+      // resolve attachments inline (keep client simple)
+      const attIds = rows
+        .map((r) => r.attachmentId)
+        .filter((x): x is number => typeof x === "number");
+      const attachmentsByMessage = new Map<number, Awaited<ReturnType<typeof getAttachmentById>>>();
+      for (const r of rows) {
+        if (r.attachmentId) {
+          const a = await getAttachmentById(r.attachmentId);
+          attachmentsByMessage.set(r.id, a ?? null);
+        }
+      }
+      return rows.map((r) => ({
+        id: r.id,
+        conversationId: r.conversationId,
+        senderIdentityId: r.senderIdentityId,
+        kind: r.kind,
+        body: r.body,
+        meta: r.meta,
+        status: r.status,
+        createdAt: r.createdAt,
+        editedAt: r.editedAt,
+        attachment: attachmentsByMessage.get(r.id) ?? null,
+        replyToId: r.replyToId ?? null,
+        _attachmentIdsUsed: attIds.length, // dev-only: visibility for tests
+      }));
+    }),
+
+  send: publicProcedure
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        kind: z
+          .enum(["text", "image", "video", "audio", "file"])
+          .optional()
+          .default("text"),
+        body: z.string().max(8000).nullable().optional(),
+        attachmentId: z.number().int().positive().nullable().optional(),
+        replyToId: z.number().int().positive().nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      if (
+        (!input.body || input.body.trim().length === 0) &&
+        !input.attachmentId
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Message must have body or attachment",
+        });
+      }
+      const row = await sendMessage({
+        conversationId: input.conversationId,
+        senderIdentityId: me.id,
+        kind: input.kind,
+        body: input.body ?? null,
+        attachmentId: input.attachmentId ?? null,
+        replyToId: input.replyToId ?? null,
+      });
+      return row;
+    }),
+
+  markRead: publicProcedure
+    .input(z.object({ conversationId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      await markThreadRead({
+        conversationId: input.conversationId,
+        identityId: me.id,
+      });
+      return { ok: true };
+    }),
+});
+
+/* ── attachments router ───────────────────────────────────────── */
+
+export const v2AttachmentsRouter = router({
+  /**
+   * Register an attachment after the file has been uploaded via the HTTP
+   * `/api/v2/upload` endpoint (which does the actual storagePut). This
+   * router-level entry exists for clients that already have storage keys
+   * (e.g. server-driven flows or tests).
+   */
+  register: publicProcedure
+    .input(
+      z.object({
+        storageKey: z.string().min(1).max(256),
+        url: z.string().min(1),
+        mimeType: z.string().min(1).max(128),
+        sizeBytes: z.number().int().nonnegative(),
+        width: z.number().int().positive().optional().nullable(),
+        height: z.number().int().positive().optional().nullable(),
+        durationMs: z.number().int().positive().optional().nullable(),
+        filename: z.string().max(256).optional().nullable(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const row = await recordAttachment({
+        ...input,
+        uploadedByIdentityId: me.id,
+      });
+      return row;
+    }),
+
+  get: publicProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .query(async ({ input }) => getAttachmentById(input.id)),
+});
+
+/* ── calls router (history + start log) ───────────────────────── */
+
+export const v2CallsRouter = router({
+  history: publicProcedure.query(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    const rows = await listCallHistory(me.id, 100);
+    // join the "other" identity for each row for friendly display
+    const otherIds = Array.from(
+      new Set(
+        rows.map((r) => (r.callerIdentityId === me.id ? r.calleeIdentityId : r.callerIdentityId))
+      )
+    );
+    const db = await getDb();
+    const otherList = db
+      ? await db.select().from(identities).where(eq(identities.id, otherIds[0] ?? -1))
+      : [];
+    // batch-fetch (simpler than N+1)
+    const otherById = new Map<number, Awaited<ReturnType<typeof getIdentityByNumber>>>();
+    for (const oid of otherIds) {
+      otherById.set(oid, await getIdentityById(oid));
+    }
+    void otherList;
+    return rows.map((r) => {
+      const otherId = r.callerIdentityId === me.id ? r.calleeIdentityId : r.callerIdentityId;
+      const other = otherById.get(otherId);
+      return {
+        id: r.id,
+        direction: r.callerIdentityId === me.id ? ("out" as const) : ("in" as const),
+        status: r.status,
+        channel: r.channel,
+        startedAt: r.startedAt,
+        answeredAt: r.answeredAt,
+        endedAt: r.endedAt,
+        durationSec: r.durationSec,
+        other: other
+          ? {
+              identityId: other.id,
+              number: other.number,
+              displayName: other.displayName,
+              avatarUrl: other.avatarUrl,
+            }
+          : null,
+      };
+    });
+  }),
+
+  /** Caller calls this immediately before sending the SDP offer. */
+  logStart: publicProcedure
+    .input(
+      z.object({
+        calleeNumber: NumberSchema,
+        channel: z.enum(["voice", "video"]).optional().default("video"),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const callee = await getIdentityByNumber(input.calleeNumber);
+      if (!callee) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Number not found" });
+      }
+      const row = await recordCallStart({
+        callerIdentityId: me.id,
+        calleeIdentityId: callee.id,
+        channel: input.channel,
+      });
+      return row;
+    }),
+});

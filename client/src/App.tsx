@@ -7,34 +7,43 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import Docs from "./pages/Docs";
 import Relay from "./pages/Relay";
+import { AppShell } from "./app/AppShell";
+import Dialer from "./pages/app/Dialer";
+import Messages from "./pages/app/Messages";
+import Contacts from "./pages/app/Contacts";
+
+function ShellRoute({ tab }: { tab: "dialer" | "messages" | "contacts" }) {
+  const View = tab === "dialer" ? Dialer : tab === "messages" ? Messages : Contacts;
+  return (
+    <AppShell>
+      <View />
+    </AppShell>
+  );
+}
 
 function Router() {
-  // make sure to consider if you need authentication for certain routes
   return (
     <Switch>
       <Route path={"/"} component={Home} />
-      <Route path={"/app"} component={Relay} />
-      <Route path={"/app/"} component={Relay} />
+      {/* Phone-app shell */}
+      <Route path={"/app"}>{() => <ShellRoute tab="dialer" />}</Route>
+      <Route path={"/app/"}>{() => <ShellRoute tab="dialer" />}</Route>
+      <Route path={"/app/dialer"}>{() => <ShellRoute tab="dialer" />}</Route>
+      <Route path={"/app/messages"}>{() => <ShellRoute tab="messages" />}</Route>
+      <Route path={"/app/contacts"}>{() => <ShellRoute tab="contacts" />}</Route>
+      {/* Legacy / in-call screen: kept reachable for the actual call UI */}
+      <Route path={"/app/call"} component={Relay} />
       <Route path={"/docs"} component={Docs} />
       <Route path={"/404"} component={NotFound} />
-      {/* Final fallback route */}
       <Route component={NotFound} />
     </Switch>
   );
 }
 
-// NOTE: About Theme
-// - First choose a default theme according to your design style (dark or light bg), than change color palette in index.css
-//   to keep consistent foreground/background color across components
-// - If you want to make theme switchable, pass `switchable` ThemeProvider and use `useTheme` hook
-
 function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider
-        defaultTheme="light"
-        // switchable
-      >
+      <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
           <Toaster />
           <Router />

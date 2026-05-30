@@ -9,6 +9,8 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { attachRelay } from "../relay";
+import { registerV2Upload } from "../v2upload";
+import { reapStalePresence } from "../v2db";
 
 // The RELAY calling UI is rendered by the React SPA at /app (see
 // `client/src/pages/Relay.tsx`). We deliberately do NOT serve a
@@ -48,6 +50,15 @@ async function startServer() {
   // plain HTTP because the production gateway downgrades raw WebSocket
   // upgrades on arbitrary paths.
   attachRelay(app);
+  // v2.0 attachment upload (multipart-friendly JSON body)
+  registerV2Upload(app);
+  // Stale-presence sweep — once a minute, flip users whose heartbeat
+  // expired to offline. Cheap UPDATE; safe to run from a single instance.
+  setInterval(() => {
+    reapStalePresence(120).catch((err) => {
+      console.warn("[v2 presence reaper]", err);
+    });
+  }, 60_000).unref();
   // tRPC API
   app.use(
     "/api/trpc",

@@ -11,7 +11,7 @@ Hosted website for the RELAY chat / voice / video application (Manus hosting).
 - [x] Authoritative room membership: glare-free mesh (only newcomer sends offers), 6-user cap, busy detection
 
 ## Client (RELAY web UI)
-- [x] Serve the original RELAY HTML/CSS/JS verbatim from `client/public/relay/` (preserves the WebRTC mesh code paths the user already validated end-to-end)
+- [x] Serve the original RELAY HTML/CSS/JS verbatim from `client/public/relay/`
 - [x] Connect to `wss://<host>/api/relay`
 - [x] Register flow with name → server-issued 6-digit number
 - [x] Dial pad / call by number
@@ -21,115 +21,94 @@ Hosted website for the RELAY chat / voice / video application (Manus hosting).
 - [x] Recents list, share-my-number control, toasts for errors
 
 ## Routing & landing
-- [x] Route `/` → marketing landing page introducing RELAY
-- [x] Route `/app` → the actual calling app (Express serves the standalone UI)
+- [x] Route `/` → marketing landing page
+- [x] Route `/app` → calling app (now wrapped in v2.0 phone-app shell)
 - [x] Privacy / hosting notes inline on the landing page
 
 ## Quality & delivery
-- [x] Unit tests for the signaling logic (vitest, 9/9 passing)
-- [x] Verify `webdev_check_status` passes (LSP / TypeScript clean, dev server running)
+- [x] Unit tests for the signaling logic (vitest, 25/25 passing including v2)
+- [x] Verify `webdev_check_status` passes
 - [x] Save checkpoint and provide preview link to user
 
-## Bugs
-- [x] Clicking "Launch RELAY" shows a "Redirecting to /app/" plain text page instead of loading the calling UI in production (fixed: explicit GET /app and /app/ handlers registered ahead of express.static; redirect disabled on static middleware)
-- [x] App is stuck on "Connecting…" in production — the WebSocket to /api/relay isn't completing (fixed: switched signaling from raw WebSocket to Server-Sent Events + HTTP POST so it goes through Cloudflare/Cloud Run cleanly)
-- [x] Production /app still stuck on "Connecting…" — fixed by porting the standalone HTML/JS calling UI into a real React route at /app (`client/src/pages/Relay.tsx` + `client/src/lib/relayClient.ts`). SSE+POST signaling unchanged. Tests still 10/10.
-- [x] Add version number to footer on every deploy (RELAY · v1.0.2 visible bottom-right of the calling UI)
+## Bugs (v1 series — all resolved)
+- [x] "Redirecting to /app/" plain text page → fixed (explicit handlers ahead of express.static)
+- [x] Production stuck on "Connecting…" → fixed (switched signaling to SSE + HTTP POST)
+- [x] Same bug recurring → fixed (ported standalone HTML/JS to a real React route)
+- [x] Add version number to footer on every deploy
 
-## Calls stuck on "Connecting…" between two real users (intermittent — reported by user on 3rd test)
-- [x] Add free public TURN fallback (openrelay.metered.ca) on top of Google STUN so strict-NAT users can establish media without operator-run coturn
-- [x] Surface per-peer WebRTC connection state next to each video tile so failures are diagnosable (per-tile data-state attribute + colored "connecting/checking/reconnecting/failed" label)
-- [x] Add a "Diagnostics" overlay (toggle with `?` key or button bottom-left) showing per-peer ICE/conn/gather/signaling state and a rolling event log; Copy button to share logs
-- [x] Auto-trigger ICE restart on the offerer side when connection fails (rescues calls where a NAT mapping died mid-call)
-- [x] Verify in dev before saving checkpoint (manual smoke test passed; vitest 11/11)
-- [x] Bump version to v1.1.0 (visible bottom-right of the calling UI)
+## v1.1 — Connection reliability
+- [x] Free public TURN fallback (openrelay.metered.ca) on top of Google STUN
+- [x] Per-peer connection-state surfaced on each video tile
+- [x] Diagnostics overlay (toggle with `?` or button) with rolling event log + Copy
+- [x] Auto-trigger ICE restart on offerer side when connection fails
+- [x] Vitest 11/11 + manual smoke pass
+- [x] Bump version to v1.1.0
 
 ## v1.2 — Camera UX, live filters, redesigned call bar
-- [x] Self-preview no longer mirrors outgoing video (outgoing canvas stream is never mirrored; local self-tile shows mirrored preview only when using front cam, no mirror on back cam)
-- [x] Add a "Flip camera" button to swap between front (`facingMode: user`) and back (`facingMode: environment`) on devices that have both
-- [x] Build a canvas-based local-camera processing pipeline (`client/src/lib/mediaPipeline.ts`) that captures raw `getUserMedia` track, runs filters per-frame on a hidden `<canvas>`, republishes `captureStream()` track via `RTCRtpSender.replaceTrack`
-- [x] Color filters: none / B&W / sepia / vivid / cool / warm (canvas `filter` property)
-- [x] Background blur using MediaPipe Selfie Segmentation (lazy-loaded — only fetched on first blur use)
-- [x] Face overlays using MediaPipe Face Detector: sunglasses, dog ears, hearts (drawn on canvas relative to detected bounding boxes; lazy-loaded)
-- [x] Snapchat-style horizontal scrollable filter picker (filter dock with horizontal scroll, scroll-snap, active-state highlight, close button)
-- [x] Redesign the in-call control bar — glassmorphic floating pill, frosted blur, circular icon buttons, gradient hangup pill
+- [x] Self-preview no longer mirrors outgoing video
+- [x] Flip-camera button (front/back via `facingMode`)
+- [x] Canvas-based local-camera processing pipeline (`client/src/lib/mediaPipeline.ts`)
+- [x] Color filters: none / B&W / sepia / vivid / cool / warm
+- [x] Background blur via MediaPipe Selfie Segmentation (lazy-loaded)
+- [x] Face overlays via MediaPipe Face Detector (sunglasses / dog ears / hearts)
+- [x] Snapchat-style horizontal scrollable filter dock
+- [x] Redesigned in-call control bar (glassmorphic floating pill)
 - [x] Bump version to v1.2.0
-- [x] Verify with two real devices — deferred to user (real-device verification of camera flip on phone, filter render fps, and remote peer receiving filtered stream cannot be performed by the agent without physical hardware; covered instead by 6 new vitest tests for the filter registry, manual UI inspection of the dock & control bar, and code-level review of replaceTrack wiring)
+- [x] Vitest 17/17 — real-device QA still deferred (no physical hardware here)
 
 ## v1.2.1 — Claude / external-LLM cloud editing pipeline
-- [x] Write CLAUDE.md at repo root with full project briefing (architecture decisions, conventions, pitfalls, pending work) so Claude or any LLM agent has accurate context the moment it opens the repo
-- [x] Add GitHub Actions CI workflow (`.github/workflows/ci.yml`) that runs `pnpm check`, `pnpm test`, and `pnpm build` on every push and PR — safety net against breaking commits from automated agents
-- [x] Add `.github/pull_request_template.md` that nudges contributors (human or LLM) to update `todo.md`, `CLAUDE.md`, and bump the version footer on every PR
-- [x] User-side: export project to GitHub — done by agent via `gh` CLI to https://github.com/khalifa1982/relay-chat-video (private). 155 files pushed on `main`.
-- [x] Push `.github/workflows/ci.yml` and `.github/pull_request_template.md` to GitHub — completed by agent after the user re-authorized the `gh` CLI on the cloud computer with the `workflow` scope (commits 574f10ff for ci.yml, 8a5cb4d9 for the PR template).
-- [ ] User-side: install Claude GitHub App on the new repo so Claude can read files and push commits directly (https://github.com/apps/claude → Install → select only `relay-chat-video`)
+- [x] Write `CLAUDE.md` at repo root
+- [x] GitHub Actions CI workflow `.github/workflows/ci.yml`
+- [x] `.github/pull_request_template.md`
+- [x] Export project to https://github.com/khalifa1982/relay-chat-video
+- [x] Push `ci.yml` and PR template
+- [x] Install Claude GitHub App on the repo (verified: Claude responded to `@claude` on issue #1)
 
-## v2.0 — Phone-app experience (planned)
+## v1.2.2 — Real @claude autonomous mentions on the repo (LIVE)
+- [x] `ANTHROPIC_API_KEY` set as Actions secret (user added via UI)
+- [x] `.github/workflows/claude.yml` using `anthropics/claude-code-action@beta`
+- [x] Verified: Claude replied correctly on issue #1 (workflow run 26678538523)
+- [x] Security note: API key shared in chat history — user confirmed they accept the exposure risk and want to keep the key active
 
-### Design (Gemini 2.5 Flash)
-- [ ] Generate visual direction via Gemini: palette refinement, dial-pad layout for phone / tablet / desktop, message bubble system, contact card, online/offline status pills, app-shell chrome
-- [ ] Write `design/v2-spec.md` capturing the chosen direction so it survives across sessions
+## v2.0 — Phone-app experience (delivered 2026-05-30)
 
-### Backend & data model
-- [ ] Schema: `guest_sessions` (id, username, number, cookie_token, created_at, expires_at, ip, upgraded_user_id)
-- [ ] Schema: `contacts` (owner_user_id_or_guest, contact_number, display_name, avatar_url, created_at)
-- [ ] Schema: `conversations` (id, kind, last_message_at) + `conversation_participants` (conversation_id, party_id, party_kind, unread_count, last_read_at)
-- [ ] Schema: `messages` (id, conversation_id, sender_party_id, sender_kind, body, kind, attachment_id, created_at, edited_at, deleted_at, status)
-- [ ] Schema: `attachments` (id, storage_key, url, mime, size, width, height, duration_ms, uploaded_by)
-- [ ] Schema: `presence` (party_id, party_kind, last_seen_at, is_online) updated by WS heartbeats
-- [ ] tRPC: `guest.start({username})` → sets 30-day cookie, allocates 6-digit number, returns identity
-- [ ] tRPC: `auth.upgradeGuestToUser()` — migrate guest data to OAuth user
-- [ ] tRPC: `contacts.list/add/update/remove`
-- [ ] tRPC: `messages.threads/messages/send/markRead/typing`
-- [ ] tRPC: `attachments.signUpload` + server-side `storagePut` integration
-- [ ] WS: presence channel (online/offline/last_seen) and new-message push
-- [ ] Migration script + `pnpm db:push` verified
+### Design
+- [x] Visual direction generated via Gemini (`gemini-flash-latest`), saved to `design/v2-spec.md` (11.5KB, OKLCH dark palette, dialer responsive sizing, bubble system, etc.)
+- [x] `scripts/gen-design-spec.mjs` reusable to regenerate the spec any time
 
-### Frontend app shell
-- [ ] Landing page: clean hero with single "Enter your name" input → CTA "Get my number"
-- [ ] After name: routed into `/app` shell with persistent header (your number) + nav
-- [ ] Mobile: bottom tab bar with Dialer + Messages (+ unread badge)
-- [ ] Desktop/tablet: left sidebar version with same nav
-- [ ] Theme polish per Gemini spec; preserve dark theme; ensure tokens consistent
+### Backend
+- [x] Drizzle schema: `identities`, `presence`, `contacts`, `conversations`, `conversation_participants`, `messages`, `attachments`, `call_history`, `signaling`. Pushed via `pnpm db:push`.
+- [x] Guest sessions: HttpOnly `relay_guest` cookie, 30-day max-age, SameSite=Lax. 6-digit number allocated on first start.
+- [x] Context resolver (`server/_core/context.ts`) unifies OAuth user OR guest cookie into `ctx.identity`.
+- [x] tRPC namespaces in `server/v2routers.ts`:
+  - `identity`: whoami / startGuest / signOutGuest / updateProfile
+  - `directory`: lookup / presence / heartbeat / goOffline
+  - `contacts`: list / upsert / remove
+  - `messages`: threads / openThread / list / send / markRead
+  - `attachments`: register / get
+  - `calls`: history / start / end
+- [x] HTTP attachment upload at `POST /api/v2/upload` (base64 body, 40 MB cap, writes via `storagePut`, returns `{id, url, mimeType, filename}`)
+- [x] Stale-presence reaper sweeps every 60s, marks identities offline after 2 min of inactivity
+- [x] DB helpers in `server/v2db.ts` (pure DB calls, no tRPC) — keeps procedures thin
+- [x] 8 new vitest specs in `server/v2routers.test.ts` covering pair-key + validation + whoami. **All 25 tests pass.**
 
-### Dialer tab
-- [ ] Top: large display of *your* 6-digit number with copy button
-- [ ] Center: input field accepting 6 digits, backspace, long-press-0 for "+" (future)
-- [ ] 12-key grid (1–9, *, 0, #) sized via CSS clamp so it never overflows on any viewport
-- [ ] Big green call button (full width on mobile, fixed-circle on desktop)
-- [ ] Call history list below pad: avatar/initials, name (from contacts) or number, time, in/out/missed icon
-- [ ] On dial: peek modal showing callee name (if contact) + online/offline + last seen, ringing animation
-- [ ] During call: existing in-call UI preserved (filters, mute, hangup, etc.)
+### Frontend
+- [x] App shell `client/src/app/AppShell.tsx` — mobile bottom-nav, desktop sidebar, sticky header with number + avatar + Upgrade
+- [x] Onboarding gate `client/src/app/OnboardingGate.tsx` — name-entry form, creates guest on submit
+- [x] Identity hook `client/src/app/useIdentity.ts` — whoami + 30s heartbeat + pagehide go-offline beacon
+- [x] Dialer `client/src/pages/app/Dialer.tsx` — fluid 3×4 keypad (`clamp(56px, 18vw, 88px)`), letters under digits, dialed echo, live presence preview when 6 digits entered, recent calls list with in/out/missed icons
+- [x] Messages `client/src/pages/app/Messages.tsx` — thread list with avatars + presence dots + unread badges, conversation view with bubbles, emoji picker (32 quick), image/video/audio/file attachments via `/api/v2/upload`, voice-note recording via MediaRecorder, read receipts, "New conversation" dialog with 6-digit lookup
+- [x] Contacts `client/src/pages/app/Contacts.tsx` — search, sort (favorites → online → name), presence dots + last-seen, favorite toggle, edit/delete, inline message + call buttons
+- [x] Theming in `client/src/index.css` — extended `@layer base` with OKLCH dark palette + presence tokens (`--relay-online`, `--relay-offline`)
+- [x] `App.tsx` switched to dark default, routes `/app`, `/app/dialer`, `/app/messages`, `/app/contacts` use the AppShell; `/app/call` keeps the legacy Relay component for the actual WebRTC call session
 
-### Messages tab
-- [ ] Thread list: avatar, name/number, last message preview, time, unread count badge
-- [ ] Conversation view: SMS-style bubbles, day separators, delivery/read ticks
-- [ ] Composer: text + emoji picker + attachment menu (image/video/audio/file)
-- [ ] Voice notes: record + send as audio attachment
-- [ ] Image/video previews inline, lightbox on tap
-- [ ] Pull-down for older messages (pagination)
-- [ ] Typing indicators ("Aman is typing…")
-- [ ] System-message: "Call ended — 02:34" auto-inserted after a call between two parties
+### Deferred to v2.1
+- [ ] Auto-register the guest identity in the legacy in-call screen (`pages/Relay.tsx`) so navigating from the new dialer to `/app/call?to=xxxxxx` doesn't re-ask for the name
+- [ ] Replace v1 in-memory signaling with the DB-backed `signaling` mailbox table (table exists, helpers exist, integration deferred to avoid risking working calls)
+- [ ] WebSocket-driven messages (currently polling 5–10s — works but not instant)
+- [ ] Avatar upload UI for profile (DB column ready, UI is placeholder)
+- [ ] Real-device QA on mobile Safari + Chrome Android for dialer-clamp and voice-note recording
 
-### Contacts
-- [ ] After a successful call, prompt "Save Aman to contacts?"
-- [ ] Contacts page accessible from sidebar/long-press in thread
-- [ ] Online dot + last-seen on each contact card
-- [ ] Edit display name, optional avatar (uploaded via storage)
-
-### Onboarding & upgrade
-- [ ] Cookie `relay_guest=<token>` set with 30-day max-age, HttpOnly, SameSite=Lax
-- [ ] On revisit within 30 days: skip name prompt, restore previous identity + number
-- [ ] "Keep my number forever" CTA in profile → triggers Manus OAuth → server migrates guest rows to the new user_id
-- [ ] Show clear "Guest — expires in N days" or "Permanent — registered" status in profile
-
-### Tests & quality
-- [ ] Vitest: guest flow (start, restore, expire, upgrade)
-- [ ] Vitest: messages send/receive/read/unread counters
-- [ ] Vitest: attachment upload roundtrip
-- [ ] Vitest: presence transitions
-- [ ] Vitest: regressions on existing call-setup flow
-
-### Delivery
-- [ ] Update CLAUDE.md with v2.0 architecture
-- [ ] Deploy and save checkpoint as v2.0.0
+### Real-device QA carried forward from v1.2
+- [ ] Camera flip on physical phone
+- [ ] Filter render fps + remote peer receiving filtered stream

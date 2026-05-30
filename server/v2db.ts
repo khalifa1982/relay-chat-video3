@@ -1,0 +1,712 @@
+/* ============================================================
+   v2.0 database helpers.
+
+   Layered on top of server/db.ts. Keeps the v1.x logic untouched
+   while exposing everything the v2.0 phone-app shell needs:
+     - Guest identities pinned by a 30-day cookie
+     - Upgrade path from guest -> registered user (preserves number,
+       contacts, messages, call history)
+     - Presence (online/offline + last seen)
+     - Contacts CRUD
+     - 1:1 conversations + messages + attachments
+
+   All times are UTC Date objects. Numbers are 6-digit strings.
+   ============================================================ */
+
+import crypto from "crypto";
+import {
+  and,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  or,
+  sql,
+} from "drizzle-orm";
+import {
+  attachments,
+  callHistory,
+  contacts,
+  conversationParticipants,
+  conversations,
+  identities,
+  messages,
+  presence,
+} from "../drizzle/schema";
+import { getDb } from "./db";
+
+/* ── identity ─────────────────────────────────────────────────── */
+
+const RESERVED_PREFIXES = ["000", "111"]; // avoid trivially-confused numbers
+const GUEST_DAYS = 30;
+
+export function pairKey(a: number, b: number): string {
+  return a < b ? `${a}-${b}` : `${b}-${a}`;
+}
+
+function randomDigits6(): string {
+  // Avoid leading zero -> reserves first digit 1-9.
+  const first = 1 + Math.floor(Math.random() * 9);
+  const rest = Math.floor(Math.random() * 100000)
+    .toString()
+    .padStart(5, "0");
+  return `${first}${rest}`;
+}
+
+export async function allocateNumber(): Promise<string> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  for (let attempt = 0; attempt < 25; attempt++) {
+    const candidate = randomDigits6();
+    if (RESERVED_PREFIXES.some((p) => candidate.startsWith(p))) continue;
+    const existing = await db
+      .select({ id: identities.id })
+      .from(identities)
+      .where(eq(identities.number, candidate))
+      .limit(1);
+    if (existing.length === 0) return candidate;
+  }
+  throw new Error("could not allocate a unique 6-digit number");
+}
+
+export function newGuestToken(): string {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+export interface ResolvedIdentity {
+  id: number;
+  number: string;
+  displayName: string;
+  avatarUrl: string | null;
+  userId: number | null;
+  isGuest: boolean;
+  guestExpiresAt: Date | null;
+}
+
+function rowToResolved(row: typeof identities.$inferSelect): ResolvedIdentity {
+  return {
+    id: row.id,
+    number: row.number,
+    displayName: row.displayName,
+    avatarUrl: row.avatarUrl ?? null,
+    userId: row.userId ?? null,
+    isGuest: row.userId == null,
+    guestExpiresAt: row.guestExpiresAt ?? null,
+  };
+}
+
+export async function getIdentityById(id: number): Promise<ResolvedIdentity | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(identities).where(eq(identities.id, id)).limit(1);
+  return rows.length > 0 ? rowToResolved(rows[0]) : null;
+}
+
+export async function getIdentityByNumber(number: string): Promise<ResolvedIdentity | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(identities).where(eq(identities.number, number)).limit(1);
+  return rows.length > 0 ? rowToResolved(rows[0]) : null;
+}
+
+export async function getIdentityByGuestToken(
+  token: string
+): Promise<ResolvedIdentity | null> {
+  const db = await getDb();
+  if (!db || !token) return null;
+  const now = new Date();
+  const rows = await db
+    .select()
+    .from(identities)
+    .where(and(eq(identities.guestToken, token), gte(identities.guestExpiresAt, now)))
+    .limit(1);
+  return rows.length > 0 ? rowToResolved(rows[0]) : null;
+}
+
+export async function getIdentityByUserId(userId: number): Promise<ResolvedIdentity | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(identities)
+    .where(eq(identities.userId, userId))
+    .limit(1);
+  return rows.length > 0 ? rowToResolved(rows[0]) : null;
+}
+
+/**
+ * Create a new guest identity with a fresh 6-digit number and a 30-day cookie.
+ * Returns the new identity plus the token to put in the response cookie.
+ */
+export async function createGuestIdentity(input: {
+  displayName: string;
+}): Promise<{ identity: ResolvedIdentity; guestToken: string }> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  const number = await allocateNumber();
+  const guestToken = newGuestToken();
+  const guestExpiresAt = new Date(Date.now() + GUEST_DAYS * 24 * 60 * 60 * 1000);
+  const displayName = input.displayName.trim().slice(0, 64) || "Guest";
+  await db.insert(identities).values({
+    number,
+    displayName,
+    guestToken,
+    guestExpiresAt,
+  });
+  const created = await db
+    .select()
+    .from(identities)
+    .where(eq(identities.guestToken, guestToken))
+    .limit(1);
+  if (created.length === 0) throw new Error("insert succeeded but row missing");
+  return { identity: rowToResolved(created[0]), guestToken };
+}
+
+/**
+ * Extend the cookie expiry on every visit so an active guest never loses
+ * their number while still in regular use.
+ */
+export async function touchGuestExpiry(identityId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const guestExpiresAt = new Date(Date.now() + GUEST_DAYS * 24 * 60 * 60 * 1000);
+  await db
+    .update(identities)
+    .set({ guestExpiresAt })
+    .where(and(eq(identities.id, identityId), isNull(identities.userId)));
+}
+
+/**
+ * Ensure a registered user has exactly one identity. If they were previously
+ * a guest with a cookie present, upgrade that row in place so all their data
+ * stays with them. Otherwise create a fresh permanent identity.
+ */
+export async function ensureUserIdentity(input: {
+  userId: number;
+  displayName: string;
+  guestToken: string | null;
+}): Promise<ResolvedIdentity> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+
+  const existingByUser = await getIdentityByUserId(input.userId);
+  if (existingByUser) return existingByUser;
+
+  // If the user previously had a guest identity cookie, upgrade that row.
+  if (input.guestToken) {
+    const guest = await getIdentityByGuestToken(input.guestToken);
+    if (guest) {
+      await db
+        .update(identities)
+        .set({
+          userId: input.userId,
+          displayName: input.displayName.trim().slice(0, 64) || guest.displayName,
+          guestToken: null,
+          guestExpiresAt: null,
+        })
+        .where(eq(identities.id, guest.id));
+      const refreshed = await getIdentityById(guest.id);
+      if (refreshed) return refreshed;
+    }
+  }
+
+  // Fresh permanent identity.
+  const number = await allocateNumber();
+  await db.insert(identities).values({
+    number,
+    displayName: input.displayName.trim().slice(0, 64) || "User",
+    userId: input.userId,
+  });
+  const created = await getIdentityByNumber(number);
+  if (!created) throw new Error("user identity insert failed");
+  return created;
+}
+
+export async function updateIdentityProfile(
+  id: number,
+  patch: { displayName?: string; avatarUrl?: string | null }
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const set: Record<string, unknown> = {};
+  if (patch.displayName !== undefined) {
+    const n = patch.displayName.trim().slice(0, 64);
+    if (n.length > 0) set.displayName = n;
+  }
+  if (patch.avatarUrl !== undefined) set.avatarUrl = patch.avatarUrl;
+  if (Object.keys(set).length === 0) return;
+  await db.update(identities).set(set).where(eq(identities.id, id));
+}
+
+/* ── presence ─────────────────────────────────────────────────── */
+
+export async function markOnline(identityId: number, socketSessionId: string | null) {
+  const db = await getDb();
+  if (!db) return;
+  const now = new Date();
+  await db
+    .insert(presence)
+    .values({
+      identityId,
+      isOnline: true,
+      lastSeenAt: now,
+      socketSessionId,
+    })
+    .onDuplicateKeyUpdate({
+      set: {
+        isOnline: true,
+        lastSeenAt: now,
+        socketSessionId,
+      },
+    });
+}
+
+export async function markOffline(identityId: number) {
+  const db = await getDb();
+  if (!db) return;
+  const now = new Date();
+  await db
+    .insert(presence)
+    .values({ identityId, isOnline: false, lastSeenAt: now })
+    .onDuplicateKeyUpdate({ set: { isOnline: false, lastSeenAt: now } });
+}
+
+/**
+ * Stale-presence sweep: anyone marked online but whose heartbeat is older
+ * than the threshold gets flipped to offline. Call this periodically.
+ */
+export async function reapStalePresence(maxAgeSeconds = 120) {
+  const db = await getDb();
+  if (!db) return 0;
+  const cutoff = new Date(Date.now() - maxAgeSeconds * 1000);
+  const res = await db
+    .update(presence)
+    .set({ isOnline: false })
+    .where(and(eq(presence.isOnline, true), lt(presence.lastSeenAt, cutoff)));
+  return res?.[0]?.affectedRows ?? 0;
+}
+
+export interface PresenceLite {
+  identityId: number;
+  isOnline: boolean;
+  lastSeenAt: Date | null;
+}
+
+export async function getPresenceForIds(ids: number[]): Promise<PresenceLite[]> {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select().from(presence).where(inArray(presence.identityId, ids));
+  const byId = new Map<number, PresenceLite>();
+  for (const r of rows) {
+    byId.set(r.identityId, {
+      identityId: r.identityId,
+      isOnline: r.isOnline,
+      lastSeenAt: r.lastSeenAt ?? null,
+    });
+  }
+  return ids.map(
+    (id) =>
+      byId.get(id) ?? {
+        identityId: id,
+        isOnline: false,
+        lastSeenAt: null,
+      }
+  );
+}
+
+/* ── contacts ─────────────────────────────────────────────────── */
+
+export async function listContacts(ownerId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select()
+    .from(contacts)
+    .where(eq(contacts.ownerId, ownerId))
+    .orderBy(desc(contacts.favourite), desc(contacts.updatedAt));
+  return rows;
+}
+
+export async function upsertContact(input: {
+  ownerId: number;
+  number: string;
+  displayName?: string | null;
+  avatarUrl?: string | null;
+  favourite?: boolean;
+  notes?: string | null;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  const values = {
+    ownerId: input.ownerId,
+    number: input.number,
+    displayName: input.displayName ?? null,
+    avatarUrl: input.avatarUrl ?? null,
+    favourite: input.favourite ?? false,
+    notes: input.notes ?? null,
+  };
+  await db
+    .insert(contacts)
+    .values(values)
+    .onDuplicateKeyUpdate({
+      set: {
+        displayName: values.displayName,
+        avatarUrl: values.avatarUrl,
+        favourite: values.favourite,
+        notes: values.notes,
+      },
+    });
+  const rows = await db
+    .select()
+    .from(contacts)
+    .where(and(eq(contacts.ownerId, input.ownerId), eq(contacts.number, input.number)))
+    .limit(1);
+  return rows[0];
+}
+
+export async function deleteContact(ownerId: number, contactId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(contacts).where(and(eq(contacts.id, contactId), eq(contacts.ownerId, ownerId)));
+}
+
+/* ── conversations & messages ─────────────────────────────────── */
+
+export async function getOrCreateDmConversation(a: number, b: number) {
+  if (a === b) throw new Error("cannot DM yourself");
+  const key = pairKey(a, b);
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+
+  const existing = await db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.pairKey, key))
+    .limit(1);
+  if (existing.length > 0) return existing[0];
+
+  await db.insert(conversations).values({ pairKey: key, kind: "dm" });
+  const created = await db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.pairKey, key))
+    .limit(1);
+  if (created.length === 0) throw new Error("conversation insert failed");
+  const convo = created[0];
+
+  await db
+    .insert(conversationParticipants)
+    .values([
+      { conversationId: convo.id, identityId: a },
+      { conversationId: convo.id, identityId: b },
+    ])
+    .onDuplicateKeyUpdate({ set: { unreadCount: sql`${conversationParticipants.unreadCount}` } });
+
+  return convo;
+}
+
+export interface ThreadSummary {
+  conversationId: number;
+  otherIdentityId: number;
+  otherNumber: string;
+  otherDisplayName: string;
+  otherAvatarUrl: string | null;
+  lastMessageAt: Date;
+  unreadCount: number;
+  lastMessagePreview: string | null;
+  lastMessageKind: string;
+}
+
+export async function listThreads(identityId: number): Promise<ThreadSummary[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  // 1) all conversations I'm in
+  const myParts = await db
+    .select()
+    .from(conversationParticipants)
+    .where(eq(conversationParticipants.identityId, identityId));
+  if (myParts.length === 0) return [];
+  const convoIds = myParts.map((p) => p.conversationId);
+  const unreadByConvo = new Map<number, number>();
+  myParts.forEach((p) => unreadByConvo.set(p.conversationId, p.unreadCount));
+
+  // 2) the other participant per conversation
+  const others = await db
+    .select()
+    .from(conversationParticipants)
+    .where(
+      and(
+        inArray(conversationParticipants.conversationId, convoIds),
+        sql`${conversationParticipants.identityId} <> ${identityId}`
+      )
+    );
+  const otherIdentityIds = others.map((o) => o.identityId);
+  const otherIds = await db
+    .select()
+    .from(identities)
+    .where(inArray(identities.id, otherIdentityIds.length > 0 ? otherIdentityIds : [-1]));
+  const otherById = new Map(otherIds.map((i) => [i.id, i]));
+
+  // 3) the conversations themselves (for lastMessageAt)
+  const convos = await db
+    .select()
+    .from(conversations)
+    .where(inArray(conversations.id, convoIds));
+  const convoById = new Map(convos.map((c) => [c.id, c]));
+
+  // 4) the most-recent non-deleted message per conversation, for preview
+  const recents = await db
+    .select()
+    .from(messages)
+    .where(and(inArray(messages.conversationId, convoIds), isNull(messages.deletedAt)))
+    .orderBy(desc(messages.createdAt));
+  const latestByConvo = new Map<number, typeof recents[number]>();
+  for (const m of recents) {
+    if (!latestByConvo.has(m.conversationId)) latestByConvo.set(m.conversationId, m);
+  }
+
+  const result: ThreadSummary[] = [];
+  for (const p of others) {
+    const convo = convoById.get(p.conversationId);
+    const other = otherById.get(p.identityId);
+    if (!convo || !other) continue;
+    const latest = latestByConvo.get(p.conversationId);
+    result.push({
+      conversationId: p.conversationId,
+      otherIdentityId: other.id,
+      otherNumber: other.number,
+      otherDisplayName: other.displayName,
+      otherAvatarUrl: other.avatarUrl ?? null,
+      lastMessageAt: convo.lastMessageAt,
+      unreadCount: unreadByConvo.get(p.conversationId) ?? 0,
+      lastMessagePreview: latest?.body ?? null,
+      lastMessageKind: latest?.kind ?? "text",
+    });
+  }
+  result.sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime());
+  return result;
+}
+
+export async function listMessages(input: {
+  conversationId: number;
+  identityId: number;
+  beforeId?: number;
+  limit?: number;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+  // verify membership
+  const member = await db
+    .select()
+    .from(conversationParticipants)
+    .where(
+      and(
+        eq(conversationParticipants.conversationId, input.conversationId),
+        eq(conversationParticipants.identityId, input.identityId)
+      )
+    )
+    .limit(1);
+  if (member.length === 0) return [];
+
+  const limit = Math.min(input.limit ?? 50, 200);
+  const baseWhere = and(
+    eq(messages.conversationId, input.conversationId),
+    isNull(messages.deletedAt)
+  );
+  const where = input.beforeId ? and(baseWhere, lt(messages.id, input.beforeId)) : baseWhere;
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(where)
+    .orderBy(desc(messages.id))
+    .limit(limit);
+  return rows.reverse(); // ascending by id (oldest first) for rendering
+}
+
+export async function sendMessage(input: {
+  conversationId: number;
+  senderIdentityId: number;
+  kind?: "text" | "image" | "video" | "audio" | "file" | "system";
+  body?: string | null;
+  attachmentId?: number | null;
+  replyToId?: number | null;
+  meta?: unknown;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  // verify membership (unless system message: server-only)
+  if (input.kind !== "system") {
+    const member = await db
+      .select()
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, input.conversationId),
+          eq(conversationParticipants.identityId, input.senderIdentityId)
+        )
+      )
+      .limit(1);
+    if (member.length === 0) throw new Error("not a member of this conversation");
+  }
+  const now = new Date();
+  await db.insert(messages).values({
+    conversationId: input.conversationId,
+    senderIdentityId: input.senderIdentityId,
+    kind: input.kind ?? "text",
+    body: input.body ?? null,
+    attachmentId: input.attachmentId ?? null,
+    replyToId: input.replyToId ?? null,
+    meta: (input.meta as object) ?? null,
+    status: "sent",
+  });
+  // bump the conversation's lastMessageAt
+  await db.update(conversations).set({ lastMessageAt: now }).where(eq(conversations.id, input.conversationId));
+  // bump unread for everyone else
+  await db
+    .update(conversationParticipants)
+    .set({ unreadCount: sql`${conversationParticipants.unreadCount} + 1` })
+    .where(
+      and(
+        eq(conversationParticipants.conversationId, input.conversationId),
+        sql`${conversationParticipants.identityId} <> ${input.senderIdentityId}`
+      )
+    );
+  // return the latest
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.conversationId, input.conversationId))
+    .orderBy(desc(messages.id))
+    .limit(1);
+  return rows[0];
+}
+
+export async function markThreadRead(input: { conversationId: number; identityId: number }) {
+  const db = await getDb();
+  if (!db) return;
+  // last visible message id
+  const rows = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(eq(messages.conversationId, input.conversationId))
+    .orderBy(desc(messages.id))
+    .limit(1);
+  const lastId = rows[0]?.id ?? null;
+  await db
+    .update(conversationParticipants)
+    .set({ unreadCount: 0, lastReadMessageId: lastId })
+    .where(
+      and(
+        eq(conversationParticipants.conversationId, input.conversationId),
+        eq(conversationParticipants.identityId, input.identityId)
+      )
+    );
+  // mark messages addressed to me as read
+  await db
+    .update(messages)
+    .set({ status: "read" })
+    .where(
+      and(
+        eq(messages.conversationId, input.conversationId),
+        sql`${messages.senderIdentityId} <> ${input.identityId}`,
+        or(eq(messages.status, "sent"), eq(messages.status, "delivered"))
+      )
+    );
+}
+
+/* ── attachments ──────────────────────────────────────────────── */
+
+export async function recordAttachment(input: {
+  storageKey: string;
+  url: string;
+  mimeType: string;
+  sizeBytes: number;
+  width?: number | null;
+  height?: number | null;
+  durationMs?: number | null;
+  filename?: string | null;
+  uploadedByIdentityId: number;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  await db.insert(attachments).values({
+    storageKey: input.storageKey,
+    url: input.url,
+    mimeType: input.mimeType,
+    sizeBytes: input.sizeBytes,
+    width: input.width ?? null,
+    height: input.height ?? null,
+    durationMs: input.durationMs ?? null,
+    filename: input.filename ?? null,
+    uploadedByIdentityId: input.uploadedByIdentityId,
+  });
+  const rows = await db
+    .select()
+    .from(attachments)
+    .where(
+      and(
+        eq(attachments.storageKey, input.storageKey),
+        eq(attachments.uploadedByIdentityId, input.uploadedByIdentityId)
+      )
+    )
+    .orderBy(desc(attachments.id))
+    .limit(1);
+  return rows[0];
+}
+
+export async function getAttachmentById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(attachments).where(eq(attachments.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+/* ── call history ─────────────────────────────────────────────── */
+
+export async function recordCallStart(input: {
+  callerIdentityId: number;
+  calleeIdentityId: number;
+  channel?: "voice" | "video";
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  await db.insert(callHistory).values({
+    callerIdentityId: input.callerIdentityId,
+    calleeIdentityId: input.calleeIdentityId,
+    channel: input.channel ?? "video",
+    status: "initiated",
+  });
+  const rows = await db
+    .select()
+    .from(callHistory)
+    .where(
+      and(
+        eq(callHistory.callerIdentityId, input.callerIdentityId),
+        eq(callHistory.calleeIdentityId, input.calleeIdentityId)
+      )
+    )
+    .orderBy(desc(callHistory.id))
+    .limit(1);
+  return rows[0];
+}
+
+export async function listCallHistory(identityId: number, limit = 100) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select()
+    .from(callHistory)
+    .where(
+      or(
+        eq(callHistory.callerIdentityId, identityId),
+        eq(callHistory.calleeIdentityId, identityId)
+      )
+    )
+    .orderBy(desc(callHistory.id))
+    .limit(limit);
+  return rows;
+}
