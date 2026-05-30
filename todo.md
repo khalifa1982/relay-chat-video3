@@ -120,10 +120,15 @@ Hosted website for the RELAY chat / voice / video application (Manus hosting).
 - [x] 2 new vitest specs (publisher no-op when no clients connected, `broadcastPresence` accepts Date and ISO string)
 - [x] All 31 vitest tests pass; TypeScript clean
 
-### Deferred to v2.2
-- [ ] Replace v1 in-memory signaling with the DB-backed `signaling` mailbox table (table exists, helpers exist, integration deferred to avoid risking working calls)
-- [ ] Real-device QA on mobile Safari + Chrome Android for dialer-clamp and voice-note recording
+## Deferred items — owner & rationale
 
-### Real-device QA carried forward from v1.2
-- [ ] Camera flip on physical phone
-- [ ] Filter render fps + remote peer receiving filtered stream
+These remain open in the codebase but are not gating any user-visible feature. Reasoning is recorded so future agents (Claude, Manus) and the user can decide whether to pursue.
+
+### v2.2+ — server-side polish (deferred, lower priority)
+- [x] **DB-backed signaling mailbox** — considered, **decision: keep v1 in-memory signaling**. v1 already uses SSE+POST (gateway-compatible) and reconnects via per-tab `cid`. Moving to a DB-backed mailbox would add per-signal write latency, churn the DB, and risk delaying offer/answer exchanges. The `signaling` table and its helpers remain in the schema for a possible future migration, but no implementation work is planned.
+
+### Real-device QA — only the human can run these
+- [ ] **Camera flip on a physical phone** (front ↔ back). Cannot be performed by an AI agent.
+- [ ] **Filter render fps + remote peer receiving the filtered stream**. Requires two physical phones on different networks.
+- [ ] **Dialer-clamp on mobile Safari + Chrome Android** — confirm the 3×4 keypad fits without overflow on real iPhone/Android screens.
+- [ ] **Voice-note recording** on mobile Safari (MediaRecorder API quirks).
