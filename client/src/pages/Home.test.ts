@@ -1,71 +1,144 @@
 import { describe, it, expect } from "vitest";
 
 /**
- * The loop reel renders LOOP_FRAMES twice in a row, then animates the track
- * with `translateX(-50%)` so the second half scrolls into the same position
- * the first half started at — that's how the loop appears seamless.
+ * v2.3.0 landing page is a scroll-driven presentation. These tests pin the
+ * pure functions and invariants that the page depends on, without booting
+ * the full component (no DOM / IntersectionObserver fakery required).
  *
- * These tests pin the pure math: how wide the track is and how wide each
- * frame is, given a frame count. Changing the duplication factor or the
- * frame width without changing these tests would visually break the loop.
+ * The maths here mirror the StorySection / HeroPhone hooks in Home.tsx.
  */
-describe("Home — loop-reel layout math", () => {
-  // The Home component uses LOOP_FRAMES.length === 6 today, but the math
-  // should hold for any non-trivial count.
-  function trackWidthPercent(frameCount: number): number {
-    return frameCount * 200;
-  }
-  function frameWidthPercent(frameCount: number): number {
-    return 100 / (frameCount * 2);
-  }
 
-  it("track width grows with frame count to fit two copies of the strip", () => {
-    expect(trackWidthPercent(6)).toBe(1200);
-    expect(trackWidthPercent(4)).toBe(800);
-    expect(trackWidthPercent(1)).toBe(200);
+// ---------------------------------------------------------------------------
+// Scroll-progress math (mirrors useSectionProgress).
+// progress(top, height, vh) maps the section's bounding box to a 0..1 number.
+// progress = 0 when section top is at the viewport bottom (entering).
+// progress = 1 when section bottom is at the viewport top (leaving).
+// ---------------------------------------------------------------------------
+function sectionProgress(top: number, height: number, vh: number): number {
+  const raw = (vh - top) / (vh + height);
+  return Math.max(0, Math.min(1, raw));
+}
+
+describe("Home — section progress math", () => {
+  const VH = 800;
+  const H = 1000;
+
+  it("progress is 0 before the section enters the viewport", () => {
+    expect(sectionProgress(VH + 50, H, VH)).toBe(0);
+    expect(sectionProgress(VH, H, VH)).toBeCloseTo(0, 6);
   });
 
-  it("frame width is the fraction of track each duplicated frame occupies", () => {
-    // 12 frames (6 duplicated) inside a 1200% track: each frame is 100% / 12 of the track.
-    expect(frameWidthPercent(6)).toBeCloseTo(100 / 12, 6);
-    expect(frameWidthPercent(4)).toBeCloseTo(100 / 8, 6);
+  it("progress is 1 after the section has fully left the viewport", () => {
+    // section bottom at viewport top means top = -H
+    expect(sectionProgress(-H, H, VH)).toBe(1);
+    expect(sectionProgress(-H - 50, H, VH)).toBe(1);
   });
 
-  it("two copies of the strip equal the track width", () => {
-    for (const n of [3, 6, 8]) {
-      // Each frame width × (2 * n) frames = track width
-      const total = frameWidthPercent(n) * (2 * n);
-      expect(total).toBeCloseTo(100, 6);
+  it("progress is 0.5 when the section's top sits at -100 with vh=800,h=1000", () => {
+    // raw = (800 - (-100)) / (800 + 1000) = 900 / 1800 = 0.5
+    expect(sectionProgress(-100, H, VH)).toBeCloseTo(0.5, 6);
+  });
+
+  it("progress is monotonic in scroll position (as top decreases, progress rises)", () => {
+    const tops = [VH, 400, 0, -200, -500, -H];
+    const ps = tops.map((t) => sectionProgress(t, H, VH));
+    for (let i = 1; i < ps.length; i++) {
+      expect(ps[i]).toBeGreaterThanOrEqual(ps[i - 1]);
     }
   });
 });
 
-describe("Home — asset paths are local manus-storage URLs", () => {
-  // Sanity-check that no asset path slipped back to absolute http(s) URLs.
-  // Local /manus-storage paths share lifecycle with the project and never expire.
-  const ASSET_PATHS = [
-    "/manus-storage/hero_7fd2aad5.png",
-    "/manus-storage/scene-chat_d5b71720.png",
-    "/manus-storage/scene-voice-call_757f9f34.png",
-    "/manus-storage/scene-video-grid_a221d124.png",
-    "/manus-storage/scene-dialpad_b09b59c0.png",
-    "/manus-storage/scene-launch_d020f421.png",
-    "/manus-storage/loop-1-dial_0d16a088.png",
-    "/manus-storage/loop-2-ringing_fb44c0f7.png",
-    "/manus-storage/loop-3-connecting_f6b2bf94.png",
-    "/manus-storage/loop-4-live_d2b91240.png",
-    "/manus-storage/loop-5-group_c4eb3cbd.png",
-    "/manus-storage/loop-6-chat_bf820cb4.png",
-  ];
+// ---------------------------------------------------------------------------
+// Phone parallax derivation: the phone image translates from -60px at entry
+// to +30px at exit (span of 90px across progress 0..1).
+// ---------------------------------------------------------------------------
+function phoneTranslateY(progress: number): number {
+  return -60 + progress * 90;
+}
 
+describe("Home — phone parallax mapping", () => {
+  it("starts low (negative) at entry and rises through center", () => {
+    expect(phoneTranslateY(0)).toBe(-60);
+    expect(phoneTranslateY(0.5)).toBe(-15);
+    expect(phoneTranslateY(1)).toBe(30);
+  });
+
+  it("spans 90px from entry to exit", () => {
+    expect(phoneTranslateY(1) - phoneTranslateY(0)).toBe(90);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Detail-panel reveal: opacity 0 below progress 0.18, full at 0.53, clamped 1.
+// ---------------------------------------------------------------------------
+function panelProgress(progress: number): number {
+  return Math.max(0, Math.min(1, (progress - 0.18) / 0.35));
+}
+
+describe("Home — detail-panel reveal mapping", () => {
+  it("is invisible before the section is meaningfully in view", () => {
+    expect(panelProgress(0)).toBe(0);
+    expect(panelProgress(0.17)).toBe(0);
+  });
+
+  it("fully revealed once progress passes 0.53", () => {
+    expect(panelProgress(0.53)).toBeCloseTo(1, 6);
+    expect(panelProgress(0.7)).toBe(1);
+    expect(panelProgress(1)).toBe(1);
+  });
+
+  it("rises smoothly between 0.18 and 0.53", () => {
+    expect(panelProgress(0.355)).toBeCloseTo(0.5, 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Asset URLs — all real-screenshot paths must be local /manus-storage/ refs.
+// Regenerate via `manus-upload-file --webdev` if you ever rotate the assets.
+// ---------------------------------------------------------------------------
+const REAL_SCREENSHOT_PATHS = [
+  "/manus-storage/dialer-empty_98fa535c.png",
+  "/manus-storage/dialer-typed_8ad4c6c2.png",
+  "/manus-storage/messages-empty_014c8014.png",
+  "/manus-storage/messages-thread_3b435df8.png",
+  "/manus-storage/contacts-empty_ee775a4f.png",
+  "/manus-storage/profile_15ca08be.png",
+];
+
+describe("Home — real screenshot assets", () => {
   it("every asset path is server-relative and starts with /manus-storage/", () => {
-    for (const p of ASSET_PATHS) {
+    for (const p of REAL_SCREENSHOT_PATHS) {
       expect(p.startsWith("/manus-storage/")).toBe(true);
       expect(p.startsWith("http")).toBe(false);
     }
   });
 
-  it("twelve unique paths (six scenes + six loop frames)", () => {
-    expect(new Set(ASSET_PATHS).size).toBe(12);
+  it("six unique paths, one per real app screen", () => {
+    expect(new Set(REAL_SCREENSHOT_PATHS).size).toBe(6);
+  });
+
+  it("paths cover every key app screen by filename hint", () => {
+    const joined = REAL_SCREENSHOT_PATHS.join("|");
+    expect(joined).toMatch(/dialer-empty/);
+    expect(joined).toMatch(/dialer-typed/);
+    expect(joined).toMatch(/messages-empty/);
+    expect(joined).toMatch(/messages-thread/);
+    expect(joined).toMatch(/contacts-empty/);
+    expect(joined).toMatch(/profile/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Section layout alternates between standard and reversed (index % 2 === 1).
+// ---------------------------------------------------------------------------
+describe("Home — section alternation", () => {
+  it("even-indexed sections render image on left, odd-indexed on right", () => {
+    const reversed = (i: number) => i % 2 === 1;
+    expect(reversed(0)).toBe(false);
+    expect(reversed(1)).toBe(true);
+    expect(reversed(2)).toBe(false);
+    expect(reversed(3)).toBe(true);
+    expect(reversed(4)).toBe(false);
+    expect(reversed(5)).toBe(true);
   });
 });

@@ -274,3 +274,31 @@ User report: "The dialing pad is quite big — you have to scroll down to see it
 - [x] Saved checkpoint **79bcfc27** with the cinematic landing in place.
 - [x] **Page-title polish (follow-up):** replaced the lingering `{{project_title}}` placeholder in `client/index.html` with `RELAY — Browser-to-browser calling`, plus a meta description, theme color, and Open Graph tags for previewable shares.
 - [ ] **Action required from you**: click Publish in the Management UI to push v2.2.0 to `relaychat-lduywq6l.manus.space`.
+
+
+## v2.3.0 — Interactive scroll-driven landing with real app screenshots + Grok copy (in progress)
+- [ ] Capture accurate screenshots of every key app screen (Dialer, Messages thread list, Messages conversation, Contacts, Profile, in-call grid)
+- [ ] Upload the screenshots to /manus-storage/ via storagePut
+- [ ] Use Grok (xAI grok-4 via xai-sdk) to draft the landing-page narrative, section headings, and detail copy
+- [ ] Rebuild client/src/pages/Home.tsx with scroll-linked parallax: images drift up/down as the user scrolls, detail panels fade/slide in beside each screenshot
+- [ ] Replace the Gemini illustrations with the real app screenshots throughout
+- [ ] Honor prefers-reduced-motion (no parallax when the user has reduced motion enabled)
+- [ ] Vitest + TypeScript clean
+- [ ] Bump in-app version footer to v2.3.0
+- [ ] Save checkpoint
+
+## v2.3.0 — Interactive scroll rebuild with Grok copy + real screenshots (delivered 2026-05-30)
+- [x] Captured 6 real app screenshots via Playwright as Alex Rivers (316-897): dialer empty, dialer-typed (277 242), messages empty, messages-thread (Note to self, two cyan bubbles), contacts empty, profile.
+- [x] Cropped to a 9:16 content-focused aspect ratio and uploaded via `manus-upload-file --webdev`.
+- [x] Generated narrative copy via **Grok-4** (xai-sdk): hero, six section blocks tied to the actual on-screen content, closing, and a "no audio/video/text stored on any server" privacy line.
+- [x] Rewrote `client/src/pages/Home.tsx` as a scroll-driven presentation:
+  - Sticky `Open the app` bar fades in after 480 px of scroll.
+  - Hero with a parallax phone bound to `scrollY` and the dialer-empty screenshot in a real bezel (rounded chrome ring + side button + notch + glossy top highlight).
+  - Six pinned story sections that alternate sides; each phone screenshot translates from `-60px` to `+30px` as the section moves through the viewport.
+  - Per-section detail panel (lede + descriptive paragraph + bulleted facts) fades and slides in once the section passes 18 % of its scroll range, fully revealed by 53 %.
+  - Finale section with a single `Open RELAY →` CTA.
+  - Whole motion layer gated behind `prefers-reduced-motion: no-preference`.
+- [x] Bumped in-app version footer to v2.3.0 with `Copy by Grok · screenshots are real` attribution.
+- [x] 121/121 vitest pass (rewrote `client/src/pages/Home.test.ts` with 13 new tests: section-progress math, parallax mapping, panel-reveal mapping, asset-URL invariants, alternation rule).
+- [x] Verified live in the preview — hero phone, Notes-to-self section, sticky top bar, narrative copy all confirmed visually.
+- [ ] **Action required from you**: click Publish in the Management UI to push v2.3.0 to `relaychat-lduywq6l.manus.space`.
