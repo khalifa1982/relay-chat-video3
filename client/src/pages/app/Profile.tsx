@@ -34,6 +34,16 @@ export default function ProfilePage() {
     if (me?.displayName) setName(me.displayName);
   }, [me?.displayName]);
 
+  // Auto-dismiss the "Saved" toast after a short window. Without this
+  // the banner sits frozen on screen because nothing re-renders the page
+  // once the mutation has finished. Reported by the user on iPhone Safari
+  // (v2.1.1 production): the banner appeared dim and never went away.
+  useEffect(() => {
+    if (savedAt === null) return;
+    const id = window.setTimeout(() => setSavedAt(null), 1800);
+    return () => window.clearTimeout(id);
+  }, [savedAt]);
+
   const signOutGuestMut = trpc.identity.signOutGuest.useMutation();
   const logoutUserMut = trpc.auth.logout.useMutation();
   const updateProfile = trpc.identity.updateProfile.useMutation({
@@ -132,9 +142,25 @@ export default function ProfilePage() {
           </div>
         )}
 
-        {savedAt && Date.now() - savedAt < 4000 && !error && (
-          <div className="rounded-lg border border-primary/40 bg-primary/10 text-primary-foreground px-4 py-3 text-sm">
-            Saved.
+        {savedAt !== null && !error && (
+          <div
+            // Centered glassy pill, online-green tint, slides up + fades in
+            // on mount, then auto-dismisses after 1.8s via the effect above.
+            className="
+              pointer-events-none fixed left-1/2 top-20 z-50
+              -translate-x-1/2 animate-in fade-in slide-in-from-top-2
+              flex items-center gap-2 rounded-full px-4 py-2
+              text-sm font-medium
+              border border-emerald-400/40
+              bg-emerald-500/15 text-emerald-100
+              dark:bg-emerald-500/20 dark:text-emerald-50
+              shadow-lg shadow-emerald-500/20 backdrop-blur-md
+            "
+            role="status"
+            aria-live="polite"
+          >
+            <Check className="h-4 w-4" strokeWidth={3} />
+            <span>Saved</span>
           </div>
         )}
 
