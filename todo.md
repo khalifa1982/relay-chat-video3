@@ -327,3 +327,12 @@ User report: "The dialing pad is quite big — you have to scroll down to see it
 - [x] **138/138 vitest pass**, TypeScript clean, dev-server healthy.
 - [x] Verified live in the preview — section-3 (Messages) renders with the bezel, real screenshot, kicker + h2 + 2 paragraphs + 3 cyan-bullet facts, sticky CTA visible after 480 px, section-4 phone entering from below.
 - [ ] **Action required from you**: click Publish in the Management UI to push v2.5.0 to `relaychat-lduywq6l.manus.space`.
+
+
+## v2.6.0 — Live call bugs reported on relaychat-lduywq6l.manus.space (in progress)
+
+- [ ] Repro: open the live URL in two browser profiles, sign in as guests, attempt a call A → B; capture network + console
+- [ ] Bug 1: Connecting fails between two parties even though both show online — likely the missing v1.3 relay fixes (call-waiting busy check, leave-prior-room on accept, per-call iceServers on joined/peer-joined). Port them in while KEEPING the existing `onInvite` SSE hook unique to webdev.
+- [ ] Bug 2: Tapping dial leads to a SECOND dial screen instead of staying in one unified dialer surface. Find where the second screen comes from (probably `/app/dialer` → `/app/call` navigates to the legacy Relay screen which re-renders its own dial UI) and collapse to a single dialer flow.
+- [ ] Run `pnpm test` (current baseline 138/138), add regression tests for both fixes
+- [ ] Save checkpoint, ask user to click Publish

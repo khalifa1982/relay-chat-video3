@@ -129,6 +129,18 @@ export function iceServers(userId: string): IceServer[] {
   return list;
 }
 
+/**
+ * Number of clients currently in a room. Returns 0 for a null/unknown
+ * roomId. Used by busy-detection and reject-cleanup so we never report
+ * "busy" for a target who is sitting alone in their own dialing room
+ * (that's call-waiting, not busy) and never leak a caller's solo room
+ * after their callee rejects.
+ */
+function roomSize(reg: RelayRegistry, roomId: string | null): number {
+  if (!roomId) return 0;
+  return reg.rooms.get(roomId)?.size ?? 0;
+}
+
 export function leaveRoom(reg: RelayRegistry, pin: string) {
   const c = reg.clients.get(pin);
   if (!c || !c.roomId) return;
@@ -220,7 +232,14 @@ export function handleMessage(
         });
         break;
       }
-      if (target.roomId && target.roomId !== self.roomId) {
+      // A target is only "busy" if it's already in an established call with
+      // someone else (2+ people). A target sitting alone in their own dialing
+      // room is still reachable — that's call-waiting, not busy.
+      if (
+        target.roomId &&
+        target.roomId !== self.roomId &&
+        roomSize(reg, target.roomId) > 1
+      ) {
         safeSend(conn.socket, { type: "busy", from: to });
         break;
       }
@@ -281,6 +300,12 @@ export function handleMessage(
         });
         break;
       }
+      // If the accepter was already in a different room (e.g. their own solo
+      // dialing room from an outgoing call, or a previous call), leave it
+      // first so they're never referenced by two rooms.
+      if (self.roomId && self.roomId !== roomId) {
+        leaveRoom(reg, conn.pin);
+      }
       const members = Array.from(room)
         .filter(p => p !== conn.pin)
         .map(p => ({
@@ -290,8 +315,15 @@ export function handleMessage(
       room.add(conn.pin);
       self.roomId = roomId;
       // Newcomer learns existing members and will offer to each (only one
-      // side ever offers, which avoids SDP glare in the mesh).
-      safeSend(conn.socket, { type: "joined", roomId, members });
+      // side ever offers, which avoids SDP glare in the mesh). Fresh ICE
+      // servers keyed to this peer are minted right as it's about to build
+      // its peer connections — never the stale register-time set.
+      safeSend(conn.socket, {
+        type: "joined",
+        roomId,
+        members,
+        iceServers: iceServers(conn.pin),
+      });
       members.forEach(m => {
         const o = reg.clients.get(m.pin);
         if (o)
@@ -299,6 +331,7 @@ export function handleMessage(
             type: "peer-joined",
             pin: conn.pin,
             name: self.name,
+            iceServers: iceServers(m.pin),
           });
       });
       break;
@@ -307,6 +340,19 @@ export function handleMessage(
     case "reject": {
       const target = reg.clients.get(String(msg.to || ""));
       if (target) safeSend(target.socket, { type: "rejected", from: conn.pin });
+      // Tear down the caller's solo dialing room so they can be invited again
+      // or place another call without being phantom-busy to themselves or to
+      // future callers.
+      if (target && roomSize(reg, target.roomId) === 1) {
+        leaveRoom(reg, String(msg.to || ""));
+      }
+      break;
+    }
+
+    case "refresh-ice": {
+      // Client is about to do an ICE restart and wants fresh TURN creds.
+      // Mint a per-peer set and ship it back; safe to call frequently.
+      safeSend(conn.socket, { type: "ice", iceServers: iceServers(conn.pin) });
       break;
     }
 

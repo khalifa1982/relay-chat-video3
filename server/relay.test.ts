@@ -238,4 +238,127 @@ describe("relay signaling", () => {
     expect(reg.rooms.get(roomId)?.size).toBe(1);
     expect(reg.rooms.get(roomId)?.has(aPin)).toBe(true);
   });
+
+  // ===== v1.3 regression tests — phantom-busy, leaked-room, per-call ICE =====
+
+  it("does not flag a solo dialing caller as busy to a third party", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    const c = register(reg, "Carol");
+    const aPin = (a.last() as { pin: string }).pin;
+    const bPin = (b.last() as { pin: string }).pin;
+    const cPin = (c.last() as { pin: string }).pin;
+
+    handleMessage(reg, a.asConn(), { type: "invite", to: bPin });
+
+    a.outbox.length = 0;
+    c.outbox.length = 0;
+    handleMessage(reg, c.asConn(), { type: "invite", to: aPin });
+
+    expect(
+      c.outbox.some(m => (m as { type?: string }).type === "busy")
+    ).toBe(false);
+    const ring = a.outbox.find(
+      (m): m is { type: string; from: string } =>
+        typeof m === "object" && m !== null &&
+        (m as { type: string }).type === "ring"
+    );
+    expect(ring?.from).toBe(cPin);
+  });
+
+  it("tears down the caller's solo dialing room when the callee rejects", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    const aPin = (a.last() as { pin: string }).pin;
+    const bPin = (b.last() as { pin: string }).pin;
+
+    handleMessage(reg, a.asConn(), { type: "invite", to: bPin });
+    const roomId = (a.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null &&
+        (m as { type: string }).type === "room"
+    ) as { roomId: string }).roomId;
+    expect(reg.rooms.has(roomId)).toBe(true);
+
+    a.outbox.length = 0;
+    handleMessage(reg, b.asConn(), { type: "reject", to: aPin });
+
+    const rejected = a.last() as { type: string; from: string };
+    expect(rejected.type).toBe("rejected");
+    expect(rejected.from).toBe(bPin);
+    expect(reg.rooms.has(roomId)).toBe(false);
+    expect(reg.clients.get(aPin)?.roomId).toBe(null);
+  });
+
+  it("ships fresh iceServers on joined and peer-joined so creds never go stale", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    const bPin = (b.last() as { pin: string }).pin;
+    handleMessage(reg, a.asConn(), { type: "invite", to: bPin });
+    const roomId = (a.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null &&
+        (m as { type: string }).type === "room"
+    ) as { roomId: string }).roomId;
+
+    a.outbox.length = 0;
+    b.outbox.length = 0;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId });
+
+    const joined = b.last() as { type: string; iceServers?: unknown[] };
+    expect(joined.type).toBe("joined");
+    expect(Array.isArray(joined.iceServers)).toBe(true);
+    expect(joined.iceServers!.length).toBeGreaterThan(0);
+
+    const peerJoined = a.last() as { type: string; iceServers?: unknown[] };
+    expect(peerJoined.type).toBe("peer-joined");
+    expect(Array.isArray(peerJoined.iceServers)).toBe(true);
+  });
+
+  it("answers refresh-ice with a fresh ice payload for a registered client", () => {
+    const a = register(reg, "Alice");
+    a.outbox.length = 0;
+
+    handleMessage(reg, a.asConn(), { type: "refresh-ice" });
+
+    const reply = a.last() as { type: string; iceServers?: unknown[] };
+    expect(reply.type).toBe("ice");
+    expect(Array.isArray(reply.iceServers)).toBe(true);
+    expect(reply.iceServers!.length).toBeGreaterThan(0);
+  });
+
+  it("ignores refresh-ice from a connection that hasn't registered", () => {
+    const c = new FakeConn();
+    handleMessage(reg, c.asConn(), { type: "refresh-ice" });
+    expect(c.outbox).toHaveLength(0);
+  });
+
+  it("issues operator TURN creds via refresh-ice when TURN env is set", () => {
+    const prevSecret = process.env.TURN_SECRET;
+    const prevHost = process.env.TURN_HOST;
+    process.env.TURN_SECRET = "test-secret";
+    process.env.TURN_HOST = "turn.example.com";
+    try {
+      const a = register(reg, "Alice");
+      const aPin = (a.last() as { pin: string }).pin;
+      a.outbox.length = 0;
+
+      handleMessage(reg, a.asConn(), { type: "refresh-ice" });
+
+      const reply = a.last() as {
+        type: string;
+        iceServers: Array<{ urls: string; username?: string; credential?: string }>;
+      };
+      expect(reply.type).toBe("ice");
+      const ours = reply.iceServers.filter(s => s.urls.includes("turn.example.com"));
+      expect(ours.length).toBeGreaterThan(0);
+      ours.forEach(s => {
+        expect(s.username).toMatch(new RegExp("^\\d+:" + aPin + "$"));
+        expect(s.credential).toBeTruthy();
+      });
+    } finally {
+      if (prevSecret !== undefined) process.env.TURN_SECRET = prevSecret; else delete process.env.TURN_SECRET;
+      if (prevHost !== undefined) process.env.TURN_HOST = prevHost; else delete process.env.TURN_HOST;
+    }
+  });
 });

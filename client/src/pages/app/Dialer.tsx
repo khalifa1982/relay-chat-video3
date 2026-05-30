@@ -70,6 +70,9 @@ export default function DialerPage() {
   const { me } = useIdentity();
   const [dialed, setDialed] = useState("");
   const [phase, setPhase] = useState<RelayPhase>("idle");
+  // Remember the number we dialed so we can show "Calling 123 456…" while
+  // the legacy lobby keypad is hidden under the fullscreen overlay.
+  const [dialedFor, setDialedFor] = useState("");
 
   // RELAY engine host. Mounted *once*, lives for the page lifetime so we
   // don't re-establish the SSE channel every time the user toggles between
@@ -188,6 +191,7 @@ export default function DialerPage() {
     if (!engineHandle.current) return;
     const ok = engineHandle.current.dial(dialed);
     if (ok) {
+      setDialedFor(dialed);
       setPhase("dialing");
       // Clear the dialed buffer so the ghost number reappears once the call
       // ends and the user comes back to idle.
@@ -469,6 +473,35 @@ export default function DialerPage() {
 
       {/* RELAY engine CSS (scoped to .relay-root). Mount once at page level. */}
       <style>{RELAY_CSS}</style>
+      {/*
+        Phase-gated overrides for the legacy RELAY markup.
+        When phase !== "idle", the engine root is promoted to fullscreen.
+        The legacy markup still has its own `#lobby` screen with its own
+        dial-pad / bigCode / directory / share-card. Without these rules,
+        users see that "second dial screen" flash up after tapping call.
+        We collapse the lobby to a slim "connecting…" status so the user
+        stays on a single dialer surface end-to-end.
+      */}
+      <style>{`
+        .relay-root.relay-during-call #lobby .pad,
+        .relay-root.relay-during-call #lobby #bigCode,
+        .relay-root.relay-during-call #lobby .row .copy,
+        .relay-root.relay-during-call #lobby #dialDisplay,
+        .relay-root.relay-during-call #lobby #backKey,
+        .relay-root.relay-during-call #lobby #callBtn,
+        .relay-root.relay-during-call #lobby #dirList,
+        .relay-root.relay-during-call #lobby .share-card,
+        .relay-root.relay-during-call #lobby .me-card { display: none !important; }
+        .relay-root.relay-during-call #lobby {
+          background: transparent !important;
+          padding: 0 !important;
+          display: flex !important;
+          align-items: center !important;
+          justify-content: center !important;
+        }
+        /* Hide the legacy register screen during calls too (we auto-join). */
+        .relay-root.relay-during-call #register { display: none !important; }
+      `}</style>
 
       {/* ── inline call surface — promoted to fullscreen overlay when phase != idle */}
       <div
@@ -479,13 +512,35 @@ export default function DialerPage() {
           (phase === "idle"
             ? // hidden but mounted — we keep the engine alive across calls
               "absolute -left-[10000px] top-0 size-px overflow-hidden pointer-events-none opacity-0"
-            : // promote to fullscreen overlay, so the call replaces the dialer in place
-              "fixed inset-0 z-40")
+            : // promote to fullscreen overlay, so the call replaces the dialer in place;
+              // `relay-during-call` toggles the lobby-hiding overrides above.
+              "relay-during-call fixed inset-0 z-40")
         }
         // Ensure the imperative DOM the engine writes into has its own
         // scope (the markup is the original RELAY app HTML).
         data-relay-engine-root="true"
       />
+
+      {/* While dialing, overlay a "Calling NNN NNN…" caption on top of the
+          collapsed legacy lobby so the user sees a single coherent dialer
+          surface rather than the legacy keypad. The actual ringing/in-call
+          UI is rendered by the engine into #call (which we leave alone). */}
+      {phase === "dialing" ? (
+        <div className="fixed inset-0 z-45 flex items-center justify-center pointer-events-none">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+              Calling
+            </div>
+            <div className="text-4xl font-light tracking-wider tabular-nums">
+              {formatDialed(dialedFor)}
+            </div>
+            <div className="mt-2 inline-flex items-center gap-2 text-sm text-muted-foreground">
+              <span className="size-2 rounded-full bg-primary animate-pulse" />
+              connecting…
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Top-right "End call" affordance when in dialing/in-call,
           purely as a UX hint: the engine's own hangup button is in the
