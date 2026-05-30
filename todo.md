@@ -102,11 +102,18 @@ Hosted website for the RELAY chat / voice / video application (Manus hosting).
 - [x] Theming in `client/src/index.css` — extended `@layer base` with OKLCH dark palette + presence tokens (`--relay-online`, `--relay-offline`)
 - [x] `App.tsx` switched to dark default, routes `/app`, `/app/dialer`, `/app/messages`, `/app/contacts` use the AppShell; `/app/call` keeps the legacy Relay component for the actual WebRTC call session
 
-### Deferred to v2.1
-- [ ] Auto-register the guest identity in the legacy in-call screen (`pages/Relay.tsx`) so navigating from the new dialer to `/app/call?to=xxxxxx` doesn't re-ask for the name
+## v2.0.1 — Phone-app polish (delivered 2026-05-30)
+- [x] Profile page at `/app/profile` with avatar upload (≤ 4 MB), display-name edit, your-number display, sign-out
+- [x] AppShell avatar/header is a Link to `/app/profile` (sidebar + mobile top-bar)
+- [x] OAuth callback (`server/_core/oauth.ts`) migrates guest identity into the new user row in-place via `ensureUserIdentity`, clears `relay_guest` cookie, redirects to `/app`. Users keep their number, contacts, messages, call history after upgrading from guest.
+- [x] Messaging poll cadence tightened (threads 4s, open conversation 2s) for closer-to-realtime UX without WebSocket work
+- [x] Auto-register legacy in-call screen: `Relay.tsx` reads `identity.whoami` and auto-populates the join form + honors `?to=<number>` to auto-dial. Skip the second name prompt when navigating from `/app/dialer` → Call.
+- [x] Footer bumped to v2.0.0
+- [x] All 25 vitest tests pass
+
+### Deferred to v2.2
 - [ ] Replace v1 in-memory signaling with the DB-backed `signaling` mailbox table (table exists, helpers exist, integration deferred to avoid risking working calls)
-- [ ] WebSocket-driven messages (currently polling 5–10s — works but not instant)
-- [ ] Avatar upload UI for profile (DB column ready, UI is placeholder)
+- [ ] WebSocket-driven messages (currently polling 2–4s — works well, but not push)
 - [ ] Real-device QA on mobile Safari + Chrome Android for dialer-clamp and voice-note recording
 
 ### Real-device QA carried forward from v1.2

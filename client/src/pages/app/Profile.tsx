@@ -26,7 +26,8 @@ export default function ProfilePage() {
     if (me?.displayName) setName(me.displayName);
   }, [me?.displayName]);
 
-  const signOutMut = trpc.identity.signOutGuest.useMutation();
+  const signOutGuestMut = trpc.identity.signOutGuest.useMutation();
+  const logoutUserMut = trpc.auth.logout.useMutation();
   const updateProfile = trpc.identity.updateProfile.useMutation({
     onSuccess: () => {
       refresh();
@@ -246,9 +247,16 @@ export default function ProfilePage() {
             variant="ghost"
             className="text-destructive hover:text-destructive"
             onClick={async () => {
-              if (!confirm("Sign out and forget this number on this device?")) return;
+              const msg = me.isGuest
+                ? "Sign out and forget this number on this device?"
+                : "Sign out of your account on this device?";
+              if (!confirm(msg)) return;
               try {
-                await signOutMut.mutateAsync();
+                if (me.isGuest) {
+                  await signOutGuestMut.mutateAsync();
+                } else {
+                  await logoutUserMut.mutateAsync();
+                }
               } catch {
                 /* ignore */
               }
