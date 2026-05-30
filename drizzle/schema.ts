@@ -1,15 +1,23 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import {
+  bigint,
+  boolean,
+  index,
+  int,
+  json,
+  mysqlEnum,
+  mysqlTable,
+  primaryKey,
+  smallint,
+  text,
+  timestamp,
+  uniqueIndex,
+  varchar,
+} from "drizzle-orm/mysql-core";
 
-/**
- * Core user table backing auth flow.
- * Extend this file with additional tables as your product grows.
- * Columns use camelCase to match both database fields and generated types.
- */
+/* ──────────────────────────────────────────────────────────────────────────
+ * users — registered (OAuth) accounts. Kept compatible with the template.
+ * ────────────────────────────────────────────────────────────────────────── */
 export const users = mysqlTable("users", {
-  /**
-   * Surrogate primary key. Auto-incremented numeric value managed by the database.
-   * Use this for relations between tables.
-   */
   id: int("id").autoincrement().primaryKey(),
   /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
@@ -21,8 +29,281 @@ export const users = mysqlTable("users", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
-
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
-// TODO: Add your tables here
+/* ──────────────────────────────────────────────────────────────────────────
+ * identities — every "party" on RELAY, whether a guest or a registered user.
+ *
+ * A guest gets an identity row immediately (no `userId`). If they later upgrade
+ * via OAuth, the same identity row stays (preserving their number, contacts,
+ * messages, call history) and `userId` is filled in.
+ *
+ * `number` is the public 6-digit RELAY number. We index it uniquely so calls
+ * can resolve a destination by number alone.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const identities = mysqlTable(
+  "identities",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    /** 6-digit RELAY number (zero-padded string, e.g. "482015"). */
+    number: varchar("number", { length: 6 }).notNull(),
+    /** Display name chosen by the user (guests pick this on landing). */
+    displayName: varchar("displayName", { length: 64 }).notNull(),
+    /** Optional avatar URL (stored via /manus-storage/...). */
+    avatarUrl: text("avatarUrl"),
+    /** If the identity has been upgraded to a registered user, link here. */
+    userId: int("userId"),
+    /** Guest cookie token (random 32-byte hex). Null once upgraded. */
+    guestToken: varchar("guestToken", { length: 64 }),
+    /** When the guest cookie expires (30 days from creation or last refresh). */
+    guestExpiresAt: timestamp("guestExpiresAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    numberIdx: uniqueIndex("identities_number_unique").on(t.number),
+    userIdx: index("identities_userId_idx").on(t.userId),
+    guestTokenIdx: index("identities_guestToken_idx").on(t.guestToken),
+  }),
+);
+export type Identity = typeof identities.$inferSelect;
+export type InsertIdentity = typeof identities.$inferInsert;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * presence — who's online right now, plus last-seen.
+ * Updated by WebSocket heartbeats; reads via tRPC are cheap.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const presence = mysqlTable(
+  "presence",
+  {
+    identityId: int("identityId").primaryKey(),
+    isOnline: boolean("isOnline").notNull().default(false),
+    lastSeenAt: timestamp("lastSeenAt").defaultNow().notNull(),
+    /** Active socket session id (helps when an identity has multiple tabs). */
+    socketSessionId: varchar("socketSessionId", { length: 64 }),
+  },
+  (t) => ({
+    onlineIdx: index("presence_isOnline_idx").on(t.isOnline),
+  }),
+);
+export type Presence = typeof presence.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * contacts — saved entries in one identity's phonebook.
+ * The contact may itself be a known identity (resolved by number).
+ * ────────────────────────────────────────────────────────────────────────── */
+export const contacts = mysqlTable(
+  "contacts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    ownerId: int("ownerId").notNull(),
+    /** The remote party's 6-digit number. */
+    number: varchar("number", { length: 6 }).notNull(),
+    /** Optional friendly name the owner gave to this contact. */
+    displayName: varchar("displayName", { length: 64 }),
+    avatarUrl: text("avatarUrl"),
+    /** True when the owner has favourited / pinned the contact. */
+    favourite: boolean("favourite").notNull().default(false),
+    notes: text("notes"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    ownerNumberUnique: uniqueIndex("contacts_owner_number_unique").on(t.ownerId, t.number),
+    ownerIdx: index("contacts_owner_idx").on(t.ownerId),
+  }),
+);
+export type Contact = typeof contacts.$inferSelect;
+export type InsertContact = typeof contacts.$inferInsert;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * conversations — a SMS-style chat thread, currently always 1:1 between two
+ * identities (extendable to group later).
+ * `key` is the lexicographically-sorted "minId-maxId" pair so we can find or
+ * create a thread idempotently.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const conversations = mysqlTable(
+  "conversations",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    /** Stable key for 1:1: `${minId}-${maxId}`; for groups, null. */
+    pairKey: varchar("pairKey", { length: 64 }),
+    kind: mysqlEnum("kind", ["dm", "group"]).notNull().default("dm"),
+    title: varchar("title", { length: 128 }),
+    lastMessageAt: timestamp("lastMessageAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    pairKeyIdx: uniqueIndex("conversations_pairKey_unique").on(t.pairKey),
+    lastMessageIdx: index("conversations_lastMessage_idx").on(t.lastMessageAt),
+  }),
+);
+export type Conversation = typeof conversations.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * conversation_participants — membership table.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const conversationParticipants = mysqlTable(
+  "conversation_participants",
+  {
+    conversationId: int("conversationId").notNull(),
+    identityId: int("identityId").notNull(),
+    unreadCount: int("unreadCount").notNull().default(0),
+    lastReadMessageId: int("lastReadMessageId"),
+    mutedUntil: timestamp("mutedUntil"),
+    joinedAt: timestamp("joinedAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.conversationId, t.identityId] }),
+    byIdentity: index("cp_identity_idx").on(t.identityId),
+  }),
+);
+export type ConversationParticipant = typeof conversationParticipants.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * messages — a single message in a thread.
+ * `kind` enum lets us render text, image, video, audio, file, or system events
+ * (e.g. "Call ended — 02:34") uniformly.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const messages = mysqlTable(
+  "messages",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    conversationId: int("conversationId").notNull(),
+    senderIdentityId: int("senderIdentityId").notNull(),
+    kind: mysqlEnum("kind", [
+      "text",
+      "image",
+      "video",
+      "audio",
+      "file",
+      "system",
+    ])
+      .notNull()
+      .default("text"),
+    body: text("body"),
+    /** Reference to attachments.id when kind is image/video/audio/file. */
+    attachmentId: int("attachmentId"),
+    /** Reply-to message id for threaded replies. */
+    replyToId: int("replyToId"),
+    /** Free-form metadata (e.g. call-ended duration, system event details). */
+    meta: json("meta"),
+    status: mysqlEnum("status", ["sent", "delivered", "read", "failed"])
+      .notNull()
+      .default("sent"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    editedAt: timestamp("editedAt"),
+    deletedAt: timestamp("deletedAt"),
+  },
+  (t) => ({
+    conversationIdx: index("messages_conversation_idx").on(t.conversationId, t.createdAt),
+    senderIdx: index("messages_sender_idx").on(t.senderIdentityId),
+  }),
+);
+export type Message = typeof messages.$inferSelect;
+export type InsertMessage = typeof messages.$inferInsert;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * attachments — file metadata. Bytes live in storage (storagePut), only the
+ * key/url + descriptive fields land in the DB.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const attachments = mysqlTable(
+  "attachments",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    storageKey: varchar("storageKey", { length: 256 }).notNull(),
+    url: text("url").notNull(),
+    mimeType: varchar("mimeType", { length: 128 }).notNull(),
+    sizeBytes: bigint("sizeBytes", { mode: "number" }).notNull(),
+    /** Optional: image/video pixel dimensions. */
+    width: smallint("width"),
+    height: smallint("height"),
+    /** Optional: audio/video duration in ms. */
+    durationMs: int("durationMs"),
+    /** Optional original filename for files. */
+    filename: varchar("filename", { length: 256 }),
+    uploadedByIdentityId: int("uploadedByIdentityId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    ownerIdx: index("attachments_owner_idx").on(t.uploadedByIdentityId),
+  }),
+);
+export type Attachment = typeof attachments.$inferSelect;
+export type InsertAttachment = typeof attachments.$inferInsert;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * call_history — every call attempt between two identities.
+ * `status` covers initiated, answered, missed, declined, ended.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const callHistory = mysqlTable(
+  "call_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    callerIdentityId: int("callerIdentityId").notNull(),
+    calleeIdentityId: int("calleeIdentityId").notNull(),
+    /** Conversation that holds the chat for this call (auto-created). */
+    conversationId: int("conversationId"),
+    status: mysqlEnum("status", [
+      "initiated",
+      "ringing",
+      "answered",
+      "missed",
+      "declined",
+      "ended",
+      "failed",
+    ])
+      .notNull()
+      .default("initiated"),
+    startedAt: timestamp("startedAt").defaultNow().notNull(),
+    answeredAt: timestamp("answeredAt"),
+    endedAt: timestamp("endedAt"),
+    durationSec: int("durationSec"),
+    /** Channel: voice | video. */
+    channel: mysqlEnum("channel", ["voice", "video"]).notNull().default("video"),
+  },
+  (t) => ({
+    callerIdx: index("call_caller_idx").on(t.callerIdentityId, t.startedAt),
+    calleeIdx: index("call_callee_idx").on(t.calleeIdentityId, t.startedAt),
+  }),
+);
+export type CallHistory = typeof callHistory.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * signaling — DB-backed WebRTC SDP/ICE mailbox.
+ *
+ * Each row is a single signaling envelope from caller to callee (or vice
+ * versa). Receivers poll/long-poll for new envelopes addressed to them.
+ * Rows TTL out after a few minutes — a periodic job purges stale ones.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const signaling = mysqlTable(
+  "signaling",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    fromIdentityId: int("fromIdentityId").notNull(),
+    toIdentityId: int("toIdentityId").notNull(),
+    /** Logical call id so caller/callee can correlate offer/answer/ice. */
+    callId: varchar("callId", { length: 64 }).notNull(),
+    kind: mysqlEnum("kind", [
+      "offer",
+      "answer",
+      "ice",
+      "hangup",
+      "ringing",
+      "decline",
+    ]).notNull(),
+    /** Payload: SDP string or ICE candidate JSON. */
+    payload: json("payload").notNull(),
+    consumed: boolean("consumed").notNull().default(false),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+  },
+  (t) => ({
+    inboxIdx: index("signaling_inbox_idx").on(t.toIdentityId, t.consumed, t.createdAt),
+    callIdx: index("signaling_call_idx").on(t.callId),
+    expiresIdx: index("signaling_expires_idx").on(t.expiresAt),
+  }),
+);
+export type Signaling = typeof signaling.$inferSelect;
+export type InsertSignaling = typeof signaling.$inferInsert;

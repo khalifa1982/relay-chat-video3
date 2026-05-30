@@ -63,3 +63,73 @@ Hosted website for the RELAY chat / voice / video application (Manus hosting).
 - [x] User-side: export project to GitHub — done by agent via `gh` CLI to https://github.com/khalifa1982/relay-chat-video (private). 155 files pushed on `main`.
 - [x] Push `.github/workflows/ci.yml` and `.github/pull_request_template.md` to GitHub — completed by agent after the user re-authorized the `gh` CLI on the cloud computer with the `workflow` scope (commits 574f10ff for ci.yml, 8a5cb4d9 for the PR template).
 - [ ] User-side: install Claude GitHub App on the new repo so Claude can read files and push commits directly (https://github.com/apps/claude → Install → select only `relay-chat-video`)
+
+## v2.0 — Phone-app experience (planned)
+
+### Design (Gemini 2.5 Flash)
+- [ ] Generate visual direction via Gemini: palette refinement, dial-pad layout for phone / tablet / desktop, message bubble system, contact card, online/offline status pills, app-shell chrome
+- [ ] Write `design/v2-spec.md` capturing the chosen direction so it survives across sessions
+
+### Backend & data model
+- [ ] Schema: `guest_sessions` (id, username, number, cookie_token, created_at, expires_at, ip, upgraded_user_id)
+- [ ] Schema: `contacts` (owner_user_id_or_guest, contact_number, display_name, avatar_url, created_at)
+- [ ] Schema: `conversations` (id, kind, last_message_at) + `conversation_participants` (conversation_id, party_id, party_kind, unread_count, last_read_at)
+- [ ] Schema: `messages` (id, conversation_id, sender_party_id, sender_kind, body, kind, attachment_id, created_at, edited_at, deleted_at, status)
+- [ ] Schema: `attachments` (id, storage_key, url, mime, size, width, height, duration_ms, uploaded_by)
+- [ ] Schema: `presence` (party_id, party_kind, last_seen_at, is_online) updated by WS heartbeats
+- [ ] tRPC: `guest.start({username})` → sets 30-day cookie, allocates 6-digit number, returns identity
+- [ ] tRPC: `auth.upgradeGuestToUser()` — migrate guest data to OAuth user
+- [ ] tRPC: `contacts.list/add/update/remove`
+- [ ] tRPC: `messages.threads/messages/send/markRead/typing`
+- [ ] tRPC: `attachments.signUpload` + server-side `storagePut` integration
+- [ ] WS: presence channel (online/offline/last_seen) and new-message push
+- [ ] Migration script + `pnpm db:push` verified
+
+### Frontend app shell
+- [ ] Landing page: clean hero with single "Enter your name" input → CTA "Get my number"
+- [ ] After name: routed into `/app` shell with persistent header (your number) + nav
+- [ ] Mobile: bottom tab bar with Dialer + Messages (+ unread badge)
+- [ ] Desktop/tablet: left sidebar version with same nav
+- [ ] Theme polish per Gemini spec; preserve dark theme; ensure tokens consistent
+
+### Dialer tab
+- [ ] Top: large display of *your* 6-digit number with copy button
+- [ ] Center: input field accepting 6 digits, backspace, long-press-0 for "+" (future)
+- [ ] 12-key grid (1–9, *, 0, #) sized via CSS clamp so it never overflows on any viewport
+- [ ] Big green call button (full width on mobile, fixed-circle on desktop)
+- [ ] Call history list below pad: avatar/initials, name (from contacts) or number, time, in/out/missed icon
+- [ ] On dial: peek modal showing callee name (if contact) + online/offline + last seen, ringing animation
+- [ ] During call: existing in-call UI preserved (filters, mute, hangup, etc.)
+
+### Messages tab
+- [ ] Thread list: avatar, name/number, last message preview, time, unread count badge
+- [ ] Conversation view: SMS-style bubbles, day separators, delivery/read ticks
+- [ ] Composer: text + emoji picker + attachment menu (image/video/audio/file)
+- [ ] Voice notes: record + send as audio attachment
+- [ ] Image/video previews inline, lightbox on tap
+- [ ] Pull-down for older messages (pagination)
+- [ ] Typing indicators ("Aman is typing…")
+- [ ] System-message: "Call ended — 02:34" auto-inserted after a call between two parties
+
+### Contacts
+- [ ] After a successful call, prompt "Save Aman to contacts?"
+- [ ] Contacts page accessible from sidebar/long-press in thread
+- [ ] Online dot + last-seen on each contact card
+- [ ] Edit display name, optional avatar (uploaded via storage)
+
+### Onboarding & upgrade
+- [ ] Cookie `relay_guest=<token>` set with 30-day max-age, HttpOnly, SameSite=Lax
+- [ ] On revisit within 30 days: skip name prompt, restore previous identity + number
+- [ ] "Keep my number forever" CTA in profile → triggers Manus OAuth → server migrates guest rows to the new user_id
+- [ ] Show clear "Guest — expires in N days" or "Permanent — registered" status in profile
+
+### Tests & quality
+- [ ] Vitest: guest flow (start, restore, expire, upgrade)
+- [ ] Vitest: messages send/receive/read/unread counters
+- [ ] Vitest: attachment upload roundtrip
+- [ ] Vitest: presence transitions
+- [ ] Vitest: regressions on existing call-setup flow
+
+### Delivery
+- [ ] Update CLAUDE.md with v2.0 architecture
+- [ ] Deploy and save checkpoint as v2.0.0
