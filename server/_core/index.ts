@@ -11,8 +11,8 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
-import { registerV2Events } from "../v2events";
-import { reapStalePresence } from "../v2db";
+import { registerV2Events, publishToIdentity } from "../v2events";
+import { getIdentityByNumber, reapStalePresence } from "../v2db";
 
 // The RELAY calling UI is rendered by the React SPA at /app (see
 // `client/src/pages/Relay.tsx`). We deliberately do NOT serve a
@@ -56,7 +56,23 @@ async function startServer() {
   // RELAY signaling — SSE + POST on /api/relay/{stream,send}. We use
   // plain HTTP because the production gateway downgrades raw WebSocket
   // upgrades on arbitrary paths.
-  attachRelay(app);
+  // The relay handler also emits a `call_offer` hint on the v2 SSE bus
+  // when an invite is dispatched, so the callee gets a desktop
+  // notification even if they're not on the call screen yet.
+  attachRelay(app, async (info) => {
+    try {
+      const callee = await getIdentityByNumber(info.toPin);
+      if (!callee) return;
+      publishToIdentity(callee.id, {
+        kind: "call_offer",
+        fromNumber: info.fromPin,
+        fromName: info.fromName,
+        roomId: info.roomId,
+      });
+    } catch {
+      /* swallow — the call still completes via the relay channel */
+    }
+  });
   // v2.0 attachment upload (multipart-friendly JSON body)
   registerV2Upload(app);
   // v2.0 push channel — SSE that routes message/presence/read events

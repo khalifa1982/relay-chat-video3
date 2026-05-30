@@ -5,12 +5,19 @@
  */
 import { useEffect } from "react";
 import { trpc } from "@/lib/trpc";
+import { notify, playCallRing, playMessageChime } from "./notifications";
 
 type V2Event =
   | { kind: "message"; conversationId: number; from: number }
   | { kind: "read"; conversationId: number; reader: number }
   | { kind: "presence"; number: string; online: boolean; lastSeenAt: string }
   | { kind: "contact"; from: number }
+  | {
+      kind: "call_offer";
+      fromNumber: string;
+      fromName: string;
+      roomId: string;
+    }
   | { kind: "ping" };
 
 export function useRealtime(enabled: boolean): void {
@@ -53,6 +60,38 @@ export function useRealtime(enabled: boolean): void {
             utils.messages.list
               .invalidate({ conversationId: payload.conversationId })
               .catch(() => {});
+            // Notification only fires when the tab is hidden — in-app
+            // UI handles the visible case.
+            playMessageChime();
+            notify({
+              title: "New message",
+              body: "You have a new RELAY message.",
+              tag: `relay-msg-${payload.conversationId}`,
+              onClick: () => {
+                if (typeof window !== "undefined") {
+                  window.location.href = `/app/messages/${payload.conversationId}`;
+                }
+              },
+            });
+            break;
+          case "call_offer":
+            // Best-effort — if the user is on the call screen the
+            // existing relay socket already handles the ring; this
+            // covers all other tabs.
+            playCallRing();
+            notify({
+              title: `Incoming call from ${payload.fromName || payload.fromNumber}`,
+              body: `RELAY · ${payload.fromNumber}`,
+              tag: `relay-call-${payload.roomId}`,
+              autoCloseMs: 25_000,
+              onClick: () => {
+                if (typeof window !== "undefined") {
+                  window.location.href = `/app/dialer?incoming=${payload.fromNumber}`;
+                }
+              },
+            });
+            // Also poke the call history list so it appears.
+            utils.calls.history.invalidate().catch(() => {});
             break;
           case "read":
             utils.messages.list

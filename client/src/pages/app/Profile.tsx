@@ -1,10 +1,18 @@
 import { useState, useRef, useEffect } from "react";
+import { Bell, BellOff, Check, Moon, Sun } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useIdentity } from "@/app/useIdentity";
 import { getLoginUrl } from "@/const";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  getNotifPermission,
+  requestNotifPermission,
+  unlockAudio,
+  type NotifPermission,
+} from "@/app/notifications";
+import { useTheme } from "@/contexts/ThemeContext";
 
 /**
  * Profile page (`/app/profile`).
@@ -209,17 +217,15 @@ export default function ProfilePage() {
         </section>
 
         {/* number */}
-        <section className="space-y-2">
-          <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-            Your number
-          </Label>
-          <div className="text-2xl font-mono tracking-widest">
-            {me.number.slice(0, 3)} {me.number.slice(3)}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Share this 6-digit number for people to call or message you.
-          </p>
-        </section>
+        <NumberAndFlag
+          number={me.number}
+        />
+
+        {/* theme */}
+        <ThemeToggleSection />
+
+        {/* notifications */}
+        <NotificationsSection />
 
         {/* upgrade CTA for guests */}
         {me.isGuest && (
@@ -241,6 +247,8 @@ export default function ProfilePage() {
         )}
 
         {/* sign out */}
+        {/* (the upgrade CTA above stays in place — sign-out is the
+           final action on this page) */}
         <section className="pt-4 border-t border-border">
           <Button
             type="button"
@@ -268,5 +276,197 @@ export default function ProfilePage() {
         </section>
       </div>
     </div>
+  );
+}
+
+/* ============================================================
+   Number row — shows the user's 6-digit RELAY number alongside
+   a country flag chip derived from their connecting IP. The flag
+   is purely informational; if the geo lookup fails (e.g. private
+   IP, network error) we silently render the number alone.
+   ============================================================ */
+function NumberAndFlag({ number }: { number: string }) {
+  const geo = trpc.directory.geoSelf.useQuery(undefined, {
+    staleTime: 60 * 60 * 1000, // 1h — country doesn't change often
+    retry: false,
+  });
+  return (
+    <section className="space-y-2">
+      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+        Your number
+      </Label>
+      <div className="flex items-center gap-3">
+        <div className="text-2xl font-mono tracking-widest">
+          {number.slice(0, 3)} {number.slice(3)}
+        </div>
+        {geo.data?.flagEmoji && (
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full bg-muted/40 border border-border px-2.5 py-1 text-sm"
+            title={
+              geo.data.countryName
+                ? `Connecting from ${geo.data.countryName}`
+                : undefined
+            }
+            aria-label={
+              geo.data.countryName
+                ? `Connecting from ${geo.data.countryName}`
+                : `Country ${geo.data.country}`
+            }
+          >
+            <span className="text-base leading-none">{geo.data.flagEmoji}</span>
+            <span className="text-xs font-medium text-muted-foreground">
+              {geo.data.country}
+            </span>
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Share this 6-digit number for people to call or message you.
+      </p>
+    </section>
+  );
+}
+
+/* ============================================================
+   Theme toggle — lets the user flip the entire app between
+   dark (default) and light. State is persisted via the
+   ThemeProvider that wraps the app in main.tsx.
+   ============================================================ */
+function ThemeToggleSection() {
+  const { theme, setTheme } = useTheme();
+  const isDark = theme === "dark";
+  return (
+    <section className="space-y-3">
+      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+        Appearance
+      </Label>
+      <div className="rounded-2xl border border-border bg-card/50 p-1 grid grid-cols-2 gap-1">
+        <Button
+          type="button"
+          variant={isDark ? "default" : "ghost"}
+          className="justify-center gap-2"
+          onClick={() => setTheme("dark")}
+        >
+          <Moon className="size-4" /> Dark
+        </Button>
+        <Button
+          type="button"
+          variant={!isDark ? "default" : "ghost"}
+          className="justify-center gap-2"
+          onClick={() => setTheme("light")}
+        >
+          <Sun className="size-4" /> Light
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Switches the entire app theme. Your choice is remembered on this
+        device.
+      </p>
+    </section>
+  );
+}
+
+/* ============================================================
+   Notifications — lets the user grant browser notification
+   permission. We show a clear three-state pill (Enable / Granted /
+   Blocked) so the user always knows where they stand.
+   ============================================================ */
+function NotificationsSection() {
+  const [perm, setPerm] = useState<NotifPermission>(() =>
+    getNotifPermission()
+  );
+  const [busy, setBusy] = useState(false);
+
+  // The browser's permission state can change in another tab — re-poll
+  // when this tab gets focus.
+  useEffect(() => {
+    const onFocus = () => setPerm(getNotifPermission());
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
+  if (perm === "unsupported") {
+    return (
+      <section className="space-y-2">
+        <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+          Notifications
+        </Label>
+        <div className="rounded-xl border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+          This browser doesn't support desktop notifications.
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="space-y-3">
+      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+        Notifications
+      </Label>
+      <div className="rounded-2xl border border-border bg-card/40 p-4 flex items-start gap-3">
+        <div
+          className={
+            "shrink-0 size-10 grid place-items-center rounded-xl " +
+            (perm === "granted"
+              ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
+              : perm === "denied"
+                ? "bg-destructive/15 text-destructive"
+                : "bg-primary/15 text-primary")
+          }
+        >
+          {perm === "granted" ? (
+            <Bell className="size-5" />
+          ) : perm === "denied" ? (
+            <BellOff className="size-5" />
+          ) : (
+            <Bell className="size-5" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="font-medium">
+            {perm === "granted"
+              ? "Notifications are on"
+              : perm === "denied"
+                ? "Notifications are blocked"
+                : "Get notified when someone calls or texts"}
+          </div>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {perm === "granted"
+              ? "You'll see a system notification and hear a chime when the app is in another tab."
+              : perm === "denied"
+                ? "Allow notifications for this site in your browser settings, then refresh."
+                : "We'll show a system notification — we never push promotional content."}
+          </p>
+          <div className="mt-3">
+            {perm === "granted" ? (
+              <span className="inline-flex items-center gap-1.5 text-sm text-[color:var(--relay-online)]">
+                <Check className="size-4" /> Enabled
+              </span>
+            ) : perm === "denied" ? (
+              <span className="inline-flex items-center gap-1.5 text-sm text-destructive">
+                <BellOff className="size-4" /> Blocked in browser
+              </span>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  // Grants are valid only if the request comes from a
+                  // user gesture — this onClick qualifies.
+                  unlockAudio();
+                  const result = await requestNotifPermission();
+                  setPerm(result);
+                  setBusy(false);
+                }}
+              >
+                {busy ? "Requesting…" : "Enable notifications"}
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }

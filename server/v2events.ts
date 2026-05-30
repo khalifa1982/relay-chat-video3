@@ -27,6 +27,12 @@ export type V2Event =
   | { kind: "read"; conversationId: number; reader: number }
   | { kind: "presence"; number: string; online: boolean; lastSeenAt: string }
   | { kind: "contact"; from: number }
+  | {
+      kind: "call_offer";
+      fromNumber: string;
+      fromName: string;
+      roomId: string;
+    }
   | { kind: "ping" };
 
 function writeEvent(client: SseClient, ev: V2Event) {

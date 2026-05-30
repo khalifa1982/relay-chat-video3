@@ -180,6 +180,79 @@ export const v2AuthRouter = router({
 
 /* ── directory (numbers / lookups) ────────────────────────────── */
 
+export interface GeoSelfResult {
+  ip: string | null;
+  country: string | null;
+  countryName: string | null;
+  city: string | null;
+  flagEmoji: string | null;
+}
+
+const GEO_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const geoCache = new Map<
+  string,
+  { value: GeoSelfResult; expiresAt: number }
+>();
+
+/** Reset the in-process cache. Used by tests. */
+export function _resetGeoCache(): void {
+  geoCache.clear();
+}
+
+/**
+ * Convert an ISO 3166-1 alpha-2 country code into the matching flag
+ * emoji by mapping each ASCII letter to its regional-indicator codepoint.
+ * Returns null for invalid input.
+ */
+export function flagEmojiFromIso2(
+  code: string | null | undefined
+): string | null {
+  if (!code) return null;
+  const c = code.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(c)) return null;
+  const A = 0x1f1e6 - "A".charCodeAt(0);
+  return String.fromCodePoint(c.charCodeAt(0) + A, c.charCodeAt(1) + A);
+}
+
+/**
+ * Best-effort extraction of the caller's public IP from an Express
+ * request. Honors `CF-Connecting-IP` and `X-Forwarded-For`, falling
+ * back to `req.ip`. Strips IPv6-mapped IPv4 prefixes.
+ */
+export function pickClientIp(req: {
+  headers: Record<string, string | string[] | undefined>;
+  socket?: { remoteAddress?: string | null };
+  ip?: string;
+}): string | null {
+  const cf = req.headers["cf-connecting-ip"];
+  if (typeof cf === "string" && cf.trim()) {
+    return cf.trim().replace(/^::ffff:/i, "");
+  }
+  const xff = req.headers["x-forwarded-for"];
+  if (typeof xff === "string" && xff.trim()) {
+    const first = xff.split(",")[0]?.trim();
+    if (first) return first.replace(/^::ffff:/i, "");
+  }
+  if (req.ip) return req.ip.replace(/^::ffff:/i, "");
+  const sock = req.socket?.remoteAddress;
+  if (sock) return sock.replace(/^::ffff:/i, "");
+  return null;
+}
+
+/** Returns true for IPs we should not run a public geo lookup against. */
+export function isPrivateOrLocalIp(ip: string): boolean {
+  if (!ip) return true;
+  if (ip === "127.0.0.1" || ip === "::1") return true;
+  if (ip.startsWith("10.")) return true;
+  if (ip.startsWith("192.168.")) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
+  if (ip.startsWith("169.254.")) return true;
+  if (ip.startsWith("fc") || ip.startsWith("fd") || ip.startsWith("fe80:")) {
+    return true;
+  }
+  return false;
+}
+
 export const v2DirectoryRouter = router({
   /** Look up a single number — returns null when unknown. */
   lookup: publicProcedure
@@ -197,6 +270,65 @@ export const v2DirectoryRouter = router({
         lastSeenAt: pres?.lastSeenAt ?? null,
       };
     }),
+
+  /**
+   * Resolve the caller's request IP to a country (ISO 3166-1 alpha-2)
+   * and a flag emoji using a free public geo service (`ipapi.co`).
+   * Cached in-process for 12h per IP. Returns nulls on failure or
+   * for private/loopback addresses — the UI gracefully omits the
+   * flag chip when null.
+   */
+  geoSelf: publicProcedure.query(async ({ ctx }) => {
+    const empty: GeoSelfResult = {
+      ip: null,
+      country: null,
+      countryName: null,
+      city: null,
+      flagEmoji: null,
+    };
+    const ip = pickClientIp(ctx.req);
+    if (!ip) return empty;
+    if (isPrivateOrLocalIp(ip)) return { ...empty, ip };
+
+    const cached = geoCache.get(ip);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4000);
+      const res = await fetch(
+        `https://ipapi.co/${encodeURIComponent(ip)}/json/`,
+        {
+          signal: ctrl.signal,
+          headers: { "User-Agent": "relay-chat-video/2.0" },
+        }
+      );
+      clearTimeout(timer);
+      if (!res.ok) return { ...empty, ip };
+      const json = (await res.json()) as {
+        country_code?: string | null;
+        country_name?: string | null;
+        city?: string | null;
+        error?: boolean;
+      };
+      if (json.error) return { ...empty, ip };
+      const country = (json.country_code || "").trim().toUpperCase() || null;
+      const out: GeoSelfResult = {
+        ip,
+        country,
+        countryName: json.country_name || null,
+        city: json.city || null,
+        flagEmoji: flagEmojiFromIso2(country),
+      };
+      geoCache.set(ip, {
+        value: out,
+        expiresAt: Date.now() + GEO_CACHE_TTL_MS,
+      });
+      return out;
+    } catch {
+      return { ...empty, ip };
+    }
+  }),
 
   /** Get presence for an array of identity ids. */
   presence: publicProcedure

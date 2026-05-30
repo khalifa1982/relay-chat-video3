@@ -153,15 +153,26 @@ export interface RelayMessage {
   data?: unknown;
 }
 
+export type InviteHook = (info: {
+  fromPin: string;
+  fromName: string;
+  toPin: string;
+  roomId: string;
+}) => void;
+
 /**
  * Protocol logic. Kept as a pure function over (registry, socket-state,
  * message) so it's straightforward to unit-test without spinning up an
- * HTTP server.
+ * HTTP server. The optional `onInvite` callback is fired exactly once
+ * per successful `invite` dispatch so a higher layer can fan out a
+ * notification (e.g. via the v2 SSE bus) to the callee even when they
+ * are not currently connected to the relay channel.
  */
 export function handleMessage(
   reg: RelayRegistry,
   conn: { socket: RelaySocket; pin: string | null; setPin: (p: string) => void },
-  msg: RelayMessage
+  msg: RelayMessage,
+  onInvite?: InviteHook
 ) {
   const type = msg && msg.type;
 
@@ -234,6 +245,20 @@ export function handleMessage(
         fromName: self.name,
         roomId: self.roomId,
       });
+      // Fan out a notification hint so the callee's other open tabs
+      // (e.g. Messages, Contacts) also see the incoming call.
+      if (onInvite && conn.pin && self.roomId) {
+        try {
+          onInvite({
+            fromPin: conn.pin,
+            fromName: self.name,
+            toPin: to,
+            roomId: self.roomId,
+          });
+        } catch {
+          /* never let a notification hook break call setup */
+        }
+      }
       break;
     }
 
@@ -311,7 +336,10 @@ export function handleMessage(
  *
  * Returns the underlying registry so tests can poke at internal state.
  */
-export function attachRelay(app: Express): RelayRegistry {
+export function attachRelay(
+  app: Express,
+  onInvite?: InviteHook
+): RelayRegistry {
   const reg = createRegistry();
 
   // SSE channel: long-lived response that streams JSON-encoded server -> client
@@ -422,7 +450,8 @@ export function attachRelay(app: Express): RelayRegistry {
           conn.pin = p;
         },
       },
-      message as RelayMessage
+      message as RelayMessage,
+      onInvite
     );
     res.json({ ok: true });
   });

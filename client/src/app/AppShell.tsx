@@ -33,12 +33,11 @@ function formatNumber(n: string): string {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  // Apply the relay-v2 theme class to <html>.
+  // Apply the relay-v2 accent palette to <html>. We deliberately do
+  // NOT toggle `.dark` here — ThemeProvider owns light/dark and the
+  // user can flip from Profile.
   useEffect(() => {
-    document.documentElement.classList.add("dark", "relay-v2");
-    return () => {
-      // Don't remove on unmount — the user is in the app, leave them in dark.
-    };
+    document.documentElement.classList.add("relay-v2");
   }, []);
 
   return (
@@ -82,7 +81,13 @@ function Inner({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-svh bg-background text-foreground flex flex-col md:flex-row">
       {/* ── desktop / tablet sidebar ───────────────────────────── */}
-      <aside className="hidden md:flex md:flex-col md:w-64 lg:w-72 border-r border-border bg-sidebar shrink-0">
+      <aside
+        className={
+          "hidden md:flex md:flex-col md:w-64 lg:w-72 shrink-0 " +
+          "border-r border-border/70 bg-sidebar/65 " +
+          "supports-[backdrop-filter]:bg-sidebar/45 supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150"
+        }
+      >
         <div className="px-5 pt-6 pb-4">
           <Link
             href="/app/profile"
@@ -163,7 +168,13 @@ function Inner({ children }: { children: React.ReactNode }) {
       {/* ── main column ────────────────────────────────────────── */}
       <main className="flex-1 flex flex-col min-w-0 min-h-svh">
         {/* mobile header */}
-        <header className="md:hidden flex items-center justify-between px-4 py-3 border-b border-border bg-card">
+        <header
+          className={
+            "md:hidden sticky top-0 z-30 flex items-center justify-between px-4 py-2.5 " +
+            "border-b border-border/70 bg-card/70 " +
+            "supports-[backdrop-filter]:bg-card/45 supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150"
+          }
+        >
           <Link
             href="/app/profile"
             className="flex items-center gap-3 min-w-0 active:opacity-70 transition-opacity"
@@ -205,32 +216,61 @@ function Inner({ children }: { children: React.ReactNode }) {
           )}
         </header>
 
-        <div className="flex-1 min-h-0 overflow-y-auto pb-24 md:pb-0">{children}</div>
+        <div className="flex-1 min-h-0 overflow-y-auto pb-28 md:pb-0">{children}</div>
 
-        {/* mobile bottom nav */}
-        <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 border-t border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+        {/* Apple-style glass tab bar: floating, compact icons, per-tab
+            accent color, and a safe-area inset so it never collides
+            with the home indicator. */}
+        <nav
+          className={
+            "md:hidden fixed bottom-2 inset-x-3 z-30 rounded-2xl " +
+            "border border-white/10 " +
+            "bg-card/65 " +
+            "shadow-[0_8px_32px_rgba(0,0,0,0.25)] " +
+            "supports-[backdrop-filter]:bg-card/40 supports-[backdrop-filter]:backdrop-blur-2xl supports-[backdrop-filter]:backdrop-saturate-150"
+          }
+          style={{
+            paddingBottom: "max(0.4rem, env(safe-area-inset-bottom))",
+          }}
+        >
           <div className="grid grid-cols-3">
             {TABS.map((tab) => {
               const active = location.startsWith(tab.path);
               const Icon = tab.icon;
+              const accentClass =
+                tab.key === "dialer"
+                  ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
+                  : tab.key === "messages"
+                    ? "bg-primary/15 text-primary"
+                    : "bg-accent/20 text-accent";
               return (
                 <Link
                   key={tab.key}
                   href={tab.path}
-                  className={
-                    "flex flex-col items-center gap-1 py-3 transition-colors " +
-                    (active ? "text-primary" : "text-muted-foreground")
-                  }
+                  className="flex flex-col items-center gap-0.5 py-2.5 transition-all duration-150 active:scale-[0.96]"
+                  style={{ transitionTimingFunction: "cubic-bezier(0.23,1,0.32,1)" }}
                 >
-                  <span className="relative inline-flex">
-                    <Icon className="size-6" />
+                  <span
+                    className={
+                      "relative inline-flex items-center justify-center rounded-xl size-9 transition-colors " +
+                      (active ? accentClass : "text-muted-foreground")
+                    }
+                  >
+                    <Icon className="size-[18px]" />
                     {tab.key === "messages" && unreadTotal > 0 && (
-                      <span className="absolute -top-1.5 -right-2 inline-flex min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] items-center justify-center font-bold">
+                      <span className="absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] items-center justify-center font-bold ring-2 ring-card">
                         {unreadTotal > 99 ? "99+" : unreadTotal}
                       </span>
                     )}
                   </span>
-                  <span className="text-[11px] font-medium">{tab.label}</span>
+                  <span
+                    className={
+                      "text-[10px] font-medium tracking-wide transition-colors " +
+                      (active ? "text-foreground" : "text-muted-foreground")
+                    }
+                  >
+                    {tab.label}
+                  </span>
                 </Link>
               );
             })}

@@ -113,7 +113,53 @@
   --sidebar-ring: oklch(0.488 0.243 264.376);
 }
 
-/* ----- v2.0 phone-app theme overrides (applies under .dark) ----- */
+/* ----- v2.0 phone-app theme overrides ----- */
+
+/* Tokens that exist in BOTH light and dark phone-app themes — used
+   by presence dots, call/online states. Defined first so they are
+   inherited by anything outside the theme-specific blocks. */
+.relay-v2 {
+  --relay-online: oklch(0.72 0.18 145);
+  --relay-offline: oklch(0.55 0.02 220);
+  --relay-danger: oklch(0.65 0.24 27);
+  --relay-success: oklch(0.72 0.18 145);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+/* Light phone-app palette — a soft, off-white surface tinted toward
+   cool slate, with the same cyan accent as dark so brand identity
+   stays consistent across themes. */
+.relay-v2:not(.dark) {
+  --background: oklch(0.985 0.005 220);
+  --foreground: oklch(0.18 0.012 220);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.012 220);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.012 220);
+  --secondary: oklch(0.96 0.005 220);
+  --secondary-foreground: oklch(0.3 0.012 220);
+  --muted: oklch(0.95 0.005 220);
+  --muted-foreground: oklch(0.5 0.015 220);
+  --accent: oklch(0.6 0.18 195);
+  --accent-foreground: oklch(0.99 0 0);
+  --primary: oklch(0.55 0.2 195);
+  --primary-foreground: oklch(0.99 0 0);
+  --destructive: oklch(0.6 0.22 27);
+  --destructive-foreground: oklch(0.99 0 0);
+  --border: oklch(0.18 0.012 220 / 12%);
+  --input: oklch(0.18 0.012 220 / 16%);
+  --ring: oklch(0.55 0.2 195);
+  --sidebar: oklch(0.99 0.005 220);
+  --sidebar-foreground: oklch(0.18 0.012 220);
+  --sidebar-accent: oklch(0.6 0.18 195);
+  --sidebar-accent-foreground: oklch(0.99 0 0);
+  --sidebar-border: oklch(0.18 0.012 220 / 10%);
+  --sidebar-ring: oklch(0.55 0.2 195);
+  --relay-online: oklch(0.55 0.18 145);
+  --relay-offline: oklch(0.6 0.015 220);
+}
+
 .dark.relay-v2 {
   /* deep space-slate base */
   --background: oklch(0.13 0.012 220);

@@ -1,6 +1,18 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { Phone, MessageSquare, Star, StarOff, Pencil, Trash2, UserPlus, X } from "lucide-react";
+import {
+  Phone,
+  MessageSquare,
+  Star,
+  StarOff,
+  Pencil,
+  Trash2,
+  UserPlus,
+  X,
+  Search,
+  CheckCircle2,
+  AlertCircle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -195,88 +207,257 @@ export default function ContactsPage() {
       </div>
 
       {editing && (
-        <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setEditing(null)}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl bg-card border border-border p-5 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold">{editing.id ? "Edit contact" : "Add contact"}</h3>
-              <Button size="icon" variant="ghost" onClick={() => setEditing(null)}>
-                <X className="size-4" />
-              </Button>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-                  Number
-                </label>
-                <Input
-                  value={editing.number}
-                  onChange={(e) =>
-                    setEditing({
-                      ...editing,
-                      number: e.target.value.replace(/\D/g, "").slice(0, 6),
-                    })
-                  }
-                  disabled={!!editing.id}
-                  placeholder="6-digit number"
-                  inputMode="numeric"
-                  className="font-mono"
-                />
-              </div>
-              <div>
-                <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-                  Display name
-                </label>
-                <Input
-                  value={editing.displayName}
-                  onChange={(e) => setEditing({ ...editing, displayName: e.target.value })}
-                  placeholder="Friend's name"
-                  maxLength={64}
-                />
-              </div>
-              <div>
-                <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-                  Notes
-                </label>
-                <Textarea
-                  value={editing.notes}
-                  onChange={(e) => setEditing({ ...editing, notes: e.target.value })}
-                  rows={3}
-                  maxLength={500}
-                />
-              </div>
-              {upsert.error && (
-                <p className="text-sm text-destructive">{upsert.error.message}</p>
-              )}
-            </div>
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <Button variant="ghost" onClick={() => setEditing(null)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => {
-                  upsert.mutate(
-                    {
-                      number: editing.number,
-                      displayName: editing.displayName.trim() || null,
-                      notes: editing.notes.trim() || null,
-                    },
-                    { onSuccess: () => setEditing(null) }
-                  );
-                }}
-                disabled={editing.number.length !== 6 || upsert.isPending}
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-        </div>
+        <AddContactDialog
+          editing={editing}
+          onClose={() => setEditing(null)}
+          onSave={(values) =>
+            upsert.mutate(values, {
+              onSuccess: () => setEditing(null),
+            })
+          }
+          saving={upsert.isPending}
+          error={upsert.error?.message ?? null}
+        />
       )}
+    </div>
+  );
+}
+
+/* ============================================================
+   Add / Edit contact dialog with live PIN preview.
+
+   When the user types a complete 6-digit number, we hit
+   `directory.lookup` so they can confirm avatar, display name,
+   and online/offline status BEFORE saving. Found numbers also
+   prefill the display name field if the user hasn't typed one.
+   ============================================================ */
+function AddContactDialog({
+  editing,
+  onClose,
+  onSave,
+  saving,
+  error,
+}: {
+  editing: {
+    id?: number;
+    number: string;
+    displayName: string;
+    notes: string;
+  };
+  onClose: () => void;
+  onSave: (values: {
+    number: string;
+    displayName: string | null;
+    notes: string | null;
+    favourite?: boolean;
+  }) => void;
+  saving: boolean;
+  error: string | null;
+}) {
+  const [number, setNumber] = useState(editing.number);
+  const [displayName, setDisplayName] = useState(editing.displayName);
+  const [notes, setNotes] = useState(editing.notes);
+  const [touchedName, setTouchedName] = useState(
+    Boolean(editing.displayName)
+  );
+
+  const lookup = trpc.directory.lookup.useQuery(
+    { number },
+    {
+      enabled: !editing.id && number.length === 6,
+      // Don't refetch as the user re-opens the dialog — 12s is plenty
+      // for staleness on a presence-aware UI.
+      staleTime: 12_000,
+      retry: false,
+    }
+  );
+
+  // Auto-fill the display name from the lookup unless the user has
+  // already typed something into the field themselves.
+  useEffect(() => {
+    if (editing.id) return;
+    if (touchedName) return;
+    if (lookup.data?.displayName) {
+      setDisplayName(lookup.data.displayName);
+    }
+  }, [editing.id, lookup.data, touchedName]);
+
+  const isComplete = number.length === 6;
+  const isLooking = isComplete && lookup.isFetching;
+  const found = isComplete && lookup.data;
+  const notFound =
+    isComplete && !lookup.isFetching && lookup.data === null;
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl bg-card border border-border p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold">
+            {editing.id ? "Edit contact" : "Add by PIN"}
+          </h3>
+          <Button size="icon" variant="ghost" onClick={onClose}>
+            <X className="size-4" />
+          </Button>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
+              RELAY number
+            </label>
+            <div className="relative">
+              <Input
+                value={number}
+                onChange={(e) =>
+                  setNumber(e.target.value.replace(/\D/g, "").slice(0, 6))
+                }
+                disabled={!!editing.id}
+                placeholder="e.g. 482015"
+                inputMode="numeric"
+                autoFocus={!editing.id}
+                className="font-mono text-lg tracking-[0.35em] pl-10"
+              />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+            </div>
+            {!editing.id && (
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Type a 6-digit RELAY number to preview the user.
+              </p>
+            )}
+          </div>
+
+          {/* Live preview card */}
+          {!editing.id && isComplete && (
+            <div
+              className={
+                "rounded-2xl border p-4 transition-all duration-200 " +
+                (found
+                  ? "border-primary/40 bg-primary/5"
+                  : notFound
+                    ? "border-destructive/40 bg-destructive/5"
+                    : "border-border bg-muted/20")
+              }
+            >
+              {isLooking ? (
+                <div className="flex items-center gap-3">
+                  <div className="size-12 rounded-2xl bg-muted animate-pulse" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-3.5 w-32 rounded bg-muted animate-pulse" />
+                    <div className="h-3 w-20 rounded bg-muted animate-pulse" />
+                  </div>
+                </div>
+              ) : found ? (
+                <div className="flex items-center gap-3">
+                  <div className="relative shrink-0">
+                    {lookup.data!.avatarUrl ? (
+                      <img
+                        src={lookup.data!.avatarUrl}
+                        alt={lookup.data!.displayName}
+                        className="size-12 rounded-2xl object-cover border border-border"
+                      />
+                    ) : (
+                      <div className="size-12 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold">
+                        {initialsFrom(
+                          lookup.data!.displayName || lookup.data!.number
+                        )}
+                      </div>
+                    )}
+                    <span
+                      className={
+                        "absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full border-2 border-card " +
+                        (lookup.data!.isOnline
+                          ? "bg-[color:var(--relay-online)]"
+                          : "bg-[color:var(--relay-offline)]")
+                      }
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold truncate flex items-center gap-1.5">
+                      {lookup.data!.displayName || lookup.data!.number}
+                      <CheckCircle2 className="size-3.5 text-primary shrink-0" />
+                    </div>
+                    <div className="text-xs text-muted-foreground font-mono">
+                      {lookup.data!.number} ·{" "}
+                      {lookup.data!.isOnline ? (
+                        <span className="text-[color:var(--relay-online)] font-medium">
+                          online
+                        </span>
+                      ) : (
+                        <span>offline</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : notFound ? (
+                <div className="flex items-center gap-3 text-destructive-foreground">
+                  <div className="size-10 rounded-2xl bg-destructive/15 grid place-items-center text-destructive">
+                    <AlertCircle className="size-5" />
+                  </div>
+                  <div className="text-sm">
+                    <div className="font-medium text-foreground">
+                      No RELAY user with this number
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      You can still save it — they'll show up once they
+                      register.
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
+              Display name
+            </label>
+            <Input
+              value={displayName}
+              onChange={(e) => {
+                setTouchedName(true);
+                setDisplayName(e.target.value);
+              }}
+              placeholder="Friend's name"
+              maxLength={64}
+            />
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
+              Notes
+            </label>
+            <Textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              maxLength={500}
+            />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() =>
+              onSave({
+                number,
+                displayName: displayName.trim() || null,
+                notes: notes.trim() || null,
+              })
+            }
+            disabled={number.length !== 6 || saving}
+          >
+            {editing.id ? "Save" : "Add to contacts"}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

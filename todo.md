@@ -161,3 +161,14 @@ _The v2.0.5 work below added safety-nets and automated coverage but did **not** 
 - [x] Added `server/composeThreadSummaries.test.ts` (6 cases): regular DM projection, self-only convo synthesises `Notes (You)`, mixed lists sort by `lastMessageAt` desc, no double-projection on real DMs, graceful fallback when `myIdentity` is missing, defaults to `text` kind when no preview.
 - [x] 49/49 vitest pass (was 43, +6 from the new file). TypeScript clean.
 - [ ] **Action required from you**: click **Publish** in the Management UI to push this to `relaychat-lduywq6l.manus.space`.
+
+## v2.0.9 — Add-by-PIN flow, push notifications, country flag, glass top/bottom bars, light/dark theme (in progress)
+- [ ] Backend: `contacts.lookupByNumber` returns `{ identityId, number, displayName, avatarUrl, isOnline, lastSeenAt }` for any 6-digit RELAY number — used by the add-by-PIN flow to preview before saving.
+- [ ] Backend: `system.geoFromIp` resolves the caller's request IP to a country (ISO 3166-1 alpha-2) via a server-side fetch, with a permissive fallback when geo lookup fails.
+- [ ] Frontend: Add Contact dialog with PIN entry — typing 6 digits live-fetches the lookup, shows avatar, name, and online/offline pill before the user confirms "Add to contacts".
+- [ ] Frontend: Browser Notifications API integration — request permission once after first identity, show desktop notifications for incoming SMS and incoming calls when the tab is hidden or unfocused; tap notification focuses the relevant thread / dialer.
+- [ ] Frontend: Country flag chip next to the user's PIN in Profile (and the dashboard sidebar header), driven by `system.geoFromIp`.
+- [ ] Frontend: Apple-style glassy top/bottom bar restyle — backdrop blur, translucent surface, smaller iconic glyphs with per-tab accent color, both dark and light variants.
+- [ ] Frontend: full app-wide theme toggle (light/dark) via `ThemeContext` already in the template — surface a switch in Profile and the desktop sidebar; persist via localStorage; verify every page renders cleanly in both modes.
+- [ ] Tests: lookupByNumber input validation, geoFromIp fallback, notification permission gate (browser API mocked).
+- [ ] Bump in-app version footer to v2.0.9.
