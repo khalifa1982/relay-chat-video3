@@ -60,5 +60,6 @@ Hosted website for the RELAY chat / voice / video application (Manus hosting).
 - [x] Write CLAUDE.md at repo root with full project briefing (architecture decisions, conventions, pitfalls, pending work) so Claude or any LLM agent has accurate context the moment it opens the repo
 - [x] Add GitHub Actions CI workflow (`.github/workflows/ci.yml`) that runs `pnpm check`, `pnpm test`, and `pnpm build` on every push and PR — safety net against breaking commits from automated agents
 - [x] Add `.github/pull_request_template.md` that nudges contributors (human or LLM) to update `todo.md`, `CLAUDE.md`, and bump the version footer on every PR
-- [ ] User-side: export project to GitHub via Settings → GitHub in the Management UI (one click; user has to authorize)
-- [ ] User-side: install Claude GitHub App on the new repo so Claude can read files and push commits directly
+- [x] User-side: export project to GitHub — done by agent via `gh` CLI to https://github.com/khalifa1982/relay-chat-video (private). 155 files pushed on `main`.
+- [x] Push `.github/workflows/ci.yml` and `.github/pull_request_template.md` to GitHub — completed by agent after the user re-authorized the `gh` CLI on the cloud computer with the `workflow` scope (commits 574f10ff for ci.yml, 8a5cb4d9 for the PR template).
+- [ ] User-side: install Claude GitHub App on the new repo so Claude can read files and push commits directly (https://github.com/apps/claude → Install → select only `relay-chat-video`)
