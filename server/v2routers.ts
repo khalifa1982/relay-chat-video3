@@ -49,6 +49,27 @@ const DisplayNameSchema = z
   .min(1, "Name is required")
   .max(64, "Name is too long");
 
+/**
+ * Avatar URL — accepts either an absolute URL (e.g. an external CDN
+ * link) or a server-relative storage path emitted by our `storagePut`
+ * helper, which returns `/manus-storage/{key}` (the platform serves it
+ * via signed redirect). `z.string().url()` only accepts absolute URLs,
+ * which would reject every avatar that came from our own upload
+ * endpoint.
+ */
+const AvatarUrlSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2048)
+  .refine(
+    v =>
+      v.startsWith("/manus-storage/") ||
+      /^https?:\/\//i.test(v) ||
+      v.startsWith("data:image/"),
+    { message: "Invalid avatar URL" }
+  );
+
 const GUEST_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 function guestCookieOptions(req: Parameters<typeof getSessionCookieOptions>[0]) {
@@ -146,7 +167,7 @@ export const v2AuthRouter = router({
     .input(
       z.object({
         displayName: DisplayNameSchema.optional(),
-        avatarUrl: z.string().url().nullable().optional(),
+        avatarUrl: AvatarUrlSchema.nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -254,7 +275,7 @@ export const v2ContactsRouter = router({
       z.object({
         number: NumberSchema,
         displayName: z.string().trim().max(64).nullable().optional(),
-        avatarUrl: z.string().url().nullable().optional(),
+        avatarUrl: AvatarUrlSchema.nullable().optional(),
         favourite: z.boolean().optional(),
         notes: z.string().max(2000).nullable().optional(),
       })

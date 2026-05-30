@@ -163,6 +163,52 @@ describe("identity.updateProfile validation", () => {
       caller.identity.updateProfile({ avatarUrl: "not a url" })
     ).rejects.toThrow();
   });
+
+  it("accepts a /manus-storage/ relative path (the format storagePut returns)", async () => {
+    // Regression for the avatar-upload bug: storagePut returns
+    // "/manus-storage/{key}", not an absolute URL. The previous
+    // z.string().url() validator rejected those with
+    // { code: "invalid_format", format: "url", path: ["avatarUrl"] }.
+    const fake = {
+      id: 11,
+      number: "900333",
+      displayName: "Profile Tester",
+      avatarUrl: null,
+      userId: null,
+      isGuest: true,
+      guestExpiresAt: new Date(),
+    };
+    const caller = appRouter.createCaller(makeCtx(fake));
+    try {
+      await caller.identity.updateProfile({
+        avatarUrl: "/manus-storage/relay-chat/11/abc_def.png",
+      });
+    } catch (err) {
+      // Acceptable: a downstream DB error is fine; what we care about
+      // is that zod did NOT reject the input as an invalid URL.
+      const msg = err instanceof Error ? err.message : String(err);
+      expect(msg).not.toMatch(/invalid_format|invalid url|invalid avatar url/i);
+    }
+  });
+
+  it("still rejects garbage strings even with the relaxed validator", async () => {
+    const fake = {
+      id: 12,
+      number: "900444",
+      displayName: "Profile Tester",
+      avatarUrl: null,
+      userId: null,
+      isGuest: true,
+      guestExpiresAt: new Date(),
+    };
+    const caller = appRouter.createCaller(makeCtx(fake));
+    await expect(
+      caller.identity.updateProfile({ avatarUrl: "javascript:alert(1)" })
+    ).rejects.toThrow();
+    await expect(
+      caller.identity.updateProfile({ avatarUrl: "./not-allowed.png" })
+    ).rejects.toThrow();
+  });
 });
 
 describe("identity.signOutGuest cookie behavior", () => {
