@@ -375,9 +375,16 @@ export async function deleteContact(ownerId: number, contactId: number) {
 
 /* ── conversations & messages ─────────────────────────────────── */
 
+/**
+ * Get or create a 1:1 conversation between two identities. When
+ * `a === b`, returns a single-participant "note to self" conversation
+ * — a private thread the user can use to leave themselves notes,
+ * links, and attachments. The pair key uses the same identity twice
+ * so it remains unique and stable.
+ */
 export async function getOrCreateDmConversation(a: number, b: number) {
-  if (a === b) throw new Error("cannot DM yourself");
   const key = pairKey(a, b);
+  const isSelf = a === b;
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
 
@@ -397,12 +404,18 @@ export async function getOrCreateDmConversation(a: number, b: number) {
   if (created.length === 0) throw new Error("conversation insert failed");
   const convo = created[0];
 
+  // For self-conversations we only insert one participant row; the
+  // composite primary key (conversationId, identityId) would reject a
+  // duplicate anyway, but being explicit avoids depending on that.
+  const participantValues = isSelf
+    ? [{ conversationId: convo.id, identityId: a }]
+    : [
+        { conversationId: convo.id, identityId: a },
+        { conversationId: convo.id, identityId: b },
+      ];
   await db
     .insert(conversationParticipants)
-    .values([
-      { conversationId: convo.id, identityId: a },
-      { conversationId: convo.id, identityId: b },
-    ])
+    .values(participantValues)
     .onDuplicateKeyUpdate({ set: { unreadCount: sql`${conversationParticipants.unreadCount}` } });
 
   return convo;
@@ -418,6 +431,90 @@ export interface ThreadSummary {
   unreadCount: number;
   lastMessagePreview: string | null;
   lastMessageKind: string;
+}
+
+/**
+ * Pure projection helper for `listThreads`. Extracted so it can be
+ * unit-tested without a database. Given the four input arrays already
+ * loaded from the DB (my participant rows, the "other" participant
+ * rows for non-self conversations, the conversation rows, and the
+ * latest message per conversation), produces a list of `ThreadSummary`
+ * sorted by `lastMessageAt` descending. Conversations where no
+ * "other" participant exists are projected as a synthetic
+ * "Notes (You)" thread using the caller's own identity row.
+ */
+export function composeThreadSummaries(input: {
+  identityId: number;
+  myParts: Array<{ conversationId: number; unreadCount: number }>;
+  others: Array<{ conversationId: number; identityId: number }>;
+  otherIdentities: Array<{
+    id: number;
+    number: string;
+    displayName: string;
+    avatarUrl: string | null;
+  }>;
+  myIdentity: {
+    id: number;
+    number: string;
+    displayName: string;
+    avatarUrl: string | null;
+  } | null;
+  convoRows: Array<{ id: number; lastMessageAt: Date }>;
+  latestMessageByConvo: Map<
+    number,
+    { body: string | null; kind: string } | null
+  >;
+}): ThreadSummary[] {
+  const otherById = new Map(input.otherIdentities.map((i) => [i.id, i]));
+  const convoById = new Map(input.convoRows.map((c) => [c.id, c]));
+  const unreadByConvo = new Map(
+    input.myParts.map((p) => [p.conversationId, p.unreadCount])
+  );
+  const convoIdsWithOther = new Set(input.others.map((o) => o.conversationId));
+
+  const result: ThreadSummary[] = [];
+
+  for (const p of input.others) {
+    const convo = convoById.get(p.conversationId);
+    const other = otherById.get(p.identityId);
+    if (!convo || !other) continue;
+    const latest = input.latestMessageByConvo.get(p.conversationId) ?? null;
+    result.push({
+      conversationId: p.conversationId,
+      otherIdentityId: other.id,
+      otherNumber: other.number,
+      otherDisplayName: other.displayName,
+      otherAvatarUrl: other.avatarUrl ?? null,
+      lastMessageAt: convo.lastMessageAt,
+      unreadCount: unreadByConvo.get(p.conversationId) ?? 0,
+      lastMessagePreview: latest?.body ?? null,
+      lastMessageKind: latest?.kind ?? "text",
+    });
+  }
+
+  // Self-conversations: synthesise the "Notes (You)" peer row.
+  if (input.myIdentity) {
+    for (const p of input.myParts) {
+      if (convoIdsWithOther.has(p.conversationId)) continue;
+      const convo = convoById.get(p.conversationId);
+      if (!convo) continue;
+      const latest = input.latestMessageByConvo.get(p.conversationId) ?? null;
+      result.push({
+        conversationId: p.conversationId,
+        otherIdentityId: input.myIdentity.id,
+        otherNumber: input.myIdentity.number,
+        otherDisplayName: "Notes (You)",
+        otherAvatarUrl: input.myIdentity.avatarUrl ?? null,
+        lastMessageAt: convo.lastMessageAt,
+        unreadCount: unreadByConvo.get(p.conversationId) ?? 0,
+        lastMessagePreview: latest?.body ?? null,
+        lastMessageKind: latest?.kind ?? "text",
+      });
+    }
+  }
+
+  result.sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime());
+  return result;
 }
 
 export async function listThreads(identityId: number): Promise<ThreadSummary[]> {
@@ -469,26 +566,47 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
     if (!latestByConvo.has(m.conversationId)) latestByConvo.set(m.conversationId, m);
   }
 
-  const result: ThreadSummary[] = [];
-  for (const p of others) {
-    const convo = convoById.get(p.conversationId);
-    const other = otherById.get(p.identityId);
-    if (!convo || !other) continue;
-    const latest = latestByConvo.get(p.conversationId);
-    result.push({
+  // 5) Find this user's own row so we can synthesise the "Notes (You)"
+  // peer projection on self-conversations (where there's no other row).
+  const myIdentityRow = await db
+    .select()
+    .from(identities)
+    .where(eq(identities.id, identityId))
+    .limit(1);
+  const me = myIdentityRow[0] ?? null;
+
+  return composeThreadSummaries({
+    identityId,
+    myParts: myParts.map((p) => ({
       conversationId: p.conversationId,
-      otherIdentityId: other.id,
-      otherNumber: other.number,
-      otherDisplayName: other.displayName,
-      otherAvatarUrl: other.avatarUrl ?? null,
-      lastMessageAt: convo.lastMessageAt,
-      unreadCount: unreadByConvo.get(p.conversationId) ?? 0,
-      lastMessagePreview: latest?.body ?? null,
-      lastMessageKind: latest?.kind ?? "text",
-    });
-  }
-  result.sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime());
-  return result;
+      unreadCount: p.unreadCount,
+    })),
+    others: others.map((o) => ({
+      conversationId: o.conversationId,
+      identityId: o.identityId,
+    })),
+    otherIdentities: otherIds.map((i) => ({
+      id: i.id,
+      number: i.number,
+      displayName: i.displayName,
+      avatarUrl: i.avatarUrl ?? null,
+    })),
+    myIdentity: me
+      ? {
+          id: me.id,
+          number: me.number,
+          displayName: me.displayName,
+          avatarUrl: me.avatarUrl ?? null,
+        }
+      : null,
+    convoRows: convos.map((c) => ({ id: c.id, lastMessageAt: c.lastMessageAt })),
+    latestMessageByConvo: new Map(
+      Array.from(latestByConvo.entries()).map(([k, m]) => [
+        k,
+        m ? { body: m.body ?? null, kind: m.kind } : null,
+      ])
+    ),
+  });
 }
 
 export async function listMessages(input: {

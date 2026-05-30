@@ -328,7 +328,11 @@ export const v2MessagesRouter = router({
     });
   }),
 
-  /** Open or create a 1:1 conversation with the given number. */
+  /**
+   * Open or create a 1:1 conversation with the given number. Passing
+   * the caller's own number creates (or returns) a private "note to
+   * self" thread — useful for saving links, ideas, or attachments.
+   */
   openThread: publicProcedure
     .input(z.object({ number: NumberSchema }))
     .mutation(async ({ ctx, input }) => {
@@ -340,21 +344,36 @@ export const v2MessagesRouter = router({
           message: "That number isn't a RELAY user yet",
         });
       }
-      if (other.id === me.id) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Can't message yourself",
-        });
-      }
+      const isSelf = other.id === me.id;
       const convo = await getOrCreateDmConversation(me.id, other.id);
       return {
         conversationId: convo.id,
         otherIdentityId: other.id,
         otherNumber: other.number,
-        otherDisplayName: other.displayName,
+        otherDisplayName: isSelf ? "Notes (You)" : other.displayName,
         otherAvatarUrl: other.avatarUrl,
+        isSelf,
       };
     }),
+
+  /**
+   * Convenience procedure: open (or create) the caller's note-to-self
+   * thread without needing to know their own number first. The client
+   * uses this to power the "Note to self" quick action in the New
+   * Conversation dialog.
+   */
+  openSelfThread: publicProcedure.mutation(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    const convo = await getOrCreateDmConversation(me.id, me.id);
+    return {
+      conversationId: convo.id,
+      otherIdentityId: me.id,
+      otherNumber: me.number,
+      otherDisplayName: "Notes (You)",
+      otherAvatarUrl: null,
+      isSelf: true,
+    };
+  }),
 
   list: publicProcedure
     .input(

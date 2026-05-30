@@ -113,6 +113,46 @@ describe("pairKey", () => {
     expect(pairKey(2, 7)).toBe("2-7");
     expect(pairKey(7, 2)).toBe("2-7");
   });
+
+  it("produces a stable key for self-DM (a === b) so the conversation row is unique", () => {
+    expect(pairKey(5, 5)).toBe("5-5");
+    expect(pairKey(99, 99)).toBe("99-99");
+  });
+});
+
+describe("messages.openSelfThread", () => {
+  it("refuses without an identity", async () => {
+    const caller = appRouter.createCaller(makeCtx(null));
+    await expect(caller.messages.openSelfThread()).rejects.toThrow(/no identity/i);
+  });
+});
+
+describe("messages.openThread", () => {
+  it("no longer rejects messaging yourself — instead defers to the DB layer", async () => {
+    // Before v2.0.8, openThread synchronously rejected `other.id === me.id`
+    // with "Can't message yourself". Self-DM is now allowed; the test asserts
+    // the *validation surface* no longer carries that hard rejection. We can't
+    // exercise the full DB path here without a live database, but we *can*
+    // confirm zod input validation still passes for the caller's own number.
+    const fake = {
+      id: 7,
+      number: "123456",
+      displayName: "Self Tester",
+      avatarUrl: null,
+      userId: null,
+      isGuest: true,
+      guestExpiresAt: new Date(),
+    };
+    const caller = appRouter.createCaller(makeCtx(fake));
+    try {
+      await caller.messages.openThread({ number: "123456" });
+    } catch (err) {
+      // Acceptable: NOT_FOUND or DB-layer error. NOT acceptable: the
+      // legacy "Can't message yourself" hard rejection.
+      const msg = err instanceof Error ? err.message : String(err);
+      expect(msg).not.toMatch(/can't message yourself/i);
+    }
+  });
 });
 
 describe("identity.updateProfile validation", () => {

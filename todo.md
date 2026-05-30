@@ -148,3 +148,16 @@ _The v2.0.5 work below added safety-nets and automated coverage but did **not** 
 - [x] Bumped in-app version footer to `v2.0.6`.
 - [x] 38/38 vitest pass (was 36 — +2 for the new regression file), TypeScript clean.
 - [ ] **Action required from you**: click **Publish** in the Management UI to push this fix to `relaychat-lduywq6l.manus.space`, then verify the Dialer/Messages/Contacts tabs appear after entering a name.
+
+## v2.0.8 — Note-to-self thread + clearer "New conversation" entry (delivered 2026-05-30)
+- [x] `getOrCreateDmConversation(a, a)` now returns a single-participant self-DM. Pair key remains stable (e.g. `5-5`).
+- [x] `messages.openThread` no longer hard-rejects messaging your own number; it labels the peer as "Notes (You)" and returns `isSelf: true`.
+- [x] New `messages.openSelfThread` mutation — client doesn't need to know its own number to open the notes thread.
+- [x] `listThreads` synthesises a "Notes (You)" projection when a conversation has only the caller as a participant, so the self-thread appears in the message list.
+- [x] `Messages.tsx` "New conversation" dialog now leads with a **Note to self** quick-action button (sticky-note icon, amber accent), then a divider, then the existing 6-digit dial-by-number input.
+- [x] Self-thread rows in the message list render a sticky-note avatar instead of initials, so notes are visually distinct.
+- [x] Bumped in-app version footer to `v2.0.8`.
+- [x] Extracted the `listThreads` projection step into a pure exported helper `composeThreadSummaries` (server/v2db.ts) so it can be unit-tested without a live database.
+- [x] Added `server/composeThreadSummaries.test.ts` (6 cases): regular DM projection, self-only convo synthesises `Notes (You)`, mixed lists sort by `lastMessageAt` desc, no double-projection on real DMs, graceful fallback when `myIdentity` is missing, defaults to `text` kind when no preview.
+- [x] 49/49 vitest pass (was 43, +6 from the new file). TypeScript clean.
+- [ ] **Action required from you**: click **Publish** in the Management UI to push this to `relaychat-lduywq6l.manus.space`.

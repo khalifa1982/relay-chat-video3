@@ -12,6 +12,7 @@ import {
   Search,
   MessageSquarePlus,
   X,
+  StickyNote,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -96,11 +97,22 @@ export default function MessagesPage() {
                       }
                     >
                       <div className="relative">
-                        <div className="size-11 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
-                          {initialsFrom(t.peerDisplayName || t.peerNumber)}
-                        </div>
-                        {t.peerIsOnline && (
-                          <span className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-[color:var(--relay-online)] border-2 border-card" />
+                        {me && t.peerIdentityId === me.id ? (
+                          <div
+                            className="size-11 rounded-2xl bg-amber-500/15 grid place-items-center text-amber-400"
+                            aria-label="Notes to yourself"
+                          >
+                            <StickyNote className="size-5" />
+                          </div>
+                        ) : (
+                          <>
+                            <div className="size-11 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
+                              {initialsFrom(t.peerDisplayName || t.peerNumber)}
+                            </div>
+                            {t.peerIsOnline && (
+                              <span className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-[color:var(--relay-online)] border-2 border-card" />
+                            )}
+                          </>
                         )}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -638,6 +650,15 @@ function NewMessageDialog() {
       setLocation(`/app/messages?c=${res.conversationId}`);
     },
   });
+  const openSelfThread = trpc.messages.openSelfThread.useMutation({
+    onSuccess: (res) => {
+      setOpen(false);
+      setNumber("");
+      setLocation(`/app/messages?c=${res.conversationId}`);
+    },
+  });
+  const pending = openThread.isPending || openSelfThread.isPending;
+  const errorMessage = openThread.error?.message ?? openSelfThread.error?.message ?? null;
 
   return (
     <>
@@ -656,6 +677,36 @@ function NewMessageDialog() {
                 <X className="size-4" />
               </Button>
             </div>
+
+            {/* Quick action: note to self */}
+            <button
+              type="button"
+              onClick={() => openSelfThread.mutate()}
+              disabled={pending}
+              className="w-full text-left flex items-center gap-3 rounded-xl border border-border bg-muted/20 hover:bg-muted/40 transition-colors px-3 py-3 mb-4 disabled:opacity-50"
+            >
+              <span className="size-10 rounded-xl bg-amber-500/15 grid place-items-center text-amber-400 shrink-0">
+                <StickyNote className="size-5" />
+              </span>
+              <span className="flex-1 min-w-0">
+                <span className="block font-medium text-sm">Note to self</span>
+                <span className="block text-xs text-muted-foreground">
+                  Save links, ideas, and attachments to your own thread.
+                </span>
+              </span>
+            </button>
+
+            <div className="relative my-2">
+              <div className="absolute inset-0 flex items-center" aria-hidden="true">
+                <div className="w-full border-t border-border" />
+              </div>
+              <div className="relative flex justify-center">
+                <span className="bg-card px-2 text-[10px] uppercase tracking-widest text-muted-foreground">
+                  or message someone
+                </span>
+              </div>
+            </div>
+
             <label className="text-xs uppercase tracking-widest text-muted-foreground mb-2 block">
               RELAY number
             </label>
@@ -669,13 +720,13 @@ function NewMessageDialog() {
               />
               <Button
                 onClick={() => openThread.mutate({ number })}
-                disabled={number.length !== 6 || openThread.isPending}
+                disabled={number.length !== 6 || pending}
               >
                 <Search className="size-4 mr-1.5" /> Open
               </Button>
             </div>
-            {openThread.error && (
-              <p className="mt-3 text-sm text-destructive">{openThread.error.message}</p>
+            {errorMessage && (
+              <p className="mt-3 text-sm text-destructive">{errorMessage}</p>
             )}
           </div>
         </div>
