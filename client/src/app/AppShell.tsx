@@ -1,12 +1,13 @@
 import { useEffect, useMemo } from "react";
 import { Link, useLocation } from "wouter";
-import { Phone, MessageSquare, UserRound, LogOut, Sparkles } from "lucide-react";
+import { Phone, MessageSquare, UserRound, LogOut, Sparkles, Sun, Moon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { getLoginUrl } from "@/const";
 import { useIdentity } from "./useIdentity";
 import { OnboardingGate } from "./OnboardingGate";
 import { useRealtime } from "./useRealtime";
+import { useTheme } from "@/contexts/ThemeContext";
 
 /**
  * Tab keys used by the bottom-nav / sidebar. We hard-code the routes here
@@ -70,6 +71,14 @@ function Inner({ children }: { children: React.ReactNode }) {
     enabled: !!me,
     refetchInterval: 15_000,
   });
+  // Lightweight geo lookup for the country-flag chip next to the user's PIN.
+  // Polled once per session — IPs don't change often inside a tab lifetime.
+  const geo = trpc.directory.geoSelf.useQuery(undefined, {
+    enabled: !!me,
+    staleTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const { theme, setTheme } = useTheme();
   const unreadTotal = useMemo(
     () =>
       (threads.data ?? []).reduce((acc, t) => acc + (t.unreadCount ?? 0), 0),
@@ -106,8 +115,16 @@ function Inner({ children }: { children: React.ReactNode }) {
             )}
             <div className="min-w-0">
               <div className="font-semibold truncate group-hover:text-primary transition-colors">{me.displayName}</div>
-              <div className="font-mono text-sm text-muted-foreground">
+              <div className="font-mono text-sm text-muted-foreground flex items-center gap-1.5">
                 {formatNumber(me.number)}
+                {geo.data?.flagEmoji && (
+                  <span
+                    className="text-base leading-none"
+                    title={geo.data.countryName ?? geo.data.country ?? ""}
+                  >
+                    {geo.data.flagEmoji}
+                  </span>
+                )}
               </div>
             </div>
           </Link>
@@ -154,7 +171,42 @@ function Inner({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
-        <div className="p-3 border-t border-border">
+        <div className="p-3 border-t border-border space-y-2">
+          {/* Compact theme toggle — mirrors the segmented control on Profile */}
+          <div
+            role="group"
+            aria-label="Theme"
+            className="grid grid-cols-2 gap-1 rounded-xl bg-muted/50 p-1"
+          >
+            <button
+              type="button"
+              aria-pressed={theme === "dark"}
+              onClick={() => setTheme("dark")}
+              className={
+                "flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 " +
+                (theme === "dark"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground")
+              }
+              style={{ transitionTimingFunction: "cubic-bezier(0.23,1,0.32,1)" }}
+            >
+              <Moon className="size-3.5" /> Dark
+            </button>
+            <button
+              type="button"
+              aria-pressed={theme === "light"}
+              onClick={() => setTheme("light")}
+              className={
+                "flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 " +
+                (theme === "light"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground")
+              }
+              style={{ transitionTimingFunction: "cubic-bezier(0.23,1,0.32,1)" }}
+            >
+              <Sun className="size-3.5" /> Light
+            </button>
+          </div>
           <Button
             variant="ghost"
             className="w-full justify-start gap-2 text-muted-foreground"
@@ -192,8 +244,16 @@ function Inner({ children }: { children: React.ReactNode }) {
             )}
             <div className="min-w-0">
               <div className="text-sm font-semibold truncate">{me.displayName}</div>
-              <div className="font-mono text-xs text-muted-foreground">
+              <div className="font-mono text-xs text-muted-foreground flex items-center gap-1.5">
                 {formatNumber(me.number)}
+                {geo.data?.flagEmoji && (
+                  <span
+                    className="text-sm leading-none"
+                    title={geo.data.countryName ?? geo.data.country ?? ""}
+                  >
+                    {geo.data.flagEmoji}
+                  </span>
+                )}
               </div>
             </div>
           </Link>

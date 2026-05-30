@@ -39,7 +39,7 @@ import {
 } from "./v2db";
 import { publishToIdentity, broadcastPresence } from "./v2events";
 
-const NumberSchema = z
+export const NumberSchema = z
   .string()
   .regex(/^\d{6}$/, { message: "Number must be 6 digits" });
 

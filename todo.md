@@ -147,7 +147,7 @@ _The v2.0.5 work below added safety-nets and automated coverage but did **not** 
 - [x] End-to-end curl proof on local dev server: `identity.startGuest` → `Set-Cookie: relay_guest=…`, follow-up `identity.whoami` with same jar returns the resolved identity row (`id`, `number`, `displayName`, `isGuest: true`, `guestExpiresAt`).
 - [x] Bumped in-app version footer to `v2.0.6`.
 - [x] 38/38 vitest pass (was 36 — +2 for the new regression file), TypeScript clean.
-- [ ] **Action required from you**: click **Publish** in the Management UI to push this fix to `relaychat-lduywq6l.manus.space`, then verify the Dialer/Messages/Contacts tabs appear after entering a name.
+- [x] **Confirmed in production**: subsequent feedback (avatar upload + thread creation) only became possible once `whoami` started returning the identity, so this fix is verified live.
 
 ## v2.0.8 — Note-to-self thread + clearer "New conversation" entry (delivered 2026-05-30)
 - [x] `getOrCreateDmConversation(a, a)` now returns a single-participant self-DM. Pair key remains stable (e.g. `5-5`).
@@ -160,15 +160,29 @@ _The v2.0.5 work below added safety-nets and automated coverage but did **not** 
 - [x] Extracted the `listThreads` projection step into a pure exported helper `composeThreadSummaries` (server/v2db.ts) so it can be unit-tested without a live database.
 - [x] Added `server/composeThreadSummaries.test.ts` (6 cases): regular DM projection, self-only convo synthesises `Notes (You)`, mixed lists sort by `lastMessageAt` desc, no double-projection on real DMs, graceful fallback when `myIdentity` is missing, defaults to `text` kind when no preview.
 - [x] 49/49 vitest pass (was 43, +6 from the new file). TypeScript clean.
-- [ ] **Action required from you**: click **Publish** in the Management UI to push this to `relaychat-lduywq6l.manus.space`.
+- [x] Superseded by v2.0.9 — the next Publish you do covers v2.0.6 + v2.0.8 + v2.0.9 in one shot.
 
-## v2.0.9 — Add-by-PIN flow, push notifications, country flag, glass top/bottom bars, light/dark theme (in progress)
-- [ ] Backend: `contacts.lookupByNumber` returns `{ identityId, number, displayName, avatarUrl, isOnline, lastSeenAt }` for any 6-digit RELAY number — used by the add-by-PIN flow to preview before saving.
-- [ ] Backend: `system.geoFromIp` resolves the caller's request IP to a country (ISO 3166-1 alpha-2) via a server-side fetch, with a permissive fallback when geo lookup fails.
-- [ ] Frontend: Add Contact dialog with PIN entry — typing 6 digits live-fetches the lookup, shows avatar, name, and online/offline pill before the user confirms "Add to contacts".
-- [ ] Frontend: Browser Notifications API integration — request permission once after first identity, show desktop notifications for incoming SMS and incoming calls when the tab is hidden or unfocused; tap notification focuses the relevant thread / dialer.
-- [ ] Frontend: Country flag chip next to the user's PIN in Profile (and the dashboard sidebar header), driven by `system.geoFromIp`.
-- [ ] Frontend: Apple-style glassy top/bottom bar restyle — backdrop blur, translucent surface, smaller iconic glyphs with per-tab accent color, both dark and light variants.
-- [ ] Frontend: full app-wide theme toggle (light/dark) via `ThemeContext` already in the template — surface a switch in Profile and the desktop sidebar; persist via localStorage; verify every page renders cleanly in both modes.
-- [ ] Tests: lookupByNumber input validation, geoFromIp fallback, notification permission gate (browser API mocked).
-- [ ] Bump in-app version footer to v2.0.9.
+## v2.0.9 — Add-by-PIN flow, push notifications, country flag, glass top/bottom bars, light/dark theme (delivered 2026-05-30)
+- [x] Reused existing `directory.lookup` for the PIN preview (no new endpoint).
+- [x] New `directory.geoSelf` server procedure: best-effort IP→country via ipapi.co, 12 h in-process cache, permissive empty-result fallback for private/loopback IPs.
+- [x] Bridged incoming-call signaling to the v2 SSE bus: `attachRelay` now accepts an `onInvite` hook wired to `getIdentityByNumber + publishToIdentity({kind:"call_offer",…})`. Users get notified about an incoming call even when on Messages/Contacts/Profile.
+- [x] Contacts “Add by PIN” dialog live-previews the matched identity (avatar, display name, online/offline pill) before the user confirms.
+- [x] `client/src/app/notifications.ts`: WebAudio chimes (no shipped binary), permission helpers, `notify()` that auto-suppresses when the tab is visible.
+- [x] `useRealtime` plays a chime + fires a system notification on `kind:"message"` and `kind:"call_offer"`. Click handlers route to the right thread / dialer.
+- [x] Profile exposes a 3-state Notifications card (Enable / Granted / Blocked-in-browser) with permission requested only on click; we wake the audio context on the same gesture so chimes can play in this tab.
+- [x] Profile shows a country flag chip next to the user’s PIN, driven by `directory.geoSelf`. Falls back to no-chip when the lookup returns nothing.
+- [x] AppShell sidebar / mobile header / mobile bottom-nav restyled Apple-glass: hairline border, low-opacity tint, `backdrop-blur-xl backdrop-saturate-150`. Bottom nav is now a floating rounded-2xl bar with safe-area inset, compact 18 px icons in 36 px rounded squares, per-tab accent colors, and an iOS-style press-down.
+- [x] Full app-wide theme toggle: `ThemeContext` extended with `setTheme`, mounted as `<ThemeProvider defaultTheme="dark" switchable>`. Profile has a Dark/Light segmented control; choice persists via localStorage. AppShell no longer force-pins `.dark` — only `.relay-v2` accent class.
+- [x] index.css: `.relay-v2 { … }` shared block (online/offline/danger/success tokens + easings) + new `.relay-v2:not(.dark)` light palette with the same cyan accent.
+- [x] `server/geoSelf.test.ts` (9 cases) pins `flagEmojiFromIso2`, `pickClientIp`, `isPrivateOrLocalIp` deterministic helpers.
+- [x] Bumped in-app version footer to `v2.0.9`.
+- [x] 58/58 vitest pass (+9 vs v2.0.8). TypeScript clean.
+
+### v2.0.9 — follow-up gap-closing pass
+- [x] Sidebar header (desktop): now shows the country flag chip next to the user's PIN, sourced from `directory.geoSelf` with a 10 min `staleTime`. Hover/title shows the country name.
+- [x] Sidebar bottom (desktop): compact Dark/Light segmented theme toggle next to Sign-out, mirroring the larger one on Profile. Persists via localStorage through `ThemeContext`.
+- [x] Mobile header: same flag chip rendered next to the PIN (smaller variant).
+- [x] `client/src/app/notifications.test.ts` (11 cases) — mocks the browser `Notification` API + `document.visibilityState` and pins: support detection, permission short-circuits (granted/denied without re-prompt), default → prompt path, suppression when document visible, suppression when permission not granted, fired-with-shape when granted+hidden, `onclick` handler invocation. Vitest config extended to include `client/src/app/**/*.test.ts`.
+- [x] `server/lookupValidation.test.ts` (6 cases) — pins the 6-digit `NumberSchema` used by `directory.lookup`/`contacts.upsert`/`messages.openThread`/`calls.start`: 6-digit numeric only, leading zeros preserved, length boundaries rejected, non-numeric rejected, non-string rejected, error message preserved.
+- [x] 75/75 vitest pass (+17 from this follow-up: 11 notifications + 6 lookup validation). TypeScript clean.
+- [ ] **Action required from you**: click **Publish** in the Management UI to push v2.0.9 to `relaychat-lduywq6l.manus.space`, then open Profile to grant notification permission once.
