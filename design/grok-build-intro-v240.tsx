@@ -77,19 +77,16 @@ const sections: Section[] = [
   }
 ];
 
-interface PhoneFrameProps {
-  src: string;
-  alt: string;
-  setHalo: (el: HTMLDivElement | null) => void;
-}
-
-const PhoneFrame = React.forwardRef<HTMLDivElement, PhoneFrameProps>(({ src, alt, setHalo }, ref) => (
+const PhoneFrame = React.forwardRef<HTMLDivElement, { 
+  src: string; 
+  alt: string; 
+  haloRef: React.RefObject<HTMLDivElement>;
+}>(({ src, alt, haloRef }, ref) => (
   <div ref={ref} className="relative w-[260px] h-[522px]">
     {/* Glow halo */}
-    <div
-      ref={setHalo}
-      className="absolute -inset-8 bg-[oklch(0.78_0.18_195)]/15 rounded-[4.5rem] blur-[48px] -z-10 will-change-transform"
-      aria-hidden="true"
+    <div 
+      ref={haloRef}
+      className="absolute -inset-8 bg-[oklch(0.78_0.18_195)]/15 rounded-[4.5rem] blur-[48px] -z-10 transition-transform duration-100"
     />
     
     {/* Device bezel */}
@@ -271,11 +268,11 @@ const Home: React.FC = () => {
               {/* Phone - Left side */}
               {isLeft && (
                 <div className="flex-shrink-0 flex justify-center lg:justify-start">
-                  <PhoneFrame
-                    src={section.image}
+                  <PhoneFrame 
+                    src={section.image} 
                     alt={`${section.heading} screenshot`}
-                    setHalo={(el) => { haloRefs.current[index] = el; }}
-                    ref={(el) => { phoneRefs.current[index] = el; }}
+                    haloRef={{ current: null } as any}
+                    ref={(el) => { phoneRefs.current[index] = el; haloRefs.current[index] = null; }}
                   />
                 </div>
               )}
@@ -308,11 +305,11 @@ const Home: React.FC = () => {
               {/* Phone - Right side */}
               {!isLeft && (
                 <div className="flex-shrink-0 flex justify-center lg:justify-end">
-                  <PhoneFrame
-                    src={section.image}
+                  <PhoneFrame 
+                    src={section.image} 
                     alt={`${section.heading} screenshot`}
-                    setHalo={(el) => { haloRefs.current[index] = el; }}
-                    ref={(el) => { phoneRefs.current[index] = el; }}
+                    haloRef={{ current: null } as any}
+                    ref={(el) => { phoneRefs.current[index] = el; haloRefs.current[index] = null; }}
                   />
                 </div>
               )}
