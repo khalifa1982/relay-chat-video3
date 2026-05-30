@@ -1,3 +1,10 @@
+# gemini-3.5-flash — RELAY intro generation
+
+**Tokens:** prompt=1145 candidates=5386 total=13454
+
+## Response
+
+```tsx
 import { useState, useEffect, useRef } from 'react';
 
 // Data structure for the six story sections
@@ -371,3 +378,4 @@ export default function Home() {
     </div>
   );
 }
+```

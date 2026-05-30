@@ -315,3 +315,15 @@ User report: "The dialing pad is quite big — you have to scroll down to see it
 - [x] **134/134 vitest pass**, TypeScript clean, dev-server healthy.
 - [x] Verified live in the preview — hero, kicker pill, both CTAs, privacy micro-copy, halo + bezel for the first phone all rendering correctly. Page source confirms the v2.4.0 / Built by grok-build-0.1 byline in the footer.
 - [ ] **Action required from you**: click Publish in the Management UI to push v2.4.0 to `relaychat-lduywq6l.manus.space`.
+
+
+## v2.5.0 — Landing intro designed by gemini-3.5-flash (delivered 2026-05-30)
+- [x] Confirmed `models/gemini-3.5-flash` is in the Gemini catalogue and switched the design driver from grok-build-0.1 to it per user request.
+- [x] One API call to `generateContent` produced 17 KB of TSX (5386 output tokens after 6923 thinking tokens). Saved raw response to `design/gemini-intro-v250.md` and extracted TSX to `design/gemini-intro-v250.tsx`.
+- [x] Dropped Gemini's TSX verbatim into `client/src/pages/Home.tsx`. The design refines the previous version with: gradient hero headline ("tab you work in" in cyan-glow gradient), grid-bg overlay, animated 8 s pulse-glow halo behind the hero, RELAY pill in the top-left header, more refined PhoneBezel (notch + speaker grill + 4 chrome side buttons + glossy gradient overlay), per-section halo with scale + opacity tied to scroll, phone tilt animation alongside translate, larger finale typography.
+- [x] All six real Playwright-captured app screenshots (`/manus-storage/...`) preserved verbatim. No remote http hosts, no FS image imports.
+- [x] Footer reads exactly `RELAY · v2.5.0 · Designed by gemini-3.5-flash`.
+- [x] Replaced `client/src/pages/Home.test.ts` with v2.5.0 invariants — 28 new assertions covering: file-shape (default-export, rAF + passive scroll listener + matchMedia, footer byline, six section ids/headings, literal `scrollY > 480`, PhoneBezel reuse), asset-URL invariants, Gemini's actual scroll-math (`t = clamp((sectionCenter - vh/2)/(vh/2), -1.5, 1.5)`, phone translate `t*40` + rotate `t*-3`, text opacity `max(0, 1-|t|*1.3)` + translate `t*15`, halo scale `1 + (1-min(1,|t|))*0.25` + opacity `max(0, 0.12-|t|*0.08)`), and the alternation rule.
+- [x] **138/138 vitest pass**, TypeScript clean, dev-server healthy.
+- [x] Verified live in the preview — section-3 (Messages) renders with the bezel, real screenshot, kicker + h2 + 2 paragraphs + 3 cyan-bullet facts, sticky CTA visible after 480 px, section-4 phone entering from below.
+- [ ] **Action required from you**: click Publish in the Management UI to push v2.5.0 to `relaychat-lduywq6l.manus.space`.
