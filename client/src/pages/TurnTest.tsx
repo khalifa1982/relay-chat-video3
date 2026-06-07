@@ -16,19 +16,14 @@ import {
 /**
  * Live in-app TURN / STUN connectivity test.
  *
- * Runs entirely in the browser: it spins up an RTCPeerConnection against the
- * RELAY coturn server on Northflank and watches which ICE candidates get
- * gathered. A `relay` candidate proves the TURN server is reachable AND
- * relaying for THIS browser on THIS network.
+ * Runs entirely in the browser. It first does a combined gather (all servers),
+ * then probes EACH transport in isolation (UDP:3478, TCP:3478, TCP:443) with a
+ * forced-relay RTCPeerConnection so we can tell EXACTLY which path works on the
+ * current network. On mobile/carrier networks UDP and non-443 TCP are commonly
+ * blocked, so the TCP:443 row is the one that matters most.
  */
 
-const TURN_UDP_IP = "34.39.116.101";
-const TURN_TCP_IP = "34.39.27.232";
-
-// Fallback only (used if the /api/relay/ice fetch fails). STUN-only so the page
-// still loads; the real probe always uses the server-issued, time-limited
-// use-auth-secret credentials fetched at runtime.
-const FALLBACK_ICE: RTCIceServer[] = [{ urls: `stun:${TURN_UDP_IP}:3478` }];
+const FALLBACK_ICE: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 
 type CandRow = {
   id: number;
@@ -41,6 +36,15 @@ type CandRow = {
 };
 
 type Phase = "idle" | "running" | "done" | "error";
+type ProbeState = "idle" | "running" | "ok" | "fail";
+
+type TransportProbe = {
+  key: string;
+  label: string;
+  server: RTCIceServer | null;
+  state: ProbeState;
+  detail: string;
+};
 
 function typeMeta(type: string) {
   switch (type) {
@@ -57,12 +61,24 @@ function typeMeta(type: string) {
   }
 }
 
+// Human label for a single TURN ICE server entry based on its url.
+function transportLabel(urls: string): string {
+  if (urls.startsWith("stun:")) return "STUN " + urls.replace("stun:", "");
+  const isTls = urls.startsWith("turns:");
+  const proto = /transport=tcp/.test(urls) ? "TCP" : "UDP";
+  const portMatch = urls.match(/:(\d+)\?/);
+  const port = portMatch ? portMatch[1] : "?";
+  return `${isTls ? "TURNS" : "TURN"} ${proto}:${port}`;
+}
+
 export default function TurnTest() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [cands, setCands] = useState<CandRow[]>([]);
   const [log, setLog] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [iceServers, setIceServers] = useState<RTCIceServer[]>(FALLBACK_ICE);
+  const [iceLoaded, setIceLoaded] = useState(false);
+  const [probes, setProbes] = useState<TransportProbe[]>([]);
   const idRef = useRef(0);
 
   // Fetch fresh, server-issued time-limited TURN credentials (use-auth-secret).
@@ -77,7 +93,8 @@ export default function TurnTest() {
           setIceServers(d.iceServers as RTCIceServer[]);
         }
       })
-      .catch(() => { /* keep STUN-only fallback */ });
+      .catch(() => { /* keep STUN-only fallback */ })
+      .finally(() => { if (alive) setIceLoaded(true); });
     return () => { alive = false; };
   }, []);
 
@@ -86,7 +103,7 @@ export default function TurnTest() {
     setLog((l) => [...l, `${ts}  ${line}`]);
   }, []);
 
-  const [relayOnly, setRelayOnly] = useState<"idle" | "running" | "ok" | "fail">("idle");
+  const [relayOnly, setRelayOnly] = useState<ProbeState>("idle");
 
   const summary = useMemo(() => {
     const has = (t: string) => cands.some((c) => c.type === t);
@@ -97,90 +114,136 @@ export default function TurnTest() {
     };
   }, [cands]);
 
-  // Forced-relay probe: iceTransportPolicy 'relay' means the browser will ONLY
-  // gather relay candidates, so any candidate at all == TURN works.
-  const runRelayOnly = useCallback(async () => {
+  // Probe a SINGLE ICE server with forced relay. Resolves true if a relay
+  // candidate is gathered through that specific server within the timeout.
+  const probeOne = useCallback(
+    (server: RTCIceServer, label: string): Promise<{ ok: boolean; detail: string }> => {
+      return new Promise((resolve) => {
+        let pc: RTCPeerConnection;
+        try {
+          pc = new RTCPeerConnection({ iceServers: [server], iceTransportPolicy: "relay" });
+        } catch (e) {
+          resolve({ ok: false, detail: "pc error " + String(e) });
+          return;
+        }
+        let settled = false;
+        let relayAddr = "";
+        const done = (ok: boolean, detail: string) => {
+          if (settled) return;
+          settled = true;
+          try { pc.close(); } catch { /* noop */ }
+          addLog(`[${label}] ${ok ? "RELAY OK " + relayAddr : "no relay (" + detail + ")"}`);
+          resolve({ ok, detail });
+        };
+        pc.onicecandidate = (ev) => {
+          if (ev.candidate && ev.candidate.candidate) {
+            if (ev.candidate.type === "relay") {
+              relayAddr = `${ev.candidate.address}:${ev.candidate.port ?? ""}`;
+              done(true, relayAddr);
+            }
+          } else {
+            done(false, "end-of-candidates");
+          }
+        };
+        pc.onicegatheringstatechange = () => {
+          if (pc.iceGatheringState === "complete") done(false, "complete-no-relay");
+        };
+        try {
+          pc.createDataChannel("probe");
+          pc.createOffer().then((o) => pc.setLocalDescription(o)).catch((e) => done(false, "offer " + String(e)));
+        } catch (e) {
+          done(false, "start " + String(e));
+        }
+        window.setTimeout(() => done(false, "timeout-10s"), 10000);
+      });
+    },
+    [addLog]
+  );
+
+  const runRelayOnly = useCallback(async (servers: RTCIceServer[]) => {
     setRelayOnly("running");
-    addLog("[relay-only] starting forced-relay probe (iceTransportPolicy: relay)");
-    let pc: RTCPeerConnection;
-    try {
-      pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: "relay" });
-    } catch (e) {
-      addLog("[relay-only] failed to create pc: " + String(e));
-      setRelayOnly("fail");
-      return;
-    }
-    let got = false;
-    let settled = false;
-    const done = (ok: boolean, reason: string) => {
-      if (settled) return;
-      settled = true;
-      addLog(`[relay-only] ${ok ? "RELAY OK" : "NO RELAY"} (${reason})`);
-      setRelayOnly(ok ? "ok" : "fail");
+    addLog("[relay-only] forced-relay probe against ALL servers");
+    const r = await new Promise<boolean>((resolve) => {
+      let pc: RTCPeerConnection;
       try {
-        pc.close();
+        pc = new RTCPeerConnection({ iceServers: servers, iceTransportPolicy: "relay" });
       } catch {
-        /* noop */
+        resolve(false);
+        return;
       }
-    };
-    pc.onicecandidate = (ev) => {
-      if (ev.candidate && ev.candidate.candidate) {
-        got = true;
-        addLog(`[relay-only] candidate: ${ev.candidate.type} ${ev.candidate.protocol} ${ev.candidate.address}:${ev.candidate.port ?? ""}`);
-      } else {
-        done(got, "end-of-candidates");
+      let got = false;
+      let settled = false;
+      const done = (ok: boolean, reason: string) => {
+        if (settled) return;
+        settled = true;
+        addLog(`[relay-only] ${ok ? "RELAY OK" : "NO RELAY"} (${reason})`);
+        try { pc.close(); } catch { /* noop */ }
+        resolve(ok);
+      };
+      pc.onicecandidate = (ev) => {
+        if (ev.candidate && ev.candidate.candidate) {
+          if (ev.candidate.type === "relay") { got = true; done(true, "relay-candidate"); }
+        } else {
+          done(got, "end-of-candidates");
+        }
+      };
+      pc.onicegatheringstatechange = () => {
+        if (pc.iceGatheringState === "complete") done(got, "state=complete");
+      };
+      try {
+        pc.createDataChannel("relay-only");
+        pc.createOffer().then((o) => pc.setLocalDescription(o)).catch((e) => done(false, "offer " + String(e)));
+      } catch (e) {
+        done(false, "start " + String(e));
       }
-    };
-    pc.onicegatheringstatechange = () => {
-      if (pc.iceGatheringState === "complete") done(got, "state=complete");
-    };
-    try {
-      pc.createDataChannel("relay-only");
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-    } catch (e) {
-      done(false, "offer-error " + String(e));
-      return;
-    }
-    window.setTimeout(() => done(got, "timeout-12s"), 12000);
+      window.setTimeout(() => done(got, "timeout-12s"), 12000);
+    });
+    setRelayOnly(r ? "ok" : "fail");
   }, [addLog]);
 
   const runTest = useCallback(async () => {
+    const servers = iceServers;
     setPhase("running");
     setCands([]);
     setLog([]);
     setErrorMsg(null);
     idRef.current = 0;
 
+    addLog(`Loaded ${servers.length} ICE servers from /api/relay/ice`);
+    servers.forEach((s) => {
+      const u = Array.isArray(s.urls) ? s.urls[0] : s.urls;
+      addLog(`  • ${u}`);
+    });
+
+    // Build the per-transport probe list from the TURN servers only.
+    const turnServers = servers.filter((s) => {
+      const u = Array.isArray(s.urls) ? s.urls[0] : s.urls;
+      return u.startsWith("turn:") || u.startsWith("turns:");
+    });
+    const initialProbes: TransportProbe[] = turnServers.map((s, i) => {
+      const u = Array.isArray(s.urls) ? s.urls[0] : s.urls;
+      return { key: "p" + i, label: transportLabel(u), server: s, state: "running", detail: "" };
+    });
+    setProbes(initialProbes);
+
     let pc: RTCPeerConnection;
     try {
-      pc = new RTCPeerConnection({
-        iceServers,
-        iceCandidatePoolSize: 0,
-      });
+      pc = new RTCPeerConnection({ iceServers: servers, iceCandidatePoolSize: 0 });
     } catch (e) {
       setErrorMsg("Your browser blocked RTCPeerConnection: " + String(e));
       setPhase("error");
       return;
     }
 
-    addLog("Created RTCPeerConnection with RELAY ICE servers");
-
-    const finish = (reason: string) => {
-      addLog(`Gathering complete (${reason})`);
-      try {
-        pc.close();
-      } catch {
-        /* noop */
-      }
-      setPhase("done");
-    };
+    addLog("Created RTCPeerConnection with all ICE servers");
 
     let settled = false;
     const settleOnce = (reason: string) => {
       if (settled) return;
       settled = true;
-      finish(reason);
+      addLog(`Gathering complete (${reason})`);
+      try { pc.close(); } catch { /* noop */ }
+      setPhase("done");
     };
 
     pc.onicecandidate = (ev) => {
@@ -208,7 +271,6 @@ export default function TurnTest() {
     };
 
     try {
-      // A data channel is enough to trigger ICE gathering without media perms.
       pc.createDataChannel("relay-turn-test");
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -216,20 +278,24 @@ export default function TurnTest() {
     } catch (e) {
       setErrorMsg("Failed to start ICE gathering: " + String(e));
       setPhase("error");
-      try {
-        pc.close();
-      } catch {
-        /* noop */
-      }
+      try { pc.close(); } catch { /* noop */ }
       return;
     }
 
-    // Safety timeout in case the browser never emits the null candidate.
-    window.setTimeout(() => settleOnce("timeout-12s"), 12000);
+    window.setTimeout(() => settleOnce("timeout-15s"), 15000);
 
-    // Also kick off the stricter forced-relay probe in parallel.
-    void runRelayOnly();
-  }, [addLog, runRelayOnly]);
+    // Forced-relay against all servers (overall verdict).
+    void runRelayOnly(servers);
+
+    // Per-transport isolation probes — run sequentially so logs stay readable.
+    for (const p of initialProbes) {
+      if (!p.server) continue;
+      const res = await probeOne(p.server, p.label);
+      setProbes((prev) =>
+        prev.map((x) => (x.key === p.key ? { ...x, state: res.ok ? "ok" : "fail", detail: res.detail } : x))
+      );
+    }
+  }, [iceServers, addLog, runRelayOnly, probeOne]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -253,25 +319,19 @@ export default function TurnTest() {
         <Card className="mb-6 border-border/60 bg-card/40 p-5">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Radio className="h-4 w-4 text-emerald-400" />
-            Target server
+            ICE servers in use
+            {!iceLoaded && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
           </div>
           <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-            <div className="flex justify-between gap-4 rounded-md bg-background/40 px-3 py-2">
-              <span className="text-muted-foreground">STUN / TURN (UDP)</span>
-              <span className="font-mono">{TURN_UDP_IP}:3478</span>
-            </div>
-            <div className="flex justify-between gap-4 rounded-md bg-background/40 px-3 py-2">
-              <span className="text-muted-foreground">TURN (TCP 443)</span>
-              <span className="font-mono">{TURN_TCP_IP}:443</span>
-            </div>
-            <div className="flex justify-between gap-4 rounded-md bg-background/40 px-3 py-2">
-              <span className="text-muted-foreground">Realm</span>
-              <span className="font-mono">relay.turn</span>
-            </div>
-            <div className="flex justify-between gap-4 rounded-md bg-background/40 px-3 py-2">
-              <span className="text-muted-foreground">Credentials</span>
-              <span className="font-mono">{iceServers.length} server (live)</span>
-            </div>
+            {iceServers.map((s, i) => {
+              const u = Array.isArray(s.urls) ? s.urls[0] : s.urls;
+              return (
+                <div key={i} className="flex justify-between gap-4 rounded-md bg-background/40 px-3 py-2">
+                  <span className="text-muted-foreground">{transportLabel(u)}</span>
+                  <span className="font-mono text-xs">{u.replace(/^turns?:|^stun:/, "")}</span>
+                </div>
+              );
+            })}
           </div>
         </Card>
 
@@ -279,17 +339,17 @@ export default function TurnTest() {
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <Button
             onClick={runTest}
-            disabled={phase === "running"}
+            disabled={phase === "running" || !iceLoaded}
             size="lg"
             className="gap-2"
           >
             {phase === "running" ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" /> Gathering candidates…
+                <Loader2 className="h-4 w-4 animate-spin" /> Testing…
               </>
             ) : (
               <>
-                <Wifi className="h-4 w-4" /> Run live test
+                <Wifi className="h-4 w-4" /> {iceLoaded ? "Run live test" : "Loading…"}
               </>
             )}
           </Button>
@@ -316,6 +376,39 @@ export default function TurnTest() {
             </div>
           )}
         </div>
+
+        {/* Per-transport probe results — the key diagnostic */}
+        {probes.length > 0 && (
+          <Card className="mb-6 overflow-hidden border-border/60 bg-card/40">
+            <div className="border-b border-border/60 px-4 py-3 text-sm font-medium">
+              Per-transport relay test
+            </div>
+            <div className="divide-y divide-border/40">
+              {probes.map((p) => (
+                <div key={p.key} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+                  <div className="flex items-center gap-3">
+                    {p.state === "running" && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                    {p.state === "ok" && <CheckCircle2 className="h-4 w-4 text-emerald-400" />}
+                    {p.state === "fail" && <XCircle className="h-4 w-4 text-amber-400" />}
+                    {p.state === "idle" && <div className="h-4 w-4" />}
+                    <span className="font-mono">{p.label}</span>
+                  </div>
+                  <span
+                    className={`text-xs font-medium ${
+                      p.state === "ok"
+                        ? "text-emerald-400"
+                        : p.state === "fail"
+                        ? "text-amber-400"
+                        : "text-muted-foreground"
+                    }`}
+                  >
+                    {p.state === "running" ? "testing…" : p.state === "ok" ? "relay OK" : p.state === "fail" ? "blocked" : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
 
         {/* Verdict tiles */}
         {(phase === "done" || cands.length > 0) && (
@@ -375,8 +468,8 @@ export default function TurnTest() {
         <p className="mt-6 text-xs text-muted-foreground">
           A <span className="font-mono text-emerald-400">relay</span> candidate means the TURN server
           accepted your credentials and allocated a media relay — calls will connect even behind
-          strict NATs/firewalls. If you only see <span className="font-mono">host</span> and{" "}
-          <span className="font-mono">srflx</span>, your network may be blocking the TURN ports.
+          strict NATs/firewalls. The <span className="font-mono">TURN TCP:443</span> row is the most
+          important on mobile networks, since port 443 is almost never blocked.
         </p>
       </div>
     </div>

@@ -365,3 +365,7 @@ User report: "The dialing pad is quite big — you have to scroll down to see it
 - [x] Add /api/relay/ice endpoint returning fresh time-limited HMAC creds
 - [x] Fix /turn-test page to fetch live creds instead of stale static ones
 - [x] Update vitest live TURN test to validate TCP:443 allocate path
+
+- [x] Rewrite /turn-test with per-transport (UDP / TCP3478 / TCP443) forced-relay diagnostics
+- [x] Fix iceServers closure race in /turn-test (use loaded creds, disable button until loaded)
+- [x] Verify real call path (relayClient.ts) adopts server iceServers before building peers
