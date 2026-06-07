@@ -349,3 +349,12 @@ User report: "The dialing pad is quite big — you have to scroll down to see it
 - [x] Add /turn-test page that gathers ICE candidates against the Northflank coturn server and reports srflx (STUN) + relay (TURN) results, plus a forced-relay (iceTransportPolicy:'relay') probe
 - [x] Register /turn-test route in App.tsx
 - [x] Verify in dev preview and checkpoint
+
+## v2.x — TURN relay fix (calls drop at "connecting...")
+- [x] Diagnose: calls reach "connecting..." then drop after ~3s with no error (screen recording)
+- [x] Root cause: TURN_SECRET/TURN_HOST not set in prod → STUN-only + flaky free openrelay; strict-NAT media never connects
+- [x] Deployed coturn on Northflank (relay-turn) with use-auth-secret matching server/relay.ts REST cred minting; verified allocation succeeds (RELAYED 34.39.116.101)
+- [x] Set TURN_SECRET, TURN_HOST, TURN_TCP_HOST, TURN_TTL secrets on the project
+- [x] Update iceServers() to support a separate TCP host (UDP IP 34.39.116.101, TCP IP 34.39.27.232)
+- [x] Add/refresh vitest coverage for iceServers TURN output
+- [ ] Verify a real call connects end-to-end

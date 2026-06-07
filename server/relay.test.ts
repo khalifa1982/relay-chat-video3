@@ -361,4 +361,164 @@ describe("relay signaling", () => {
       if (prevHost !== undefined) process.env.TURN_HOST = prevHost; else delete process.env.TURN_HOST;
     }
   });
+
+  it("uses TURN_TCP_HOST for the tcp candidate when the UDP and TCP IPs differ", () => {
+    const prev = {
+      s: process.env.TURN_SECRET,
+      h: process.env.TURN_HOST,
+      t: process.env.TURN_TCP_HOST,
+    };
+    process.env.TURN_SECRET = "test-secret";
+    process.env.TURN_HOST = "1.1.1.1";
+    process.env.TURN_TCP_HOST = "2.2.2.2";
+    try {
+      const list = iceServers("user-7");
+      const udp = list.find(s => s.urls.includes("transport=udp"));
+      const tcp = list.find(s => s.urls.includes("transport=tcp"));
+      expect(udp?.urls).toContain("1.1.1.1");
+      expect(tcp?.urls).toContain("2.2.2.2");
+    } finally {
+      process.env.TURN_SECRET = prev.s ?? ""; if (prev.s === undefined) delete process.env.TURN_SECRET;
+      process.env.TURN_HOST = prev.h ?? ""; if (prev.h === undefined) delete process.env.TURN_HOST;
+      process.env.TURN_TCP_HOST = prev.t ?? ""; if (prev.t === undefined) delete process.env.TURN_TCP_HOST;
+    }
+  });
+
+  it("does NOT advertise a turns: (TLS) candidate unless TURN_TLS=1", () => {
+    const prev = { s: process.env.TURN_SECRET, h: process.env.TURN_HOST, tls: process.env.TURN_TLS };
+    process.env.TURN_SECRET = "test-secret";
+    process.env.TURN_HOST = "1.1.1.1";
+    delete process.env.TURN_TLS;
+    try {
+      const list = iceServers("user-9");
+      expect(list.some(s => s.urls.startsWith("turns:"))).toBe(false);
+    } finally {
+      process.env.TURN_SECRET = prev.s ?? ""; if (prev.s === undefined) delete process.env.TURN_SECRET;
+      process.env.TURN_HOST = prev.h ?? ""; if (prev.h === undefined) delete process.env.TURN_HOST;
+      if (prev.tls !== undefined) process.env.TURN_TLS = prev.tls; else delete process.env.TURN_TLS;
+    }
+  });
+});
+
+/**
+ * Live validation of the configured TURN secret/host. This performs a real
+ * STUN/TURN Allocate handshake over UDP against the operator coturn server
+ * using the same time-limited credential scheme the app issues. It only runs
+ * when TURN_SECRET + TURN_HOST are present in the environment (i.e. the
+ * secrets have been configured); otherwise it is skipped so CI without the
+ * secret stays green.
+ */
+import crypto from "crypto";
+import dgram from "dgram";
+
+const HAS_TURN = !!(process.env.TURN_SECRET && process.env.TURN_HOST);
+
+function parseAttrs(buf: Buffer, mlen: number) {
+  const attrs = new Map<number, Buffer>();
+  let i = 20;
+  const end = 20 + mlen;
+  while (i + 4 <= end) {
+    const at = buf.readUInt16BE(i);
+    const al = buf.readUInt16BE(i + 2);
+    attrs.set(at, buf.subarray(i + 4, i + 4 + al));
+    i += 4 + al + ((4 - (al % 4)) % 4);
+  }
+  return attrs;
+}
+
+function pad(b: Buffer) {
+  const padLen = (4 - (b.length % 4)) % 4;
+  return padLen ? Buffer.concat([b, Buffer.alloc(padLen)]) : b;
+}
+function attr(t: number, v: Buffer) {
+  const head = Buffer.alloc(4);
+  head.writeUInt16BE(t, 0);
+  head.writeUInt16BE(v.length, 2);
+  return Buffer.concat([head, pad(v)]);
+}
+
+const ALLOCATE = 0x0003;
+const REQUESTED_TRANSPORT = 0x0019;
+const USERNAME = 0x0006;
+const REALM = 0x0014;
+const NONCE = 0x0015;
+const MESSAGE_INTEGRITY = 0x0008;
+const XOR_RELAYED = 0x0016;
+const MAGIC = 0x2112a442;
+
+function header(type: number, len: number, txid: Buffer) {
+  const h = Buffer.alloc(20);
+  h.writeUInt16BE(type, 0);
+  h.writeUInt16BE(len, 2);
+  h.writeUInt32BE(MAGIC, 4);
+  txid.copy(h, 8);
+  return h;
+}
+
+(HAS_TURN ? describe : describe.skip)("live TURN allocation (operator coturn)", () => {
+  it("allocates a relay with app-issued time-limited credentials", async () => {
+    const SECRET = process.env.TURN_SECRET as string;
+    const HOST = process.env.TURN_HOST as string;
+    const PORT = parseInt(process.env.TURN_PORT || "3478", 10);
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    const user = expiry + ":vitest";
+    const cred = crypto.createHmac("sha1", SECRET).update(user).digest("base64");
+
+    const sock = dgram.createSocket("udp4");
+    const reqTransport = attr(REQUESTED_TRANSPORT, Buffer.from([17, 0, 0, 0]));
+
+    const result = await new Promise<{ ok: boolean; relayed?: string }>((resolve) => {
+      let stage = 1;
+      const timer = setTimeout(() => { try { sock.close(); } catch { /* noop */ } resolve({ ok: false }); }, 8000);
+
+      const send1 = () => {
+        const txid = crypto.randomBytes(12);
+        const body = reqTransport;
+        sock.send(Buffer.concat([header(ALLOCATE, body.length, txid), body]), PORT, HOST);
+      };
+
+      sock.on("message", (msg) => {
+        const type = msg.readUInt16BE(0);
+        const mlen = msg.readUInt16BE(2);
+        const attrs = parseAttrs(msg, mlen);
+        if (stage === 1) {
+          // expect 401 with realm + nonce
+          const realm = attrs.get(REALM)?.toString() || "";
+          const nonce = attrs.get(NONCE);
+          if (!nonce) { clearTimeout(timer); try { sock.close(); } catch { /* noop */ } resolve({ ok: false }); return; }
+          stage = 2;
+          const key = crypto.createHash("md5").update(`${user}:${realm}:${cred}`).digest();
+          const txid2 = crypto.randomBytes(12);
+          const body = Buffer.concat([
+            reqTransport,
+            attr(USERNAME, Buffer.from(user)),
+            attr(REALM, Buffer.from(realm)),
+            attr(NONCE, nonce),
+          ]);
+          const lenWithMI = body.length + 24;
+          const h = header(ALLOCATE, lenWithMI, txid2);
+          const mac = crypto.createHmac("sha1", key).update(Buffer.concat([h, body])).digest();
+          const full = Buffer.concat([header(ALLOCATE, body.length + 24, txid2), body, attr(MESSAGE_INTEGRITY, mac)]);
+          sock.send(full, PORT, HOST);
+        } else {
+          clearTimeout(timer);
+          const success = type === 0x0103; // Allocate success response
+          let relayed: string | undefined;
+          const ra = attrs.get(XOR_RELAYED);
+          if (ra && ra.length >= 8) {
+            const port = ra.readUInt16BE(2) ^ (MAGIC >>> 16);
+            const ipNum = ra.readUInt32BE(4) ^ MAGIC;
+            relayed = `${(ipNum >>> 24) & 255}.${(ipNum >>> 16) & 255}.${(ipNum >>> 8) & 255}.${ipNum & 255}:${port}`;
+          }
+          try { sock.close(); } catch { /* noop */ }
+          resolve({ ok: success, relayed });
+        }
+      });
+      sock.on("error", () => { clearTimeout(timer); try { sock.close(); } catch { /* noop */ } resolve({ ok: false }); });
+      send1();
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.relayed).toBeTruthy();
+  }, 12000);
 });

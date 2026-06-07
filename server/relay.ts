@@ -102,18 +102,33 @@ export function iceServers(userId: string): IceServer[] {
   ];
   const TURN_SECRET = process.env.TURN_SECRET || "";
   const TURN_HOST = process.env.TURN_HOST || "";
+  // The relay's UDP and TCP listeners may sit behind different public IPs
+  // (e.g. two separate Layer-4 load balancers). TURN_TCP_HOST overrides the
+  // host used for the TCP/TLS candidates; it falls back to TURN_HOST.
+  const TURN_TCP_HOST = process.env.TURN_TCP_HOST || TURN_HOST;
+  const TURN_PORT = process.env.TURN_PORT || "3478";
+  const TURN_TLS_PORT = process.env.TURN_TLS_PORT || "5349";
+  const TURN_TLS = process.env.TURN_TLS === "1"; // only advertise turns: when a cert is configured
   const TURN_TTL = parseInt(process.env.TURN_TTL || "3600", 10);
   if (TURN_SECRET && TURN_HOST) {
-    // Operator-supplied TURN (recommended for production).
+    // Operator-supplied TURN (recommended for production). coturn runs in
+    // use-auth-secret mode: username = "<expiry-unix>:<userId>",
+    // credential = base64(HMAC-SHA1(secret, username)).
     const username =
       Math.floor(Date.now() / 1000) + TURN_TTL + ":" + userId;
     const credential = crypto
       .createHmac("sha1", TURN_SECRET)
       .update(username)
       .digest("base64");
-    list.push({ urls: "turn:" + TURN_HOST + ":3478?transport=udp", username, credential });
-    list.push({ urls: "turn:" + TURN_HOST + ":3478?transport=tcp", username, credential });
-    list.push({ urls: "turns:" + TURN_HOST + ":5349?transport=tcp", username, credential });
+    // UDP relay (primary path) on the UDP load balancer IP.
+    list.push({ urls: "turn:" + TURN_HOST + ":" + TURN_PORT + "?transport=udp", username, credential });
+    // TCP relay (fallback for UDP-blocked networks) on the TCP load balancer IP.
+    list.push({ urls: "turn:" + TURN_TCP_HOST + ":" + TURN_PORT + "?transport=tcp", username, credential });
+    // TLS relay only when a certificate is actually provisioned on coturn,
+    // otherwise the turns: candidate just wastes time failing the handshake.
+    if (TURN_TLS) {
+      list.push({ urls: "turns:" + TURN_TCP_HOST + ":" + TURN_TLS_PORT + "?transport=tcp", username, credential });
+    }
   } else if (process.env.RELAY_DISABLE_PUBLIC_TURN !== "1") {
     // No operator TURN configured. Use OpenRelay's free public TURN as a
     // safety net so users on strict/symmetric NAT can still connect.
