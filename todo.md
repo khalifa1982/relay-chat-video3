@@ -336,3 +336,16 @@ User report: "The dialing pad is quite big — you have to scroll down to see it
 - [ ] Bug 2: Tapping dial leads to a SECOND dial screen instead of staying in one unified dialer surface. Find where the second screen comes from (probably `/app/dialer` → `/app/call` navigates to the legacy Relay screen which re-renders its own dial UI) and collapse to a single dialer flow.
 - [ ] Run `pnpm test` (current baseline 138/138), add regression tests for both fixes
 - [ ] Save checkpoint, ask user to click Publish
+
+## v2.7.0 — Call drops ~3s after dialing (ICE/TURN fix)
+- [ ] Root cause A: no operator TURN configured on the published site; OpenRelay public fallback fails relay allocations, so cross-NAT calls never complete ICE.
+- [ ] Root cause B: client tears the peer down on the first `failed` state and only attempts ICE restart on `failed`+initiator+!gotStream, with no grace handling for the common `disconnected` transition.
+- [ ] Provide a working TURN: set TURN_SECRET + TURN_HOST (coturn) OR Metered hosted TURN creds via webdev secrets so iceServers() hands out a usable relay.
+- [ ] Harden client connection lifecycle: grace timer on `disconnected`, ICE restart on `disconnected` (not only `failed`), avoid premature removePeer, allow restart from offerer side.
+- [ ] Add a vitest for iceServers() proving a TURN entry with credentials is emitted when TURN env is set.
+- [ ] Verify, save checkpoint, re-publish, ask user to test a real 1-to-1 cross-network call.
+
+## v2.x — Live in-app TURN connectivity test (2026-06-08)
+- [x] Add /turn-test page that gathers ICE candidates against the Northflank coturn server and reports srflx (STUN) + relay (TURN) results, plus a forced-relay (iceTransportPolicy:'relay') probe
+- [x] Register /turn-test route in App.tsx
+- [x] Verify in dev preview and checkpoint

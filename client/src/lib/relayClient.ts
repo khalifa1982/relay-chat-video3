@@ -24,6 +24,13 @@ interface PeerEntry {
   candQ: RTCIceCandidateInit[];
   remoteSet: boolean;
   gotStream: boolean;
+  initiator: boolean;
+  /** grace timer started on `disconnected`; cleared if we recover */
+  graceT: ReturnType<typeof setTimeout> | null;
+  /** debounce so we don't fire a burst of restarts */
+  restartT: ReturnType<typeof setTimeout> | null;
+  /** capped count of ICE restarts attempted for this peer */
+  iceRestarts: number;
 }
 interface PendingRing { from: string; fromName: string; roomId: string; }
 interface Recent { id: string; name: string; }
@@ -177,6 +184,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         break;
       case "peer-left":    removePeer(m.pin!); break;
       case "signal":       onSignal(m.from!, m.data); break;
+      case "ice":          onIceServers(m); break;
       case "error":
         toast(m.message || "Something went wrong.", true);
         if ((m.code === "offline" || m.code === "self" || m.code === "gone")
@@ -432,7 +440,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function createPeer(pin: string, name: string, initiator: boolean): PeerEntry {
     if (peers[pin]) return peers[pin];
     const pc = new RTCPeerConnection(iceConfig);
-    const peer: PeerEntry = { pc, name: name || "Guest", dc: null, el: null, candQ: [], remoteSet: false, gotStream: false };
+    const peer: PeerEntry = { pc, name: name || "Guest", dc: null, el: null, candQ: [], remoteSet: false, gotStream: false, initiator, graceT: null, restartT: null, iceRestarts: 0 };
     peers[pin] = peer;
     // We send the PROCESSED stream to peers (so they see filters), but if
     // there's no pipeline (audio-only) fall back to the raw stream.
@@ -451,19 +459,31 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const st = pc.connectionState;
       diag("conn " + pin.slice(-4) + " " + st);
       updateTileState(pin, st);
-      if (st === "failed" || st === "closed") {
-        // Don't blow away on transient failures from the offerer side; the
-        // remote may still come up. Only tear down if we *never* connected.
-        if (!peer.gotStream) removePeer(pin);
+      if (st === "connected") {
+        // Recovered (or first connect): cancel any pending teardown.
+        if (peer.graceT) { clearTimeout(peer.graceT); peer.graceT = null; }
+        peer.iceRestarts = 0;
+      } else if (st === "closed") {
+        removePeer(pin);
       }
+      // NOTE: we deliberately do NOT tear down on the first `failed` here.
+      // The ICE handler below runs a grace window + restart first; only after
+      // that window expires without recovery do we remove the peer. This is
+      // what stops the "call drops ~3s after dialing" behaviour.
     };
     pc.oniceconnectionstatechange = () => {
-      diag("ice " + pin.slice(-4) + " " + pc.iceConnectionState);
-      // On 'failed' or 'disconnected', try an ICE restart from whichever side
-      // is the offerer. This rescues calls where a NAT mapping died mid-call.
-      if (pc.iceConnectionState === "failed" && initiator && peer.gotStream === false) {
-        diag("ice restart " + pin.slice(-4));
-        tryIceRestart(pin).catch(() => { /* */ });
+      const ist = pc.iceConnectionState;
+      diag("ice " + pin.slice(-4) + " " + ist);
+      if (ist === "connected" || ist === "completed") {
+        if (peer.graceT) { clearTimeout(peer.graceT); peer.graceT = null; }
+        return;
+      }
+      // Both `disconnected` and `failed` get a rescue attempt. `disconnected`
+      // is the common transient state browsers sit in for many seconds before
+      // `failed`; restarting ICE (with fresh TURN creds) here recovers most
+      // cross-NAT calls instead of letting them die.
+      if (ist === "disconnected" || ist === "failed") {
+        scheduleRescue(pin, ist);
       }
     };
     pc.onicegatheringstatechange = () => diag("gather " + pin.slice(-4) + " " + pc.iceGatheringState);
@@ -515,10 +535,23 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     peer.candQ = [];
   }
+  // Apply server-issued (refreshed) TURN/STUN credentials. Updates the default
+  // config used for new peers AND live-applies to existing connections via
+  // setConfiguration so an in-flight restart can use the fresh relay.
+  function onIceServers(m: Msg) {
+    if (!m.iceServers || !m.iceServers.length) return;
+    iceConfig = { iceServers: m.iceServers };
+    diag("ice servers refreshed (" + m.iceServers.length + ")");
+    Object.values(peers).forEach(p => {
+      try { p.pc.setConfiguration(iceConfig as RTCConfiguration); } catch { /* */ }
+    });
+  }
   function removePeer(pin: string) {
     const e = peers[pin];
     if (!e) return;
     const nm = e.name;
+    if (e.graceT) { clearTimeout(e.graceT); e.graceT = null; }
+    if (e.restartT) { clearTimeout(e.restartT); e.restartT = null; }
     try { e.pc.close(); } catch { /* */ }
     if (e.el) e.el.remove();
     delete peers[pin];
@@ -556,10 +589,84 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     peer.el.dataset.state = st;
   }
+  const MAX_ICE_RESTARTS = 4;
+  const GRACE_MS = 8000;       // how long to let `disconnected` self-heal
+  const RESTART_DEBOUNCE_MS = 1200;
+
+  // Rescue a peer whose ICE went `disconnected`/`failed`. We (a) ask the server
+  // for fresh TURN creds, (b) after a short grace window for `disconnected`
+  // (immediately for `failed`), trigger an ICE restart from the offerer side,
+  // and (c) only tear the peer down if the grace window fully elapses without
+  // recovery AND we've exhausted restart attempts. This is what stops calls
+  // dropping ~3s after dialing.
+  function scheduleRescue(pin: string, ist: string) {
+    const peer = peers[pin];
+    if (!peer) return;
+    // Pull fresh ICE servers so a restart can land on a working relay.
+    requestFreshIce();
+    // `failed` is terminal-ish: restart right away. `disconnected` often heals
+    // on its own, so give it a grace window before doing anything drastic.
+    if (ist === "failed") {
+      debouncedRestart(pin);
+    }
+    if (peer.graceT) return; // already counting down
+    peer.graceT = setTimeout(() => {
+      peer.graceT = null;
+      const cur = peer.pc.iceConnectionState;
+      if (cur === "connected" || cur === "completed") return; // healed
+      // still broken after the grace window
+      if (peer.iceRestarts < MAX_ICE_RESTARTS) {
+        debouncedRestart(pin);
+        // re-arm a shorter window to check the restart result
+        peer.graceT = setTimeout(() => {
+          peer.graceT = null;
+          const c2 = peer.pc.iceConnectionState;
+          if ((c2 === "failed" || c2 === "disconnected") && !peer.gotStream) {
+            diag("giving up on " + pin.slice(-4) + " after " + peer.iceRestarts + " restarts");
+            removePeer(pin);
+          }
+        }, GRACE_MS);
+      } else if (!peer.gotStream) {
+        diag("giving up on " + pin.slice(-4) + " (max restarts)");
+        removePeer(pin);
+      }
+    }, ist === "failed" ? 1500 : GRACE_MS);
+  }
+
+  function debouncedRestart(pin: string) {
+    const peer = peers[pin];
+    if (!peer) return;
+    if (peer.restartT) return;
+    peer.restartT = setTimeout(() => {
+      peer.restartT = null;
+      tryIceRestart(pin).catch(() => { /* */ });
+    }, RESTART_DEBOUNCE_MS);
+  }
+
+  // Ask the signaling server to re-issue short-lived TURN credentials. The
+  // server replies with a `{ type: "ice", iceServers }` message handled below.
+  let lastIceRefresh = 0;
+  function requestFreshIce() {
+    const now = Date.now();
+    if (now - lastIceRefresh < 5000) return; // don't spam
+    lastIceRefresh = now;
+    sendWS({ type: "refresh-ice" });
+  }
+
   async function tryIceRestart(pin: string) {
     const peer = peers[pin];
     if (!peer) return;
+    // Only the offerer performs the restart (avoids glare). If we're not the
+    // initiator, nudge the peer by asking the server for fresh creds; their
+    // side will drive the restart.
+    if (!peer.initiator) { requestFreshIce(); return; }
+    if (peer.iceRestarts >= MAX_ICE_RESTARTS) return;
+    peer.iceRestarts++;
     try {
+      // Apply any freshly-received TURN creds to this live connection before
+      // restarting, so the new offer gathers relay candidates from them.
+      try { peer.pc.setConfiguration(iceConfig as RTCConfiguration); } catch { /* older browsers */ }
+      diag("ice restart " + pin.slice(-4) + " (#" + peer.iceRestarts + ")");
       const offer = await peer.pc.createOffer({ iceRestart: true });
       await peer.pc.setLocalDescription(offer);
       sendWS({ type: "signal", to: pin, data: { sdp: peer.pc.localDescription } });

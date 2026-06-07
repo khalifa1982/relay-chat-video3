@@ -7,6 +7,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import Docs from "./pages/Docs";
 import Relay from "./pages/Relay";
+import TurnTest from "./pages/TurnTest";
 import { AppShell } from "./app/AppShell";
 import Dialer from "./pages/app/Dialer";
 import Messages from "./pages/app/Messages";
@@ -40,6 +41,7 @@ function Router() {
       {/* Legacy / in-call screen: kept reachable for the actual call UI */}
       <Route path={"/app/call"} component={Relay} />
       <Route path={"/docs"} component={Docs} />
+      <Route path={"/turn-test"} component={TurnTest} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>
