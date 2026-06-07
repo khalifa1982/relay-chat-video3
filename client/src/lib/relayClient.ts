@@ -431,10 +431,22 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // ---------- mesh ----------
   function onJoined(m: Msg) {
     roomId = m.roomId || null;
+    // Apply the fresh, per-peer TURN/STUN credentials the server minted for
+    // this room BEFORE building any peer connections, so every RTCPeerConnection
+    // gathers relay candidates from our coturn (not the stale register-time set).
+    if (m.iceServers && m.iceServers.length) {
+      iceConfig = { iceServers: m.iceServers };
+      diag("ice servers from joined (" + m.iceServers.length + ")");
+    }
     (m.members || []).forEach(mem => callPeer(mem.pin, mem.name));
   }
   function onPeerJoined(m: Msg) {
     if (peers[m.pin!]) return;
+    // Same as onJoined: adopt the fresh relay creds before creating the peer.
+    if (m.iceServers && m.iceServers.length) {
+      iceConfig = { iceServers: m.iceServers };
+      diag("ice servers from peer-joined (" + m.iceServers.length + ")");
+    }
     createPeer(m.pin!, m.name || "Guest", false);
   }
   function createPeer(pin: string, name: string, initiator: boolean): PeerEntry {

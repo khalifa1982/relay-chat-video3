@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -24,22 +24,11 @@ import {
 
 const TURN_UDP_IP = "34.39.116.101";
 const TURN_TCP_IP = "34.39.27.232";
-const TURN_USERNAME = "relay";
-const TURN_CREDENTIAL = "82813ce83f68ae37a726438d94f9393f";
 
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: `stun:${TURN_UDP_IP}:3478` },
-  {
-    urls: `turn:${TURN_UDP_IP}:3478?transport=udp`,
-    username: TURN_USERNAME,
-    credential: TURN_CREDENTIAL,
-  },
-  {
-    urls: `turn:${TURN_TCP_IP}:3478?transport=tcp`,
-    username: TURN_USERNAME,
-    credential: TURN_CREDENTIAL,
-  },
-];
+// Fallback only (used if the /api/relay/ice fetch fails). STUN-only so the page
+// still loads; the real probe always uses the server-issued, time-limited
+// use-auth-secret credentials fetched at runtime.
+const FALLBACK_ICE: RTCIceServer[] = [{ urls: `stun:${TURN_UDP_IP}:3478` }];
 
 type CandRow = {
   id: number;
@@ -73,7 +62,24 @@ export default function TurnTest() {
   const [cands, setCands] = useState<CandRow[]>([]);
   const [log, setLog] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [iceServers, setIceServers] = useState<RTCIceServer[]>(FALLBACK_ICE);
   const idRef = useRef(0);
+
+  // Fetch fresh, server-issued time-limited TURN credentials (use-auth-secret).
+  // The static long-term credentials no longer work because coturn runs in
+  // use-auth-secret mode, so the page MUST get HMAC creds from the server.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/relay/ice")
+      .then((r) => r.json())
+      .then((d) => {
+        if (alive && Array.isArray(d?.iceServers) && d.iceServers.length) {
+          setIceServers(d.iceServers as RTCIceServer[]);
+        }
+      })
+      .catch(() => { /* keep STUN-only fallback */ });
+    return () => { alive = false; };
+  }, []);
 
   const addLog = useCallback((line: string) => {
     const ts = new Date().toLocaleTimeString();
@@ -98,7 +104,7 @@ export default function TurnTest() {
     addLog("[relay-only] starting forced-relay probe (iceTransportPolicy: relay)");
     let pc: RTCPeerConnection;
     try {
-      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS, iceTransportPolicy: "relay" });
+      pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: "relay" });
     } catch (e) {
       addLog("[relay-only] failed to create pc: " + String(e));
       setRelayOnly("fail");
@@ -149,7 +155,7 @@ export default function TurnTest() {
     let pc: RTCPeerConnection;
     try {
       pc = new RTCPeerConnection({
-        iceServers: ICE_SERVERS,
+        iceServers,
         iceCandidatePoolSize: 0,
       });
     } catch (e) {
@@ -255,16 +261,16 @@ export default function TurnTest() {
               <span className="font-mono">{TURN_UDP_IP}:3478</span>
             </div>
             <div className="flex justify-between gap-4 rounded-md bg-background/40 px-3 py-2">
-              <span className="text-muted-foreground">TURN (TCP)</span>
-              <span className="font-mono">{TURN_TCP_IP}:3478</span>
+              <span className="text-muted-foreground">TURN (TCP 443)</span>
+              <span className="font-mono">{TURN_TCP_IP}:443</span>
             </div>
             <div className="flex justify-between gap-4 rounded-md bg-background/40 px-3 py-2">
               <span className="text-muted-foreground">Realm</span>
               <span className="font-mono">relay.turn</span>
             </div>
             <div className="flex justify-between gap-4 rounded-md bg-background/40 px-3 py-2">
-              <span className="text-muted-foreground">Username</span>
-              <span className="font-mono">{TURN_USERNAME}</span>
+              <span className="text-muted-foreground">Credentials</span>
+              <span className="font-mono">{iceServers.length} server (live)</span>
             </div>
           </div>
         </Card>

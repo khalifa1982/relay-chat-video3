@@ -378,6 +378,23 @@ describe("relay signaling", () => {
       expect(udp?.urls).toContain("1.1.1.1");
       expect(tcp?.urls).toContain("2.2.2.2");
     } finally {
+      void 0;
+    }
+  });
+
+  it("advertises a firewall-penetrating TURN-over-TCP candidate on port 443", () => {
+    const prev = { s: process.env.TURN_SECRET, h: process.env.TURN_HOST, t: process.env.TURN_TCP_HOST };
+    process.env.TURN_SECRET = "test-secret";
+    process.env.TURN_HOST = "1.1.1.1";
+    process.env.TURN_TCP_HOST = "2.2.2.2";
+    try {
+      const list = iceServers("user-443");
+      const tcp443 = list.find(s => s.urls.includes(":443?transport=tcp"));
+      expect(tcp443).toBeDefined();
+      expect(tcp443?.urls).toBe("turn:2.2.2.2:443?transport=tcp");
+      expect(typeof tcp443?.username).toBe("string");
+      expect(typeof tcp443?.credential).toBe("string");
+    } finally {
       process.env.TURN_SECRET = prev.s ?? ""; if (prev.s === undefined) delete process.env.TURN_SECRET;
       process.env.TURN_HOST = prev.h ?? ""; if (prev.h === undefined) delete process.env.TURN_HOST;
       process.env.TURN_TCP_HOST = prev.t ?? ""; if (prev.t === undefined) delete process.env.TURN_TCP_HOST;
@@ -409,8 +426,16 @@ describe("relay signaling", () => {
  * secret stays green.
  */
 import crypto from "crypto";
-import dgram from "dgram";
+import net from "net";
 
+// Capture the real TURN config ONCE at module load. Other tests in this file
+// mutate process.env.TURN_* to fake values (e.g. "1.1.1.1", "test-secret") and
+// run concurrently, so reading process.env inside the async live test would
+// race and point the socket at a bogus host. Snapshotting here keeps the live
+// probe pinned to the actual operator coturn server.
+const LIVE_TURN_SECRET = process.env.TURN_SECRET || "";
+const LIVE_TURN_TCP_HOST = process.env.TURN_TCP_HOST || process.env.TURN_HOST || "";
+const LIVE_TURN_TCP_PORT = parseInt(process.env.TURN_TCP_ALT_PORT || "443", 10);
 const HAS_TURN = !!(process.env.TURN_SECRET && process.env.TURN_HOST);
 
 function parseAttrs(buf: Buffer, mlen: number) {
@@ -456,36 +481,38 @@ function header(type: number, len: number, txid: Buffer) {
 }
 
 (HAS_TURN ? describe : describe.skip)("live TURN allocation (operator coturn)", () => {
-  it("allocates a relay with app-issued time-limited credentials", async () => {
-    const SECRET = process.env.TURN_SECRET as string;
-    const HOST = process.env.TURN_HOST as string;
-    const PORT = parseInt(process.env.TURN_PORT || "3478", 10);
+  // Validate the firewall-penetrating TURN-over-TCP path on port 443 — the same
+  // path the app now advertises and the one that actually fixes calls stuck on
+  // "connecting...". TCP is also more stable than UDP inside the CI sandbox.
+  it("allocates a relay over TCP:443 with app-issued time-limited credentials", async () => {
+    const SECRET = LIVE_TURN_SECRET;
+    const HOST = LIVE_TURN_TCP_HOST;
+    const PORT = LIVE_TURN_TCP_PORT;
     const expiry = Math.floor(Date.now() / 1000) + 3600;
     const user = expiry + ":vitest";
     const cred = crypto.createHmac("sha1", SECRET).update(user).digest("base64");
-
-    const sock = dgram.createSocket("udp4");
     const reqTransport = attr(REQUESTED_TRANSPORT, Buffer.from([17, 0, 0, 0]));
 
     const result = await new Promise<{ ok: boolean; relayed?: string }>((resolve) => {
       let stage = 1;
-      const timer = setTimeout(() => { try { sock.close(); } catch { /* noop */ } resolve({ ok: false }); }, 8000);
+      let rbuf = Buffer.alloc(0);
+      const sock = net.createConnection({ host: HOST, port: PORT });
+      const done = (r: { ok: boolean; relayed?: string }) => { try { sock.destroy(); } catch { /* noop */ } resolve(r); };
+      const timer = setTimeout(() => done({ ok: false }), 9000);
 
       const send1 = () => {
         const txid = crypto.randomBytes(12);
-        const body = reqTransport;
-        sock.send(Buffer.concat([header(ALLOCATE, body.length, txid), body]), PORT, HOST);
+        sock.write(Buffer.concat([header(ALLOCATE, reqTransport.length, txid), reqTransport]));
       };
 
-      sock.on("message", (msg) => {
+      const handle = (msg: Buffer) => {
         const type = msg.readUInt16BE(0);
         const mlen = msg.readUInt16BE(2);
         const attrs = parseAttrs(msg, mlen);
         if (stage === 1) {
-          // expect 401 with realm + nonce
           const realm = attrs.get(REALM)?.toString() || "";
           const nonce = attrs.get(NONCE);
-          if (!nonce) { clearTimeout(timer); try { sock.close(); } catch { /* noop */ } resolve({ ok: false }); return; }
+          if (!nonce) { clearTimeout(timer); done({ ok: false }); return; }
           stage = 2;
           const key = crypto.createHash("md5").update(`${user}:${realm}:${cred}`).digest();
           const txid2 = crypto.randomBytes(12);
@@ -495,14 +522,12 @@ function header(type: number, len: number, txid: Buffer) {
             attr(REALM, Buffer.from(realm)),
             attr(NONCE, nonce),
           ]);
-          const lenWithMI = body.length + 24;
-          const h = header(ALLOCATE, lenWithMI, txid2);
+          const h = header(ALLOCATE, body.length + 24, txid2);
           const mac = crypto.createHmac("sha1", key).update(Buffer.concat([h, body])).digest();
-          const full = Buffer.concat([header(ALLOCATE, body.length + 24, txid2), body, attr(MESSAGE_INTEGRITY, mac)]);
-          sock.send(full, PORT, HOST);
+          sock.write(Buffer.concat([h, body, attr(MESSAGE_INTEGRITY, mac)]));
         } else {
           clearTimeout(timer);
-          const success = type === 0x0103; // Allocate success response
+          const success = type === 0x0103;
           let relayed: string | undefined;
           const ra = attrs.get(XOR_RELAYED);
           if (ra && ra.length >= 8) {
@@ -510,15 +535,26 @@ function header(type: number, len: number, txid: Buffer) {
             const ipNum = ra.readUInt32BE(4) ^ MAGIC;
             relayed = `${(ipNum >>> 24) & 255}.${(ipNum >>> 16) & 255}.${(ipNum >>> 8) & 255}.${ipNum & 255}:${port}`;
           }
-          try { sock.close(); } catch { /* noop */ }
-          resolve({ ok: success, relayed });
+          done({ ok: success, relayed });
+        }
+      };
+
+      sock.on("connect", send1);
+      sock.on("data", (chunk) => {
+        rbuf = Buffer.concat([rbuf, chunk]);
+        // STUN/TURN over TCP frames each message with its 20-byte header + length.
+        while (rbuf.length >= 20) {
+          const mlen = rbuf.readUInt16BE(2);
+          if (rbuf.length < 20 + mlen) break;
+          const frame = rbuf.subarray(0, 20 + mlen);
+          rbuf = rbuf.subarray(20 + mlen);
+          handle(frame);
         }
       });
-      sock.on("error", () => { clearTimeout(timer); try { sock.close(); } catch { /* noop */ } resolve({ ok: false }); });
-      send1();
+      sock.on("error", () => { clearTimeout(timer); done({ ok: false }); });
     });
 
     expect(result.ok).toBe(true);
     expect(result.relayed).toBeTruthy();
-  }, 12000);
+  }, 14000);
 });

@@ -358,3 +358,10 @@ User report: "The dialing pad is quite big — you have to scroll down to see it
 - [x] Update iceServers() to support a separate TCP host (UDP IP 34.39.116.101, TCP IP 34.39.27.232)
 - [x] Add/refresh vitest coverage for iceServers TURN output
 - [ ] Verify a real call connects end-to-end
+
+- [x] Diagnose calls stuck on "connecting..." (root cause: stale static TURN creds + no firewall-penetrating relay path)
+- [x] Add port 443/TCP to Northflank TCP load balancer (maps 443 -> coturn:3478)
+- [x] Advertise turn:TCP_HOST:443?transport=tcp in server iceServers()
+- [x] Add /api/relay/ice endpoint returning fresh time-limited HMAC creds
+- [x] Fix /turn-test page to fetch live creds instead of stale static ones
+- [x] Update vitest live TURN test to validate TCP:443 allocate path

@@ -122,7 +122,15 @@ export function iceServers(userId: string): IceServer[] {
       .digest("base64");
     // UDP relay (primary path) on the UDP load balancer IP.
     list.push({ urls: "turn:" + TURN_HOST + ":" + TURN_PORT + "?transport=udp", username, credential });
-    // TCP relay (fallback for UDP-blocked networks) on the TCP load balancer IP.
+    // TURN over TCP on port 443 (firewall/CGNAT-penetrating fallback). Port 443
+    // is virtually never blocked, so this path connects even on mobile/carrier
+    // and corporate networks that drop UDP and non-standard TCP ports like 3478.
+    // The L4 load balancer maps external 443 -> coturn 3478, so no coturn change
+    // is needed and relay media tunnels back to the client over this same TCP
+    // connection. This is the key fix for calls hanging on "connecting...".
+    const TURN_TCP_ALT_PORT = process.env.TURN_TCP_ALT_PORT || "443";
+    list.push({ urls: "turn:" + TURN_TCP_HOST + ":" + TURN_TCP_ALT_PORT + "?transport=tcp", username, credential });
+    // TCP relay on the standard port (additional fallback) on the TCP LB IP.
     list.push({ urls: "turn:" + TURN_TCP_HOST + ":" + TURN_PORT + "?transport=tcp", username, credential });
     // TLS relay only when a certificate is actually provisioned on coturn,
     // otherwise the turns: candidate just wastes time failing the handshake.
@@ -402,6 +410,15 @@ export function attachRelay(
   onInvite?: InviteHook
 ): RelayRegistry {
   const reg = createRegistry();
+
+  // Public ICE config endpoint. Returns the same fresh, time-limited TURN/STUN
+  // credentials the signaling layer issues, so browser-side tools (e.g. the
+  // /turn-test page) can probe the operator coturn with VALID use-auth-secret
+  // credentials instead of stale static ones.
+  app.get("/api/relay/ice", (req: Request, res: Response) => {
+    const who = String(req.query.u || "probe-" + Math.random().toString(36).slice(2, 8));
+    res.json({ iceServers: iceServers(who) });
+  });
 
   // SSE channel: long-lived response that streams JSON-encoded server -> client
   // messages. Each event line is `data: <json>\n\n`.
