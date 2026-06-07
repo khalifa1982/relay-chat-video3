@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://relaychat-lduywq6l.manus.space/sitemap.xml
