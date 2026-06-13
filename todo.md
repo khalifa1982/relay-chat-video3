@@ -506,12 +506,30 @@ ON TOP of the call, hiding the call's own controls.
 - [x] Footer → `RELAY · v2.9.1`. tsc clean, 169/170 vitest, production build clean.
 
 ### Known follow-ups surfaced by this test
-- [ ] **Caller-cancel signal**: if the caller hangs up before the callee answers, the
-      server doesn't tell the callee, so their ring only clears via the 60s timeout. Needs
-      a server-side "ring cancelled" message to the pending callee.
-- [ ] **Engine only registers on the Dialer tab**: a callee sitting on Messages/Contacts
-      isn't registered with the signaling server, so they can't be rung (only a push
-      notification fires). Mounting the engine app-wide (AppShell) would make incoming
-      calls work from any tab.
+- [x] **Caller-cancel signal** — done in v2.10.0 (below).
+- [x] **Engine only registers on the Dialer tab** — done in v2.10.0 (below).
 - [ ] **Media still needs TURN live**: once the callee can Accept, audio/video connecting
       across networks depends on the Manus TURN secrets being set + Published.
+
+## v2.10.0 — Caller-cancel signal + app-wide call engine (delivered 2026-06-13)
+
+- [x] **Caller-cancel signal.** The signaling server now tracks each caller's pending
+      rings (`RelayClient.ringing`). When a caller leaves or disconnects before the callee
+      answers, `cancelPendingRings()` sends a `ring-cancel` to each still-pending callee;
+      the client clears its incoming-ring UI (no reject sent back — the caller is gone).
+      `accept`/`reject` remove the callee from the set so an answered/declined call never
+      gets a spurious cancel. +2 vitest in `server/relay.test.ts` (cancel-on-leave, and
+      "accepted callee gets peer-left, not ring-cancel").
+- [x] **App-wide call engine.** New `client/src/app/RelayEngine.tsx` hosts the engine ONCE
+      for the whole `/app` session (above the router, so it survives tab navigation) and
+      renders the fullscreen call/ring overlay + End button. Previously the engine only ran
+      on the Dialer page, so a callee on Messages/Contacts wasn't registered and couldn't be
+      rung. Now incoming calls surface on **any** tab. `App.tsx` wraps `<Router>` in
+      `<RelayEngineProvider>`; `Dialer.tsx` is reduced to the keypad and drives the engine
+      via `useRelayEngine()` (dial / phase / authoritative pin). Deleted the now-dead
+      `pages/Relay.tsx` (the old `/app/call` screen — already redirected to `/app/dialer`),
+      so there is exactly one `startRelay()` instance.
+- [x] Footer → `RELAY · v2.10.0`. tsc clean, 171/172 vitest, production build clean.
+- [ ] **Action required from you**: set the Manus TURN secrets + Publish, then retest a
+      two-device call (now from any tab) — the callee should get a ring with Accept, and
+      cancelling before they answer should clear their ring immediately.

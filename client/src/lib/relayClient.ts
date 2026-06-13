@@ -203,6 +203,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "registered":   onRegistered(m); break;
       case "room":         roomId = m.roomId || null; break;
       case "ring":         onRing(m); break;
+      case "ring-cancel":  onRingCancel(m); break;
       case "joined":       onJoined(m); break;
       case "peer-joined":  onPeerJoined(m); break;
       case "rejected":
@@ -513,6 +514,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     $("ringOverlay")?.classList.remove("active");
     if (r) sendWS({ type: "reject", to: r.from });
+    emitPhase("idle");
+  }
+  // The caller hung up before we answered — clear the incoming-ring UI without
+  // sending a reject back (they're already gone).
+  function onRingCancel(m: Msg) {
+    if (!pendingRing) return;
+    if (m.from && pendingRing.from !== m.from) return;
+    pendingRing = null;
+    if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
+    $("ringOverlay")?.classList.remove("active");
+    toast("Caller cancelled the call");
     emitPhase("idle");
   }
 

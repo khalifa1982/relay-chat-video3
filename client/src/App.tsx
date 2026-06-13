@@ -8,6 +8,7 @@ import Home from "./pages/Home";
 import Docs from "./pages/Docs";
 import TurnTest from "./pages/TurnTest";
 import { AppShell } from "./app/AppShell";
+import { RelayEngineProvider } from "./app/RelayEngine";
 import Dialer from "./pages/app/Dialer";
 import Messages from "./pages/app/Messages";
 import Contacts from "./pages/app/Contacts";
@@ -63,7 +64,12 @@ function App() {
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
           <Toaster />
-          <Router />
+          {/* RelayEngineProvider hosts the call engine once for the whole /app
+              session (above the router, so it survives tab navigation) and
+              renders the fullscreen call/ring overlay. */}
+          <RelayEngineProvider>
+            <Router />
+          </RelayEngineProvider>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
