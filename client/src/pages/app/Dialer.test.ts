@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDialed, ghostNumberRule } from "./Dialer";
+import { formatDialed, ghostNumberRule, parseDialToParam } from "./Dialer";
 
 /**
  * Pure-logic tests for the redesigned Dialer (v2.1.1):
@@ -96,5 +96,38 @@ describe("ghostNumberRule", () => {
       mode: "ghost",
       display: "812 345",
     });
+  });
+});
+
+describe("parseDialToParam", () => {
+  // The Messages/Contacts call buttons and the legacy /app/call redirect carry
+  // the target as ?to=NNNNNN. The Dialer auto-dials it once registered, so the
+  // parser must accept exactly a 6-digit number and reject everything else.
+  it("extracts a 6-digit number with or without a leading '?'", () => {
+    expect(parseDialToParam("?to=277242")).toBe("277242");
+    expect(parseDialToParam("to=277242")).toBe("277242");
+  });
+
+  it("preserves leading zeros (numbers are strings, not ints)", () => {
+    expect(parseDialToParam("?to=000123")).toBe("000123");
+  });
+
+  it("ignores other params and order", () => {
+    expect(parseDialToParam("?foo=1&to=812345&bar=2")).toBe("812345");
+  });
+
+  it("returns null when there is no ?to= at all", () => {
+    expect(parseDialToParam("")).toBeNull();
+    expect(parseDialToParam("?other=x")).toBeNull();
+  });
+
+  it("returns null for a non-6-digit or non-numeric target", () => {
+    expect(parseDialToParam("?to=12345")).toBeNull(); // too short
+    expect(parseDialToParam("?to=abcdef")).toBeNull(); // not numeric
+  });
+
+  it("clips an over-long value to its first 6 digits", () => {
+    // URL-encoded junk should still yield a clean 6-digit target.
+    expect(parseDialToParam("?to=1234567")).toBe("123456");
   });
 });

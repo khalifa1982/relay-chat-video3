@@ -1,12 +1,11 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import Docs from "./pages/Docs";
-import Relay from "./pages/Relay";
 import TurnTest from "./pages/TurnTest";
 import { AppShell } from "./app/AppShell";
 import Dialer from "./pages/app/Dialer";
@@ -38,8 +37,18 @@ function Router() {
       <Route path={"/app/messages"}>{() => <ShellRoute tab="messages" />}</Route>
       <Route path={"/app/contacts"}>{() => <ShellRoute tab="contacts" />}</Route>
       <Route path={"/app/profile"}>{() => <ShellRoute tab="profile" />}</Route>
-      {/* Legacy / in-call screen: kept reachable for the actual call UI */}
-      <Route path={"/app/call"} component={Relay} />
+      {/* Legacy in-call route. The Dialer now hosts the call engine in-place,
+          so redirect here (preserving ?to=) to guarantee only ONE relay engine
+          instance ever mounts — two engines sharing one relay_cid used to fight
+          over the same peer slot and tear down each other's call. */}
+      <Route path={"/app/call"}>
+        {() => (
+          <Redirect
+            to={"/app/dialer" + (typeof window !== "undefined" ? window.location.search : "")}
+            replace
+          />
+        )}
+      </Route>
       <Route path={"/docs"} component={Docs} />
       <Route path={"/turn-test"} component={TurnTest} />
       <Route path={"/404"} component={NotFound} />

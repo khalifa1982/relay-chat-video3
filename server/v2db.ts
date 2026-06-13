@@ -22,6 +22,7 @@ import {
   inArray,
   isNull,
   lt,
+  lte,
   or,
   sql,
 } from "drizzle-orm";
@@ -478,7 +479,20 @@ export async function getOrCreateDmConversation(a: number, b: number) {
     .limit(1);
   if (existing.length > 0) return existing[0];
 
-  await db.insert(conversations).values({ pairKey: key, kind: "dm" });
+  try {
+    await db.insert(conversations).values({ pairKey: key, kind: "dm" });
+  } catch (insertErr) {
+    // Two participants can open the same thread at once: both SELECTs above see
+    // nothing, both INSERT, and the loser hits the unique index on pairKey. Re-
+    // select here; if the row now exists the race is benign and we return it.
+    // Only a genuine insert failure (row still absent) is rethrown.
+    const raced = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.pairKey, key))
+      .limit(1);
+    if (raced.length === 0) throw insertErr;
+  }
   const created = await db
     .select()
     .from(conversations)
@@ -818,17 +832,23 @@ export async function markThreadRead(input: { conversationId: number; identityId
         eq(conversationParticipants.identityId, input.identityId)
       )
     );
-  // mark messages addressed to me as read
-  await db
-    .update(messages)
-    .set({ status: "read" })
-    .where(
-      and(
-        eq(messages.conversationId, input.conversationId),
-        sql`${messages.senderIdentityId} <> ${input.identityId}`,
-        or(eq(messages.status, "sent"), eq(messages.status, "delivered"))
-      )
-    );
+  // Mark the peer's messages as read — but only those at or before the message
+  // id we actually observed (lastId). Without the `id <= lastId` bound, a
+  // message inserted between the SELECT above and this UPDATE would be flipped
+  // to "read" before the reader ever saw it, giving the sender a false receipt.
+  if (lastId != null) {
+    await db
+      .update(messages)
+      .set({ status: "read" })
+      .where(
+        and(
+          eq(messages.conversationId, input.conversationId),
+          lte(messages.id, lastId),
+          sql`${messages.senderIdentityId} <> ${input.identityId}`,
+          or(eq(messages.status, "sent"), eq(messages.status, "delivered"))
+        )
+      );
+  }
 }
 
 /* ── attachments ──────────────────────────────────────────────── */
@@ -876,6 +896,64 @@ export async function getAttachmentById(id: number) {
   if (!db) return null;
   const rows = await db.select().from(attachments).where(eq(attachments.id, id)).limit(1);
   return rows[0] ?? null;
+}
+
+/**
+ * Authorization-scoped attachment fetch. Returns the attachment ONLY if the
+ * caller is allowed to see it: either they uploaded it, or it is referenced by
+ * a message in a conversation they participate in. Returns null otherwise, so a
+ * caller cannot enumerate sequential attachment ids to read other people's
+ * media (the public `attachments.get` endpoint must go through this).
+ */
+export async function getAttachmentForIdentity(attachmentId: number, identityId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(attachments)
+    .where(eq(attachments.id, attachmentId))
+    .limit(1);
+  const att = rows[0];
+  if (!att) return null;
+  // The uploader can always read their own attachment.
+  if (att.uploadedByIdentityId === identityId) return att;
+  // Otherwise require a message that references this attachment to live in a
+  // conversation the caller participates in.
+  const ref = await db
+    .select({ conversationId: messages.conversationId })
+    .from(messages)
+    .innerJoin(
+      conversationParticipants,
+      eq(conversationParticipants.conversationId, messages.conversationId)
+    )
+    .where(
+      and(
+        eq(messages.attachmentId, attachmentId),
+        eq(conversationParticipants.identityId, identityId)
+      )
+    )
+    .limit(1);
+  return ref.length > 0 ? att : null;
+}
+
+/* ── batch lookups (collapse N+1 loops in list endpoints) ─────── */
+
+export async function getIdentitiesByIds(ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  return db.select().from(identities).where(inArray(identities.id, ids));
+}
+
+export async function getIdentitiesByNumbers(numbers: string[]) {
+  const db = await getDb();
+  if (!db || numbers.length === 0) return [];
+  return db.select().from(identities).where(inArray(identities.number, numbers));
+}
+
+export async function getAttachmentsByIds(ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  return db.select().from(attachments).where(inArray(attachments.id, ids));
 }
 
 /* ── call history ─────────────────────────────────────────────── */

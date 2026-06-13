@@ -377,3 +377,107 @@ User report: "The dialing pad is quite big — you have to scroll down to see it
 - [ ] Prime camera/mic permission at login (before dial) so mobile permission prompt doesn't drop the call
 - [ ] Add leave-reason diagnostics to pinpoint the instant auto-leave
 - [ ] Verify a real two-device call holds via live log
+
+## v2.8.0 — Code-review fixes: duplicate dial screen, attachment IDOR, SSE leak, self-notify (delivered 2026-06-13)
+
+Full-codebase review (engine + signaling + backend + UI). This batch fixes the two
+reported user-facing bugs plus the most serious security issue found.
+
+### Reported bug 1 — "tapping Call shows a second / duplicate dial screen"
+- [x] Root cause: the imperative engine markup (`relayAssets.ts`) ships its OWN full
+      dialer (`#register` name form + `#lobby` keypad / big-number / recents / share).
+      The React Dialer renders a second keypad over it; the legacy one was only hidden
+      by phase-gated CSS whose selectors (`.share-card` / `.me-card` / `.row .copy`)
+      didn't even match the real markup classes (`.share-box` / `.topbar .me` /
+      `.mycode .copy`), and an optimistic `setPhase("dialing")` raced the engine.
+- [x] Hide `#register` / `#lobby` UNCONDITIONALLY while embedded via a permanent
+      `relay-embedded` class on the engine root; removed the broken phase-gated CSS and
+      the redundant "Calling…" caption overlay (the engine's `#call` already shows it).
+- [x] Drive `phase` solely from the engine's `setOnStateChange`; dropped the optimistic
+      `setPhase("dialing")` that stranded the fullscreen overlay when the async dial
+      failed (mic/cam blocked).
+- [x] Collapsed the two-engine problem — `/app/call` (Relay.tsx) and the Dialer both
+      called `startRelay()` on the same `relay_cid`, so two engines fought over one peer
+      slot ("connects then drops"). `/app/call` now redirects to `/app/dialer`
+      (preserving `?to=`); Messages/Contacts call buttons point at `/app/dialer?to=`;
+      the Dialer auto-dials `?to=` once registered (new exported `parseDialToParam`).
+
+### Reported bug 2 — "calls won't connect / drop"
+- [x] Fixed an SSE heartbeat-interval leak in `relay.ts`: on a same-cid reconnect,
+      `prev.socket.close()` set `closed = true` before the res-close event reached
+      `cleanup()`, which then early-returned and never cleared the 15s interval — one
+      leaked timer per reconnect. Now cleared in both `close()` and `cleanup()`.
+- [ ] STILL TO VERIFY (operational, not a code bug): confirm `TURN_SECRET` / `TURN_HOST`
+      are set on the live www.your-chat.org deploy and run `/turn-test` there.
+
+### Security
+- [x] CRITICAL attachment IDOR: `attachments.get` was a `publicProcedure` taking a raw
+      autoincrement id with no auth — anyone could enumerate ids and read every
+      attachment URL. Now requires identity + a new scoped `getAttachmentForIdentity()`
+      (uploader OR a participant of a conversation that references the attachment).
+
+### Client polish
+- [x] Stop chiming / notifying on your OWN sent messages (the server fans the `message`
+      event to the sender too). New exported `shouldAlertForMessage` gate + chime
+      suppressed when the tab is visible.
+
+- [x] Bumped in-app version footer to `RELAY · v2.8.0`.
+- [x] 169/170 vitest pass (+9 new: 6 `parseDialToParam`, 3 `shouldAlertForMessage`),
+      TypeScript clean, production build clean.
+- [ ] **Action required from you**: click Publish in the Management UI to push v2.8.0.
+
+### Documented in the review, deferred to a follow-up (NOT in this batch)
+- DM conversation create race (catch+reselect); `markRead`/`sendMessage` atomicity;
+  N+1 queries (`messages.list` / `contacts.list` / `calls.history`) + the dead query in
+  `calls.history`; voice-note mic stays hot on unmount; 40 MB base64 main-thread freeze;
+  upload fetches missing the device-id header; upload SVG/MIME hardening; 3× `useIdentity`
+  heartbeats; `useRealtime` untracked reconnect timer; over-broad presence invalidation;
+  per-frame canvas allocation in `mediaPipeline`.
+
+## v2.9.0 — Deferred-batch fixes from the review (delivered 2026-06-13)
+
+Cleared most of the v2.8.0 "deferred" list. TURN code path verified first: with the
+operator coturn env (TURN_SECRET/TURN_HOST/TURN_TCP_HOST set), `iceServers()` emits the
+UDP-3478 + TCP-443 + TCP-3478 operator relays (not the OpenRelay fallback), valid HMAC
+creds, `<expiry>:<user>` username — confirmed via a scripted call to `iceServers()`.
+
+### Backend (server)
+- [x] **DM conversation create race** (`getOrCreateDmConversation`): the INSERT is now
+      wrapped so a concurrent opener hitting the `pairKey` unique index re-selects the
+      existing row instead of 500-ing; a genuine insert failure still throws.
+- [x] **Read-receipt correctness** (`markThreadRead`): the status→"read" UPDATE is now
+      bounded by `messages.id <= lastId` (the id we actually observed), so a message that
+      arrives mid-mark-read can't be flipped to "read" before it's seen (no false receipt).
+- [x] **N+1 + dead query removed**: added batch helpers `getIdentitiesByIds`,
+      `getIdentitiesByNumbers`, `getAttachmentsByIds`. `messages.list` (per-message
+      attachment), `contacts.list` (per-contact identity), and `calls.history` (per-row
+      identity + a dead single-row query that was discarded with `void`) are now one query
+      each. Dropped the prod `_attachmentIdsUsed` debug field.
+- [x] **Upload MIME hardening** (`v2upload.ts`): block `image/svg+xml`, `text/html`,
+      `application/javascript`, etc. — script-bearing subtypes that passed the top-level
+      allowlist and would be a stored-XSS risk if served inline.
+
+### Client
+- [x] **Shared upload helper** (`lib/uploadAttachment.ts`): all three call sites (Messages
+      image/file, Messages voice-note, Profile avatar) now (a) base64 via `FileReader`
+      instead of `btoa(uint8.reduce(...))` — the latter froze/OOM-crashed mobile Safari on
+      a 40 MB file — and (b) send the `x-relay-device-id` header so cookie-dropped guests
+      can still upload (Profile's avatar upload also wasn't even sending `credentials`).
+- [x] **Voice-note mic release**: the recording `MediaStream` is held in a ref and stopped
+      on `onstop` AND on component unmount, so navigating away mid-record no longer leaves
+      the mic live (LED on).
+- [x] **`useRealtime` reconnect timer** is now tracked and cleared on cleanup (no orphaned
+      reconnect after unmount / `enabled` flap), and presence events invalidate only
+      `directory.lookup({ number })` instead of the whole namespace.
+- [x] **`mediaPipeline` blur** reuses one offscreen canvas instead of allocating a new
+      `<canvas>` every frame (was 30/sec of GC churn).
+
+- [x] Bumped in-app version footer to `RELAY · v2.9.0`.
+- [x] 169/170 vitest pass, TypeScript clean, production build clean.
+- [ ] **Action required from you**: set the five TURN/Forge secrets in Manus → Settings →
+      Secrets, then click Publish to push v2.8.0 + v2.9.0 live.
+
+### Still deferred (intentionally — higher risk, needs DB transactions)
+- `sendMessage` full atomicity (wrap insert + lastMessageAt + unread bump in a transaction
+  and return by `insertId`); centralizing the 3× `useIdentity` heartbeat loops into one
+  owner; presence broadcast scoping (currently fans every user's number to all clients).

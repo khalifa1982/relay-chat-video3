@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Bell, BellOff, Check, Moon, Sun } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { uploadAttachment } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
 import { getLoginUrl } from "@/const";
 import { Button } from "@/components/ui/button";
@@ -79,24 +80,7 @@ export default function ProfilePage() {
     setUploading(true);
     setError(null);
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(String(r.result || ""));
-        r.onerror = () => reject(new Error("Failed to read file"));
-        r.readAsDataURL(file);
-      });
-      const base64 = dataUrl.split(",")[1] || "";
-      const res = await fetch("/api/v2/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: file.name,
-          mimeType: file.type,
-          dataBase64: base64,
-        }),
-      });
-      if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-      const json = (await res.json()) as { url: string };
+      const json = await uploadAttachment(file, { filename: file.name, mimeType: file.type });
       updateProfile.mutate({ avatarUrl: json.url });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Avatar upload failed");

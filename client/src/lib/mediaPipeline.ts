@@ -100,6 +100,9 @@ export class MediaPipeline {
   // last-frame caches
   private lastSegMask: ImageData | null = null;
   private lastFaceBox: { x: number; y: number; w: number; h: number } | null = null;
+  // Reused scratch canvas for the background-blur composite (was allocated
+  // every frame — 30 canvases/sec of GC churn).
+  private tmpCanvas: HTMLCanvasElement | null = null;
 
   constructor(cb: PipelineCallbacks = {}) {
     this.cb = cb;
@@ -252,10 +255,13 @@ export class MediaPipeline {
             px[j] = 0; px[j + 1] = 0; px[j + 2] = 0; px[j + 3] = a;
           }
           // Compose: draw mask, then in source-in mode draw the sharp video.
-          const tmp = document.createElement("canvas");
-          tmp.width = maskW; tmp.height = maskH;
+          let tmp = this.tmpCanvas;
+          if (!tmp) { tmp = document.createElement("canvas"); this.tmpCanvas = tmp; }
+          if (tmp.width !== maskW) tmp.width = maskW;
+          if (tmp.height !== maskH) tmp.height = maskH;
           const tctx = tmp.getContext("2d");
           if (tctx) {
+            tctx.globalCompositeOperation = "source-over";
             tctx.putImageData(this.lastSegMask, 0, 0);
             tctx.globalCompositeOperation = "source-in";
             tctx.drawImage(v, 0, 0, maskW, maskH);

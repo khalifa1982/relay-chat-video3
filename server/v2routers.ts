@@ -18,7 +18,10 @@ import {
   bindDeviceIdToIdentity,
   createGuestIdentity,
   deleteContact,
-  getAttachmentById,
+  getAttachmentForIdentity,
+  getAttachmentsByIds,
+  getIdentitiesByIds,
+  getIdentitiesByNumbers,
   getIdentityByDeviceId,
   getIdentityById,
   getIdentityByNumber,
@@ -448,15 +451,10 @@ export const v2ContactsRouter = router({
   list: publicProcedure.query(async ({ ctx }) => {
     const me = requireIdentity(ctx);
     const rows = await listContacts(me.id);
-    const ids: number[] = [];
-    const idByNumber = new Map<string, number>();
-    for (const r of rows) {
-      const ident = await getIdentityByNumber(r.number);
-      if (ident) {
-        ids.push(ident.id);
-        idByNumber.set(r.number, ident.id);
-      }
-    }
+    // Resolve every contact's identity in ONE query (was N+1: one per contact).
+    const idents = await getIdentitiesByNumbers(rows.map((r) => r.number));
+    const idByNumber = new Map(idents.map((i) => [i.number, i.id]));
+    const ids = idents.map((i) => i.id);
     const presList = await getPresenceForIds(ids);
     const presByIdentity = new Map(presList.map((p) => [p.identityId, p]));
     return rows.map((r) => {
@@ -597,17 +595,11 @@ export const v2MessagesRouter = router({
         beforeId: input.beforeId,
         limit: input.limit,
       });
-      // resolve attachments inline (keep client simple)
+      // Resolve attachments in ONE query (was N+1: one round-trip per message).
       const attIds = rows
         .map((r) => r.attachmentId)
         .filter((x): x is number => typeof x === "number");
-      const attachmentsByMessage = new Map<number, Awaited<ReturnType<typeof getAttachmentById>>>();
-      for (const r of rows) {
-        if (r.attachmentId) {
-          const a = await getAttachmentById(r.attachmentId);
-          attachmentsByMessage.set(r.id, a ?? null);
-        }
-      }
+      const attById = new Map((await getAttachmentsByIds(attIds)).map((a) => [a.id, a]));
       return rows.map((r) => ({
         id: r.id,
         conversationId: r.conversationId,
@@ -618,9 +610,8 @@ export const v2MessagesRouter = router({
         status: r.status,
         createdAt: r.createdAt,
         editedAt: r.editedAt,
-        attachment: attachmentsByMessage.get(r.id) ?? null,
+        attachment: r.attachmentId ? (attById.get(r.attachmentId) ?? null) : null,
         replyToId: r.replyToId ?? null,
-        _attachmentIdsUsed: attIds.length, // dev-only: visibility for tests
       }));
     }),
 
@@ -733,7 +724,13 @@ export const v2AttachmentsRouter = router({
 
   get: publicProcedure
     .input(z.object({ id: z.number().int().positive() }))
-    .query(async ({ input }) => getAttachmentById(input.id)),
+    .query(async ({ ctx, input }) => {
+      // Authorization: only return an attachment the caller uploaded or that
+      // belongs to a conversation they participate in. Without this gate, any
+      // caller could enumerate sequential ids and read every attachment URL.
+      const me = requireIdentity(ctx);
+      return getAttachmentForIdentity(input.id, me.id);
+    }),
 });
 
 /* ── calls router (history + start log) ───────────────────────── */
@@ -748,16 +745,9 @@ export const v2CallsRouter = router({
         rows.map((r) => (r.callerIdentityId === me.id ? r.calleeIdentityId : r.callerIdentityId))
       )
     );
-    const db = await getDb();
-    const otherList = db
-      ? await db.select().from(identities).where(eq(identities.id, otherIds[0] ?? -1))
-      : [];
-    // batch-fetch (simpler than N+1)
-    const otherById = new Map<number, Awaited<ReturnType<typeof getIdentityByNumber>>>();
-    for (const oid of otherIds) {
-      otherById.set(oid, await getIdentityById(oid));
-    }
-    void otherList;
+    // Resolve the "other" identity for every row in ONE query. (This replaced a
+    // dead single-row query plus an N+1 loop.)
+    const otherById = new Map((await getIdentitiesByIds(otherIds)).map((o) => [o.id, o]));
     return rows.map((r) => {
       const otherId = r.callerIdentityId === me.id ? r.calleeIdentityId : r.callerIdentityId;
       const other = otherById.get(otherId);

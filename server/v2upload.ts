@@ -28,6 +28,11 @@ import {
 } from "./v2db";
 
 const ALLOWED_MIME = /^(image|video|audio|application|text)\//i;
+// Deny script-bearing subtypes even when their top-level type passes ALLOWED_MIME.
+// image/svg+xml is the notable one — it's an "image" but can embed <script>, so
+// serving it same-origin would be a stored-XSS vector.
+const BLOCKED_MIME =
+  /^(image\/svg\+xml|text\/html|application\/xhtml\+xml|application\/javascript|application\/x-msdownload|application\/x-sh)/i;
 const MAX_BYTES = 40 * 1024 * 1024; // 40 MB ceiling per attachment
 
 function safeName(name: string | undefined, fallback: string) {
@@ -79,7 +84,7 @@ export function registerV2Upload(app: Express) {
       if (typeof dataBase64 !== "string" || typeof mimeType !== "string") {
         return res.status(400).json({ error: "dataBase64 and mimeType are required" });
       }
-      if (!ALLOWED_MIME.test(mimeType)) {
+      if (!ALLOWED_MIME.test(mimeType) || BLOCKED_MIME.test(mimeType)) {
         return res.status(400).json({ error: "Unsupported mime type" });
       }
 
