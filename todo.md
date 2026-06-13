@@ -478,6 +478,79 @@ creds, `<expiry>:<user>` username — confirmed via a scripted call to `iceServe
       Secrets, then click Publish to push v2.8.0 + v2.9.0 live.
 
 ### Still deferred (intentionally — higher risk, needs DB transactions)
-- `sendMessage` full atomicity (wrap insert + lastMessageAt + unread bump in a transaction
-  and return by `insertId`); centralizing the 3× `useIdentity` heartbeat loops into one
-  owner; presence broadcast scoping (currently fans every user's number to all clients).
+- ~~`sendMessage` full atomicity; centralizing the 3× `useIdentity` heartbeats; presence
+  broadcast scoping~~ — all done in v2.11.0 (below).
+
+## v2.11.0 — Reliability cleanup: tx, single heartbeat, scoped presence (delivered 2026-06-13)
+
+- [x] **`sendMessage` is now atomic.** Insert + `lastMessageAt` bump + unread bump run inside
+      one `db.transaction(...)`, and the returned row is fetched by the real `insertId`
+      (mysql2) instead of `max(id)` — under concurrent sends in the same conversation,
+      max(id) could return another sender's message. (`server/v2db.ts`.)
+- [x] **One presence heartbeat for the whole app.** The 30s heartbeat + go-offline beacon
+      moved out of `useIdentity()` (which ran one loop per call site — AppShell + Dialer +
+      OnboardingGate + …) into a single `<PresenceManager/>` mounted once above the router.
+      `useIdentity()` is now a pure read. (`client/src/app/PresenceManager.tsx`,
+      `useIdentity.ts`, `App.tsx`.)
+- [x] **Presence broadcast scoped + transition-only.** `directory.heartbeat`/`goOffline` no
+      longer fan every user's number + online/offline to *every* connected client (a privacy
+      leak). New `getPresenceAudienceIds(id, number)` resolves the people who care (contacts
+      who saved you + conversation peers); new `publishPresenceTo(audience, …)` delivers only
+      to them. `markOnline` now reports the offline→online transition so we broadcast on the
+      transition, not on every 30s tick. (`server/v2db.ts`, `v2events.ts`, `v2routers.ts`.)
+- [x] Footer → `RELAY · v2.11.0`. tsc clean, 172/173 vitest (+1: `publishPresenceTo`),
+      production build clean.
+- [ ] **Action required from you**: set the Manus TURN secrets + Publish, then do the live
+      two-device call verification (now reachable from any tab, with caller-cancel).
+
+## v2.9.1 — Live-test fixes: incoming call invisible + app chrome over the call (delivered 2026-06-13)
+
+Reported from a real two-device test: caller sees their own video and "online", but the
+callee never receives the call; and the phone-app's top header + bottom tab bar render
+ON TOP of the call, hiding the call's own controls.
+
+- [x] **Incoming calls were drawn off-screen** (root cause of "they don't receive the
+      call"). The Dialer hosts the call engine off-screen until *you* dial out, and an
+      incoming `ring` didn't change that — so the callee's Accept/Decline overlay rendered
+      at `left:-10000px` and could never be seen/tapped. Added a `"ringing"` phase to the
+      engine (`RelayPhase`): `onRing` now `emitPhase("ringing")`, which promotes the host
+      to fullscreen so the ring overlay is visible. `acceptInvite`→in-call,
+      `declineInvite`→idle. Added a 60s auto-dismiss for an unanswered ring (there's still
+      no caller-cancel signal — noted below).
+- [x] **App chrome covered the call** (root cause of "lower menu over the middle menus").
+      The engine's `.relay-root { z-index:1 }` lost to the AppShell header/nav (`z-30`).
+      AppShell's sidebar + mobile header + bottom nav are now tagged `relay-appshell-chrome`;
+      the Dialer toggles `body.relay-call-active` whenever `phase !== "idle"` and a style
+      rule hides that chrome and lifts the engine to `z-index:60` during a call. The
+      Dialer's "End" affordance is gated to dialing/in-call (the ring overlay owns
+      Accept/Decline) and bumped above the engine.
+- [x] Footer → `RELAY · v2.9.1`. tsc clean, 169/170 vitest, production build clean.
+
+### Known follow-ups surfaced by this test
+- [x] **Caller-cancel signal** — done in v2.10.0 (below).
+- [x] **Engine only registers on the Dialer tab** — done in v2.10.0 (below).
+- [ ] **Media still needs TURN live**: once the callee can Accept, audio/video connecting
+      across networks depends on the Manus TURN secrets being set + Published.
+
+## v2.10.0 — Caller-cancel signal + app-wide call engine (delivered 2026-06-13)
+
+- [x] **Caller-cancel signal.** The signaling server now tracks each caller's pending
+      rings (`RelayClient.ringing`). When a caller leaves or disconnects before the callee
+      answers, `cancelPendingRings()` sends a `ring-cancel` to each still-pending callee;
+      the client clears its incoming-ring UI (no reject sent back — the caller is gone).
+      `accept`/`reject` remove the callee from the set so an answered/declined call never
+      gets a spurious cancel. +2 vitest in `server/relay.test.ts` (cancel-on-leave, and
+      "accepted callee gets peer-left, not ring-cancel").
+- [x] **App-wide call engine.** New `client/src/app/RelayEngine.tsx` hosts the engine ONCE
+      for the whole `/app` session (above the router, so it survives tab navigation) and
+      renders the fullscreen call/ring overlay + End button. Previously the engine only ran
+      on the Dialer page, so a callee on Messages/Contacts wasn't registered and couldn't be
+      rung. Now incoming calls surface on **any** tab. `App.tsx` wraps `<Router>` in
+      `<RelayEngineProvider>`; `Dialer.tsx` is reduced to the keypad and drives the engine
+      via `useRelayEngine()` (dial / phase / authoritative pin). Deleted the now-dead
+      `pages/Relay.tsx` (the old `/app/call` screen — already redirected to `/app/dialer`),
+      so there is exactly one `startRelay()` instance.
+- [x] Footer → `RELAY · v2.10.0`. tsc clean, 171/172 vitest, production build clean.
+- [ ] **Action required from you**: set the Manus TURN secrets + Publish, then retest a
+      two-device call (now from any tab) — the callee should get a ring with Accept, and
+      cancelling before they answer should clear their ring immediately.

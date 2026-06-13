@@ -6,13 +6,11 @@ import {
   PhoneMissed,
   PhoneOutgoing,
   UserPlus,
-  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { useIdentity } from "@/app/useIdentity";
-import { startRelay, type RelayHandle, type RelayPhase } from "@/lib/relayClient";
-import { RELAY_MARKUP, RELAY_CSS } from "@/lib/relayAssets";
+import { useRelayEngine } from "@/app/RelayEngine";
 
 const KEYS: { d: string; sub: string }[] = [
   { d: "1", sub: " " },
@@ -79,93 +77,12 @@ function timeAgo(iso: string | Date): string {
 
 export default function DialerPage() {
   const { me } = useIdentity();
+  // The call engine is hosted app-wide by RelayEngineProvider so a user can be
+  // rung from any tab; the Dialer just drives it (dial / read phase + the
+  // authoritative signaling pin).
+  const engine = useRelayEngine();
+  const { phase, ready: engineReady, pin: enginePin } = engine;
   const [dialed, setDialed] = useState("");
-  const [phase, setPhase] = useState<RelayPhase>("idle");
-
-  // RELAY engine host. Mounted *once*, lives for the page lifetime so we
-  // don't re-establish the SSE channel every time the user toggles between
-  // idle and a call. Visibility is controlled by `phase`.
-  const engineRoot = useRef<HTMLDivElement>(null);
-  const engineHandle = useRef<RelayHandle | null>(null);
-  const [engineReady, setEngineReady] = useState(false);
-  // The AUTHORITATIVE 6-digit number the signaling server registered for this
-  // device. This is the only number a peer can dial successfully, so it (not
-  // the v2 identity number) must be what we show and what we self-call-guard
-  // against. Sourced from the relay engine via setOnPinChange.
-  const [enginePin, setEnginePin] = useState<string | null>(null);
-  // Keep the latest identity number in a ref so the (mount-once) engine effect
-  // can always read the freshest value when it auto-registers, even though the
-  // identity may resolve after the engine mounted.
-  const myIdentityNumberRef = useRef<string | null>(null);
-  myIdentityNumberRef.current = me?.number ?? null;
-
-  useEffect(() => {
-    const el = engineRoot.current;
-    if (!el) return;
-    el.innerHTML = RELAY_MARKUP;
-    const handle = startRelay(el);
-    handle.setOnStateChange((p) => setPhase(p));
-    handle.setOnPinChange((pin) => setEnginePin(pin));
-    engineHandle.current = handle;
-
-    // Auto-register against our v2 identity so the engine has a `me.pin`
-    // before the user dials. Same pattern Relay.tsx already uses.
-    const tryAutoRegister = () => {
-      const nameInput = el.querySelector<HTMLInputElement>("#nameInput");
-      if (!nameInput) return false;
-      const display = me?.displayName ?? "";
-      if (!display) return false;
-      if (!nameInput.value) nameInput.value = display;
-      // Register under the stable identity number so the big number == the
-      // profile number == one consistent dialable number.
-      handle.setPreferredPin(myIdentityNumberRef.current);
-      const btn = el.querySelector<HTMLButtonElement>("#joinBtn");
-      if (btn && !btn.disabled) {
-        btn.click();
-        return true;
-      }
-      return false;
-    };
-
-    let registerTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
-      if (tryAutoRegister()) {
-        if (registerTimer) clearInterval(registerTimer);
-        registerTimer = null;
-        // After register, give the WS a moment to bind, then mark ready.
-        setTimeout(() => setEngineReady(true), 350);
-      }
-    }, 200);
-
-    // Bail out after 5 seconds — the user can still dial, the engine just
-    // won't be primed (the dial() returns false until me.pin is set).
-    const giveUp = setTimeout(() => {
-      if (registerTimer) clearInterval(registerTimer);
-      setEngineReady(true);
-    }, 5_000);
-
-    return () => {
-      if (registerTimer) clearInterval(registerTimer);
-      clearTimeout(giveUp);
-      handle.destroy();
-      engineHandle.current = null;
-    };
-    // me.displayName is the only thing we need stable; engine should not
-    // re-mount on every name edit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // When the v2 identity becomes available *after* the engine mounted,
-  // try the auto-register path again.
-  useEffect(() => {
-    if (!me?.displayName) return;
-    const el = engineRoot.current;
-    if (!el) return;
-    const nameInput = el.querySelector<HTMLInputElement>("#nameInput");
-    if (nameInput && !nameInput.value) nameInput.value = me.displayName;
-    engineHandle.current?.setPreferredPin(me.number ?? null);
-    const btn = el.querySelector<HTMLButtonElement>("#joinBtn");
-    if (btn && !btn.disabled) btn.click();
-  }, [me?.displayName, me?.number]);
 
   // Honor ?to=<6 digits> — carried over when the user taps "call" from
   // Messages/Contacts (and from the legacy /app/call redirect). Auto-dial once,
@@ -179,7 +96,8 @@ export default function DialerPage() {
     );
     if (!to || to === enginePin) return;
     autoDialedRef.current = true;
-    engineHandle.current?.dial(to);
+    engine.dial(to);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engineReady, enginePin]);
 
   const history = trpc.calls.history.useQuery(undefined, {
@@ -226,20 +144,12 @@ export default function DialerPage() {
 
   function startCallNow() {
     if (dialed.length !== 6) return;
-    if (!engineHandle.current) return;
-    const ok = engineHandle.current.dial(dialed);
+    const ok = engine.dial(dialed);
     if (ok) {
-      // Don't optimistically set phase. The engine flips to "dialing" (via
-      // setOnStateChange) only once it has actually entered the call UI;
-      // setting it here stranded the fullscreen overlay when the async dial
-      // failed (e.g. mic/camera blocked) and no phase event ever arrived.
-      // Clear the dialed buffer so the ghost number reappears after the call.
+      // Phase is driven by the engine (via the provider), so we just clear the
+      // dialed buffer; the ghost number reappears once the call ends.
       setDialed("");
     }
-  }
-
-  function hangup() {
-    engineHandle.current?.hangup();
   }
 
   const previewIdentity = previewQuery.data ?? null;
@@ -514,56 +424,10 @@ export default function DialerPage() {
         </section>
       </div>
 
-      {/* RELAY engine CSS (scoped to .relay-root). Mount once at page level. */}
-      <style>{RELAY_CSS}</style>
-      {/*
-        The Dialer renders its own React keypad, so the engine's built-in
-        #register and #lobby screens — each a complete *second* dial surface
-        (keypad, big number, recents, share card) — must never be visible while
-        embedded. Hiding them unconditionally (not just during a call) is what
-        collapses the old "second dial screen" into a single dialer surface; the
-        engine only ever shows #call (the in-call grid) inside the Dialer.
-      */}
-      <style>{`
-        .relay-root.relay-embedded #register,
-        .relay-root.relay-embedded #lobby { display: none !important; }
-      `}</style>
-
-      {/* ── inline call surface — promoted to fullscreen overlay when phase != idle */}
-      <div
-        ref={engineRoot}
-        // `relay-root` is required for RELAY_CSS to apply (CSS is scoped to it).
-        // `relay-embedded` permanently hides the engine's own #register/#lobby
-        // screens (the React keypad above fully replaces them), so the legacy
-        // "second dial screen" can never show — in any phase.
-        className={
-          "relay-root relay-embedded " +
-          (phase === "idle"
-            ? // hidden but mounted — we keep the engine alive across calls
-              "absolute -left-[10000px] top-0 size-px overflow-hidden pointer-events-none opacity-0"
-            : // promote to fullscreen overlay so the call replaces the dialer in place
-              "fixed inset-0 z-40")
-        }
-        // Ensure the imperative DOM the engine writes into has its own
-        // scope (the markup is the original RELAY app HTML).
-        data-relay-engine-root="true"
-      />
-
-      {/* Top-right "End call" affordance when in dialing/in-call,
-          purely as a UX hint: the engine's own hangup button is in the
-          control bar, but having a quick exit at the top helps users
-          who otherwise can't find it. */}
-      {phase !== "idle" ? (
-        <button
-          type="button"
-          onClick={hangup}
-          className="fixed top-3 right-3 z-50 inline-flex items-center gap-1.5 rounded-full bg-destructive/90 hover:bg-destructive text-destructive-foreground px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur-md"
-          aria-label="End call"
-        >
-          <X className="size-3.5" />
-          End
-        </button>
-      ) : null}
+      {/* The call engine, its scoped CSS, the fullscreen call/ring overlay, and
+          the End button now live app-wide in RelayEngineProvider, so an incoming
+          call surfaces on ANY tab — not just here. The Dialer only renders the
+          keypad and drives the engine via useRelayEngine(). */}
 
       <style>{`
         @keyframes ghost-flash {

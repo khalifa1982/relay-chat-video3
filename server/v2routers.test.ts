@@ -274,7 +274,12 @@ describe("identity.signOutGuest cookie behavior", () => {
 
 /* ── v2 SSE event bus -------------------------------------------- */
 
-import { _connectedCount, publishToIdentity, broadcastPresence } from "./v2events";
+import {
+  _connectedCount,
+  publishToIdentity,
+  broadcastPresence,
+  publishPresenceTo,
+} from "./v2events";
 
 describe("v2 SSE event bus — publisher safety", () => {
   it("publishToIdentity is a no-op when no clients are connected", () => {
@@ -294,6 +299,15 @@ describe("v2 SSE event bus — publisher safety", () => {
     expect(() => broadcastPresence("123456", true, new Date())).not.toThrow();
     expect(() =>
       broadcastPresence("123456", false, new Date().toISOString())
+    ).not.toThrow();
+  });
+
+  it("publishPresenceTo no-ops on an empty audience and tolerates Date/ISO", () => {
+    // Scoped presence: with no audience (or no connected clients) it must be a
+    // safe no-op — never fan out to everyone like the old broadcast did.
+    expect(() => publishPresenceTo([], "123456", true, new Date())).not.toThrow();
+    expect(() =>
+      publishPresenceTo([99999], "123456", false, new Date().toISOString())
     ).not.toThrow();
   });
 });

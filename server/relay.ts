@@ -48,6 +48,9 @@ export interface RelayClient {
   roomId: string | null;
   cid: string | null;          // owning channel id, for reconnect re-binding
   graceT: ReturnType<typeof setTimeout> | null; // pending disconnect cleanup
+  /** Pins we've sent a `ring` to that haven't accepted/rejected yet. Used to
+   *  send a `ring-cancel` to the callee if we hang up before they answer. */
+  ringing: Set<string>;
 }
 
 export interface RelayConnection {
@@ -172,6 +175,21 @@ function roomSize(reg: RelayRegistry, roomId: string | null): number {
   return reg.rooms.get(roomId)?.size ?? 0;
 }
 
+/**
+ * Tell every callee we've rung (but who hasn't joined our room yet) that the
+ * call is cancelled, so their incoming-ring UI clears instead of hanging until
+ * the client-side timeout. Called when the caller leaves or disconnects.
+ */
+export function cancelPendingRings(reg: RelayRegistry, callerPin: string) {
+  const c = reg.clients.get(callerPin);
+  if (!c || c.ringing.size === 0) return;
+  c.ringing.forEach(calleePin => {
+    const callee = reg.clients.get(calleePin);
+    if (callee) safeSend(callee.socket, { type: "ring-cancel", from: callerPin });
+  });
+  c.ringing.clear();
+}
+
 export function leaveRoom(reg: RelayRegistry, pin: string) {
   const c = reg.clients.get(pin);
   if (!c || !c.roomId) return;
@@ -277,7 +295,7 @@ export function handleMessage(
       prev.name = name;
       prev.cid = cid || prev.cid;
     } else {
-      reg.clients.set(pin, { socket: conn.socket, name, roomId: null, cid: cid || null, graceT: null });
+      reg.clients.set(pin, { socket: conn.socket, name, roomId: null, cid: cid || null, graceT: null, ringing: new Set() });
     }
     safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin) });
     return;
@@ -345,6 +363,8 @@ export function handleMessage(
         fromName: self.name,
         roomId: self.roomId,
       });
+      // Remember we're ringing this callee so we can cancel it if we bail.
+      self.ringing.add(to);
       // Fan out a notification hint so the callee's other open tabs
       // (e.g. Messages, Contacts) also see the incoming call.
       if (onInvite && conn.pin && self.roomId) {
@@ -405,27 +425,36 @@ export function handleMessage(
         members,
         iceServers: iceServers(conn.pin),
       });
+      const newcomerPin = conn.pin;
       members.forEach(m => {
         const o = reg.clients.get(m.pin);
-        if (o)
+        if (o) {
+          // The newcomer answered — they're no longer a pending ring for us.
+          o.ringing.delete(newcomerPin);
           safeSend(o.socket, {
             type: "peer-joined",
-            pin: conn.pin,
+            pin: newcomerPin,
             name: self.name,
             iceServers: iceServers(m.pin),
           });
+        }
       });
       break;
     }
 
     case "reject": {
-      const target = reg.clients.get(String(msg.to || ""));
-      if (target) safeSend(target.socket, { type: "rejected", from: conn.pin });
+      const targetPin = String(msg.to || "");
+      const target = reg.clients.get(targetPin);
+      if (target) {
+        // We declined — clear ourselves from the caller's pending-ring set.
+        target.ringing.delete(conn.pin);
+        safeSend(target.socket, { type: "rejected", from: conn.pin });
+      }
       // Tear down the caller's solo dialing room so they can be invited again
       // or place another call without being phantom-busy to themselves or to
       // future callers.
       if (target && roomSize(reg, target.roomId) === 1) {
-        leaveRoom(reg, String(msg.to || ""));
+        leaveRoom(reg, targetPin);
       }
       break;
     }
@@ -449,6 +478,7 @@ export function handleMessage(
     }
 
     case "leave": {
+      cancelPendingRings(reg, conn.pin);
       leaveRoom(reg, conn.pin);
       break;
     }
@@ -582,6 +612,7 @@ export function attachRelay(
             const c = reg.clients.get(pin);
             // Only reap if it wasn't re-bound to a newer live connection.
             if (c && c.graceT) {
+              cancelPendingRings(reg, pin);
               leaveRoom(reg, pin);
               reg.clients.delete(pin);
               if (reg.cidToPin.get(cid) === pin) reg.cidToPin.delete(cid);

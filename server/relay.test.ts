@@ -127,6 +127,36 @@ describe("relay signaling", () => {
     expect(reg.clients.get(firstPin)?.name).toBe("Alice2");
   });
 
+  it("sends ring-cancel to a pending callee when the caller leaves before answer", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    expect((b.last() as { type: string }).type).toBe("ring");
+    // Alice hangs up before Bob answers → Bob's ring must be cancelled.
+    handleMessage(reg, a.asConn(), { type: "leave" });
+    const cancel = b.outbox.find(
+      (m): m is { type: string; from: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "ring-cancel"
+    );
+    expect(cancel).toBeTruthy();
+    expect(cancel!.from).toBe(a.pin);
+  });
+
+  it("does NOT ring-cancel a callee who already accepted (they get peer-left instead)", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const room = a.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "room"
+    )!;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: room.roomId });
+    b.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "leave" });
+    expect(b.outbox.some((m) => (m as { type?: string }).type === "ring-cancel")).toBe(false);
+    expect(b.outbox.some((m) => (m as { type?: string }).type === "peer-left")).toBe(true);
+  });
+
   it("rejects calling your own number", () => {
     const c = register(reg, "Alice");
     const pin = (c.last() as { pin: string }).pin;

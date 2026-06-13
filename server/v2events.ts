@@ -69,6 +69,29 @@ export function broadcastPresence(
 }
 
 /**
+ * Scoped presence push: deliver a presence event ONLY to the given audience
+ * (contacts + conversation peers), instead of every connected client. This is
+ * what `broadcastPresence` should have been — it stops leaking every user's
+ * number and online/offline state to strangers.
+ */
+export function publishPresenceTo(
+  audienceIds: number[],
+  number: string,
+  online: boolean,
+  lastSeenAt: Date | string
+): void {
+  if (audienceIds.length === 0) return;
+  const payload: V2Event = {
+    kind: "presence",
+    number,
+    online,
+    lastSeenAt:
+      lastSeenAt instanceof Date ? lastSeenAt.toISOString() : lastSeenAt,
+  };
+  audienceIds.forEach((id) => publishToIdentity(id, payload));
+}
+
+/**
  * Mount the SSE endpoint. The client subscribes via:
  *   const es = new EventSource("/api/v2/events", { withCredentials: true });
  * and listens for the `message` event in JS (browser default — the data
