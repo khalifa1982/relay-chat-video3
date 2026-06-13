@@ -878,6 +878,44 @@ export async function getAttachmentById(id: number) {
   return rows[0] ?? null;
 }
 
+/**
+ * Authorization-scoped attachment fetch. Returns the attachment ONLY if the
+ * caller is allowed to see it: either they uploaded it, or it is referenced by
+ * a message in a conversation they participate in. Returns null otherwise, so a
+ * caller cannot enumerate sequential attachment ids to read other people's
+ * media (the public `attachments.get` endpoint must go through this).
+ */
+export async function getAttachmentForIdentity(attachmentId: number, identityId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(attachments)
+    .where(eq(attachments.id, attachmentId))
+    .limit(1);
+  const att = rows[0];
+  if (!att) return null;
+  // The uploader can always read their own attachment.
+  if (att.uploadedByIdentityId === identityId) return att;
+  // Otherwise require a message that references this attachment to live in a
+  // conversation the caller participates in.
+  const ref = await db
+    .select({ conversationId: messages.conversationId })
+    .from(messages)
+    .innerJoin(
+      conversationParticipants,
+      eq(conversationParticipants.conversationId, messages.conversationId)
+    )
+    .where(
+      and(
+        eq(messages.attachmentId, attachmentId),
+        eq(conversationParticipants.identityId, identityId)
+      )
+    )
+    .limit(1);
+  return ref.length > 0 ? att : null;
+}
+
 /* ── call history ─────────────────────────────────────────────── */
 
 export async function recordCallStart(input: {

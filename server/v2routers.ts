@@ -19,6 +19,7 @@ import {
   createGuestIdentity,
   deleteContact,
   getAttachmentById,
+  getAttachmentForIdentity,
   getIdentityByDeviceId,
   getIdentityById,
   getIdentityByNumber,
@@ -733,7 +734,13 @@ export const v2AttachmentsRouter = router({
 
   get: publicProcedure
     .input(z.object({ id: z.number().int().positive() }))
-    .query(async ({ input }) => getAttachmentById(input.id)),
+    .query(async ({ ctx, input }) => {
+      // Authorization: only return an attachment the caller uploaded or that
+      // belongs to a conversation they participate in. Without this gate, any
+      // caller could enumerate sequential ids and read every attachment URL.
+      const me = requireIdentity(ctx);
+      return getAttachmentForIdentity(input.id, me.id);
+    }),
 });
 
 /* ── calls router (history + start log) ───────────────────────── */

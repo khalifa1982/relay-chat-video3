@@ -377,3 +377,59 @@ User report: "The dialing pad is quite big — you have to scroll down to see it
 - [ ] Prime camera/mic permission at login (before dial) so mobile permission prompt doesn't drop the call
 - [ ] Add leave-reason diagnostics to pinpoint the instant auto-leave
 - [ ] Verify a real two-device call holds via live log
+
+## v2.8.0 — Code-review fixes: duplicate dial screen, attachment IDOR, SSE leak, self-notify (delivered 2026-06-13)
+
+Full-codebase review (engine + signaling + backend + UI). This batch fixes the two
+reported user-facing bugs plus the most serious security issue found.
+
+### Reported bug 1 — "tapping Call shows a second / duplicate dial screen"
+- [x] Root cause: the imperative engine markup (`relayAssets.ts`) ships its OWN full
+      dialer (`#register` name form + `#lobby` keypad / big-number / recents / share).
+      The React Dialer renders a second keypad over it; the legacy one was only hidden
+      by phase-gated CSS whose selectors (`.share-card` / `.me-card` / `.row .copy`)
+      didn't even match the real markup classes (`.share-box` / `.topbar .me` /
+      `.mycode .copy`), and an optimistic `setPhase("dialing")` raced the engine.
+- [x] Hide `#register` / `#lobby` UNCONDITIONALLY while embedded via a permanent
+      `relay-embedded` class on the engine root; removed the broken phase-gated CSS and
+      the redundant "Calling…" caption overlay (the engine's `#call` already shows it).
+- [x] Drive `phase` solely from the engine's `setOnStateChange`; dropped the optimistic
+      `setPhase("dialing")` that stranded the fullscreen overlay when the async dial
+      failed (mic/cam blocked).
+- [x] Collapsed the two-engine problem — `/app/call` (Relay.tsx) and the Dialer both
+      called `startRelay()` on the same `relay_cid`, so two engines fought over one peer
+      slot ("connects then drops"). `/app/call` now redirects to `/app/dialer`
+      (preserving `?to=`); Messages/Contacts call buttons point at `/app/dialer?to=`;
+      the Dialer auto-dials `?to=` once registered (new exported `parseDialToParam`).
+
+### Reported bug 2 — "calls won't connect / drop"
+- [x] Fixed an SSE heartbeat-interval leak in `relay.ts`: on a same-cid reconnect,
+      `prev.socket.close()` set `closed = true` before the res-close event reached
+      `cleanup()`, which then early-returned and never cleared the 15s interval — one
+      leaked timer per reconnect. Now cleared in both `close()` and `cleanup()`.
+- [ ] STILL TO VERIFY (operational, not a code bug): confirm `TURN_SECRET` / `TURN_HOST`
+      are set on the live www.your-chat.org deploy and run `/turn-test` there.
+
+### Security
+- [x] CRITICAL attachment IDOR: `attachments.get` was a `publicProcedure` taking a raw
+      autoincrement id with no auth — anyone could enumerate ids and read every
+      attachment URL. Now requires identity + a new scoped `getAttachmentForIdentity()`
+      (uploader OR a participant of a conversation that references the attachment).
+
+### Client polish
+- [x] Stop chiming / notifying on your OWN sent messages (the server fans the `message`
+      event to the sender too). New exported `shouldAlertForMessage` gate + chime
+      suppressed when the tab is visible.
+
+- [x] Bumped in-app version footer to `RELAY · v2.8.0`.
+- [x] 169/170 vitest pass (+9 new: 6 `parseDialToParam`, 3 `shouldAlertForMessage`),
+      TypeScript clean, production build clean.
+- [ ] **Action required from you**: click Publish in the Management UI to push v2.8.0.
+
+### Documented in the review, deferred to a follow-up (NOT in this batch)
+- DM conversation create race (catch+reselect); `markRead`/`sendMessage` atomicity;
+  N+1 queries (`messages.list` / `contacts.list` / `calls.history`) + the dead query in
+  `calls.history`; voice-note mic stays hot on unmount; 40 MB base64 main-thread freeze;
+  upload fetches missing the device-id header; upload SVG/MIME hardening; 3× `useIdentity`
+  heartbeats; `useRealtime` untracked reconnect timer; over-broad presence invalidation;
+  per-frame canvas allocation in `mediaPipeline`.

@@ -56,7 +56,7 @@ function Inner({ children }: { children: React.ReactNode }) {
   // Open the SSE push channel as soon as we know we have an identity.
   // Server pushes message/read/presence/contact hints → hook invalidates the
   // right tRPC queries so the UI feels near-instant without WebSockets.
-  useRealtime(Boolean(me));
+  useRealtime(Boolean(me), me?.id ?? null);
 
   // Pre-fetch the threads & calls list once we have an identity so the
   // tab badges are warm by the time the user taps them.

@@ -20,7 +20,22 @@ type V2Event =
     }
   | { kind: "ping" };
 
-export function useRealtime(enabled: boolean): void {
+/**
+ * Whether an inbound `message` SSE event should raise a chime / notification.
+ * The server fans the `message` event out to ALL participants *including the
+ * sender* (so the sender's other tabs stay in sync), so we must NOT alert for
+ * our own outgoing messages — otherwise every message you send beeps at you
+ * (and pops a "New message" notification on a backgrounded tab).
+ */
+export function shouldAlertForMessage(
+  from: number,
+  selfId: number | null | undefined,
+): boolean {
+  if (selfId == null) return true; // identity not known yet — fail open
+  return from !== selfId;
+}
+
+export function useRealtime(enabled: boolean, selfId?: number | null): void {
   const utils = trpc.useUtils();
 
   useEffect(() => {
@@ -60,19 +75,25 @@ export function useRealtime(enabled: boolean): void {
             utils.messages.list
               .invalidate({ conversationId: payload.conversationId })
               .catch(() => {});
-            // Notification only fires when the tab is hidden — in-app
-            // UI handles the visible case.
-            playMessageChime();
-            notify({
-              title: "New message",
-              body: "You have a new RELAY message.",
-              tag: `relay-msg-${payload.conversationId}`,
-              onClick: () => {
-                if (typeof window !== "undefined") {
-                  window.location.href = `/app/messages/${payload.conversationId}`;
-                }
-              },
-            });
+            // Skip the chime/notification for our OWN messages (the event is
+            // fanned to the sender too). notify() already suppresses when the
+            // tab is visible; gate the chime the same way so we don't beep
+            // while the user is reading the thread.
+            if (shouldAlertForMessage(payload.from, selfId)) {
+              if (typeof document === "undefined" || document.hidden) {
+                playMessageChime();
+              }
+              notify({
+                title: "New message",
+                body: "You have a new RELAY message.",
+                tag: `relay-msg-${payload.conversationId}`,
+                onClick: () => {
+                  if (typeof window !== "undefined") {
+                    window.location.href = `/app/messages/${payload.conversationId}`;
+                  }
+                },
+              });
+            }
             break;
           case "call_offer":
             // Best-effort — if the user is on the call screen the

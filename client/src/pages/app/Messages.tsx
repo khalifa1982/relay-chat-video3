@@ -413,7 +413,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           <Button
             size="icon"
             variant="ghost"
-            onClick={() => setLocation(`/app/call?to=${encodeURIComponent(thread.peerNumber)}`)}
+            onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(thread.peerNumber)}`)}
             aria-label="Call"
           >
             <Phone className="size-5" />

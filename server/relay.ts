@@ -504,6 +504,12 @@ export function attachRelay(
     res.flushHeaders?.();
 
     let closed = false;
+    // Declared here so `close()` can clear it directly. When the server closes
+    // an old channel on reconnect, it sets `closed = true` before the res-close
+    // event reaches `cleanup()` — which then early-returns on `if (closed)` and
+    // never clears the interval. That leaks one 15s timer per reconnect. Clear
+    // it in BOTH paths so neither leaks.
+    let hb: ReturnType<typeof setInterval> | null = null;
     const socket: RelaySocket = {
       send: (obj: unknown) => {
         if (closed) return;
@@ -516,6 +522,7 @@ export function attachRelay(
       close: () => {
         if (closed) return;
         closed = true;
+        if (hb) { clearInterval(hb); hb = null; }
         try {
           res.end();
         } catch {
@@ -546,7 +553,7 @@ export function attachRelay(
 
     // Keep-alive heartbeat (comment line every 25s; passes through Cloudflare,
     // Cloud Run, and most proxies without timing out).
-    const hb = setInterval(() => {
+    hb = setInterval(() => {
       if (closed) return;
       try {
         res.write(": ping\n\n");
@@ -558,7 +565,7 @@ export function attachRelay(
     const cleanup = () => {
       if (closed) return;
       closed = true;
-      clearInterval(hb);
+      if (hb) { clearInterval(hb); hb = null; }
       const existing = reg.connections.get(cid);
       if (existing === conn) reg.connections.delete(cid);
       // Do NOT remove the client immediately. SSE channels are routinely cut by

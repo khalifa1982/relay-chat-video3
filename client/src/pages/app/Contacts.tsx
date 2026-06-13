@@ -196,7 +196,7 @@ export default function ContactsPage() {
                 <Button
                   size="icon"
                   aria-label="Call"
-                  onClick={() => setLocation(`/app/call?to=${encodeURIComponent(c.number)}`)}
+                  onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(c.number)}`)}
                 >
                   <Phone className="size-4" />
                 </Button>
