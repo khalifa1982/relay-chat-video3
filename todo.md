@@ -369,3 +369,11 @@ User report: "The dialing pad is quite big — you have to scroll down to see it
 - [x] Rewrite /turn-test with per-transport (UDP / TCP3478 / TCP443) forced-relay diagnostics
 - [x] Fix iceServers closure race in /turn-test (use loaded creds, disable button until loaded)
 - [x] Verify real call path (relayClient.ts) adopts server iceServers before building peers
+
+## v2.1 — Call reliability: TURN 443 + reconnect pin-stability + media priming
+- [x] Add firewall-penetrating TURN-over-TCP:443 path (Northflank LB + iceServers + /api/relay/ice)
+- [x] Per-transport /turn-test diagnostic (UDP / TCP3478 / TCP443) — all relay OK on user network
+- [x] Stabilize pin across SSE reconnects (cid->pin binding + 30s grace period)
+- [ ] Prime camera/mic permission at login (before dial) so mobile permission prompt doesn't drop the call
+- [ ] Add leave-reason diagnostics to pinpoint the instant auto-leave
+- [ ] Verify a real two-device call holds via live log

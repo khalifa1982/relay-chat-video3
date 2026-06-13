@@ -18,7 +18,9 @@ class FakeConn {
   outbox: Sent[] = [];
   pin: string | null = null;
   socket: RelaySocket;
-  constructor() {
+  cid: string | undefined;
+  constructor(cid?: string) {
+    this.cid = cid;
     this.socket = {
       send: (obj: unknown) => {
         this.outbox.push(obj);
@@ -33,7 +35,7 @@ class FakeConn {
     return this.outbox[this.outbox.length - 1];
   }
   asConn() {
-    return { socket: this.socket, pin: this.pin, setPin: this.setPin };
+    return { socket: this.socket, pin: this.pin, setPin: this.setPin, cid: this.cid };
   }
 }
 
@@ -108,16 +110,21 @@ describe("relay signaling", () => {
     expect(c.pin).toBe(last.pin);
   });
 
-  it("ignores a duplicate register for the same connection", () => {
+  it("re-affirms the SAME pin on a duplicate register for the same connection", () => {
+    // A duplicate register on an already-bound connection must NOT mint a new
+    // number; it re-affirms the existing pin (used by the client after a
+    // reconnect). It may also refresh the display name.
     const c = register(reg, "Alice");
     const firstPin = (c.last() as { pin: string }).pin;
     handleMessage(reg, c.asConn(), { type: "register", name: "Alice2" });
     const registers = c.outbox.filter(
-      (m): m is { type: string } =>
+      (m): m is { type: string; pin: string } =>
         typeof m === "object" && m !== null && (m as { type: string }).type === "registered"
     );
-    expect(registers).toHaveLength(1);
-    expect(reg.clients.get(firstPin)?.name).toBe("Alice");
+    // Both replies reference the same pin.
+    expect(registers.every(r => r.pin === firstPin)).toBe(true);
+    expect(c.pin).toBe(firstPin);
+    expect(reg.clients.get(firstPin)?.name).toBe("Alice2");
   });
 
   it("rejects calling your own number", () => {
@@ -414,6 +421,63 @@ describe("relay signaling", () => {
       process.env.TURN_HOST = prev.h ?? ""; if (prev.h === undefined) delete process.env.TURN_HOST;
       if (prev.tls !== undefined) process.env.TURN_TLS = prev.tls; else delete process.env.TURN_TLS;
     }
+  });
+
+  // ---- reconnect / cid-binding behaviour (the "keeps disconnecting" fix) ----
+
+  it("reuses the same pin when a cid re-registers after its channel dropped", () => {
+    // First registration on cid "tab-1".
+    const c1 = new FakeConn("tab-1");
+    handleMessage(reg, c1.asConn(), { type: "register", name: "Sam" });
+    const pin1 = (c1.last() as { pin: string }).pin;
+    expect(reg.cidToPin.get("tab-1")).toBe(pin1);
+
+    // Simulate the SSE channel dropping then the SAME cid reconnecting and
+    // re-registering. Even though the old client entry may still exist, the
+    // user must keep the same number.
+    const c2 = new FakeConn("tab-1");
+    handleMessage(reg, c2.asConn(), { type: "register", name: "Sam" });
+    const pin2 = (c2.last() as { pin: string }).pin;
+    expect(pin2).toBe(pin1);
+  });
+
+  it("keeps room membership when a peer reconnects on the same cid mid-call", () => {
+    // Two parties in a room.
+    const a = new FakeConn("cid-a");
+    handleMessage(reg, a.asConn(), { type: "register", name: "A" });
+    const aPin = (a.last() as { pin: string }).pin;
+    const b = new FakeConn("cid-b");
+    handleMessage(reg, b.asConn(), { type: "register", name: "B" });
+    const bPin = (b.last() as { pin: string }).pin;
+
+    handleMessage(reg, a.asConn(), { type: "invite", to: bPin });
+    const roomId = (a.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "room"
+    ) as { roomId: string }).roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId });
+    expect(reg.clients.get(aPin)?.roomId).toBe(roomId);
+
+    // A's channel drops but, crucially, we do NOT call leaveRoom here (the
+    // server now defers cleanup behind a grace timer). A re-registers on the
+    // same cid and must still be in the room with the same pin.
+    const a2 = new FakeConn("cid-a");
+    handleMessage(reg, a2.asConn(), { type: "register", name: "A" });
+    const aPin2 = (a2.last() as { pin: string }).pin;
+    expect(aPin2).toBe(aPin);
+    expect(reg.clients.get(aPin)?.roomId).toBe(roomId);
+    expect(reg.rooms.get(roomId)?.has(aPin)).toBe(true);
+  });
+
+  it("honours an explicit pin request from the same cid that already owns it", () => {
+    const c1 = new FakeConn("cid-x");
+    handleMessage(reg, c1.asConn(), { type: "register", name: "X" });
+    const pin = (c1.last() as { pin: string }).pin;
+
+    // Reconnect and explicitly ask for the same pin (mirrors client behaviour).
+    const c2 = new FakeConn("cid-x");
+    handleMessage(reg, c2.asConn(), { type: "register", name: "X", pin });
+    expect((c2.last() as { pin: string }).pin).toBe(pin);
   });
 });
 

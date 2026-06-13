@@ -176,34 +176,22 @@ export default function Relay() {
   // gracefully fall back to the existing manual register form.
   const whoami = trpc.identity.whoami.useQuery(undefined, { staleTime: 30_000 });
 
+  // The relay engine MUST be created exactly once for the lifetime of this
+  // page. It was previously keyed on `whoami.data?.displayName`, but that query
+  // polls/refetches, so the effect re-ran -> destroy() + startRelay() on a loop.
+  // Each teardown sent a `leave`, the SSE reconnected with a fresh identity, and
+  // the user's number kept changing — which is why calls dropped instantly.
+  const handleRef = useRef<ReturnType<typeof startRelay> | null>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.innerHTML = RELAY_MARKUP;
     const handle = startRelay(el);
+    handleRef.current = handle;
 
-    // Auto-fill name + auto-click Join if we have a v2.0 identity.
     // Auto-fill the dial pad with ?to=<6digits> if present in the URL.
     const params = new URLSearchParams(window.location.search);
     const to = (params.get("to") || "").replace(/\D+/g, "").slice(0, 6);
-    const me = whoami.data;
-    const autofill = () => {
-      const nameInput = el.querySelector<HTMLInputElement>("#nameInput");
-      if (nameInput && me?.displayName && !nameInput.value) {
-        nameInput.value = me.displayName;
-      }
-      // Auto-click join if we have a name pre-filled.
-      if (nameInput?.value) {
-        const btn = el.querySelector<HTMLButtonElement>("#joinBtn");
-        if (btn && !btn.disabled) btn.click();
-      }
-    };
-    if (me?.displayName) {
-      // The register UI is visible immediately on mount. Defer to give
-      // startRelay's event listeners a tick to attach.
-      window.setTimeout(autofill, 30);
-    }
-    // After the lobby appears, fill the dial pad if ?to= was provided.
     let observer: MutationObserver | null = null;
     if (to.length === 6) {
       observer = new MutationObserver(() => {
@@ -222,7 +210,28 @@ export default function Relay() {
     return () => {
       observer?.disconnect();
       handle.destroy();
+      handleRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-fill name + auto-click Join once we know the user's identity. This runs
+  // separately so it never tears down the engine. It only touches DOM the engine
+  // already created.
+  useEffect(() => {
+    const el = ref.current;
+    const name = whoami.data?.displayName;
+    if (!el || !name) return;
+    const autofill = () => {
+      const nameInput = el.querySelector<HTMLInputElement>("#nameInput");
+      if (nameInput && !nameInput.value) nameInput.value = name;
+      if (nameInput?.value) {
+        const btn = el.querySelector<HTMLButtonElement>("#joinBtn");
+        if (btn && !btn.disabled) btn.click();
+      }
+    };
+    const t = window.setTimeout(autofill, 30);
+    return () => window.clearTimeout(t);
   }, [whoami.data?.displayName]);
 
   return (

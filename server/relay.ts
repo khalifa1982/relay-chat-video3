@@ -46,6 +46,8 @@ export interface RelayClient {
   socket: RelaySocket;
   name: string;
   roomId: string | null;
+  cid: string | null;          // owning channel id, for reconnect re-binding
+  graceT: ReturnType<typeof setTimeout> | null; // pending disconnect cleanup
 }
 
 export interface RelayConnection {
@@ -58,11 +60,17 @@ export interface RelayRegistry {
   clients: Map<string, RelayClient>;          // pin   -> client
   rooms: Map<string, Set<string>>;            // rid   -> set<pin>
   connections: Map<string, RelayConnection>;  // cid   -> connection
+  cidToPin: Map<string, string>;              // cid   -> last assigned pin
 }
 
 export function createRegistry(): RelayRegistry {
-  return { clients: new Map(), rooms: new Map(), connections: new Map() };
+  return { clients: new Map(), rooms: new Map(), connections: new Map(), cidToPin: new Map() };
 }
+
+// Grace window before a client is fully removed after its SSE channel drops.
+// SSE channels are routinely cut by proxies/Cloud Run; a brief grace lets the
+// client reconnect (same cid) and keep its number, room, and active call.
+export const RELAY_DISCONNECT_GRACE_MS = 30_000;
 
 function safeSend(socket: RelaySocket, obj: unknown) {
   try {
@@ -205,28 +213,72 @@ export type InviteHook = (info: {
  */
 export function handleMessage(
   reg: RelayRegistry,
-  conn: { socket: RelaySocket; pin: string | null; setPin: (p: string) => void },
+  conn: { socket: RelaySocket; pin: string | null; setPin: (p: string) => void; cid?: string },
   msg: RelayMessage,
   onInvite?: InviteHook
 ) {
   const type = msg && msg.type;
 
+  // [TEMP DIAG] live signaling trace — remove after debugging the call flow.
+  if ((process.env.RELAY_DIAG === "1" || process.env.NODE_ENV === "development") && type !== "ping") {
+    const m = msg as Record<string, unknown>;
+    const extra =
+      type === "invite" || type === "reject"
+        ? " to=" + String(m.to ?? "")
+        : type === "accept"
+        ? " room=" + String(m.roomId ?? "")
+        : type === "signal"
+        ? " to=" + String(m.to ?? "") + " data=" + (m.data && (m.data as Record<string, unknown>).sdp ? "sdp:" + String(((m.data as Record<string, unknown>).sdp as Record<string, unknown>).type) : (m.data && (m.data as Record<string, unknown>).candidate ? "candidate" : "?"))
+        : type === "leave"
+        ? " reason=" + String(m.reason ?? "(none)")
+        : "";
+    console.log(`[relay-diag] <- ${type} from=${conn.pin ?? "(unreg)"}${extra}`);
+  }
+
   // register: assign (or reuse requested) 6-digit number.
   if (type === "register") {
-    if (conn.pin) return;
+    if (conn.pin) {
+      // Already bound on this channel (e.g. a duplicate register after a
+      // reconnect that was re-bound below). Just re-affirm the number.
+      const existing = reg.clients.get(conn.pin);
+      if (existing) {
+        if (msg.name) existing.name = String(msg.name).slice(0, 24);
+        safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin) });
+      }
+      return;
+    }
     const name = String(msg.name || "Guest").slice(0, 24);
+    const cid = conn.cid || "";
     let pin: string;
-    if (
-      typeof msg.pin === "string" &&
-      /^\d{6}$/.test(msg.pin) &&
-      !reg.clients.has(msg.pin)
-    ) {
-      pin = msg.pin;
+
+    // Prefer the pin this channel (cid) already owns, so a reconnect keeps the
+    // same number even if a stale client entry is still being cleaned up.
+    const ownedPin = cid ? reg.cidToPin.get(cid) : undefined;
+    const requested = typeof msg.pin === "string" && /^\d{6}$/.test(msg.pin) ? msg.pin : undefined;
+
+    if (ownedPin) {
+      pin = ownedPin;
+    } else if (requested && (!reg.clients.has(requested) || reg.clients.get(requested)!.cid === cid)) {
+      // Honour an explicit pin request if it's free or already owned by this cid.
+      pin = requested;
     } else {
       pin = genPin(reg);
     }
+
     conn.setPin(pin);
-    reg.clients.set(pin, { socket: conn.socket, name, roomId: null });
+    if (cid) reg.cidToPin.set(cid, pin);
+
+    // Reuse/refresh an existing client record (preserves room membership across
+    // a reconnect); otherwise create a fresh one.
+    const prev = reg.clients.get(pin);
+    if (prev) {
+      if (prev.graceT) { clearTimeout(prev.graceT); prev.graceT = null; }
+      prev.socket = conn.socket;
+      prev.name = name;
+      prev.cid = cid || prev.cid;
+    } else {
+      reg.clients.set(pin, { socket: conn.socket, name, roomId: null, cid: cid || null, graceT: null });
+    }
     safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin) });
     return;
   }
@@ -248,6 +300,9 @@ export function handleMessage(
       }
       const target = reg.clients.get(to);
       if (!target) {
+        if (process.env.RELAY_DIAG === "1" || process.env.NODE_ENV === "development") {
+          console.log(`[relay-diag]    invite -> ${to} REJECTED: target not registered (known pins: ${Array.from(reg.clients.keys()).join(",")})`);
+        }
         safeSend(conn.socket, {
           type: "error",
           code: "offline",
@@ -280,6 +335,9 @@ export function handleMessage(
           message: "Call is full (6 max).",
         });
         break;
+      }
+      if (process.env.RELAY_DIAG === "1" || process.env.NODE_ENV === "development") {
+        console.log(`[relay-diag]    invite -> ${to} OK: sending ring (room=${self.roomId})`);
       }
       safeSend(target.socket, {
         type: "ring",
@@ -469,6 +527,20 @@ export function attachRelay(
     const conn: RelayConnection = { cid, socket, pin: null };
     reg.connections.set(cid, conn);
 
+    // Reconnect re-binding: if this cid already owns a number whose client
+    // record still exists (within the disconnect grace window), re-attach the
+    // fresh SSE socket to it immediately so the user keeps their number, room,
+    // and any active call instead of being assigned a new number.
+    const ownedPin = reg.cidToPin.get(cid);
+    if (ownedPin) {
+      const client = reg.clients.get(ownedPin);
+      if (client) {
+        if (client.graceT) { clearTimeout(client.graceT); client.graceT = null; }
+        client.socket = socket;
+        conn.pin = ownedPin;
+      }
+    }
+
     // Send a ready event so the client can flip state.
     safeSend(socket, { type: "ready" });
 
@@ -481,7 +553,7 @@ export function attachRelay(
       } catch {
         /* noop */
       }
-    }, 25_000);
+    }, 15_000);
 
     const cleanup = () => {
       if (closed) return;
@@ -489,9 +561,26 @@ export function attachRelay(
       clearInterval(hb);
       const existing = reg.connections.get(cid);
       if (existing === conn) reg.connections.delete(cid);
+      // Do NOT remove the client immediately. SSE channels are routinely cut by
+      // proxies; instead start a grace timer. If the same cid reconnects within
+      // the window, the stream handler re-binds and clears this timer, so the
+      // user keeps their number, room, and active call. Only after the window
+      // expires with no reconnect do we actually tear the client down.
       if (conn.pin) {
-        leaveRoom(reg, conn.pin);
-        reg.clients.delete(conn.pin);
+        const pin = conn.pin;
+        const client = reg.clients.get(pin);
+        if (client && (client.cid === cid || client.cid === null)) {
+          if (client.graceT) clearTimeout(client.graceT);
+          client.graceT = setTimeout(() => {
+            const c = reg.clients.get(pin);
+            // Only reap if it wasn't re-bound to a newer live connection.
+            if (c && c.graceT) {
+              leaveRoom(reg, pin);
+              reg.clients.delete(pin);
+              if (reg.cidToPin.get(cid) === pin) reg.cidToPin.delete(cid);
+            }
+          }, RELAY_DISCONNECT_GRACE_MS);
+        }
       }
       try {
         res.end();
@@ -524,6 +613,7 @@ export function attachRelay(
       {
         socket: conn.socket,
         pin: conn.pin,
+        cid,
         setPin: (p: string) => {
           conn.pin = p;
         },

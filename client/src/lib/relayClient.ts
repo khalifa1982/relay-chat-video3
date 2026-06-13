@@ -60,6 +60,16 @@ export interface RelayHandle {
   setOnStateChange: (cb: ((phase: RelayPhase) => void) | null) => void;
   /** Best-effort: cancel an in-flight call/leave the room. */
   hangup: () => void;
+  /** The 6-digit number the SIGNALING server actually registered for this
+   *  device. This is the ONLY number a peer can dial successfully. Returns
+   *  null until the first `registered` message arrives. */
+  getPin: () => string | null;
+  /** Subscribe to authoritative pin changes (fires on every `registered`). */
+  setOnPinChange: (cb: ((pin: string | null) => void) | null) => void;
+  /** Ask the engine to register under this stable number (the identity
+   *  number). Must be called before the engine registers. The server may
+   *  still override if the number is taken by another device. */
+  setPreferredPin: (pin: string | null) => void;
 }
 
 export function startRelay(root: HTMLElement): RelayHandle {
@@ -70,13 +80,25 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let reconnectT: ReturnType<typeof setTimeout> | null = null;
   let registeredOnce = false;
   const cid = (() => {
+    // Stable per-device connection id. Persist it in localStorage so a page
+    // reload / reconnect keeps the SAME cid, which the server maps back to the
+    // SAME 6-digit number. Without this, every reload minted a fresh cid -> a
+    // brand-new number, so callers kept dialing a number that no longer existed.
+    const KEY = "relay_cid";
+    try {
+      const existing = window.localStorage.getItem(KEY);
+      if (existing && existing.length >= 8) return existing;
+    } catch { /* localStorage blocked (private mode) — fall through */ }
+    let fresh: string;
     try {
       const a = new Uint8Array(16);
       (window.crypto || (window as any).msCrypto).getRandomValues(a);
-      return Array.from(a).map(b => ("0" + b.toString(16)).slice(-2)).join("");
+      fresh = Array.from(a).map(b => ("0" + b.toString(16)).slice(-2)).join("");
     } catch {
-      return String(Date.now()) + Math.random().toString(16).slice(2);
+      fresh = String(Date.now()) + Math.random().toString(16).slice(2);
     }
+    try { window.localStorage.setItem(KEY, fresh); } catch { /* ignore */ }
+    return fresh;
   })();
   let wsReady = false;
   const wsOpenCbs: Array<() => void> = [];
@@ -98,6 +120,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let unread = 0;
   let dialed = "";
   let wantName: string | null = null;
+  let onPinChange: ((pin: string | null) => void) | null = null;
+  const emitPin = () => { try { onPinChange?.(me.pin); } catch { /* */ } };
+  // The stable identity number the host (Dialer.tsx) wants this device to
+  // register under, so the signaling pin == the profile number == one number
+  // everywhere. Set BEFORE register() runs.
+  let preferredPin: string | null = null;
   let toastT: ReturnType<typeof setTimeout> | null = null;
   let destroyed = false;
 
@@ -176,11 +204,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "peer-joined":  onPeerJoined(m); break;
       case "rejected":
         toast(nameOf(m.from!) + " declined.");
-        if (inCall && Object.keys(peers).length === 0) hangUp();
+        if (inCall && Object.keys(peers).length === 0) hangUp("peer-rejected");
         break;
       case "busy":
         toast("They're on another call.", true);
-        if (inCall && Object.keys(peers).length === 0) hangUp();
+        if (inCall && Object.keys(peers).length === 0) hangUp("peer-busy");
         break;
       case "peer-left":    removePeer(m.pin!); break;
       case "signal":       onSignal(m.from!, m.data); break;
@@ -188,7 +216,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "error":
         toast(m.message || "Something went wrong.", true);
         if ((m.code === "offline" || m.code === "self" || m.code === "gone")
-            && inCall && Object.keys(peers).length === 0) hangUp();
+            && inCall && Object.keys(peers).length === 0) hangUp("server-error:" + (m.code || "?"));
         break;
     }
   }
@@ -199,13 +227,32 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const name = (input?.value || "").trim();
     if (!name) { toast("Enter a display name first.", true); return; }
     me.name = name; wantName = name;
+    try { window.localStorage.setItem("relay_name", name); } catch { /* */ }
+    // Reuse our previously-issued number if we have one saved, so reloads keep
+    // the same 6-digit number that friends may already be dialing.
+    let savedPin: string | undefined;
+    try { savedPin = window.localStorage.getItem("relay_pin") || undefined; } catch { /* */ }
+    // Priority for the number we ask the server to register us under:
+    //   1. preferredPin — the stable identity number from the host. This is
+    //      what unifies the big number with the profile number.
+    //   2. savedPin — a number we were previously issued (reload continuity).
+    // The server still has final say (it rejects a pin already taken by
+    // someone else) and reports the authoritative value back via onRegistered.
+    if (preferredPin && /^\d{6}$/.test(preferredPin)) me.pin = preferredPin;
+    else if (savedPin && !me.pin) me.pin = savedPin;
     const btn = $("joinBtn") as HTMLButtonElement | null;
     if (btn) { btn.disabled = true; btn.textContent = "Connecting…"; }
-    if (ws && ws.readyState === 1) sendWS({ type: "register", name });
+    if (ws && ws.readyState === 1) sendWS({ type: "register", name, pin: me.pin || undefined });
     else connectWS();
   }
   function onRegistered(m: Msg) {
     me.pin = String(m.pin);
+    try { window.localStorage.setItem("relay_pin", me.pin); } catch { /* */ }
+    // Tell the embedding host (Dialer.tsx) the AUTHORITATIVE number so the UI
+    // shows the exact pin the signaling server will route calls to. Without
+    // this the page showed a separate identity number and every dial to it was
+    // rejected as "offline".
+    emitPin();
     if (m.iceServers && m.iceServers.length) iceConfig = { iceServers: m.iceServers };
     if (!registeredOnce) {
       registeredOnce = true;
@@ -217,6 +264,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const shareUrl = $("shareUrl"); if (shareUrl) shareUrl.textContent = shareLink;
       buildPad();
       show("lobby");
+      // Prime camera/mic permission NOW, at login, so the OS permission prompt
+      // is handled while the user is idle in the lobby — not in the middle of
+      // placing a call. On mobile, prompting during the invite caused the page
+      // to lose focus and the call to drop instantly. We warm the stream and
+      // keep it ready; ensureMedia() is idempotent (returns the cached stream).
+      void primeMedia();
     } else {
       const meCode = $("meCode"); if (meCode) meCode.textContent = fmtPin(me.pin);
       const bigCode = $("bigCode"); if (bigCode) bigCode.textContent = me.pin;
@@ -296,6 +349,26 @@ export function startRelay(root: HTMLElement): RelayHandle {
       processedStream = localStream;
     }
     return processedStream || localStream!;
+  }
+
+  // Warm the camera/mic at login. Best-effort: if the user denies or has no
+  // devices we surface a gentle banner but never block the lobby. The stream is
+  // cached so the later ensureMedia() call during a dial is instant and does not
+  // pop a fresh OS prompt (which on mobile was dropping the call).
+  let mediaPrimed = false;
+  async function primeMedia() {
+    if (mediaPrimed || processedStream) return;
+    const banner = $("mediaBanner");
+    try {
+      await ensureMedia();
+      mediaPrimed = true;
+      if (banner) banner.style.display = "none";
+      // Show a tiny self-preview confirmation so the user sees mic/cam are live.
+      toast("Camera & mic ready");
+    } catch {
+      // ensureMedia already toasted; show a persistent banner with a retry.
+      if (banner) banner.style.display = "flex";
+    }
   }
 
   /** Swap the camera between front and back. Re-acquires getUserMedia with
@@ -896,8 +969,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     toast("Inviting " + pin + "…");
     closeAddPad();
   }
-  function hangUp() {
-    sendWS({ type: "leave" });
+  function hangUp(reason: string = "manual") {
+    sendWS({ type: "leave", reason });
     for (const id in peers) {
       try { peers[id].pc.close(); } catch { /* */ }
       if (peers[id].el) peers[id].el!.remove();
@@ -951,11 +1024,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
   };
   const onUnload = () => {
     try {
-      const body = JSON.stringify({ cid, message: { type: "leave" } });
+      const body = JSON.stringify({ cid, message: { type: "leave", reason: "page-unload" } });
       if (navigator.sendBeacon) {
         navigator.sendBeacon("/api/relay/send", new Blob([body], { type: "application/json" }));
       } else {
-        sendWS({ type: "leave" });
+        sendWS({ type: "leave", reason: "page-unload" });
       }
     } catch { /* */ }
   };
@@ -974,7 +1047,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("chatClose") as HTMLElement | null)?.addEventListener("click", toggleChat);
   ($("addBtn") as HTMLElement | null)?.addEventListener("click", openAddPad);
   ($("addGo") as HTMLElement | null)?.addEventListener("click", addToCall);
-  ($("hangBtn") as HTMLElement | null)?.addEventListener("click", hangUp);
+  ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => hangUp("user-hangup"));
   ($("flipCamBtn") as HTMLElement | null)?.addEventListener("click", () => { flipCamera(); });
   ($("filterBtn") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("filterClose") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
@@ -1007,6 +1080,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
       return true;
     },
     setOnStateChange(cb) { onPhaseChange = cb; },
+    getPin() { return me.pin; },
+    setPreferredPin(pin) {
+      preferredPin = pin && /^\d{6}$/.test(pin) ? pin : null;
+    },
+    setOnPinChange(cb) {
+      onPinChange = cb;
+      // Fire immediately with the current value so a late subscriber syncs up.
+      if (cb) { try { cb(me.pin); } catch { /* */ } }
+    },
     hangup() {
       try { ($("hangBtn") as HTMLButtonElement | null)?.click(); }
       catch { /* swallow — engine handles its own cleanup */ }
@@ -1029,7 +1111,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       window.removeEventListener("beforeunload", onUnload);
       // best-effort: tell server we're leaving
       try {
-        const body = JSON.stringify({ cid, message: { type: "leave" } });
+        const body = JSON.stringify({ cid, message: { type: "leave", reason: "page-unload-2" } });
         if (navigator.sendBeacon) {
           navigator.sendBeacon("/api/relay/send", new Blob([body], { type: "application/json" }));
         }

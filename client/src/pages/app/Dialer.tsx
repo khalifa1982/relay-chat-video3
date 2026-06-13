@@ -80,6 +80,16 @@ export default function DialerPage() {
   const engineRoot = useRef<HTMLDivElement>(null);
   const engineHandle = useRef<RelayHandle | null>(null);
   const [engineReady, setEngineReady] = useState(false);
+  // The AUTHORITATIVE 6-digit number the signaling server registered for this
+  // device. This is the only number a peer can dial successfully, so it (not
+  // the v2 identity number) must be what we show and what we self-call-guard
+  // against. Sourced from the relay engine via setOnPinChange.
+  const [enginePin, setEnginePin] = useState<string | null>(null);
+  // Keep the latest identity number in a ref so the (mount-once) engine effect
+  // can always read the freshest value when it auto-registers, even though the
+  // identity may resolve after the engine mounted.
+  const myIdentityNumberRef = useRef<string | null>(null);
+  myIdentityNumberRef.current = me?.number ?? null;
 
   useEffect(() => {
     const el = engineRoot.current;
@@ -87,6 +97,7 @@ export default function DialerPage() {
     el.innerHTML = RELAY_MARKUP;
     const handle = startRelay(el);
     handle.setOnStateChange((p) => setPhase(p));
+    handle.setOnPinChange((pin) => setEnginePin(pin));
     engineHandle.current = handle;
 
     // Auto-register against our v2 identity so the engine has a `me.pin`
@@ -97,6 +108,9 @@ export default function DialerPage() {
       const display = me?.displayName ?? "";
       if (!display) return false;
       if (!nameInput.value) nameInput.value = display;
+      // Register under the stable identity number so the big number == the
+      // profile number == one consistent dialable number.
+      handle.setPreferredPin(myIdentityNumberRef.current);
       const btn = el.querySelector<HTMLButtonElement>("#joinBtn");
       if (btn && !btn.disabled) {
         btn.click();
@@ -140,9 +154,10 @@ export default function DialerPage() {
     if (!el) return;
     const nameInput = el.querySelector<HTMLInputElement>("#nameInput");
     if (nameInput && !nameInput.value) nameInput.value = me.displayName;
+    engineHandle.current?.setPreferredPin(me.number ?? null);
     const btn = el.querySelector<HTMLButtonElement>("#joinBtn");
     if (btn && !btn.disabled) btn.click();
-  }, [me?.displayName]);
+  }, [me?.displayName, me?.number]);
 
   const history = trpc.calls.history.useQuery(undefined, {
     refetchInterval: 20_000,
@@ -204,12 +219,16 @@ export default function DialerPage() {
   }
 
   const previewIdentity = previewQuery.data ?? null;
+  // Self-call guard and the displayed "your number" must both use the
+  // signaling pin (enginePin), NOT the v2 identity number, otherwise the
+  // shown number can never actually be dialed.
+  const myNumber = enginePin ?? me?.number ?? null;
   const callable =
-    /^\d{6}$/.test(dialed) && dialed !== me?.number && engineReady;
+    /^\d{6}$/.test(dialed) && dialed !== myNumber && engineReady;
 
   const ghost = useMemo(
-    () => ghostNumberRule({ typed: dialed, ownNumber: me?.number }),
-    [dialed, me?.number]
+    () => ghostNumberRule({ typed: dialed, ownNumber: myNumber }),
+    [dialed, myNumber]
   );
 
   const recent = useMemo(() => (history.data ?? []).slice(0, 8), [history.data]);
@@ -461,7 +480,7 @@ export default function DialerPage() {
             </div>
 
             {/* Quick-add */}
-            {dialed.length === 6 && previewIdentity && previewIdentity.number !== me?.number ? (
+            {dialed.length === 6 && previewIdentity && previewIdentity.number !== myNumber ? (
               <QuickAddContact
                 number={previewIdentity.number}
                 displayName={previewIdentity.displayName}
