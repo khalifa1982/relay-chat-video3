@@ -433,3 +433,51 @@ reported user-facing bugs plus the most serious security issue found.
   upload fetches missing the device-id header; upload SVG/MIME hardening; 3× `useIdentity`
   heartbeats; `useRealtime` untracked reconnect timer; over-broad presence invalidation;
   per-frame canvas allocation in `mediaPipeline`.
+
+## v2.9.0 — Deferred-batch fixes from the review (delivered 2026-06-13)
+
+Cleared most of the v2.8.0 "deferred" list. TURN code path verified first: with the
+operator coturn env (TURN_SECRET/TURN_HOST/TURN_TCP_HOST set), `iceServers()` emits the
+UDP-3478 + TCP-443 + TCP-3478 operator relays (not the OpenRelay fallback), valid HMAC
+creds, `<expiry>:<user>` username — confirmed via a scripted call to `iceServers()`.
+
+### Backend (server)
+- [x] **DM conversation create race** (`getOrCreateDmConversation`): the INSERT is now
+      wrapped so a concurrent opener hitting the `pairKey` unique index re-selects the
+      existing row instead of 500-ing; a genuine insert failure still throws.
+- [x] **Read-receipt correctness** (`markThreadRead`): the status→"read" UPDATE is now
+      bounded by `messages.id <= lastId` (the id we actually observed), so a message that
+      arrives mid-mark-read can't be flipped to "read" before it's seen (no false receipt).
+- [x] **N+1 + dead query removed**: added batch helpers `getIdentitiesByIds`,
+      `getIdentitiesByNumbers`, `getAttachmentsByIds`. `messages.list` (per-message
+      attachment), `contacts.list` (per-contact identity), and `calls.history` (per-row
+      identity + a dead single-row query that was discarded with `void`) are now one query
+      each. Dropped the prod `_attachmentIdsUsed` debug field.
+- [x] **Upload MIME hardening** (`v2upload.ts`): block `image/svg+xml`, `text/html`,
+      `application/javascript`, etc. — script-bearing subtypes that passed the top-level
+      allowlist and would be a stored-XSS risk if served inline.
+
+### Client
+- [x] **Shared upload helper** (`lib/uploadAttachment.ts`): all three call sites (Messages
+      image/file, Messages voice-note, Profile avatar) now (a) base64 via `FileReader`
+      instead of `btoa(uint8.reduce(...))` — the latter froze/OOM-crashed mobile Safari on
+      a 40 MB file — and (b) send the `x-relay-device-id` header so cookie-dropped guests
+      can still upload (Profile's avatar upload also wasn't even sending `credentials`).
+- [x] **Voice-note mic release**: the recording `MediaStream` is held in a ref and stopped
+      on `onstop` AND on component unmount, so navigating away mid-record no longer leaves
+      the mic live (LED on).
+- [x] **`useRealtime` reconnect timer** is now tracked and cleared on cleanup (no orphaned
+      reconnect after unmount / `enabled` flap), and presence events invalidate only
+      `directory.lookup({ number })` instead of the whole namespace.
+- [x] **`mediaPipeline` blur** reuses one offscreen canvas instead of allocating a new
+      `<canvas>` every frame (was 30/sec of GC churn).
+
+- [x] Bumped in-app version footer to `RELAY · v2.9.0`.
+- [x] 169/170 vitest pass, TypeScript clean, production build clean.
+- [ ] **Action required from you**: set the five TURN/Forge secrets in Manus → Settings →
+      Secrets, then click Publish to push v2.8.0 + v2.9.0 live.
+
+### Still deferred (intentionally — higher risk, needs DB transactions)
+- `sendMessage` full atomicity (wrap insert + lastMessageAt + unread bump in a transaction
+  and return by `insertId`); centralizing the 3× `useIdentity` heartbeat loops into one
+  owner; presence broadcast scoping (currently fans every user's number to all clients).

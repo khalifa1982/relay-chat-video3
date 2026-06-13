@@ -17,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
+import { uploadAttachment } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
 
 const EMOJI_QUICK = [
@@ -231,23 +232,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     }
     setUploading(true);
     try {
-      const buffer = await file.arrayBuffer();
-      const b64 = btoa(
-        new Uint8Array(buffer).reduce((s, b) => s + String.fromCharCode(b), "")
-      );
-      const res = await fetch("/api/v2/upload", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          dataBase64: b64,
-          mimeType: file.type || "application/octet-stream",
-          filename: file.name,
-        }),
+      const json = await uploadAttachment(file, {
+        filename: file.name,
+        mimeType: file.type || "application/octet-stream",
       });
-      if (!res.ok) throw new Error(await res.text());
-      const json = await res.json();
-      setPendingUpload({ id: json.id, url: json.url, mimeType: json.mimeType, filename: json.filename });
+      setPendingUpload({ id: json.id, url: json.url, mimeType: json.mimeType, filename: json.filename ?? file.name });
     } catch (err) {
       alert("Upload failed: " + (err instanceof Error ? err.message : String(err)));
     } finally {
@@ -286,7 +275,23 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   // Safari (especially mobile) does not support "audio/webm". We probe the
   // browser's supported MIME types and pick the first one that works.
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  // Held so an unmount mid-recording can release the mic (onstop wouldn't run).
+  const recordStreamRef = useRef<MediaStream | null>(null);
   const [recording, setRecording] = useState(false);
+
+  // Safety net: if the conversation unmounts while recording, stop the recorder
+  // and stop every track so the getUserMedia mic doesn't stay live (LED on).
+  useEffect(() => {
+    return () => {
+      try {
+        mediaRecorderRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+      recordStreamRef.current?.getTracks().forEach((t) => t.stop());
+      recordStreamRef.current = null;
+    };
+  }, []);
 
   // Capability: MediaRecorder may be missing entirely on older iOS Safari.
   const recorderSupported =
@@ -327,6 +332,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         return;
       }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordStreamRef.current = stream;
       const rec = pick.mimeType
         ? new MediaRecorder(stream, { mimeType: pick.mimeType })
         : new MediaRecorder(stream);
@@ -334,6 +340,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       rec.ondataavailable = (e) => e.data.size > 0 && chunks.push(e.data);
       rec.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
+        recordStreamRef.current = null;
         // Use the recorder's actual mimeType (browsers sometimes substitute one).
         const finalMime = rec.mimeType || pick.mimeType || "application/octet-stream";
         const blob = new Blob(chunks, { type: finalMime });
@@ -357,16 +364,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   async function uploadBlob(blob: Blob, filename: string) {
     setUploading(true);
     try {
-      const buf = await blob.arrayBuffer();
-      const b64 = btoa(new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ""));
-      const res = await fetch("/api/v2/upload", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dataBase64: b64, mimeType: blob.type, filename }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const json = await res.json();
+      const json = await uploadAttachment(blob, { filename, mimeType: blob.type });
       sendMutation.mutate({
         conversationId,
         kind: "audio",

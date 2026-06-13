@@ -47,6 +47,7 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
     let closed = false;
     let es: EventSource | null = null;
     let backoff = 1000;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     const connect = () => {
       if (closed) return;
@@ -124,7 +125,10 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
             // contacts / threads both render presence dots
             utils.contacts.list.invalidate().catch(() => {});
             utils.messages.threads.invalidate().catch(() => {});
-            utils.directory.lookup.invalidate().catch(() => {});
+            // Scope to the number that changed — invalidating the whole
+            // directory.lookup namespace defeated the Add-Contact preview's
+            // staleTime and refetched on every stranger's heartbeat.
+            utils.directory.lookup.invalidate({ number: payload.number }).catch(() => {});
             break;
           case "contact":
             utils.contacts.list.invalidate().catch(() => {});
@@ -139,7 +143,8 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
         // capped exponential backoff
         const wait = Math.min(backoff, 15_000);
         backoff = Math.min(backoff * 2, 15_000);
-        setTimeout(connect, wait);
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connect, wait);
       };
     };
 
@@ -147,6 +152,10 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
 
     return () => {
       closed = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       es?.close();
       es = null;
     };
