@@ -182,6 +182,16 @@ export default function DialerPage() {
     engineHandle.current?.dial(to);
   }, [engineReady, enginePin]);
 
+  // While a call OR an incoming ring is on screen, hide the phone-app chrome
+  // (top header + bottom tab bar + sidebar) so it doesn't cover the call's own
+  // controls. AppShell tags that chrome with `.relay-appshell-chrome`; the rule
+  // that hides it lives in the engine <style> block below.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.body.classList.toggle("relay-call-active", phase !== "idle");
+    return () => document.body.classList.remove("relay-call-active");
+  }, [phase]);
+
   const history = trpc.calls.history.useQuery(undefined, {
     refetchInterval: 20_000,
     enabled: !!me,
@@ -527,6 +537,12 @@ export default function DialerPage() {
       <style>{`
         .relay-root.relay-embedded #register,
         .relay-root.relay-embedded #lobby { display: none !important; }
+        /* When a call / incoming ring is up, the engine root is promoted to a
+           fullscreen overlay — hide the app chrome so it can't cover the call's
+           controls or the incoming-ring Accept/Decline buttons, and lift the
+           engine above any remaining app layers. */
+        body.relay-call-active .relay-appshell-chrome { display: none !important; }
+        body.relay-call-active .relay-root.relay-embedded { z-index: 60 !important; }
       `}</style>
 
       {/* ── inline call surface — promoted to fullscreen overlay when phase != idle */}
@@ -553,11 +569,11 @@ export default function DialerPage() {
           purely as a UX hint: the engine's own hangup button is in the
           control bar, but having a quick exit at the top helps users
           who otherwise can't find it. */}
-      {phase !== "idle" ? (
+      {phase === "dialing" || phase === "in-call" ? (
         <button
           type="button"
           onClick={hangup}
-          className="fixed top-3 right-3 z-50 inline-flex items-center gap-1.5 rounded-full bg-destructive/90 hover:bg-destructive text-destructive-foreground px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur-md"
+          className="fixed top-3 right-3 z-[70] inline-flex items-center gap-1.5 rounded-full bg-destructive/90 hover:bg-destructive text-destructive-foreground px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur-md"
           aria-label="End call"
         >
           <X className="size-3.5" />

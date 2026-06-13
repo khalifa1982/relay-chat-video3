@@ -50,7 +50,7 @@ interface Msg {
   code?: string;
 }
 
-export type RelayPhase = "idle" | "dialing" | "in-call";
+export type RelayPhase = "idle" | "dialing" | "ringing" | "in-call";
 
 export interface RelayHandle {
   destroy: () => void;
@@ -127,6 +127,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // everywhere. Set BEFORE register() runs.
   let preferredPin: string | null = null;
   let toastT: ReturnType<typeof setTimeout> | null = null;
+  // Auto-dismiss timer for an unanswered incoming ring (there's no caller-cancel
+  // signal yet, so we don't strand the callee on a dead ring screen).
+  let ringTimeoutT: ReturnType<typeof setTimeout> | null = null;
   let destroyed = false;
 
   // ---------- utils ----------
@@ -486,19 +489,31 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const ringWho = $("ringWho"); if (ringWho) ringWho.textContent = m.fromName!;
     const ringSub = $("ringSub"); if (ringSub) ringSub.textContent = "is calling you…";
     $("ringOverlay")?.classList.add("active");
+    // Promote the embedding host (Dialer) to fullscreen so the callee actually
+    // SEES the Accept/Decline overlay. Without this the engine stays parked
+    // off-screen for an incoming call and the callee can never answer — which
+    // looked like "the call never connects / they don't receive anything".
+    emitPhase("ringing");
+    if (ringTimeoutT) clearTimeout(ringTimeoutT);
+    ringTimeoutT = setTimeout(() => {
+      if (pendingRing && pendingRing.from === m.from) declineInvite();
+    }, 60000);
   }
   async function acceptInvite() {
     const r = pendingRing; pendingRing = null;
+    if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     $("ringOverlay")?.classList.remove("active");
-    if (!r) return;
-    try { await ensureMedia(); } catch { sendWS({ type: "reject", to: r.from }); return; }
+    if (!r) { emitPhase("idle"); return; }
+    try { await ensureMedia(); } catch { sendWS({ type: "reject", to: r.from }); emitPhase("idle"); return; }
     inCall = true; roomId = r.roomId; enterCallUI("In call");
     sendWS({ type: "accept", roomId: r.roomId });
   }
   function declineInvite() {
     const r = pendingRing; pendingRing = null;
+    if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     $("ringOverlay")?.classList.remove("active");
     if (r) sendWS({ type: "reject", to: r.from });
+    emitPhase("idle");
   }
 
   // ---------- mesh ----------
@@ -971,6 +986,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function hangUp(reason: string = "manual") {
     sendWS({ type: "leave", reason });
+    if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
+    pendingRing = null;
+    $("ringOverlay")?.classList.remove("active");
     for (const id in peers) {
       try { peers[id].pc.close(); } catch { /* */ }
       if (peers[id].el) peers[id].el!.remove();
@@ -1097,6 +1115,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       destroyed = true;
       if (reconnectT) { clearTimeout(reconnectT); reconnectT = null; }
       if (timerInt) { clearInterval(timerInt); timerInt = null; }
+      if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
       try { ws?.close(); } catch { /* */ }
       ws = null;
       // close peer connections

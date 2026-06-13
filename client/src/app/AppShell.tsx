@@ -92,7 +92,7 @@ function Inner({ children }: { children: React.ReactNode }) {
       {/* ── desktop / tablet sidebar ───────────────────────────── */}
       <aside
         className={
-          "hidden md:flex md:flex-col md:w-64 lg:w-72 shrink-0 " +
+          "relay-appshell-chrome hidden md:flex md:flex-col md:w-64 lg:w-72 shrink-0 " +
           "border-r border-border/70 bg-sidebar/65 " +
           "supports-[backdrop-filter]:bg-sidebar/45 supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150"
         }
@@ -222,7 +222,7 @@ function Inner({ children }: { children: React.ReactNode }) {
         {/* mobile header */}
         <header
           className={
-            "md:hidden sticky top-0 z-30 flex items-center justify-between px-4 py-2.5 " +
+            "relay-appshell-chrome md:hidden sticky top-0 z-30 flex items-center justify-between px-4 py-2.5 " +
             "border-b border-border/70 bg-card/70 " +
             "supports-[backdrop-filter]:bg-card/45 supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150"
           }
@@ -283,7 +283,7 @@ function Inner({ children }: { children: React.ReactNode }) {
             with the home indicator. */}
         <nav
           className={
-            "md:hidden fixed bottom-2 inset-x-3 z-30 rounded-2xl " +
+            "relay-appshell-chrome md:hidden fixed bottom-2 inset-x-3 z-30 rounded-2xl " +
             "border border-white/10 " +
             "bg-card/65 " +
             "shadow-[0_8px_32px_rgba(0,0,0,0.25)] " +

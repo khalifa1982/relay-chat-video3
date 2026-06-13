@@ -481,3 +481,37 @@ creds, `<expiry>:<user>` username — confirmed via a scripted call to `iceServe
 - `sendMessage` full atomicity (wrap insert + lastMessageAt + unread bump in a transaction
   and return by `insertId`); centralizing the 3× `useIdentity` heartbeat loops into one
   owner; presence broadcast scoping (currently fans every user's number to all clients).
+
+## v2.9.1 — Live-test fixes: incoming call invisible + app chrome over the call (delivered 2026-06-13)
+
+Reported from a real two-device test: caller sees their own video and "online", but the
+callee never receives the call; and the phone-app's top header + bottom tab bar render
+ON TOP of the call, hiding the call's own controls.
+
+- [x] **Incoming calls were drawn off-screen** (root cause of "they don't receive the
+      call"). The Dialer hosts the call engine off-screen until *you* dial out, and an
+      incoming `ring` didn't change that — so the callee's Accept/Decline overlay rendered
+      at `left:-10000px` and could never be seen/tapped. Added a `"ringing"` phase to the
+      engine (`RelayPhase`): `onRing` now `emitPhase("ringing")`, which promotes the host
+      to fullscreen so the ring overlay is visible. `acceptInvite`→in-call,
+      `declineInvite`→idle. Added a 60s auto-dismiss for an unanswered ring (there's still
+      no caller-cancel signal — noted below).
+- [x] **App chrome covered the call** (root cause of "lower menu over the middle menus").
+      The engine's `.relay-root { z-index:1 }` lost to the AppShell header/nav (`z-30`).
+      AppShell's sidebar + mobile header + bottom nav are now tagged `relay-appshell-chrome`;
+      the Dialer toggles `body.relay-call-active` whenever `phase !== "idle"` and a style
+      rule hides that chrome and lifts the engine to `z-index:60` during a call. The
+      Dialer's "End" affordance is gated to dialing/in-call (the ring overlay owns
+      Accept/Decline) and bumped above the engine.
+- [x] Footer → `RELAY · v2.9.1`. tsc clean, 169/170 vitest, production build clean.
+
+### Known follow-ups surfaced by this test
+- [ ] **Caller-cancel signal**: if the caller hangs up before the callee answers, the
+      server doesn't tell the callee, so their ring only clears via the 60s timeout. Needs
+      a server-side "ring cancelled" message to the pending callee.
+- [ ] **Engine only registers on the Dialer tab**: a callee sitting on Messages/Contacts
+      isn't registered with the signaling server, so they can't be rung (only a push
+      notification fires). Mounting the engine app-wide (AppShell) would make incoming
+      calls work from any tab.
+- [ ] **Media still needs TURN live**: once the callee can Accept, audio/video connecting
+      across networks depends on the Manus TURN secrets being set + Published.
