@@ -326,10 +326,21 @@ export async function updateIdentityProfile(
 
 /* ── presence ─────────────────────────────────────────────────── */
 
-export async function markOnline(identityId: number, socketSessionId: string | null) {
+export async function markOnline(
+  identityId: number,
+  socketSessionId: string | null
+): Promise<{ becameOnline: boolean }> {
   const db = await getDb();
-  if (!db) return;
+  if (!db) return { becameOnline: false };
   const now = new Date();
+  // Was this identity already online? Lets the caller broadcast presence ONLY
+  // on an actual offline->online transition instead of every 30s heartbeat.
+  const prev = await db
+    .select({ isOnline: presence.isOnline })
+    .from(presence)
+    .where(eq(presence.identityId, identityId))
+    .limit(1);
+  const wasOnline = prev[0]?.isOnline ?? false;
   await db
     .insert(presence)
     .values({
@@ -345,6 +356,7 @@ export async function markOnline(identityId: number, socketSessionId: string | n
         socketSessionId,
       },
     });
+  return { becameOnline: !wasOnline };
 }
 
 export async function markOffline(identityId: number) {
@@ -370,6 +382,47 @@ export async function reapStalePresence(maxAgeSeconds = 120) {
     .set({ isOnline: false })
     .where(and(eq(presence.isOnline, true), lt(presence.lastSeenAt, cutoff)));
   return res?.[0]?.affectedRows ?? 0;
+}
+
+/**
+ * Identities that should hear about this identity's presence changes: anyone
+ * who saved them as a contact, plus anyone they share a conversation with. Used
+ * to SCOPE presence pushes — the old broadcast fanned every user's number (and
+ * online/offline) to every connected client, leaking strangers' presence.
+ */
+export async function getPresenceAudienceIds(
+  identityId: number,
+  number: string
+): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const audience = new Set<number>();
+  // Who saved me as a contact?
+  const owners = await db
+    .select({ id: contacts.ownerId })
+    .from(contacts)
+    .where(eq(contacts.number, number));
+  owners.forEach((r) => audience.add(r.id));
+  // Who shares a conversation with me?
+  const myConvos = await db
+    .select({ cid: conversationParticipants.conversationId })
+    .from(conversationParticipants)
+    .where(eq(conversationParticipants.identityId, identityId));
+  const convoIds = myConvos.map((r) => r.cid);
+  if (convoIds.length > 0) {
+    const peers = await db
+      .select({ id: conversationParticipants.identityId })
+      .from(conversationParticipants)
+      .where(
+        and(
+          inArray(conversationParticipants.conversationId, convoIds),
+          sql`${conversationParticipants.identityId} <> ${identityId}`
+        )
+      );
+    peers.forEach((r) => audience.add(r.id));
+  }
+  audience.delete(identityId); // never notify yourself
+  return Array.from(audience);
 }
 
 export interface PresenceLite {
@@ -768,36 +821,43 @@ export async function sendMessage(input: {
     if (member.length === 0) throw new Error("not a member of this conversation");
   }
   const now = new Date();
-  await db.insert(messages).values({
-    conversationId: input.conversationId,
-    senderIdentityId: input.senderIdentityId,
-    kind: input.kind ?? "text",
-    body: input.body ?? null,
-    attachmentId: input.attachmentId ?? null,
-    replyToId: input.replyToId ?? null,
-    meta: (input.meta as object) ?? null,
-    status: "sent",
+  // Insert + lastMessageAt bump + unread bump must be atomic; and we must return
+  // the row WE inserted (by insertId). Selecting max(id) could return another
+  // sender's message under concurrent sends in the same conversation.
+  return db.transaction(async (tx) => {
+    const ins = await tx.insert(messages).values({
+      conversationId: input.conversationId,
+      senderIdentityId: input.senderIdentityId,
+      kind: input.kind ?? "text",
+      body: input.body ?? null,
+      attachmentId: input.attachmentId ?? null,
+      replyToId: input.replyToId ?? null,
+      meta: (input.meta as object) ?? null,
+      status: "sent",
+    });
+    const insertId = Number(ins[0].insertId);
+    // bump the conversation's lastMessageAt
+    await tx
+      .update(conversations)
+      .set({ lastMessageAt: now })
+      .where(eq(conversations.id, input.conversationId));
+    // bump unread for everyone else
+    await tx
+      .update(conversationParticipants)
+      .set({ unreadCount: sql`${conversationParticipants.unreadCount} + 1` })
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, input.conversationId),
+          sql`${conversationParticipants.identityId} <> ${input.senderIdentityId}`
+        )
+      );
+    const rows = await tx
+      .select()
+      .from(messages)
+      .where(eq(messages.id, insertId))
+      .limit(1);
+    return rows[0];
   });
-  // bump the conversation's lastMessageAt
-  await db.update(conversations).set({ lastMessageAt: now }).where(eq(conversations.id, input.conversationId));
-  // bump unread for everyone else
-  await db
-    .update(conversationParticipants)
-    .set({ unreadCount: sql`${conversationParticipants.unreadCount} + 1` })
-    .where(
-      and(
-        eq(conversationParticipants.conversationId, input.conversationId),
-        sql`${conversationParticipants.identityId} <> ${input.senderIdentityId}`
-      )
-    );
-  // return the latest
-  const rows = await db
-    .select()
-    .from(messages)
-    .where(eq(messages.conversationId, input.conversationId))
-    .orderBy(desc(messages.id))
-    .limit(1);
-  return rows[0];
 }
 
 export async function getConversationParticipantIds(

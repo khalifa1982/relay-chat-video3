@@ -9,6 +9,7 @@ import Docs from "./pages/Docs";
 import TurnTest from "./pages/TurnTest";
 import { AppShell } from "./app/AppShell";
 import { RelayEngineProvider } from "./app/RelayEngine";
+import { PresenceManager } from "./app/PresenceManager";
 import Dialer from "./pages/app/Dialer";
 import Messages from "./pages/app/Messages";
 import Contacts from "./pages/app/Contacts";
@@ -68,6 +69,9 @@ function App() {
               session (above the router, so it survives tab navigation) and
               renders the fullscreen call/ring overlay. */}
           <RelayEngineProvider>
+            {/* One presence heartbeat for the whole app (not one per
+                useIdentity() call site). */}
+            <PresenceManager />
             <Router />
           </RelayEngineProvider>
         </TooltipProvider>

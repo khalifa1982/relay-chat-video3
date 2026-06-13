@@ -26,6 +26,7 @@ import {
   getIdentityById,
   getIdentityByNumber,
   getOrCreateDmConversation,
+  getPresenceAudienceIds,
   getPresenceForIds,
   listCallHistory,
   listContacts,
@@ -42,7 +43,7 @@ import {
   upsertContact,
   getConversationParticipantIds,
 } from "./v2db";
-import { publishToIdentity, broadcastPresence } from "./v2events";
+import { publishToIdentity, publishPresenceTo } from "./v2events";
 
 export const NumberSchema = z
   .string()
@@ -421,13 +422,17 @@ export const v2DirectoryRouter = router({
    */
   heartbeat: publicProcedure.mutation(async ({ ctx }) => {
     const me = requireIdentity(ctx);
-    await markOnline(me.id, null);
-    // Notify other connected clients that this number is online now.
-    // Cheap fire-and-forget; failures don't affect the heartbeat result.
-    try {
-      broadcastPresence(me.number, true, new Date());
-    } catch {
-      /* ignore */
+    const { becameOnline } = await markOnline(me.id, null);
+    // Only push presence to people who care (contacts + conversation peers), and
+    // only on an actual offline->online transition — not on every 30s tick.
+    // Fire-and-forget; failures don't affect the heartbeat result.
+    if (becameOnline) {
+      try {
+        const audience = await getPresenceAudienceIds(me.id, me.number);
+        publishPresenceTo(audience, me.number, true, new Date());
+      } catch {
+        /* ignore */
+      }
     }
     return { ok: true, at: new Date() };
   }),
@@ -437,7 +442,8 @@ export const v2DirectoryRouter = router({
     const me = requireIdentity(ctx);
     await markOffline(me.id);
     try {
-      broadcastPresence(me.number, false, new Date());
+      const audience = await getPresenceAudienceIds(me.id, me.number);
+      publishPresenceTo(audience, me.number, false, new Date());
     } catch {
       /* ignore */
     }

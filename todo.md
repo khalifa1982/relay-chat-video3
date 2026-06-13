@@ -478,9 +478,30 @@ creds, `<expiry>:<user>` username — confirmed via a scripted call to `iceServe
       Secrets, then click Publish to push v2.8.0 + v2.9.0 live.
 
 ### Still deferred (intentionally — higher risk, needs DB transactions)
-- `sendMessage` full atomicity (wrap insert + lastMessageAt + unread bump in a transaction
-  and return by `insertId`); centralizing the 3× `useIdentity` heartbeat loops into one
-  owner; presence broadcast scoping (currently fans every user's number to all clients).
+- ~~`sendMessage` full atomicity; centralizing the 3× `useIdentity` heartbeats; presence
+  broadcast scoping~~ — all done in v2.11.0 (below).
+
+## v2.11.0 — Reliability cleanup: tx, single heartbeat, scoped presence (delivered 2026-06-13)
+
+- [x] **`sendMessage` is now atomic.** Insert + `lastMessageAt` bump + unread bump run inside
+      one `db.transaction(...)`, and the returned row is fetched by the real `insertId`
+      (mysql2) instead of `max(id)` — under concurrent sends in the same conversation,
+      max(id) could return another sender's message. (`server/v2db.ts`.)
+- [x] **One presence heartbeat for the whole app.** The 30s heartbeat + go-offline beacon
+      moved out of `useIdentity()` (which ran one loop per call site — AppShell + Dialer +
+      OnboardingGate + …) into a single `<PresenceManager/>` mounted once above the router.
+      `useIdentity()` is now a pure read. (`client/src/app/PresenceManager.tsx`,
+      `useIdentity.ts`, `App.tsx`.)
+- [x] **Presence broadcast scoped + transition-only.** `directory.heartbeat`/`goOffline` no
+      longer fan every user's number + online/offline to *every* connected client (a privacy
+      leak). New `getPresenceAudienceIds(id, number)` resolves the people who care (contacts
+      who saved you + conversation peers); new `publishPresenceTo(audience, …)` delivers only
+      to them. `markOnline` now reports the offline→online transition so we broadcast on the
+      transition, not on every 30s tick. (`server/v2db.ts`, `v2events.ts`, `v2routers.ts`.)
+- [x] Footer → `RELAY · v2.11.0`. tsc clean, 172/173 vitest (+1: `publishPresenceTo`),
+      production build clean.
+- [ ] **Action required from you**: set the Manus TURN secrets + Publish, then do the live
+      two-device call verification (now reachable from any tab, with caller-cancel).
 
 ## v2.9.1 — Live-test fixes: incoming call invisible + app chrome over the call (delivered 2026-06-13)
 
