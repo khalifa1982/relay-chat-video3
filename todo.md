@@ -1327,3 +1327,27 @@ the persistent-room work in v2.33; this batch adds moderation, roles, and host-d
 - [x] 9 new tests (7 server moderation: host designation, mute-all, non-mod rejected, co-host promote +
       moderate, host-only co-host assignment, pin, grid; 2 CSS guards). 330 tests green, tsc + build
       clean. Footer → `v2.41.0`.
+
+## v2.42.0 — Messaging UI overhaul (delivered 2026-06-27)
+
+Batch 5 (final) of the UX overhaul.
+
+- [x] Fixed the misplaced composer: the message list was a flex child without `min-h-0`, so it grew to
+      fit its content and shoved the reply input into the middle of the screen. Adding `min-h-0` pins
+      the composer to the bottom (standard chat-app layout); only the message list scrolls.
+- [x] Three-dot context menu per message (Reply / Copy / Unsend) replacing the old hover-only buttons —
+      which were `opacity-0 group-hover` and therefore INVISIBLE on mobile (no hover on touch), so
+      delete/reply were unreachable on phones. The menu is always tappable.
+- [x] Attachment thumbnails open a fullscreen in-app MediaLightbox (image/video) instead of a new tab;
+      videos show a play overlay. The lightbox closes on the X, a backdrop click, or Escape.
+- [x] Sent vs received are already visually distinct (right/primary vs left/muted) with delivery ticks
+      (✓ / ✓✓) and timestamps — retained and cleaned up around the new menu/thumbnails.
+- [x] 5 new static guards (min-h-0, three-dot menu, lightbox, dismissibility). 335 tests green, tsc +
+      build clean. Footer → `v2.42.0`.
+
+### UX overhaul batch — COMPLETE (v2.36.0 → v2.42.0)
+All 9 batches of the large multi-request UX overhaul shipped: contacts, history-message, dialer
+buttons + group call, share link + device chip, global UX (sticky nav/back/X), in-call tiles, host
+controls, resolution + message popups, and the messaging overhaul. Deferred (noted in-line): per-
+participant national flag on tiles, real photo avatars in tiles, and guest-presence privacy on the
+message thread header (the contacts + directory surfaces are covered).
