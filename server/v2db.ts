@@ -571,12 +571,53 @@ export async function getOrCreateDmConversation(a: number, b: number) {
   return convo;
 }
 
+/**
+ * Create a named group conversation owned by `creatorId` with the given member
+ * identities. The creator is always included. Returns the new conversation row.
+ * Groups have a null `pairKey` (the unique index is on pairKey, which permits
+ * many NULLs in MySQL), so every group is distinct even with the same members.
+ */
+export async function createGroupConversation(input: {
+  creatorId: number;
+  memberIds: number[];
+  title: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  // De-dupe + always include the creator.
+  const ids = Array.from(new Set([input.creatorId, ...input.memberIds]));
+  const res = await db.insert(conversations).values({
+    pairKey: null,
+    kind: "group",
+    title: input.title.slice(0, 128),
+  });
+  // mysql2 returns the new row id as insertId on the result header.
+  const insertId = Number(res[0].insertId);
+  if (!insertId) throw new Error("group conversation insert failed");
+  await db.insert(conversationParticipants).values(
+    ids.map((identityId) => ({ conversationId: insertId, identityId }))
+  );
+  const [row] = await db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.id, insertId))
+    .limit(1);
+  return row;
+}
+
 export interface ThreadSummary {
   conversationId: number;
+  /** "dm" (1:1 or note-to-self) or "group". */
+  kind: "dm" | "group";
+  /** Group title (null for DMs). */
+  title: string | null;
+  /** For a DM: the other participant. For a group: 0 (use title/members). */
   otherIdentityId: number;
   otherNumber: string;
   otherDisplayName: string;
   otherAvatarUrl: string | null;
+  /** Participant count INCLUDING me (2 for a DM, 1 for self-notes). */
+  memberCount: number;
   lastMessageAt: Date;
   unreadCount: number;
   lastMessagePreview: string | null;
@@ -609,7 +650,12 @@ export function composeThreadSummaries(input: {
     displayName: string;
     avatarUrl: string | null;
   } | null;
-  convoRows: Array<{ id: number; lastMessageAt: Date }>;
+  convoRows: Array<{
+    id: number;
+    lastMessageAt: Date;
+    kind?: "dm" | "group";
+    title?: string | null;
+  }>;
   latestMessageByConvo: Map<
     number,
     { body: string | null; kind: string } | null
@@ -620,47 +666,75 @@ export function composeThreadSummaries(input: {
   const unreadByConvo = new Map(
     input.myParts.map((p) => [p.conversationId, p.unreadCount])
   );
-  const convoIdsWithOther = new Set(input.others.map((o) => o.conversationId));
+  // Group the "other" participants by conversation (a group has many).
+  const othersByConvo = new Map<
+    number,
+    Array<{ id: number; number: string; displayName: string; avatarUrl: string | null }>
+  >();
+  for (const o of input.others) {
+    const ident = otherById.get(o.identityId);
+    if (!ident) continue;
+    const arr = othersByConvo.get(o.conversationId) ?? [];
+    arr.push(ident);
+    othersByConvo.set(o.conversationId, arr);
+  }
 
   const result: ThreadSummary[] = [];
 
-  for (const p of input.others) {
+  // Iterate MY conversations once each (no double-projection), branching on kind.
+  for (const p of input.myParts) {
     const convo = convoById.get(p.conversationId);
-    const other = otherById.get(p.identityId);
-    if (!convo || !other) continue;
+    if (!convo) continue;
+    const kind = convo.kind ?? "dm";
     const latest = input.latestMessageByConvo.get(p.conversationId) ?? null;
-    result.push({
+    const members = othersByConvo.get(p.conversationId) ?? [];
+    const base = {
       conversationId: p.conversationId,
-      otherIdentityId: other.id,
-      otherNumber: other.number,
-      otherDisplayName: other.displayName,
-      otherAvatarUrl: other.avatarUrl ?? null,
       lastMessageAt: convo.lastMessageAt,
       unreadCount: unreadByConvo.get(p.conversationId) ?? 0,
       lastMessagePreview: latest?.body ?? null,
       lastMessageKind: latest?.kind ?? "text",
-    });
-  }
+    };
 
-  // Self-conversations: synthesise the "Notes (You)" peer row.
-  if (input.myIdentity) {
-    for (const p of input.myParts) {
-      if (convoIdsWithOther.has(p.conversationId)) continue;
-      const convo = convoById.get(p.conversationId);
-      if (!convo) continue;
-      const latest = input.latestMessageByConvo.get(p.conversationId) ?? null;
+    if (kind === "group") {
+      const fallbackTitle = members.map((m) => m.displayName).slice(0, 3).join(", ");
       result.push({
-        conversationId: p.conversationId,
+        ...base,
+        kind: "group",
+        title: convo.title ?? null,
+        otherIdentityId: 0,
+        otherNumber: "",
+        otherDisplayName: convo.title || fallbackTitle || "Group",
+        otherAvatarUrl: null,
+        memberCount: members.length + 1, // + me
+      });
+    } else if (members.length > 0) {
+      // Regular 1:1 DM — the single other participant.
+      const other = members[0];
+      result.push({
+        ...base,
+        kind: "dm",
+        title: null,
+        otherIdentityId: other.id,
+        otherNumber: other.number,
+        otherDisplayName: other.displayName,
+        otherAvatarUrl: other.avatarUrl ?? null,
+        memberCount: 2,
+      });
+    } else if (input.myIdentity) {
+      // Self-conversation — synthesise the "Notes (You)" peer row.
+      result.push({
+        ...base,
+        kind: "dm",
+        title: null,
         otherIdentityId: input.myIdentity.id,
         otherNumber: input.myIdentity.number,
         otherDisplayName: "Notes (You)",
         otherAvatarUrl: input.myIdentity.avatarUrl ?? null,
-        lastMessageAt: convo.lastMessageAt,
-        unreadCount: unreadByConvo.get(p.conversationId) ?? 0,
-        lastMessagePreview: latest?.body ?? null,
-        lastMessageKind: latest?.kind ?? "text",
+        memberCount: 1,
       });
     }
+    // else: self-only conversation but myIdentity missing → drop (no crash).
   }
 
   result.sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime());
@@ -749,7 +823,12 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
           avatarUrl: me.avatarUrl ?? null,
         }
       : null,
-    convoRows: convos.map((c) => ({ id: c.id, lastMessageAt: c.lastMessageAt })),
+    convoRows: convos.map((c) => ({
+      id: c.id,
+      lastMessageAt: c.lastMessageAt,
+      kind: c.kind,
+      title: c.title,
+    })),
     latestMessageByConvo: new Map(
       Array.from(latestByConvo.entries()).map(([k, m]) => [
         k,

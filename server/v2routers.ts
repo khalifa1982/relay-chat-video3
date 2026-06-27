@@ -26,6 +26,7 @@ import {
   getIdentityById,
   getIdentityByNumber,
   getOrCreateDmConversation,
+  createGroupConversation,
   getPresenceAudienceIds,
   getPresenceForIds,
   listCallHistory,
@@ -525,6 +526,9 @@ export const v2MessagesRouter = router({
       const p = byId.get(b.otherIdentityId);
       return {
         conversationId: b.conversationId,
+        kind: b.kind,
+        title: b.title,
+        memberCount: b.memberCount,
         peerIdentityId: b.otherIdentityId,
         peerNumber: b.otherNumber,
         peerDisplayName: b.otherDisplayName,
@@ -585,6 +589,74 @@ export const v2MessagesRouter = router({
       isSelf: true,
     };
   }),
+
+  /**
+   * Create a named group from a set of 6-digit numbers. The caller is always a
+   * member. Unknown numbers are skipped (we report which resolved). Needs at
+   * least one other valid member.
+   */
+  createGroup: publicProcedure
+    .input(
+      z.object({
+        title: z.string().trim().min(1).max(128),
+        numbers: z.array(NumberSchema).min(1).max(19), // + creator = 20 cap
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const unique = Array.from(new Set(input.numbers)).filter((n) => n !== me.number);
+      const members = await getIdentitiesByNumbers(unique);
+      if (members.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Add at least one other RELAY number to start a group.",
+        });
+      }
+      const convo = await createGroupConversation({
+        creatorId: me.id,
+        memberIds: members.map((m) => m.id),
+        title: input.title,
+      });
+      // Push a hint so every member's thread list refreshes.
+      try {
+        for (const pid of [me.id, ...members.map((m) => m.id)]) {
+          publishToIdentity(pid, { kind: "message", conversationId: convo.id, from: me.id });
+        }
+      } catch {
+        /* best-effort */
+      }
+      return {
+        conversationId: convo.id,
+        title: convo.title,
+        memberCount: members.length + 1,
+        skipped: unique.length - members.length,
+      };
+    }),
+
+  /**
+   * Members of a conversation (id, number, name, avatar) — used by the group
+   * conversation view to label messages with sender names and show the roster.
+   */
+  conversationInfo: publicProcedure
+    .input(z.object({ conversationId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const memberIds = await getConversationParticipantIds(input.conversationId);
+      if (!memberIds.includes(me.id)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Not a member of this conversation." });
+      }
+      const idents = await getIdentitiesByIds(memberIds);
+      return {
+        conversationId: input.conversationId,
+        members: idents.map((i) => ({
+          id: i.id,
+          number: i.number,
+          displayName: i.displayName,
+          avatarUrl: i.avatarUrl ?? null,
+          isMe: i.id === me.id,
+        })),
+      };
+    }),
 
   list: publicProcedure
     .input(

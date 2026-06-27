@@ -13,6 +13,8 @@ import {
   MessageSquarePlus,
   X,
   StickyNote,
+  Users,
+  UserPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -99,7 +101,14 @@ export default function MessagesPage() {
                       }
                     >
                       <div className="relative">
-                        {me && t.peerIdentityId === me.id ? (
+                        {t.kind === "group" ? (
+                          <div
+                            className="size-11 rounded-2xl bg-accent/15 grid place-items-center text-accent"
+                            aria-label="Group conversation"
+                          >
+                            <Users className="size-5" />
+                          </div>
+                        ) : me && t.peerIdentityId === me.id ? (
                           <div
                             className="size-11 rounded-2xl bg-amber-500/15 grid place-items-center text-amber-400"
                             aria-label="Notes to yourself"
@@ -179,6 +188,18 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     () => threadsQuery.data?.find((t) => t.conversationId === conversationId),
     [threadsQuery.data, conversationId]
   );
+
+  const isGroup = thread?.kind === "group";
+  // For groups, fetch the roster so we can label messages with sender names.
+  const infoQuery = trpc.messages.conversationInfo.useQuery(
+    { conversationId },
+    { enabled: !!me && isGroup, staleTime: 60_000 }
+  );
+  const nameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const mem of infoQuery.data?.members ?? []) m.set(mem.id, mem.displayName || mem.number);
+    return m;
+  }, [infoQuery.data]);
 
   const messagesQuery = trpc.messages.list.useQuery(
     { conversationId, limit: 100 },
@@ -392,11 +413,19 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           <ArrowLeft className="size-5" />
         </Button>
         <div className="relative">
-          <div className="size-10 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
-            {initialsFrom(thread?.peerDisplayName || thread?.peerNumber || "??")}
-          </div>
-          {thread?.peerIsOnline && (
-            <span className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-[color:var(--relay-online)] border-2 border-card" />
+          {isGroup ? (
+            <div className="size-10 rounded-2xl bg-accent/15 grid place-items-center text-accent">
+              <Users className="size-5" />
+            </div>
+          ) : (
+            <>
+              <div className="size-10 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
+                {initialsFrom(thread?.peerDisplayName || thread?.peerNumber || "??")}
+              </div>
+              {thread?.peerIsOnline && (
+                <span className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-[color:var(--relay-online)] border-2 border-card" />
+              )}
+            </>
           )}
         </div>
         <div className="flex-1 min-w-0">
@@ -404,11 +433,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             {thread?.peerDisplayName || thread?.peerNumber || "Conversation"}
           </div>
           <div className="text-xs text-muted-foreground font-mono">
-            {thread?.peerNumber}
-            {thread?.peerIsOnline ? " · online" : thread?.peerLastSeenAt ? ` · last seen ${timeAgo(thread.peerLastSeenAt)}` : ""}
+            {isGroup
+              ? `${thread?.memberCount ?? infoQuery.data?.members.length ?? ""} members`
+              : (thread?.peerNumber ?? "") +
+                (thread?.peerIsOnline
+                  ? " · online"
+                  : thread?.peerLastSeenAt
+                    ? ` · last seen ${timeAgo(thread.peerLastSeenAt)}`
+                    : "")}
           </div>
         </div>
-        {thread?.peerNumber && (
+        {!isGroup && thread?.peerNumber && (
           <Button
             size="icon"
             variant="ghost"
@@ -447,6 +482,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       : "bg-muted text-foreground rounded-bl-sm")
                   }
                 >
+                  {isGroup && !mine && (
+                    <div className="text-[11px] font-semibold text-accent mb-0.5">
+                      {nameById.get(m.senderIdentityId) || "Member"}
+                    </div>
+                  )}
                   {m.attachment && (
                     <AttachmentView
                       mimeType={m.attachment.mimeType}
@@ -640,8 +680,24 @@ function AttachmentView({
 
 function NewMessageDialog() {
   const [, setLocation] = useLocation();
+  const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"dm" | "group">("dm");
   const [number, setNumber] = useState("");
+  // group-builder state
+  const [groupTitle, setGroupTitle] = useState("");
+  const [groupNumbers, setGroupNumbers] = useState<string[]>([]);
+  const [groupInput, setGroupInput] = useState("");
+
+  function resetAll() {
+    setOpen(false);
+    setMode("dm");
+    setNumber("");
+    setGroupTitle("");
+    setGroupNumbers([]);
+    setGroupInput("");
+  }
+
   const openThread = trpc.messages.openThread.useMutation({
     onSuccess: (res) => {
       setOpen(false);
@@ -649,6 +705,20 @@ function NewMessageDialog() {
       setLocation(`/app/messages?c=${res.conversationId}`);
     },
   });
+  const createGroup = trpc.messages.createGroup.useMutation({
+    onSuccess: (res) => {
+      utils.messages.threads.invalidate();
+      resetAll();
+      setLocation(`/app/messages?c=${res.conversationId}`);
+    },
+  });
+  function addGroupNumber() {
+    const n = groupInput.replace(/\D/g, "").slice(0, 6);
+    if (n.length === 6 && !groupNumbers.includes(n)) {
+      setGroupNumbers((xs) => [...xs, n]);
+    }
+    setGroupInput("");
+  }
   const openSelfThread = trpc.messages.openSelfThread.useMutation({
     onSuccess: (res) => {
       setOpen(false);
@@ -656,8 +726,12 @@ function NewMessageDialog() {
       setLocation(`/app/messages?c=${res.conversationId}`);
     },
   });
-  const pending = openThread.isPending || openSelfThread.isPending;
-  const errorMessage = openThread.error?.message ?? openSelfThread.error?.message ?? null;
+  const pending = openThread.isPending || openSelfThread.isPending || createGroup.isPending;
+  const errorMessage =
+    openThread.error?.message ??
+    openSelfThread.error?.message ??
+    createGroup.error?.message ??
+    null;
 
   return (
     <>
@@ -671,59 +745,142 @@ function NewMessageDialog() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold">New conversation</h3>
-              <Button size="icon" variant="ghost" onClick={() => setOpen(false)}>
+              <h3 className="font-semibold">{mode === "group" ? "New group" : "New conversation"}</h3>
+              <Button size="icon" variant="ghost" onClick={resetAll}>
                 <X className="size-4" />
               </Button>
             </div>
 
-            {/* Quick action: note to self */}
-            <button
-              type="button"
-              onClick={() => openSelfThread.mutate()}
-              disabled={pending}
-              className="w-full text-left flex items-center gap-3 rounded-xl border border-border bg-muted/20 hover:bg-muted/40 transition-colors px-3 py-3 mb-4 disabled:opacity-50"
-            >
-              <span className="size-10 rounded-xl bg-amber-500/15 grid place-items-center text-amber-400 shrink-0">
-                <StickyNote className="size-5" />
-              </span>
-              <span className="flex-1 min-w-0">
-                <span className="block font-medium text-sm">Note to self</span>
-                <span className="block text-xs text-muted-foreground">
-                  Save links, ideas, and attachments to your own thread.
-                </span>
-              </span>
-            </button>
-
-            <div className="relative my-2">
-              <div className="absolute inset-0 flex items-center" aria-hidden="true">
-                <div className="w-full border-t border-border" />
-              </div>
-              <div className="relative flex justify-center">
-                <span className="bg-card px-2 text-[10px] uppercase tracking-widest text-muted-foreground">
-                  or message someone
-                </span>
-              </div>
-            </div>
-
-            <label className="text-xs uppercase tracking-widest text-muted-foreground mb-2 block">
-              RELAY number
-            </label>
-            <div className="flex gap-2">
-              <Input
-                value={number}
-                onChange={(e) => setNumber(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                placeholder="6-digit number"
-                inputMode="numeric"
-                className="font-mono"
-              />
-              <Button
-                onClick={() => openThread.mutate({ number })}
-                disabled={number.length !== 6 || pending}
+            {/* Direct / Group toggle */}
+            <div role="group" aria-label="Conversation type" className="grid grid-cols-2 gap-1 rounded-xl bg-muted/50 p-1 mb-4">
+              <button
+                type="button"
+                aria-pressed={mode === "dm"}
+                onClick={() => setMode("dm")}
+                className={
+                  "flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-colors " +
+                  (mode === "dm" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
+                }
               >
-                <Search className="size-4 mr-1.5" /> Open
-              </Button>
+                <MessageSquarePlus className="size-3.5" /> Direct
+              </button>
+              <button
+                type="button"
+                aria-pressed={mode === "group"}
+                onClick={() => setMode("group")}
+                className={
+                  "flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-colors " +
+                  (mode === "group" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
+                }
+              >
+                <Users className="size-3.5" /> Group
+              </button>
             </div>
+
+            {mode === "dm" ? (
+              <>
+                {/* Quick action: note to self */}
+                <button
+                  type="button"
+                  onClick={() => openSelfThread.mutate()}
+                  disabled={pending}
+                  className="w-full text-left flex items-center gap-3 rounded-xl border border-border bg-muted/20 hover:bg-muted/40 transition-colors px-3 py-3 mb-4 disabled:opacity-50"
+                >
+                  <span className="size-10 rounded-xl bg-amber-500/15 grid place-items-center text-amber-400 shrink-0">
+                    <StickyNote className="size-5" />
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block font-medium text-sm">Note to self</span>
+                    <span className="block text-xs text-muted-foreground">
+                      Save links, ideas, and attachments to your own thread.
+                    </span>
+                  </span>
+                </button>
+
+                <div className="relative my-2">
+                  <div className="absolute inset-0 flex items-center" aria-hidden="true">
+                    <div className="w-full border-t border-border" />
+                  </div>
+                  <div className="relative flex justify-center">
+                    <span className="bg-card px-2 text-[10px] uppercase tracking-widest text-muted-foreground">
+                      or message someone
+                    </span>
+                  </div>
+                </div>
+
+                <label className="text-xs uppercase tracking-widest text-muted-foreground mb-2 block">
+                  RELAY number
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    value={number}
+                    onChange={(e) => setNumber(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="6-digit number"
+                    inputMode="numeric"
+                    className="font-mono"
+                  />
+                  <Button
+                    onClick={() => openThread.mutate({ number })}
+                    disabled={number.length !== 6 || pending}
+                  >
+                    <Search className="size-4 mr-1.5" /> Open
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <label className="text-xs uppercase tracking-widest text-muted-foreground mb-2 block">
+                  Group name
+                </label>
+                <Input
+                  value={groupTitle}
+                  onChange={(e) => setGroupTitle(e.target.value.slice(0, 128))}
+                  placeholder="e.g. Weekend Trip"
+                  className="mb-4"
+                />
+                <label className="text-xs uppercase tracking-widest text-muted-foreground mb-2 block">
+                  Add members by number
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    value={groupInput}
+                    onChange={(e) => setGroupInput(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    onKeyDown={(e) => { if (e.key === "Enter") addGroupNumber(); }}
+                    placeholder="6-digit number"
+                    inputMode="numeric"
+                    className="font-mono"
+                  />
+                  <Button variant="secondary" onClick={addGroupNumber} disabled={groupInput.length !== 6}>
+                    <UserPlus className="size-4" />
+                  </Button>
+                </div>
+                {groupNumbers.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-3">
+                    {groupNumbers.map((n) => (
+                      <span key={n} className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-xs font-mono">
+                        {n.slice(0, 3)} {n.slice(3)}
+                        <button
+                          type="button"
+                          aria-label={`Remove ${n}`}
+                          onClick={() => setGroupNumbers((xs) => xs.filter((x) => x !== n))}
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <Button
+                  className="w-full mt-4"
+                  onClick={() => createGroup.mutate({ title: groupTitle.trim(), numbers: groupNumbers })}
+                  disabled={pending || groupTitle.trim().length === 0 || groupNumbers.length === 0}
+                >
+                  <Users className="size-4 mr-1.5" />
+                  {createGroup.isPending ? "Creating…" : `Create group${groupNumbers.length ? ` (${groupNumbers.length + 1})` : ""}`}
+                </Button>
+              </>
+            )}
             {errorMessage && (
               <p className="mt-3 text-sm text-destructive">{errorMessage}</p>
             )}

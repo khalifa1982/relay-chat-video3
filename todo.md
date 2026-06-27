@@ -833,3 +833,23 @@ the operator provides an S3 bucket (`RECORDING_S3_*`).
 - [ ] **Needs operator infra to activate**: an S3-compatible bucket. Once `RECORDING_S3_*` are
       set (alongside LiveKit, already configured), recording goes live — no code change.
 - [x] Footer → `v2.21.0`. tsc clean, 213 tests green, build clean.
+
+## v2.22.0 — Group messaging (delivered 2026-06-27)
+
+No migration needed — the schema already had `conversations.kind="group"` + `title` +
+`conversation_participants`, and `send`/`list`/`markRead` already fan out to all members.
+
+- [x] `createGroupConversation(creatorId, memberIds, title)` in `v2db.ts` (insert group convo +
+      participant rows; creator always included, de-duped; null `pairKey`).
+- [x] Refactored the pure `composeThreadSummaries` projection from "one row per other" to
+      "iterate my conversations once, branch on kind" so a group yields exactly ONE thread
+      summary (title + member count); DM / note-to-self behavior unchanged (existing tests +
+      3 new group tests all green).
+- [x] `messages.createGroup` (resolve numbers→identities, reject if no valid other member) and
+      `messages.conversationInfo` (membership-gated roster, for sender-name labels).
+      `threads` now returns `kind` / `title` / `memberCount`.
+- [x] Client: group threads render with a group glyph + title; the conversation header shows
+      "N members" (no 1:1 call button); group messages show sender names; a **New group**
+      mode in the New-Conversation dialog (title + add-members-by-number chips).
+- [x] Reviewed by a focused adversarial agent pass. Footer → `v2.22.0`. tsc clean, 216 tests
+      green, build clean.
