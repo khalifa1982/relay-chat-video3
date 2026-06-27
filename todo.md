@@ -790,3 +790,23 @@ Completes the app-lock story from v2.17.0 — the deferred biometric follow-up.
       bar is already full) — it's a desktop feature.
 - [x] Reviewed by a focused adversarial agent pass. Footer → `v2.20.0`. tsc clean, 205 tests
       green, build clean.
+
+## v2.20.1 — Screen-share review fixes (delivered 2026-06-27)
+
+The focused review of v2.20.0 confirmed 4 edge-case bugs (all fixed) + 2 cheap polish items.
+
+- [x] **`screenBusy` could wedge the button** if `getDisplayMedia` returned no video track
+      (early-return skipped the reset). Now reset on every exit path, and defensively in
+      hang-up / destroy.
+- [x] **Call ended while the picker was open** would resume into a dead call — leaking the
+      capture and sticking `screenSharing` true. Now re-checks `inCall` after the await and
+      bails (stopping the capture) if the call is gone.
+- [x] **Mesh newcomers mid-share saw the camera, not the screen** — `createPeer` now seeds a
+      mid-share peer's video sender with the screen track (camera audio unchanged).
+- [x] **Audio-only mesh call** (no camera = no video sender) silently shared to no one; now
+      blocked up front with a clear "needs a camera-enabled call" message (the SFU path still
+      works, since it publishes a fresh track).
+- [x] Polish: `toggleCam` no longer flips the self-tile to audio-only while a screen occupies
+      it; `replaceVideoEverywhere(null)` now unpublishes the SFU video (no orphan publication
+      when stopping an audio-only SFU share).
+- [x] Footer → `v2.20.1`. tsc clean, 205 tests green, build clean.

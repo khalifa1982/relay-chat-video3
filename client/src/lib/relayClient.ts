@@ -473,7 +473,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         if (sender) await sender.replaceTrack(track);
       } catch { /* */ }
     }
-    if (lkRoom && track) {
+    if (lkRoom) {
       try {
         // LiveKit types are dynamically imported (any); prefer the SDK's
         // in-place replaceTrack, else fall back to unpublish + publish.
@@ -481,16 +481,28 @@ export function startRelay(root: HTMLElement): RelayHandle {
         const pubs: any[] = typeof lp.getTrackPublications === "function"
           ? lp.getTrackPublications()
           : (lp.videoTrackPublications ? Array.from(lp.videoTrackPublications.values()) : []);
-        let swapped = false;
-        for (const pub of pubs) {
-          const lt = pub?.track;
-          const isVideo = pub?.kind === "video" || lt?.kind === "video";
-          if (lt && isVideo) {
-            if (typeof lt.replaceTrack === "function") { await lt.replaceTrack(track); swapped = true; break; }
-            if (lt.mediaStreamTrack) { try { await lp.unpublishTrack(lt.mediaStreamTrack); } catch { /* */ } }
+        if (!track) {
+          // No replacement (e.g. stopping screen share in an audio-only call) —
+          // drop any published video so no orphan publication lingers.
+          for (const pub of pubs) {
+            const lt = pub?.track;
+            const isVideo = pub?.kind === "video" || lt?.kind === "video";
+            if (lt && isVideo && lt.mediaStreamTrack) {
+              try { await lp.unpublishTrack(lt.mediaStreamTrack); } catch { /* */ }
+            }
           }
+        } else {
+          let swapped = false;
+          for (const pub of pubs) {
+            const lt = pub?.track;
+            const isVideo = pub?.kind === "video" || lt?.kind === "video";
+            if (lt && isVideo) {
+              if (typeof lt.replaceTrack === "function") { await lt.replaceTrack(track); swapped = true; break; }
+              if (lt.mediaStreamTrack) { try { await lp.unpublishTrack(lt.mediaStreamTrack); } catch { /* */ } }
+            }
+          }
+          if (!swapped) await lp.publishTrack(track);
         }
-        if (!swapped) await lp.publishTrack(track);
       } catch { /* */ }
     }
     syncCamEnabled();
@@ -955,9 +967,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const peer: PeerEntry = { pc, name: name || "Guest", dc: null, el: null, candQ: [], remoteSet: false, gotStream: false, initiator, graceT: null, restartT: null, iceRestarts: 0 };
     peers[pin] = peer;
     // We send the PROCESSED stream to peers (so they see filters), but if
-    // there's no pipeline (audio-only) fall back to the raw stream.
+    // there's no pipeline (audio-only) fall back to the raw stream. Audio always
+    // comes from the camera stream; the VIDEO is the SCREEN while sharing, so a
+    // participant who joins mid-share sees the screen (not the camera).
     const sendStream = processedStream || localStream;
-    if (sendStream) sendStream.getTracks().forEach(t => pc.addTrack(t, sendStream));
+    if (sendStream) {
+      sendStream.getAudioTracks().forEach(t => pc.addTrack(t, sendStream));
+      const sharing = screenSharing && screenStream;
+      const vtrack = sharing
+        ? (screenStream!.getVideoTracks()[0] || null)
+        : (sendStream.getVideoTracks()[0] || null);
+      if (vtrack) pc.addTrack(vtrack, sharing ? screenStream! : sendStream);
+    }
     pc.onicecandidate = e => {
       if (e.candidate) {
         sendWS({ type: "signal", to: pin, data: { candidate: e.candidate } });
@@ -1503,7 +1524,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     published.getVideoTracks().forEach(t => (t.enabled = camOn));
     if (processedStream) localStream.getVideoTracks().forEach(t => (t.enabled = camOn));
     $("camBtn")?.classList.toggle("off", !camOn);
-    const s = $("tile-self"); if (s) s.classList.toggle("audio-only", !camOn);
+    // Don't flip the self-tile to audio-only while a screen share occupies it.
+    const s = $("tile-self"); if (s && !screenSharing) s.classList.toggle("audio-only", !camOn);
   }
   // The camera video track we publish when NOT screen-sharing: the filtered
   // canvas track when a filter is active, else the raw camera.
@@ -1519,6 +1541,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
       getDisplayMedia?: (c?: MediaStreamConstraints) => Promise<MediaStream>;
     };
     if (!md.getDisplayMedia) { toast("Screen sharing isn't supported on this device.", true); return; }
+    // Mesh path can only hot-swap into an EXISTING video sender (no
+    // renegotiation). An audio-only call (no camera) has none, so screen share
+    // would silently reach no one — block it with a clear message. The SFU path
+    // publishes a fresh track, so it's fine there.
+    if (!livekitEnabled && Object.keys(peers).length > 0) {
+      const haveVideoSlot = Object.values(peers).some(p =>
+        p.pc.getSenders().some(s => (s.track && s.track.kind === "video") || !s.track));
+      if (!haveVideoSlot) {
+        toast("Screen sharing needs a camera-enabled call.", true);
+        return;
+      }
+    }
     screenBusy = true;
     let disp: MediaStream;
     try {
@@ -1528,8 +1562,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
       screenBusy = false;
       return;
     }
+    // The call may have ended while the picker was open — don't adopt a capture
+    // into a dead call (that would leak the screen grab + wedge state).
     const track = disp.getVideoTracks()[0] || null;
-    if (!track) { disp.getTracks().forEach(t => t.stop()); return; }
+    if (!inCall || !track) {
+      disp.getTracks().forEach(t => t.stop());
+      screenBusy = false;
+      return;
+    }
     screenStream = disp;
     screenSharing = true;
     // Browser "Stop sharing" UI (or the source ending) ⇒ restore the camera.
@@ -1629,6 +1669,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       screenStream = null;
     }
     screenSharing = false;
+    screenBusy = false;
     $("screenBtn")?.classList.remove("on");
     if (pipeline) { try { pipeline.destroy(); } catch { /* */ } pipeline = null; }
     if (localStream) {
@@ -1782,6 +1823,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         screenStream = null;
       }
       screenSharing = false;
+      screenBusy = false;
       if (localStream) {
         localStream.getTracks().forEach(t => t.stop());
         localStream = null;
