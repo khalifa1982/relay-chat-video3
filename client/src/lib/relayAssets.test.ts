@@ -35,4 +35,21 @@ describe("relay call UI regression guards", () => {
     // Some .ctrl-bar rule (the narrow-phone override) must allow wrapping.
     expect(RELAY_CSS).toMatch(/\.ctrl-bar\{[^}]*flex-wrap:wrap/);
   });
+
+  // ── active-speaker / spotlight view (v2.35) ────────────────────────────────
+  it("video tiles are clickable (cursor:pointer) so users can spotlight them", () => {
+    expect(RELAY_CSS).toMatch(/\.relay-tile\{[^}]*cursor:pointer/);
+  });
+
+  it("the spotlighted tile gets a visible accent ring", () => {
+    expect(RELAY_CSS).toMatch(/\.relay-tile\.is-spotlight\{[^}]*box-shadow/);
+  });
+
+  it("the active speaker tile gets a speaking outline", () => {
+    expect(RELAY_CSS).toMatch(/\.relay-tile\.speaking\{[^}]*outline/);
+  });
+
+  it("a screen-share tile letterboxes its video (object-fit:contain, never cropped)", () => {
+    expect(RELAY_CSS).toMatch(/\.relay-tile\.screen video\{[^}]*object-fit:contain/);
+  });
 });

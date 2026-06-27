@@ -345,6 +345,17 @@ export const RELAY_CSS = `
    (video keeps flowing) while hiding the empty/old frame; the avatar (.ph)
    overlays it for true audio-only participants. */
 .relay-root .relay-tile.audio-only video{visibility:hidden}
+/* ── active-speaker / spotlight view (v2.35) ──────────────────────────────
+   Tiles are clickable to spotlight. layoutGrid() toggles .spotlight/.compact on
+   the grid and .is-spotlight/.is-thumb/.speaking on tiles, and sets the grid
+   template inline; these rules just style those states. */
+.relay-root .relay-tile{cursor:pointer}
+.relay-root .relay-tile.is-spotlight{box-shadow:inset 0 0 0 2px var(--accent)}
+.relay-root .relay-tile.speaking{outline:2px solid var(--relay-online,#22c55e);outline-offset:-2px}
+.relay-root .relay-tile.screen video{object-fit:contain;background:#000}
+.relay-root #videoGrid.spotlight .relay-tile.is-thumb .ph .av{width:46px;height:46px;font-size:20px}
+.relay-root #videoGrid.spotlight .relay-tile.is-thumb .nm{font-size:11px;padding:3px 7px}
+.relay-root #videoGrid.compact{padding:8px;gap:8px}
 .relay-root .relay-tile .ph{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
 .relay-root .relay-tile .ph .av{width:74px;height:74px;border-radius:24px;background:var(--surface2);border:1px solid var(--border);
   display:grid;place-items:center;font-family:"Bricolage Grotesque";font-weight:800;font-size:30px;color:var(--accent)}

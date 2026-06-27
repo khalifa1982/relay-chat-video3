@@ -1150,3 +1150,39 @@ conference, so a 2-party call and a 10-way SFU call are recorded the same way.
 - [x] 10 new vitest cases (3 server: roster+dialed-number emit, unanswered-not-logged, left-early
       stays in roster; 7 client: `formatDuration`/`formatWhen`). 278 tests green, tsc + build clean.
 - [x] Footer → `v2.34.0`.
+
+## v2.34.0 review — conference-history findings (to fold into v2.35.1)
+
+A focused adversarial review found: (1) HIGH duration includes ring/dial time (startedAt stamped at
+invite, not accept); (2) MEDIUM abandonment-reaped rooms inflate duration by up to the 5-min abandon
+window (endedAt = reap wall-clock); (3) LOW/MED `recordConferenceEnd` SELECT-back-by-roomId is brittle
+(use the driver `insertId` like the rest of the codebase); (4) LOW unstable secondary sort (order by
+id, not 1-second-granularity startedAt). No leak / no double-emit / auth scoping all verified clean.
+
+## v2.35.0 — Active-speaker / spotlight view (delivered 2026-06-27)
+
+The in-call grid is now smart: it follows whoever's talking, auto-focuses a shared screen, lets you
+tap any tile to blow it up, and collapses to a 2-up of the active speakers when the window is small.
+
+- [x] **Spotlight layout**: one big tile + a thumb row. The focused tile is chosen by precedence
+      **manual pin > screen share > active speaker**. Pure decision logic in `lib/callLayout.ts`
+      (`computeLayout`/`resolveFocus`/`rankTiles`/`pickScreenShareTile`); `relayClient.layoutGrid`
+      just applies it to the real `#videoGrid` tiles (grid template + classes), so the existing
+      add/remove-tile callers get it for free.
+- [x] **Auto active-speaker**: SFU via LiveKit `ActiveSpeakersChanged` (loudest-first identities →
+      tile ids, self excluded); mesh via a lightweight Web Audio `AnalyserNode` per remote stream
+      sampled every 400ms (lazy `AudioContext`, torn down on call end). The big tile follows the
+      loudest speaker unless you've pinned someone.
+- [x] **Screen-share auto-focus**: a remote LiveKit screen-share track (`source === "screen_share"`)
+      or our own local share marks its tile `.screen` (letterboxed) and auto-spotlights it.
+- [x] **Click-to-spotlight**: tap a tile to pin it big; tap it again to unpin (back to auto). Tiles
+      show `cursor:pointer`; the active speaker gets a green `.speaking` outline.
+- [x] **Minimized 2-up**: a `ResizeObserver` on the call host flips to a compact, stacked 2-up of the
+      top-2 active tiles when the window is genuinely small (BOTH width<500 AND height<420 — so a
+      normal tall phone screen still gets the full spotlight, not a forced 2-up).
+- [x] State is reset on every call start (`enterCallUI`) and torn down on hang-up/destroy (interval,
+      AudioContext, ResizeObserver). Spotlight/active state pinned to a tile is cleared when that tile
+      leaves (mesh + SFU).
+- [x] 20 new vitest cases (16 `callLayout` decision logic, 4 `relayAssets` CSS guards). 298 tests
+      green, tsc + build clean.
+- [x] Footer → `v2.35.0`.
