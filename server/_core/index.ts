@@ -166,6 +166,7 @@ async function startServer() {
           roomId: info.roomId,
           dialedNumber: info.dialedNumber,
           startedAt: info.startedAt,
+          answeredAt: info.answeredAt,
           endedAt: info.endedAt,
           participants: info.participants.map((p) => ({ number: p.pin, name: p.name })),
         });

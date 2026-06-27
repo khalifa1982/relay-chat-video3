@@ -1186,3 +1186,23 @@ tap any tile to blow it up, and collapses to a 2-up of the active speakers when 
 - [x] 20 new vitest cases (16 `callLayout` decision logic, 4 `relayAssets` CSS guards). 298 tests
       green, tsc + build clean.
 - [x] Footer → `v2.35.0`.
+
+## v2.35.1 — Conference-history review fixes (delivered 2026-06-27)
+
+Folds the v2.34.0 adversarial-review findings (duration accuracy + insert robustness).
+
+- [x] **HIGH — duration now measures TALK time, not ring time.** `RoomMeta` gained `answeredAt`
+      (stamped on the first `accept`) and the logged `durationSec` counts from the answer, not the
+      dial. A 2-second call after a 40-second ring no longer shows as "0:42".
+- [x] **MEDIUM — abandoned-room duration no longer inflated by the 5-min reaper.** `RoomMeta` gained
+      `lastActiveAt`, refreshed on accept / explicit leave / in-call grace-disconnect (`roomActivityTouch`).
+      `reapRoom` logs `endedAt = lastActiveAt` (clamped ≥ startedAt) — the real last-active moment, not
+      the wall-clock reap time (which for an abandoned room is up to `ROOM_ABANDON_MS` later).
+- [x] **LOW/MED — `recordConferenceEnd` uses the driver `insertId`** (like `sendMessage` /
+      `createGroupConversation`) instead of a SELECT-back-by-roomId, removing the roomId-reuse
+      ambiguity and an extra query.
+- [x] **LOW — `listConferenceHistory` orders by `id`** (monotonic) instead of 1-second-granularity
+      `startedAt`, for a stable order.
+- [x] Test updated to assert `answeredAt` is set and `startedAt ≤ answeredAt ≤ endedAt`. 298 green,
+      tsc + build clean.
+- [x] Footer → `v2.35.1`.

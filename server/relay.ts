@@ -81,7 +81,9 @@ export interface RoomRecording {
  * path already records that).
  */
 export interface RoomMeta {
-  startedAt: number;            // unix ms — first invite that created the room
+  startedAt: number;            // unix ms — first invite that created the room (the "when")
+  answeredAt: number | null;    // unix ms — first accept (talk time starts here)
+  lastActiveAt: number;         // unix ms — last time a member was connected (the real end)
   dialedNumber: string | null;  // the number that seeded the room
   accepted: boolean;            // at least one callee answered → a real call
   roster: Map<string, string>;  // pin -> latest display name
@@ -91,6 +93,7 @@ export interface RoomMeta {
 export type ConferenceEndHook = (info: {
   roomId: string;
   startedAt: number;
+  answeredAt: number | null;
   endedAt: number;
   dialedNumber: string | null;
   participants: Array<{ pin: string; name: string }>;
@@ -143,6 +146,14 @@ function rosterTouch(reg: RelayRegistry, roomId: string, pin: string, name: stri
   if (meta) meta.roster.set(pin, name || "Guest");
 }
 
+/** Mark a room as active "now" so its logged end time tracks real activity,
+ *  not the (possibly 5-min-later) abandonment-reap wall clock. */
+function roomActivityTouch(reg: RelayRegistry, roomId: string | null | undefined) {
+  if (!roomId) return;
+  const meta = reg.roomMeta.get(roomId);
+  if (meta) meta.lastActiveAt = Date.now();
+}
+
 // How long a room with NO connected members survives before it's reaped. A
 // member who returns within this window auto-rejoins; longer and the call is
 // considered over. Generous so "refresh / step away / come back" keeps the call.
@@ -178,10 +189,16 @@ function reapRoom(reg: RelayRegistry, roomId: string) {
   reg.roomMeta.delete(roomId);
   if (meta && meta.accepted && meta.roster.size >= 2 && reg.onConferenceEnd) {
     try {
+      // End time = the last moment a member was actually connected, NOT the
+      // wall-clock reap time. For an immediate hang-up these are ~equal; for an
+      // ABANDONED room they differ by up to ROOM_ABANDON_MS (5 min), so using
+      // lastActiveAt keeps the logged duration honest. Clamp to >= startedAt.
+      const endedAt = Math.max(meta.startedAt, meta.lastActiveAt || Date.now());
       reg.onConferenceEnd({
         roomId,
         startedAt: meta.startedAt,
-        endedAt: Date.now(),
+        answeredAt: meta.answeredAt,
+        endedAt,
         dialedNumber: meta.dialedNumber,
         participants: Array.from(meta.roster.entries()).map(([pin, name]) => ({ pin, name })),
       });
@@ -483,6 +500,8 @@ export function leaveRoom(reg: RelayRegistry, pin: string) {
   const c = reg.clients.get(pin);
   if (c) c.roomId = null;
   if (!roomId) return;
+  // This member was active up to now — stamp the room so its end time is right.
+  roomActivityTouch(reg, roomId);
   const room = reg.rooms.get(roomId);
   if (room) {
     room.delete(pin);
@@ -709,6 +728,8 @@ export function handleMessage(
         // accept (below), so an unanswered dial is never logged as a conference.
         reg.roomMeta.set(rid, {
           startedAt: Date.now(),
+          answeredAt: null,
+          lastActiveAt: Date.now(),
           dialedNumber: to,
           accepted: false,
           roster: new Map([[conn.pin, self.name]]),
@@ -827,10 +848,16 @@ export function handleMessage(
       joinRoomMember(reg, roomId, conn.pin);
       self.roomId = roomId;
       // Conference history: this accept makes the room a REAL (answered) call;
-      // add the accepter to the roster so they appear in the history.
+      // add the accepter to the roster + stamp answer/active time so the logged
+      // duration measures TALK time (from first answer), not ring/dial time.
       {
         const meta = reg.roomMeta.get(roomId);
-        if (meta) { meta.accepted = true; meta.roster.set(conn.pin, self.name); }
+        if (meta) {
+          meta.accepted = true;
+          meta.roster.set(conn.pin, self.name);
+          if (meta.answeredAt == null) meta.answeredAt = Date.now();
+          meta.lastActiveAt = Date.now();
+        }
       }
       // Multi-device: tell this number's OTHER devices the call was answered
       // here, so their incoming-call UI clears ("answered elsewhere"). The
@@ -1174,6 +1201,9 @@ export function attachRelay(
                 // auto-rejoins the same call without a fresh invite. Drop only
                 // the dead connection, then arm the abandonment reaper in case
                 // this was the last connected member.
+                // This member was connected until now; stamp the room so an
+                // eventual abandonment reap logs the real end, not reap time.
+                roomActivityTouch(reg, rid);
                 reg.clients.delete(pin);
                 reg.devices.delete(pin);
                 maybeScheduleRoomReap(reg, rid);

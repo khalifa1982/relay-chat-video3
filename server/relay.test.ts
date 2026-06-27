@@ -667,6 +667,7 @@ describe("relay — conference history", () => {
   type ConfInfo = {
     roomId: string;
     startedAt: number;
+    answeredAt: number | null;
     endedAt: number;
     dialedNumber: string | null;
     participants: Array<{ pin: string; name: string }>;
@@ -702,6 +703,10 @@ describe("relay — conference history", () => {
     expect(names[a.pin!]).toBe("Alice");
     expect(names[b.pin!]).toBe("Bob");
     expect(info!.endedAt).toBeGreaterThanOrEqual(info!.startedAt);
+    // Duration is measured from the ANSWER (talk time), not the dial.
+    expect(info!.answeredAt).not.toBeNull();
+    expect(info!.answeredAt!).toBeGreaterThanOrEqual(info!.startedAt);
+    expect(info!.endedAt).toBeGreaterThanOrEqual(info!.answeredAt!);
   });
 
   it("does NOT log an UNANSWERED dial as a conference (no accept → no history)", () => {

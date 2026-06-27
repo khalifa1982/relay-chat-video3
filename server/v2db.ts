@@ -1348,8 +1348,9 @@ export interface ConferenceRosterEntry {
 export async function recordConferenceEnd(input: {
   roomId: string;
   dialedNumber: string | null;
-  startedAt: number; // unix ms
-  endedAt: number; // unix ms
+  startedAt: number; // unix ms — when the room was created (the "when")
+  answeredAt?: number | null; // unix ms — first answer; duration counts from here
+  endedAt: number; // unix ms — last member active
   participants: Array<{ number: string; name: string }>;
 }) {
   const db = await getDb();
@@ -1366,8 +1367,12 @@ export async function recordConferenceEnd(input: {
       identityId: id?.id ?? null,
     };
   });
-  const durationSec = Math.max(0, Math.round((input.endedAt - input.startedAt) / 1000));
-  await db.insert(conferenceHistory).values({
+  // Duration is TALK time: from the first answer (not the dial), to the end.
+  const talkStart = input.answeredAt ?? input.startedAt;
+  const durationSec = Math.max(0, Math.round((input.endedAt - talkStart) / 1000));
+  // Use the driver's insertId (same pattern as sendMessage/createGroupConversation)
+  // instead of a SELECT-back — avoids any roomId-reuse ambiguity + an extra query.
+  const ins = await db.insert(conferenceHistory).values({
     roomId: input.roomId,
     dialedNumber: input.dialedNumber ?? null,
     partyCount: roster.length,
@@ -1376,18 +1381,11 @@ export async function recordConferenceEnd(input: {
     durationSec,
     participants: roster,
   });
-  // Pull the row back to get its id (MySQL driver doesn't return it inline).
-  const inserted = await db
-    .select()
-    .from(conferenceHistory)
-    .where(eq(conferenceHistory.roomId, input.roomId))
-    .orderBy(desc(conferenceHistory.id))
-    .limit(1);
-  const conf = inserted[0];
-  if (!conf) return;
+  const conferenceId = Number((ins as unknown as Array<{ insertId?: number }>)[0]?.insertId);
+  if (!conferenceId) return;
   const partRows = roster
     .filter((r) => r.identityId != null)
-    .map((r) => ({ conferenceId: conf.id, identityId: r.identityId as number, number: r.number }));
+    .map((r) => ({ conferenceId, identityId: r.identityId as number, number: r.number }));
   if (partRows.length) await db.insert(conferenceParticipants).values(partRows);
 }
 
@@ -1406,7 +1404,9 @@ export async function listConferenceHistory(identityId: number, limit = 100) {
   const confs = await db
     .select()
     .from(conferenceHistory)
+    // Order by id (monotonic) — startedAt has 1-second granularity, so it ties
+    // unstably for conferences started in the same second.
     .where(inArray(conferenceHistory.id, confIds))
-    .orderBy(desc(conferenceHistory.startedAt));
+    .orderBy(desc(conferenceHistory.id));
   return confs;
 }
