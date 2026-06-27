@@ -132,4 +132,15 @@ describe("relay call UI regression guards", () => {
     expect(RELAY_MARKUP).toMatch(/id="tileMenu"/);
     expect(RELAY_MARKUP).toMatch(/id="tmActs"/);
   });
+
+  // ── add-person keypad (v2.49) ──────────────────────────────────────────────
+  it("the add-person window has an on-screen keypad container", () => {
+    expect(RELAY_MARKUP).toMatch(/id="addKeys"/);
+    expect(RELAY_CSS).toMatch(/\.addpad-keys\{[^}]*grid-template-columns:repeat\(3,1fr\)/);
+    expect(RELAY_CSS).toMatch(/\.addpad-key\{/);
+  });
+  it("tells the user the invite fires automatically (no Add click needed)", () => {
+    expect(RELAY_MARKUP).toMatch(/class="addpad-hint"/);
+    expect(RELAY_MARKUP).toMatch(/automatically/i);
+  });
 });

@@ -1509,3 +1509,23 @@ Five refinements + the v2.44 review fixes.
       server membership to auto-rejoin and would drop the outgoing dial).
 - [x] 26 new tests (version constant + endpoint, UpdateChecker contract, `isNewer` semver behaviour,
       auto-PiP wiring). 379 tests green, tsc + build clean. Footer → `v2.48.0`.
+
+## v2.49.0 — Add-person keypad + auto-invite, working call waiting (delivered 2026-06-27)
+
+Three fixes from on-device feedback about the in-call "+" add-person window and call waiting.
+
+- [x] **Add-person window auto-invites (no "Add" click).** The in-call "+" pad now has an on-screen
+      numeric **keypad** (it had regressed to a bare text field) — tap the digits and the invite **fires
+      automatically on the 6th digit**. Online → the server rings them straight in; offline/nonexistent →
+      a clear **"That number doesn't exist or is offline."** toast (server message reworded, system-wide).
+      Either way the **pad closes itself**. A re-entry guard (`addInviting`) + a pad-open guard stop the
+      auto-fire, the input event, and Enter from triple-sending one invite. The text field still accepts
+      typing (desktop) and is sanitized to digits; the pad no longer auto-focuses (so the on-screen keypad
+      isn't buried under the mobile OS keyboard).
+- [x] **Call waiting now actually works.** The signaling server used to bounce a second caller with
+      **"busy"** whenever the callee was already in a 2+ person call, so the call-waiting popup (built long
+      ago: Answer = hold current + switch, Reject = decline) **never showed**. The server no longer sends
+      busy — the invite **rings through** and the callee's client shows the call-waiting popup; the callee
+      decides. (The only invite still suppressed is a redundant one into a room the caller is already in.)
+- [x] Updated the relay "busy" test to assert the new ring-through (call-waiting) behaviour; added keypad
+      markup guards. 381 tests green, tsc + build clean. Footer → `v2.49.0`.
