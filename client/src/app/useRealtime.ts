@@ -6,6 +6,7 @@
 import { useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { notify, playCallRing, playMessageChime } from "./notifications";
+import { isThreadMuted } from "./mutedThreads";
 
 type V2Event =
   | { kind: "message"; conversationId: number; from: number }
@@ -80,7 +81,10 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
             // fanned to the sender too). notify() already suppresses when the
             // tab is visible; gate the chime the same way so we don't beep
             // while the user is reading the thread.
-            if (shouldAlertForMessage(payload.from, selfId)) {
+            if (
+              shouldAlertForMessage(payload.from, selfId) &&
+              !isThreadMuted(payload.conversationId)
+            ) {
               if (typeof document === "undefined" || document.hidden) {
                 playMessageChime();
               }

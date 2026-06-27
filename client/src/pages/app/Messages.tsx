@@ -17,6 +17,8 @@ import {
   UserPlus,
   Trash2,
   Reply,
+  Bell,
+  BellOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,6 +26,7 @@ import { trpc } from "@/lib/trpc";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { linkify } from "@/lib/linkify";
 import { useIdentity } from "@/app/useIdentity";
+import { useThreadMuted, isThreadMuted, onMutedChange } from "@/app/mutedThreads";
 
 const EMOJI_QUICK = [
   "😀","😂","😊","😍","😉","😎","🤔","🙏",
@@ -55,6 +58,10 @@ function formatTime(iso: string | Date): string {
 export default function MessagesPage() {
   const { me } = useIdentity();
   const [location, setLocation] = useLocation();
+  // Re-render the thread list when any conversation's mute state changes so the
+  // muted icons stay live (the per-item read is otherwise unsubscribed).
+  const [, forceMuteTick] = useState(0);
+  useEffect(() => onMutedChange(() => forceMuteTick((n) => n + 1)), []);
   const search = useSearch();
   const params = new URLSearchParams(search);
   const activeConvoIdRaw = params.get("c");
@@ -130,7 +137,10 @@ export default function MessagesPage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2">
-                          <div className="font-medium truncate">
+                          <div className="font-medium truncate flex items-center gap-1.5">
+                            {isThreadMuted(t.conversationId) && (
+                              <BellOff className="size-3.5 shrink-0 text-muted-foreground" />
+                            )}
                             {t.peerDisplayName || t.peerNumber}
                           </div>
                           {t.lastMessageAt && (
@@ -192,6 +202,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   );
 
   const isGroup = thread?.kind === "group";
+  const [muted, setMuted] = useThreadMuted(conversationId);
   // For groups, fetch the roster so we can label messages with sender names.
   const infoQuery = trpc.messages.conversationInfo.useQuery(
     { conversationId },
@@ -482,6 +493,16 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     : "")}
           </div>
         </div>
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={() => setMuted(!muted)}
+          aria-label={muted ? "Unmute conversation" : "Mute conversation"}
+          title={muted ? "Muted — tap to unmute" : "Mute notifications"}
+          className={muted ? "text-muted-foreground" : ""}
+        >
+          {muted ? <BellOff className="size-5" /> : <Bell className="size-5" />}
+        </Button>
         {!isGroup && thread?.peerNumber && (
           <Button
             size="icon"

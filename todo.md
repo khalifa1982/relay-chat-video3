@@ -974,3 +974,15 @@ Feature-gated on `INBOUND_EMAIL_DOMAIN`; built + reviewed by an adversarial agen
       preview, with 📷/🎬/🎤/📎 glyphs for attachments) resolved from the loaded thread.
 - [x] Reply works in DMs and groups (sender label uses the group roster when available).
 - [x] Footer → `v2.28.0`. tsc clean, 243 tests green, build clean.
+
+## v2.29.0 — Per-conversation mute (delivered 2026-06-27)
+
+- [x] `client/src/app/mutedThreads.ts` — per-device mute set in localStorage (same pattern as
+      DND; no server/schema change). `isThreadMuted`/`setThreadMuted`/`useThreadMuted`/`onMutedChange`.
+- [x] `useRealtime` now suppresses the chime + desktop notification for muted conversations
+      (messages still arrive and update in-app — only the alert is silenced).
+- [x] Conversation header gets a Bell/BellOff toggle; the thread list shows a BellOff icon on
+      muted threads (live-updates via an `onMutedChange` subscription).
+- [x] 5 vitest cases (`mutedThreads.test.ts`): default, toggle isolation, persistence,
+      subscribe/unsubscribe, corrupt-storage tolerance. 248 tests green.
+- [x] Footer → `v2.29.0`. tsc clean, build clean.
