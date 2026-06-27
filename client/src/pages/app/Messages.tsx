@@ -16,6 +16,7 @@ import {
   Users,
   UserPlus,
   Trash2,
+  Reply,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -243,6 +244,31 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   // ── composer state ──
   const [text, setText] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<{
+    id: number;
+    senderIdentityId: number;
+    body: string | null;
+    kind: string;
+  } | null>(null);
+  // Quick lookup of a message by id (to render the quoted reply preview).
+  const msgById = useMemo(() => {
+    const m = new Map<number, { senderIdentityId: number; body: string | null; kind: string }>();
+    for (const x of messagesQuery.data ?? []) m.set(x.id, x);
+    return m;
+  }, [messagesQuery.data]);
+  function senderLabel(identityId: number): string {
+    if (me && identityId === me.id) return "You";
+    return nameById.get(identityId) || thread?.peerDisplayName || "Them";
+  }
+  function previewOf(msg: { body: string | null; kind: string } | undefined): string {
+    if (!msg) return "Message";
+    if (msg.body) return msg.body.length > 80 ? msg.body.slice(0, 80) + "…" : msg.body;
+    return msg.kind === "image" ? "📷 Photo"
+      : msg.kind === "video" ? "🎬 Video"
+      : msg.kind === "audio" ? "🎤 Voice message"
+      : msg.kind === "file" ? "📎 Attachment"
+      : "Message";
+  }
   const fileRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLInputElement>(null);
   const [pendingUpload, setPendingUpload] = useState<{ id: number; url: string; mimeType: string; filename?: string } | null>(null);
@@ -294,10 +320,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       kind,
       body: body || null,
       attachmentId: pendingUpload?.id ?? null,
+      replyToId: replyingTo?.id ?? null,
     });
     setText("");
     setPendingUpload(null);
     setEmojiOpen(false);
+    setReplyingTo(null);
   }
 
   function insertEmoji(e: string) {
@@ -486,16 +514,27 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 className={"group flex items-end gap-1.5 " + (mine ? "justify-end" : "justify-start")}
               >
                 {mine && (
-                  <button
-                    type="button"
-                    aria-label="Unsend message"
-                    title="Unsend"
-                    onClick={() => deleteMessage(m.id)}
-                    disabled={removeMutation.isPending}
-                    className="shrink-0 mb-1 size-7 grid place-items-center rounded-full text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-muted/60 hover:text-destructive transition-opacity"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      aria-label="Unsend message"
+                      title="Unsend"
+                      onClick={() => deleteMessage(m.id)}
+                      disabled={removeMutation.isPending}
+                      className="shrink-0 mb-1 size-7 grid place-items-center rounded-full text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-muted/60 hover:text-destructive transition-opacity"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Reply"
+                      title="Reply"
+                      onClick={() => setReplyingTo(m)}
+                      className="shrink-0 mb-1 size-7 grid place-items-center rounded-full text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-muted/60 hover:text-foreground transition-opacity"
+                    >
+                      <Reply className="size-3.5" />
+                    </button>
+                  </>
                 )}
                 <div
                   className={
@@ -508,6 +547,19 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   {isGroup && !mine && (
                     <div className="text-[11px] font-semibold text-accent mb-0.5">
                       {nameById.get(m.senderIdentityId) || "Member"}
+                    </div>
+                  )}
+                  {m.replyToId != null && (
+                    <div
+                      className={
+                        "mb-1 rounded-lg border-l-2 pl-2 py-0.5 text-[11px] leading-tight " +
+                        (mine
+                          ? "border-primary-foreground/50 bg-primary-foreground/10 text-primary-foreground/80"
+                          : "border-accent/60 bg-foreground/5 text-muted-foreground")
+                      }
+                    >
+                      <span className="font-semibold">{senderLabel(msgById.get(m.replyToId)?.senderIdentityId ?? -1)}</span>
+                      <span className="opacity-80"> · {previewOf(msgById.get(m.replyToId))}</span>
                     </div>
                   )}
                   {m.attachment && (
@@ -534,6 +586,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     )}
                   </div>
                 </div>
+                {!mine && (
+                  <button
+                    type="button"
+                    aria-label="Reply"
+                    title="Reply"
+                    onClick={() => setReplyingTo(m)}
+                    className="shrink-0 mb-1 size-7 grid place-items-center rounded-full text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-muted/60 hover:text-foreground transition-opacity"
+                  >
+                    <Reply className="size-3.5" />
+                  </button>
+                )}
               </div>
             );
           })
@@ -542,6 +605,25 @@ function ConversationView({ conversationId }: { conversationId: number }) {
 
       {/* composer */}
       <div className="px-3 md:px-5 py-3 border-t border-border bg-card md:rounded-b-2xl">
+        {replyingTo && (
+          <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-muted/60 border-l-2 border-accent text-sm">
+            <Reply className="size-4 shrink-0 text-accent" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[11px] font-semibold text-accent">
+                Replying to {senderLabel(replyingTo.senderIdentityId)}
+              </div>
+              <div className="truncate text-xs text-muted-foreground">{previewOf(replyingTo)}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReplyingTo(null)}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Cancel reply"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        )}
         {pendingUpload && (
           <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-muted text-sm">
             <Paperclip className="size-4 shrink-0" />

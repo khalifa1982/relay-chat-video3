@@ -965,3 +965,12 @@ Feature-gated on `INBOUND_EMAIL_DOMAIN`; built + reviewed by an adversarial agen
 - [x] Client: a hover/focus-revealed trash button on your OWN message bubbles with a confirm;
       optimistic invalidation refreshes the thread.
 - [x] Footer → `v2.27.0`. tsc clean, 243 tests green, build clean.
+
+## v2.28.0 — Message reply / quote (delivered 2026-06-27)
+
+- [x] Client-only — the `messages` schema + `send` already carried `replyToId`; this surfaces
+      it. A hover/focus reply button on every message sets the reply target; a quoted chip
+      shows above the composer; the sent message renders the quoted original (sender label +
+      preview, with 📷/🎬/🎤/📎 glyphs for attachments) resolved from the loaded thread.
+- [x] Reply works in DMs and groups (sender label uses the group roster when available).
+- [x] Footer → `v2.28.0`. tsc clean, 243 tests green, build clean.
