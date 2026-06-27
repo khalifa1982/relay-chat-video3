@@ -154,7 +154,7 @@ export const RELAY_MARKUP = `
         <button class="ctrl" id="audioBtn" title="Audio output" style="display:none">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg>
         </button>
-        <button class="ctrl" id="pipBtn" title="Picture-in-Picture (keep the call visible)" style="display:none">
+        <button class="ctrl" id="pipBtn" title="Auto Picture-in-Picture (keeps the call visible when you switch apps)" style="display:none">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="5" rx="1" fill="currentColor" stroke="none"/></svg>
         </button>
         <button class="ctrl" id="filterBtn" title="Filters">

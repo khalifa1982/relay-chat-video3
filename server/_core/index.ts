@@ -1,6 +1,8 @@
 import "dotenv/config";
 import express from "express";
+import type { Request, Response } from "express";
 import cookieParser from "cookie-parser";
+import { APP_VERSION } from "@shared/version";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
@@ -175,6 +177,13 @@ async function startServer() {
       }
     }
   );
+  // Version endpoint for the client's auto-update checker. Returns the version
+  // baked into THIS (running) deploy; an older already-loaded tab polls it and
+  // notices a mismatch after a new deploy. Cheap, no-auth, no-cache.
+  app.get("/api/version", (_req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ version: APP_VERSION });
+  });
   // v2.0 attachment upload (multipart-friendly JSON body)
   registerV2Upload(app);
   // v2.0 push channel — SSE that routes message/presence/read events
