@@ -22,6 +22,13 @@
       "when": 1780144734179,
       "tag": "0002_classy_stone_men",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1782567116164,
+      "tag": "0003_known_magma",
+      "breakpoints": true
     }
   ]
 }
