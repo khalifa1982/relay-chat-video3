@@ -102,7 +102,7 @@ export default function ContactsPage() {
           className="h-11"
         />
       </div>
-      <div className="flex-1 overflow-y-auto md:rounded-2xl md:border md:border-border md:bg-card">
+      <div className="flex-1 overflow-y-auto pb-24 md:pb-0 md:rounded-2xl md:border md:border-border md:bg-card">
         {contacts.isLoading ? (
           <div className="p-6 text-sm text-muted-foreground">Loading…</div>
         ) : filtered.length === 0 ? (
@@ -121,14 +121,17 @@ export default function ContactsPage() {
                   <div className="size-11 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
                     {initialsFrom(c.displayName || c.number)}
                   </div>
-                  <span
-                    className={
-                      "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
-                      (c.isOnline
-                        ? "bg-[color:var(--relay-online)]"
-                        : "bg-[color:var(--relay-offline)]")
-                    }
-                  />
+                  {/* Presence dot — fully hidden for a guest inactive >24h (privacy). */}
+                  {!c.presenceHidden && (
+                    <span
+                      className={
+                        "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
+                        (c.isOnline
+                          ? "bg-[color:var(--relay-online)]"
+                          : "bg-[color:var(--relay-offline)]")
+                      }
+                    />
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="font-medium truncate flex items-center gap-1.5">
@@ -136,11 +139,11 @@ export default function ContactsPage() {
                     {c.displayName || c.number}
                   </div>
                   <div className="text-xs text-muted-foreground font-mono">
-                    {c.number} ·{" "}
-                    {c.isOnline ? (
-                      <span className="text-[color:var(--relay-online)]">online</span>
+                    {c.number}
+                    {c.presenceHidden ? null : c.isOnline ? (
+                      <> · <span className="text-[color:var(--relay-online)]">online</span></>
                     ) : (
-                      <>last seen {relativeTime(c.lastSeenAt)}</>
+                      <> · last seen {relativeTime(c.lastSeenAt)}</>
                     )}
                   </div>
                   {(c.company || c.jobTitle) && (
@@ -329,19 +332,21 @@ function AddContactDialog({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-2xl bg-card border border-border p-5 shadow-2xl"
+        className="w-full max-w-md flex flex-col max-h-[90dvh] rounded-2xl bg-card border border-border shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between p-5 pb-3 shrink-0 border-b border-border/60">
           <h3 className="font-semibold">
             {editing.id ? "Edit contact" : "Add by PIN"}
           </h3>
-          <Button size="icon" variant="ghost" onClick={onClose}>
+          <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close">
             <X className="size-4" />
           </Button>
         </div>
 
-        <div className="space-y-4">
+        {/* Scrollable body so the form never pushes the Save button off-screen
+            on small/mobile viewports (the bug where "Save" was unreachable). */}
+        <div className="space-y-4 p-5 overflow-y-auto flex-1 min-h-0">
           <div>
             <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
               RELAY number
@@ -418,13 +423,16 @@ function AddContactDialog({
                       <CheckCircle2 className="size-3.5 text-primary shrink-0" />
                     </div>
                     <div className="text-xs text-muted-foreground font-mono">
-                      {lookup.data!.number} ·{" "}
-                      {lookup.data!.isOnline ? (
-                        <span className="text-[color:var(--relay-online)] font-medium">
-                          online
-                        </span>
+                      {lookup.data!.number}
+                      {lookup.data!.presenceHidden ? null : lookup.data!.isOnline ? (
+                        <>
+                          {" · "}
+                          <span className="text-[color:var(--relay-online)] font-medium">
+                            online
+                          </span>
+                        </>
                       ) : (
-                        <span>offline</span>
+                        <span> · offline</span>
                       )}
                     </div>
                   </div>
@@ -545,7 +553,8 @@ function AddContactDialog({
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
-        <div className="mt-5 flex items-center justify-end gap-2">
+        {/* Sticky footer — always visible regardless of form length. */}
+        <div className="shrink-0 flex items-center justify-end gap-2 p-4 border-t border-border/60 bg-card rounded-b-2xl">
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>

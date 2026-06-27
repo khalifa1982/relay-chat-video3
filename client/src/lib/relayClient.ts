@@ -15,6 +15,7 @@
 
 import { MediaPipeline, FILTERS, type FilterId, type FilterDef } from "./mediaPipeline";
 import { computeLayout } from "./callLayout";
+import { detectDeviceType } from "./deviceType";
 import { isDndOn } from "@/app/dnd";
 
 interface IceConfig { iceServers: Array<{ urls: string; username?: string; credential?: string }>; }
@@ -41,11 +42,17 @@ interface Msg {
   type?: string;
   pin?: string;
   name?: string;
+  device?: string;
   from?: string;
   fromName?: string;
   to?: string;
   roomId?: string;
-  members?: Array<{ pin: string; name: string }>;
+  // Host moderation / roles. (`on`/`by` are shared with the recording message
+  // below, so they're not re-declared here.)
+  role?: string | null;
+  selfRole?: string | null;
+  hostPin?: string | null;
+  members?: Array<{ pin: string; name: string; device?: string; role?: string }>;
   iceServers?: IceConfig["iceServers"];
   data?: { sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
   message?: string;
@@ -70,6 +77,9 @@ export interface RelayHandle {
   /** Programmatic dial. Returns true if the engine accepted the request.
    *  `opts.voice` starts the call with the camera off (a voice call). */
   dial: (number: string, opts?: { voice?: boolean }) => boolean;
+  /** Start a GROUP call — ring up to 10 numbers into one room. Returns true if
+   *  at least one valid number was accepted. */
+  dialGroup: (numbers: string[], opts?: { voice?: boolean }) => boolean;
   /** Set/replace the engine-state callback. Fired whenever phase changes. */
   setOnStateChange: (cb: ((phase: RelayPhase) => void) | null) => void;
   /** Best-effort: cancel an in-flight call/leave the room. */
@@ -131,6 +141,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let inCall = false;
   let roomId: string | null = null;
   const peers: Record<string, PeerEntry> = {};
+  // Group call: extra invitees queued until the server confirms the room, so a
+  // fresh group dial can't race into two separate rooms.
+  let pendingGroupInvites: string[] = [];
+  // Per-tile enrichment (v2.39): remote device types (pin -> "Mobile"/"Desktop",
+  // shared via signaling) + a periodic getStats sampler for live bitrate.
+  const peerDevices: Record<string, string> = {};
+  let statsSampleT: ReturnType<typeof setInterval> | null = null;
+  const statsPrev: Record<string, { bytes: number; ts: number }> = {};
+  // Host moderation (v2.41): my role + everyone's roles for badges + the
+  // host-controls panel. "host" | "cohost" | null.
+  let myRole: string | null = null;
+  let roomHostPin: string | null = null;
+  const peerRoles: Record<string, string> = {};
   // ---------- active-speaker / spotlight view (v2.35) ----------
   let spotlightId: string | null = null;     // tile id manually pinned big, or null
   let manualSpotlight = false;               // user clicked a tile to pin it
@@ -237,7 +260,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         diag("sse ready");
         const cbs = wsOpenCbs.splice(0);
         cbs.forEach(fn => { try { fn(); } catch { /* */ } });
-        if (wantName) sendWS({ type: "register", name: wantName, pin: me.pin || undefined });
+        if (wantName) sendWS({ type: "register", name: wantName, pin: me.pin || undefined, device: detectDeviceType() });
         return;
       }
       if (m && m.type) diag("recv " + m.type + (m.from ? " from " + m.from.slice(-4) : ""));
@@ -294,7 +317,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
         toast(m.message || "Recording failed.", true);
         recordingOn = false; updateRecordingUI();
         break;
-      case "room":         roomId = m.roomId || null; break;
+      case "room":
+        roomId = m.roomId || null;
+        captureSelfRole(m); // the creator is the host
+        // Group call: now that the room exists, ring the remaining invitees.
+        if (pendingGroupInvites.length) {
+          const q = pendingGroupInvites; pendingGroupInvites = [];
+          q.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t }); });
+        }
+        break;
       case "ring":         onRing(m); break;
       case "ring-cancel":  onRingCancel(m); break;
       case "joined":       onJoined(m); break;
@@ -310,6 +341,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
         if (inCall && aloneInCall()) hangUp("peer-busy");
         break;
       case "peer-left":    removePeer(m.pin!); break;
+      case "force-mute":   onForceMute(m); break;
+      case "role":         onRoleChange(m); break;
+      case "host-pin":     onHostPin(m); break;
       case "signal":       onSignal(m.from!, m.data); break;
       case "ice":          onIceServers(m); break;
       case "error":
@@ -349,7 +383,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     else if (savedPin && !me.pin) me.pin = savedPin;
     const btn = $("joinBtn") as HTMLButtonElement | null;
     if (btn) { btn.disabled = true; btn.textContent = "Connecting…"; }
-    if (ws && ws.readyState === 1) sendWS({ type: "register", name, pin: me.pin || undefined });
+    if (ws && ws.readyState === 1) sendWS({ type: "register", name, pin: me.pin || undefined, device: detectDeviceType() });
     else connectWS();
   }
   function onRegistered(m: Msg) {
@@ -425,17 +459,52 @@ export function startRelay(root: HTMLElement): RelayHandle {
             && Math.min(window.screen?.width || 9999, window.screen?.height || 9999) <= 820);
     } catch { return false; }
   })();
+  // Streaming quality (camera + screen). "low" = data saver: far less CPU
+  // (cooler device) and bandwidth (lower latency); "high" = HD. Persisted.
+  type VideoQuality = "high" | "low";
+  let videoQuality: VideoQuality = (() => {
+    try { return window.localStorage.getItem("relay_quality") === "low" ? "low" : "high"; }
+    catch { return "high"; }
+  })();
+  function qualityVideo(q: VideoQuality) {
+    if (q === "low") {
+      return { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 15, max: 20 } };
+    }
+    return {
+      width: { ideal: isMobile ? 960 : 1280 },
+      height: { ideal: isMobile ? 540 : 720 },
+      frameRate: { ideal: 30, max: 30 },
+    };
+  }
   async function acquireRawStream(useFacingMode: "user" | "environment"): Promise<MediaStream> {
     return navigator.mediaDevices.getUserMedia({
       audio: true,
-      video: {
-        width: { ideal: isMobile ? 960 : 1280 },
-        height: { ideal: isMobile ? 540 : 720 },
-        frameRate: { ideal: 30, max: 30 },
-        facingMode: useFacingMode,
-      },
+      video: { ...qualityVideo(videoQuality), facingMode: useFacingMode },
     });
   }
+  function updateQualityBtn() {
+    const b = $("qualityBtn");
+    if (b) {
+      b.textContent = videoQuality === "low" ? "SD" : "HD";
+      b.classList.toggle("on", videoQuality === "high");
+      b.setAttribute("title", videoQuality === "low" ? "Data saver — tap for HD" : "HD — tap for data saver");
+    }
+  }
+  // Switch resolution live (no re-acquire) via applyConstraints on the current
+  // camera and/or screen track, so it's seamless mid-call.
+  async function setVideoQuality(q: VideoQuality) {
+    videoQuality = q;
+    try { window.localStorage.setItem("relay_quality", q); } catch { /* */ }
+    const vc = qualityVideo(q);
+    const ac = { width: vc.width, height: vc.height, frameRate: vc.frameRate };
+    const camTrack = localStream?.getVideoTracks()[0];
+    if (camTrack) { try { await camTrack.applyConstraints(ac); } catch { /* */ } }
+    const scrTrack = screenStream?.getVideoTracks()[0];
+    if (scrTrack) { try { await scrTrack.applyConstraints(ac); } catch { /* */ } }
+    updateQualityBtn();
+    toast(q === "low" ? "Data saver on (low resolution)" : "HD video on");
+  }
+  function toggleQuality() { void setVideoQuality(videoQuality === "high" ? "low" : "high"); }
   // The stream we currently publish to peers. When a filter is active it's the
   // processed (canvas) stream; otherwise it's the RAW camera — which means NO
   // canvas, NO captureStream re-encode, and far less heat in the common case of
@@ -576,12 +645,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try {
       nuVideo = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: {
-          width: { ideal: isMobile ? 960 : 1280 },
-          height: { ideal: isMobile ? 540 : 720 },
-          frameRate: { ideal: 30, max: 30 },
-          facingMode: next,
-        },
+        video: { ...qualityVideo(videoQuality), facingMode: next },
       });
     } catch {
       toast("Couldn't switch camera — this device may only have one.", true);
@@ -745,6 +809,36 @@ export function startRelay(root: HTMLElement): RelayHandle {
     return true;
   }
 
+  // Start a GROUP call: ring up to 10 numbers into ONE room. The relay creates
+  // the room on the first invite and rings every subsequent invite into the same
+  // room, so the first to accept joins and the rest keep ringing (call-waiting
+  // style). We gate the extra invites on the server's `room` confirmation so a
+  // fresh group dial can't race into two rooms.
+  async function programmaticGroupDial(targets: string[], opts?: { voice?: boolean }): Promise<boolean> {
+    if (!me.pin) return false;
+    const clean = Array.from(
+      new Set(
+        targets
+          .map(t => String(t).replace(/\D/g, "").slice(0, 6))
+          .filter(t => /^\d{6}$/.test(t) && t !== me.pin)
+      )
+    ).slice(0, 10);
+    if (clean.length === 0) return false;
+    try { await ensureMedia(); } catch { return false; }
+    if (opts?.voice && localStream && localStream.getVideoTracks().length > 0) setCam(false);
+    const alreadyInRoom = inCall && !!roomId;
+    if (!inCall) { inCall = true; enterCallUI(opts?.voice ? "Voice call…" : "Calling…"); emitPhase("dialing"); }
+    if (alreadyInRoom) {
+      clean.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t }); });
+    } else {
+      const [first, ...rest] = clean;
+      pendingGroupInvites = rest;
+      sendWS({ type: "invite", to: first });
+    }
+    toast("Starting group call (" + clean.length + ")…");
+    return true;
+  }
+
   // ---------- incoming ----------
   // ---------- call waiting ----------
   function showCallWaiting(name: string) {
@@ -838,6 +932,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // ---------- mesh / SFU ----------
   function onJoined(m: Msg) {
     roomId = m.roomId || null;
+    recordMemberDevices(m.members);
+    recordMemberRoles(m.members);
+    captureSelfRole(m);
     if (livekitEnabled && roomId) {
       // SFU path: media goes through LiveKit, not the mesh. Don't build peers;
       // connect to the room (if the token already arrived — otherwise the
@@ -875,6 +972,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     roomId = rid;
     inCall = true;
     enterCallUI("In call");          // shows the call screen + arms the SFU watchdog
+    recordMemberDevices(m.members);
+    recordMemberRoles(m.members);
+    captureSelfRole(m);
     toast("Rejoined the call");
     if (livekitEnabled) {
       diag("rejoin: livekit room " + rid);
@@ -888,6 +988,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
   }
   function onPeerJoined(m: Msg) {
+    if (m.pin && m.device) { peerDevices[m.pin] = m.device; setTileDevice("tile-" + m.pin, m.device); }
+    if (m.pin && m.role) { peerRoles[m.pin] = m.role as string; setTileRole("tile-" + m.pin, m.role as string); }
+    refreshHostPanel();
     // On the SFU path, LiveKit's own ParticipantConnected/TrackSubscribed events
     // drive remote tiles — the mesh offer/answer dance is skipped entirely.
     if (livekitEnabled) return;
@@ -1032,6 +1135,227 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
   // Remote-participant tile shims that reuse the existing #videoGrid DOM/CSS
   // (keyed by LiveKit participant.identity, which equals the 6-digit pin).
+  // Placeholder (avatar + full name, shown when the camera is off) + an info
+  // chip (device + live speed) used by every tile builder.
+  function tileContentHTML(name: string, device: string): string {
+    const dev = device
+      ? '<span class="ti-dev">' + escapeHtml(device) + "</span>"
+      : '<span class="ti-dev"></span>';
+    return (
+      '<div class="ph"><div class="av">' + initials(name) + "</div>" +
+      '<div class="ph-name">' + escapeHtml(name) + "</div></div>" +
+      '<div class="nm">' + escapeHtml(name) + "</div>" +
+      '<div class="tile-info">' + dev + '<span class="ti-speed"></span></div>'
+    );
+  }
+  function setTileDevice(tileId: string, device: string) {
+    const el = document.getElementById(tileId);
+    const d = el?.querySelector(".ti-dev") as HTMLElement | null;
+    if (d && device) d.textContent = device;
+  }
+  // Remember (and display) each member's device type. Works for both paths: the
+  // map is read at LiveKit tile creation, and the live setter updates mesh tiles.
+  function recordMemberDevices(members?: Array<{ pin: string; device?: string }>) {
+    (members || []).forEach(mem => {
+      if (mem.device) {
+        peerDevices[mem.pin] = mem.device;
+        setTileDevice("tile-" + mem.pin, mem.device);
+      }
+    });
+  }
+
+  // ---------- host moderation (roles, mute, pin) ----------
+  function setMic(on: boolean) {
+    if (!localStream) return;
+    micOn = on;
+    localStream.getAudioTracks().forEach(t => (t.enabled = on));
+    $("micBtn")?.classList.toggle("off", !on);
+  }
+  function setTileRole(tileId: string, role: string | null | undefined) {
+    const el = document.getElementById(tileId);
+    let badge = el?.querySelector(".role-badge") as HTMLElement | null;
+    const nm = el?.querySelector(".nm") as HTMLElement | null;
+    if (role) {
+      if (!badge && nm) {
+        badge = document.createElement("span");
+        badge.className = "role-badge";
+        nm.insertBefore(badge, nm.firstChild);
+      }
+      if (badge) badge.textContent = role === "host" ? "Host" : "Co-Host";
+    } else if (badge) {
+      badge.remove();
+    }
+  }
+  function recordMemberRoles(members?: Array<{ pin: string; role?: string }>) {
+    (members || []).forEach(mem => {
+      if (mem.role) { peerRoles[mem.pin] = mem.role; setTileRole("tile-" + mem.pin, mem.role); }
+      else { delete peerRoles[mem.pin]; setTileRole("tile-" + mem.pin, null); }
+    });
+  }
+  function captureSelfRole(m: Msg) {
+    if (m.selfRole !== undefined) myRole = m.selfRole ?? null;
+    if (m.hostPin !== undefined) roomHostPin = m.hostPin ?? null;
+    if (myRole && me.pin) { peerRoles[me.pin] = myRole; setTileRole("tile-self", myRole); }
+    updateHostUI();
+  }
+  function isModerator(): boolean { return myRole === "host" || myRole === "cohost"; }
+  function updateHostUI() {
+    const b = $("hostBtn");
+    if (b) b.style.display = isModerator() ? "" : "none";
+  }
+  function onForceMute(m: Msg) {
+    if (m.on) { setMic(false); toast("You were muted by the host."); }
+    else { setMic(true); toast("The host unmuted you."); }
+  }
+  function onRoleChange(m: Msg) {
+    const pin = m.pin || "";
+    if (!pin) return;
+    const role = (m.role as string | null) ?? null;
+    if (role) peerRoles[pin] = role; else delete peerRoles[pin];
+    setTileRole(pin === me.pin ? "tile-self" : "tile-" + pin, role);
+    if (pin === me.pin) { myRole = role; updateHostUI(); toast(role === "cohost" ? "You're now a co-host." : "You're no longer a co-host."); }
+    refreshHostPanel();
+  }
+  function onHostPin(m: Msg) {
+    const pin = m.pin || null;
+    if (pin) {
+      manualSpotlight = true;
+      spotlightId = pin === me.pin ? "tile-self" : "tile-" + pin;
+      toast("The host pinned a video.");
+    } else {
+      manualSpotlight = false;
+      spotlightId = null;
+      toast("Switched to grid view.");
+    }
+    layoutGrid();
+  }
+  // Send a moderation action to the server (host/co-host only — server re-checks).
+  function sendMod(action: string, target?: string) {
+    sendWS({ type: "mod", action, target });
+  }
+  function openHostPanel() {
+    if (!isModerator()) { toast("Only the host can do that.", true); return; }
+    refreshHostPanel();
+    $("hostPanel")?.classList.add("open");
+  }
+  function closeHostPanel() { $("hostPanel")?.classList.remove("open"); }
+  // Rebuild the participant list with per-row moderation actions.
+  function refreshHostPanel() {
+    const list = $("hostList"); const grid = $("videoGrid");
+    if (!list || !grid) return;
+    const amHost = myRole === "host";
+    const rows: string[] = [];
+    Array.from(grid.children).forEach(node => {
+      const el = node as HTMLElement;
+      if (el.id === "tile-self") return;
+      const pin = el.id.replace(/^tile-/, "");
+      if (!pin) return;
+      const rawName = (el.querySelector(".nm")?.textContent || pin).replace(/^(Host|Co-Host)/, "").trim();
+      const role = peerRoles[pin];
+      const badge = role ? '<span class="hl-badge">' + (role === "host" ? "Host" : "Co-Host") + "</span>" : "";
+      const cohostLabel = role === "cohost" ? "Remove co-host" : "Make co-host";
+      rows.push(
+        '<div class="hl-row">' +
+          '<div class="hl-name">' + escapeHtml(rawName) + badge + '<span class="hl-pin">' + escapeHtml(pin) + "</span></div>" +
+          '<div class="hl-acts">' +
+            '<button data-act="mute" data-pin="' + pin + '">Mute</button>' +
+            '<button data-act="pin" data-pin="' + pin + '">Pin</button>' +
+            (amHost ? '<button data-act="cohost" data-pin="' + pin + '">' + cohostLabel + "</button>" : "") +
+          "</div>" +
+        "</div>"
+      );
+    });
+    list.innerHTML = rows.join("") || '<div class="hl-empty">No other participants yet.</div>';
+  }
+  function onHostListClick(e: Event) {
+    const btn = (e.target as HTMLElement)?.closest?.("button[data-act]") as HTMLElement | null;
+    if (!btn) return;
+    const act = btn.getAttribute("data-act") || "";
+    const pin = btn.getAttribute("data-pin") || "";
+    if (act === "mute") { sendMod("mute", pin); toast("Muted " + pin); }
+    else if (act === "pin") { sendMod("pin", pin); closeHostPanel(); }
+    else if (act === "cohost") { sendMod("cohost", pin); }
+  }
+
+  // ---------- live bitrate (getStats) ----------
+  function formatMbps(bitsPerSec: number): string {
+    const mbps = bitsPerSec / 1_000_000;
+    if (mbps <= 0) return "";
+    return (mbps >= 10 ? mbps.toFixed(0) : mbps.toFixed(1)) + " Mbps";
+  }
+  function setTileSpeed(tileId: string, text: string) {
+    const el = document.getElementById(tileId);
+    const s = el?.querySelector(".ti-speed") as HTMLElement | null;
+    if (s) s.textContent = text;
+  }
+  async function sampleOneStats(key: string, tileId: string, pc: RTCPeerConnection, outbound: boolean) {
+    try {
+      const report = await pc.getStats();
+      let bytes = 0;
+      report.forEach((r: { type?: string; bytesReceived?: number; bytesSent?: number; kind?: string; mediaType?: string }) => {
+        const wanted = outbound ? "outbound-rtp" : "inbound-rtp";
+        if (r.type === wanted) bytes += (outbound ? r.bytesSent : r.bytesReceived) ?? 0;
+      });
+      const now = Date.now();
+      const prev = statsPrev[key];
+      statsPrev[key] = { bytes, ts: now };
+      if (prev && now > prev.ts) {
+        const bits = (bytes - prev.bytes) * 8;
+        const secs = (now - prev.ts) / 1000;
+        if (bits >= 0 && secs > 0) setTileSpeed(tileId, formatMbps(bits / secs));
+      }
+    } catch { /* stats unavailable */ }
+  }
+  function sampleStats() {
+    if (!inCall) return;
+    // Mesh peers: inbound bitrate per remote tile.
+    for (const pin in peers) {
+      void sampleOneStats("in-" + pin, "tile-" + pin, peers[pin].pc, false);
+    }
+    // Self: outbound bitrate (from any one peer connection — same encode).
+    const anyPeer = Object.values(peers)[0];
+    if (anyPeer) void sampleOneStats("out-self", "tile-self", anyPeer.pc, true);
+    // SFU: best-effort per-participant inbound via the track's own stats report.
+    // LiveKit's stats API is loosely typed and varies by version, so this block
+    // is intentionally `any` and fully guarded.
+    if (livekitEnabled && lkRoom) {
+      try {
+        const remotes = (lkRoom as unknown as { remoteParticipants?: Map<string, unknown> }).remoteParticipants;
+        remotes?.forEach((pp: unknown) => {
+          const p = pp as { identity?: string; getTrackPublications?: () => unknown[] };
+          const identity = p.identity;
+          if (!identity || typeof p.getTrackPublications !== "function") return;
+          const pubs = p.getTrackPublications() as Array<{ track?: { getRTCStatsReport?: () => Promise<RTCStatsReport> } }>;
+          for (const pub of pubs) {
+            const track = pub?.track;
+            if (!track || typeof track.getRTCStatsReport !== "function") continue;
+            void track.getRTCStatsReport().then((report) => {
+              let bytes = 0;
+              report.forEach((r: { type?: string; bytesReceived?: number }) => {
+                if (r.type === "inbound-rtp") bytes += r.bytesReceived ?? 0;
+              });
+              const key = "lk-" + identity, now = Date.now(), prev = statsPrev[key];
+              statsPrev[key] = { bytes, ts: now };
+              if (prev && now > prev.ts) {
+                const bits = (bytes - prev.bytes) * 8, secs = (now - prev.ts) / 1000;
+                if (bits >= 0 && secs > 0) setTileSpeed("tile-" + identity, formatMbps(bits / secs));
+              }
+            }).catch(() => {});
+            break; // one video pub is enough
+          }
+        });
+      } catch { /* */ }
+    }
+  }
+  function startStatsSampler() {
+    if (statsSampleT) return;
+    statsSampleT = setInterval(sampleStats, 2000);
+  }
+  function stopStatsSampler() {
+    if (statsSampleT) { clearInterval(statsSampleT); statsSampleT = null; }
+    for (const k in statsPrev) delete statsPrev[k];
+  }
+
   function addLkTile(id: string, name: string) {
     if (lkParticipantTiles[id]) return;
     const grid = $("videoGrid"); if (!grid) return;
@@ -1040,8 +1364,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const v = document.createElement("video");
     v.autoplay = true; v.playsInline = true;
     t.appendChild(v);
-    t.insertAdjacentHTML("beforeend", '<div class="ph"><div class="av">' + initials(name) + "</div></div>");
-    t.insertAdjacentHTML("beforeend", '<div class="nm">' + escapeHtml(name) + "</div>");
+    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || ""));
     t.insertAdjacentHTML("beforeend", '<div class="connecting">connecting…</div>');
     lkParticipantTiles[id] = t;
     grid.appendChild(t);
@@ -1529,6 +1852,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     establishedOnce = false;
     exitReconnecting();
     resetSpeakerView(); // fresh call → no stale spotlight/active-speaker focus
+    startStatsSampler(); // live per-tile bitrate
     runConnSequence();
     // On the SFU path, start the join watchdog so a failed/slow token or connect
     // recovers (re-request) or surfaces an error instead of a silent dead call.
@@ -1559,7 +1883,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // exactly as the remote peer will see it.
     v.srcObject = processedStream || localStream;
     t.appendChild(v);
-    t.insertAdjacentHTML("beforeend", '<div class="nm">You</div>');
+    // Avatar (from the user's name) + "You" label + device chip. The avatar
+    // shows whenever the camera is off so the tile is never a blank black box.
+    t.insertAdjacentHTML(
+      "beforeend",
+      '<div class="ph"><div class="av">' + initials(me.name || "You") + "</div>" +
+        '<div class="ph-name">You</div></div>' +
+        '<div class="nm">You</div>' +
+        '<div class="tile-info"><span class="ti-dev">' + escapeHtml(detectDeviceType()) + "</span>" +
+        '<span class="ti-speed"></span></div>'
+    );
     grid.appendChild(t);
     if (!camOn) t.classList.add("audio-only");
   }
@@ -1572,8 +1905,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const v = document.createElement("video");
     v.autoplay = true; v.playsInline = true;
     t.appendChild(v);
-    t.insertAdjacentHTML("beforeend", '<div class="ph"><div class="av">' + initials(name) + "</div></div>");
-    t.insertAdjacentHTML("beforeend", '<div class="nm">' + escapeHtml(name) + "</div>");
+    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || ""));
     t.insertAdjacentHTML("beforeend", '<div class="connecting">connecting…</div>');
     entry.el = t;
     grid.appendChild(t);
@@ -1823,9 +2155,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // ---------- controls ----------
   function toggleMic() {
     if (!localStream) return;
-    micOn = !micOn;
-    localStream.getAudioTracks().forEach(t => t.enabled = micOn);
-    $("micBtn")?.classList.toggle("off", !micOn);
+    setMic(!micOn);
   }
   // Set the camera on/off explicitly (shared by the toggle button and the
   // voice-call start path, which begins with the camera off). The track actually
@@ -1875,7 +2205,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenBusy = true;
     let disp: MediaStream;
     try {
-      disp = await md.getDisplayMedia({ video: true, audio: false });
+      disp = await md.getDisplayMedia({ video: { ...qualityVideo(videoQuality) }, audio: false });
     } catch {
       // User cancelled the picker, or permission denied — no-op.
       screenBusy = false;
@@ -2005,6 +2335,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (peers[id].el) peers[id].el!.remove();
     }
     for (const id in peers) delete peers[id];
+    pendingGroupInvites = [];
+    for (const k in peerDevices) delete peerDevices[k];
+    for (const k in peerRoles) delete peerRoles[k];
+    myRole = null; roomHostPin = null;
+    closeHostPanel(); updateHostUI();
+    stopStatsSampler();
     teardownSpeakerMonitor();
     resetSpeakerView();
     // Clear leftover tiles so an idle/parked grid doesn't keep dead srcObjects.
@@ -2052,8 +2388,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
   };
   const onBackKey = () => { dialed = dialed.slice(0, -1); refreshDisplay(); };
   const onChatField = (e: KeyboardEvent) => { if (e.key === "Enter") sendChat(); };
-  const onAddInput = (e: KeyboardEvent) => { if (e.key === "Enter") addToCall(); };
+  const onAddInput = (e: KeyboardEvent) => {
+    if (e.key === "Enter") addToCall();
+    else if (e.key === "Escape") closeAddPad();
+  };
   const onDocKey = (e: KeyboardEvent) => {
+    // Escape closes the add-person pad first (a dismissible floating panel).
+    if (e.key === "Escape" && $("addpad")?.classList.contains("open")) {
+      e.preventDefault();
+      closeAddPad();
+      return;
+    }
     // Diagnostics shortcut works on any screen (lower- and upper-case).
     if (e.key === "?" || (e.shiftKey && e.key === "/")) {
       e.preventDefault();
@@ -2089,6 +2434,27 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("chatClose") as HTMLElement | null)?.addEventListener("click", toggleChat);
   ($("addBtn") as HTMLElement | null)?.addEventListener("click", openAddPad);
   ($("addGo") as HTMLElement | null)?.addEventListener("click", addToCall);
+  ($("addClose") as HTMLElement | null)?.addEventListener("click", closeAddPad);
+  // Host controls
+  ($("hostBtn") as HTMLElement | null)?.addEventListener("click", openHostPanel);
+  ($("hostClose") as HTMLElement | null)?.addEventListener("click", closeHostPanel);
+  ($("muteAllBtn") as HTMLElement | null)?.addEventListener("click", () => { sendMod("mute-all"); toast("Muted everyone."); });
+  ($("unmuteAllBtn") as HTMLElement | null)?.addEventListener("click", () => { sendMod("unmute-all"); toast("Asked everyone to unmute."); });
+  ($("gridBtn") as HTMLElement | null)?.addEventListener("click", () => { sendMod("grid"); closeHostPanel(); });
+  ($("hostList") as HTMLElement | null)?.addEventListener("click", onHostListClick);
+  // Dismiss the add-person pad on an outside click (capture phase so it runs
+  // before the add-button's own toggle; the add button is excluded so toggling
+  // still works). This fixes the "can't close the add window during a call" bug.
+  const onDocClickAddPad = (e: Event) => {
+    const pad = $("addpad");
+    if (!pad || !pad.classList.contains("open")) return;
+    const t = e.target as Node | null;
+    if (!t) return;
+    if (pad.contains(t)) return;
+    if (($("addBtn") as HTMLElement | null)?.contains(t)) return;
+    closeAddPad();
+  };
+  document.addEventListener("click", onDocClickAddPad, true);
   ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => hangUp("user-hangup"));
   ($("flipCamBtn") as HTMLElement | null)?.addEventListener("click", () => { flipCamera(); });
   ($("screenBtn") as HTMLElement | null)?.addEventListener("click", () => { void toggleScreenShare(); });
@@ -2101,6 +2467,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (sb) sb.style.display = md && typeof md.getDisplayMedia === "function" ? "" : "none";
   }
   ($("recordBtn") as HTMLElement | null)?.addEventListener("click", toggleRecording);
+  ($("qualityBtn") as HTMLElement | null)?.addEventListener("click", toggleQuality);
+  updateQualityBtn();
   ($("filterBtn") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("filterClose") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("chatSend") as HTMLElement | null)?.addEventListener("click", sendChat);
@@ -2165,6 +2533,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
       void programmaticDial(target, opts);
       return true;
     },
+    dialGroup(targets: string[], opts?: { voice?: boolean }): boolean {
+      if (!me.pin) return false;
+      const valid = targets.filter(t => /^\d{6}$/.test(String(t)) && t !== me.pin);
+      if (valid.length === 0) return false;
+      void programmaticGroupDial(targets, opts);
+      return true;
+    },
     setOnStateChange(cb) { onPhaseChange = cb; },
     getPin() { return me.pin; },
     setPreferredPin(pin) {
@@ -2207,7 +2582,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
         localStream = null;
       }
       teardownSpeakerMonitor();
+      stopStatsSampler();
       if (callResizeObs) { try { callResizeObs.disconnect(); } catch { /* */ } callResizeObs = null; }
+      document.removeEventListener("click", onDocClickAddPad, true);
       document.removeEventListener("keydown", onDocKey);
       window.removeEventListener("beforeunload", onUnload);
       window.removeEventListener("offline", onOffline);

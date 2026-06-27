@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { Link, useLocation } from "wouter";
-import { Phone, MessageSquare, UserRound, Clock, LogOut, Sparkles, Sun, Moon, Bell, BellOff } from "lucide-react";
+import { Phone, MessageSquare, UserRound, Clock, LogOut, Sparkles, Sun, Moon, Bell, BellOff, Smartphone, Monitor, ArrowLeft } from "lucide-react";
+import { detectDeviceType } from "@/lib/deviceType";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { getLoginUrl } from "@/const";
@@ -45,6 +46,25 @@ const TABS = [
   { key: "contacts", path: "/app/contacts", label: "Contacts", icon: UserRound },
 ] as const;
 
+/** Small "Mobile"/"Desktop" chip shown next to the country flag, detected
+ *  dynamically from this device. */
+function DeviceChip({ className = "" }: { className?: string }) {
+  const type = detectDeviceType();
+  const Icon = type === "Mobile" ? Smartphone : Monitor;
+  return (
+    <span
+      className={
+        "inline-flex items-center gap-1 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground " +
+        className
+      }
+      title={`Calling from ${type}`}
+    >
+      <Icon className="size-3" />
+      {type}
+    </span>
+  );
+}
+
 function initialsFrom(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
   return parts
@@ -80,7 +100,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
 function Inner({ children }: { children: React.ReactNode }) {
   const { me, signOut } = useIdentity();
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
   const utils = trpc.useUtils();
 
   // Open the SSE push channel as soon as we know we have an identity.
@@ -109,6 +129,14 @@ function Inner({ children }: { children: React.ReactNode }) {
     refetchOnWindowFocus: false,
   });
   const { theme, setTheme } = useTheme();
+  // Universal Back: Profile is the one drill-in route off the tab bar (message
+  // threads handle their own in-page back). Go back in history, or fall back to
+  // the dialer if there's nowhere to go.
+  const isSubPage = location.startsWith("/app/profile");
+  const goBack = () => {
+    if (typeof window !== "undefined" && window.history.length > 1) window.history.back();
+    else navigate("/app/dialer");
+  };
   const unreadTotal = useMemo(
     () =>
       (threads.data ?? []).reduce((acc, t) => acc + (t.unreadCount ?? 0), 0),
@@ -145,7 +173,7 @@ function Inner({ children }: { children: React.ReactNode }) {
             )}
             <div className="min-w-0">
               <div className="font-semibold truncate group-hover:text-primary transition-colors">{me.displayName}</div>
-              <div className="font-mono text-sm text-muted-foreground flex items-center gap-1.5">
+              <div className="font-mono text-sm text-muted-foreground flex items-center gap-1.5 flex-wrap">
                 {formatNumber(me.number)}
                 {geo.data?.flagEmoji && (
                   <span
@@ -155,6 +183,7 @@ function Inner({ children }: { children: React.ReactNode }) {
                     {geo.data.flagEmoji}
                   </span>
                 )}
+                <DeviceChip />
               </div>
             </div>
           </Link>
@@ -257,6 +286,16 @@ function Inner({ children }: { children: React.ReactNode }) {
             "supports-[backdrop-filter]:bg-card/45 supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150"
           }
         >
+          {isSubPage && (
+            <button
+              type="button"
+              onClick={goBack}
+              aria-label="Back"
+              className="mr-1 grid size-9 shrink-0 place-items-center rounded-xl text-foreground hover:bg-muted/50 active:scale-95 transition"
+            >
+              <ArrowLeft className="size-5" />
+            </button>
+          )}
           <Link
             href="/app/profile"
             className="flex items-center gap-3 min-w-0 active:opacity-70 transition-opacity"
@@ -274,7 +313,7 @@ function Inner({ children }: { children: React.ReactNode }) {
             )}
             <div className="min-w-0">
               <div className="text-sm font-semibold truncate">{me.displayName}</div>
-              <div className="font-mono text-xs text-muted-foreground flex items-center gap-1.5">
+              <div className="font-mono text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
                 {formatNumber(me.number)}
                 {geo.data?.flagEmoji && (
                   <span
@@ -284,6 +323,7 @@ function Inner({ children }: { children: React.ReactNode }) {
                     {geo.data.flagEmoji}
                   </span>
                 )}
+                <DeviceChip />
               </div>
             </div>
           </Link>

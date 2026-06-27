@@ -212,7 +212,8 @@ describe("relay signaling", () => {
     };
     expect(joined.type).toBe("joined");
     expect(joined.roomId).toBe(roomId);
-    expect(joined.members).toEqual([{ pin: aPin, name: "Alice" }]);
+    expect(joined.members).toHaveLength(1);
+    expect(joined.members[0]).toMatchObject({ pin: aPin, name: "Alice" });
 
     const peerJoined = a.last() as { type: string; pin: string; name: string };
     expect(peerJoined.type).toBe("peer-joined");
@@ -709,6 +710,25 @@ describe("relay — conference history", () => {
     expect(info!.endedAt).toBeGreaterThanOrEqual(info!.answeredAt!);
   });
 
+  it("propagates each member's device type in the joined member list (v2.39)", () => {
+    const a = new FakeConn("dev-a");
+    handleMessage(reg, a.asConn(), { type: "register", name: "Alice", device: "Desktop" });
+    const b = new FakeConn("dev-b");
+    handleMessage(reg, b.asConn(), { type: "register", name: "Bob", device: "Mobile" });
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const rid = (a.outbox.find((m) => rtype(m) === "room") as { roomId: string }).roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
+    // B's `joined` message lists A with A's device.
+    const joined = b.outbox.find((m) => rtype(m) === "joined") as
+      | { members: Array<{ pin: string; device?: string }> }
+      | undefined;
+    const aMember = joined?.members.find((mm) => mm.pin === a.pin);
+    expect(aMember?.device).toBe("Desktop");
+    // A gets a `peer-joined` for B carrying B's device.
+    const pj = a.outbox.find((m) => rtype(m) === "peer-joined") as { device?: string } | undefined;
+    expect(pj?.device).toBe("Mobile");
+  });
+
   it("does NOT log an UNANSWERED dial as a conference (no accept → no history)", () => {
     const a = registerConn("dev-a", "Alice");
     const b = registerConn("dev-b", "Bob");
@@ -742,6 +762,91 @@ describe("relay — conference history", () => {
     const pins = info!.participants.map((p) => p.pin).sort();
     expect(pins).toEqual([a.pin!, b.pin!, c.pin!].sort());
     expect(info!.participants.length).toBe(3);
+  });
+});
+
+/* ── host moderation (v2.41) ───────────────────────────────────────────────
+ * The room creator is the host; host/co-hosts can mute, promote, and pin.
+ * ────────────────────────────────────────────────────────────────────────── */
+describe("relay — host moderation", () => {
+  let reg: RelayRegistry;
+  beforeEach(() => { reg = createRegistry(); });
+  const rtype = (m: unknown) => (m as { type?: string })?.type;
+
+  function hostAndGuest() {
+    const a = new FakeConn("dev-a");
+    handleMessage(reg, a.asConn(), { type: "register", name: "Host" });
+    const b = new FakeConn("dev-b");
+    handleMessage(reg, b.asConn(), { type: "register", name: "Bob" });
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const rid = (a.outbox.find((m) => rtype(m) === "room") as { roomId: string }).roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
+    return { a, b, rid };
+  }
+
+  it("the room creator is told they are the host", () => {
+    const a = new FakeConn("dev-a");
+    handleMessage(reg, a.asConn(), { type: "register", name: "Host" });
+    const b = new FakeConn("dev-b");
+    handleMessage(reg, b.asConn(), { type: "register", name: "Bob" });
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const room = a.outbox.find((m) => rtype(m) === "room") as { selfRole?: string };
+    expect(room.selfRole).toBe("host");
+  });
+
+  it("host 'mute-all' force-mutes every OTHER member", () => {
+    const { a, b } = hostAndGuest();
+    b.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "mod", action: "mute-all" });
+    const fm = b.outbox.find((m) => rtype(m) === "force-mute") as { on?: boolean } | undefined;
+    expect(fm?.on).toBe(true);
+  });
+
+  it("a non-moderator's mod request is rejected", () => {
+    const { b } = hostAndGuest();
+    b.outbox.length = 0;
+    handleMessage(reg, b.asConn(), { type: "mod", action: "mute-all" });
+    const err = b.outbox.find((m) => rtype(m) === "error") as { code?: string } | undefined;
+    expect(err?.code).toBe("forbidden");
+  });
+
+  it("host can promote a co-host, who can then moderate", () => {
+    const { a, b } = hostAndGuest();
+    handleMessage(reg, a.asConn(), { type: "mod", action: "cohost", target: b.pin! });
+    const roleMsg = b.outbox.find((m) => rtype(m) === "role") as { role?: string } | undefined;
+    expect(roleMsg?.role).toBe("cohost");
+    // The co-host (B) can now mute the host (A).
+    a.outbox.length = 0;
+    handleMessage(reg, b.asConn(), { type: "mod", action: "mute", target: a.pin! });
+    const fm = a.outbox.find((m) => rtype(m) === "force-mute") as { on?: boolean } | undefined;
+    expect(fm?.on).toBe(true);
+  });
+
+  it("only the HOST (not a co-host) can assign co-hosts", () => {
+    const { a, b } = hostAndGuest();
+    handleMessage(reg, a.asConn(), { type: "mod", action: "cohost", target: b.pin! }); // B is cohost
+    // B (cohost) tries to promote A — must be refused (only host assigns).
+    b.outbox.length = 0;
+    handleMessage(reg, b.asConn(), { type: "mod", action: "cohost", target: a.pin! });
+    const err = b.outbox.find((m) => rtype(m) === "error") as { code?: string } | undefined;
+    expect(err?.code).toBe("forbidden");
+  });
+
+  it("host 'pin' broadcasts host-pin to the room", () => {
+    const { a, b } = hostAndGuest();
+    b.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "mod", action: "pin", target: b.pin! });
+    const pin = b.outbox.find((m) => rtype(m) === "host-pin") as { pin?: string } | undefined;
+    expect(pin?.pin).toBe(b.pin);
+  });
+
+  it("host 'grid' broadcasts a host-pin clear (null)", () => {
+    const { a, b } = hostAndGuest();
+    b.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "mod", action: "grid" });
+    const msg = b.outbox.find((m) => rtype(m) === "host-pin") as { pin?: string | null } | undefined;
+    expect(msg).toBeTruthy();
+    expect(msg?.pin ?? null).toBeNull();
   });
 });
 

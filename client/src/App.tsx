@@ -10,6 +10,7 @@ import TurnTest from "./pages/TurnTest";
 import { AppShell } from "./app/AppShell";
 import { RelayEngineProvider } from "./app/RelayEngine";
 import { PresenceManager } from "./app/PresenceManager";
+import { MessagePopups } from "./app/MessagePopups";
 import Dialer from "./pages/app/Dialer";
 import History from "./pages/app/History";
 import Messages from "./pages/app/Messages";
@@ -54,6 +55,14 @@ function Router() {
           />
         )}
       </Route>
+      {/* Short, clean invite link: /i/<pin> → auto-dials that number. Keeps the
+          shareable URL terse and lands users straight in the dialer. */}
+      <Route path={"/i/:pin"}>
+        {(params) => {
+          const pin = (params.pin ?? "").replace(/\D/g, "").slice(0, 6);
+          return <Redirect to={pin ? `/app/dialer?to=${pin}` : "/app/dialer"} replace />;
+        }}
+      </Route>
       <Route path={"/docs"} component={Docs} />
       <Route path={"/turn-test"} component={TurnTest} />
       <Route path={"/404"} component={NotFound} />
@@ -75,6 +84,7 @@ function App() {
             {/* One presence heartbeat for the whole app (not one per
                 useIdentity() call site). */}
             <PresenceManager />
+            <MessagePopups />
             <Router />
           </RelayEngineProvider>
         </TooltipProvider>

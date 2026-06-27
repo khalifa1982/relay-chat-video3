@@ -52,4 +52,33 @@ describe("relay call UI regression guards", () => {
   it("a screen-share tile letterboxes its video (object-fit:contain, never cropped)", () => {
     expect(RELAY_CSS).toMatch(/\.relay-tile\.screen video\{[^}]*object-fit:contain/);
   });
+
+  // ── dismissible add-person pad (v2.38) ─────────────────────────────────────
+  it("the in-call add-person pad has a visible close (X) control", () => {
+    expect(RELAY_MARKUP).toMatch(/id="addClose"/);
+    expect(RELAY_CSS).toMatch(/#addClose\{/);
+  });
+
+  // ── tile enrichment (v2.39) ────────────────────────────────────────────────
+  it("cam-off tiles show a full-name label under the avatar", () => {
+    expect(RELAY_CSS).toMatch(/\.relay-tile \.ph-name\{/);
+  });
+  it("tiles carry a device + speed info chip", () => {
+    expect(RELAY_CSS).toMatch(/\.relay-tile \.tile-info\{/);
+  });
+  it("the active speaker pulses (motion-gated)", () => {
+    expect(RELAY_CSS).toMatch(/@keyframes relaySpeakPulse/);
+    expect(RELAY_CSS).toMatch(/prefers-reduced-motion: no-preference/);
+  });
+
+  // ── host controls (v2.41) ──────────────────────────────────────────────────
+  it("has a host-controls button + panel with mute-all / grid actions", () => {
+    expect(RELAY_MARKUP).toMatch(/id="hostBtn"/);
+    expect(RELAY_MARKUP).toMatch(/id="hostPanel"/);
+    expect(RELAY_MARKUP).toMatch(/id="muteAllBtn"/);
+    expect(RELAY_MARKUP).toMatch(/id="gridBtn"/);
+  });
+  it("styles the Host/Co-Host role badge on tiles", () => {
+    expect(RELAY_CSS).toMatch(/\.role-badge\{/);
+  });
 });

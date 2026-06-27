@@ -1225,3 +1225,129 @@ Folds the v2.35.0 adversarial-review findings.
       active-speaker (me.pin == LiveKit identity), clean layout reset between modes, click-to-spotlight
       survives a tile leaving. 298 tests green, tsc + build clean.
 - [x] Footer → `v2.35.2`.
+
+## v2.36.0 — Contacts: scrollable add-dialog + 24h guest privacy (delivered 2026-06-27)
+
+Batch 1 of the UX overhaul (large multi-request batch).
+
+- [x] Add-contact dialog is a flex column with a scrollable body + sticky footer, so the
+      Save/"Add to contacts" button is always reachable on small/mobile viewports (it used to be
+      pushed off-screen with no scroll).
+- [x] Guest presence privacy: a GUEST inactive >24h has presence COMPLETELY suppressed (no dot, no
+      "offline", no "last seen") in the contacts list, directory lookup, and add preview. Pure
+      `isGuestPresenceHidden` helper + 5 tests.
+
+## v2.37.0 — Call history Message, Dialer buttons, Group Call, clean share link, device chip (delivered 2026-06-27)
+
+Batches 2–4 of the UX overhaul.
+
+- [x] **Call history Message action**: a Message icon next to the call icon on every History row
+      (conference + missed) opens/creates a 1:1 thread and jumps into it.
+- [x] **Dialer call buttons redesigned**: Voice (blue circle, "Voice Call" label) and Video (green
+      circle, "Video Call" label) are now two equally-prominent labelled circular buttons.
+- [x] **Create Group Call**: a new picker screen (`GroupCallScreen.tsx`) — select up to 10
+      participants from contacts or add numbers manually, choose Voice/Video, Start. New engine
+      `dialGroup(numbers)` rings everyone into ONE room (extra invitees gated on the server `room`
+      confirmation so a fresh group dial can't race into two rooms). Dismissible (X / backdrop /
+      Cancel).
+- [x] **Clean share link**: short `/i/<pin>` route redirects straight into the dialer (auto-dials),
+      replacing the long `?to=` URL. Shared message is structured (header line + link line) and the
+      OS share sheet gets title + url separately (no illegible blob, no unexpected page).
+- [x] **Device chip on the main screen**: a dynamically-detected "Mobile"/"Desktop" chip sits next to
+      the country flag (sidebar + mobile header). New `detectDeviceType()` util + 4 tests.
+- [x] 307 tests green, tsc + build clean. Footer → `v2.37.0`.
+
+## v2.38.0 — Global UX: dismissible add-pad, Back button, sticky-nav clearance (delivered 2026-06-27)
+
+Batch 6 of the UX overhaul.
+
+- [x] In-call "add person" pad is now dismissible: a visible X (#addClose), an outside click (capture
+      phase, excludes the add button so toggling still works), and Escape all close it instantly.
+      Fixes the "can't close the add window during a mobile call" lock-up.
+- [x] Universal Back button in the mobile header on the Profile sub-page (history.back, falls back to
+      the dialer).
+- [x] Sticky-nav clearance: Profile no longer creates a competing `h-full overflow-auto` scroll area
+      (its Sign-out control sat UNDER the fixed bottom nav with no way to reach it) — it now flows
+      within the AppShell scroll container, which already reserves nav space. Contacts list gains
+      `pb-24` so the last contact clears the nav. The bottom nav remains fixed to the viewport.
+- [x] X close is present on all modals/popups (contacts dialog, group-call picker, add-pad).
+- [x] 1 new test (add-pad close guard). 308 tests green, tsc + build clean. Footer → `v2.38.0`.
+
+## v2.39.0 — In-call tile enrichment (delivered 2026-06-27)
+
+Batch 7 of the UX overhaul.
+
+- [x] Camera-off tiles now show the participant's avatar (initials) AND full name centred, so a tile
+      is never a blank black box. Added to the self tile too (was previously just a black "You").
+- [x] Active-speaking cue: a glowing green ring plus a soft expanding "sound-wave" halo pulse on the
+      avatar (motion-gated behind prefers-reduced-motion).
+- [x] Per-tile info chip: device type (Mobile/Desktop) + a LIVE connection speed (e.g. "5.2 Mbps").
+      Speed is sampled every 2s from getStats — inbound per remote tile, outbound for self (mesh), and
+      best-effort per-participant on the SFU. Device type is shared via signaling: each client reports
+      its type at register (`device`), the relay carries it in member lists + peer-joined, and tiles
+      display it (mesh + SFU).
+- [x] DEFERRED (noted): per-participant NATIONAL FLAG (needs geo-per-participant signaling) and the
+      real profile-photo avatar in tiles (the engine only knows name → initials today).
+- [x] 4 new tests (CSS guards + server device propagation). 312 tests green, tsc + build clean.
+      Footer → `v2.39.0`.
+
+## v2.40.0 — Resolution selector + in-app message popups (delivered 2026-06-27)
+
+Batch 9 of the UX overhaul (overheating/latency + notifications).
+
+- [x] Streaming-quality selector (HD / SD) in the in-call control bar — applies to BOTH the camera and
+      screen share. "SD" (640×360@15) sharply cuts CPU (cooler device) and bandwidth (lower latency);
+      "HD" is the default. Switches live via applyConstraints (no re-acquire), persisted in localStorage,
+      and honoured by getUserMedia, flip-camera, and getDisplayMedia.
+- [x] Non-intrusive incoming-message popups: when a message arrives while the user is in a call or on
+      another screen, a small card appears (bottom-right) with the sender, the message content, and an
+      inline reply box. Minimizable to a chip, closable with X, or tap to open the full thread.
+      Suppressed when the user is already viewing that conversation. Store (`messagePopups.ts`) + manager
+      (`MessagePopups.tsx`) mounted at the app root; fed by the existing realtime SSE layer.
+- [x] 13 new tests (popup store dedup/cap/dismiss + isViewingConversation). 321 tests green, tsc + build
+      clean. Footer → `v2.40.0`.
+
+## v2.41.0 — Host controls + call layout (delivered 2026-06-27)
+
+Batch 8 of the UX overhaul. (Host call-continuity + auto-rejoin-on-refresh were already delivered by
+the persistent-room work in v2.33; this batch adds moderation, roles, and host-driven layout.)
+
+- [x] Host designation: the room creator is the host (tracked in RoomMeta.hostPin). Roles flow to
+      clients via the room/joined/rejoin/peer-joined member info; tiles show a "Host"/"Co-Host" badge.
+- [x] Moderation (`mod` signaling message, server-gated to host/co-hosts of the caller's own room):
+      mute individual, mute all, unmute all — relayed to targets as `force-mute`, which the client
+      honours (mutes/unmutes the mic + a toast). 
+- [x] Co-host delegation: only the HOST can promote/demote co-hosts; the change broadcasts a `role`
+      update (badge + grants moderation powers). Co-hosts can mute/pin but not assign other co-hosts.
+- [x] Host-driven layout: the host can PIN a feed to everyone's main spotlight (`host-pin` broadcast →
+      all clients spotlight that tile) or switch everyone to GRID view (clears the pin). Builds on the
+      v2.35 spotlight engine.
+- [x] Host-controls panel (three-dot button in the call bar, shown only to moderators): a live
+      participant list with per-row Mute / Pin / Make-co-host, plus Mute all / Unmute all / Grid view.
+- [x] 9 new tests (7 server moderation: host designation, mute-all, non-mod rejected, co-host promote +
+      moderate, host-only co-host assignment, pin, grid; 2 CSS guards). 330 tests green, tsc + build
+      clean. Footer → `v2.41.0`.
+
+## v2.42.0 — Messaging UI overhaul (delivered 2026-06-27)
+
+Batch 5 (final) of the UX overhaul.
+
+- [x] Fixed the misplaced composer: the message list was a flex child without `min-h-0`, so it grew to
+      fit its content and shoved the reply input into the middle of the screen. Adding `min-h-0` pins
+      the composer to the bottom (standard chat-app layout); only the message list scrolls.
+- [x] Three-dot context menu per message (Reply / Copy / Unsend) replacing the old hover-only buttons —
+      which were `opacity-0 group-hover` and therefore INVISIBLE on mobile (no hover on touch), so
+      delete/reply were unreachable on phones. The menu is always tappable.
+- [x] Attachment thumbnails open a fullscreen in-app MediaLightbox (image/video) instead of a new tab;
+      videos show a play overlay. The lightbox closes on the X, a backdrop click, or Escape.
+- [x] Sent vs received are already visually distinct (right/primary vs left/muted) with delivery ticks
+      (✓ / ✓✓) and timestamps — retained and cleaned up around the new menu/thumbnails.
+- [x] 5 new static guards (min-h-0, three-dot menu, lightbox, dismissibility). 335 tests green, tsc +
+      build clean. Footer → `v2.42.0`.
+
+### UX overhaul batch — COMPLETE (v2.36.0 → v2.42.0)
+All 9 batches of the large multi-request UX overhaul shipped: contacts, history-message, dialer
+buttons + group call, share link + device chip, global UX (sticky nav/back/X), in-call tiles, host
+controls, resolution + message popups, and the messaging overhaul. Deferred (noted in-line): per-
+participant national flag on tiles, real photo avatars in tiles, and guest-presence privacy on the
+message thread header (the contacts + directory surfaces are covered).

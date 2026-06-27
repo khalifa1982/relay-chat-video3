@@ -1,8 +1,10 @@
 import { useMemo } from "react";
+import { useLocation } from "wouter";
 import {
   Clock,
   Phone,
   Users,
+  MessageSquare,
   PhoneMissed,
   PhoneOutgoing,
   PhoneIncoming,
@@ -39,6 +41,11 @@ type Item =
 export default function HistoryPage() {
   const { me } = useIdentity();
   const engine = useRelayEngine();
+  const [, setLocation] = useLocation();
+  // Open (or create) a 1:1 thread with a number and jump straight into it.
+  const openThread = trpc.messages.openThread.useMutation({
+    onSuccess: (res) => setLocation(`/app/messages?c=${res.conversationId}`),
+  });
 
   // Answered calls (2..10 parties) with full roster + duration.
   const conferences = trpc.calls.conferenceHistory.useQuery(undefined, {
@@ -79,6 +86,9 @@ export default function HistoryPage() {
   const redial = (num: string) => {
     if (num) engine.dial(num);
   };
+  const message = (num: string) => {
+    if (num) openThread.mutate({ number: num });
+  };
 
   return (
     <div className="mx-auto flex h-full w-full max-w-2xl flex-col px-4 pb-24 pt-4 md:pb-6">
@@ -101,9 +111,9 @@ export default function HistoryPage() {
             <ul>
               {items.map((it) =>
                 it.kind === "conf" ? (
-                  <ConferenceItem key={it.key} conf={it.conf} onRedial={redial} />
+                  <ConferenceItem key={it.key} conf={it.conf} onRedial={redial} onMessage={message} />
                 ) : (
-                  <MissedItem key={it.key} call={it.call} onRedial={redial} />
+                  <MissedItem key={it.key} call={it.call} onRedial={redial} onMessage={message} />
                 )
               )}
             </ul>
@@ -117,9 +127,11 @@ export default function HistoryPage() {
 function ConferenceItem({
   conf,
   onRedial,
+  onMessage,
 }: {
   conf: ConfRow;
   onRedial: (num: string) => void;
+  onMessage: (num: string) => void;
 }) {
   const others = conf.participants.filter((p) => !p.isSelf);
   const isGroup = conf.partyCount > 2;
@@ -153,10 +165,21 @@ function ConferenceItem({
           </div>
         </div>
         <Button
-          size="sm"
+          size="icon"
+          variant="ghost"
+          disabled={!callBack}
+          aria-label="Message"
+          title="Message"
+          onClick={() => onMessage(callBack)}
+        >
+          <MessageSquare className="size-4" />
+        </Button>
+        <Button
+          size="icon"
           variant="ghost"
           disabled={!callBack}
           aria-label="Call back"
+          title="Call back"
           onClick={() => onRedial(callBack)}
         >
           <Phone className="size-4" />
@@ -190,9 +213,11 @@ function ConferenceItem({
 function MissedItem({
   call,
   onRedial,
+  onMessage,
 }: {
   call: CallRow;
   onRedial: (num: string) => void;
+  onMessage: (num: string) => void;
 }) {
   const Icon =
     call.status === "missed"
@@ -221,10 +246,21 @@ function MissedItem({
           </div>
         </div>
         <Button
-          size="sm"
+          size="icon"
+          variant="ghost"
+          disabled={!peerNum}
+          aria-label="Message"
+          title="Message"
+          onClick={() => onMessage(peerNum)}
+        >
+          <MessageSquare className="size-4" />
+        </Button>
+        <Button
+          size="icon"
           variant="ghost"
           disabled={!peerNum}
           aria-label="Call back"
+          title="Call back"
           onClick={() => onRedial(peerNum)}
         >
           <Phone className="size-4" />

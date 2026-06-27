@@ -19,6 +19,9 @@ import {
   Reply,
   Bell,
   BellOff,
+  MoreVertical,
+  Copy,
+  Play,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -267,6 +270,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   // ── composer state ──
   const [text, setText] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
+  // Fullscreen media preview (image/video lightbox).
+  const [lightbox, setLightbox] = useState<{ url: string; type: "image" | "video"; name?: string } | null>(null);
   const [replyingTo, setReplyingTo] = useState<{
     id: number;
     senderIdentityId: number;
@@ -527,10 +532,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         )}
       </header>
 
-      {/* message list */}
+      {/* message list — min-h-0 lets this flex child shrink so the composer
+          stays pinned at the bottom (without it, the list grows to fit content
+          and shoves the input into the middle of the screen). */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-3 md:px-5 py-4 space-y-2 bg-background md:bg-card"
+        className="flex-1 min-h-0 overflow-y-auto px-3 md:px-5 py-4 space-y-2 bg-background md:bg-card"
       >
         {messagesQuery.isLoading ? (
           <div className="text-sm text-muted-foreground">Loading…</div>
@@ -547,27 +554,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 className={"group flex items-end gap-1.5 " + (mine ? "justify-end" : "justify-start")}
               >
                 {mine && (
-                  <>
-                    <button
-                      type="button"
-                      aria-label="Unsend message"
-                      title="Unsend"
-                      onClick={() => deleteMessage(m.id)}
-                      disabled={removeMutation.isPending}
-                      className="shrink-0 mb-1 size-7 grid place-items-center rounded-full text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-muted/60 hover:text-destructive transition-opacity"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="Reply"
-                      title="Reply"
-                      onClick={() => setReplyingTo(m)}
-                      className="shrink-0 mb-1 size-7 grid place-items-center rounded-full text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-muted/60 hover:text-foreground transition-opacity"
-                    >
-                      <Reply className="size-3.5" />
-                    </button>
-                  </>
+                  <MessageMenu
+                    mine
+                    onReply={() => setReplyingTo(m)}
+                    onCopy={m.body ? () => navigator.clipboard?.writeText(m.body!) : undefined}
+                    onDelete={() => deleteMessage(m.id)}
+                  />
                 )}
                 <div
                   className={
@@ -600,6 +592,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       mimeType={m.attachment.mimeType}
                       url={m.attachment.url}
                       filename={m.attachment.filename ?? undefined}
+                      onOpen={setLightbox}
                     />
                   )}
                   {m.body && (
@@ -620,15 +613,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   </div>
                 </div>
                 {!mine && (
-                  <button
-                    type="button"
-                    aria-label="Reply"
-                    title="Reply"
-                    onClick={() => setReplyingTo(m)}
-                    className="shrink-0 mb-1 size-7 grid place-items-center rounded-full text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-muted/60 hover:text-foreground transition-opacity"
-                  >
-                    <Reply className="size-3.5" />
-                  </button>
+                  <MessageMenu
+                    onReply={() => setReplyingTo(m)}
+                    onCopy={m.body ? () => navigator.clipboard?.writeText(m.body!) : undefined}
+                  />
                 )}
               </div>
             );
@@ -786,36 +774,123 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           )}
         </div>
       </div>
+
+      {lightbox && <MediaLightbox media={lightbox} onClose={() => setLightbox(null)} />}
     </>
   );
 }
 
 /* ────────────────────────────────────────────────────────────── */
 
+/** Three-dot context menu for a message (Reply / Copy / Delete). Always tappable
+ *  on mobile (the old hover-only buttons were invisible on touch). */
+function MessageMenu({
+  mine,
+  onReply,
+  onCopy,
+  onDelete,
+}: {
+  mine?: boolean;
+  onReply: () => void;
+  onCopy?: () => void;
+  onDelete?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative shrink-0 mb-1">
+      <button
+        type="button"
+        aria-label="Message options"
+        onClick={() => setOpen((v) => !v)}
+        className="grid size-7 place-items-center rounded-full text-muted-foreground hover:bg-muted/60 hover:text-foreground md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 transition-opacity"
+      >
+        <MoreVertical className="size-4" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            className={
+              "absolute z-50 bottom-8 min-w-36 rounded-xl border border-border bg-card p-1 shadow-xl " +
+              (mine ? "right-0" : "left-0")
+            }
+          >
+            <button
+              type="button"
+              onClick={() => { onReply(); setOpen(false); }}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+            >
+              <Reply className="size-4" /> Reply
+            </button>
+            {onCopy && (
+              <button
+                type="button"
+                onClick={() => { onCopy(); setOpen(false); }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+              >
+                <Copy className="size-4" /> Copy
+              </button>
+            )}
+            {mine && onDelete && (
+              <button
+                type="button"
+                onClick={() => { onDelete(); setOpen(false); }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10"
+              >
+                <Trash2 className="size-4" /> Unsend
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function AttachmentView({
   mimeType,
   url,
   filename,
+  onOpen,
 }: {
   mimeType: string;
   url: string;
   filename?: string;
+  onOpen?: (m: { url: string; type: "image" | "video"; name?: string }) => void;
 }) {
   if (mimeType.startsWith("image/")) {
+    // Thumbnail → click opens an in-app fullscreen preview (not a new tab).
     return (
-      <a href={url} target="_blank" rel="noreferrer">
+      <button
+        type="button"
+        onClick={() => onOpen?.({ url, type: "image", name: filename })}
+        className="block mb-1"
+        aria-label="Open image"
+      >
         <img
           src={url}
           alt={filename || "image"}
-          className="rounded-xl max-h-72 w-auto mb-1 object-cover"
+          className="rounded-xl max-h-64 w-auto object-cover hover:opacity-90 transition-opacity"
           loading="lazy"
         />
-      </a>
+      </button>
     );
   }
   if (mimeType.startsWith("video/")) {
     return (
-      <video src={url} controls className="rounded-xl max-h-72 w-auto mb-1" />
+      <button
+        type="button"
+        onClick={() => onOpen?.({ url, type: "video", name: filename })}
+        className="relative block mb-1 group/vid"
+        aria-label="Play video"
+      >
+        <video src={url} className="rounded-xl max-h-64 w-auto" muted preload="metadata" />
+        <span className="absolute inset-0 grid place-items-center">
+          <span className="grid size-12 place-items-center rounded-full bg-black/55 text-white">
+            <Play className="size-6 translate-x-0.5" />
+          </span>
+        </span>
+      </button>
     );
   }
   if (mimeType.startsWith("audio/")) {
@@ -830,6 +905,43 @@ function AttachmentView({
     >
       <Paperclip className="size-4" /> {filename || "attachment"}
     </a>
+  );
+}
+
+/** Fullscreen media preview with a close (X). Closes on backdrop click + Escape. */
+function MediaLightbox({
+  media,
+  onClose,
+}: {
+  media: { url: string; type: "image" | "video"; name?: string };
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90 p-4"
+      onClick={onClose}
+    >
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close preview"
+        className="absolute right-4 top-4 grid size-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
+      >
+        <X className="size-5" />
+      </button>
+      <div className="max-h-[90vh] max-w-[92vw]" onClick={(e) => e.stopPropagation()}>
+        {media.type === "image" ? (
+          <img src={media.url} alt={media.name || "image"} className="max-h-[90vh] max-w-[92vw] rounded-lg object-contain" />
+        ) : (
+          <video src={media.url} controls autoPlay className="max-h-[90vh] max-w-[92vw] rounded-lg" />
+        )}
+      </div>
+    </div>
   );
 }
 

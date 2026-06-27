@@ -51,6 +51,8 @@ export interface RelaySocket {
 export interface RelayClient {
   socket: RelaySocket;
   name: string;
+  /** Device type this client reported at register ("Mobile"/"Desktop"). */
+  device?: string;
   roomId: string | null;
   cid: string | null;          // owning channel id, for reconnect re-binding
   graceT: ReturnType<typeof setTimeout> | null; // pending disconnect cleanup
@@ -87,6 +89,19 @@ export interface RoomMeta {
   dialedNumber: string | null;  // the number that seeded the room
   accepted: boolean;            // at least one callee answered → a real call
   roster: Map<string, string>;  // pin -> latest display name
+  hostPin: string | null;       // the room creator (host) for moderation
+  cohosts: Set<string>;         // pins the host promoted to co-host
+}
+
+/** Host/co-host role of a pin in a room, for badges + moderation gating. */
+export function roleOf(meta: RoomMeta | undefined, pin: string): "host" | "cohost" | undefined {
+  if (!meta) return undefined;
+  if (meta.hostPin === pin) return "host";
+  if (meta.cohosts.has(pin)) return "cohost";
+  return undefined;
+}
+function isModerator(meta: RoomMeta | undefined, pin: string): boolean {
+  return roleOf(meta, pin) !== undefined;
 }
 
 /** Fired once per ENDED room that had ≥2 participants and was actually answered. */
@@ -242,9 +257,10 @@ function maybeScheduleRoomReap(reg: RelayRegistry, roomId: string) {
 function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string) {
   const rid = reg.pinRoom.get(pin);
   if (!rid || !reg.rooms.has(rid)) return;
+  const rmeta = reg.roomMeta.get(rid);
   const members = Array.from(reg.rooms.get(rid) || [])
     .filter(p => p !== pin)
-    .map(p => ({ pin: p, name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest" }));
+    .map(p => ({ pin: p, name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest", device: reg.clients.get(p)?.device, role: roleOf(rmeta, p) }));
   if (members.length === 0) {
     // The user is ALONE in this room — a stale solo dialing room (they refreshed
     // mid-ring before anyone answered) or everyone else already left. Don't drop
@@ -262,6 +278,8 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
     type: "rejoin",
     roomId: rid,
     members,
+    selfRole: roleOf(rmeta, pin),
+    hostPin: rmeta?.hostPin ?? null,
     iceServers: iceServers(pin),
     livekit: lk.enabled,
     livekitUrl: lk.url,
@@ -527,9 +545,13 @@ export interface RelayMessage {
   type?: string;
   name?: string;
   pin?: string;
+  device?: string;
   to?: string;
   roomId?: string;
   data?: unknown;
+  // Host moderation (`mod` message): action + optional target pin.
+  action?: string;
+  target?: string;
 }
 
 export type InviteHook = (info: {
@@ -592,6 +614,7 @@ export function handleMessage(
       const existing = reg.clients.get(conn.pin);
       if (existing) {
         if (msg.name) existing.name = String(msg.name).slice(0, 24);
+        if (msg.device) existing.device = String(msg.device).slice(0, 16);
         const lk = livekitConfig();
         safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
         // A within-grace re-attach (same cid) also auto-rejoins its active call.
@@ -665,8 +688,9 @@ export function handleMessage(
         prev.cid = cid || prev.cid;
       }
       prev.name = name;
+      if (msg.device) prev.device = String(msg.device).slice(0, 16);
     } else {
-      reg.clients.set(pin, { socket: conn.socket, name, roomId: null, cid: cid || null, graceT: null, ringing: new Set() });
+      reg.clients.set(pin, { socket: conn.socket, name, device: msg.device ? String(msg.device).slice(0, 16) : undefined, roomId: null, cid: cid || null, graceT: null, ringing: new Set() });
     }
     const lk = livekitConfig();
     safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
@@ -733,8 +757,10 @@ export function handleMessage(
           dialedNumber: to,
           accepted: false,
           roster: new Map([[conn.pin, self.name]]),
+          hostPin: conn.pin, // the creator is the host
+          cohosts: new Set(),
         });
-        safeSend(conn.socket, { type: "room", roomId: rid });
+        safeSend(conn.socket, { type: "room", roomId: rid, selfRole: "host", hostPin: conn.pin });
         // On the LiveKit path, the caller joins the SFU room immediately (alone)
         // so the callee connects near-instantly the moment they accept.
         pushLivekitToken(reg, conn.pin, rid);
@@ -839,11 +865,14 @@ export function handleMessage(
       if (self.roomId && self.roomId !== roomId) {
         leaveRoom(reg, conn.pin);
       }
+      const roomMetaForRoles = reg.roomMeta.get(roomId);
       const members = Array.from(room)
         .filter(p => p !== conn.pin)
         .map(p => ({
           pin: p,
           name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest",
+          device: reg.clients.get(p)?.device,
+          role: roleOf(roomMetaForRoles, p),
         }));
       joinRoomMember(reg, roomId, conn.pin);
       self.roomId = roomId;
@@ -883,6 +912,8 @@ export function handleMessage(
         type: "joined",
         roomId,
         members,
+        selfRole: roleOf(roomMetaForRoles, conn.pin),
+        hostPin: roomMetaForRoles?.hostPin ?? null,
         iceServers: iceServers(conn.pin),
         livekit: lk.enabled,
         livekitUrl: lk.url,
@@ -902,6 +933,8 @@ export function handleMessage(
             type: "peer-joined",
             pin: newcomerPin,
             name: self.name,
+            device: self.device,
+            role: roleOf(roomMetaForRoles, newcomerPin),
             iceServers: iceServers(m.pin),
             livekit: lk.enabled,
             livekitUrl: lk.url,
@@ -1016,6 +1049,61 @@ export function handleMessage(
         } catch { /* never let a notification hook break call teardown */ }
       }
       leaveRoom(reg, conn.pin);
+      break;
+    }
+
+    case "mod": {
+      // Host / co-host moderation. Only a moderator of the caller's own active
+      // room may act, and only on members of THAT room.
+      const rid = self.roomId;
+      if (!rid) break;
+      const meta = reg.roomMeta.get(rid);
+      if (!isModerator(meta, conn.pin)) {
+        safeSend(conn.socket, { type: "error", code: "forbidden", message: "Only the host can do that." });
+        break;
+      }
+      const room = reg.rooms.get(rid);
+      if (!room) break;
+      const action = String(msg.action || "");
+      const target = typeof msg.target === "string" ? msg.target : "";
+      const sendTo = (p: string, obj: unknown) => { const c = reg.clients.get(p); if (c) safeSend(c.socket, obj); };
+      switch (action) {
+        case "mute":
+        case "unmute": {
+          if (!room.has(target)) break;
+          sendTo(target, { type: "force-mute", on: action === "mute", by: conn.pin });
+          break;
+        }
+        case "mute-all":
+        case "unmute-all": {
+          const on = action === "mute-all";
+          room.forEach(p => { if (p !== conn.pin) sendTo(p, { type: "force-mute", on, by: conn.pin }); });
+          break;
+        }
+        case "cohost": {
+          // Toggle co-host. Only the HOST may (de)assign co-hosts.
+          if (meta!.hostPin !== conn.pin) {
+            safeSend(conn.socket, { type: "error", code: "forbidden", message: "Only the host assigns co-hosts." });
+            break;
+          }
+          if (!room.has(target) || target === meta!.hostPin) break;
+          const role = meta!.cohosts.has(target) ? undefined : "cohost";
+          if (role) meta!.cohosts.add(target); else meta!.cohosts.delete(target);
+          broadcastToRoom(reg, rid, { type: "role", pin: target, role: role ?? null });
+          break;
+        }
+        case "pin": {
+          // Pin a feed to everyone's main view (empty target = clear → grid).
+          broadcastToRoom(reg, rid, { type: "host-pin", pin: target || null });
+          break;
+        }
+        case "grid": {
+          broadcastToRoom(reg, rid, { type: "host-pin", pin: null });
+          break;
+        }
+        default:
+          break;
+      }
       break;
     }
 

@@ -1,7 +1,37 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { contactUpdateKeys } from "./v2db";
+import { contactUpdateKeys, isGuestPresenceHidden, GUEST_PRESENCE_TTL_MS } from "./v2db";
+
+/**
+ * Guest presence privacy (v2.36): a GUEST inactive for >24h has their presence
+ * COMPLETELY suppressed (no online dot, no "offline", no "last seen"). Registered
+ * users always show presence; a live or recently-seen guest still shows status.
+ */
+describe("isGuestPresenceHidden — 24h guest privacy", () => {
+  const now = 1_000_000_000_000;
+  it("never hides a REGISTERED user's presence (even if long offline)", () => {
+    expect(
+      isGuestPresenceHidden({ isGuest: false, isOnline: false, lastSeenAt: new Date(0) }, now),
+    ).toBe(false);
+  });
+  it("never hides an ONLINE guest", () => {
+    expect(
+      isGuestPresenceHidden({ isGuest: true, isOnline: true, lastSeenAt: new Date(now) }, now),
+    ).toBe(false);
+  });
+  it("shows a guest seen WITHIN 24h (so 'last seen' still renders)", () => {
+    const seen = new Date(now - (GUEST_PRESENCE_TTL_MS - 60_000));
+    expect(isGuestPresenceHidden({ isGuest: true, isOnline: false, lastSeenAt: seen }, now)).toBe(false);
+  });
+  it("HIDES a guest inactive for >24h", () => {
+    const seen = new Date(now - (GUEST_PRESENCE_TTL_MS + 60_000));
+    expect(isGuestPresenceHidden({ isGuest: true, isOnline: false, lastSeenAt: seen }, now)).toBe(true);
+  });
+  it("HIDES a guest with no presence record at all", () => {
+    expect(isGuestPresenceHidden({ isGuest: true, isOnline: false, lastSeenAt: null }, now)).toBe(true);
+  });
+});
 
 /**
  * Rich-contact upsert + the additive boot-migrator (v2.24).
