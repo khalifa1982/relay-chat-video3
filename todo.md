@@ -729,3 +729,27 @@ Reported from live mobile testing. Four fixes, reviewed by an adversarial multi-
       `setCallStatus`, with a colour-coded dot (amber pulsing / green / red). The diagnostics
       "?" floating button is **hidden** (panel still reachable via the `?` key for debugging).
 - [x] Footer → `v2.18.0`. tsc clean, 197 tests green, build clean.
+
+## v2.18.1 — Review fixes for the v2.18.0 call-engine batch (delivered 2026-06-27)
+
+An adversarial multi-agent review of v2.18.0 confirmed 6 real findings; all fixed here.
+
+- [x] **Camera flip broke audio (HIGH)** — the new raw-path flip re-acquired a fresh
+      `audio:true` stream, so after a flip on a plain call mute/unmute toggled the wrong
+      (untransmitted) track and a 2nd mic capture leaked. Now `flipCamera` acquires
+      **video-only** and grafts the EXISTING audio track onto the new stream, so the
+      transmitted/muteable audio identity never changes.
+- [x] **SFU reconnect did nothing + raced LiveKit (HIGH)** — on the LiveKit path `peers` is
+      empty, so the 10s window ran no recovery and just delayed `hangUp`; worse, arming it on
+      LiveKit's `Reconnecting` event raced and killed LiveKit's own (longer, working) retry.
+      Fixed: the 10s hard window is now **mesh-only**; the SFU path surfaces a status-only
+      "Reconnecting…" (`setSfuReconnectingUI`) and lets LiveKit own recovery — a terminal
+      `Disconnected` is the single teardown point.
+- [x] **applyFilter re-entrancy (MED)** — rapid filter taps could interleave and publish the
+      wrong track / null-deref the pipeline mid-teardown. Now coalesced to the latest request
+      and serialized (one change at a time); `ensurePipeline` null-guards its output read.
+- [x] **Transient mesh `disconnected` flapped the UI (MED)** — a brief `disconnected` (which
+      self-heals) no longer opens the window or tears down a healthy SSE channel; only an
+      all-peers `failed`/`closed` does, and signaling is re-opened only when actually down.
+      The per-tile "reconnecting…" hint still shows immediately.
+- [x] Footer → `v2.18.1`. tsc clean, 197 tests green, build clean.

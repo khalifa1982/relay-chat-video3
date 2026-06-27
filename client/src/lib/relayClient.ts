@@ -424,7 +424,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
       pipeline.setFacingMode(facingMode);
       await pipeline.setInputStream(localStream);
     }
-    processedStream = pipeline.getOutputStream();
+    // Null-guard: an interleaved filter-off could have torn the pipeline down
+    // while we awaited above.
+    if (pipeline) processedStream = pipeline.getOutputStream();
   }
   async function ensureMedia(): Promise<MediaStream> {
     // Reuse a live camera/mic — don't re-prompt. (We key off localStream, not
@@ -514,23 +516,36 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
   /** Swap the camera between front and back. Re-acquires getUserMedia with
    *  the opposite facingMode and hot-replaces the video track on every peer
-   *  via RTCRtpSender.replaceTrack — no re-negotiation needed. */
+   *  via RTCRtpSender.replaceTrack — no re-negotiation needed. We acquire
+   *  VIDEO-ONLY and keep the EXISTING audio track, so the transmitted/muteable
+   *  audio identity never changes (otherwise mute would silently toggle the
+   *  wrong track and a duplicate mic capture would leak). */
   async function flipCamera() {
     if (!localStream) { toast("Camera isn't active yet.", true); return; }
     const next: "user" | "environment" = facingMode === "user" ? "environment" : "user";
-    let nu: MediaStream;
+    let nuVideo: MediaStream;
     try {
-      nu = await acquireRawStream(next);
+      nuVideo = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          width: { ideal: isMobile ? 960 : 1280 },
+          height: { ideal: isMobile ? 540 : 720 },
+          frameRate: { ideal: 30, max: 30 },
+          facingMode: next,
+        },
+      });
     } catch {
       toast("Couldn't switch camera — this device may only have one.", true);
       return;
     }
     facingMode = next;
-    // Stop old VIDEO tracks (keep audio tracks running to avoid mic glitches)
-    if (localStream) {
-      localStream.getVideoTracks().forEach(t => t.stop());
-    }
-    const oldLocal = localStream;
+    // Carry the SAME audio track across the flip; stop only the old VIDEO.
+    const audioTracks = localStream.getAudioTracks();
+    localStream.getVideoTracks().forEach(t => t.stop());
+    // New combined stream = existing audio + the fresh camera video. The audio
+    // track object is unchanged, so toggleMic and every peer/SFU audio sender
+    // keep pointing at the right track.
+    const nu = new MediaStream([...audioTracks, ...nuVideo.getVideoTracks()]);
     localStream = nu;
     if (pipeline) {
       // Filtered path: the canvas output track is unchanged — just point the
@@ -538,11 +553,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
       pipeline.setFacingMode(facingMode);
       await pipeline.setInputStream(nu);
     } else {
-      // Raw path: we publish the camera track directly, so hot-swap it on every
-      // peer / the SFU.
+      // Raw path: we publish the camera track directly, so hot-swap the VIDEO
+      // on every peer / the SFU (audio is untouched — it's the same track).
       await replaceVideoEverywhere(nu.getVideoTracks()[0] || null);
     }
-    void oldLocal;
     // Update the local self-tile's video (if shown)
     const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
     if (selfV) selfV.srcObject = processedStream || nu;
@@ -552,11 +566,32 @@ export function startRelay(root: HTMLElement): RelayHandle {
     toast(facingMode === "environment" ? "Switched to back camera" : "Switched to front camera");
   }
 
-  /** Apply a filter; lazy-loads MediaPipe models if needed. Turning filters ON
-   *  spins up the canvas pipeline and hot-swaps the outgoing track to it;
-   *  turning them OFF tears the canvas down and publishes the raw camera again
-   *  (so a plain call costs zero canvas work). */
+  // Serialize filter changes: applyFilter awaits getUserMedia/MediaPipe/track
+  // swaps, so two rapid taps could interleave and leave the published track
+  // disagreeing with the selection (or null-deref the pipeline mid-teardown).
+  // We coalesce to the LATEST requested filter and run one change at a time.
+  let filterBusy = false;
+  let pendingFilter: FilterId | null = null;
   async function applyFilter(id: FilterId) {
+    pendingFilter = id;
+    // Immediate visual feedback on the strip even while a prior change runs.
+    const sel = $("filterStrip");
+    sel?.querySelectorAll(".relay-filter").forEach(el => {
+      (el as HTMLElement).classList.toggle("active", (el as HTMLElement).dataset.id === id);
+    });
+    if (filterBusy) return;
+    filterBusy = true;
+    try {
+      while (pendingFilter !== null && pendingFilter !== activeFilter) {
+        const target = pendingFilter;
+        pendingFilter = null;
+        await applyFilterInner(target);
+      }
+    } finally {
+      filterBusy = false;
+    }
+  }
+  async function applyFilterInner(id: FilterId) {
     const prev = activeFilter;
     activeFilter = id;
     updateFilterStripUI();
@@ -821,21 +856,22 @@ export function startRelay(root: HTMLElement): RelayHandle {
     room.on(RoomEventEnum.DataReceived, (payload: Uint8Array) => {
       try { const d = JSON.parse(new TextDecoder().decode(payload)); addChatMsg(d.name, d.text, false); } catch { /* */ }
     });
-    // LiveKit drives its OWN reconnection first (Reconnecting → Reconnected).
-    // Surface that in the top bar; only treat a final Disconnected as a drop,
-    // and even then give the 10s window a chance before tearing down.
+    // LiveKit drives its OWN reconnection (Reconnecting → Reconnected), and its
+    // retry window is longer than our 10s mesh window. So on the SFU path we
+    // only surface the status — we must NOT arm our hard timer, or it would race
+    // and kill LiveKit's working reconnection. A terminal `Disconnected` (after
+    // LiveKit has exhausted its retries) is the single source of teardown.
     if (RoomEventEnum.Reconnecting) {
-      room.on(RoomEventEnum.Reconnecting, () => { if (lkRoom === room) enterReconnecting(); });
+      room.on(RoomEventEnum.Reconnecting, () => { if (lkRoom === room) setSfuReconnectingUI(); });
     }
     if (RoomEventEnum.Reconnected) {
       room.on(RoomEventEnum.Reconnected, () => { if (lkRoom === room) markEstablished(); });
     }
     room.on(RoomEventEnum.Disconnected, () => {
       if (lkRoom !== room || !inCall) return;
-      // If the call was live, let the reconnect window try (the LK watchdog can
-      // re-mint a token and rejoin); otherwise end now.
-      if (establishedOnce) enterReconnecting();
-      else hangUp("livekit-disconnected");
+      // Terminal: LiveKit already gave the call its (longer) reconnect window
+      // and gave up. End the call rather than show a misleading countdown.
+      hangUp("livekit-disconnected");
     });
 
     try {
@@ -1229,12 +1265,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     clearConnSeq();
     if (callStatus !== "live") setCallStatus("live");
   }
+  // MESH reconnect: WE own recovery (ICE restarts + signaling), so we run a
+  // hard 10s window with a visible countdown and tear the call down if it
+  // doesn't recover. NOT used on the SFU path — see setSfuReconnectingUI().
   function enterReconnecting() {
-    if (!inCall || !establishedOnce) return; // only meaningful after a live call
+    if (!inCall || !establishedOnce || livekitEnabled) return;
     if (reconnectHardT) return; // already counting down
-    // Actively try to recover: re-open signaling + kick ICE restarts now.
-    try { ws?.close(); } catch { /* */ }
-    if (!destroyed) connectWS();
+    // Re-open signaling ONLY if it's actually unhealthy (don't tear down a
+    // working SSE channel on a transient media blip), then kick ICE restarts.
+    if (!ws || ws.readyState !== 1 /* EventSource.OPEN */) {
+      try { ws?.close(); } catch { /* */ }
+      if (!destroyed) connectWS();
+    }
     Object.keys(peers).forEach(pin => { try { void tryIceRestart(pin); } catch { /* */ } });
     let remaining = Math.ceil(RECONNECT_WINDOW_MS / 1000);
     setCallStatus("reconnecting", "Reconnecting… " + remaining + "s");
@@ -1250,11 +1292,23 @@ export function startRelay(root: HTMLElement): RelayHandle {
       hangUp("connection-lost");
     }, RECONNECT_WINDOW_MS);
   }
+  // SFU reconnect: LiveKit owns its OWN retry loop (which is longer than 10s),
+  // so we must NOT arm our hard timer — that would race and kill LiveKit's
+  // working reconnection. We only surface the status; the terminal LiveKit
+  // `Disconnected` event is the single source of teardown.
+  function setSfuReconnectingUI() {
+    if (!inCall || !establishedOnce) return;
+    setCallStatus("reconnecting");
+  }
   function exitReconnecting() {
     if (reconnectHardT) { clearTimeout(reconnectHardT); reconnectHardT = null; }
     if (reconnectTickT) { clearInterval(reconnectTickT); reconnectTickT = null; }
   }
   // Re-evaluate whether the mesh call is healthy after any peer state change.
+  // Only a TERMINAL failure (`failed`/`closed`) on every peer opens the window —
+  // a transient `disconnected` is left to the per-peer grace + ICE restart (and
+  // still shows "reconnecting…" on the tile) so brief blips don't flap the UI or
+  // tear down signaling.
   function evaluateMeshHealth() {
     if (livekitEnabled || !inCall || !establishedOnce) return;
     const ps = Object.values(peers);
@@ -1265,9 +1319,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (callStatus === "reconnecting") setCallStatus("live");
       return;
     }
-    const allTrouble = ps.every(p =>
-      ["disconnected", "failed", "closed"].includes(p.pc.connectionState));
-    if (allTrouble) enterReconnecting();
+    const allTerminal = ps.every(p =>
+      ["failed", "closed"].includes(p.pc.connectionState));
+    if (allTerminal) enterReconnecting();
   }
   function enterCallUI(label: string) {
     show("call");
@@ -1588,13 +1642,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
   document.addEventListener("keydown", onDocKey);
   window.addEventListener("beforeunload", onUnload);
   // Local network loss (Wi-Fi drop, tunnel, airplane toggle) is the clearest
-  // "you're disconnected" signal. While in a live call, show the reconnect
-  // window; when the radio returns, re-open signaling and kick ICE restarts.
-  const onOffline = () => { if (inCall && establishedOnce) enterReconnecting(); };
+  // "you're disconnected" signal. On the MESH path we own recovery, so show the
+  // reconnect window and, when the radio returns, re-open signaling + kick ICE
+  // restarts. On the SFU path LiveKit detects and drives this itself (its
+  // Reconnecting/Reconnected events), so we stay out of its way.
+  const onOffline = () => {
+    if (inCall && establishedOnce && !livekitEnabled) enterReconnecting();
+  };
   const onOnline = () => {
-    if (!inCall) return;
-    try { ws?.close(); } catch { /* */ }
-    if (!destroyed) connectWS();
+    if (!inCall || livekitEnabled) return;
+    if (!ws || ws.readyState !== 1 /* EventSource.OPEN */) {
+      try { ws?.close(); } catch { /* */ }
+      if (!destroyed) connectWS();
+    }
     Object.keys(peers).forEach(pin => { try { void tryIceRestart(pin); } catch { /* */ } });
   };
   window.addEventListener("offline", onOffline);
