@@ -20,10 +20,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Do NOT pin the version here — package.json's `packageManager` field is
+      # the single source of truth. pnpm/action-setup@v4 errors out
+      # (ERR_PNPM_BAD_PM_VERSION) if a version is specified in BOTH places.
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 10.4.1
 
       - name: Setup Node 22
         uses: actions/setup-node@v4
