@@ -126,6 +126,31 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let lkRoom: import("livekit-client").Room | null = null;
   const lkParticipantTiles: Record<string, HTMLElement> = {};
   let lkPendingToken: { roomId: string; token: string; url: string } | null = null;
+  let lkConnected = false; // true only AFTER a successful room.connect()+publish
+  let lkWatchdog: ReturnType<typeof setTimeout> | null = null;
+  let lkJoinTries = 0;
+  function clearLkWatchdog() { if (lkWatchdog) { clearTimeout(lkWatchdog); lkWatchdog = null; } lkJoinTries = 0; }
+  // Reliability net for the SFU path: if media isn't up a few seconds after the
+  // call UI opens (token mint failed, SSE frame dropped, or connect() failed),
+  // re-request a fresh token; after a few tries, surface an error + hang up
+  // instead of sitting on a silent, media-less call forever.
+  function armLkWatchdog() {
+    clearLkWatchdog();
+    const tick = () => {
+      if (!inCall || !livekitEnabled || lkConnected) { lkWatchdog = null; return; }
+      lkJoinTries++;
+      if (lkJoinTries > 3) {
+        lkWatchdog = null;
+        toast("Couldn't connect call media. Please try again.", true);
+        hangUp("livekit-join-timeout");
+        return;
+      }
+      diag("livekit: media not up — re-requesting token (try " + lkJoinTries + ")");
+      sendWS({ type: "refresh-livekit" });
+      lkWatchdog = setTimeout(tick, 4000);
+    };
+    lkWatchdog = setTimeout(tick, 4500);
+  }
   let pendingRing: PendingRing | null = null;
   const recents: Recent[] = [];
   let callStart = 0;
@@ -631,6 +656,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         bindLkPlaceholder(el, true);
       } else if (track.kind === TrackEnum.Kind.Audio) {
         track.attach(); // detached <audio> element for playback
+        bindLkPlaceholder(el, false); // audio-only: clear "connecting…", keep avatar
       }
     });
     room.on(RoomEventEnum.TrackUnsubscribed, (track, _pub, participant) => {
@@ -653,10 +679,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
         for (const t of send.getVideoTracks()) await room.localParticipant.publishTrack(t);
         for (const t of send.getAudioTracks()) await room.localParticipant.publishTrack(t);
       }
+      lkConnected = true;
+      clearLkWatchdog();
       diag("livekit: connected + published");
     } catch (e) {
+      // Connect/publish failed (expired token, transient SFU/network fault).
+      // Clear the half-built room so the double-connect guard doesn't block a
+      // retry, and drop the (maybe-expired) token so the watchdog's
+      // refresh-livekit mints a fresh one. No-op if the call already ended.
       diag("livekit: connect failed");
       console.warn("livekit connect failed", e);
+      try { void room.disconnect(); } catch { /* */ }
+      if (lkRoom === room) lkRoom = null;
+      lkConnected = false;
+      lkPendingToken = null;
     }
   }
 
@@ -679,19 +715,28 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function bindLkPlaceholder(el: HTMLElement, hasVideo: boolean) {
     const ph = el.querySelector(".ph") as HTMLElement | null;
-    if (ph) ph.style.display = hasVideo ? "none" : "flex";
+    if (ph) ph.style.display = hasVideo ? "none" : "flex"; // keep the avatar for audio-only
     el.classList.toggle("audio-only", !hasVideo);
+    // Any subscribed track means the participant is connected — clear the
+    // "connecting…" overlay regardless of video (else audio-only tiles show it
+    // forever, since no Video track ever arrives to flip the state).
     const c = el.querySelector(".connecting") as HTMLElement | null;
-    if (c && hasVideo) c.style.display = "none";
-    if (hasVideo) el.dataset.state = "connected";
+    if (c) c.style.display = "none";
+    el.dataset.state = "connected";
   }
   function removeLkTile(id: string) {
-    lkParticipantTiles[id]?.remove();
+    const el = lkParticipantTiles[id];
+    const nm = el?.querySelector(".nm")?.textContent || "Someone";
+    el?.remove();
     delete lkParticipantTiles[id];
     layoutGrid();
+    // Parity with the mesh path's removePeer, which posts a "left" notice.
+    if (inCall) addSysMsg(nm + " left the call.");
   }
   // Tear down the LiveKit room + its tiles. Safe to call when not on the SFU path.
   function teardownLivekit() {
+    clearLkWatchdog();
+    lkConnected = false;
     if (lkRoom) { try { void lkRoom.disconnect(); } catch { /* */ } lkRoom = null; }
     for (const id in lkParticipantTiles) { lkParticipantTiles[id].remove(); delete lkParticipantTiles[id]; }
     lkPendingToken = null;
@@ -964,6 +1009,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // ---------- video grid ----------
   function enterCallUI(label: string) {
     show("call");
+    // On the SFU path, start the join watchdog so a failed/slow token or connect
+    // recovers (re-request) or surfaces an error instead of a silent dead call.
+    if (livekitEnabled) armLkWatchdog();
     if (label && /in call/i.test(label)) emitPhase("in-call");
     const lbl = $("callRoomLbl"); if (lbl) lbl.textContent = label || "In call";
     const grid = $("videoGrid"); if (grid) grid.innerHTML = "";
@@ -1115,7 +1163,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function toggleCam() {
     if (!localStream) return;
     camOn = !camOn;
-    localStream.getVideoTracks().forEach(t => t.enabled = camOn);
+    // The track actually SENT to peers/SFU is the PROCESSED (canvas) track, so
+    // toggle THAT to truly stop outgoing video. Toggling only the raw input (the
+    // old behavior) just starves the canvas and keeps forwarding a frozen frame.
+    // This fixes camera-off on BOTH the mesh and the SFU. Also toggle the raw
+    // input so the physical camera capture/light reflects the off state.
+    const published = processedStream || localStream;
+    published.getVideoTracks().forEach(t => (t.enabled = camOn));
+    if (processedStream) localStream.getVideoTracks().forEach(t => (t.enabled = camOn));
     $("camBtn")?.classList.toggle("off", !camOn);
     const s = $("tile-self"); if (s) s.classList.toggle("audio-only", !camOn);
   }
@@ -1143,8 +1198,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!/^\d{6}$/.test(pin)) { toast("Enter a 6-digit number.", true); return; }
     const here = pin === me.pin || (livekitEnabled ? !!lkParticipantTiles[pin] : !!peers[pin]);
     if (here) { toast("Already in the call.", true); return; }
+    // 10-way only on the SFU; the mesh fallback stays capped at 6.
+    const cap = livekitEnabled ? 10 : 6;
     const n = livekitEnabled ? Object.keys(lkParticipantTiles).length : Object.keys(peers).length;
-    if (n >= 9) { toast("Call is full (10 people max).", true); return; }
+    if (n >= cap - 1) { toast(`Call is full (${cap} people max).`, true); return; }
     try { await ensureMedia(); } catch { return; }
     sendWS({ type: "invite", to: pin });
     toast("Inviting " + pin + "…");

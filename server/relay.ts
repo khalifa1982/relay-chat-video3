@@ -404,6 +404,12 @@ export function handleMessage(
           code: "offline",
           message: "That number isn't online.",
         });
+        // The callee was offline — record the miss and (for registered users)
+        // email them. The hook resolves identity from the DB by number, so it
+        // works even though an offline callee has no in-memory registry entry.
+        try {
+          onMissedCall?.({ calleePin: to, callerPin: conn.pin, callerName: self.name, reason: "cancelled" });
+        } catch { /* never let a notification hook break call setup */ }
         break;
       }
       // A target is only "busy" if it's already in an established call with
@@ -427,12 +433,14 @@ export function handleMessage(
         pushLivekitToken(reg, conn.pin, rid);
       }
       const room = reg.rooms.get(self.roomId!);
-      // 10 is comfortable only on the LiveKit SFU path; a 10-way mesh is heavy.
-      if (room && room.size >= 10) {
+      // 10-way only on the SFU; the mesh fallback stays capped at 6 (a 10-way
+      // mesh is ~45 peer connections — far too heavy for the fallback path).
+      const inviteCap = livekitConfig().enabled ? 10 : 6;
+      if (room && room.size >= inviteCap) {
         safeSend(conn.socket, {
           type: "error",
           code: "full",
-          message: "Call is full (10 max).",
+          message: `Call is full (${inviteCap} max).`,
         });
         break;
       }
@@ -475,12 +483,26 @@ export function handleMessage(
         });
         break;
       }
-      // 10 is comfortable only on the LiveKit SFU path; a 10-way mesh is heavy.
-      if (room.size >= 10) {
+      // Authorization: only a pin that was actually rung into this room (i.e.
+      // sits in some current member's `ringing` set) may join it. Without this,
+      // a client that learns a roomId could join an in-progress call — and on
+      // the SFU path be minted a publish/subscribe token. Covers mesh + SFU.
+      const invitedToRoom = Array.from(room).some(p => reg.clients.get(p)?.ringing.has(conn.pin!));
+      if (!invitedToRoom) {
+        safeSend(conn.socket, {
+          type: "error",
+          code: "forbidden",
+          message: "You weren't invited to this call.",
+        });
+        break;
+      }
+      // 10-way only on the SFU; the mesh fallback stays capped at 6.
+      const acceptCap = livekitConfig().enabled ? 10 : 6;
+      if (room.size >= acceptCap) {
         safeSend(conn.socket, {
           type: "error",
           code: "full",
-          message: "Call is full (10 max).",
+          message: `Call is full (${acceptCap} max).`,
         });
         break;
       }
@@ -537,20 +559,20 @@ export function handleMessage(
     case "reject": {
       const targetPin = String(msg.to || "");
       const target = reg.clients.get(targetPin);
-      if (target) {
-        // We declined — clear ourselves from the caller's pending-ring set.
+      // Only honour a decline for a call that was genuinely ringing us — without
+      // this guard a client could POST reject for an arbitrary live pin and forge
+      // a "declined" call_history row between two parties.
+      if (target && target.ringing.has(conn.pin)) {
         target.ringing.delete(conn.pin);
         safeSend(target.socket, { type: "rejected", from: conn.pin });
         // Record the decline (call_history). Caller=targetPin, callee=us.
         try {
           onMissedCall?.({ calleePin: conn.pin, callerPin: targetPin, callerName: target.name, reason: "rejected" });
         } catch { /* never let a notification hook break call teardown */ }
-      }
-      // Tear down the caller's solo dialing room so they can be invited again
-      // or place another call without being phantom-busy to themselves or to
-      // future callers.
-      if (target && roomSize(reg, target.roomId) === 1) {
-        leaveRoom(reg, targetPin);
+        // Tear down the caller's solo dialing room so they can be invited again.
+        if (roomSize(reg, target.roomId) === 1) {
+          leaveRoom(reg, targetPin);
+        }
       }
       break;
     }
@@ -559,6 +581,14 @@ export function handleMessage(
       // Client is about to do an ICE restart and wants fresh TURN creds.
       // Mint a per-peer set and ship it back; safe to call frequently.
       safeSend(conn.socket, { type: "ice", iceServers: iceServers(conn.pin) });
+      break;
+    }
+
+    case "refresh-livekit": {
+      // Client lost or never received its SFU token (mint failure / dropped SSE
+      // frame / connect failure). Re-mint for its CURRENT room, derived from
+      // trusted server state — never a client-supplied room name.
+      if (self.roomId) pushLivekitToken(reg, conn.pin, self.roomId);
       break;
     }
 

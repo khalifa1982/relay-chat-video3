@@ -591,3 +591,49 @@ ON TOP of the call, hiding the call's own controls.
 - [ ] **Action required from you**: set the Manus TURN secrets + Publish, then retest a
       two-device call (now from any tab) — the callee should get a ring with Accept, and
       cancelling before they answer should clear their ring immediately.
+
+## v2.12.0 — LiveKit SFU + Resend email + copyright footer (delivered 2026-06-27)
+
+Designed by a 6-agent research workflow (verified against the installed SDK types) and
+hardened by a 22-agent adversarial review (18 findings, 10 confirmed, all fixed bar one
+cosmetic by-design item).
+
+### LiveKit SFU (professional 10-way calling) — feature-gated on `LIVEKIT_*`
+- [x] `server/relay.ts`: `livekitConfig()` + `mintLivekitToken()` (60s join token, minted
+      server-side: identity=caller pin, room=relay roomId, never client-supplied; API
+      secret never leaves the server). `pushLivekitToken` over SSE. Advisory `livekit`
+      flag on registered/joined/peer-joined.
+- [x] `client/src/lib/relayClient.ts`: lazy-imports `livekit-client` (530 kB chunk, only on
+      a real call); `onJoined`/`onPeerJoined` branch to LiveKit when enabled (mesh
+      otherwise); publishes the processed stream; remote tiles reuse the #videoGrid; chat
+      over LiveKit data; teardown disconnects the SFU first.
+
+### Resend missed-call email — feature-gated on `RESEND_API_KEY`
+- [x] `server/email.ts` (fetch-based, never throws); `onMissedCall` hook (leave/reject/
+      disconnect/**offline**) → records `call_history` for everyone + emails REGISTERED
+      callees on a genuine miss (declines recorded, not emailed). Verified by a real send.
+
+### Copyright footer
+- [x] `© <year> RELAY · v2.12.0 · <build-date>` — build date injected via a Vite `define`
+      (`__BUILD_DATE__`); version is a single constant (`buildInfo.ts`). Landing footer
+      bumped + copyright added.
+
+### Review fixes (this batch)
+- [x] **Room-join authorization**: `accept` now requires the joiner to have actually been
+      rung into the room (covers mesh + SFU). Reject only honored for a real ring.
+- [x] **Path-dependent cap**: SFU=10, mesh fallback stays 6 (client + server).
+- [x] **SFU join reliability**: a watchdog re-requests the token (`refresh-livekit`) and,
+      after a few tries, surfaces an error + hangs up instead of a silent dead call; a
+      failed `room.connect()` clears the half-built room so a retry isn't blocked.
+- [x] **Camera-off**: now toggles the PUBLISHED (canvas) track so outgoing video actually
+      stops (fixed on both mesh + SFU); audio-only remote tiles clear the "connecting…"
+      overlay; SFU remote-leave posts a "left the call" notice (mesh parity); offline
+      callees now get a missed-call record/email.
+- [ ] Deferred (cosmetic, by-design): missed/declined calls log `channel:"video"` because
+      the SSE relay is intentionally media-agnostic.
+
+- [x] tsc clean, 185/186 vitest (+13), build code-splits + stamps the footer date, prod
+      bundle boots (external `livekit-server-sdk` resolves), LiveKit creds validated, real
+      test email sent OK.
+- [ ] **Action required from you**: set `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`
+      + `RESEND_API_KEY` (and the TURN ones) in Manus → Secrets, then fetch + Publish.

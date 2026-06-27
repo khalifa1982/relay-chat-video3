@@ -738,4 +738,61 @@ describe("relay — missed-call hook", () => {
     handleMessage(reg, a.asConn(), { type: "leave" }, undefined, (i) => calls.push(i));
     expect(calls).toHaveLength(0);
   });
+
+  it("fires onMissedCall (cancelled) when inviting an OFFLINE / unregistered number", () => {
+    const a = register(reg, "Alice");
+    const calls: Missed[] = [];
+    handleMessage(reg, a.asConn(), { type: "invite", to: "999000" }, undefined, (i) => calls.push(i));
+    // Caller gets the offline error, and the miss is reported so the DB layer can
+    // record it + email a registered (but offline) callee.
+    expect((a.last() as { type: string; code?: string }).code).toBe("offline");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ calleePin: "999000", callerPin: a.pin, reason: "cancelled" });
+  });
+
+  it("ignores a `reject` for a call that was never ringing the sender (no forged history)", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    const calls: Missed[] = [];
+    // Bob rejects Alice without Alice ever having rung Bob.
+    handleMessage(reg, b.asConn(), { type: "reject", to: a.pin! }, undefined, (i) => calls.push(i));
+    expect(calls).toHaveLength(0);
+    expect(a.outbox.some((m) => (m as { type?: string }).type === "rejected")).toBe(false);
+  });
+});
+
+describe("relay — room-join authorization", () => {
+  let reg: RelayRegistry;
+  beforeEach(() => { reg = createRegistry(); });
+
+  function roomIdOf(c: FakeConn): string {
+    return (c.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "room"
+    ) as { roomId: string }).roomId;
+  }
+
+  it("rejects an `accept` from a client who was never invited to the room", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    const c = register(reg, "Carol");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! }); // A rings B, room created
+    const rid = roomIdOf(a);
+    // Carol learned the roomId but was never rung — she must NOT be able to join.
+    handleMessage(reg, c.asConn(), { type: "accept", roomId: rid });
+    const last = c.last() as { type: string; code?: string };
+    expect(last.type).toBe("error");
+    expect(last.code).toBe("forbidden");
+    expect(reg.rooms.get(rid)?.has(c.pin!)).toBe(false);
+  });
+
+  it("allows an invited callee to accept", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const rid = roomIdOf(a);
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
+    expect((b.last() as { type: string }).type).toBe("joined");
+    expect(reg.rooms.get(rid)?.has(b.pin!)).toBe(true);
+  });
 });
