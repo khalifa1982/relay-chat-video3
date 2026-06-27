@@ -11,6 +11,8 @@
  * the CSS won't apply.
  */
 
+import { FOOTER_LINE } from "./buildInfo";
+
 export const RELAY_MARKUP = `
 <div class="relay-bg-fx"><div class="grid"></div><div class="noise"></div></div>
 
@@ -159,7 +161,7 @@ export const RELAY_MARKUP = `
 
 <div class="boot" id="boot"><div class="spin"></div><div class="t">Connecting&hellip;</div></div>
 
-<div class="version-tag">RELAY &middot; v2.12.0</div>
+<div class="version-tag">${FOOTER_LINE}</div>
 `;
 
 export const RELAY_CSS = `

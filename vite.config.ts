@@ -152,8 +152,15 @@ function vitePluginManusDebugCollector(): Plugin {
 
 const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
 
+// Stamp the build date (UTC, YYYY-MM-DD) into the bundle so the footer can show
+// when this build was produced. Replaced at build time via `define`.
+const BUILD_DATE = new Date().toISOString().slice(0, 10);
+
 export default defineConfig({
   plugins,
+  define: {
+    __BUILD_DATE__: JSON.stringify(BUILD_DATE),
+  },
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
