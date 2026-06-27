@@ -3,7 +3,7 @@
 // Injected by Vite `define` at build time (see vite.config.ts).
 declare const __BUILD_DATE__: string;
 
-export const APP_VERSION = "2.46.0";
+export const APP_VERSION = "2.47.0";
 
 /** Build date (UTC YYYY-MM-DD), stamped at build time. Falls back to the current
  *  date in dev/test where the Vite `define` isn't applied. */

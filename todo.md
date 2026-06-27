@@ -1464,3 +1464,15 @@ Five refinements + the v2.44 review fixes.
       — it only appears when the camera is off. (Regression from the v2.39 cam-off avatar feature.)
 - [x] 4 new server tests (screen broadcast, host transfer + permission gate). 354 tests green, tsc + build
       clean. Footer → `v2.46.0`.
+
+## v2.47.0 — Per-tile host menu + remove participant (delivered 2026-06-27)
+
+- [x] **Per-tile ⋮ host menu.** Each remote participant's tile now shows a 3-dots button in the corner,
+      visible ONLY to the host/co-host (`#videoGrid.mod-on`). Tapping it opens a sheet with: Pin to
+      everyone's view, Mute, (host) Make co-host, (host) Make host, and **Remove from call**.
+- [x] **Remove participant (kick).** New host/co-host `mod action:"kick"` force-leaves the target
+      (server `leaveRoom` clears membership + broadcasts peer-left); the kicked client gets a `kicked`
+      message and exits the session with a notice. Permission-gated: nobody can remove the host; only the
+      host can remove a co-host. "Remove" also added to the host-panel rows.
+- [x] 2 new server tests (kick removes membership; can't kick the host) + a CSS guard. 357 tests green,
+      tsc + build clean. Footer → `v2.47.0`.

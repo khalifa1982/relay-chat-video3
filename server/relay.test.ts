@@ -874,6 +874,25 @@ describe("relay — host moderation", () => {
     expect((b.outbox.find((m) => rtype(m) === "error") as { code?: string } | undefined)?.code).toBe("forbidden");
   });
 
+  it("host 'kick' removes the target from the call (kicked + membership cleared)", () => {
+    const { a, b, rid } = hostAndGuest();
+    b.outbox.length = 0;
+    expect(reg.rooms.get(rid)?.has(b.pin!)).toBe(true);
+    handleMessage(reg, a.asConn(), { type: "mod", action: "kick", target: b.pin! });
+    // B is told they were kicked and is removed from the room membership.
+    expect(b.outbox.some((m) => rtype(m) === "kicked")).toBe(true);
+    expect(reg.rooms.get(rid)?.has(b.pin!) ?? false).toBe(false);
+    expect(reg.pinRoom.has(b.pin!)).toBe(false);
+  });
+
+  it("nobody can kick the HOST", () => {
+    const { a, b } = hostAndGuest();
+    handleMessage(reg, a.asConn(), { type: "mod", action: "cohost", target: b.pin! }); // B = cohost
+    b.outbox.length = 0;
+    handleMessage(reg, b.asConn(), { type: "mod", action: "kick", target: a.pin! }); // cohost tries to kick host
+    expect((b.outbox.find((m) => rtype(m) === "error") as { code?: string } | undefined)?.code).toBe("forbidden");
+  });
+
   it("host 'pin' broadcasts host-pin to the room", () => {
     const { a, b } = hostAndGuest();
     b.outbox.length = 0;

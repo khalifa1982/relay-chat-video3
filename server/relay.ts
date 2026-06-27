@@ -1146,6 +1146,24 @@ export function handleMessage(
           if (oldHost) broadcastToRoom(reg, rid, { type: "role", pin: oldHost, role: "cohost", hostPin: target });
           break;
         }
+        case "kick": {
+          // Remove a participant from the call. A co-host can remove regular
+          // members; only the host can remove a co-host; nobody can remove the host.
+          if (!room.has(target) || target === conn.pin) break;
+          const trole = roleOf(meta, target);
+          if (trole === "host") {
+            safeSend(conn.socket, { type: "error", code: "forbidden", message: "You can't remove the host." });
+            break;
+          }
+          if (trole === "cohost" && meta!.hostPin !== conn.pin) {
+            safeSend(conn.socket, { type: "error", code: "forbidden", message: "Only the host can remove a co-host." });
+            break;
+          }
+          // Tell the target they were removed, then force them out of the room.
+          sendTo(target, { type: "kicked", by: conn.pin });
+          leaveRoom(reg, target); // removes membership + broadcasts peer-left + reaps if empty
+          break;
+        }
         case "pin": {
           // Pin a feed to everyone's main view (empty target = clear → grid).
           broadcastToRoom(reg, rid, { type: "host-pin", pin: target || null });
