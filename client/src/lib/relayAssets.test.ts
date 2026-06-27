@@ -58,4 +58,16 @@ describe("relay call UI regression guards", () => {
     expect(RELAY_MARKUP).toMatch(/id="addClose"/);
     expect(RELAY_CSS).toMatch(/#addClose\{/);
   });
+
+  // ── tile enrichment (v2.39) ────────────────────────────────────────────────
+  it("cam-off tiles show a full-name label under the avatar", () => {
+    expect(RELAY_CSS).toMatch(/\.relay-tile \.ph-name\{/);
+  });
+  it("tiles carry a device + speed info chip", () => {
+    expect(RELAY_CSS).toMatch(/\.relay-tile \.tile-info\{/);
+  });
+  it("the active speaker pulses (motion-gated)", () => {
+    expect(RELAY_CSS).toMatch(/@keyframes relaySpeakPulse/);
+    expect(RELAY_CSS).toMatch(/prefers-reduced-motion: no-preference/);
+  });
 });

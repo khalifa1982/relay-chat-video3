@@ -354,6 +354,22 @@ export const RELAY_CSS = `
 .relay-root .relay-tile.is-spotlight{box-shadow:inset 0 0 0 2px var(--accent)}
 .relay-root .relay-tile.speaking{outline:2px solid var(--relay-online,#22c55e);outline-offset:-2px}
 .relay-root .relay-tile.screen video{object-fit:contain;background:#000}
+/* Cam-off display: full name under the avatar (never a blank black box). */
+.relay-root .relay-tile .ph-name{font-size:14px;font-weight:600;color:var(--text);max-width:84%;text-align:center;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Per-tile info chip: device type + live connection speed (e.g. "5.2 Mbps"). */
+.relay-root .relay-tile .tile-info{position:absolute;right:10px;bottom:11px;display:flex;gap:6px;align-items:center;pointer-events:none}
+.relay-root .relay-tile .tile-info span{background:rgba(8,9,12,.62);backdrop-filter:blur(6px);padding:3px 7px;border-radius:7px;
+  font-size:10px;font-weight:600;color:#cbd5e1;line-height:1.2}
+.relay-root .relay-tile .tile-info span:empty{display:none}
+/* Active-speaking cue: a glowing ring + a soft sound-wave halo on the avatar.
+   The static outline always marks the speaker; the pulse is motion-gated. */
+@media (prefers-reduced-motion: no-preference){
+  .relay-root .relay-tile.speaking{animation:relaySpeakPulse 1.4s ease-in-out infinite}
+  .relay-root .relay-tile.speaking .ph .av{animation:relayAvPulse 1.4s ease-in-out infinite}
+}
+@keyframes relaySpeakPulse{0%,100%{box-shadow:inset 0 0 0 0 rgba(34,197,94,0)}50%{box-shadow:inset 0 0 22px 0 rgba(34,197,94,.32)}}
+@keyframes relayAvPulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}70%{box-shadow:0 0 0 16px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
 .relay-root #videoGrid.spotlight .relay-tile.is-thumb .ph .av{width:46px;height:46px;font-size:20px}
 .relay-root #videoGrid.spotlight .relay-tile.is-thumb .nm{font-size:11px;padding:3px 7px}
 .relay-root #videoGrid.compact{padding:8px;gap:8px}

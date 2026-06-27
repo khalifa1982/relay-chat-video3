@@ -15,6 +15,7 @@
 
 import { MediaPipeline, FILTERS, type FilterId, type FilterDef } from "./mediaPipeline";
 import { computeLayout } from "./callLayout";
+import { detectDeviceType } from "./deviceType";
 import { isDndOn } from "@/app/dnd";
 
 interface IceConfig { iceServers: Array<{ urls: string; username?: string; credential?: string }>; }
@@ -41,11 +42,12 @@ interface Msg {
   type?: string;
   pin?: string;
   name?: string;
+  device?: string;
   from?: string;
   fromName?: string;
   to?: string;
   roomId?: string;
-  members?: Array<{ pin: string; name: string }>;
+  members?: Array<{ pin: string; name: string; device?: string }>;
   iceServers?: IceConfig["iceServers"];
   data?: { sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
   message?: string;
@@ -137,6 +139,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // Group call: extra invitees queued until the server confirms the room, so a
   // fresh group dial can't race into two separate rooms.
   let pendingGroupInvites: string[] = [];
+  // Per-tile enrichment (v2.39): remote device types (pin -> "Mobile"/"Desktop",
+  // shared via signaling) + a periodic getStats sampler for live bitrate.
+  const peerDevices: Record<string, string> = {};
+  let statsSampleT: ReturnType<typeof setInterval> | null = null;
+  const statsPrev: Record<string, { bytes: number; ts: number }> = {};
   // ---------- active-speaker / spotlight view (v2.35) ----------
   let spotlightId: string | null = null;     // tile id manually pinned big, or null
   let manualSpotlight = false;               // user clicked a tile to pin it
@@ -243,7 +250,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         diag("sse ready");
         const cbs = wsOpenCbs.splice(0);
         cbs.forEach(fn => { try { fn(); } catch { /* */ } });
-        if (wantName) sendWS({ type: "register", name: wantName, pin: me.pin || undefined });
+        if (wantName) sendWS({ type: "register", name: wantName, pin: me.pin || undefined, device: detectDeviceType() });
         return;
       }
       if (m && m.type) diag("recv " + m.type + (m.from ? " from " + m.from.slice(-4) : ""));
@@ -362,7 +369,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     else if (savedPin && !me.pin) me.pin = savedPin;
     const btn = $("joinBtn") as HTMLButtonElement | null;
     if (btn) { btn.disabled = true; btn.textContent = "Connecting…"; }
-    if (ws && ws.readyState === 1) sendWS({ type: "register", name, pin: me.pin || undefined });
+    if (ws && ws.readyState === 1) sendWS({ type: "register", name, pin: me.pin || undefined, device: detectDeviceType() });
     else connectWS();
   }
   function onRegistered(m: Msg) {
@@ -881,6 +888,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // ---------- mesh / SFU ----------
   function onJoined(m: Msg) {
     roomId = m.roomId || null;
+    recordMemberDevices(m.members);
     if (livekitEnabled && roomId) {
       // SFU path: media goes through LiveKit, not the mesh. Don't build peers;
       // connect to the room (if the token already arrived — otherwise the
@@ -918,6 +926,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     roomId = rid;
     inCall = true;
     enterCallUI("In call");          // shows the call screen + arms the SFU watchdog
+    recordMemberDevices(m.members);
     toast("Rejoined the call");
     if (livekitEnabled) {
       diag("rejoin: livekit room " + rid);
@@ -931,6 +940,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
   }
   function onPeerJoined(m: Msg) {
+    if (m.pin && m.device) { peerDevices[m.pin] = m.device; setTileDevice("tile-" + m.pin, m.device); }
     // On the SFU path, LiveKit's own ParticipantConnected/TrackSubscribed events
     // drive remote tiles — the mesh offer/answer dance is skipped entirely.
     if (livekitEnabled) return;
@@ -1075,6 +1085,114 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
   // Remote-participant tile shims that reuse the existing #videoGrid DOM/CSS
   // (keyed by LiveKit participant.identity, which equals the 6-digit pin).
+  // Placeholder (avatar + full name, shown when the camera is off) + an info
+  // chip (device + live speed) used by every tile builder.
+  function tileContentHTML(name: string, device: string): string {
+    const dev = device
+      ? '<span class="ti-dev">' + escapeHtml(device) + "</span>"
+      : '<span class="ti-dev"></span>';
+    return (
+      '<div class="ph"><div class="av">' + initials(name) + "</div>" +
+      '<div class="ph-name">' + escapeHtml(name) + "</div></div>" +
+      '<div class="nm">' + escapeHtml(name) + "</div>" +
+      '<div class="tile-info">' + dev + '<span class="ti-speed"></span></div>'
+    );
+  }
+  function setTileDevice(tileId: string, device: string) {
+    const el = document.getElementById(tileId);
+    const d = el?.querySelector(".ti-dev") as HTMLElement | null;
+    if (d && device) d.textContent = device;
+  }
+  // Remember (and display) each member's device type. Works for both paths: the
+  // map is read at LiveKit tile creation, and the live setter updates mesh tiles.
+  function recordMemberDevices(members?: Array<{ pin: string; device?: string }>) {
+    (members || []).forEach(mem => {
+      if (mem.device) {
+        peerDevices[mem.pin] = mem.device;
+        setTileDevice("tile-" + mem.pin, mem.device);
+      }
+    });
+  }
+
+  // ---------- live bitrate (getStats) ----------
+  function formatMbps(bitsPerSec: number): string {
+    const mbps = bitsPerSec / 1_000_000;
+    if (mbps <= 0) return "";
+    return (mbps >= 10 ? mbps.toFixed(0) : mbps.toFixed(1)) + " Mbps";
+  }
+  function setTileSpeed(tileId: string, text: string) {
+    const el = document.getElementById(tileId);
+    const s = el?.querySelector(".ti-speed") as HTMLElement | null;
+    if (s) s.textContent = text;
+  }
+  async function sampleOneStats(key: string, tileId: string, pc: RTCPeerConnection, outbound: boolean) {
+    try {
+      const report = await pc.getStats();
+      let bytes = 0;
+      report.forEach((r: { type?: string; bytesReceived?: number; bytesSent?: number; kind?: string; mediaType?: string }) => {
+        const wanted = outbound ? "outbound-rtp" : "inbound-rtp";
+        if (r.type === wanted) bytes += (outbound ? r.bytesSent : r.bytesReceived) ?? 0;
+      });
+      const now = Date.now();
+      const prev = statsPrev[key];
+      statsPrev[key] = { bytes, ts: now };
+      if (prev && now > prev.ts) {
+        const bits = (bytes - prev.bytes) * 8;
+        const secs = (now - prev.ts) / 1000;
+        if (bits >= 0 && secs > 0) setTileSpeed(tileId, formatMbps(bits / secs));
+      }
+    } catch { /* stats unavailable */ }
+  }
+  function sampleStats() {
+    if (!inCall) return;
+    // Mesh peers: inbound bitrate per remote tile.
+    for (const pin in peers) {
+      void sampleOneStats("in-" + pin, "tile-" + pin, peers[pin].pc, false);
+    }
+    // Self: outbound bitrate (from any one peer connection — same encode).
+    const anyPeer = Object.values(peers)[0];
+    if (anyPeer) void sampleOneStats("out-self", "tile-self", anyPeer.pc, true);
+    // SFU: best-effort per-participant inbound via the track's own stats report.
+    // LiveKit's stats API is loosely typed and varies by version, so this block
+    // is intentionally `any` and fully guarded.
+    if (livekitEnabled && lkRoom) {
+      try {
+        const remotes = (lkRoom as unknown as { remoteParticipants?: Map<string, unknown> }).remoteParticipants;
+        remotes?.forEach((pp: unknown) => {
+          const p = pp as { identity?: string; getTrackPublications?: () => unknown[] };
+          const identity = p.identity;
+          if (!identity || typeof p.getTrackPublications !== "function") return;
+          const pubs = p.getTrackPublications() as Array<{ track?: { getRTCStatsReport?: () => Promise<RTCStatsReport> } }>;
+          for (const pub of pubs) {
+            const track = pub?.track;
+            if (!track || typeof track.getRTCStatsReport !== "function") continue;
+            void track.getRTCStatsReport().then((report) => {
+              let bytes = 0;
+              report.forEach((r: { type?: string; bytesReceived?: number }) => {
+                if (r.type === "inbound-rtp") bytes += r.bytesReceived ?? 0;
+              });
+              const key = "lk-" + identity, now = Date.now(), prev = statsPrev[key];
+              statsPrev[key] = { bytes, ts: now };
+              if (prev && now > prev.ts) {
+                const bits = (bytes - prev.bytes) * 8, secs = (now - prev.ts) / 1000;
+                if (bits >= 0 && secs > 0) setTileSpeed("tile-" + identity, formatMbps(bits / secs));
+              }
+            }).catch(() => {});
+            break; // one video pub is enough
+          }
+        });
+      } catch { /* */ }
+    }
+  }
+  function startStatsSampler() {
+    if (statsSampleT) return;
+    statsSampleT = setInterval(sampleStats, 2000);
+  }
+  function stopStatsSampler() {
+    if (statsSampleT) { clearInterval(statsSampleT); statsSampleT = null; }
+    for (const k in statsPrev) delete statsPrev[k];
+  }
+
   function addLkTile(id: string, name: string) {
     if (lkParticipantTiles[id]) return;
     const grid = $("videoGrid"); if (!grid) return;
@@ -1083,8 +1201,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const v = document.createElement("video");
     v.autoplay = true; v.playsInline = true;
     t.appendChild(v);
-    t.insertAdjacentHTML("beforeend", '<div class="ph"><div class="av">' + initials(name) + "</div></div>");
-    t.insertAdjacentHTML("beforeend", '<div class="nm">' + escapeHtml(name) + "</div>");
+    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || ""));
     t.insertAdjacentHTML("beforeend", '<div class="connecting">connecting…</div>');
     lkParticipantTiles[id] = t;
     grid.appendChild(t);
@@ -1572,6 +1689,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     establishedOnce = false;
     exitReconnecting();
     resetSpeakerView(); // fresh call → no stale spotlight/active-speaker focus
+    startStatsSampler(); // live per-tile bitrate
     runConnSequence();
     // On the SFU path, start the join watchdog so a failed/slow token or connect
     // recovers (re-request) or surfaces an error instead of a silent dead call.
@@ -1602,7 +1720,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // exactly as the remote peer will see it.
     v.srcObject = processedStream || localStream;
     t.appendChild(v);
-    t.insertAdjacentHTML("beforeend", '<div class="nm">You</div>');
+    // Avatar (from the user's name) + "You" label + device chip. The avatar
+    // shows whenever the camera is off so the tile is never a blank black box.
+    t.insertAdjacentHTML(
+      "beforeend",
+      '<div class="ph"><div class="av">' + initials(me.name || "You") + "</div>" +
+        '<div class="ph-name">You</div></div>' +
+        '<div class="nm">You</div>' +
+        '<div class="tile-info"><span class="ti-dev">' + escapeHtml(detectDeviceType()) + "</span>" +
+        '<span class="ti-speed"></span></div>'
+    );
     grid.appendChild(t);
     if (!camOn) t.classList.add("audio-only");
   }
@@ -1615,8 +1742,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const v = document.createElement("video");
     v.autoplay = true; v.playsInline = true;
     t.appendChild(v);
-    t.insertAdjacentHTML("beforeend", '<div class="ph"><div class="av">' + initials(name) + "</div></div>");
-    t.insertAdjacentHTML("beforeend", '<div class="nm">' + escapeHtml(name) + "</div>");
+    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || ""));
     t.insertAdjacentHTML("beforeend", '<div class="connecting">connecting…</div>');
     entry.el = t;
     grid.appendChild(t);
@@ -2049,6 +2175,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     for (const id in peers) delete peers[id];
     pendingGroupInvites = [];
+    for (const k in peerDevices) delete peerDevices[k];
+    stopStatsSampler();
     teardownSpeakerMonitor();
     resetSpeakerView();
     // Clear leftover tiles so an idle/parked grid doesn't keep dead srcObjects.
@@ -2281,6 +2409,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         localStream = null;
       }
       teardownSpeakerMonitor();
+      stopStatsSampler();
       if (callResizeObs) { try { callResizeObs.disconnect(); } catch { /* */ } callResizeObs = null; }
       document.removeEventListener("click", onDocClickAddPad, true);
       document.removeEventListener("keydown", onDocKey);

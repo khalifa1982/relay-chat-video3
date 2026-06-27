@@ -1272,3 +1272,21 @@ Batch 6 of the UX overhaul.
       `pb-24` so the last contact clears the nav. The bottom nav remains fixed to the viewport.
 - [x] X close is present on all modals/popups (contacts dialog, group-call picker, add-pad).
 - [x] 1 new test (add-pad close guard). 308 tests green, tsc + build clean. Footer → `v2.38.0`.
+
+## v2.39.0 — In-call tile enrichment (delivered 2026-06-27)
+
+Batch 7 of the UX overhaul.
+
+- [x] Camera-off tiles now show the participant's avatar (initials) AND full name centred, so a tile
+      is never a blank black box. Added to the self tile too (was previously just a black "You").
+- [x] Active-speaking cue: a glowing green ring plus a soft expanding "sound-wave" halo pulse on the
+      avatar (motion-gated behind prefers-reduced-motion).
+- [x] Per-tile info chip: device type (Mobile/Desktop) + a LIVE connection speed (e.g. "5.2 Mbps").
+      Speed is sampled every 2s from getStats — inbound per remote tile, outbound for self (mesh), and
+      best-effort per-participant on the SFU. Device type is shared via signaling: each client reports
+      its type at register (`device`), the relay carries it in member lists + peer-joined, and tiles
+      display it (mesh + SFU).
+- [x] DEFERRED (noted): per-participant NATIONAL FLAG (needs geo-per-participant signaling) and the
+      real profile-photo avatar in tiles (the engine only knows name → initials today).
+- [x] 4 new tests (CSS guards + server device propagation). 312 tests green, tsc + build clean.
+      Footer → `v2.39.0`.

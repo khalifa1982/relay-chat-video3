@@ -709,6 +709,25 @@ describe("relay — conference history", () => {
     expect(info!.endedAt).toBeGreaterThanOrEqual(info!.answeredAt!);
   });
 
+  it("propagates each member's device type in the joined member list (v2.39)", () => {
+    const a = new FakeConn("dev-a");
+    handleMessage(reg, a.asConn(), { type: "register", name: "Alice", device: "Desktop" });
+    const b = new FakeConn("dev-b");
+    handleMessage(reg, b.asConn(), { type: "register", name: "Bob", device: "Mobile" });
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const rid = (a.outbox.find((m) => rtype(m) === "room") as { roomId: string }).roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
+    // B's `joined` message lists A with A's device.
+    const joined = b.outbox.find((m) => rtype(m) === "joined") as
+      | { members: Array<{ pin: string; device?: string }> }
+      | undefined;
+    const aMember = joined?.members.find((mm) => mm.pin === a.pin);
+    expect(aMember?.device).toBe("Desktop");
+    // A gets a `peer-joined` for B carrying B's device.
+    const pj = a.outbox.find((m) => rtype(m) === "peer-joined") as { device?: string } | undefined;
+    expect(pj?.device).toBe("Mobile");
+  });
+
   it("does NOT log an UNANSWERED dial as a conference (no accept → no history)", () => {
     const a = registerConn("dev-a", "Alice");
     const b = registerConn("dev-b", "Bob");

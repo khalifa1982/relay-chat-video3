@@ -51,6 +51,8 @@ export interface RelaySocket {
 export interface RelayClient {
   socket: RelaySocket;
   name: string;
+  /** Device type this client reported at register ("Mobile"/"Desktop"). */
+  device?: string;
   roomId: string | null;
   cid: string | null;          // owning channel id, for reconnect re-binding
   graceT: ReturnType<typeof setTimeout> | null; // pending disconnect cleanup
@@ -244,7 +246,7 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
   if (!rid || !reg.rooms.has(rid)) return;
   const members = Array.from(reg.rooms.get(rid) || [])
     .filter(p => p !== pin)
-    .map(p => ({ pin: p, name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest" }));
+    .map(p => ({ pin: p, name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest", device: reg.clients.get(p)?.device }));
   if (members.length === 0) {
     // The user is ALONE in this room — a stale solo dialing room (they refreshed
     // mid-ring before anyone answered) or everyone else already left. Don't drop
@@ -527,6 +529,7 @@ export interface RelayMessage {
   type?: string;
   name?: string;
   pin?: string;
+  device?: string;
   to?: string;
   roomId?: string;
   data?: unknown;
@@ -592,6 +595,7 @@ export function handleMessage(
       const existing = reg.clients.get(conn.pin);
       if (existing) {
         if (msg.name) existing.name = String(msg.name).slice(0, 24);
+        if (msg.device) existing.device = String(msg.device).slice(0, 16);
         const lk = livekitConfig();
         safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
         // A within-grace re-attach (same cid) also auto-rejoins its active call.
@@ -665,8 +669,9 @@ export function handleMessage(
         prev.cid = cid || prev.cid;
       }
       prev.name = name;
+      if (msg.device) prev.device = String(msg.device).slice(0, 16);
     } else {
-      reg.clients.set(pin, { socket: conn.socket, name, roomId: null, cid: cid || null, graceT: null, ringing: new Set() });
+      reg.clients.set(pin, { socket: conn.socket, name, device: msg.device ? String(msg.device).slice(0, 16) : undefined, roomId: null, cid: cid || null, graceT: null, ringing: new Set() });
     }
     const lk = livekitConfig();
     safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
@@ -844,6 +849,7 @@ export function handleMessage(
         .map(p => ({
           pin: p,
           name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest",
+          device: reg.clients.get(p)?.device,
         }));
       joinRoomMember(reg, roomId, conn.pin);
       self.roomId = roomId;
@@ -902,6 +908,7 @@ export function handleMessage(
             type: "peer-joined",
             pin: newcomerPin,
             name: self.name,
+            device: self.device,
             iceServers: iceServers(m.pin),
             livekit: lk.enabled,
             livekitUrl: lk.url,
