@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from "react";
-import { Lock } from "lucide-react";
+import { useState, useEffect, type FormEvent } from "react";
+import { Lock, ScanFace } from "lucide-react";
 import { useLocked, verifyPasscode, unlockApp } from "./passcode";
+import { hasBiometric, biometricUnlock } from "./biometric";
 
 /** Shows a full-screen lock when a device passcode is set and the app is locked. */
 export function PasscodeGate({ children }: { children: React.ReactNode }) {
@@ -13,6 +14,8 @@ function LockScreen() {
   const [code, setCode] = useState("");
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [bioEnrolled] = useState(() => hasBiometric());
+  const [bioBusy, setBioBusy] = useState(false);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -28,6 +31,23 @@ function LockScreen() {
     }
   }
 
+  async function tryBiometric() {
+    if (bioBusy) return;
+    setBioBusy(true);
+    const ok = await biometricUnlock();
+    setBioBusy(false);
+    if (ok) unlockApp();
+    // On cancel/failure we silently fall back to the passcode field below.
+  }
+
+  // Offer the biometric prompt as soon as the lock screen mounts (a no-op if
+  // not enrolled). Some browsers require a gesture, so the button stays as the
+  // reliable fallback; we swallow any auto-prompt rejection.
+  useEffect(() => {
+    if (bioEnrolled) void tryBiometric();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div className="dark min-h-svh grid place-items-center bg-[#08090C] text-foreground p-5">
       <form onSubmit={submit} className="w-full max-w-[340px] text-center">
@@ -36,6 +56,17 @@ function LockScreen() {
         </div>
         <h1 className="text-lg font-semibold">Enter passcode</h1>
         <p className="mt-1 text-sm text-muted-foreground">RELAY is locked on this device.</p>
+        {bioEnrolled && (
+          <button
+            type="button"
+            onClick={tryBiometric}
+            disabled={bioBusy}
+            className="mt-5 inline-flex items-center gap-2 rounded-xl border border-[color:var(--relay-online)]/40 bg-[color:var(--relay-online)]/10 px-4 py-2.5 text-sm font-medium text-[color:var(--relay-online)] transition active:scale-[0.98] disabled:opacity-50"
+          >
+            <ScanFace className="size-4" />
+            {bioBusy ? "Waiting…" : "Unlock with Face ID / fingerprint"}
+          </button>
+        )}
         <input
           autoFocus
           inputMode="numeric"

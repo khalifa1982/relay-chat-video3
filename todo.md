@@ -753,3 +753,24 @@ An adversarial multi-agent review of v2.18.0 confirmed 6 real findings; all fixe
       all-peers `failed`/`closed` does, and signaling is re-opened only when actually down.
       The per-tile "reconnecting…" hint still shows immediately.
 - [x] Footer → `v2.18.1`. tsc clean, 197 tests green, build clean.
+
+## v2.19.0 — Biometric (Face ID / fingerprint) unlock (delivered 2026-06-27)
+
+Completes the app-lock story from v2.17.0 — the deferred biometric follow-up.
+
+- [x] `client/src/app/biometric.ts` — WebAuthn platform-credential unlock as a LOCAL gate
+      (not server auth): `enrollBiometric` creates a platform credential (prompts Face ID /
+      fingerprint) and stores its rawId (base64url) in localStorage; `biometricUnlock` prompts
+      the authenticator and resolves true only on user verification. No server, no secrets —
+      the private key stays in the device secure enclave. Feature-gated on
+      `isUserVerifyingPlatformAuthenticatorAvailable` + secure context.
+- [x] Layered on the passcode, never a replacement: only offered when a passcode exists (the
+      always-available fallback), and `clearBiometric()` runs when the passcode is removed.
+- [x] LockScreen (`PasscodeGate`): shows an "Unlock with Face ID / fingerprint" button (and
+      auto-prompts on mount) when enrolled; the passcode field stays as the fallback.
+- [x] Profile → App lock: a Face ID / fingerprint toggle (enroll / disable) appears when the
+      device supports it and a passcode is set.
+- [x] 8 vitest cases (`biometric.test.ts`): base64url round-trip + url-safety, enrolled-state,
+      unlock short-circuit when unenrolled, and the capability gate (no window / insecure
+      context / platform-probe true|false).
+- [x] Footer → `v2.19.0`. tsc clean, 205 tests green, build clean.

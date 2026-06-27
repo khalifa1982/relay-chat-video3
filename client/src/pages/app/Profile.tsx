@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Bell, BellOff, Check, Lock, Moon, ShieldCheck, Sun } from "lucide-react";
+import { Bell, BellOff, Check, Lock, Moon, ScanFace, ShieldCheck, Sun } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
@@ -20,6 +20,12 @@ import {
   clearPasscode,
   lockApp,
 } from "@/app/passcode";
+import {
+  hasBiometric,
+  biometricSupported,
+  enrollBiometric,
+  clearBiometric,
+} from "@/app/biometric";
 import { useTheme } from "@/contexts/ThemeContext";
 
 /**
@@ -248,7 +254,7 @@ export default function ProfilePage() {
         <DndSection />
 
         {/* app lock / passcode */}
-        <PasscodeSection />
+        <PasscodeSection displayName={me.displayName} />
 
         {/* upgrade CTA for guests */}
         {me.isGuest && (
@@ -559,9 +565,10 @@ function DndSection() {
    this device. It's a local UI gate, not account auth: the code is
    salted + SHA-256 hashed in localStorage (plaintext never stored),
    and the app re-locks on every load until the code is entered.
-   Face ID / fingerprint (WebAuthn) is a planned follow-up.
+   When the device supports it, Face ID / fingerprint (WebAuthn) can
+   be added as a faster unlock on top of the passcode fallback.
    ============================================================ */
-function PasscodeSection() {
+function PasscodeSection({ displayName }: { displayName: string }) {
   const [enabled, setEnabled] = useState(() => hasPasscode());
   // null = closed; "set" = first-time set; "change" = replace existing
   const [mode, setMode] = useState<null | "set" | "change">(null);
@@ -569,6 +576,35 @@ function PasscodeSection() {
   const [confirm, setConfirm] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Biometric (Face ID / fingerprint) — an optional faster unlock layered on
+  // top of the passcode. Only offered when the device supports platform
+  // verification AND a passcode is set (the always-available fallback).
+  const [bioCapable, setBioCapable] = useState(false);
+  const [bioOn, setBioOn] = useState(() => hasBiometric());
+  const [bioBusy, setBioBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    biometricSupported().then(ok => { if (alive) setBioCapable(ok); });
+    return () => { alive = false; };
+  }, []);
+
+  async function toggleBiometric() {
+    if (bioBusy) return;
+    setBioBusy(true);
+    try {
+      if (bioOn) {
+        clearBiometric();
+        setBioOn(false);
+      } else {
+        const ok = await enrollBiometric(displayName);
+        setBioOn(ok);
+        if (!ok) setErr("Couldn't set up biometric unlock on this device.");
+      }
+    } finally {
+      setBioBusy(false);
+    }
+  }
 
   const onlyDigits = (s: string) => s.replace(/\D+/g, "").slice(0, 8);
 
@@ -604,7 +640,9 @@ function PasscodeSection() {
   function remove() {
     if (!window.confirm("Remove the app passcode on this device?")) return;
     clearPasscode();
+    clearBiometric(); // biometric is only an unlock for the passcode — drop it too
     setEnabled(false);
+    setBioOn(false);
     reset();
   }
 
@@ -645,6 +683,53 @@ function PasscodeSection() {
             </button>
           )}
         </div>
+
+        {/* Biometric unlock — only when supported AND a passcode exists. */}
+        {enabled && bioCapable && mode === null && (
+          <div className="flex items-center gap-3 border-t border-border/60 pt-3">
+            <div
+              className={
+                "shrink-0 size-9 grid place-items-center rounded-lg " +
+                (bioOn
+                  ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
+                  : "bg-muted text-muted-foreground")
+              }
+            >
+              <ScanFace className="size-[18px]" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">Face ID / fingerprint</div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {bioOn
+                  ? "Unlock with biometrics; your passcode still works as a fallback."
+                  : "Add a faster unlock using this device's built-in biometrics."}
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={bioOn}
+              aria-label="Toggle biometric unlock"
+              disabled={bioBusy}
+              onClick={toggleBiometric}
+              className={
+                "relative shrink-0 h-7 w-12 rounded-full transition-colors duration-200 disabled:opacity-50 " +
+                (bioOn
+                  ? "bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))]"
+                  : "bg-muted-foreground/30")
+              }
+              style={{ transitionTimingFunction: "var(--ease-out)" }}
+            >
+              <span
+                className={
+                  "absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform duration-200 " +
+                  (bioOn ? "translate-x-5" : "translate-x-0")
+                }
+                style={{ transitionTimingFunction: "var(--ease-out)" }}
+              />
+            </button>
+          </div>
+        )}
 
         {mode === null ? (
           <div className="flex flex-wrap gap-2">
