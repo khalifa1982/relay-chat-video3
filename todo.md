@@ -700,4 +700,32 @@ cosmetic by-design item).
       verify-true-when-unset, clear-unlocks, lock no-op without code, lock/unlock transitions.
 - [ ] Deferred (follow-up): **Face ID / fingerprint** unlock via WebAuthn/passkeys — the
       numeric passcode is the no-prompt, broadly-supported baseline; biometric is additive.
+      (WIP module drafted, parked in scratchpad pending TS BufferSource typing + UI wiring.)
 - [x] Footer → `v2.17.0`. tsc clean, 197 tests green, build clean.
+
+## v2.18.0 — Call-engine fixes: heat, chat-close, reconnect, live status (delivered 2026-06-27)
+
+Reported from live mobile testing. Four fixes, reviewed by an adversarial multi-agent pass.
+
+- [x] **Mobile heating** — plain calls (no filter) now publish the **RAW camera track**
+      and NEVER build the canvas pipeline, so there's zero per-frame canvas draw +
+      captureStream re-encode in the common case. The pipeline is built lazily only when a
+      real filter is chosen; turning a filter off hot-swaps peers/SFU back to the raw track
+      (`replaceVideoEverywhere`) and `dispose()`s the canvas (stops ONLY the canvas video
+      track — keeps the shared camera/mic alive). Also: rAF loop **throttled to 30fps**
+      (was running at the 90–120Hz display rate), removed `willReadFrequently` (it forced
+      CPU/software canvas), and `acquireRawStream` caps frameRate to 30 + uses 960×540 on
+      mobile (720p on desktop).
+- [x] **Chat close button** — the full-screen mobile chat had only a tiny grey `×` glyph;
+      replaced with an obvious 38–44px circular close button (`#chatClose`) with safe-area
+      padding, so closing the chat no longer means hitting End by mistake.
+- [x] **10s reconnect window** — losing the connection after a call was live no longer exits
+      instantly. The top bar shows **"Reconnecting… Ns"** and the engine re-opens signaling +
+      kicks ICE restarts (mesh) / rides LiveKit's Reconnecting/Reconnected (SFU); only after
+      10s without recovery does it hang up. Driven by `establishedOnce` (never fires during
+      initial connect), `online`/`offline`, mesh-health eval, and LK reconnect events.
+- [x] **Live top-bar status** — replaced the scripted "Transmission/Encryption/Join" overlay
+      with a REAL status (`connecting → encrypting → live`, or `reconnecting`) via
+      `setCallStatus`, with a colour-coded dot (amber pulsing / green / red). The diagnostics
+      "?" floating button is **hidden** (panel still reachable via the `?` key for debugging).
+- [x] Footer → `v2.18.0`. tsc clean, 197 tests green, build clean.

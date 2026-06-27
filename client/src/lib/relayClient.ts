@@ -379,18 +379,57 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
 
   // ---------- media ----------
+  // Phones run hot encoding 720p60. Cap the framerate to 30 everywhere and ask
+  // for a lighter capture resolution on mobile — WebRTC still upscales fine and
+  // the device stays cool. Desktops keep 720p.
+  const isMobile = (() => {
+    try {
+      return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+        || (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches
+            && Math.min(window.screen?.width || 9999, window.screen?.height || 9999) <= 820);
+    } catch { return false; }
+  })();
   async function acquireRawStream(useFacingMode: "user" | "environment"): Promise<MediaStream> {
     return navigator.mediaDevices.getUserMedia({
       audio: true,
       video: {
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
+        width: { ideal: isMobile ? 960 : 1280 },
+        height: { ideal: isMobile ? 540 : 720 },
+        frameRate: { ideal: 30, max: 30 },
         facingMode: useFacingMode,
       },
     });
   }
+  // The stream we currently publish to peers. When a filter is active it's the
+  // processed (canvas) stream; otherwise it's the RAW camera — which means NO
+  // canvas, NO captureStream re-encode, and far less heat in the common case of
+  // a plain call. `processedStream` is non-null ONLY while a filter runs, so the
+  // historic `processedStream || localStream` call-sites stay correct.
+  function outStream(): MediaStream {
+    return processedStream || (localStream as MediaStream);
+  }
+  // Build (once) and start the canvas pipeline reading from the live camera.
+  // Called lazily the first time a real filter is selected — never for plain
+  // calls.
+  async function ensurePipeline(): Promise<void> {
+    if (!localStream || localStream.getVideoTracks().length === 0) return;
+    if (!pipeline) {
+      pipeline = new MediaPipeline({
+        onError: m => toast(m, true),
+        onLoading: l => {
+          const dot = $("filterLoading");
+          if (dot) dot.style.display = l ? "inline-block" : "none";
+        },
+      });
+      pipeline.setFacingMode(facingMode);
+      await pipeline.setInputStream(localStream);
+    }
+    processedStream = pipeline.getOutputStream();
+  }
   async function ensureMedia(): Promise<MediaStream> {
-    if (processedStream) return processedStream;
+    // Reuse a live camera/mic — don't re-prompt. (We key off localStream, not
+    // processedStream, because plain calls never create a processedStream.)
+    if (localStream) return outStream();
     try {
       localStream = await acquireRawStream(facingMode);
     } catch {
@@ -403,23 +442,54 @@ export function startRelay(root: HTMLElement): RelayHandle {
         throw e2;
       }
     }
-    if (localStream && localStream.getVideoTracks().length > 0) {
-      // Route through the canvas pipeline so filters / blur / overlays apply.
-      pipeline = new MediaPipeline({
-        onError: m => toast(m, true),
-        onLoading: l => {
-          const dot = $("filterLoading");
-          if (dot) dot.style.display = l ? "inline-block" : "none";
-        },
-      });
-      pipeline.setFacingMode(facingMode);
-      await pipeline.setInputStream(localStream);
-      processedStream = pipeline.getOutputStream();
-    } else {
-      // Audio-only fallback
-      processedStream = localStream;
+    // Only spin up the heavy canvas pipeline if a filter was already chosen.
+    if (activeFilter !== "none" && localStream.getVideoTracks().length > 0) {
+      await ensurePipeline();
     }
-    return processedStream || localStream!;
+    return outStream();
+  }
+  // Keep the outgoing video track's enabled flag in sync with camOn after any
+  // track swap (filter on/off, camera flip).
+  function syncCamEnabled() {
+    const pub = outStream();
+    pub.getVideoTracks().forEach(t => (t.enabled = camOn));
+    if (processedStream && localStream) {
+      localStream.getVideoTracks().forEach(t => (t.enabled = camOn));
+    }
+  }
+  // Hot-swap the outgoing VIDEO track on every transport (mesh peers + SFU) with
+  // no SDP renegotiation. Used when filters turn on/off and when flipping camera
+  // in the no-filter (raw) path.
+  async function replaceVideoEverywhere(track: MediaStreamTrack | null) {
+    for (const id in peers) {
+      try {
+        const senders = peers[id].pc.getSenders();
+        const sender = senders.find(s => s.track && s.track.kind === "video")
+                    || senders.find(s => !s.track);
+        if (sender) await sender.replaceTrack(track);
+      } catch { /* */ }
+    }
+    if (lkRoom && track) {
+      try {
+        // LiveKit types are dynamically imported (any); prefer the SDK's
+        // in-place replaceTrack, else fall back to unpublish + publish.
+        const lp: any = (lkRoom as any).localParticipant;
+        const pubs: any[] = typeof lp.getTrackPublications === "function"
+          ? lp.getTrackPublications()
+          : (lp.videoTrackPublications ? Array.from(lp.videoTrackPublications.values()) : []);
+        let swapped = false;
+        for (const pub of pubs) {
+          const lt = pub?.track;
+          const isVideo = pub?.kind === "video" || lt?.kind === "video";
+          if (lt && isVideo) {
+            if (typeof lt.replaceTrack === "function") { await lt.replaceTrack(track); swapped = true; break; }
+            if (lt.mediaStreamTrack) { try { await lp.unpublishTrack(lt.mediaStreamTrack); } catch { /* */ } }
+          }
+        }
+        if (!swapped) await lp.publishTrack(track);
+      } catch { /* */ }
+    }
+    syncCamEnabled();
   }
 
   // Warm the camera/mic at login. Best-effort: if the user denies or has no
@@ -428,7 +498,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // pop a fresh OS prompt (which on mobile was dropping the call).
   let mediaPrimed = false;
   async function primeMedia() {
-    if (mediaPrimed || processedStream) return;
+    if (mediaPrimed || localStream) return;
     const banner = $("mediaBanner");
     try {
       await ensureMedia();
@@ -460,11 +530,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (localStream) {
       localStream.getVideoTracks().forEach(t => t.stop());
     }
+    const oldLocal = localStream;
+    localStream = nu;
     if (pipeline) {
+      // Filtered path: the canvas output track is unchanged — just point the
+      // pipeline at the new camera. Peers keep the same sender track.
       pipeline.setFacingMode(facingMode);
       await pipeline.setInputStream(nu);
+    } else {
+      // Raw path: we publish the camera track directly, so hot-swap it on every
+      // peer / the SFU.
+      await replaceVideoEverywhere(nu.getVideoTracks()[0] || null);
     }
-    localStream = nu;
+    void oldLocal;
     // Update the local self-tile's video (if shown)
     const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
     if (selfV) selfV.srcObject = processedStream || nu;
@@ -474,17 +552,44 @@ export function startRelay(root: HTMLElement): RelayHandle {
     toast(facingMode === "environment" ? "Switched to back camera" : "Switched to front camera");
   }
 
-  /** Apply a filter; lazy-loads MediaPipe models if needed. */
+  /** Apply a filter; lazy-loads MediaPipe models if needed. Turning filters ON
+   *  spins up the canvas pipeline and hot-swaps the outgoing track to it;
+   *  turning them OFF tears the canvas down and publishes the raw camera again
+   *  (so a plain call costs zero canvas work). */
   async function applyFilter(id: FilterId) {
-    if (!pipeline) {
-      // Filter chosen before camera started — remember and apply on ensureMedia
-      activeFilter = id;
-      updateFilterStripUI();
+    const prev = activeFilter;
+    activeFilter = id;
+    updateFilterStripUI();
+
+    // No camera yet — remember the choice; ensureMedia() builds the pipeline.
+    if (!localStream || localStream.getVideoTracks().length === 0) return;
+    if (id === prev) return;
+
+    if (id === "none") {
+      // Filters OFF: republish the raw camera track, then stop the canvas loop.
+      const rawTrack = localStream.getVideoTracks()[0] || null;
+      const dying = pipeline;
+      pipeline = null;
+      processedStream = null;
+      await replaceVideoEverywhere(rawTrack);
+      const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
+      if (selfV) selfV.srcObject = localStream;
+      // dispose() (NOT destroy()) — keep the shared camera/mic alive.
+      try { dying?.dispose(); } catch { /* */ }
       return;
     }
-    activeFilter = id;
-    await pipeline.setFilter(id);
-    updateFilterStripUI();
+
+    // Filters ON (or switching between filters).
+    const hadPipeline = !!pipeline;
+    await ensurePipeline();
+    await pipeline!.setFilter(id);
+    if (!hadPipeline) {
+      // raw → canvas: hot-swap the published track to the processed stream.
+      const procTrack = processedStream?.getVideoTracks()[0] || null;
+      await replaceVideoEverywhere(procTrack);
+      const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
+      if (selfV) selfV.srcObject = processedStream;
+    }
   }
   function updateFilterStripUI() {
     const strip = $("filterStrip");
@@ -716,7 +821,22 @@ export function startRelay(root: HTMLElement): RelayHandle {
     room.on(RoomEventEnum.DataReceived, (payload: Uint8Array) => {
       try { const d = JSON.parse(new TextDecoder().decode(payload)); addChatMsg(d.name, d.text, false); } catch { /* */ }
     });
-    room.on(RoomEventEnum.Disconnected, () => { if (lkRoom === room && inCall) hangUp("livekit-disconnected"); });
+    // LiveKit drives its OWN reconnection first (Reconnecting → Reconnected).
+    // Surface that in the top bar; only treat a final Disconnected as a drop,
+    // and even then give the 10s window a chance before tearing down.
+    if (RoomEventEnum.Reconnecting) {
+      room.on(RoomEventEnum.Reconnecting, () => { if (lkRoom === room) enterReconnecting(); });
+    }
+    if (RoomEventEnum.Reconnected) {
+      room.on(RoomEventEnum.Reconnected, () => { if (lkRoom === room) markEstablished(); });
+    }
+    room.on(RoomEventEnum.Disconnected, () => {
+      if (lkRoom !== room || !inCall) return;
+      // If the call was live, let the reconnect window try (the LK watchdog can
+      // re-mint a token and rejoin); otherwise end now.
+      if (establishedOnce) enterReconnecting();
+      else hangUp("livekit-disconnected");
+    });
 
     try {
       await room.connect(tok.url, tok.token);
@@ -728,6 +848,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       }
       lkConnected = true;
       clearLkWatchdog();
+      markEstablished(); // SFU media is up → top bar shows "Connected"
       diag("livekit: connected + published");
     } catch (e) {
       // Connect/publish failed (expired token, transient SFU/network fault).
@@ -814,9 +935,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // Recovered (or first connect): cancel any pending teardown.
         if (peer.graceT) { clearTimeout(peer.graceT); peer.graceT = null; }
         peer.iceRestarts = 0;
+        markEstablished(); // first live media → top bar shows "Connected"
       } else if (st === "closed") {
         removePeer(pin);
       }
+      // Re-evaluate the whole call's health: if every peer is in trouble (after
+      // the call was live) we flip the top bar to "Reconnecting…" and start the
+      // 10s recovery window; if any peer is back, we return to "Connected".
+      evaluateMeshHealth();
       // NOTE: we deliberately do NOT tear down on the first `failed` here.
       // The ICE handler below runs a grace window + restart first; only after
       // that window expires without recovery do we remove the peer. This is
@@ -1054,41 +1180,106 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
 
   // ---------- video grid ----------
+  // ---------- live connection status + 10s reconnect window ----------
+  // The top bar shows a REAL status (connecting → encrypting → live, or
+  // reconnecting), not a scripted animation. If the call drops after it was
+  // live, we hold the call open and try to recover for RECONNECT_WINDOW_MS
+  // before tearing down — so a brief tunnel/elevator/Wi-Fi blip doesn't kill
+  // the call.
+  type CallStatus = "connecting" | "encrypting" | "live" | "reconnecting";
+  let callStatus: CallStatus = "connecting";
+  let establishedOnce = false; // reached "live" at least once this call
+  let reconnectHardT: ReturnType<typeof setTimeout> | null = null;
+  let reconnectTickT: ReturnType<typeof setInterval> | null = null;
   let connSeqTimers: ReturnType<typeof setTimeout>[] = [];
+  const RECONNECT_WINDOW_MS = 10000;
+  const STATUS_LABEL: Record<CallStatus, string> = {
+    connecting: "Connecting…",
+    encrypting: "Securing connection…",
+    live: "Connected",
+    reconnecting: "Reconnecting…",
+  };
+  function setCallStatus(s: CallStatus, labelOverride?: string) {
+    callStatus = s;
+    const lbl = $("callRoomLbl");
+    if (lbl) lbl.textContent = labelOverride ?? STATUS_LABEL[s];
+    const ct = $("call")?.querySelector(".call-head .ct");
+    if (ct) {
+      ct.classList.remove("st-connecting", "st-encrypting", "st-live", "st-reconnecting");
+      ct.classList.add("st-" + s);
+    }
+  }
   function clearConnSeq() {
     connSeqTimers.forEach(t => clearTimeout(t));
     connSeqTimers = [];
-    $("connSeq")?.classList.remove("show", "hide");
   }
-  // Brief "Transmission Connected → Encryption → Join the Call" handshake shown
-  // for ~2.3s when a call screen opens — a professional connecting cue.
+  // Drive connecting → encrypting while the transport comes up; the real "live"
+  // flip happens when a peer / the SFU actually connects.
   function runConnSequence() {
-    const o = $("connSeq"); if (!o) return;
     clearConnSeq();
-    const steps = Array.from(o.querySelectorAll<HTMLElement>(".conn-step"));
-    steps.forEach(s => s.classList.remove("active", "done"));
-    o.classList.remove("hide"); o.classList.add("show");
-    const advance = (i: number) => steps.forEach((s, idx) => {
-      s.classList.toggle("active", idx === i);
-      s.classList.toggle("done", idx < i);
-    });
-    advance(0);
-    connSeqTimers.push(setTimeout(() => advance(1), 700));
-    connSeqTimers.push(setTimeout(() => advance(2), 1400));
-    connSeqTimers.push(setTimeout(() => steps.forEach(s => { s.classList.remove("active"); s.classList.add("done"); }), 2050));
+    setCallStatus("connecting");
     connSeqTimers.push(setTimeout(() => {
-      o.classList.add("hide");
-      connSeqTimers.push(setTimeout(() => o.classList.remove("show", "hide"), 400));
-    }, 2300));
+      if (callStatus === "connecting") setCallStatus("encrypting");
+    }, 600));
+  }
+  // We reached a live media connection. Cancel any reconnect window and show it.
+  function markEstablished() {
+    establishedOnce = true;
+    exitReconnecting();
+    clearConnSeq();
+    if (callStatus !== "live") setCallStatus("live");
+  }
+  function enterReconnecting() {
+    if (!inCall || !establishedOnce) return; // only meaningful after a live call
+    if (reconnectHardT) return; // already counting down
+    // Actively try to recover: re-open signaling + kick ICE restarts now.
+    try { ws?.close(); } catch { /* */ }
+    if (!destroyed) connectWS();
+    Object.keys(peers).forEach(pin => { try { void tryIceRestart(pin); } catch { /* */ } });
+    let remaining = Math.ceil(RECONNECT_WINDOW_MS / 1000);
+    setCallStatus("reconnecting", "Reconnecting… " + remaining + "s");
+    reconnectTickT = setInterval(() => {
+      remaining -= 1;
+      if (remaining > 0 && callStatus === "reconnecting") {
+        setCallStatus("reconnecting", "Reconnecting… " + remaining + "s");
+      }
+    }, 1000);
+    reconnectHardT = setTimeout(() => {
+      reconnectHardT = null;
+      toast("Call lost — couldn't reconnect.", true);
+      hangUp("connection-lost");
+    }, RECONNECT_WINDOW_MS);
+  }
+  function exitReconnecting() {
+    if (reconnectHardT) { clearTimeout(reconnectHardT); reconnectHardT = null; }
+    if (reconnectTickT) { clearInterval(reconnectTickT); reconnectTickT = null; }
+  }
+  // Re-evaluate whether the mesh call is healthy after any peer state change.
+  function evaluateMeshHealth() {
+    if (livekitEnabled || !inCall || !establishedOnce) return;
+    const ps = Object.values(peers);
+    if (ps.length === 0) return; // alone — nothing to reconnect to
+    const anyConnected = ps.some(p => p.pc.connectionState === "connected");
+    if (anyConnected) {
+      exitReconnecting();
+      if (callStatus === "reconnecting") setCallStatus("live");
+      return;
+    }
+    const allTrouble = ps.every(p =>
+      ["disconnected", "failed", "closed"].includes(p.pc.connectionState));
+    if (allTrouble) enterReconnecting();
   }
   function enterCallUI(label: string) {
     show("call");
+    establishedOnce = false;
+    exitReconnecting();
     runConnSequence();
     // On the SFU path, start the join watchdog so a failed/slow token or connect
     // recovers (re-request) or surfaces an error instead of a silent dead call.
     if (livekitEnabled) armLkWatchdog();
     if (label && /in call/i.test(label)) emitPhase("in-call");
-    const lbl = $("callRoomLbl"); if (lbl) lbl.textContent = label || "In call";
+    // NOTE: the top-bar label is now owned by setCallStatus() (live status),
+    // so we deliberately do NOT write `label` into #callRoomLbl here.
     const grid = $("videoGrid"); if (grid) grid.innerHTML = "";
     addSelfTile();
     for (const id in peers) { if (!peers[id].el) addTile(id, peers[id].name); }
@@ -1295,6 +1486,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     pendingRing = null;
     $("ringOverlay")?.classList.remove("active");
     clearConnSeq();
+    exitReconnecting();
+    establishedOnce = false;
     if (waitingRing) declineWaiting(); // reject any pending second caller
     // Disconnect the SFU BEFORE stopping localStream/pipeline below, or LiveKit
     // errors republishing a dead track during teardown. No-op on the mesh path.
@@ -1394,6 +1587,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
   });
   document.addEventListener("keydown", onDocKey);
   window.addEventListener("beforeunload", onUnload);
+  // Local network loss (Wi-Fi drop, tunnel, airplane toggle) is the clearest
+  // "you're disconnected" signal. While in a live call, show the reconnect
+  // window; when the radio returns, re-open signaling and kick ICE restarts.
+  const onOffline = () => { if (inCall && establishedOnce) enterReconnecting(); };
+  const onOnline = () => {
+    if (!inCall) return;
+    try { ws?.close(); } catch { /* */ }
+    if (!destroyed) connectWS();
+    Object.keys(peers).forEach(pin => { try { void tryIceRestart(pin); } catch { /* */ } });
+  };
+  window.addEventListener("offline", onOffline);
+  window.addEventListener("online", onOnline);
 
   // ---------- boot ----------
   $("boot")?.classList.add("hidden");
@@ -1433,6 +1638,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (waitingTimeoutT) { clearTimeout(waitingTimeoutT); waitingTimeoutT = null; }
       waitingRing = null;
       clearConnSeq();
+      exitReconnecting();
       // Disconnect the SFU before stopping local tracks (no-op on the mesh path).
       teardownLivekit();
       try { ws?.close(); } catch { /* */ }
@@ -1447,6 +1653,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       }
       document.removeEventListener("keydown", onDocKey);
       window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
       // best-effort: tell server we're leaving
       try {
         const body = JSON.stringify({ cid, message: { type: "leave", reason: "page-unload-2" } });

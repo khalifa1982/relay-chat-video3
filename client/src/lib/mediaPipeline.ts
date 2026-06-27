@@ -97,6 +97,13 @@ export class MediaPipeline {
   private faceDetector: FaceDetectorLike | null = null;
   private mlBootInProgress = false;
 
+  // Frame-rate throttle. requestAnimationFrame fires at the display refresh
+  // rate — 90-120Hz on modern phones — but 30fps is plenty for video and a
+  // quarter of the canvas+encode work on a 120Hz panel. Tracked here and
+  // enforced at the top of loop().
+  private static readonly TARGET_FPS = 30;
+  private lastFrameTs = 0;
+
   // last-frame caches
   private lastSegMask: ImageData | null = null;
   private lastFaceBox: { x: number; y: number; w: number; h: number } | null = null;
@@ -113,7 +120,13 @@ export class MediaPipeline {
     this.canvas = document.createElement("canvas");
     this.canvas.width = 640;
     this.canvas.height = 480;
-    const ctx = this.canvas.getContext("2d", { willReadFrequently: true });
+    // NOTE: we deliberately do NOT pass { willReadFrequently: true }. That hint
+    // forces the canvas onto a CPU (software) backing store, which made every
+    // frame's drawImage run on the CPU and was a major source of device heat.
+    // We never getImageData() from this main canvas (the segmentation mask is
+    // read from MediaPipe's own buffer, not the canvas), so GPU compositing is
+    // safe and far cooler.
+    const ctx = this.canvas.getContext("2d");
     if (!ctx) throw new Error("canvas 2d context unavailable");
     this.ctx = ctx;
   }
@@ -212,8 +225,12 @@ export class MediaPipeline {
     }
   }
 
-  private loop = () => {
+  private loop = (ts = 0) => {
     this.rafId = requestAnimationFrame(this.loop);
+    // Throttle to ~TARGET_FPS regardless of the display's refresh rate.
+    const minGap = 1000 / MediaPipeline.TARGET_FPS - 1;
+    if (ts && ts - this.lastFrameTs < minGap) return;
+    this.lastFrameTs = ts;
     const v = this.inputVideo;
     if (!v.videoWidth || !v.videoHeight) return;
     if (this.canvas.width !== v.videoWidth || this.canvas.height !== v.videoHeight) {
@@ -364,6 +381,29 @@ export class MediaPipeline {
     }
     // Avoid unused-vars from fixed signature
     void canvasW; void canvasH;
+  }
+
+  /**
+   * Stop the canvas loop and release ML models WITHOUT stopping the input
+   * camera/mic — the caller still owns `localStream` and may keep publishing
+   * its raw track. Only the canvas's own generated video track is stopped
+   * (the output's audio tracks are shared with the input, so we leave them).
+   * Use this when turning filters OFF mid-call; use destroy() to tear the
+   * whole thing (including the camera) down at hang-up.
+   */
+  dispose() {
+    if (this.rafId !== null) cancelAnimationFrame(this.rafId);
+    this.rafId = null;
+    try { this.segmenter?.close?.(); } catch { /* */ }
+    try { this.faceDetector?.close?.(); } catch { /* */ }
+    this.segmenter = null;
+    this.faceDetector = null;
+    if (this.outputStream) {
+      this.outputStream.getVideoTracks().forEach(t => t.stop());
+      this.outputStream = null;
+    }
+    this.input = null;
+    try { this.inputVideo.srcObject = null; } catch { /* */ }
   }
 
   destroy() {
