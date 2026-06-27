@@ -135,6 +135,80 @@ describe("composeThreadSummaries", () => {
     expect(out).toEqual([]);
   });
 
+  it("projects a GROUP as a single summary with title + member count (not one-per-member)", () => {
+    const bob = { id: 11, number: "555666", displayName: "Bob", avatarUrl: null };
+    const out = composeThreadSummaries({
+      identityId: me.id,
+      myParts: [{ conversationId: 300, unreadCount: 4 }],
+      // a group has MANY "others" for the same conversation
+      others: [
+        { conversationId: 300, identityId: friend.id },
+        { conversationId: 300, identityId: bob.id },
+      ],
+      otherIdentities: [friend, bob],
+      myIdentity: me,
+      convoRows: [{ id: 300, lastMessageAt: tNow, kind: "group", title: "Weekend Trip" }],
+      latestMessageByConvo: new Map([[300, { body: "who's driving?", kind: "text" }]]),
+    });
+    expect(out).toHaveLength(1); // ONE summary, not two
+    expect(out[0]).toMatchObject({
+      conversationId: 300,
+      kind: "group",
+      title: "Weekend Trip",
+      otherDisplayName: "Weekend Trip",
+      otherIdentityId: 0,
+      memberCount: 3, // friend + bob + me
+      unreadCount: 4,
+      lastMessagePreview: "who's driving?",
+    });
+  });
+
+  it("falls back to member names when a group has no title", () => {
+    const bob = { id: 11, number: "555666", displayName: "Bob", avatarUrl: null };
+    const out = composeThreadSummaries({
+      identityId: me.id,
+      myParts: [{ conversationId: 301, unreadCount: 0 }],
+      others: [
+        { conversationId: 301, identityId: friend.id },
+        { conversationId: 301, identityId: bob.id },
+      ],
+      otherIdentities: [friend, bob],
+      myIdentity: me,
+      convoRows: [{ id: 301, lastMessageAt: tNow, kind: "group", title: null }],
+      latestMessageByConvo: new Map(),
+    });
+    expect(out[0].kind).toBe("group");
+    expect(out[0].otherDisplayName).toBe("Anya, Bob");
+  });
+
+  it("drops a DM whose peer identity didn't resolve (does NOT mislabel it 'Notes (You)')", () => {
+    // The conversation HAS an other participant row, but that identity is
+    // absent from otherIdentities (deleted/orphaned/transient race).
+    const out = composeThreadSummaries({
+      identityId: me.id,
+      myParts: [{ conversationId: 400, unreadCount: 0 }],
+      others: [{ conversationId: 400, identityId: 9999 }], // unresolved
+      otherIdentities: [], // 9999 not present
+      myIdentity: me,
+      convoRows: [{ id: 400, lastMessageAt: tNow, kind: "dm", title: null }],
+      latestMessageByConvo: new Map(),
+    });
+    expect(out).toEqual([]); // dropped, not a synthetic self-note
+  });
+
+  it("tags regular DMs with kind 'dm' and memberCount 2", () => {
+    const out = composeThreadSummaries({
+      identityId: me.id,
+      myParts: [{ conversationId: 100, unreadCount: 0 }],
+      others: [{ conversationId: 100, identityId: friend.id }],
+      otherIdentities: [friend],
+      myIdentity: me,
+      convoRows: [{ id: 100, lastMessageAt: tNow, kind: "dm", title: null }],
+      latestMessageByConvo: new Map(),
+    });
+    expect(out[0]).toMatchObject({ kind: "dm", memberCount: 2, otherDisplayName: "Anya" });
+  });
+
   it("uses 'text' as a default kind when the latest message is missing", () => {
     const out = composeThreadSummaries({
       identityId: me.id,

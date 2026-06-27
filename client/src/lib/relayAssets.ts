@@ -73,12 +73,29 @@ export const RELAY_MARKUP = `
   <section id="call" class="relay-screen">
     <div class="call-head">
       <div class="ct"><span class="live-dot"></span> <span id="callRoomLbl">In call</span></div>
-      <div class="timer" id="timer">00:00</div>
+      <div class="call-head-right">
+        <span id="recIndicator" class="rec-ind" style="display:none"><span class="rec-blink"></span>REC</span>
+        <div class="timer" id="timer">00:00</div>
+      </div>
+    </div>
+    <div id="connSeq" class="conn-seq">
+      <div class="conn-seq-card">
+        <div class="conn-step" data-i="0"><span class="conn-tick"></span><span class="conn-lbl">Transmission Connected</span></div>
+        <div class="conn-step" data-i="1"><span class="conn-tick"></span><span class="conn-lbl">Encryption</span></div>
+        <div class="conn-step" data-i="2"><span class="conn-tick"></span><span class="conn-lbl">Join the Call</span></div>
+      </div>
+    </div>
+    <div id="callWaiting" class="call-waiting">
+      <div class="cw-info"><span class="cw-pulse"></span><b id="cwName">Someone</b> is calling&hellip;</div>
+      <div class="cw-actions">
+        <button id="cwDecline" class="cw-btn cw-decline">Decline</button>
+        <button id="cwSwitch" class="cw-btn cw-switch">Switch</button>
+      </div>
     </div>
     <div class="call-main">
       <div class="grid" id="videoGrid"></div>
       <div class="chat" id="chatPanel">
-        <div class="chat-head">Chat <span class="x" id="chatClose">&times;</span></div>
+        <div class="chat-head"><span class="chat-title">Chat</span><button class="chat-close-btn" id="chatClose" aria-label="Close chat" title="Close chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
         <div class="chat-log" id="chatLog"></div>
         <div class="chat-input">
           <input id="chatField" placeholder="Message everyone&hellip;" maxlength="500">
@@ -108,6 +125,12 @@ export const RELAY_MARKUP = `
         </button>
         <button class="ctrl" id="flipCamBtn" title="Flip camera (front ↔ back)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
+        </button>
+        <button class="ctrl" id="screenBtn" title="Share screen">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        </button>
+        <button class="ctrl" id="recordBtn" title="Record call" style="display:none">
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg>
         </button>
         <button class="ctrl" id="filterBtn" title="Filters">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="7" r="4"/><circle cx="12" cy="16" r="4"/></svg>
@@ -300,6 +323,14 @@ export const RELAY_CSS = `
 .relay-root #call{flex-direction:column}
 .relay-root .call-head{display:flex;align-items:center;justify-content:space-between;padding:13px 20px;border-bottom:1px solid var(--border)}
 .relay-root .call-head .ct{display:flex;align-items:center;gap:11px;font-size:14px;color:var(--muted)}
+/* Live connection status — the status dot colour + label reflect the REAL
+   transport state (connecting → encrypting → live, or reconnecting). */
+.relay-root .call-head .ct .live-dot{transition:background .3s,box-shadow .3s}
+.relay-root .call-head .ct.st-connecting .live-dot,
+.relay-root .call-head .ct.st-encrypting .live-dot{background:#f5b338;box-shadow:0 0 10px #f5b338;animation:relayPulse2 1s ease-in-out infinite}
+.relay-root .call-head .ct.st-reconnecting{color:#ff7a7a}
+.relay-root .call-head .ct.st-reconnecting .live-dot{background:#ff5d5d;box-shadow:0 0 10px #ff5d5d;animation:relayPulse2 .8s ease-in-out infinite}
+.relay-root .call-head .ct.st-live .live-dot{background:var(--accent);box-shadow:0 0 10px var(--accent);animation:none}
 .relay-root .call-head .timer{font-family:"JetBrains Mono";color:var(--text);font-size:14px}
 .relay-root .call-main{flex:1;min-height:0;display:flex}
 .relay-root .grid{flex:1;min-height:0;padding:16px;display:grid;gap:12px;align-content:center}
@@ -318,10 +349,18 @@ export const RELAY_CSS = `
 
 .relay-root .chat{width:320px;border-left:1px solid var(--border);display:none;flex-direction:column;background:var(--bg2)}
 .relay-root .chat.open{display:flex}
-@media (max-width:680px){.relay-root .chat{position:fixed;inset:0;width:100%;z-index:40}}
+@media (max-width:680px){.relay-root .chat{position:fixed;inset:0;width:100%;z-index:40}
+  .relay-root .chat-head{padding-top:max(15px,env(safe-area-inset-top))}}
 .relay-root .chat-head{padding:15px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;
   font-family:"Bricolage Grotesque";font-weight:600;font-size:15px}
-.relay-root .chat-head .x{cursor:pointer;color:var(--muted);font-size:20px}
+.relay-root .chat-head .chat-title{display:flex;align-items:center;gap:8px}
+/* Obvious, high-contrast close button (the old tiny grey × was unfindable on
+   the full-screen mobile chat overlay). */
+.relay-root .chat-close-btn{appearance:none;-webkit-appearance:none;border:1px solid var(--border2);background:var(--surface2);color:var(--text);
+  width:38px;height:38px;border-radius:50%;display:grid;place-items:center;cursor:pointer;transition:.15s;flex-shrink:0}
+.relay-root .chat-close-btn svg{width:18px;height:18px}
+.relay-root .chat-close-btn:hover,.relay-root .chat-close-btn:active{background:var(--accent);color:#04201B;border-color:var(--accent)}
+@media (max-width:680px){.relay-root .chat-close-btn{width:44px;height:44px}.relay-root .chat-close-btn svg{width:21px;height:21px}}
 .relay-root .chat-log{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:11px}
 .relay-root .relay-msg{max-width:80%;padding:9px 13px;border-radius:13px;font-size:14px;line-height:1.4;word-break:break-word}
 .relay-root .relay-msg .au{font-size:11px;color:var(--accent);font-weight:600;margin-bottom:2px}
@@ -356,6 +395,20 @@ export const RELAY_CSS = `
    back cam not mirrored, and outgoing stream NEVER mirrored. */
 .relay-root .relay-tile.you video{transform:scaleX(-1)}
 .relay-root .relay-tile.you.back-cam video{transform:none}
+/* Screen share: the shared screen must never be mirrored, and should be shown
+   in full (letterboxed) rather than cropped like a camera tile. */
+.relay-root .relay-tile.you.screen video{transform:none;object-fit:contain;background:#000}
+/* Active control state (e.g. screen-share on) — accent-tinted like .off is red. */
+.relay-root .ctrl.on{background:rgba(63,224,197,.18);border-color:rgba(63,224,197,.4);color:var(--accent)}
+/* Record button, when armed, glows red. */
+.relay-root #recordBtn.on{background:rgba(255,76,76,.22);border-color:rgba(255,76,76,.5);color:#ff5d5d}
+/* "● REC" live indicator in the call header. */
+.relay-root .call-head-right{display:flex;align-items:center;gap:12px}
+.relay-root .rec-ind{display:flex;align-items:center;gap:6px;font-family:"JetBrains Mono";font-size:12px;font-weight:700;letter-spacing:.06em;color:#ff5d5d}
+.relay-root .rec-blink{width:9px;height:9px;border-radius:50%;background:#ff3b3b;box-shadow:0 0 8px #ff3b3b;animation:relayPulse2 1s ease-in-out infinite}
+/* Screen share is a desktop feature (iOS Safari has no getDisplayMedia, and the
+   mobile control bar is already full) — hide the button on small screens. */
+@media (max-width:680px){.relay-root #screenBtn{display:none}}
 
 /* Filter dock (Snapchat-style horizontal strip) */
 .relay-root .filter-dock{position:absolute;left:50%;bottom:96px;transform:translateX(-50%) translateY(12px);width:min(720px,94vw);
@@ -411,9 +464,40 @@ export const RELAY_CSS = `
 @keyframes relaySpin{to{transform:rotate(360deg)}}
 .relay-root .boot .t{color:var(--muted);font-size:14px}
 
+/* Connection sequence — Transmission Connected -> Encryption -> Join the Call */
+.relay-root .conn-seq{position:absolute;inset:0;z-index:25;display:none;align-items:center;justify-content:center;background:rgba(8,9,12,.82);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.relay-root .conn-seq.show{display:flex;animation:relayFade .25s ease both}
+.relay-root .conn-seq.hide{animation:connSeqOut .4s ease both}
+@keyframes connSeqOut{to{opacity:0;visibility:hidden}}
+.relay-root .conn-seq-card{display:flex;flex-direction:column;gap:18px}
+.relay-root .conn-step{display:flex;align-items:center;gap:14px;font-family:"Bricolage Grotesque";font-weight:600;font-size:17px;color:var(--faint);opacity:.4;transform:translateX(-6px);transition:.32s cubic-bezier(0.23,1,0.32,1)}
+.relay-root .conn-step.active{color:var(--text);opacity:1;transform:none}
+.relay-root .conn-step.done{color:var(--accent);opacity:1;transform:none}
+.relay-root .conn-tick{width:24px;height:24px;border-radius:50%;border:2px solid var(--border2);display:grid;place-items:center;flex:0 0 auto;transition:.3s}
+.relay-root .conn-step.active .conn-tick{border-color:var(--accent);box-shadow:0 0 0 4px rgba(63,224,197,.14)}
+.relay-root .conn-step.active .conn-tick::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);animation:relayPulse2 1s ease-in-out infinite}
+.relay-root .conn-step.done .conn-tick{border-color:var(--accent);background:var(--accent)}
+.relay-root .conn-step.done .conn-tick::after{content:"✓";color:#04201B;font-size:13px;font-weight:800;line-height:1}
+/* Call waiting — a second incoming call during an active call */
+.relay-root .call-waiting{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:36;display:none;align-items:center;gap:14px;background:rgba(20,23,29,.92);border:1px solid var(--border2);border-radius:16px;padding:10px 12px 10px 16px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
+.relay-root .call-waiting.show{display:flex;animation:cwIn .3s cubic-bezier(0.23,1,0.32,1) both}
+@keyframes cwIn{from{opacity:0;transform:translateX(-50%) translateY(-16px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+.relay-root .call-waiting .cw-info{font-size:14px;color:var(--text);white-space:nowrap;display:flex;align-items:center;gap:9px}
+.relay-root .call-waiting .cw-pulse{width:9px;height:9px;border-radius:50%;background:var(--accent);animation:cwPulse 1.3s ease-out infinite;flex:0 0 auto}
+@keyframes cwPulse{0%{box-shadow:0 0 0 0 rgba(63,224,197,.5)}100%{box-shadow:0 0 0 9px rgba(63,224,197,0)}}
+.relay-root .call-waiting .cw-actions{display:flex;gap:8px}
+.relay-root .call-waiting .cw-btn{border:none;border-radius:11px;padding:8px 14px;font-family:"Bricolage Grotesque";font-weight:700;font-size:13px;cursor:pointer;transition:.14s}
+.relay-root .call-waiting .cw-decline{background:rgba(255,92,114,.16);color:var(--danger);border:1px solid rgba(255,92,114,.3)}
+.relay-root .call-waiting .cw-decline:hover{background:rgba(255,92,114,.26)}
+.relay-root .call-waiting .cw-switch{background:var(--grad);color:#04201B}
+.relay-root .call-waiting .cw-switch:hover{transform:translateY(-1px)}
+@media (max-width:680px){.relay-root .call-waiting{flex-direction:column;gap:10px;top:10px;padding:12px 14px}.relay-root .call-waiting .cw-actions{width:100%}.relay-root .call-waiting .cw-btn{flex:1}}
 .relay-root .version-tag{position:fixed;bottom:8px;right:12px;z-index:5;font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.06em;color:var(--faint);pointer-events:none;opacity:.7}
 
-.relay-root .diag-btn{position:fixed;bottom:14px;left:14px;z-index:60;width:36px;height:36px;border-radius:10px;background:var(--surface);border:1px solid var(--border);color:var(--muted);display:grid;place-items:center;cursor:pointer;transition:.15s}
+/* Diagnostics button is hidden from users (the "?" floater). The panel is
+   still reachable for debugging via the keyboard shortcut. */
+.relay-root .diag-btn{display:none!important}
+.relay-root .diag-btn--shown{position:fixed;bottom:14px;left:14px;z-index:60;width:36px;height:36px;border-radius:10px;background:var(--surface);border:1px solid var(--border);color:var(--muted);display:grid;place-items:center;cursor:pointer;transition:.15s}
 .relay-root .diag-btn:hover{background:var(--surface2);border-color:var(--border2);color:var(--accent)}
 .relay-root .diag-btn svg{width:18px;height:18px}
 .relay-root .diag-overlay{position:fixed;inset:0;z-index:95;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(6px)}

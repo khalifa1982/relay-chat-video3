@@ -365,7 +365,7 @@ export default function Home() {
       {/* Footer */}
       <footer className="relative border-t border-white/5 py-12 text-center z-10">
         <p className="text-xs text-slate-500 tracking-wider">
-          © 2026 RELAY · v2.13.0 · Designed by gemini-3.5-flash
+          © 2026 RELAY · v2.24.0 · Designed by gemini-3.5-flash
         </p>
       </footer>
     </div>

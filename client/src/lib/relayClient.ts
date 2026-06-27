@@ -55,6 +55,11 @@ interface Msg {
   livekitUrl?: string;
   token?: string;
   url?: string;
+  // Recording (LiveKit Egress). `recording` (boolean) on `registered` advertises
+  // availability; the `recording` status message carries `on` + `by`.
+  recording?: boolean;
+  on?: boolean;
+  by?: string;
 }
 
 export type RelayPhase = "idle" | "dialing" | "ringing" | "in-call";
@@ -117,6 +122,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let facingMode: "user" | "environment" = "user";
   let activeFilter: FilterId = "none";
   let micOn = true, camOn = true;
+  let screenStream: MediaStream | null = null;       // active getDisplayMedia stream, or null
+  let screenSharing = false;
+  let recordingAvailable = false; // server advertised egress+S3 are configured
+  let recordingOn = false;        // a recording is in progress for this room
   let inCall = false;
   let roomId: string | null = null;
   const peers: Record<string, PeerEntry> = {};
@@ -153,6 +162,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     lkWatchdog = setTimeout(tick, 4500);
   }
   let pendingRing: PendingRing | null = null;
+  // Call waiting: a second incoming call while already in a call.
+  let waitingRing: PendingRing | null = null;
+  let waitingTimeoutT: ReturnType<typeof setTimeout> | null = null;
   const recents: Recent[] = [];
   let callStart = 0;
   let timerInt: ReturnType<typeof setInterval> | null = null;
@@ -254,8 +266,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
       livekitEnabled = m.livekit;
       livekitUrl = m.livekitUrl || livekitUrl;
     }
+    if (typeof m.recording === "boolean" && m.type === "registered") {
+      recordingAvailable = m.recording;
+      updateRecordBtnVisibility();
+    }
     switch (m.type) {
       case "registered":   onRegistered(m); break;
+      case "recording":      onRecordingStatus(m); break;
+      case "recording-error":
+        toast(m.message || "Recording failed.", true);
+        recordingOn = false; updateRecordingUI();
+        break;
       case "room":         roomId = m.roomId || null; break;
       case "ring":         onRing(m); break;
       case "ring-cancel":  onRingCancel(m); break;
@@ -376,18 +397,59 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
 
   // ---------- media ----------
+  // Phones run hot encoding 720p60. Cap the framerate to 30 everywhere and ask
+  // for a lighter capture resolution on mobile — WebRTC still upscales fine and
+  // the device stays cool. Desktops keep 720p.
+  const isMobile = (() => {
+    try {
+      return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+        || (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches
+            && Math.min(window.screen?.width || 9999, window.screen?.height || 9999) <= 820);
+    } catch { return false; }
+  })();
   async function acquireRawStream(useFacingMode: "user" | "environment"): Promise<MediaStream> {
     return navigator.mediaDevices.getUserMedia({
       audio: true,
       video: {
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
+        width: { ideal: isMobile ? 960 : 1280 },
+        height: { ideal: isMobile ? 540 : 720 },
+        frameRate: { ideal: 30, max: 30 },
         facingMode: useFacingMode,
       },
     });
   }
+  // The stream we currently publish to peers. When a filter is active it's the
+  // processed (canvas) stream; otherwise it's the RAW camera — which means NO
+  // canvas, NO captureStream re-encode, and far less heat in the common case of
+  // a plain call. `processedStream` is non-null ONLY while a filter runs, so the
+  // historic `processedStream || localStream` call-sites stay correct.
+  function outStream(): MediaStream {
+    return processedStream || (localStream as MediaStream);
+  }
+  // Build (once) and start the canvas pipeline reading from the live camera.
+  // Called lazily the first time a real filter is selected — never for plain
+  // calls.
+  async function ensurePipeline(): Promise<void> {
+    if (!localStream || localStream.getVideoTracks().length === 0) return;
+    if (!pipeline) {
+      pipeline = new MediaPipeline({
+        onError: m => toast(m, true),
+        onLoading: l => {
+          const dot = $("filterLoading");
+          if (dot) dot.style.display = l ? "inline-block" : "none";
+        },
+      });
+      pipeline.setFacingMode(facingMode);
+      await pipeline.setInputStream(localStream);
+    }
+    // Null-guard: an interleaved filter-off could have torn the pipeline down
+    // while we awaited above.
+    if (pipeline) processedStream = pipeline.getOutputStream();
+  }
   async function ensureMedia(): Promise<MediaStream> {
-    if (processedStream) return processedStream;
+    // Reuse a live camera/mic — don't re-prompt. (We key off localStream, not
+    // processedStream, because plain calls never create a processedStream.)
+    if (localStream) return outStream();
     try {
       localStream = await acquireRawStream(facingMode);
     } catch {
@@ -400,23 +462,66 @@ export function startRelay(root: HTMLElement): RelayHandle {
         throw e2;
       }
     }
-    if (localStream && localStream.getVideoTracks().length > 0) {
-      // Route through the canvas pipeline so filters / blur / overlays apply.
-      pipeline = new MediaPipeline({
-        onError: m => toast(m, true),
-        onLoading: l => {
-          const dot = $("filterLoading");
-          if (dot) dot.style.display = l ? "inline-block" : "none";
-        },
-      });
-      pipeline.setFacingMode(facingMode);
-      await pipeline.setInputStream(localStream);
-      processedStream = pipeline.getOutputStream();
-    } else {
-      // Audio-only fallback
-      processedStream = localStream;
+    // Only spin up the heavy canvas pipeline if a filter was already chosen.
+    if (activeFilter !== "none" && localStream.getVideoTracks().length > 0) {
+      await ensurePipeline();
     }
-    return processedStream || localStream!;
+    return outStream();
+  }
+  // Keep the outgoing video track's enabled flag in sync with camOn after any
+  // track swap (filter on/off, camera flip).
+  function syncCamEnabled() {
+    const pub = outStream();
+    pub.getVideoTracks().forEach(t => (t.enabled = camOn));
+    if (processedStream && localStream) {
+      localStream.getVideoTracks().forEach(t => (t.enabled = camOn));
+    }
+  }
+  // Hot-swap the outgoing VIDEO track on every transport (mesh peers + SFU) with
+  // no SDP renegotiation. Used when filters turn on/off and when flipping camera
+  // in the no-filter (raw) path.
+  async function replaceVideoEverywhere(track: MediaStreamTrack | null) {
+    for (const id in peers) {
+      try {
+        const senders = peers[id].pc.getSenders();
+        const sender = senders.find(s => s.track && s.track.kind === "video")
+                    || senders.find(s => !s.track);
+        if (sender) await sender.replaceTrack(track);
+      } catch { /* */ }
+    }
+    if (lkRoom) {
+      try {
+        // LiveKit types are dynamically imported (any); prefer the SDK's
+        // in-place replaceTrack, else fall back to unpublish + publish.
+        const lp: any = (lkRoom as any).localParticipant;
+        const pubs: any[] = typeof lp.getTrackPublications === "function"
+          ? lp.getTrackPublications()
+          : (lp.videoTrackPublications ? Array.from(lp.videoTrackPublications.values()) : []);
+        if (!track) {
+          // No replacement (e.g. stopping screen share in an audio-only call) —
+          // drop any published video so no orphan publication lingers.
+          for (const pub of pubs) {
+            const lt = pub?.track;
+            const isVideo = pub?.kind === "video" || lt?.kind === "video";
+            if (lt && isVideo && lt.mediaStreamTrack) {
+              try { await lp.unpublishTrack(lt.mediaStreamTrack); } catch { /* */ }
+            }
+          }
+        } else {
+          let swapped = false;
+          for (const pub of pubs) {
+            const lt = pub?.track;
+            const isVideo = pub?.kind === "video" || lt?.kind === "video";
+            if (lt && isVideo) {
+              if (typeof lt.replaceTrack === "function") { await lt.replaceTrack(track); swapped = true; break; }
+              if (lt.mediaStreamTrack) { try { await lp.unpublishTrack(lt.mediaStreamTrack); } catch { /* */ } }
+            }
+          }
+          if (!swapped) await lp.publishTrack(track);
+        }
+      } catch { /* */ }
+    }
+    syncCamEnabled();
   }
 
   // Warm the camera/mic at login. Best-effort: if the user denies or has no
@@ -425,7 +530,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // pop a fresh OS prompt (which on mobile was dropping the call).
   let mediaPrimed = false;
   async function primeMedia() {
-    if (mediaPrimed || processedStream) return;
+    if (mediaPrimed || localStream) return;
     const banner = $("mediaBanner");
     try {
       await ensureMedia();
@@ -441,27 +546,48 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
   /** Swap the camera between front and back. Re-acquires getUserMedia with
    *  the opposite facingMode and hot-replaces the video track on every peer
-   *  via RTCRtpSender.replaceTrack — no re-negotiation needed. */
+   *  via RTCRtpSender.replaceTrack — no re-negotiation needed. We acquire
+   *  VIDEO-ONLY and keep the EXISTING audio track, so the transmitted/muteable
+   *  audio identity never changes (otherwise mute would silently toggle the
+   *  wrong track and a duplicate mic capture would leak). */
   async function flipCamera() {
     if (!localStream) { toast("Camera isn't active yet.", true); return; }
+    if (screenSharing) { toast("Stop screen sharing to flip the camera.", true); return; }
     const next: "user" | "environment" = facingMode === "user" ? "environment" : "user";
-    let nu: MediaStream;
+    let nuVideo: MediaStream;
     try {
-      nu = await acquireRawStream(next);
+      nuVideo = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          width: { ideal: isMobile ? 960 : 1280 },
+          height: { ideal: isMobile ? 540 : 720 },
+          frameRate: { ideal: 30, max: 30 },
+          facingMode: next,
+        },
+      });
     } catch {
       toast("Couldn't switch camera — this device may only have one.", true);
       return;
     }
     facingMode = next;
-    // Stop old VIDEO tracks (keep audio tracks running to avoid mic glitches)
-    if (localStream) {
-      localStream.getVideoTracks().forEach(t => t.stop());
-    }
+    // Carry the SAME audio track across the flip; stop only the old VIDEO.
+    const audioTracks = localStream.getAudioTracks();
+    localStream.getVideoTracks().forEach(t => t.stop());
+    // New combined stream = existing audio + the fresh camera video. The audio
+    // track object is unchanged, so toggleMic and every peer/SFU audio sender
+    // keep pointing at the right track.
+    const nu = new MediaStream([...audioTracks, ...nuVideo.getVideoTracks()]);
+    localStream = nu;
     if (pipeline) {
+      // Filtered path: the canvas output track is unchanged — just point the
+      // pipeline at the new camera. Peers keep the same sender track.
       pipeline.setFacingMode(facingMode);
       await pipeline.setInputStream(nu);
+    } else {
+      // Raw path: we publish the camera track directly, so hot-swap the VIDEO
+      // on every peer / the SFU (audio is untouched — it's the same track).
+      await replaceVideoEverywhere(nu.getVideoTracks()[0] || null);
     }
-    localStream = nu;
     // Update the local self-tile's video (if shown)
     const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
     if (selfV) selfV.srcObject = processedStream || nu;
@@ -471,17 +597,66 @@ export function startRelay(root: HTMLElement): RelayHandle {
     toast(facingMode === "environment" ? "Switched to back camera" : "Switched to front camera");
   }
 
-  /** Apply a filter; lazy-loads MediaPipe models if needed. */
+  // Serialize filter changes: applyFilter awaits getUserMedia/MediaPipe/track
+  // swaps, so two rapid taps could interleave and leave the published track
+  // disagreeing with the selection (or null-deref the pipeline mid-teardown).
+  // We coalesce to the LATEST requested filter and run one change at a time.
+  let filterBusy = false;
+  let pendingFilter: FilterId | null = null;
   async function applyFilter(id: FilterId) {
-    if (!pipeline) {
-      // Filter chosen before camera started — remember and apply on ensureMedia
-      activeFilter = id;
-      updateFilterStripUI();
+    if (screenSharing) { toast("Filters are off while sharing your screen.", true); return; }
+    pendingFilter = id;
+    // Immediate visual feedback on the strip even while a prior change runs.
+    const sel = $("filterStrip");
+    sel?.querySelectorAll(".relay-filter").forEach(el => {
+      (el as HTMLElement).classList.toggle("active", (el as HTMLElement).dataset.id === id);
+    });
+    if (filterBusy) return;
+    filterBusy = true;
+    try {
+      while (pendingFilter !== null && pendingFilter !== activeFilter) {
+        const target = pendingFilter;
+        pendingFilter = null;
+        await applyFilterInner(target);
+      }
+    } finally {
+      filterBusy = false;
+    }
+  }
+  async function applyFilterInner(id: FilterId) {
+    const prev = activeFilter;
+    activeFilter = id;
+    updateFilterStripUI();
+
+    // No camera yet — remember the choice; ensureMedia() builds the pipeline.
+    if (!localStream || localStream.getVideoTracks().length === 0) return;
+    if (id === prev) return;
+
+    if (id === "none") {
+      // Filters OFF: republish the raw camera track, then stop the canvas loop.
+      const rawTrack = localStream.getVideoTracks()[0] || null;
+      const dying = pipeline;
+      pipeline = null;
+      processedStream = null;
+      await replaceVideoEverywhere(rawTrack);
+      const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
+      if (selfV) selfV.srcObject = localStream;
+      // dispose() (NOT destroy()) — keep the shared camera/mic alive.
+      try { dying?.dispose(); } catch { /* */ }
       return;
     }
-    activeFilter = id;
-    await pipeline.setFilter(id);
-    updateFilterStripUI();
+
+    // Filters ON (or switching between filters).
+    const hadPipeline = !!pipeline;
+    await ensurePipeline();
+    await pipeline!.setFilter(id);
+    if (!hadPipeline) {
+      // raw → canvas: hot-swap the published track to the processed stream.
+      const procTrack = processedStream?.getVideoTracks()[0] || null;
+      await replaceVideoEverywhere(procTrack);
+      const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
+      if (selfV) selfV.srcObject = processedStream;
+    }
   }
   function updateFilterStripUI() {
     const strip = $("filterStrip");
@@ -546,11 +721,51 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
 
   // ---------- incoming ----------
+  // ---------- call waiting ----------
+  function showCallWaiting(name: string) {
+    const cw = $("callWaiting"); if (!cw) return;
+    const n = $("cwName"); if (n) n.textContent = name || "Someone";
+    cw.classList.add("show");
+    if (waitingTimeoutT) clearTimeout(waitingTimeoutT);
+    // Auto-decline if ignored, so the second caller isn't left hanging.
+    waitingTimeoutT = setTimeout(() => declineWaiting(), 30000);
+  }
+  function hideCallWaiting() {
+    $("callWaiting")?.classList.remove("show");
+    if (waitingTimeoutT) { clearTimeout(waitingTimeoutT); waitingTimeoutT = null; }
+  }
+  function declineWaiting() {
+    const w = waitingRing; waitingRing = null;
+    hideCallWaiting();
+    if (w) sendWS({ type: "reject", to: w.from });
+  }
+  function switchCall() {
+    const w = waitingRing; waitingRing = null;
+    hideCallWaiting();
+    if (!w) return;
+    // Leave the current room but KEEP media + the call UI (no idle flash), then
+    // accept the waiting call, reusing the same camera/mic stream.
+    sendWS({ type: "leave", reason: "switch-call" });
+    for (const id in peers) { try { peers[id].pc.close(); } catch { /* */ } if (peers[id].el) peers[id].el!.remove(); delete peers[id]; }
+    teardownLivekit();
+    roomId = w.roomId;
+    enterCallUI("Connecting…");
+    sendWS({ type: "accept", roomId: w.roomId });
+  }
+
   function onRing(m: Msg) {
     // Do Not Disturb: silently auto-decline (no ring overlay, no chime/notify).
     // The caller sees a normal "declined" and the miss is still recorded.
     if (isDndOn()) { sendWS({ type: "reject", to: m.from }); return; }
-    if (inCall) { if (m.roomId === roomId) return; sendWS({ type: "reject", to: m.from }); return; }
+    if (inCall) {
+      if (m.roomId === roomId) return; // already in this room
+      // Call waiting: alert (Switch / Decline) instead of auto-rejecting. Only
+      // one waiter at a time; a second concurrent caller is rejected.
+      if (waitingRing) { sendWS({ type: "reject", to: m.from }); return; }
+      waitingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId! };
+      showCallWaiting(m.fromName || nameOf(m.from!));
+      return;
+    }
     if (pendingRing) { sendWS({ type: "reject", to: m.from }); return; }
     pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId! };
     const ringAv = $("ringAv"); if (ringAv) ringAv.textContent = initials(m.fromName!);
@@ -673,7 +888,23 @@ export function startRelay(root: HTMLElement): RelayHandle {
     room.on(RoomEventEnum.DataReceived, (payload: Uint8Array) => {
       try { const d = JSON.parse(new TextDecoder().decode(payload)); addChatMsg(d.name, d.text, false); } catch { /* */ }
     });
-    room.on(RoomEventEnum.Disconnected, () => { if (lkRoom === room && inCall) hangUp("livekit-disconnected"); });
+    // LiveKit drives its OWN reconnection (Reconnecting → Reconnected), and its
+    // retry window is longer than our 10s mesh window. So on the SFU path we
+    // only surface the status — we must NOT arm our hard timer, or it would race
+    // and kill LiveKit's working reconnection. A terminal `Disconnected` (after
+    // LiveKit has exhausted its retries) is the single source of teardown.
+    if (RoomEventEnum.Reconnecting) {
+      room.on(RoomEventEnum.Reconnecting, () => { if (lkRoom === room) setSfuReconnectingUI(); });
+    }
+    if (RoomEventEnum.Reconnected) {
+      room.on(RoomEventEnum.Reconnected, () => { if (lkRoom === room) markEstablished(); });
+    }
+    room.on(RoomEventEnum.Disconnected, () => {
+      if (lkRoom !== room || !inCall) return;
+      // Terminal: LiveKit already gave the call its (longer) reconnect window
+      // and gave up. End the call rather than show a misleading countdown.
+      hangUp("livekit-disconnected");
+    });
 
     try {
       await room.connect(tok.url, tok.token);
@@ -685,6 +916,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       }
       lkConnected = true;
       clearLkWatchdog();
+      markEstablished(); // SFU media is up → top bar shows "Connected"
       diag("livekit: connected + published");
     } catch (e) {
       // Connect/publish failed (expired token, transient SFU/network fault).
@@ -751,9 +983,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const peer: PeerEntry = { pc, name: name || "Guest", dc: null, el: null, candQ: [], remoteSet: false, gotStream: false, initiator, graceT: null, restartT: null, iceRestarts: 0 };
     peers[pin] = peer;
     // We send the PROCESSED stream to peers (so they see filters), but if
-    // there's no pipeline (audio-only) fall back to the raw stream.
+    // there's no pipeline (audio-only) fall back to the raw stream. Audio always
+    // comes from the camera stream; the VIDEO is the SCREEN while sharing, so a
+    // participant who joins mid-share sees the screen (not the camera).
     const sendStream = processedStream || localStream;
-    if (sendStream) sendStream.getTracks().forEach(t => pc.addTrack(t, sendStream));
+    if (sendStream) {
+      sendStream.getAudioTracks().forEach(t => pc.addTrack(t, sendStream));
+      const sharing = screenSharing && screenStream;
+      const vtrack = sharing
+        ? (screenStream!.getVideoTracks()[0] || null)
+        : (sendStream.getVideoTracks()[0] || null);
+      if (vtrack) pc.addTrack(vtrack, sharing ? screenStream! : sendStream);
+    }
     pc.onicecandidate = e => {
       if (e.candidate) {
         sendWS({ type: "signal", to: pin, data: { candidate: e.candidate } });
@@ -771,9 +1012,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // Recovered (or first connect): cancel any pending teardown.
         if (peer.graceT) { clearTimeout(peer.graceT); peer.graceT = null; }
         peer.iceRestarts = 0;
+        markEstablished(); // first live media → top bar shows "Connected"
       } else if (st === "closed") {
         removePeer(pin);
       }
+      // Re-evaluate the whole call's health: if every peer is in trouble (after
+      // the call was live) we flip the top bar to "Reconnecting…" and start the
+      // 10s recovery window; if any peer is back, we return to "Connected".
+      evaluateMeshHealth();
       // NOTE: we deliberately do NOT tear down on the first `failed` here.
       // The ICE handler below runs a grace window + restart first; only after
       // that window expires without recovery do we remove the peer. This is
@@ -1011,13 +1257,124 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
 
   // ---------- video grid ----------
+  // ---------- live connection status + 10s reconnect window ----------
+  // The top bar shows a REAL status (connecting → encrypting → live, or
+  // reconnecting), not a scripted animation. If the call drops after it was
+  // live, we hold the call open and try to recover for RECONNECT_WINDOW_MS
+  // before tearing down — so a brief tunnel/elevator/Wi-Fi blip doesn't kill
+  // the call.
+  type CallStatus = "connecting" | "encrypting" | "live" | "reconnecting";
+  let callStatus: CallStatus = "connecting";
+  let establishedOnce = false; // reached "live" at least once this call
+  let reconnectHardT: ReturnType<typeof setTimeout> | null = null;
+  let reconnectTickT: ReturnType<typeof setInterval> | null = null;
+  let connSeqTimers: ReturnType<typeof setTimeout>[] = [];
+  const RECONNECT_WINDOW_MS = 10000;
+  const STATUS_LABEL: Record<CallStatus, string> = {
+    connecting: "Connecting…",
+    encrypting: "Securing connection…",
+    live: "Connected",
+    reconnecting: "Reconnecting…",
+  };
+  function setCallStatus(s: CallStatus, labelOverride?: string) {
+    callStatus = s;
+    const lbl = $("callRoomLbl");
+    if (lbl) lbl.textContent = labelOverride ?? STATUS_LABEL[s];
+    const ct = $("call")?.querySelector(".call-head .ct");
+    if (ct) {
+      ct.classList.remove("st-connecting", "st-encrypting", "st-live", "st-reconnecting");
+      ct.classList.add("st-" + s);
+    }
+  }
+  function clearConnSeq() {
+    connSeqTimers.forEach(t => clearTimeout(t));
+    connSeqTimers = [];
+  }
+  // Drive connecting → encrypting while the transport comes up; the real "live"
+  // flip happens when a peer / the SFU actually connects.
+  function runConnSequence() {
+    clearConnSeq();
+    setCallStatus("connecting");
+    connSeqTimers.push(setTimeout(() => {
+      if (callStatus === "connecting") setCallStatus("encrypting");
+    }, 600));
+  }
+  // We reached a live media connection. Cancel any reconnect window and show it.
+  function markEstablished() {
+    establishedOnce = true;
+    exitReconnecting();
+    clearConnSeq();
+    if (callStatus !== "live") setCallStatus("live");
+  }
+  // MESH reconnect: WE own recovery (ICE restarts + signaling), so we run a
+  // hard 10s window with a visible countdown and tear the call down if it
+  // doesn't recover. NOT used on the SFU path — see setSfuReconnectingUI().
+  function enterReconnecting() {
+    if (!inCall || !establishedOnce || livekitEnabled) return;
+    if (reconnectHardT) return; // already counting down
+    // Re-open signaling ONLY if it's actually unhealthy (don't tear down a
+    // working SSE channel on a transient media blip), then kick ICE restarts.
+    if (!ws || ws.readyState !== 1 /* EventSource.OPEN */) {
+      try { ws?.close(); } catch { /* */ }
+      if (!destroyed) connectWS();
+    }
+    Object.keys(peers).forEach(pin => { try { void tryIceRestart(pin); } catch { /* */ } });
+    let remaining = Math.ceil(RECONNECT_WINDOW_MS / 1000);
+    setCallStatus("reconnecting", "Reconnecting… " + remaining + "s");
+    reconnectTickT = setInterval(() => {
+      remaining -= 1;
+      if (remaining > 0 && callStatus === "reconnecting") {
+        setCallStatus("reconnecting", "Reconnecting… " + remaining + "s");
+      }
+    }, 1000);
+    reconnectHardT = setTimeout(() => {
+      reconnectHardT = null;
+      toast("Call lost — couldn't reconnect.", true);
+      hangUp("connection-lost");
+    }, RECONNECT_WINDOW_MS);
+  }
+  // SFU reconnect: LiveKit owns its OWN retry loop (which is longer than 10s),
+  // so we must NOT arm our hard timer — that would race and kill LiveKit's
+  // working reconnection. We only surface the status; the terminal LiveKit
+  // `Disconnected` event is the single source of teardown.
+  function setSfuReconnectingUI() {
+    if (!inCall || !establishedOnce) return;
+    setCallStatus("reconnecting");
+  }
+  function exitReconnecting() {
+    if (reconnectHardT) { clearTimeout(reconnectHardT); reconnectHardT = null; }
+    if (reconnectTickT) { clearInterval(reconnectTickT); reconnectTickT = null; }
+  }
+  // Re-evaluate whether the mesh call is healthy after any peer state change.
+  // Only a TERMINAL failure (`failed`/`closed`) on every peer opens the window —
+  // a transient `disconnected` is left to the per-peer grace + ICE restart (and
+  // still shows "reconnecting…" on the tile) so brief blips don't flap the UI or
+  // tear down signaling.
+  function evaluateMeshHealth() {
+    if (livekitEnabled || !inCall || !establishedOnce) return;
+    const ps = Object.values(peers);
+    if (ps.length === 0) return; // alone — nothing to reconnect to
+    const anyConnected = ps.some(p => p.pc.connectionState === "connected");
+    if (anyConnected) {
+      exitReconnecting();
+      if (callStatus === "reconnecting") setCallStatus("live");
+      return;
+    }
+    const allTerminal = ps.every(p =>
+      ["failed", "closed"].includes(p.pc.connectionState));
+    if (allTerminal) enterReconnecting();
+  }
   function enterCallUI(label: string) {
     show("call");
+    establishedOnce = false;
+    exitReconnecting();
+    runConnSequence();
     // On the SFU path, start the join watchdog so a failed/slow token or connect
     // recovers (re-request) or surfaces an error instead of a silent dead call.
     if (livekitEnabled) armLkWatchdog();
     if (label && /in call/i.test(label)) emitPhase("in-call");
-    const lbl = $("callRoomLbl"); if (lbl) lbl.textContent = label || "In call";
+    // NOTE: the top-bar label is now owned by setCallStatus() (live status),
+    // so we deliberately do NOT write `label` into #callRoomLbl here.
     const grid = $("videoGrid"); if (grid) grid.innerHTML = "";
     addSelfTile();
     for (const id in peers) { if (!peers[id].el) addTile(id, peers[id].name); }
@@ -1107,11 +1464,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
       }
     }
   }
+  // Wrap http(s)/www URLs in safe anchors. Input MUST already be HTML-escaped.
+  function linkifyEscaped(escaped: string): string {
+    return escaped.replace(/((?:https?:\/\/|www\.)[^\s<]+[^\s<.,!?)\]}"'])/gi, (u) => {
+      const href = /^www\./i.test(u) ? "https://" + u : u;
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer nofollow" style="color:var(--accent2);text-decoration:underline">${u}</a>`;
+    });
+  }
   function addChatMsg(name: string, text: string, mine: boolean) {
     const log = $("chatLog"); if (!log) return;
     const d = document.createElement("div");
     d.className = "relay-msg " + (mine ? "me" : "them");
-    d.innerHTML = (mine ? "" : '<div class="au">' + escapeHtml(name) + "</div>") + escapeHtml(text);
+    d.innerHTML = (mine ? "" : '<div class="au">' + escapeHtml(name) + "</div>") + linkifyEscaped(escapeHtml(text));
     log.appendChild(d); log.scrollTop = log.scrollHeight;
     if (!mine && !$("chatPanel")?.classList.contains("open")) {
       unread++;
@@ -1176,7 +1540,109 @@ export function startRelay(root: HTMLElement): RelayHandle {
     published.getVideoTracks().forEach(t => (t.enabled = camOn));
     if (processedStream) localStream.getVideoTracks().forEach(t => (t.enabled = camOn));
     $("camBtn")?.classList.toggle("off", !camOn);
-    const s = $("tile-self"); if (s) s.classList.toggle("audio-only", !camOn);
+    // Don't flip the self-tile to audio-only while a screen share occupies it.
+    const s = $("tile-self"); if (s && !screenSharing) s.classList.toggle("audio-only", !camOn);
+  }
+  // The camera video track we publish when NOT screen-sharing: the filtered
+  // canvas track when a filter is active, else the raw camera.
+  function currentCameraVideoTrack(): MediaStreamTrack | null {
+    return (processedStream || localStream)?.getVideoTracks()[0] || null;
+  }
+  let screenBusy = false;
+  async function toggleScreenShare() {
+    if (screenBusy) return; // ignore double-taps while a transition is in flight
+    if (screenSharing) { await stopScreenShare(); return; }
+    if (!inCall) { toast("Start a call first.", true); return; }
+    const md = navigator.mediaDevices as MediaDevices & {
+      getDisplayMedia?: (c?: MediaStreamConstraints) => Promise<MediaStream>;
+    };
+    if (!md.getDisplayMedia) { toast("Screen sharing isn't supported on this device.", true); return; }
+    // Mesh path can only hot-swap into an EXISTING video sender (no
+    // renegotiation). An audio-only call (no camera) has none, so screen share
+    // would silently reach no one — block it with a clear message. The SFU path
+    // publishes a fresh track, so it's fine there.
+    if (!livekitEnabled && Object.keys(peers).length > 0) {
+      const haveVideoSlot = Object.values(peers).some(p =>
+        p.pc.getSenders().some(s => (s.track && s.track.kind === "video") || !s.track));
+      if (!haveVideoSlot) {
+        toast("Screen sharing needs a camera-enabled call.", true);
+        return;
+      }
+    }
+    screenBusy = true;
+    let disp: MediaStream;
+    try {
+      disp = await md.getDisplayMedia({ video: true, audio: false });
+    } catch {
+      // User cancelled the picker, or permission denied — no-op.
+      screenBusy = false;
+      return;
+    }
+    // The call may have ended while the picker was open — don't adopt a capture
+    // into a dead call (that would leak the screen grab + wedge state).
+    const track = disp.getVideoTracks()[0] || null;
+    if (!inCall || !track) {
+      disp.getTracks().forEach(t => t.stop());
+      screenBusy = false;
+      return;
+    }
+    screenStream = disp;
+    screenSharing = true;
+    // Browser "Stop sharing" UI (or the source ending) ⇒ restore the camera.
+    track.onended = () => { void stopScreenShare(); };
+    await replaceVideoEverywhere(track);
+    $("screenBtn")?.classList.add("on");
+    const selfTile = $("tile-self");
+    const selfV = selfTile?.querySelector("video") as HTMLVideoElement | null;
+    if (selfV) selfV.srcObject = disp;
+    // Screen content must never be mirrored, and isn't "audio-only".
+    if (selfTile) { selfTile.classList.add("screen"); selfTile.classList.remove("audio-only"); }
+    screenBusy = false;
+    toast("Sharing your screen");
+  }
+  async function stopScreenShare() {
+    if (!screenSharing) return;
+    screenBusy = true;
+    screenSharing = false;
+    const dying = screenStream;
+    screenStream = null;
+    // Swap the live camera/filtered track back in for every peer + the SFU.
+    await replaceVideoEverywhere(currentCameraVideoTrack());
+    try { dying?.getTracks().forEach(t => { t.onended = null; t.stop(); }); } catch { /* */ }
+    $("screenBtn")?.classList.remove("on");
+    const selfTile = $("tile-self");
+    const selfV = selfTile?.querySelector("video") as HTMLVideoElement | null;
+    if (selfV) selfV.srcObject = processedStream || localStream;
+    if (selfTile) {
+      selfTile.classList.remove("screen");
+      selfTile.classList.toggle("audio-only", !camOn);
+    }
+    screenBusy = false;
+    toast("Stopped screen sharing");
+  }
+  // ---------- recording (LiveKit Egress → operator S3) ----------
+  function updateRecordBtnVisibility() {
+    const b = $("recordBtn");
+    if (b) b.style.display = recordingAvailable ? "" : "none";
+  }
+  function updateRecordingUI() {
+    $("recordBtn")?.classList.toggle("on", recordingOn);
+    const ind = $("recIndicator");
+    if (ind) ind.style.display = recordingOn ? "flex" : "none";
+  }
+  function onRecordingStatus(m: Msg) {
+    const was = recordingOn;
+    recordingOn = !!m.on;
+    updateRecordingUI();
+    if (recordingOn && !was) toast("Recording started");
+    else if (!recordingOn && was) toast("Recording stopped");
+  }
+  function toggleRecording() {
+    if (!recordingAvailable) { toast("Recording isn't set up on this server.", true); return; }
+    if (!inCall) { toast("Start a call first.", true); return; }
+    // Optimistic; the server broadcasts the authoritative `recording` status.
+    if (recordingOn) sendWS({ type: "stop-recording" });
+    else sendWS({ type: "start-recording" });
   }
   function toggleChat() {
     const p = $("chatPanel"); if (!p) return;
@@ -1216,6 +1682,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     pendingRing = null;
     $("ringOverlay")?.classList.remove("active");
+    clearConnSeq();
+    exitReconnecting();
+    establishedOnce = false;
+    if (waitingRing) declineWaiting(); // reject any pending second caller
     // Disconnect the SFU BEFORE stopping localStream/pipeline below, or LiveKit
     // errors republishing a dead track during teardown. No-op on the mesh path.
     // NOTE: keep `livekitEnabled` (it's a stable server-config flag captured at
@@ -1234,6 +1704,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("filterDock")?.classList.remove("open");
     unread = 0;
     const b = $("chatBadge"); if (b) b.style.display = "none";
+    if (screenStream) {
+      try { screenStream.getTracks().forEach(t => { t.onended = null; t.stop(); }); } catch { /* */ }
+      screenStream = null;
+    }
+    screenSharing = false;
+    screenBusy = false;
+    $("screenBtn")?.classList.remove("on");
+    // The server stops the egress when the room empties; just reset local UI.
+    recordingOn = false;
+    updateRecordingUI();
     if (pipeline) { try { pipeline.destroy(); } catch { /* */ } pipeline = null; }
     if (localStream) {
       localStream.getTracks().forEach(t => t.stop());
@@ -1291,6 +1771,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("callBtn") as HTMLElement | null)?.addEventListener("click", startCall);
   ($("acceptBtn") as HTMLElement | null)?.addEventListener("click", acceptInvite);
   ($("declineBtn") as HTMLElement | null)?.addEventListener("click", declineInvite);
+  ($("cwSwitch") as HTMLElement | null)?.addEventListener("click", switchCall);
+  ($("cwDecline") as HTMLElement | null)?.addEventListener("click", declineWaiting);
   ($("micBtn") as HTMLElement | null)?.addEventListener("click", toggleMic);
   ($("camBtn") as HTMLElement | null)?.addEventListener("click", toggleCam);
   ($("chatBtn") as HTMLElement | null)?.addEventListener("click", toggleChat);
@@ -1299,6 +1781,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("addGo") as HTMLElement | null)?.addEventListener("click", addToCall);
   ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => hangUp("user-hangup"));
   ($("flipCamBtn") as HTMLElement | null)?.addEventListener("click", () => { flipCamera(); });
+  ($("screenBtn") as HTMLElement | null)?.addEventListener("click", () => { void toggleScreenShare(); });
+  ($("recordBtn") as HTMLElement | null)?.addEventListener("click", toggleRecording);
   ($("filterBtn") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("filterClose") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("chatSend") as HTMLElement | null)?.addEventListener("click", sendChat);
@@ -1312,6 +1796,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
   });
   document.addEventListener("keydown", onDocKey);
   window.addEventListener("beforeunload", onUnload);
+  // Local network loss (Wi-Fi drop, tunnel, airplane toggle) is the clearest
+  // "you're disconnected" signal. On the MESH path we own recovery, so show the
+  // reconnect window and, when the radio returns, re-open signaling + kick ICE
+  // restarts. On the SFU path LiveKit detects and drives this itself (its
+  // Reconnecting/Reconnected events), so we stay out of its way.
+  const onOffline = () => {
+    if (inCall && establishedOnce && !livekitEnabled) enterReconnecting();
+  };
+  const onOnline = () => {
+    if (!inCall || livekitEnabled) return;
+    if (!ws || ws.readyState !== 1 /* EventSource.OPEN */) {
+      try { ws?.close(); } catch { /* */ }
+      if (!destroyed) connectWS();
+    }
+    Object.keys(peers).forEach(pin => { try { void tryIceRestart(pin); } catch { /* */ } });
+  };
+  window.addEventListener("offline", onOffline);
+  window.addEventListener("online", onOnline);
 
   // ---------- boot ----------
   $("boot")?.classList.add("hidden");
@@ -1348,6 +1850,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (reconnectT) { clearTimeout(reconnectT); reconnectT = null; }
       if (timerInt) { clearInterval(timerInt); timerInt = null; }
       if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
+      if (waitingTimeoutT) { clearTimeout(waitingTimeoutT); waitingTimeoutT = null; }
+      waitingRing = null;
+      clearConnSeq();
+      exitReconnecting();
       // Disconnect the SFU before stopping local tracks (no-op on the mesh path).
       teardownLivekit();
       try { ws?.close(); } catch { /* */ }
@@ -1356,12 +1862,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
       for (const id in peers) {
         try { peers[id].pc.close(); } catch { /* */ }
       }
+      if (screenStream) {
+        try { screenStream.getTracks().forEach(t => { t.onended = null; t.stop(); }); } catch { /* */ }
+        screenStream = null;
+      }
+      screenSharing = false;
+      screenBusy = false;
       if (localStream) {
         localStream.getTracks().forEach(t => t.stop());
         localStream = null;
       }
       document.removeEventListener("keydown", onDocKey);
       window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
       // best-effort: tell server we're leaving
       try {
         const body = JSON.stringify({ cid, message: { type: "leave", reason: "page-unload-2" } });

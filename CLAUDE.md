@@ -10,7 +10,9 @@
 
 Stack: **React 19 + Vite + Tailwind 4 + Express 4 + tRPC 11 + Drizzle ORM (MySQL) + Manus OAuth + Server-Sent Events signaling + native WebRTC + MediaPipe Tasks Vision**. Deployed as a single Node.js process on Cloud Run.
 
-**Current version: v2.0.0** (Phone-app shell with Dialer/Messages/Contacts tabs, guest identities with 30-day cookies, persistent messaging with attachments, presence). The legacy single-screen calling UI is still reachable at `/app/call` for the actual in-call experience.
+**Current version: v2.19.0** (Phone-app shell with Dialer/Messages/Contacts tabs, guest identities with 30-day cookies, persistent messaging with attachments, presence). The legacy single-screen calling UI is still reachable at `/app/call` for the actual in-call experience.
+
+> Versions v2.1–v2.19 layered on a lot since this doc's v2.0 baseline — LiveKit SFU calls, Resend missed-call email, Do-Not-Disturb, in-call connection sequence + chat links, invite links, offline auto-reply, call waiting (switch/decline), a device **passcode app-lock** + **biometric (WebAuthn) unlock**, and a call-engine reliability batch (raw-track publishing to kill mobile heat, a 10s reconnect window, live top-bar status). See `todo.md` for the per-version changelog; treat it as the source of truth for what shipped.
 
 ---
 
@@ -32,7 +34,7 @@ Stack: **React 19 + Vite + Tailwind 4 + Express 4 + tRPC 11 + Drizzle ORM (MySQL
 | Front/back camera flip (`facingMode: user` ↔ `environment`) with `RTCRtpSender.replaceTrack` (no renegotiation) | shipped | `client/src/lib/relayClient.ts` (`flipCamera`) |
 | Snapchat-style live filter dock (color filters via canvas filter, background blur via MediaPipe Selfie Segmentation, face overlays via MediaPipe Face Detector) | shipped | `client/src/lib/mediaPipeline.ts` |
 | Glassmorphic redesigned in-call control bar | shipped | `client/src/pages/Relay.tsx` (CSS in template literal) |
-| Vitest suite (signaling + filter registry + auth.logout + v2 routers) | **25/25 passing** | `server/relay.test.ts`, `client/src/lib/mediaPipeline.test.ts`, `server/auth.logout.test.ts`, `server/v2routers.test.ts` |
+| Vitest suite (signaling, filter registry, auth, v2 routers, DND, passcode, biometric, geo, …) | **205 passing / 1 skipped** | `server/**/*.test.ts`, `client/src/lib/**/*.test.ts`, `client/src/app/**/*.test.ts`, `client/src/pages/**/*.test.ts` |
 
 ### v2.0 phone-app surface (added 2026-05-30)
 
@@ -145,7 +147,7 @@ relay-chat-video/
 ```bash
 pnpm install              # install
 pnpm dev                  # NODE_ENV=development tsx watch server/_core/index.ts (serves React + tRPC + relay on port 3000)
-pnpm test                 # vitest run (17 tests)
+pnpm test                 # vitest run (205 tests)
 pnpm check                # tsc --noEmit
 pnpm format               # prettier --write .
 pnpm db:push              # drizzle-kit generate && drizzle-kit migrate
@@ -171,6 +173,12 @@ These are read **per-call** in `iceServers()` so they can be added without resta
 - `LIVEKIT_URL` — `wss://` project URL of the LiveKit SFU
 - `LIVEKIT_API_KEY` — LiveKit project API key
 - `LIVEKIT_API_SECRET` — LiveKit project API secret (server-only; HMAC key for all grants; **never** sent to the browser — only short-TTL join JWTs are)
+
+**Recording** (optional; LiveKit Egress → S3. Requires LiveKit above AND all four S3 vars. Records a room-composite grid MP4 straight to the operator's bucket — bytes never touch this server. Read per-call like `LIVEKIT_*`):
+- `RECORDING_S3_BUCKET`, `RECORDING_S3_REGION`, `RECORDING_S3_ACCESS_KEY`, `RECORDING_S3_SECRET` — all four required to enable. When set, the in-call **Record** button appears and a "● REC" indicator shows for every participant.
+- `RECORDING_S3_ENDPOINT` (optional) — custom endpoint for non-AWS S3 (Cloudflare R2, MinIO, …).
+- `RECORDING_S3_PREFIX` (optional) — key prefix, default `recordings/`.
+- `RECORDING_S3_FORCE_PATH_STYLE` (optional) — `1`/`true` for R2/MinIO.
 
 **Email** (optional; missed-call notifications via Resend):
 - `RESEND_API_KEY` — enables outbound email. Without a DNS-verified sending domain, Resend test mode only delivers FROM `onboarding@resend.dev` TO the account owner's address.
@@ -198,7 +206,7 @@ These are read **per-call** in `iceServers()` so they can be added without resta
 
 Vitest runs Node-environment tests under `server/**/*.test.ts` and `client/src/lib/**/*.test.ts` (see `vitest.config.ts`). New features must come with tests — focus on protocol shapes, business logic, and pure functions. Browser DOM tests are not currently configured; UI is verified via manual preview.
 
-> Run `pnpm test` before every checkpoint / PR. All 17 must stay green.
+> Run `pnpm test` before every checkpoint / PR. All 205 must stay green.
 
 ---
 

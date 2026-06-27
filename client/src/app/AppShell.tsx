@@ -1,13 +1,38 @@
 import { useEffect, useMemo } from "react";
 import { Link, useLocation } from "wouter";
-import { Phone, MessageSquare, UserRound, LogOut, Sparkles, Sun, Moon } from "lucide-react";
+import { Phone, MessageSquare, UserRound, LogOut, Sparkles, Sun, Moon, Bell, BellOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { getLoginUrl } from "@/const";
 import { useIdentity } from "./useIdentity";
 import { OnboardingGate } from "./OnboardingGate";
+import { PasscodeGate } from "./PasscodeGate";
 import { useRealtime } from "./useRealtime";
+import { useDnd } from "./dnd";
 import { useTheme } from "@/contexts/ThemeContext";
+
+/** One-tap Do Not Disturb toggle for the app header. */
+function DndToggle() {
+  const [dnd, setDnd] = useDnd();
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={dnd}
+      aria-label={dnd ? "Do Not Disturb is on — tap to turn off" : "Turn on Do Not Disturb"}
+      title={dnd ? "Do Not Disturb: on" : "Do Not Disturb: off"}
+      onClick={() => setDnd(!dnd)}
+      className={
+        "grid size-9 place-items-center rounded-xl transition-colors active:scale-95 " +
+        (dnd
+          ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
+          : "text-muted-foreground hover:text-foreground hover:bg-muted/50")
+      }
+    >
+      {dnd ? <BellOff className="size-[18px]" /> : <Bell className="size-[18px]" />}
+    </button>
+  );
+}
 
 /**
  * Tab keys used by the bottom-nav / sidebar. We hard-code the routes here
@@ -41,10 +66,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     document.documentElement.classList.add("relay-v2");
   }, []);
 
+  // PasscodeGate sits outermost: if a device passcode is set the lock
+  // screen covers everything (even onboarding) until the user unlocks.
   return (
-    <OnboardingGate>
-      <Inner>{children}</Inner>
-    </OnboardingGate>
+    <PasscodeGate>
+      <OnboardingGate>
+        <Inner>{children}</Inner>
+      </OnboardingGate>
+    </PasscodeGate>
   );
 }
 
@@ -257,23 +286,26 @@ function Inner({ children }: { children: React.ReactNode }) {
               </div>
             </div>
           </Link>
-          {me.isGuest ? (
-            <a
-              href={getLoginUrl()}
-              className="text-xs font-semibold text-primary"
-            >
-              Upgrade
-            </a>
-          ) : (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground"
-              onClick={() => signOut().then(() => (window.location.href = "/"))}
-            >
-              <LogOut className="size-4" />
-            </Button>
-          )}
+          <div className="flex items-center gap-1">
+            <DndToggle />
+            {me.isGuest ? (
+              <a
+                href={getLoginUrl()}
+                className="text-xs font-semibold text-primary"
+              >
+                Upgrade
+              </a>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                onClick={() => signOut().then(() => (window.location.href = "/"))}
+              >
+                <LogOut className="size-4" />
+              </Button>
+            )}
+          </div>
         </header>
 
         <div className="flex-1 min-h-0 overflow-y-auto pb-28 md:pb-0">{children}</div>

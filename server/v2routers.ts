@@ -26,6 +26,7 @@ import {
   getIdentityById,
   getIdentityByNumber,
   getOrCreateDmConversation,
+  createGroupConversation,
   getPresenceAudienceIds,
   getPresenceForIds,
   listCallHistory,
@@ -42,6 +43,7 @@ import {
   updateIdentityProfile,
   upsertContact,
   getConversationParticipantIds,
+  recentAutoReplyExists,
 } from "./v2db";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 
@@ -473,6 +475,12 @@ export const v2ContactsRouter = router({
         avatarUrl: r.avatarUrl,
         favourite: r.favourite,
         notes: r.notes,
+        email: r.email ?? null,
+        phone: r.phone ?? null,
+        company: r.company ?? null,
+        jobTitle: r.jobTitle ?? null,
+        website: r.website ?? null,
+        birthday: r.birthday ?? null,
         identityId: ident ?? null,
         isOnline: pres?.isOnline ?? false,
         lastSeenAt: pres?.lastSeenAt ?? null,
@@ -488,6 +496,12 @@ export const v2ContactsRouter = router({
         avatarUrl: AvatarUrlSchema.nullable().optional(),
         favourite: z.boolean().optional(),
         notes: z.string().max(2000).nullable().optional(),
+        email: z.string().trim().max(320).nullable().optional(),
+        phone: z.string().trim().max(40).nullable().optional(),
+        company: z.string().trim().max(128).nullable().optional(),
+        jobTitle: z.string().trim().max(128).nullable().optional(),
+        website: z.string().trim().max(256).nullable().optional(),
+        birthday: z.string().trim().max(32).nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -524,6 +538,9 @@ export const v2MessagesRouter = router({
       const p = byId.get(b.otherIdentityId);
       return {
         conversationId: b.conversationId,
+        kind: b.kind,
+        title: b.title,
+        memberCount: b.memberCount,
         peerIdentityId: b.otherIdentityId,
         peerNumber: b.otherNumber,
         peerDisplayName: b.otherDisplayName,
@@ -584,6 +601,74 @@ export const v2MessagesRouter = router({
       isSelf: true,
     };
   }),
+
+  /**
+   * Create a named group from a set of 6-digit numbers. The caller is always a
+   * member. Unknown numbers are skipped (we report which resolved). Needs at
+   * least one other valid member.
+   */
+  createGroup: publicProcedure
+    .input(
+      z.object({
+        title: z.string().trim().min(1).max(128),
+        numbers: z.array(NumberSchema).min(1).max(19), // + creator = 20 cap
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const unique = Array.from(new Set(input.numbers)).filter((n) => n !== me.number);
+      const members = await getIdentitiesByNumbers(unique);
+      if (members.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Add at least one other RELAY number to start a group.",
+        });
+      }
+      const convo = await createGroupConversation({
+        creatorId: me.id,
+        memberIds: members.map((m) => m.id),
+        title: input.title,
+      });
+      // Push a hint so every member's thread list refreshes.
+      try {
+        for (const pid of [me.id, ...members.map((m) => m.id)]) {
+          publishToIdentity(pid, { kind: "message", conversationId: convo.id, from: me.id });
+        }
+      } catch {
+        /* best-effort */
+      }
+      return {
+        conversationId: convo.id,
+        title: convo.title,
+        memberCount: members.length + 1,
+        skipped: unique.length - members.length,
+      };
+    }),
+
+  /**
+   * Members of a conversation (id, number, name, avatar) — used by the group
+   * conversation view to label messages with sender names and show the roster.
+   */
+  conversationInfo: publicProcedure
+    .input(z.object({ conversationId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const memberIds = await getConversationParticipantIds(input.conversationId);
+      if (!memberIds.includes(me.id)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Not a member of this conversation." });
+      }
+      const idents = await getIdentitiesByIds(memberIds);
+      return {
+        conversationId: input.conversationId,
+        members: idents.map((i) => ({
+          id: i.id,
+          number: i.number,
+          displayName: i.displayName,
+          avatarUrl: i.avatarUrl ?? null,
+          isMe: i.id === me.id,
+        })),
+      };
+    }),
 
   list: publicProcedure
     .input(
@@ -667,6 +752,49 @@ export const v2MessagesRouter = router({
       } catch {
         /* push is best-effort; polling is the safety net */
       }
+
+      // Offline auto-reply (1:1 only — avoids group spam). If the single other
+      // party is offline and hasn't auto-replied in the last 10 min, post a
+      // one-time auto-reply FROM them so the sender knows they'll reply later.
+      try {
+        const peerIds = (
+          await getConversationParticipantIds(input.conversationId)
+        ).filter((p) => p !== me.id);
+        if (peerIds.length === 1) {
+          const peerId = peerIds[0];
+          const [pres] = await getPresenceForIds([peerId]);
+          const offline = !pres?.isOnline;
+          if (
+            offline &&
+            !(await recentAutoReplyExists(input.conversationId, peerId, 10 * 60 * 1000))
+          ) {
+            const peer = await getIdentityById(peerId);
+            const name = peer?.displayName || "They";
+            const autoRow = await sendMessage({
+              conversationId: input.conversationId,
+              senderIdentityId: peerId,
+              kind: "text",
+              body: `${name} is away right now and will reply when they're back. (Auto-reply)`,
+              meta: { autoReply: true },
+            });
+            if (autoRow) {
+              publishToIdentity(me.id, {
+                kind: "message",
+                conversationId: input.conversationId,
+                from: peerId,
+              });
+              publishToIdentity(peerId, {
+                kind: "message",
+                conversationId: input.conversationId,
+                from: peerId,
+              });
+            }
+          }
+        }
+      } catch {
+        /* auto-reply is best-effort */
+      }
+
       return row;
     }),
 

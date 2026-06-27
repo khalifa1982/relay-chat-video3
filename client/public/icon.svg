@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="RELAY">
+  <!-- Maskable-safe: all content sits within the central ~80% safe zone. -->
+  <rect width="512" height="512" rx="112" fill="#0A0D10"/>
+  <g fill="none" stroke="#3FE0C5" stroke-linecap="round">
+    <!-- central node -->
+    <circle cx="256" cy="256" r="26" fill="#3FE0C5" stroke="none"/>
+    <!-- signal arcs, left + right (relaying) -->
+    <path d="M196 196 A85 85 0 0 0 196 316" stroke-width="22"/>
+    <path d="M316 196 A85 85 0 0 1 316 316" stroke-width="22"/>
+    <path d="M156 156 A141 141 0 0 0 156 356" stroke-width="22" opacity="0.55"/>
+    <path d="M356 156 A141 141 0 0 1 356 356" stroke-width="22" opacity="0.55"/>
+  </g>
+</svg>

@@ -456,6 +456,39 @@ export async function getPresenceForIds(ids: number[]): Promise<PresenceLite[]> 
 
 /* ── contacts ─────────────────────────────────────────────────── */
 
+/**
+ * Idempotently apply additive, nullable columns to the live database at boot.
+ * This is how we evolve the schema on an already-provisioned MySQL without a
+ * manual `pnpm db:push`: each `ADD COLUMN` runs once; on subsequent boots (or a
+ * concurrent second Cloud Run instance) the duplicate-column error is swallowed.
+ * STRICTLY additive — never drops or alters existing columns/data. Best-effort:
+ * a DB hiccup is logged and never blocks startup.
+ */
+export async function ensureSchemaExtensions(): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const adds: Array<{ table: string; column: string; ddl: string }> = [
+    { table: "contacts", column: "email", ddl: "ADD COLUMN `email` varchar(320)" },
+    { table: "contacts", column: "phone", ddl: "ADD COLUMN `phone` varchar(40)" },
+    { table: "contacts", column: "company", ddl: "ADD COLUMN `company` varchar(128)" },
+    { table: "contacts", column: "jobTitle", ddl: "ADD COLUMN `jobTitle` varchar(128)" },
+    { table: "contacts", column: "website", ddl: "ADD COLUMN `website` varchar(256)" },
+    { table: "contacts", column: "birthday", ddl: "ADD COLUMN `birthday` varchar(32)" },
+  ];
+  for (const a of adds) {
+    try {
+      await db.execute(sql.raw(`ALTER TABLE \`${a.table}\` ${a.ddl}`));
+      console.log(`[schema] added ${a.table}.${a.column}`);
+    } catch (e) {
+      const msg = (e as Error)?.message || "";
+      // Already present (normal on every boot after the first) → ignore quietly.
+      if (!/duplicate column|exists|check that column/i.test(msg)) {
+        console.warn(`[schema] ensure ${a.table}.${a.column} skipped:`, msg);
+      }
+    }
+  }
+}
+
 export async function listContacts(ownerId: number) {
   const db = await getDb();
   if (!db) return [];
@@ -467,6 +500,27 @@ export async function listContacts(ownerId: number) {
   return rows;
 }
 
+/** Columns that may be updated on a contact (everything except ownerId/number,
+ *  which form the unique key). */
+const CONTACT_UPDATABLE = [
+  "displayName", "avatarUrl", "favourite", "notes",
+  "email", "phone", "company", "jobTitle", "website", "birthday",
+] as const;
+
+/**
+ * Decide which contact columns an upsert should overwrite on conflict: ONLY the
+ * keys the caller explicitly passed (so a partial update never wipes saved
+ * fields). Falls back to a harmless `number` self-assignment when nothing
+ * updatable was provided (onDuplicateKeyUpdate requires a non-empty SET). Pure —
+ * unit-tested without a DB.
+ */
+export function contactUpdateKeys(input: Record<string, unknown>): string[] {
+  const keys = CONTACT_UPDATABLE.filter((k) =>
+    Object.prototype.hasOwnProperty.call(input, k)
+  );
+  return keys.length > 0 ? keys : ["number"];
+}
+
 export async function upsertContact(input: {
   ownerId: number;
   number: string;
@@ -474,6 +528,12 @@ export async function upsertContact(input: {
   avatarUrl?: string | null;
   favourite?: boolean;
   notes?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  company?: string | null;
+  jobTitle?: string | null;
+  website?: string | null;
+  birthday?: string | null;
 }) {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
@@ -484,18 +544,23 @@ export async function upsertContact(input: {
     avatarUrl: input.avatarUrl ?? null,
     favourite: input.favourite ?? false,
     notes: input.notes ?? null,
+    email: input.email ?? null,
+    phone: input.phone ?? null,
+    company: input.company ?? null,
+    jobTitle: input.jobTitle ?? null,
+    website: input.website ?? null,
+    birthday: input.birthday ?? null,
   };
+  // Only overwrite columns the caller explicitly provided, so a partial update
+  // (e.g. a favourite toggle that omits email/notes/…) never wipes saved fields.
+  const set: Record<string, unknown> = {};
+  for (const k of contactUpdateKeys(input)) {
+    set[k] = (values as Record<string, unknown>)[k];
+  }
   await db
     .insert(contacts)
     .values(values)
-    .onDuplicateKeyUpdate({
-      set: {
-        displayName: values.displayName,
-        avatarUrl: values.avatarUrl,
-        favourite: values.favourite,
-        notes: values.notes,
-      },
-    });
+    .onDuplicateKeyUpdate({ set });
   const rows = await db
     .select()
     .from(contacts)
@@ -571,12 +636,57 @@ export async function getOrCreateDmConversation(a: number, b: number) {
   return convo;
 }
 
+/**
+ * Create a named group conversation owned by `creatorId` with the given member
+ * identities. The creator is always included. Returns the new conversation row.
+ * Groups have a null `pairKey` (the unique index is on pairKey, which permits
+ * many NULLs in MySQL), so every group is distinct even with the same members.
+ */
+export async function createGroupConversation(input: {
+  creatorId: number;
+  memberIds: number[];
+  title: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  // De-dupe + always include the creator.
+  const ids = Array.from(new Set([input.creatorId, ...input.memberIds]));
+  // Both inserts in ONE transaction so a failed participant insert never leaves
+  // an orphaned conversation row behind.
+  return await db.transaction(async (tx) => {
+    const res = await tx.insert(conversations).values({
+      pairKey: null,
+      kind: "group",
+      title: input.title.slice(0, 128),
+    });
+    // mysql2 returns the new row id as insertId on the result header.
+    const insertId = Number(res[0].insertId);
+    if (!insertId) throw new Error("group conversation insert failed");
+    await tx.insert(conversationParticipants).values(
+      ids.map((identityId) => ({ conversationId: insertId, identityId }))
+    );
+    const [row] = await tx
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, insertId))
+      .limit(1);
+    return row;
+  });
+}
+
 export interface ThreadSummary {
   conversationId: number;
+  /** "dm" (1:1 or note-to-self) or "group". */
+  kind: "dm" | "group";
+  /** Group title (null for DMs). */
+  title: string | null;
+  /** For a DM: the other participant. For a group: 0 (use title/members). */
   otherIdentityId: number;
   otherNumber: string;
   otherDisplayName: string;
   otherAvatarUrl: string | null;
+  /** Participant count INCLUDING me (2 for a DM, 1 for self-notes). */
+  memberCount: number;
   lastMessageAt: Date;
   unreadCount: number;
   lastMessagePreview: string | null;
@@ -609,7 +719,12 @@ export function composeThreadSummaries(input: {
     displayName: string;
     avatarUrl: string | null;
   } | null;
-  convoRows: Array<{ id: number; lastMessageAt: Date }>;
+  convoRows: Array<{
+    id: number;
+    lastMessageAt: Date;
+    kind?: "dm" | "group";
+    title?: string | null;
+  }>;
   latestMessageByConvo: Map<
     number,
     { body: string | null; kind: string } | null
@@ -620,47 +735,82 @@ export function composeThreadSummaries(input: {
   const unreadByConvo = new Map(
     input.myParts.map((p) => [p.conversationId, p.unreadCount])
   );
-  const convoIdsWithOther = new Set(input.others.map((o) => o.conversationId));
+  // Conversations that have ANY other participant row (before identity
+  // resolution). Used to tell a true self-note (no others at all) apart from a
+  // DM whose peer identity simply failed to load — the latter must be dropped,
+  // NOT relabelled "Notes (You)".
+  const convoIdsWithRawOther = new Set(input.others.map((o) => o.conversationId));
+  // Group the RESOLVED "other" participants by conversation (a group has many).
+  const othersByConvo = new Map<
+    number,
+    Array<{ id: number; number: string; displayName: string; avatarUrl: string | null }>
+  >();
+  for (const o of input.others) {
+    const ident = otherById.get(o.identityId);
+    if (!ident) continue;
+    const arr = othersByConvo.get(o.conversationId) ?? [];
+    arr.push(ident);
+    othersByConvo.set(o.conversationId, arr);
+  }
 
   const result: ThreadSummary[] = [];
 
-  for (const p of input.others) {
+  // Iterate MY conversations once each (no double-projection), branching on kind.
+  for (const p of input.myParts) {
     const convo = convoById.get(p.conversationId);
-    const other = otherById.get(p.identityId);
-    if (!convo || !other) continue;
+    if (!convo) continue;
+    const kind = convo.kind ?? "dm";
     const latest = input.latestMessageByConvo.get(p.conversationId) ?? null;
-    result.push({
+    const members = othersByConvo.get(p.conversationId) ?? [];
+    const base = {
       conversationId: p.conversationId,
-      otherIdentityId: other.id,
-      otherNumber: other.number,
-      otherDisplayName: other.displayName,
-      otherAvatarUrl: other.avatarUrl ?? null,
       lastMessageAt: convo.lastMessageAt,
       unreadCount: unreadByConvo.get(p.conversationId) ?? 0,
       lastMessagePreview: latest?.body ?? null,
       lastMessageKind: latest?.kind ?? "text",
-    });
-  }
+    };
 
-  // Self-conversations: synthesise the "Notes (You)" peer row.
-  if (input.myIdentity) {
-    for (const p of input.myParts) {
-      if (convoIdsWithOther.has(p.conversationId)) continue;
-      const convo = convoById.get(p.conversationId);
-      if (!convo) continue;
-      const latest = input.latestMessageByConvo.get(p.conversationId) ?? null;
+    if (kind === "group") {
+      const fallbackTitle = members.map((m) => m.displayName).slice(0, 3).join(", ");
       result.push({
-        conversationId: p.conversationId,
+        ...base,
+        kind: "group",
+        title: convo.title ?? null,
+        otherIdentityId: 0,
+        otherNumber: "",
+        otherDisplayName: convo.title || fallbackTitle || "Group",
+        otherAvatarUrl: null,
+        memberCount: members.length + 1, // + me
+      });
+    } else if (members.length > 0) {
+      // Regular 1:1 DM — the single other participant.
+      const other = members[0];
+      result.push({
+        ...base,
+        kind: "dm",
+        title: null,
+        otherIdentityId: other.id,
+        otherNumber: other.number,
+        otherDisplayName: other.displayName,
+        otherAvatarUrl: other.avatarUrl ?? null,
+        memberCount: 2,
+      });
+    } else if (input.myIdentity && !convoIdsWithRawOther.has(p.conversationId)) {
+      // TRUE self-conversation (no other participant rows at all) — synthesise
+      // the "Notes (You)" peer row.
+      result.push({
+        ...base,
+        kind: "dm",
+        title: null,
         otherIdentityId: input.myIdentity.id,
         otherNumber: input.myIdentity.number,
         otherDisplayName: "Notes (You)",
         otherAvatarUrl: input.myIdentity.avatarUrl ?? null,
-        lastMessageAt: convo.lastMessageAt,
-        unreadCount: unreadByConvo.get(p.conversationId) ?? 0,
-        lastMessagePreview: latest?.body ?? null,
-        lastMessageKind: latest?.kind ?? "text",
+        memberCount: 1,
       });
     }
+    // else: a DM whose peer didn't resolve (or myIdentity missing) → drop, just
+    // as the pre-refactor projection did (never mislabel it "Notes (You)").
   }
 
   result.sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime());
@@ -749,7 +899,12 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
           avatarUrl: me.avatarUrl ?? null,
         }
       : null,
-    convoRows: convos.map((c) => ({ id: c.id, lastMessageAt: c.lastMessageAt })),
+    convoRows: convos.map((c) => ({
+      id: c.id,
+      lastMessageAt: c.lastMessageAt,
+      kind: c.kind,
+      title: c.title,
+    })),
     latestMessageByConvo: new Map(
       Array.from(latestByConvo.entries()).map(([k, m]) => [
         k,
@@ -858,6 +1013,31 @@ export async function sendMessage(input: {
       .limit(1);
     return rows[0];
   });
+}
+
+/** True if `senderIdentityId` already posted an auto-reply in this conversation
+ *  within `sinceMs` — used to rate-limit offline auto-replies (one per window). */
+export async function recentAutoReplyExists(
+  conversationId: number,
+  senderIdentityId: number,
+  sinceMs: number
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const cutoff = new Date(Date.now() - sinceMs);
+  const rows = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.senderIdentityId, senderIdentityId),
+        gte(messages.createdAt, cutoff),
+        sql`JSON_EXTRACT(${messages.meta}, '$.autoReply') IS NOT NULL`
+      )
+    )
+    .limit(1);
+  return rows.length > 0;
 }
 
 export async function getConversationParticipantIds(

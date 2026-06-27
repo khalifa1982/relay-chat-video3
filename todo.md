@@ -647,3 +647,264 @@ cosmetic by-design item).
       `useDnd()` hook; a clean iOS-style toggle in Profile. +4 vitest.
 - [x] Footer → `v2.13.0`. tsc clean, 189/190 vitest, build clean.
 - [ ] Easy follow-up: a one-tap DND toggle in the app header (currently in Profile only).
+
+## v2.14.0 — UX batch: connection sequence, chat links, header DND, invite links (delivered 2026-06-27)
+
+- [x] **Connection sequence** — a ~2.3s "Transmission Connected → Encryption → Join the
+      Call" handshake overlay shown when a call screen opens (relayAssets markup/CSS +
+      `runConnSequence()` in the engine, cleared on hangup/destroy).
+- [x] **Link sharing in chat** — URLs become safe clickable links in both the SMS chat
+      (`lib/linkify.tsx`, React-escaped) and the in-call chat (`linkifyEscaped` over the
+      already-escaped HTML). http(s)/www only — never javascript:/data:.
+- [x] **Header DND quick-toggle** — one-tap bell/bell-off in the app header (was Profile-only).
+- [x] **Call invite links** — a "Share invite link" action in the Dialer produces
+      `…/app/dialer?to=<number>` (native share sheet on mobile, clipboard else); opening it
+      auto-dials the sharer (the Dialer already honors `?to=`).
+- [x] Footer → `v2.14.0`. tsc clean, build clean.
+
+## v2.15.0 — Offline auto-reply (delivered 2026-06-27)
+
+- [x] **Auto-reply when offline** — when you message someone who's offline in a 1:1, the
+      system posts a one-time auto-reply FROM them ("… is away right now and will reply
+      when they're back."), rate-limited to once per 10 min per conversation (no spam),
+      pushed live to both sides. No schema change; marked `meta.autoReply` + a
+      `recentAutoReplyExists` dedup. Group threads are excluded (avoids N auto-replies).
+- [ ] Follow-up: a per-user toggle + custom auto-reply text (needs a settings column).
+- [x] Footer → `v2.15.0`. tsc clean, 189/190 vitest, build clean.
+
+## v2.16.0 — Call waiting (delivered 2026-06-27)
+
+- [x] **Call waiting** — a 2nd incoming call during an active call now shows a banner
+      (caller name + **Switch** / **Decline**) instead of being silently rejected. Switch
+      leaves the current room and accepts the new one, REUSING the same camera/mic (no idle
+      flash); Decline rejects the 2nd caller and stays. Auto-declines after 30s if ignored.
+      One waiter at a time (a 3rd concurrent caller is rejected). Cleared on hangup/destroy.
+- [ ] Deferred (needs dual-session/conference support): **Hold** the current call while
+      taking the new one, and **Merge** both into a conference. These require running two
+      call contexts at once (or moving participants between rooms) — a larger engine change.
+- [x] Footer → `v2.16.0`. tsc clean, build clean.
+
+## v2.17.0 — App lock (device passcode) (delivered 2026-06-27)
+
+- [x] **Optional device passcode** — Profile → *App lock* lets a user set a 4–8 digit
+      code that gates entry to `/app` on this device. The code is salted + SHA-256 hashed
+      in `localStorage` (plaintext never stored); `relay_pass_hash` + `relay_pass_salt`.
+- [x] `client/src/app/passcode.ts` — store: `hasPasscode`/`setPasscode`/`verifyPasscode`/
+      `clearPasscode` plus an in-memory lock state (`isLocked`/`lockApp`/`unlockApp`/`useLocked`).
+      App starts **locked on load** whenever a passcode exists; setting one mid-session does
+      NOT lock the live tab; removing it unlocks.
+- [x] `client/src/app/PasscodeGate.tsx` — full-screen numeric LockScreen; wired **outermost**
+      in `AppShell` (above OnboardingGate) so the lock covers everything until unlocked.
+- [x] Profile *App lock* section: set / change / remove + **Lock now** (mirrors the DND row).
+- [x] 8 vitest cases (`passcode.test.ts`): hash-not-plaintext, random salt, verify ok/bad,
+      verify-true-when-unset, clear-unlocks, lock no-op without code, lock/unlock transitions.
+- [ ] Deferred (follow-up): **Face ID / fingerprint** unlock via WebAuthn/passkeys — the
+      numeric passcode is the no-prompt, broadly-supported baseline; biometric is additive.
+      (WIP module drafted, parked in scratchpad pending TS BufferSource typing + UI wiring.)
+- [x] Footer → `v2.17.0`. tsc clean, 197 tests green, build clean.
+
+## v2.18.0 — Call-engine fixes: heat, chat-close, reconnect, live status (delivered 2026-06-27)
+
+Reported from live mobile testing. Four fixes, reviewed by an adversarial multi-agent pass.
+
+- [x] **Mobile heating** — plain calls (no filter) now publish the **RAW camera track**
+      and NEVER build the canvas pipeline, so there's zero per-frame canvas draw +
+      captureStream re-encode in the common case. The pipeline is built lazily only when a
+      real filter is chosen; turning a filter off hot-swaps peers/SFU back to the raw track
+      (`replaceVideoEverywhere`) and `dispose()`s the canvas (stops ONLY the canvas video
+      track — keeps the shared camera/mic alive). Also: rAF loop **throttled to 30fps**
+      (was running at the 90–120Hz display rate), removed `willReadFrequently` (it forced
+      CPU/software canvas), and `acquireRawStream` caps frameRate to 30 + uses 960×540 on
+      mobile (720p on desktop).
+- [x] **Chat close button** — the full-screen mobile chat had only a tiny grey `×` glyph;
+      replaced with an obvious 38–44px circular close button (`#chatClose`) with safe-area
+      padding, so closing the chat no longer means hitting End by mistake.
+- [x] **10s reconnect window** — losing the connection after a call was live no longer exits
+      instantly. The top bar shows **"Reconnecting… Ns"** and the engine re-opens signaling +
+      kicks ICE restarts (mesh) / rides LiveKit's Reconnecting/Reconnected (SFU); only after
+      10s without recovery does it hang up. Driven by `establishedOnce` (never fires during
+      initial connect), `online`/`offline`, mesh-health eval, and LK reconnect events.
+- [x] **Live top-bar status** — replaced the scripted "Transmission/Encryption/Join" overlay
+      with a REAL status (`connecting → encrypting → live`, or `reconnecting`) via
+      `setCallStatus`, with a colour-coded dot (amber pulsing / green / red). The diagnostics
+      "?" floating button is **hidden** (panel still reachable via the `?` key for debugging).
+- [x] Footer → `v2.18.0`. tsc clean, 197 tests green, build clean.
+
+## v2.18.1 — Review fixes for the v2.18.0 call-engine batch (delivered 2026-06-27)
+
+An adversarial multi-agent review of v2.18.0 confirmed 6 real findings; all fixed here.
+
+- [x] **Camera flip broke audio (HIGH)** — the new raw-path flip re-acquired a fresh
+      `audio:true` stream, so after a flip on a plain call mute/unmute toggled the wrong
+      (untransmitted) track and a 2nd mic capture leaked. Now `flipCamera` acquires
+      **video-only** and grafts the EXISTING audio track onto the new stream, so the
+      transmitted/muteable audio identity never changes.
+- [x] **SFU reconnect did nothing + raced LiveKit (HIGH)** — on the LiveKit path `peers` is
+      empty, so the 10s window ran no recovery and just delayed `hangUp`; worse, arming it on
+      LiveKit's `Reconnecting` event raced and killed LiveKit's own (longer, working) retry.
+      Fixed: the 10s hard window is now **mesh-only**; the SFU path surfaces a status-only
+      "Reconnecting…" (`setSfuReconnectingUI`) and lets LiveKit own recovery — a terminal
+      `Disconnected` is the single teardown point.
+- [x] **applyFilter re-entrancy (MED)** — rapid filter taps could interleave and publish the
+      wrong track / null-deref the pipeline mid-teardown. Now coalesced to the latest request
+      and serialized (one change at a time); `ensurePipeline` null-guards its output read.
+- [x] **Transient mesh `disconnected` flapped the UI (MED)** — a brief `disconnected` (which
+      self-heals) no longer opens the window or tears down a healthy SSE channel; only an
+      all-peers `failed`/`closed` does, and signaling is re-opened only when actually down.
+      The per-tile "reconnecting…" hint still shows immediately.
+- [x] Footer → `v2.18.1`. tsc clean, 197 tests green, build clean.
+
+## v2.19.0 — Biometric (Face ID / fingerprint) unlock (delivered 2026-06-27)
+
+Completes the app-lock story from v2.17.0 — the deferred biometric follow-up.
+
+- [x] `client/src/app/biometric.ts` — WebAuthn platform-credential unlock as a LOCAL gate
+      (not server auth): `enrollBiometric` creates a platform credential (prompts Face ID /
+      fingerprint) and stores its rawId (base64url) in localStorage; `biometricUnlock` prompts
+      the authenticator and resolves true only on user verification. No server, no secrets —
+      the private key stays in the device secure enclave. Feature-gated on
+      `isUserVerifyingPlatformAuthenticatorAvailable` + secure context.
+- [x] Layered on the passcode, never a replacement: only offered when a passcode exists (the
+      always-available fallback), and `clearBiometric()` runs when the passcode is removed.
+- [x] LockScreen (`PasscodeGate`): shows an "Unlock with Face ID / fingerprint" button (and
+      auto-prompts on mount) when enrolled; the passcode field stays as the fallback.
+- [x] Profile → App lock: a Face ID / fingerprint toggle (enroll / disable) appears when the
+      device supports it and a passcode is set.
+- [x] 8 vitest cases (`biometric.test.ts`): base64url round-trip + url-safety, enrolled-state,
+      unlock short-circuit when unenrolled, and the capability gate (no window / insecure
+      context / platform-probe true|false).
+- [x] Footer → `v2.19.0`. tsc clean, 205 tests green, build clean.
+
+## v2.20.0 — Screen sharing (delivered 2026-06-27)
+
+- [x] **Share screen** — a control-bar button calls `getDisplayMedia` and hot-swaps the
+      outgoing video (camera → screen) on every mesh peer AND the LiveKit SFU via
+      `replaceVideoEverywhere` — no renegotiation. Stopping (button or the browser's native
+      "Stop sharing", caught via `track.onended`) swaps back to `currentCameraVideoTrack()`
+      (the filtered canvas track if a filter is active, else the raw camera).
+- [x] State: `screenStream` / `screenSharing` / `screenBusy` (double-tap guard). Cleanup on
+      hang-up and engine destroy stops the capture and clears the button state. flipCamera and
+      filters are gated with a toast while sharing (you can't flip/filter a screen).
+- [x] Self-tile shows the screen un-mirrored and letterboxed (`object-fit:contain`); the
+      button is hidden on mobile (iOS Safari has no `getDisplayMedia` and the mobile control
+      bar is already full) — it's a desktop feature.
+- [x] Reviewed by a focused adversarial agent pass. Footer → `v2.20.0`. tsc clean, 205 tests
+      green, build clean.
+
+## v2.20.1 — Screen-share review fixes (delivered 2026-06-27)
+
+The focused review of v2.20.0 confirmed 4 edge-case bugs (all fixed) + 2 cheap polish items.
+
+- [x] **`screenBusy` could wedge the button** if `getDisplayMedia` returned no video track
+      (early-return skipped the reset). Now reset on every exit path, and defensively in
+      hang-up / destroy.
+- [x] **Call ended while the picker was open** would resume into a dead call — leaking the
+      capture and sticking `screenSharing` true. Now re-checks `inCall` after the await and
+      bails (stopping the capture) if the call is gone.
+- [x] **Mesh newcomers mid-share saw the camera, not the screen** — `createPeer` now seeds a
+      mid-share peer's video sender with the screen track (camera audio unchanged).
+- [x] **Audio-only mesh call** (no camera = no video sender) silently shared to no one; now
+      blocked up front with a clear "needs a camera-enabled call" message (the SFU path still
+      works, since it publishes a fresh track).
+- [x] Polish: `toggleCam` no longer flips the self-tile to audio-only while a screen occupies
+      it; `replaceVideoEverywhere(null)` now unpublishes the SFU video (no orphan publication
+      when stopping an audio-only SFU share).
+- [x] Footer → `v2.20.1`. tsc clean, 205 tests green, build clean.
+
+## v2.21.0 — Call recording (LiveKit Egress → S3) (delivered 2026-06-27)
+
+Flagship "professional comms" feature. Feature-gated like LiveKit/TURN — dormant until
+the operator provides an S3 bucket (`RECORDING_S3_*`).
+
+- [x] `server/recording.ts` — `recordingConfig()` gate (LiveKit + S3), pure `toHttpUrl` /
+      `recordingKey` helpers, and `startRoomRecording` / `stopRoomRecording` via the SDK's
+      `EgressClient` (room-composite **grid** MP4 written straight to the operator's bucket —
+      bytes never touch this server).
+- [x] Signaling (`server/relay.ts`): `start-recording` / `stop-recording` messages, a per-room
+      `recordings` map with a SYNCHRONOUS slot reservation (no double-start race), a `recording`
+      status broadcast to the whole room, auto-stop when the room empties, and a status push to
+      anyone who **joins mid-recording** (consent/transparency). `registered` now advertises
+      `recording` availability.
+- [x] Client (`relayClient.ts` + `relayAssets.ts`): a **Record** button (hidden unless the
+      server advertises availability) and a red **"● REC"** indicator shown to every
+      participant; resets on hang-up.
+- [x] 8 vitest cases (`recording.test.ts`): the config gate (off when unconfigured / partial,
+      on with full S3, prefix normalization, force-path-style + endpoint) and the pure helpers.
+- [ ] **Needs operator infra to activate**: an S3-compatible bucket. Once `RECORDING_S3_*` are
+      set (alongside LiveKit, already configured), recording goes live — no code change.
+- [x] Footer → `v2.21.0`. tsc clean, 213 tests green, build clean.
+
+## v2.22.0 — Group messaging (delivered 2026-06-27)
+
+No migration needed — the schema already had `conversations.kind="group"` + `title` +
+`conversation_participants`, and `send`/`list`/`markRead` already fan out to all members.
+
+- [x] `createGroupConversation(creatorId, memberIds, title)` in `v2db.ts` (insert group convo +
+      participant rows; creator always included, de-duped; null `pairKey`).
+- [x] Refactored the pure `composeThreadSummaries` projection from "one row per other" to
+      "iterate my conversations once, branch on kind" so a group yields exactly ONE thread
+      summary (title + member count); DM / note-to-self behavior unchanged (existing tests +
+      3 new group tests all green).
+- [x] `messages.createGroup` (resolve numbers→identities, reject if no valid other member) and
+      `messages.conversationInfo` (membership-gated roster, for sender-name labels).
+      `threads` now returns `kind` / `title` / `memberCount`.
+- [x] Client: group threads render with a group glyph + title; the conversation header shows
+      "N members" (no 1:1 call button); group messages show sender names; a **New group**
+      mode in the New-Conversation dialog (title + add-members-by-number chips).
+- [x] Footer → `v2.22.0`. tsc clean, 216 tests green, build clean.
+
+## v2.22.1 — Group-messaging review fixes (delivered 2026-06-27)
+
+The focused adversarial review found NO critical/high bugs (the projection refactor verified
+correct — duplication structurally impossible, DM/self behavior field-for-field unchanged).
+Three low-severity findings, all fixed:
+
+- [x] **Non-transactional group creation** — `createGroupConversation` now wraps the
+      conversation + participant inserts in `db.transaction` so a failed participant insert
+      can't orphan a conversation row (matches the `sendMessage` pattern).
+- [x] **DM-with-unresolvable-peer mislabel** — if a 1:1's peer identity failed to load, the
+      refactor would have rendered it as "Notes (You)". Now restores the original behavior
+      (drop it) by distinguishing a true self-note (no participant rows) from an unresolved
+      peer (has a row, identity missing). New unit test pins this (218 tests total).
+- [x] **Backdrop dismissal kept group-builder state** — the New-Conversation overlay backdrop
+      now calls `resetAll` (was `setOpen(false)`), so dismissing mid-build clears title/members.
+- [x] Footer → `v2.22.1`. tsc clean, 217 tests green, build clean.
+
+## v2.23.0 — Installable PWA (delivered 2026-06-27)
+
+First, zero-cost step toward a "native app": RELAY is now installable to the home screen /
+desktop and launches standalone (no browser chrome).
+
+- [x] `client/public/manifest.webmanifest` — name/short_name, `display: standalone`,
+      `start_url: /app`, theme + background `#0A0D10`, brand icon.
+- [x] `client/public/icon.svg` — RELAY mark (maskable-safe signal-relay glyph). SVG icon works
+      for Chrome/Edge/Android + desktop installs; iOS falls back gracefully (no rasterizer was
+      available to emit PNGs).
+- [x] `client/public/sw.js` — intentionally minimal service worker: a no-op `fetch` handler
+      (never calls `respondWith`) so it satisfies the install criteria WITHOUT caching or
+      intercepting anything — it can't cause stale assets or break the tRPC API / SSE stream.
+- [x] `index.html` — manifest + apple-touch + `apple-mobile-web-app-*` meta; SW registered on
+      load, skipped on localhost so it never touches the Vite dev server / HMR.
+- [ ] Follow-up (needs operator accounts): real native apps — **Capacitor** (iOS/Android;
+      Apple Developer $99/yr + Google Play $25) or **Electron** (desktop, free, supports
+      auto-launch-on-startup). PNG icon set also wanted once a rasterizer is available.
+- [x] Footer → `v2.23.0`. tsc clean, 217 tests green, build clean.
+
+## v2.24.0 — Rich contact fields + safe boot-migrator (delivered 2026-06-27)
+
+- [x] **Additive boot-migrator** (`ensureSchemaExtensions` in `v2db.ts`, called once at server
+      boot): idempotent `ALTER TABLE … ADD COLUMN` that swallows duplicate-column errors —
+      STRICTLY additive, race-safe across Cloud Run instances, never blocks startup. This is
+      how we evolve the live MySQL schema without a manual `pnpm db:push`.
+- [x] **Rich contact columns** on `contacts`: `email`, `phone`, `company`, `jobTitle`,
+      `website`, `birthday` (all nullable). Schema + router input + list mapping updated.
+- [x] **Partial-update preservation fix** — `upsertContact` now overwrites ONLY the columns the
+      caller passed (`contactUpdateKeys`), fixing a latent bug where a Favourite toggle (which
+      omits avatarUrl/notes) would wipe them.
+- [x] Client: the Add/Edit Contact dialog gained Email / Phone / Company / Title / Website /
+      Birthday fields; the contact row shows "title · company" when present.
+- [x] 7 vitest cases: `contactUpdateKeys` preservation + a static-analysis guard that the
+      boot-migrator is ADD-COLUMN-only (no DROP/TRUNCATE/DELETE). 224 tests green.
+- [x] Contact **cloud sync** already works — contacts are stored server-side per identity, so
+      they load on any device a registered user signs into.
+- [x] Footer → `v2.24.0`. tsc clean, build clean.

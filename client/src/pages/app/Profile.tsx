@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Bell, BellOff, Check, Moon, Sun } from "lucide-react";
+import { Bell, BellOff, Check, Lock, Moon, ScanFace, ShieldCheck, Sun } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
@@ -14,6 +14,18 @@ import {
   type NotifPermission,
 } from "@/app/notifications";
 import { useDnd } from "@/app/dnd";
+import {
+  hasPasscode,
+  setPasscode,
+  clearPasscode,
+  lockApp,
+} from "@/app/passcode";
+import {
+  hasBiometric,
+  biometricSupported,
+  enrollBiometric,
+  clearBiometric,
+} from "@/app/biometric";
 import { useTheme } from "@/contexts/ThemeContext";
 
 /**
@@ -240,6 +252,9 @@ export default function ProfilePage() {
 
         {/* do not disturb */}
         <DndSection />
+
+        {/* app lock / passcode */}
+        <PasscodeSection displayName={me.displayName} />
 
         {/* upgrade CTA for guests */}
         {me.isGuest && (
@@ -540,6 +555,282 @@ function DndSection() {
             style={{ transitionTimingFunction: "var(--ease-out)" }}
           />
         </button>
+      </div>
+    </section>
+  );
+}
+
+/* ============================================================
+   App lock — an optional numeric passcode that locks the app on
+   this device. It's a local UI gate, not account auth: the code is
+   salted + SHA-256 hashed in localStorage (plaintext never stored),
+   and the app re-locks on every load until the code is entered.
+   When the device supports it, Face ID / fingerprint (WebAuthn) can
+   be added as a faster unlock on top of the passcode fallback.
+   ============================================================ */
+function PasscodeSection({ displayName }: { displayName: string }) {
+  const [enabled, setEnabled] = useState(() => hasPasscode());
+  // null = closed; "set" = first-time set; "change" = replace existing
+  const [mode, setMode] = useState<null | "set" | "change">(null);
+  const [code, setCode] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Biometric (Face ID / fingerprint) — an optional faster unlock layered on
+  // top of the passcode. Only offered when the device supports platform
+  // verification AND a passcode is set (the always-available fallback).
+  const [bioCapable, setBioCapable] = useState(false);
+  const [bioOn, setBioOn] = useState(() => hasBiometric());
+  const [bioBusy, setBioBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    biometricSupported().then(ok => { if (alive) setBioCapable(ok); });
+    return () => { alive = false; };
+  }, []);
+
+  async function toggleBiometric() {
+    if (bioBusy) return;
+    setBioBusy(true);
+    try {
+      if (bioOn) {
+        clearBiometric();
+        setBioOn(false);
+      } else {
+        const ok = await enrollBiometric(displayName);
+        setBioOn(ok);
+        if (!ok) setErr("Couldn't set up biometric unlock on this device.");
+      }
+    } finally {
+      setBioBusy(false);
+    }
+  }
+
+  const onlyDigits = (s: string) => s.replace(/\D+/g, "").slice(0, 8);
+
+  function reset() {
+    setMode(null);
+    setCode("");
+    setConfirm("");
+    setErr(null);
+  }
+
+  async function save() {
+    if (busy) return;
+    if (code.length < 4) {
+      setErr("Use at least 4 digits.");
+      return;
+    }
+    if (code !== confirm) {
+      setErr("The two codes don't match.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await setPasscode(code);
+      setEnabled(true);
+      reset();
+    } catch {
+      setErr("Couldn't save the passcode on this device.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function remove() {
+    if (!window.confirm("Remove the app passcode on this device?")) return;
+    clearPasscode();
+    clearBiometric(); // biometric is only an unlock for the passcode — drop it too
+    setEnabled(false);
+    setBioOn(false);
+    reset();
+  }
+
+  return (
+    <section className="space-y-3">
+      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+        App lock
+      </Label>
+      <div className="rounded-2xl border border-border bg-card/40 p-4 space-y-4">
+        <div className="flex items-center gap-3">
+          <div
+            className={
+              "shrink-0 size-10 grid place-items-center rounded-xl " +
+              (enabled
+                ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
+                : "bg-muted text-muted-foreground")
+            }
+          >
+            {enabled ? <ShieldCheck className="size-5" /> : <Lock className="size-5" />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="font-medium">
+              {enabled ? "Passcode is on" : "Passcode is off"}
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {enabled
+                ? "RELAY asks for your code each time it opens on this device."
+                : "Lock RELAY behind a 4–8 digit code on this device. It's stored hashed and never leaves this browser."}
+            </p>
+          </div>
+          {enabled && mode === null && (
+            <button
+              type="button"
+              onClick={() => lockApp()}
+              className="shrink-0 text-xs font-semibold text-[color:var(--relay-online)] hover:underline underline-offset-4"
+            >
+              Lock now
+            </button>
+          )}
+        </div>
+
+        {/* Biometric unlock — only when supported AND a passcode exists. */}
+        {enabled && bioCapable && mode === null && (
+          <div className="flex items-center gap-3 border-t border-border/60 pt-3">
+            <div
+              className={
+                "shrink-0 size-9 grid place-items-center rounded-lg " +
+                (bioOn
+                  ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
+                  : "bg-muted text-muted-foreground")
+              }
+            >
+              <ScanFace className="size-[18px]" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">Face ID / fingerprint</div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {bioOn
+                  ? "Unlock with biometrics; your passcode still works as a fallback."
+                  : "Add a faster unlock using this device's built-in biometrics."}
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={bioOn}
+              aria-label="Toggle biometric unlock"
+              disabled={bioBusy}
+              onClick={toggleBiometric}
+              className={
+                "relative shrink-0 h-7 w-12 rounded-full transition-colors duration-200 disabled:opacity-50 " +
+                (bioOn
+                  ? "bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))]"
+                  : "bg-muted-foreground/30")
+              }
+              style={{ transitionTimingFunction: "var(--ease-out)" }}
+            >
+              <span
+                className={
+                  "absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform duration-200 " +
+                  (bioOn ? "translate-x-5" : "translate-x-0")
+                }
+                style={{ transitionTimingFunction: "var(--ease-out)" }}
+              />
+            </button>
+          </div>
+        )}
+
+        {mode === null ? (
+          <div className="flex flex-wrap gap-2">
+            {enabled ? (
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setErr(null);
+                    setCode("");
+                    setConfirm("");
+                    setMode("change");
+                  }}
+                >
+                  Change passcode
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:text-destructive"
+                  onClick={remove}
+                >
+                  Remove
+                </Button>
+              </>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  setErr(null);
+                  setCode("");
+                  setConfirm("");
+                  setMode("set");
+                }}
+              >
+                Set a passcode
+              </Button>
+            )}
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void save();
+            }}
+            className="space-y-3"
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="newPass" className="text-xs text-muted-foreground">
+                  {mode === "change" ? "New passcode" : "Passcode"}
+                </Label>
+                <Input
+                  id="newPass"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="new-password"
+                  autoFocus
+                  value={code}
+                  onChange={(e) => {
+                    setErr(null);
+                    setCode(onlyDigits(e.target.value));
+                  }}
+                  placeholder="4–8 digits"
+                  className="font-mono tracking-widest"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="confirmPass" className="text-xs text-muted-foreground">
+                  Confirm
+                </Label>
+                <Input
+                  id="confirmPass"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="new-password"
+                  value={confirm}
+                  onChange={(e) => {
+                    setErr(null);
+                    setConfirm(onlyDigits(e.target.value));
+                  }}
+                  placeholder="Repeat code"
+                  className="font-mono tracking-widest"
+                />
+              </div>
+            </div>
+            {err && <p className="text-sm text-destructive">{err}</p>}
+            <div className="flex gap-2">
+              <Button type="submit" size="sm" disabled={busy || code.length < 4}>
+                {busy ? "Saving…" : mode === "change" ? "Update" : "Turn on"}
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={reset} disabled={busy}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        )}
       </div>
     </section>
   );

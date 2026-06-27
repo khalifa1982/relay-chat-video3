@@ -1,0 +1,27 @@
+{
+  "name": "RELAY — Voice, Video & Chat",
+  "short_name": "RELAY",
+  "description": "Free peer-to-peer voice, video, and chat in your browser. Pick a name, get a 6-digit number, dial anyone.",
+  "id": "/app",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0A0D10",
+  "theme_color": "#0A0D10",
+  "categories": ["communication", "social", "productivity"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
