@@ -365,6 +365,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         if (m.pin && m.device) { peerDevices[m.pin] = m.device; setTileDevice("tile-" + m.pin, m.device); }
         break;
       case "peer-hold":    onPeerHold(m); break;
+      case "peer-screen":  onPeerScreen(m); break;
       case "signal":       onSignal(m.from!, m.data); break;
       case "ice":          onIceServers(m); break;
       case "error":
@@ -1396,6 +1397,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (m.on) { setMic(false); toast("You were muted by the host."); }
     else { setMic(true); toast("The host unmuted you."); }
   }
+  // A peer started/stopped screen sharing. Spotlight (or release) their tile for
+  // EVERYONE — independent of per-browser track-source detection, so a shared
+  // screen shows prominently to all participants, not just the sharer.
+  function onPeerScreen(m: Msg) {
+    const pin = m.pin || ""; if (!pin) return;
+    const id = "tile-" + pin;
+    const tile = document.getElementById(id);
+    if (m.on) {
+      screenShareIds.add(id);
+      tile?.classList.add("screen");
+      addSysMsg(nameOf(pin) + " is sharing their screen.");
+    } else {
+      screenShareIds.delete(id);
+      tile?.classList.remove("screen");
+    }
+    layoutGrid();
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutGrid());
+  }
   // A peer put this call on hold to take another call. Mark their tile + notify.
   function onPeerHold(m: Msg) {
     const pin = m.pin || ""; if (!pin) return;
@@ -1414,9 +1433,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const pin = m.pin || "";
     if (!pin) return;
     const role = (m.role as string | null) ?? null;
+    if (m.hostPin !== undefined) roomHostPin = m.hostPin ?? null;
     if (role) peerRoles[pin] = role; else delete peerRoles[pin];
     setTileRole(pin === me.pin ? "tile-self" : "tile-" + pin, role);
-    if (pin === me.pin) { myRole = role; updateHostUI(); toast(role === "cohost" ? "You're now a co-host." : "You're no longer a co-host."); }
+    if (pin === me.pin) {
+      myRole = role; updateHostUI();
+      const msg = role === "host" ? "You're now the host."
+        : role === "cohost" ? "You're now a co-host."
+        : "You're no longer a co-host.";
+      toast(msg);
+    } else if (role === "host") {
+      toast(nameOf(pin) + " is now the host.");
+    }
     refreshHostPanel();
   }
   function onHostPin(m: Msg) {
@@ -1464,6 +1492,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
             '<button data-act="mute" data-pin="' + pin + '">Mute</button>' +
             '<button data-act="pin" data-pin="' + pin + '">Pin</button>' +
             (amHost ? '<button data-act="cohost" data-pin="' + pin + '">' + cohostLabel + "</button>" : "") +
+            (amHost && role !== "host" ? '<button data-act="makehost" data-pin="' + pin + '">Make host</button>' : "") +
           "</div>" +
         "</div>"
       );
@@ -1478,6 +1507,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (act === "mute") { sendMod("mute", pin); toast("Muted " + pin); }
     else if (act === "pin") { sendMod("pin", pin); closeHostPanel(); }
     else if (act === "cohost") { sendMod("cohost", pin); }
+    else if (act === "makehost") {
+      if (confirm("Make " + nameOf(pin) + " the host? You'll become a co-host.")) {
+        sendMod("makehost", pin); closeHostPanel();
+      }
+    }
   }
 
   // ---------- live bitrate (getStats) ----------
@@ -2585,6 +2619,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenShareIds.add("tile-self");
     layoutGrid();
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutGrid());
+    // Tell everyone we're sharing so they spotlight our tile (works on every
+    // browser — viewers don't need to detect the track source themselves).
+    sendWS({ type: "screen", action: "on" });
     screenBusy = false;
     toast("Sharing your screen");
   }
@@ -2607,6 +2644,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     screenShareIds.delete("tile-self");
     layoutGrid();
+    sendWS({ type: "screen", action: "off" });
     screenBusy = false;
     toast("Stopped screen sharing");
   }

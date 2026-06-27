@@ -422,6 +422,11 @@ export const RELAY_CSS = `
 .relay-root #videoGrid.spotlight .relay-tile.is-thumb .nm{font-size:11px;padding:3px 7px}
 .relay-root #videoGrid.compact{padding:8px;gap:8px}
 .relay-root .relay-tile .ph{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+/* SELF tile: hide the centered avatar/name placeholder once the camera is on
+   (remote tiles toggle .ph inline via JS; the self tile didn't, so the big name
+   used to sit over your own face). Shown again only when cam-off (.audio-only)
+   or while sharing your screen has its own .screen handling. */
+.relay-root .relay-tile.you:not(.audio-only) .ph{display:none}
 .relay-root .relay-tile .ph .av{width:74px;height:74px;border-radius:24px;background:var(--surface2);border:1px solid var(--border);
   display:grid;place-items:center;font-family:"Bricolage Grotesque";font-weight:800;font-size:30px;color:var(--accent)}
 .relay-root .relay-tile .nm{position:absolute;left:12px;bottom:11px;display:flex;align-items:center;gap:7px;max-width:calc(100% - 24px);

@@ -843,6 +843,37 @@ describe("relay — host moderation", () => {
     expect(ph?.pin).toBe(a.pin);
   });
 
+  it("'screen' broadcasts peer-screen so everyone can spotlight the sharer", () => {
+    const { a, b } = hostAndGuest();
+    b.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "screen", action: "on" });
+    const ps = b.outbox.find((m) => rtype(m) === "peer-screen") as { pin?: string; on?: boolean } | undefined;
+    expect(ps?.on).toBe(true);
+    expect(ps?.pin).toBe(a.pin);
+  });
+
+  it("the host can TRANSFER the host role (makehost): new host promoted, old host → co-host", () => {
+    const { a, b } = hostAndGuest();
+    b.outbox.length = 0; a.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "mod", action: "makehost", target: b.pin! });
+    // The room learns B is host and A is now co-host.
+    const roleMsgs = b.outbox.filter((m) => rtype(m) === "role") as Array<{ pin?: string; role?: string }>;
+    expect(roleMsgs.find((r) => r.pin === b.pin)?.role).toBe("host");
+    expect(roleMsgs.find((r) => r.pin === a.pin)?.role).toBe("cohost");
+    // B (now host) can moderate; A (now co-host) can no longer assign co-hosts.
+    a.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "mod", action: "cohost", target: b.pin! });
+    expect((a.outbox.find((m) => rtype(m) === "error") as { code?: string } | undefined)?.code).toBe("forbidden");
+  });
+
+  it("a non-host cannot transfer the host role", () => {
+    const { a, b } = hostAndGuest();
+    handleMessage(reg, a.asConn(), { type: "mod", action: "cohost", target: b.pin! }); // B = cohost
+    b.outbox.length = 0;
+    handleMessage(reg, b.asConn(), { type: "mod", action: "makehost", target: a.pin! });
+    expect((b.outbox.find((m) => rtype(m) === "error") as { code?: string } | undefined)?.code).toBe("forbidden");
+  });
+
   it("host 'pin' broadcasts host-pin to the room", () => {
     const { a, b } = hostAndGuest();
     b.outbox.length = 0;

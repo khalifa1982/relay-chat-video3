@@ -1449,3 +1449,18 @@ Five refinements + the v2.44 review fixes.
 - [x] **Flag no longer shows twice on a camera-off tile.** The flag now lives ONLY in the bottom-left
       name label, not also in the centered cam-off placeholder name — so a black/cam-off tile shows it
       once. 351 tests green, tsc + build clean. Footer → `v2.45.1`.
+
+## v2.46.0 — Cross-browser screen share, host transfer, cam-on placeholder fix (delivered 2026-06-27)
+
+- [x] **Screen share now shows to EVERYONE (any browser).** Instead of relying on per-browser track-source
+      detection (which the mesh + replaced-track paths don't expose), the sharer now broadcasts a `screen`
+      signal; the relay fans out `peer-screen` so every participant spotlights the sharer's tile. Sent on
+      start AND stop.
+- [x] **Host can transfer the host role.** New `mod action:"makehost"` (host-only): promotes the target to
+      host and demotes the old host to co-host, broadcasting both role changes (+ the new hostPin). A
+      "Make host" button appears per-participant in the host panel (with a confirm).
+- [x] **Camera-on no longer shows the big name over your face.** The self-tile's centered avatar/name
+      placeholder is now hidden once the camera is live (`.relay-tile.you:not(.audio-only) .ph{display:none}`)
+      — it only appears when the camera is off. (Regression from the v2.39 cam-off avatar feature.)
+- [x] 4 new server tests (screen broadcast, host transfer + permission gate). 354 tests green, tsc + build
+      clean. Footer → `v2.46.0`.
