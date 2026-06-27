@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from "react";
+import { Phone, Video, MessageSquare, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { getLoginUrl } from "@/const";
 import { useIdentity } from "./useIdentity";
 
 interface OnboardingGateProps {
@@ -8,8 +10,10 @@ interface OnboardingGateProps {
 }
 
 /**
- * Show the children only after we have an identity. Otherwise render
- * a friendly "pick a name" screen that creates a guest session.
+ * Entry / login screen. Shows the app once an identity exists; otherwise a
+ * fast, glassy dual-path screen: continue as a guest (name → instant 6-digit
+ * number) or sign in / register. Forced dark for a consistent striking look;
+ * the animated backdrop is pure CSS and gated behind prefers-reduced-motion.
  */
 export function OnboardingGate({ children }: OnboardingGateProps) {
   const { me, loading, startGuest, startGuestPending, startGuestError } = useIdentity();
@@ -17,8 +21,8 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
 
   if (loading) {
     return (
-      <div className="min-h-svh flex items-center justify-center bg-background text-foreground">
-        <div className="size-10 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+      <div className="dark min-h-svh grid place-items-center bg-[#08090C] text-foreground">
+        <div className="size-9 rounded-full border-2 border-primary/25 border-t-primary animate-spin" />
       </div>
     );
   }
@@ -34,52 +38,139 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
     });
   }
 
+  // "" when OAuth isn't configured (e.g. local dev) — hide the sign-in path
+  // rather than crashing the whole entry screen.
+  const loginUrl = getLoginUrl();
+
   return (
-    <div className="min-h-svh flex items-center justify-center bg-background text-foreground p-6">
-      <div className="w-full max-w-md">
-        <div className="mb-10 text-center">
-          <div className="inline-flex items-center gap-3">
-            <span className="inline-block size-3 rounded-full bg-primary animate-pulse" />
-            <span className="text-2xl font-semibold tracking-wide">RELAY</span>
+    <div className="dark relay-login relative min-h-svh overflow-hidden grid place-items-center bg-[#08090C] text-foreground p-5">
+      {/* Lightweight animated backdrop (CSS only, reduced-motion gated) */}
+      <div aria-hidden className="login-fx pointer-events-none absolute inset-0" />
+      <div aria-hidden className="login-grid pointer-events-none absolute inset-0" />
+
+      <div className="login-card relative w-full max-w-[400px]">
+        {/* Brand */}
+        <div className="mb-7 text-center">
+          <div className="inline-flex items-center gap-2.5">
+            <span className="login-dot inline-block size-3 rounded-full" />
+            <span className="text-[1.6rem] font-bold tracking-tight">RELAY</span>
           </div>
-          <p className="mt-3 text-sm text-muted-foreground">
-            Pick a name. Get a 6-digit number. Call anyone, anywhere.
+          <p className="mx-auto mt-2.5 max-w-[19rem] text-sm leading-relaxed text-muted-foreground">
+            Pick a name, get a 6-digit number, call anyone — straight in the browser.
           </p>
         </div>
-        <form
-          onSubmit={onSubmit}
-          className="rounded-2xl bg-card border border-border p-6 shadow-2xl"
-        >
-          <label className="text-xs uppercase tracking-widest text-muted-foreground mb-2 block">
-            Your display name
-          </label>
-          <Input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Alex"
-            maxLength={64}
-            className="h-12 text-base"
-          />
-          <p className="mt-2 text-xs text-muted-foreground">
-            Guests stay signed in on this device for 30 days. Upgrade later to keep your number forever.
-          </p>
-          {startGuestError && (
-            <p className="mt-3 text-sm text-destructive">{startGuestError.message}</p>
+
+        {/* Card */}
+        <div className="rounded-3xl border border-border/60 bg-card/60 p-6 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150">
+          <form onSubmit={onSubmit}>
+            <label
+              htmlFor="relay-name"
+              className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
+            >
+              Your display name
+            </label>
+            <Input
+              id="relay-name"
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Alex"
+              maxLength={64}
+              className="h-12 rounded-xl text-base"
+            />
+            {startGuestError && (
+              <p className="mt-2.5 text-sm text-destructive">{startGuestError.message}</p>
+            )}
+            <Button
+              type="submit"
+              disabled={!name.trim() || startGuestPending}
+              className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
+            >
+              {startGuestPending ? (
+                "Setting up…"
+              ) : (
+                <>
+                  Enter RELAY <ArrowRight className="size-4" />
+                </>
+              )}
+            </Button>
+          </form>
+
+          {loginUrl && (
+            <>
+              <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground/70">
+                <span className="h-px flex-1 bg-border/60" /> or{" "}
+                <span className="h-px flex-1 bg-border/60" />
+              </div>
+
+              <a href={loginUrl} className="block">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-12 w-full rounded-xl border-border/60 text-base"
+                >
+                  Sign in / Register
+                </Button>
+              </a>
+            </>
           )}
-          <Button
-            type="submit"
-            disabled={!name.trim() || startGuestPending}
-            className="mt-5 h-12 w-full text-base font-semibold"
-          >
-            {startGuestPending ? "Setting up…" : "Enter RELAY"}
-          </Button>
-        </form>
-        <div className="mt-6 text-center text-xs text-muted-foreground">
-          By continuing you agree the only data we store about you is your name, number,
-          contacts, messages, and call history — all tied to this device until you register.
+          <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
+            Guests stay on this device for 30 days. Register to keep your number forever
+            and unlock contact sync, recording &amp; more.
+          </p>
+        </div>
+
+        {/* Feature chips */}
+        <div className="mt-6 flex items-center justify-center gap-2">
+          {[
+            { icon: Phone, label: "Voice" },
+            { icon: Video, label: "Video" },
+            { icon: MessageSquare, label: "Chat" },
+          ].map(({ icon: Icon, label }) => (
+            <span
+              key={label}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-card/50 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur-md"
+            >
+              <Icon className="size-3.5" /> {label}
+            </span>
+          ))}
         </div>
       </div>
+
+      <style>{`
+        .relay-login { --c1: 63,224,197; --c2: 110,231,255; }
+        .relay-login .login-dot {
+          background: linear-gradient(135deg, #3FE0C5, #6EE7FF);
+          box-shadow: 0 0 16px rgba(63,224,197,.7);
+        }
+        .relay-login .login-grid {
+          background-image:
+            linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+          background-size: 44px 44px;
+          -webkit-mask-image: radial-gradient(circle at 50% 42%, black, transparent 72%);
+          mask-image: radial-gradient(circle at 50% 42%, black, transparent 72%);
+        }
+        .relay-login .login-fx::before, .relay-login .login-fx::after {
+          content: ""; position: absolute; border-radius: 9999px; filter: blur(60px); opacity: .5;
+        }
+        .relay-login .login-fx::before {
+          width: 46vmax; height: 46vmax; left: -10vmax; top: -14vmax;
+          background: radial-gradient(circle, rgba(var(--c1),.20), transparent 60%);
+        }
+        .relay-login .login-fx::after {
+          width: 40vmax; height: 40vmax; right: -12vmax; bottom: -14vmax;
+          background: radial-gradient(circle, rgba(var(--c2),.16), transparent 60%);
+        }
+        @media (prefers-reduced-motion: no-preference) {
+          .relay-login .login-fx::before { animation: loginDrift1 14s ease-in-out infinite alternate; }
+          .relay-login .login-fx::after  { animation: loginDrift2 18s ease-in-out infinite alternate; }
+          .relay-login .login-card { animation: loginIn .5s cubic-bezier(0.23,1,0.32,1) both; }
+        }
+        @keyframes loginDrift1 { from { transform: translate(-3%,-2%) scale(1); } to { transform: translate(4%,3%) scale(1.08); } }
+        @keyframes loginDrift2 { from { transform: translate(3%,2%) scale(1); } to { transform: translate(-4%,-3%) scale(1.1); } }
+        @keyframes loginIn { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
+      `}</style>
     </div>
   );
 }

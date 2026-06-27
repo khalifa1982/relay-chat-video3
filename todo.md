@@ -503,6 +503,39 @@ creds, `<expiry>:<user>` username — confirmed via a scripted call to `iceServe
 - [ ] **Action required from you**: set the Manus TURN secrets + Publish, then do the live
       two-device call verification (now reachable from any tab, with caller-cancel).
 
+## v2.12.0 — Phase 1 of the pro-platform spec: login/onboarding redesign (in progress)
+
+Kicking off the large feature spec. Triaged into: buildable-now (this stack), needs-infra
+(SFU media server / email service / native app), and not-possible-on-web (MAC-address
+device tracking → redirected to the existing device-id system; OS auto-launch → needs a
+native/desktop build). Starting with the explicitly-prioritized login redesign.
+
+- [x] **Login / onboarding redesign** (`client/src/app/OnboardingGate.tsx`): fast, glassy,
+      dual-path entry — guest (name → instant 6-digit number) + "Sign in / Register"
+      (OAuth). Lightweight CSS-only animated backdrop (aurora glow + grid), gated behind
+      `prefers-reduced-motion`; brand mark, feature chips (Voice/Video/Chat), forced-dark
+      for a consistent striking look.
+- [x] **Bug caught by screenshot QA + fixed**: the new sign-in link called `getLoginUrl()`
+      during render, which threw `TypeError: Invalid URL` when OAuth env is absent (e.g.
+      local dev) and white-screened the whole entry via the ErrorBoundary. Made
+      `getLoginUrl()` defensive (returns "" instead of throwing) and the gate now renders
+      the sign-in path only when a real URL exists. Verified the fix with a live Playwright
+      screenshot at a phone viewport.
+- [x] Footer → `RELAY · v2.12.0`. tsc clean, 172/173 vitest, production build clean.
+
+### Still to come in Phase 1 (in-stack, no new infra)
+- Call connection sequence (Transmission Connected → Encryption → Join the Call), DND +
+  offline auto-reply + smarter notifications, call waiting (hold/swap/merge/reject),
+  voice↔video toggle + in-call side chat, multi-device simultaneous ring + device
+  management, richer contacts (names/email/mobile+country codes/notes/photo) + cloud sync,
+  groups + link sharing + call invite links.
+
+### Open questions for the user (don't block Phase 1)
+- Guest PIN: ephemeral-per-session vs sticky-per-device? (the spec says both — they're
+  opposites; current system is sticky-per-device via device-id).
+- Which infra to plan toward: SFU media server (10-way + recording), email service
+  (missed-call email + chat→email), native/desktop app (OS auto-launch)?
+
 ## v2.9.1 — Live-test fixes: incoming call invisible + app chrome over the call (delivered 2026-06-13)
 
 Reported from a real two-device test: caller sees their own video and "online", but the
