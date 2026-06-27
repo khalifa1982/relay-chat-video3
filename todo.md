@@ -1439,3 +1439,13 @@ Five refinements + the v2.44 review fixes.
       `pipSupported` now requires `canvas.captureStream` (hides the button on iOS), filter caches clear on
       filter switch, late-resolving flags fan out via a new `peer-meta` broadcast, PiP stream tracks stopped.
 - [x] 5 new tests/guards (hold broadcast + CSS/markup). 349 tests green, tsc + build clean. Footer → `v2.45.0`.
+
+## v2.45.1 — Tile-chrome fixes from device screenshots (delivered 2026-06-27)
+
+- [x] **Name no longer overlaps the device/speed chip.** Moved the device + live-speed chip to the
+      TOP-right corner (it was bottom-right, colliding with the bottom-left name on narrow tiles); the
+      "connecting…" indicator moved to top-left. The name label is width-capped and truncates with an
+      ellipsis (badge + flag stay). The chip is dropped entirely on tiny spotlight thumbnails.
+- [x] **Flag no longer shows twice on a camera-off tile.** The flag now lives ONLY in the bottom-left
+      name label, not also in the centered cam-off placeholder name — so a black/cam-off tile shows it
+      once. 351 tests green, tsc + build clean. Footer → `v2.45.1`.

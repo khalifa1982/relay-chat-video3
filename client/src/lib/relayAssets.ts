@@ -394,11 +394,16 @@ export const RELAY_CSS = `
 /* Cam-off display: full name under the avatar (never a blank black box). */
 .relay-root .relay-tile .ph-name{font-size:14px;font-weight:600;color:var(--text);max-width:84%;text-align:center;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* Per-tile info chip: device type + live connection speed (e.g. "5.2 Mbps"). */
-.relay-root .relay-tile .tile-info{position:absolute;right:10px;bottom:11px;display:flex;gap:6px;align-items:center;pointer-events:none}
+/* Per-tile info chip: device type + live connection speed (e.g. "5.2 Mbps").
+   Pinned to the TOP-right so it never collides with the bottom-left name label
+   (which, with a Host badge + flag, can be wide on a narrow tile). */
+.relay-root .relay-tile .tile-info{position:absolute;right:10px;top:11px;display:flex;gap:6px;align-items:center;
+  pointer-events:none;max-width:calc(100% - 20px);flex-wrap:wrap;justify-content:flex-end}
 .relay-root .relay-tile .tile-info span{background:rgba(8,9,12,.62);backdrop-filter:blur(6px);padding:3px 7px;border-radius:7px;
   font-size:10px;font-weight:600;color:#cbd5e1;line-height:1.2}
 .relay-root .relay-tile .tile-info span:empty{display:none}
+/* Thumbnails in the spotlight filmstrip are tiny — drop the info chip there. */
+.relay-root #videoGrid.spotlight .relay-tile.is-thumb .tile-info{display:none}
 /* Active-speaking cue: a glowing ring + a soft sound-wave halo on the avatar.
    The static outline always marks the speaker; the pulse is motion-gated. */
 @media (prefers-reduced-motion: no-preference){
@@ -419,10 +424,14 @@ export const RELAY_CSS = `
 .relay-root .relay-tile .ph{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
 .relay-root .relay-tile .ph .av{width:74px;height:74px;border-radius:24px;background:var(--surface2);border:1px solid var(--border);
   display:grid;place-items:center;font-family:"Bricolage Grotesque";font-weight:800;font-size:30px;color:var(--accent)}
-.relay-root .relay-tile .nm{position:absolute;left:12px;bottom:11px;display:flex;align-items:center;gap:7px;
-  background:rgba(8,9,12,.62);backdrop-filter:blur(6px);padding:5px 11px;border-radius:9px;font-size:13px;font-weight:600}
+.relay-root .relay-tile .nm{position:absolute;left:12px;bottom:11px;display:flex;align-items:center;gap:7px;max-width:calc(100% - 24px);
+  background:rgba(8,9,12,.62);backdrop-filter:blur(6px);padding:5px 11px;border-radius:9px;font-size:13px;font-weight:600;
+  white-space:nowrap;overflow:hidden}
+/* The display name itself truncates with an ellipsis (the badge/flag stay). */
+.relay-root .relay-tile .nm .nm-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .relay-root .relay-tile.you .nm{background:rgba(63,224,197,.2);color:var(--accent)}
-.relay-root .connecting{position:absolute;top:11px;right:12px;font-size:11px;color:var(--warn);background:rgba(255,180,84,.14);
+/* "connecting…" sits TOP-LEFT now (the info chip owns the top-right corner). */
+.relay-root .connecting{position:absolute;top:11px;left:12px;font-size:11px;color:var(--warn);background:rgba(255,180,84,.14);
   padding:3px 9px;border-radius:7px;letter-spacing:.04em}
 
 .relay-root .chat{width:320px;border-left:1px solid var(--border);display:none;flex-direction:column;background:var(--bg2)}

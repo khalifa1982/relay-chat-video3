@@ -1315,11 +1315,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
       ? '<span class="ti-dev">' + escapeHtml(device) + "</span>"
       : '<span class="ti-dev"></span>';
     const fl = '<span class="nm-flag">' + (flag ? escapeHtml(flag) : "") + "</span>";
+    // The flag lives ONLY in the bottom-left .nm label (not also in the centered
+    // cam-off name) so it never renders twice on a camera-off tile.
     return (
       '<div class="ph"><div class="av">' + initials(name) + "</div>" +
-      '<div class="ph-name">' + fl + escapeHtml(name) + "</div>" +
+      '<div class="ph-name">' + escapeHtml(name) + "</div>" +
       SOUND_WAVE_HTML + "</div>" +
-      '<div class="nm">' + fl + escapeHtml(name) + "</div>" +
+      '<div class="nm">' + fl + '<span class="nm-text">' + escapeHtml(name) + "</span></div>" +
       '<div class="tile-info">' + dev + '<span class="ti-speed"></span></div>'
     );
   }
@@ -2094,9 +2096,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     t.insertAdjacentHTML(
       "beforeend",
       '<div class="ph"><div class="av">' + initials(me.name || "You") + "</div>" +
-        '<div class="ph-name">' + selfFl + "You</div>" +
+        '<div class="ph-name">You</div>' +
         SOUND_WAVE_HTML + "</div>" +
-        '<div class="nm">' + selfFl + "You</div>" +
+        '<div class="nm">' + selfFl + '<span class="nm-text">You</span></div>' +
         '<div class="tile-info"><span class="ti-dev">' + escapeHtml(detectDeviceType()) + "</span>" +
         '<span class="ti-speed"></span></div>'
     );
