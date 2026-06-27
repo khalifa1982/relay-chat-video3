@@ -147,6 +147,9 @@ export const RELAY_MARKUP = `
         <button class="ctrl" id="audioBtn" title="Audio output" style="display:none">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg>
         </button>
+        <button class="ctrl" id="pipBtn" title="Picture-in-Picture (keep the call visible)" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="5" rx="1" fill="currentColor" stroke="none"/></svg>
+        </button>
         <button class="ctrl" id="filterBtn" title="Filters">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="7" r="4"/><circle cx="12" cy="16" r="4"/></svg>
         </button>
@@ -514,6 +517,10 @@ export const RELAY_CSS = `
 /* ── role badge + host-controls panel (v2.41) ───────────────────────────── */
 .relay-root .relay-tile .nm .role-badge{background:var(--accent);color:#04201B;font-size:9px;font-weight:800;
   padding:1px 5px;border-radius:5px;letter-spacing:.02em;text-transform:uppercase}
+/* Country flag emoji beside the name (in both the label + cam-off placeholder). */
+.relay-root .relay-tile .nm-flag{line-height:1}
+.relay-root .relay-tile .nm-flag:not(:empty){margin-right:5px}
+.relay-root .relay-tile .ph-name .nm-flag:not(:empty){margin-right:4px;font-size:1.1em}
 .relay-root .host-panel{position:absolute;bottom:84px;right:18px;width:280px;max-width:88vw;max-height:60vh;display:none;
   flex-direction:column;background:var(--surface);border:1px solid var(--border2);border-radius:18px;
   box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:31;overflow:hidden}

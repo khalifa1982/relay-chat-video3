@@ -101,7 +101,21 @@ export class MediaPipeline {
   // rate — 90-120Hz on modern phones — but 30fps is plenty for video and a
   // quarter of the canvas+encode work on a 120Hz panel. Tracked here and
   // enforced at the top of loop().
-  private static readonly TARGET_FPS = 30;
+  // 24fps is plenty for a filtered self-view and ~20% less canvas/encode work
+  // than 30. The heavy ML inference is throttled further below.
+  private static readonly TARGET_FPS = 24;
+  // Cap the PROCESSING resolution (height) when a filter is active. Filtering a
+  // full 720p/1080p frame per tick is the main source of device heat/slowdown;
+  // 480p output looks fine for a filtered tile and quarters the pixel work of
+  // 1080p. (Plain, unfiltered calls don't use this pipeline at all.)
+  private static readonly MAX_PROC_HEIGHT = 480;
+  // Run the EXPENSIVE MediaPipe inference less often than we draw — the mask /
+  // face box barely change frame-to-frame, so we reuse the last result and only
+  // re-infer every Nth processed frame. Drawing (foreground = current frame)
+  // still happens every tick, so motion stays smooth.
+  private static readonly SEG_EVERY = 2;   // segmentation ~12fps
+  private static readonly FACE_EVERY = 3;  // face detect ~8fps
+  private frameCount = 0;
   private lastFrameTs = 0;
 
   // last-frame caches
@@ -157,7 +171,7 @@ export class MediaPipeline {
     // Build the output stream once.
     if (!this.outputStream) {
       const out = (this.canvas as any).captureStream
-        ? (this.canvas as any).captureStream(30)
+        ? (this.canvas as any).captureStream(MediaPipeline.TARGET_FPS)
         : new MediaStream();
       // Add audio tracks from the input.
       stream.getAudioTracks().forEach(t => out.addTrack(t));
@@ -231,11 +245,17 @@ export class MediaPipeline {
     const minGap = 1000 / MediaPipeline.TARGET_FPS - 1;
     if (ts && ts - this.lastFrameTs < minGap) return;
     this.lastFrameTs = ts;
+    this.frameCount++;
     const v = this.inputVideo;
     if (!v.videoWidth || !v.videoHeight) return;
-    if (this.canvas.width !== v.videoWidth || this.canvas.height !== v.videoHeight) {
-      this.canvas.width = v.videoWidth;
-      this.canvas.height = v.videoHeight;
+    // Cap the processing canvas to MAX_PROC_HEIGHT (preserving aspect) so we
+    // never filter a full-res frame — the big heat/slowdown win.
+    const scale = Math.min(1, MediaPipeline.MAX_PROC_HEIGHT / v.videoHeight);
+    const cw = Math.max(2, Math.round(v.videoWidth * scale));
+    const ch = Math.max(2, Math.round(v.videoHeight * scale));
+    if (this.canvas.width !== cw || this.canvas.height !== ch) {
+      this.canvas.width = cw;
+      this.canvas.height = ch;
     }
     const ctx = this.ctx;
     const w = this.canvas.width, h = this.canvas.height;
@@ -251,27 +271,36 @@ export class MediaPipeline {
     // the foreground (person) on top using the segmentation mask as alpha.
     if (this.filter.backgroundBlur && this.segmenter) {
       try {
-        const tsNow = performance.now();
-        const result: any = (this.segmenter as any).segmentForVideo(v, tsNow);
-        const mask = result?.categoryMask;
-        // Draw blurred background fill.
+        // Draw the blurred background fill EVERY frame (current frame).
         ctx.filter = "blur(14px) saturate(1.05)";
         ctx.drawImage(v, 0, 0, w, h);
         ctx.filter = "none";
-        // Build mask ImageData on first use / refresh.
-        if (mask) {
-          const maskW = mask.width, maskH = mask.height;
-          const data: Uint8Array = mask.getAsUint8Array();
-          if (!this.lastSegMask || this.lastSegMask.width !== maskW || this.lastSegMask.height !== maskH) {
-            this.lastSegMask = ctx.createImageData(maskW, maskH);
+        // Re-segment only every SEG_EVERY frames; reuse the cached alpha mask in
+        // between (the person barely moves between two frames). This halves the
+        // most expensive per-frame work.
+        if (this.frameCount % MediaPipeline.SEG_EVERY === 0 || !this.lastSegMask) {
+          const tsNow = performance.now();
+          const result: any = (this.segmenter as any).segmentForVideo(v, tsNow);
+          const mask = result?.categoryMask;
+          if (mask) {
+            const maskW = mask.width, maskH = mask.height;
+            const data: Uint8Array = mask.getAsUint8Array();
+            if (!this.lastSegMask || this.lastSegMask.width !== maskW || this.lastSegMask.height !== maskH) {
+              this.lastSegMask = ctx.createImageData(maskW, maskH);
+            }
+            const px = this.lastSegMask.data;
+            for (let i = 0, j = 0; i < data.length; i++, j += 4) {
+              // selfie segmenter: 0 = person, others = background → inverted alpha.
+              const a = data[i] === 0 ? 255 : 0;
+              px[j] = 0; px[j + 1] = 0; px[j + 2] = 0; px[j + 3] = a;
+            }
+            if (mask.close) mask.close();
           }
-          const px = this.lastSegMask.data;
-          for (let i = 0, j = 0; i < data.length; i++, j += 4) {
-            // selfie segmenter: 0 = person, others = background. Use inverted alpha
-            const a = data[i] === 0 ? 255 : 0;
-            px[j] = 0; px[j + 1] = 0; px[j + 2] = 0; px[j + 3] = a;
-          }
-          // Compose: draw mask, then in source-in mode draw the sharp video.
+        }
+        // Composite the CURRENT-frame foreground (person) using the cached mask,
+        // so motion stays sharp even though the mask refreshes at half rate.
+        if (this.lastSegMask) {
+          const maskW = this.lastSegMask.width, maskH = this.lastSegMask.height;
           let tmp = this.tmpCanvas;
           if (!tmp) { tmp = document.createElement("canvas"); this.tmpCanvas = tmp; }
           if (tmp.width !== maskW) tmp.width = maskW;
@@ -279,12 +308,11 @@ export class MediaPipeline {
           const tctx = tmp.getContext("2d");
           if (tctx) {
             tctx.globalCompositeOperation = "source-over";
-            tctx.putImageData(this.lastSegMask, 0, 0);
+            tctx.putImageData(this.lastSegMask, 0, 0); // resets tmp to the mask
             tctx.globalCompositeOperation = "source-in";
             tctx.drawImage(v, 0, 0, maskW, maskH);
             ctx.drawImage(tmp, 0, 0, w, h);
           }
-          if (mask.close) mask.close();
         }
       } catch {
         // Fall back to plain frame on segmentation failure.
@@ -302,22 +330,33 @@ export class MediaPipeline {
     // dependencies and look fun without external files.
     if (this.filter.faceOverlay && this.faceDetector) {
       try {
-        const tsNow = performance.now();
-        const result: any = (this.faceDetector as any).detectForVideo(v, tsNow);
-        const det = result?.detections?.[0]?.boundingBox;
-        if (det) {
-          this.lastFaceBox = {
-            x: (det.originX ?? 0),
-            y: (det.originY ?? 0),
-            w: (det.width ?? 0),
-            h: (det.height ?? 0),
-          };
-        } else if (!this.lastFaceBox) {
-          // Nothing yet, skip drawing
+        // Re-detect only every FACE_EVERY frames; the overlay is anchored to the
+        // cached box in between (faces don't jump between frames).
+        if (this.frameCount % MediaPipeline.FACE_EVERY === 0) {
+          const tsNow = performance.now();
+          const result: any = (this.faceDetector as any).detectForVideo(v, tsNow);
+          const det = result?.detections?.[0]?.boundingBox;
+          if (det) {
+            this.lastFaceBox = {
+              x: (det.originX ?? 0),
+              y: (det.originY ?? 0),
+              w: (det.width ?? 0),
+              h: (det.height ?? 0),
+            };
+          }
         }
         const box = this.lastFaceBox;
         if (box) {
-          this.drawFaceOverlay(ctx, box, this.filter.faceOverlay, w, h);
+          // The detector ran on the full-res input video; scale its pixel box
+          // into the (smaller) processing-canvas space before drawing.
+          const sx = w / (v.videoWidth || w), sy = h / (v.videoHeight || h);
+          this.drawFaceOverlay(
+            ctx,
+            { x: box.x * sx, y: box.y * sy, w: box.w * sx, h: box.h * sy },
+            this.filter.faceOverlay,
+            w,
+            h,
+          );
         }
       } catch { /* */ }
     } else {

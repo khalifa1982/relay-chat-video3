@@ -710,23 +710,25 @@ describe("relay — conference history", () => {
     expect(info!.endedAt).toBeGreaterThanOrEqual(info!.answeredAt!);
   });
 
-  it("propagates each member's device type in the joined member list (v2.39)", () => {
+  it("propagates each member's device type AND flag in the joined member list (v2.39/v2.44)", () => {
     const a = new FakeConn("dev-a");
-    handleMessage(reg, a.asConn(), { type: "register", name: "Alice", device: "Desktop" });
+    handleMessage(reg, a.asConn(), { type: "register", name: "Alice", device: "Desktop", flag: "🇬🇧" });
     const b = new FakeConn("dev-b");
-    handleMessage(reg, b.asConn(), { type: "register", name: "Bob", device: "Mobile" });
+    handleMessage(reg, b.asConn(), { type: "register", name: "Bob", device: "Mobile", flag: "🇺🇸" });
     handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
     const rid = (a.outbox.find((m) => rtype(m) === "room") as { roomId: string }).roomId;
     handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
-    // B's `joined` message lists A with A's device.
+    // B's `joined` message lists A with A's device + flag.
     const joined = b.outbox.find((m) => rtype(m) === "joined") as
-      | { members: Array<{ pin: string; device?: string }> }
+      | { members: Array<{ pin: string; device?: string; flag?: string }> }
       | undefined;
     const aMember = joined?.members.find((mm) => mm.pin === a.pin);
     expect(aMember?.device).toBe("Desktop");
-    // A gets a `peer-joined` for B carrying B's device.
-    const pj = a.outbox.find((m) => rtype(m) === "peer-joined") as { device?: string } | undefined;
+    expect(aMember?.flag).toBe("🇬🇧");
+    // A gets a `peer-joined` for B carrying B's device + flag.
+    const pj = a.outbox.find((m) => rtype(m) === "peer-joined") as { device?: string; flag?: string } | undefined;
     expect(pj?.device).toBe("Mobile");
+    expect(pj?.flag).toBe("🇺🇸");
   });
 
   it("does NOT log an UNANSWERED dial as a conference (no accept → no history)", () => {

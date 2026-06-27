@@ -53,6 +53,12 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   // AppShell's useIdentity); we only need name + number to auto-register.
   const whoami = trpc.identity.whoami.useQuery(undefined, { staleTime: 30_000 });
   const me = whoami.data ?? null;
+  // Our country flag (for the in-call name tag), resolved from our IP geo.
+  const geo = trpc.directory.geoSelf.useQuery(undefined, {
+    enabled: !!me,
+    staleTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+  });
   const [location] = useLocation();
   const inApp = location.startsWith("/app");
 
@@ -67,6 +73,14 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   nameRef.current = me?.displayName ?? null;
   const numberRef = useRef<string | null>(null);
   numberRef.current = me?.number ?? null;
+  const flagRef = useRef<string>("");
+  flagRef.current = geo.data?.flagEmoji ?? "";
+
+  // Push our flag to the engine whenever it resolves/changes (the engine
+  // re-affirms registration so remote tiles pick it up).
+  useEffect(() => {
+    if (geo.data?.flagEmoji) handleRef.current?.setSelfFlag(geo.data.flagEmoji);
+  }, [geo.data?.flagEmoji]);
 
   useEffect(() => {
     if (!inApp || !me) return;
@@ -76,6 +90,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     const handle = startRelay(el);
     handle.setOnStateChange(setPhase);
     handle.setOnPinChange(setPin);
+    if (flagRef.current) handle.setSelfFlag(flagRef.current);
     handleRef.current = handle;
 
     // Auto-register against the v2 identity (number + name) so the engine has a

@@ -53,7 +53,8 @@ interface Msg {
   role?: string | null;
   selfRole?: string | null;
   hostPin?: string | null;
-  members?: Array<{ pin: string; name: string; device?: string; role?: string }>;
+  flag?: string;
+  members?: Array<{ pin: string; name: string; device?: string; flag?: string; role?: string }>;
   iceServers?: IceConfig["iceServers"];
   data?: { sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
   message?: string;
@@ -95,6 +96,9 @@ export interface RelayHandle {
    *  number). Must be called before the engine registers. The server may
    *  still override if the number is taken by another device. */
   setPreferredPin: (pin: string | null) => void;
+  /** Set our country flag emoji (shown beside our name on remote tiles).
+   *  Re-affirms registration if already connected. */
+  setSelfFlag: (flag: string) => void;
 }
 
 export function startRelay(root: HTMLElement): RelayHandle {
@@ -148,6 +152,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // Per-tile enrichment (v2.39): remote device types (pin -> "Mobile"/"Desktop",
   // shared via signaling) + a periodic getStats sampler for live bitrate.
   const peerDevices: Record<string, string> = {};
+  const peerFlags: Record<string, string> = {}; // pin -> country flag emoji
+  let selfFlag = "";                              // our own flag (set by the host app)
   let statsSampleT: ReturnType<typeof setInterval> | null = null;
   const statsPrev: Record<string, { bytes: number; ts: number }> = {};
   // Host moderation (v2.41): my role + everyone's roles for badges + the
@@ -269,7 +275,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         diag("sse ready");
         const cbs = wsOpenCbs.splice(0);
         cbs.forEach(fn => { try { fn(); } catch { /* */ } });
-        if (wantName) sendWS({ type: "register", name: wantName, pin: me.pin || undefined, device: detectDeviceType() });
+        if (wantName) sendWS({ type: "register", name: wantName, pin: me.pin || undefined, device: detectDeviceType(), flag: selfFlag || undefined });
         return;
       }
       if (m && m.type) diag("recv " + m.type + (m.from ? " from " + m.from.slice(-4) : ""));
@@ -392,7 +398,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     else if (savedPin && !me.pin) me.pin = savedPin;
     const btn = $("joinBtn") as HTMLButtonElement | null;
     if (btn) { btn.disabled = true; btn.textContent = "Connecting…"; }
-    if (ws && ws.readyState === 1) sendWS({ type: "register", name, pin: me.pin || undefined, device: detectDeviceType() });
+    if (ws && ws.readyState === 1) sendWS({ type: "register", name, pin: me.pin || undefined, device: detectDeviceType(), flag: selfFlag || undefined });
     else connectWS();
   }
   function onRegistered(m: Msg) {
@@ -1126,6 +1132,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function onPeerJoined(m: Msg) {
     if (m.pin && m.device) { peerDevices[m.pin] = m.device; setTileDevice("tile-" + m.pin, m.device); }
+    if (m.pin && m.flag) { peerFlags[m.pin] = m.flag; setTileFlag("tile-" + m.pin, m.flag); }
     if (m.pin && m.role) { peerRoles[m.pin] = m.role as string; setTileRole("tile-" + m.pin, m.role as string); }
     refreshHostPanel();
     // On the SFU path, LiveKit's own ParticipantConnected/TrackSubscribed events
@@ -1291,14 +1298,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // (keyed by LiveKit participant.identity, which equals the 6-digit pin).
   // Placeholder (avatar + full name, shown when the camera is off) + an info
   // chip (device + live speed) used by every tile builder.
-  function tileContentHTML(name: string, device: string): string {
+  function tileContentHTML(name: string, device: string, flag: string): string {
     const dev = device
       ? '<span class="ti-dev">' + escapeHtml(device) + "</span>"
       : '<span class="ti-dev"></span>';
+    const fl = '<span class="nm-flag">' + (flag ? escapeHtml(flag) : "") + "</span>";
     return (
       '<div class="ph"><div class="av">' + initials(name) + "</div>" +
-      '<div class="ph-name">' + escapeHtml(name) + "</div></div>" +
-      '<div class="nm">' + escapeHtml(name) + "</div>" +
+      '<div class="ph-name">' + fl + escapeHtml(name) + "</div></div>" +
+      '<div class="nm">' + fl + escapeHtml(name) + "</div>" +
       '<div class="tile-info">' + dev + '<span class="ti-speed"></span></div>'
     );
   }
@@ -1307,13 +1315,25 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const d = el?.querySelector(".ti-dev") as HTMLElement | null;
     if (d && device) d.textContent = device;
   }
-  // Remember (and display) each member's device type. Works for both paths: the
-  // map is read at LiveKit tile creation, and the live setter updates mesh tiles.
-  function recordMemberDevices(members?: Array<{ pin: string; device?: string }>) {
+  // Show a participant's country flag in BOTH name spots (the bottom-left label
+  // and the cam-off placeholder name).
+  function setTileFlag(tileId: string, flag: string) {
+    if (!flag) return;
+    const el = document.getElementById(tileId);
+    el?.querySelectorAll(".nm-flag").forEach(s => { (s as HTMLElement).textContent = flag; });
+  }
+  // Remember (and display) each member's device type + flag. Works for both
+  // paths: the maps are read at LiveKit tile creation, and the live setters
+  // update mesh tiles.
+  function recordMemberDevices(members?: Array<{ pin: string; device?: string; flag?: string }>) {
     (members || []).forEach(mem => {
       if (mem.device) {
         peerDevices[mem.pin] = mem.device;
         setTileDevice("tile-" + mem.pin, mem.device);
+      }
+      if (mem.flag) {
+        peerFlags[mem.pin] = mem.flag;
+        setTileFlag("tile-" + mem.pin, mem.flag);
       }
     });
   }
@@ -1518,7 +1538,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const v = document.createElement("video");
     v.autoplay = true; v.playsInline = true;
     t.appendChild(v);
-    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || ""));
+    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || "", peerFlags[id] || ""));
     t.insertAdjacentHTML("beforeend", '<div class="connecting">connecting…</div>');
     lkParticipantTiles[id] = t;
     grid.appendChild(t);
@@ -2043,11 +2063,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     t.appendChild(v);
     // Avatar (from the user's name) + "You" label + device chip. The avatar
     // shows whenever the camera is off so the tile is never a blank black box.
+    const selfFl = '<span class="nm-flag">' + (selfFlag ? escapeHtml(selfFlag) : "") + "</span>";
     t.insertAdjacentHTML(
       "beforeend",
       '<div class="ph"><div class="av">' + initials(me.name || "You") + "</div>" +
-        '<div class="ph-name">You</div></div>' +
-        '<div class="nm">You</div>' +
+        '<div class="ph-name">' + selfFl + "You</div></div>" +
+        '<div class="nm">' + selfFl + "You</div>" +
         '<div class="tile-info"><span class="ti-dev">' + escapeHtml(detectDeviceType()) + "</span>" +
         '<span class="ti-speed"></span></div>'
     );
@@ -2063,7 +2084,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const v = document.createElement("video");
     v.autoplay = true; v.playsInline = true;
     t.appendChild(v);
-    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || ""));
+    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || "", peerFlags[id] || ""));
     t.insertAdjacentHTML("beforeend", '<div class="connecting">connecting…</div>');
     entry.el = t;
     grid.appendChild(t);
@@ -2230,6 +2251,120 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (speakerSampleT) { clearInterval(speakerSampleT); speakerSampleT = null; }
     for (const pin in meshAnalysers) unregisterMeshAnalyser(pin);
     if (meshAudioCtx) { try { void meshAudioCtx.close(); } catch { /* */ } meshAudioCtx = null; }
+  }
+
+  // ---------- Picture-in-Picture (composited active speakers) ----------
+  // Minimizing a mobile browser pauses the call; PiP keeps it alive + visible.
+  // We composite the top-2 active speakers onto a canvas, capture that canvas as
+  // a stream, and PiP the resulting video — so a single PiP window shows a 2-up
+  // split that follows whoever's talking (and a shared screen).
+  let pipCanvas: HTMLCanvasElement | null = null;
+  let pipCtx: CanvasRenderingContext2D | null = null;
+  let pipVideo: HTMLVideoElement | null = null;
+  let pipActive = false;
+  let pipTimer: ReturnType<typeof setInterval> | null = null;
+  function pipSupported(): boolean {
+    return typeof document !== "undefined" &&
+      "pictureInPictureEnabled" in document &&
+      !!(document as unknown as { pictureInPictureEnabled?: boolean }).pictureInPictureEnabled;
+  }
+  function ensurePipCompositor() {
+    if (pipCanvas) return;
+    pipCanvas = document.createElement("canvas");
+    pipCanvas.width = 640; pipCanvas.height = 360;
+    pipCtx = pipCanvas.getContext("2d");
+    pipVideo = document.createElement("video");
+    pipVideo.muted = true; pipVideo.playsInline = true; pipVideo.autoplay = true;
+    (pipVideo as unknown as { autoPictureInPicture?: boolean }).autoPictureInPicture = true;
+    pipVideo.setAttribute("style", "position:fixed;left:-10000px;top:0;width:2px;height:2px;opacity:0;pointer-events:none");
+    const cap = (pipCanvas as unknown as { captureStream?: (fps: number) => MediaStream }).captureStream;
+    if (cap) pipVideo.srcObject = cap.call(pipCanvas, 24);
+    document.body.appendChild(pipVideo);
+    pipVideo.addEventListener("leavepictureinpicture", () => { pipActive = false; stopPipLoop(); updatePipBtn(false); });
+  }
+  // The ordered <video> elements to feature: screen share first, then loudest
+  // speakers, then DOM order, self last. Returns up to 2.
+  function pipSourceVideos(): HTMLVideoElement[] {
+    const ids: string[] = [];
+    const push = (id?: string | null) => { if (id && !ids.includes(id) && document.getElementById(id)) ids.push(id); };
+    screenShareIds.forEach(push);
+    speakerOrder.forEach(push);
+    push(activeSpeakerId);
+    const grid = $("videoGrid");
+    if (grid) Array.from(grid.children).forEach(c => { const id = (c as HTMLElement).id; if (id !== "tile-self") push(id); });
+    push("tile-self");
+    return ids.slice(0, 2)
+      .map(id => document.getElementById(id)?.querySelector("video") as HTMLVideoElement | null)
+      .filter((v): v is HTMLVideoElement => !!v && v.videoWidth > 0);
+  }
+  function pipDrawCover(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, dx: number, dy: number, dw: number, dh: number) {
+    const vw = video.videoWidth || 16, vh = video.videoHeight || 9;
+    const scale = Math.max(dw / vw, dh / vh);
+    const sw = dw / scale, sh = dh / scale;
+    const sx = (vw - sw) / 2, sy = (vh - sh) / 2;
+    try { ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh); } catch { /* not ready */ }
+  }
+  function pipRender() {
+    if (!pipActive || !pipCanvas || !pipCtx) return;
+    const W = pipCanvas.width, H = pipCanvas.height;
+    pipCtx.fillStyle = "#0b0c10";
+    pipCtx.fillRect(0, 0, W, H);
+    const vids = pipSourceVideos();
+    if (vids.length >= 2) {
+      // Side-by-side split of the two active speakers.
+      pipDrawCover(pipCtx, vids[0], 0, 0, W / 2 - 1, H);
+      pipDrawCover(pipCtx, vids[1], W / 2 + 1, 0, W / 2 - 1, H);
+      pipCtx.fillStyle = "rgba(255,255,255,.15)";
+      pipCtx.fillRect(W / 2 - 1, 0, 2, H);
+    } else if (vids.length === 1) {
+      pipDrawCover(pipCtx, vids[0], 0, 0, W, H);
+    }
+  }
+  function startPipLoop() {
+    stopPipLoop();
+    // ~12fps composite — plenty for a thumbnail, and keeps the captured stream
+    // (and thus the PiP window) updating while the page is backgrounded.
+    pipTimer = setInterval(pipRender, 80);
+    pipRender();
+  }
+  function stopPipLoop() { if (pipTimer) { clearInterval(pipTimer); pipTimer = null; } }
+  function updatePipBtn(on: boolean) {
+    const b = $("pipBtn");
+    if (!b) return;
+    b.style.display = pipSupported() ? "" : "none";
+    b.classList.toggle("on", on);
+  }
+  async function enterPip() {
+    if (!pipSupported() || !inCall) { toast("Picture-in-Picture isn't available here.", true); return; }
+    ensurePipCompositor();
+    pipActive = true;
+    startPipLoop();
+    try { await pipVideo!.play(); } catch { /* */ }
+    try {
+      await (pipVideo as unknown as { requestPictureInPicture: () => Promise<unknown> }).requestPictureInPicture();
+      updatePipBtn(true);
+      toast("Picture-in-Picture on");
+    } catch {
+      pipActive = false; stopPipLoop(); updatePipBtn(false);
+      toast("Couldn't start Picture-in-Picture.", true);
+    }
+  }
+  async function exitPip() {
+    pipActive = false; stopPipLoop();
+    try {
+      const d = document as unknown as { pictureInPictureElement?: Element; exitPictureInPicture?: () => Promise<void> };
+      if (d.pictureInPictureElement && d.exitPictureInPicture) await d.exitPictureInPicture();
+    } catch { /* */ }
+    updatePipBtn(false);
+  }
+  function togglePip() {
+    const inPip = !!(document as unknown as { pictureInPictureElement?: Element }).pictureInPictureElement;
+    if (pipActive || inPip) void exitPip(); else void enterPip();
+  }
+  function teardownPip() {
+    void exitPip();
+    if (pipVideo) { try { pipVideo.srcObject = null; pipVideo.remove(); } catch { /* */ } pipVideo = null; }
+    pipCanvas = null; pipCtx = null;
   }
 
   // ---------- chat (data channels) ----------
@@ -2510,10 +2645,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     for (const id in peers) delete peers[id];
     pendingGroupInvites = [];
     for (const k in peerDevices) delete peerDevices[k];
+    for (const k in peerFlags) delete peerFlags[k];
     for (const k in peerRoles) delete peerRoles[k];
     lkAudioEls.length = 0;
     myRole = null; roomHostPin = null;
     closeHostPanel(); closeAudioMenu(); updateHostUI();
+    void exitPip(); // leave PiP when the call ends
     stopStatsSampler();
     teardownSpeakerMonitor();
     resetSpeakerView();
@@ -2654,6 +2791,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   });
   ($("audioMenu") as HTMLElement | null)?.addEventListener("click", onAudioMenuClick);
   updateAudioBtn();
+  // Picture-in-Picture (composited active speakers).
+  ($("pipBtn") as HTMLElement | null)?.addEventListener("click", togglePip);
+  updatePipBtn(false);
   if (typeof navigator !== "undefined" && navigator.mediaDevices?.addEventListener) {
     try { navigator.mediaDevices.addEventListener("devicechange", onAudioDeviceChange); } catch { /* */ }
   }
@@ -2733,6 +2873,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
     setPreferredPin(pin) {
       preferredPin = pin && /^\d{6}$/.test(pin) ? pin : null;
     },
+    setSelfFlag(flag) {
+      const f = (flag || "").slice(0, 8);
+      if (f === selfFlag) return;
+      selfFlag = f;
+      // If already registered, re-affirm so the server stores it (and future
+      // member lists carry it). Also update our own self tile live.
+      if (me.pin && ws && ws.readyState === 1) {
+        sendWS({ type: "register", name: me.name || "Guest", pin: me.pin, device: detectDeviceType(), flag: selfFlag || undefined });
+      }
+      setTileFlag("tile-self", selfFlag);
+    },
     setOnPinChange(cb) {
       onPinChange = cb;
       // Fire immediately with the current value so a late subscriber syncs up.
@@ -2771,6 +2922,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       }
       teardownSpeakerMonitor();
       stopStatsSampler();
+      teardownPip();
       if (callResizeObs) { try { callResizeObs.disconnect(); } catch { /* */ } callResizeObs = null; }
       document.removeEventListener("click", onDocClickAddPad, true);
       if (typeof navigator !== "undefined" && navigator.mediaDevices?.removeEventListener) {

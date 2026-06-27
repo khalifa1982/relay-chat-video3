@@ -88,4 +88,12 @@ describe("relay call UI regression guards", () => {
     expect(RELAY_MARKUP).toMatch(/id="audioMenu"/);
     expect(RELAY_CSS).toMatch(/\.audio-menu\{/);
   });
+
+  // ── flag + Picture-in-Picture (v2.44) ──────────────────────────────────────
+  it("styles a country-flag tag beside the tile name", () => {
+    expect(RELAY_CSS).toMatch(/\.nm-flag/);
+  });
+  it("has a Picture-in-Picture button", () => {
+    expect(RELAY_MARKUP).toMatch(/id="pipBtn"/);
+  });
 });
