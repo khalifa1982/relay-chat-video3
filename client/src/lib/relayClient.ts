@@ -1011,8 +1011,36 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
 
   // ---------- video grid ----------
+  let connSeqTimers: ReturnType<typeof setTimeout>[] = [];
+  function clearConnSeq() {
+    connSeqTimers.forEach(t => clearTimeout(t));
+    connSeqTimers = [];
+    $("connSeq")?.classList.remove("show", "hide");
+  }
+  // Brief "Transmission Connected → Encryption → Join the Call" handshake shown
+  // for ~2.3s when a call screen opens — a professional connecting cue.
+  function runConnSequence() {
+    const o = $("connSeq"); if (!o) return;
+    clearConnSeq();
+    const steps = Array.from(o.querySelectorAll<HTMLElement>(".conn-step"));
+    steps.forEach(s => s.classList.remove("active", "done"));
+    o.classList.remove("hide"); o.classList.add("show");
+    const advance = (i: number) => steps.forEach((s, idx) => {
+      s.classList.toggle("active", idx === i);
+      s.classList.toggle("done", idx < i);
+    });
+    advance(0);
+    connSeqTimers.push(setTimeout(() => advance(1), 700));
+    connSeqTimers.push(setTimeout(() => advance(2), 1400));
+    connSeqTimers.push(setTimeout(() => steps.forEach(s => { s.classList.remove("active"); s.classList.add("done"); }), 2050));
+    connSeqTimers.push(setTimeout(() => {
+      o.classList.add("hide");
+      connSeqTimers.push(setTimeout(() => o.classList.remove("show", "hide"), 400));
+    }, 2300));
+  }
   function enterCallUI(label: string) {
     show("call");
+    runConnSequence();
     // On the SFU path, start the join watchdog so a failed/slow token or connect
     // recovers (re-request) or surfaces an error instead of a silent dead call.
     if (livekitEnabled) armLkWatchdog();
@@ -1107,11 +1135,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
       }
     }
   }
+  // Wrap http(s)/www URLs in safe anchors. Input MUST already be HTML-escaped.
+  function linkifyEscaped(escaped: string): string {
+    return escaped.replace(/((?:https?:\/\/|www\.)[^\s<]+[^\s<.,!?)\]}"'])/gi, (u) => {
+      const href = /^www\./i.test(u) ? "https://" + u : u;
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer nofollow" style="color:var(--accent2);text-decoration:underline">${u}</a>`;
+    });
+  }
   function addChatMsg(name: string, text: string, mine: boolean) {
     const log = $("chatLog"); if (!log) return;
     const d = document.createElement("div");
     d.className = "relay-msg " + (mine ? "me" : "them");
-    d.innerHTML = (mine ? "" : '<div class="au">' + escapeHtml(name) + "</div>") + escapeHtml(text);
+    d.innerHTML = (mine ? "" : '<div class="au">' + escapeHtml(name) + "</div>") + linkifyEscaped(escapeHtml(text));
     log.appendChild(d); log.scrollTop = log.scrollHeight;
     if (!mine && !$("chatPanel")?.classList.contains("open")) {
       unread++;
@@ -1216,6 +1251,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     pendingRing = null;
     $("ringOverlay")?.classList.remove("active");
+    clearConnSeq();
     // Disconnect the SFU BEFORE stopping localStream/pipeline below, or LiveKit
     // errors republishing a dead track during teardown. No-op on the mesh path.
     // NOTE: keep `livekitEnabled` (it's a stable server-config flag captured at
@@ -1348,6 +1384,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (reconnectT) { clearTimeout(reconnectT); reconnectT = null; }
       if (timerInt) { clearInterval(timerInt); timerInt = null; }
       if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
+      clearConnSeq();
       // Disconnect the SFU before stopping local tracks (no-op on the mesh path).
       teardownLivekit();
       try { ws?.close(); } catch { /* */ }

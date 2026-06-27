@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { uploadAttachment } from "@/lib/uploadAttachment";
+import { linkify } from "@/lib/linkify";
 import { useIdentity } from "@/app/useIdentity";
 
 const EMOJI_QUICK = [
@@ -454,7 +455,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     />
                   )}
                   {m.body && (
-                    <div className="whitespace-pre-wrap leading-relaxed">{m.body}</div>
+                    <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body)}</div>
                   )}
                   <div
                     className={

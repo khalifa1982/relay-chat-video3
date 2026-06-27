@@ -6,7 +6,9 @@ import {
   PhoneMissed,
   PhoneOutgoing,
   UserPlus,
+  Share2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { useIdentity } from "@/app/useIdentity";
@@ -152,6 +154,22 @@ export default function DialerPage() {
     }
   }
 
+  // Share a "call me" invite link. Opening it auto-dials this number (the Dialer
+  // already honors ?to=). Uses the native share sheet on mobile, clipboard else.
+  function shareInvite() {
+    const num = enginePin ?? me?.number ?? null;
+    if (!num) return;
+    const url = `${window.location.origin}/app/dialer?to=${num}`;
+    if (typeof navigator !== "undefined" && navigator.share) {
+      navigator.share({ title: "Call me on RELAY", text: `Call me on RELAY — dial ${num}`, url }).catch(() => {});
+    } else {
+      navigator.clipboard
+        ?.writeText(url)
+        .then(() => toast.success("Invite link copied"))
+        .catch(() => toast.error("Couldn't copy the link"));
+    }
+  }
+
   const previewIdentity = previewQuery.data ?? null;
   // Self-call guard and the displayed "your number" must both use the
   // signaling pin (enginePin), NOT the v2 identity number, otherwise the
@@ -289,9 +307,13 @@ export default function DialerPage() {
                 aria-live="polite"
               >
                 {ghost.mode === "ghost" ? (
-                  <span className="font-medium tracking-wide">
-                    Your number · tap any key to dial someone
-                  </span>
+                  <button
+                    type="button"
+                    onClick={shareInvite}
+                    className="inline-flex items-center gap-1.5 font-medium tracking-wide text-muted-foreground hover:text-foreground transition-colors active:scale-95"
+                  >
+                    <Share2 className="size-3.5" /> Share invite link
+                  </button>
                 ) : ghost.mode === "typed" && dialed.length === 6 ? (
                   previewQuery.isLoading ? (
                     "Looking up…"
