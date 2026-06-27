@@ -121,6 +121,10 @@ export const RELAY_MARKUP = `
         <button id="addGo">Add to call</button>
       </div>
       <div class="audio-menu" id="audioMenu"></div>
+      <div class="tile-menu" id="tileMenu">
+        <div class="tm-head"><span id="tmName">Participant</span><button id="tmClose" type="button" aria-label="Close" title="Close">&#10005;</button></div>
+        <div class="tm-acts" id="tmActs"></div>
+      </div>
       <div class="host-panel" id="hostPanel">
         <div class="host-head"><span>Host controls</span><button id="hostClose" type="button" aria-label="Close" title="Close">&#10005;</button></div>
         <div class="host-actions">
@@ -394,11 +398,16 @@ export const RELAY_CSS = `
 /* Cam-off display: full name under the avatar (never a blank black box). */
 .relay-root .relay-tile .ph-name{font-size:14px;font-weight:600;color:var(--text);max-width:84%;text-align:center;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* Per-tile info chip: device type + live connection speed (e.g. "5.2 Mbps"). */
-.relay-root .relay-tile .tile-info{position:absolute;right:10px;bottom:11px;display:flex;gap:6px;align-items:center;pointer-events:none}
+/* Per-tile info chip: device type + live connection speed (e.g. "5.2 Mbps").
+   Pinned to the TOP-right so it never collides with the bottom-left name label
+   (which, with a Host badge + flag, can be wide on a narrow tile). */
+.relay-root .relay-tile .tile-info{position:absolute;right:10px;top:11px;display:flex;gap:6px;align-items:center;
+  pointer-events:none;max-width:calc(100% - 20px);flex-wrap:wrap;justify-content:flex-end}
 .relay-root .relay-tile .tile-info span{background:rgba(8,9,12,.62);backdrop-filter:blur(6px);padding:3px 7px;border-radius:7px;
   font-size:10px;font-weight:600;color:#cbd5e1;line-height:1.2}
 .relay-root .relay-tile .tile-info span:empty{display:none}
+/* Thumbnails in the spotlight filmstrip are tiny — drop the info chip there. */
+.relay-root #videoGrid.spotlight .relay-tile.is-thumb .tile-info{display:none}
 /* Active-speaking cue: a glowing ring + a soft sound-wave halo on the avatar.
    The static outline always marks the speaker; the pulse is motion-gated. */
 @media (prefers-reduced-motion: no-preference){
@@ -417,12 +426,21 @@ export const RELAY_CSS = `
 .relay-root #videoGrid.spotlight .relay-tile.is-thumb .nm{font-size:11px;padding:3px 7px}
 .relay-root #videoGrid.compact{padding:8px;gap:8px}
 .relay-root .relay-tile .ph{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+/* SELF tile: hide the centered avatar/name placeholder once the camera is on
+   (remote tiles toggle .ph inline via JS; the self tile didn't, so the big name
+   used to sit over your own face). Shown again only when cam-off (.audio-only)
+   or while sharing your screen has its own .screen handling. */
+.relay-root .relay-tile.you:not(.audio-only) .ph{display:none}
 .relay-root .relay-tile .ph .av{width:74px;height:74px;border-radius:24px;background:var(--surface2);border:1px solid var(--border);
   display:grid;place-items:center;font-family:"Bricolage Grotesque";font-weight:800;font-size:30px;color:var(--accent)}
-.relay-root .relay-tile .nm{position:absolute;left:12px;bottom:11px;display:flex;align-items:center;gap:7px;
-  background:rgba(8,9,12,.62);backdrop-filter:blur(6px);padding:5px 11px;border-radius:9px;font-size:13px;font-weight:600}
+.relay-root .relay-tile .nm{position:absolute;left:12px;bottom:11px;display:flex;align-items:center;gap:7px;max-width:calc(100% - 24px);
+  background:rgba(8,9,12,.62);backdrop-filter:blur(6px);padding:5px 11px;border-radius:9px;font-size:13px;font-weight:600;
+  white-space:nowrap;overflow:hidden}
+/* The display name itself truncates with an ellipsis (the badge/flag stay). */
+.relay-root .relay-tile .nm .nm-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .relay-root .relay-tile.you .nm{background:rgba(63,224,197,.2);color:var(--accent)}
-.relay-root .connecting{position:absolute;top:11px;right:12px;font-size:11px;color:var(--warn);background:rgba(255,180,84,.14);
+/* "connecting…" sits TOP-LEFT now (the info chip owns the top-right corner). */
+.relay-root .connecting{position:absolute;top:11px;left:12px;font-size:11px;color:var(--warn);background:rgba(255,180,84,.14);
   padding:3px 9px;border-radius:7px;letter-spacing:.04em}
 
 .relay-root .chat{width:320px;border-left:1px solid var(--border);display:none;flex-direction:column;background:var(--bg2)}
@@ -572,7 +590,30 @@ export const RELAY_CSS = `
 .relay-root .hl-acts button{background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:4px 7px;color:var(--text);
   font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap}
 .relay-root .hl-acts button:hover{border-color:var(--accent);color:var(--accent)}
+.relay-root .hl-acts button.hl-danger{color:var(--danger);border-color:rgba(255,92,114,.3)}
+.relay-root .hl-acts button.hl-danger:hover{border-color:var(--danger);color:var(--danger);background:rgba(255,92,114,.12)}
 .relay-root .hl-empty{padding:18px;text-align:center;font-size:12px;color:var(--text2,#9aa)}
+/* Per-tile ⋮ host menu button (corner of each remote tile, moderators only). */
+.relay-root .relay-tile .tile-menu-btn{position:absolute;right:8px;bottom:8px;z-index:4;width:30px;height:30px;border-radius:50%;
+  border:none;display:none;place-items:center;background:rgba(8,9,12,.62);backdrop-filter:blur(6px);color:#fff;font-size:19px;
+  font-weight:800;cursor:pointer;line-height:1;padding:0}
+.relay-root #videoGrid.mod-on .relay-tile:not(.you) .tile-menu-btn{display:grid}
+.relay-root .relay-tile .tile-menu-btn:hover{background:var(--accent);color:#04201B}
+/* Shared bottom-sheet action menu opened by a tile's ⋮ button. */
+.relay-root .tile-menu{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);width:260px;max-width:90vw;display:none;
+  flex-direction:column;background:var(--surface);border:1px solid var(--border2);border-radius:16px;overflow:hidden;
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:32}
+.relay-root .tile-menu.open{display:flex;animation:relayFade .2s ease both}
+.relay-root .tm-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--border);
+  font-family:"Bricolage Grotesque";font-weight:600;font-size:14px}
+.relay-root #tmClose{background:none;border:none;color:var(--text2,#9aa);font-size:14px;cursor:pointer;padding:3px 7px;border-radius:8px;font-weight:700}
+.relay-root #tmClose:hover{background:var(--bg2);color:var(--text)}
+.relay-root .tm-acts{display:flex;flex-direction:column;padding:6px}
+.relay-root .tm-acts button{background:none;border:none;text-align:left;padding:11px 12px;border-radius:10px;color:var(--text);
+  font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit}
+.relay-root .tm-acts button:hover{background:var(--bg2)}
+.relay-root .tm-acts button.tm-danger{color:var(--danger)}
+.relay-root .tm-acts button.tm-danger:hover{background:rgba(255,92,114,.14)}
 /* ── audio-output picker (speaker / earpiece / headset / Bluetooth) ──────── */
 .relay-root .audio-menu{position:absolute;bottom:84px;right:18px;width:248px;max-width:86vw;max-height:50vh;display:none;
   flex-direction:column;background:var(--surface);border:1px solid var(--border2);border-radius:16px;overflow-y:auto;

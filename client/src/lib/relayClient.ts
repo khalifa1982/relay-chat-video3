@@ -365,6 +365,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
         if (m.pin && m.device) { peerDevices[m.pin] = m.device; setTileDevice("tile-" + m.pin, m.device); }
         break;
       case "peer-hold":    onPeerHold(m); break;
+      case "peer-screen":  onPeerScreen(m); break;
+      case "kicked":
+        toast("You were removed from the call by the host.", true);
+        hangUp("kicked");
+        break;
       case "signal":       onSignal(m.from!, m.data); break;
       case "ice":          onIceServers(m); break;
       case "error":
@@ -1310,17 +1315,25 @@ export function startRelay(root: HTMLElement): RelayHandle {
   const SOUND_WAVE_HTML = '<div class="sound-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>';
   // Placeholder (avatar + full name, shown when the camera is off) + an info
   // chip (device + live speed) used by every tile builder.
-  function tileContentHTML(name: string, device: string, flag: string): string {
+  function tileContentHTML(name: string, device: string, flag: string, pin?: string): string {
     const dev = device
       ? '<span class="ti-dev">' + escapeHtml(device) + "</span>"
       : '<span class="ti-dev"></span>';
     const fl = '<span class="nm-flag">' + (flag ? escapeHtml(flag) : "") + "</span>";
+    // Host/co-host control: a ⋮ menu in the corner (shown only when #videoGrid is
+    // .mod-on). Remote tiles only.
+    const menuBtn = pin
+      ? '<button class="tile-menu-btn" type="button" data-pin="' + escapeHtml(pin) + '" aria-label="Participant options" title="Options">⋮</button>'
+      : "";
+    // The flag lives ONLY in the bottom-left .nm label (not also in the centered
+    // cam-off name) so it never renders twice on a camera-off tile.
     return (
       '<div class="ph"><div class="av">' + initials(name) + "</div>" +
-      '<div class="ph-name">' + fl + escapeHtml(name) + "</div>" +
+      '<div class="ph-name">' + escapeHtml(name) + "</div>" +
       SOUND_WAVE_HTML + "</div>" +
-      '<div class="nm">' + fl + escapeHtml(name) + "</div>" +
-      '<div class="tile-info">' + dev + '<span class="ti-speed"></span></div>'
+      '<div class="nm">' + fl + '<span class="nm-text">' + escapeHtml(name) + "</span></div>" +
+      '<div class="tile-info">' + dev + '<span class="ti-speed"></span></div>' +
+      menuBtn
     );
   }
   function setTileDevice(tileId: string, device: string) {
@@ -1389,10 +1402,68 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function updateHostUI() {
     const b = $("hostBtn");
     if (b) b.style.display = isModerator() ? "" : "none";
+    // Reveal the per-tile ⋮ menu buttons only for moderators.
+    $("videoGrid")?.classList.toggle("mod-on", isModerator());
+  }
+  // ---- per-tile host menu (⋮ in a tile corner) ----
+  function openTileMenu(pin: string) {
+    if (!isModerator() || !pin) return;
+    const nameEl = $("tmName"); if (nameEl) nameEl.textContent = nameOf(pin);
+    const acts = $("tmActs");
+    if (acts) {
+      const amHost = myRole === "host";
+      const role = peerRoles[pin];
+      const rows: string[] = [];
+      rows.push('<button data-act="pin" data-pin="' + pin + '">Pin to everyone’s view</button>');
+      rows.push('<button data-act="mute" data-pin="' + pin + '">Mute</button>');
+      if (amHost) {
+        rows.push('<button data-act="cohost" data-pin="' + pin + '">' + (role === "cohost" ? "Remove co-host" : "Make co-host") + "</button>");
+        if (role !== "host") rows.push('<button data-act="makehost" data-pin="' + pin + '">Make host</button>');
+      }
+      rows.push('<button class="tm-danger" data-act="kick" data-pin="' + pin + '">Remove from call</button>');
+      acts.innerHTML = rows.join("");
+    }
+    $("tileMenu")?.classList.add("open");
+  }
+  function closeTileMenu() { $("tileMenu")?.classList.remove("open"); }
+  function onTileMenuClick(e: Event) {
+    const btn = (e.target as HTMLElement)?.closest?.("button[data-act]") as HTMLElement | null;
+    if (!btn) return;
+    const act = btn.getAttribute("data-act") || "";
+    const pin = btn.getAttribute("data-pin") || "";
+    if (!pin) return;
+    if (act === "kick") {
+      if (confirm("Remove " + nameOf(pin) + " from the call?")) { sendMod("kick", pin); closeTileMenu(); }
+      return;
+    }
+    if (act === "makehost") {
+      if (confirm("Make " + nameOf(pin) + " the host? You'll become a co-host.")) { sendMod("makehost", pin); closeTileMenu(); }
+      return;
+    }
+    sendMod(act, pin); // pin / mute / cohost
+    if (act !== "cohost") closeTileMenu();
   }
   function onForceMute(m: Msg) {
     if (m.on) { setMic(false); toast("You were muted by the host."); }
     else { setMic(true); toast("The host unmuted you."); }
+  }
+  // A peer started/stopped screen sharing. Spotlight (or release) their tile for
+  // EVERYONE — independent of per-browser track-source detection, so a shared
+  // screen shows prominently to all participants, not just the sharer.
+  function onPeerScreen(m: Msg) {
+    const pin = m.pin || ""; if (!pin) return;
+    const id = "tile-" + pin;
+    const tile = document.getElementById(id);
+    if (m.on) {
+      screenShareIds.add(id);
+      tile?.classList.add("screen");
+      addSysMsg(nameOf(pin) + " is sharing their screen.");
+    } else {
+      screenShareIds.delete(id);
+      tile?.classList.remove("screen");
+    }
+    layoutGrid();
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutGrid());
   }
   // A peer put this call on hold to take another call. Mark their tile + notify.
   function onPeerHold(m: Msg) {
@@ -1412,9 +1483,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const pin = m.pin || "";
     if (!pin) return;
     const role = (m.role as string | null) ?? null;
+    if (m.hostPin !== undefined) roomHostPin = m.hostPin ?? null;
     if (role) peerRoles[pin] = role; else delete peerRoles[pin];
     setTileRole(pin === me.pin ? "tile-self" : "tile-" + pin, role);
-    if (pin === me.pin) { myRole = role; updateHostUI(); toast(role === "cohost" ? "You're now a co-host." : "You're no longer a co-host."); }
+    if (pin === me.pin) {
+      myRole = role; updateHostUI();
+      const msg = role === "host" ? "You're now the host."
+        : role === "cohost" ? "You're now a co-host."
+        : "You're no longer a co-host.";
+      toast(msg);
+    } else if (role === "host") {
+      toast(nameOf(pin) + " is now the host.");
+    }
     refreshHostPanel();
   }
   function onHostPin(m: Msg) {
@@ -1462,6 +1542,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
             '<button data-act="mute" data-pin="' + pin + '">Mute</button>' +
             '<button data-act="pin" data-pin="' + pin + '">Pin</button>' +
             (amHost ? '<button data-act="cohost" data-pin="' + pin + '">' + cohostLabel + "</button>" : "") +
+            (amHost && role !== "host" ? '<button data-act="makehost" data-pin="' + pin + '">Make host</button>' : "") +
+            (role !== "host" ? '<button class="hl-danger" data-act="kick" data-pin="' + pin + '">Remove</button>' : "") +
           "</div>" +
         "</div>"
       );
@@ -1476,6 +1558,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (act === "mute") { sendMod("mute", pin); toast("Muted " + pin); }
     else if (act === "pin") { sendMod("pin", pin); closeHostPanel(); }
     else if (act === "cohost") { sendMod("cohost", pin); }
+    else if (act === "makehost") {
+      if (confirm("Make " + nameOf(pin) + " the host? You'll become a co-host.")) {
+        sendMod("makehost", pin); closeHostPanel();
+      }
+    }
+    else if (act === "kick") {
+      if (confirm("Remove " + nameOf(pin) + " from the call?")) {
+        sendMod("kick", pin); closeHostPanel();
+      }
+    }
   }
 
   // ---------- live bitrate (getStats) ----------
@@ -1565,7 +1657,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const v = document.createElement("video");
     v.autoplay = true; v.playsInline = true;
     t.appendChild(v);
-    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || "", peerFlags[id] || ""));
+    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || "", peerFlags[id] || "", id));
     t.insertAdjacentHTML("beforeend", '<div class="connecting">connecting…</div>');
     lkParticipantTiles[id] = t;
     grid.appendChild(t);
@@ -2094,9 +2186,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     t.insertAdjacentHTML(
       "beforeend",
       '<div class="ph"><div class="av">' + initials(me.name || "You") + "</div>" +
-        '<div class="ph-name">' + selfFl + "You</div>" +
+        '<div class="ph-name">You</div>' +
         SOUND_WAVE_HTML + "</div>" +
-        '<div class="nm">' + selfFl + "You</div>" +
+        '<div class="nm">' + selfFl + '<span class="nm-text">You</span></div>' +
         '<div class="tile-info"><span class="ti-dev">' + escapeHtml(detectDeviceType()) + "</span>" +
         '<span class="ti-speed"></span></div>'
     );
@@ -2112,7 +2204,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const v = document.createElement("video");
     v.autoplay = true; v.playsInline = true;
     t.appendChild(v);
-    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || "", peerFlags[id] || ""));
+    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || "", peerFlags[id] || "", id));
     t.insertAdjacentHTML("beforeend", '<div class="connecting">connecting…</div>');
     entry.el = t;
     grid.appendChild(t);
@@ -2193,6 +2285,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
   /** Click a tile to spotlight it big; click the spotlighted tile again to unpin. */
   function onGridClick(e: Event) {
     if (!inCall) return;
+    // A tap on the per-tile ⋮ opens the host menu instead of spotlighting.
+    const menuBtn = (e.target as HTMLElement)?.closest?.(".tile-menu-btn") as HTMLElement | null;
+    if (menuBtn) {
+      e.stopPropagation();
+      openTileMenu(menuBtn.getAttribute("data-pin") || "");
+      return;
+    }
     const tile = (e.target as HTMLElement)?.closest?.(".relay-tile") as HTMLElement | null;
     if (!tile) return;
     if (manualSpotlight && spotlightId === tile.id) {
@@ -2583,6 +2682,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenShareIds.add("tile-self");
     layoutGrid();
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutGrid());
+    // Tell everyone we're sharing so they spotlight our tile (works on every
+    // browser — viewers don't need to detect the track source themselves).
+    sendWS({ type: "screen", action: "on" });
     screenBusy = false;
     toast("Sharing your screen");
   }
@@ -2605,6 +2707,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     screenShareIds.delete("tile-self");
     layoutGrid();
+    sendWS({ type: "screen", action: "off" });
     screenBusy = false;
     toast("Stopped screen sharing");
   }
@@ -2690,7 +2793,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     for (const k in peerRoles) delete peerRoles[k];
     lkAudioEls.length = 0;
     myRole = null; roomHostPin = null;
-    closeHostPanel(); closeAudioMenu(); updateHostUI();
+    closeHostPanel(); closeAudioMenu(); closeTileMenu(); updateHostUI();
     void exitPip(); // leave PiP when the call ends
     stopStatsSampler();
     teardownSpeakerMonitor();
@@ -2794,6 +2897,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("unmuteAllBtn") as HTMLElement | null)?.addEventListener("click", () => { sendMod("unmute-all"); toast("Asked everyone to unmute."); });
   ($("gridBtn") as HTMLElement | null)?.addEventListener("click", () => { sendMod("grid"); closeHostPanel(); });
   ($("hostList") as HTMLElement | null)?.addEventListener("click", onHostListClick);
+  // Per-tile host menu
+  ($("tmClose") as HTMLElement | null)?.addEventListener("click", closeTileMenu);
+  ($("tmActs") as HTMLElement | null)?.addEventListener("click", onTileMenuClick);
   // Dismiss the add-person pad on an outside click (capture phase so it runs
   // before the add-button's own toggle; the add button is excluded so toggling
   // still works). This fixes the "can't close the add window during a call" bug.
@@ -2809,6 +2915,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     };
     if (outside("addpad", "addBtn")) closeAddPad();
     if (outside("audioMenu", "audioBtn")) closeAudioMenu();
+    // Tile menu closes on any outside click (its ⋮ openers live on tiles).
+    const tm = $("tileMenu");
+    if (tm && tm.classList.contains("open") && !tm.contains(t) && !(t as HTMLElement)?.closest?.(".tile-menu-btn")) closeTileMenu();
   };
   document.addEventListener("click", onDocClickAddPad, true);
   ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => hangUp("user-hangup"));

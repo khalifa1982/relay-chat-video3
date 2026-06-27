@@ -114,4 +114,22 @@ describe("relay call UI regression guards", () => {
   it("has an on-hold tile badge", () => {
     expect(RELAY_CSS).toMatch(/\.relay-tile\.on-hold::after/);
   });
+
+  // ── v2.45.1 tile-chrome fixes ──────────────────────────────────────────────
+  it("the device/speed chip sits at the TOP (not bottom) so it can't overlap the name", () => {
+    expect(RELAY_CSS).toMatch(/\.tile-info\{[^}]*top:11px/);
+    expect(RELAY_CSS).not.toMatch(/\.tile-info\{[^}]*bottom:11px/);
+  });
+  it("the name label is width-capped and truncates", () => {
+    expect(RELAY_CSS).toMatch(/\.relay-tile \.nm\{[^}]*max-width/);
+    expect(RELAY_CSS).toMatch(/\.nm \.nm-text\{[^}]*text-overflow:ellipsis/);
+  });
+
+  // ── per-tile host menu (v2.47) ─────────────────────────────────────────────
+  it("has a per-tile host ⋮ menu (shown only when moderating) + a shared menu", () => {
+    expect(RELAY_CSS).toMatch(/\.tile-menu-btn\{/);
+    expect(RELAY_CSS).toMatch(/#videoGrid\.mod-on .relay-tile:not\(\.you\) \.tile-menu-btn/);
+    expect(RELAY_MARKUP).toMatch(/id="tileMenu"/);
+    expect(RELAY_MARKUP).toMatch(/id="tmActs"/);
+  });
 });

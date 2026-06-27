@@ -1079,6 +1079,17 @@ export function handleMessage(
       break;
     }
 
+    case "screen": {
+      // The caller started/stopped sharing their screen. Tell the room so EVERY
+      // participant can spotlight the sharer's tile — we don't rely on per-browser
+      // track-source detection (the mesh + replaced-track paths don't expose it).
+      const rid = self.roomId;
+      if (!rid) break;
+      const on = msg.action !== "off";
+      broadcastToRoom(reg, rid, { type: "peer-screen", pin: conn.pin, on }, conn.pin);
+      break;
+    }
+
     case "mod": {
       // Host / co-host moderation. Only a moderator of the caller's own active
       // room may act, and only on members of THAT room.
@@ -1117,6 +1128,40 @@ export function handleMessage(
           const role = meta!.cohosts.has(target) ? undefined : "cohost";
           if (role) meta!.cohosts.add(target); else meta!.cohosts.delete(target);
           broadcastToRoom(reg, rid, { type: "role", pin: target, role: role ?? null });
+          break;
+        }
+        case "makehost": {
+          // Transfer the HOST role to another member. Only the current host can.
+          if (meta!.hostPin !== conn.pin) {
+            safeSend(conn.socket, { type: "error", code: "forbidden", message: "Only the host can transfer the host role." });
+            break;
+          }
+          if (!room.has(target) || target === meta!.hostPin) break;
+          const oldHost = meta!.hostPin;
+          meta!.hostPin = target;
+          meta!.cohosts.delete(target);     // new host is no longer just a co-host
+          if (oldHost) meta!.cohosts.add(oldHost); // demote old host to co-host
+          // Tell the room about BOTH role changes.
+          broadcastToRoom(reg, rid, { type: "role", pin: target, role: "host", hostPin: target });
+          if (oldHost) broadcastToRoom(reg, rid, { type: "role", pin: oldHost, role: "cohost", hostPin: target });
+          break;
+        }
+        case "kick": {
+          // Remove a participant from the call. A co-host can remove regular
+          // members; only the host can remove a co-host; nobody can remove the host.
+          if (!room.has(target) || target === conn.pin) break;
+          const trole = roleOf(meta, target);
+          if (trole === "host") {
+            safeSend(conn.socket, { type: "error", code: "forbidden", message: "You can't remove the host." });
+            break;
+          }
+          if (trole === "cohost" && meta!.hostPin !== conn.pin) {
+            safeSend(conn.socket, { type: "error", code: "forbidden", message: "Only the host can remove a co-host." });
+            break;
+          }
+          // Tell the target they were removed, then force them out of the room.
+          sendTo(target, { type: "kicked", by: conn.pin });
+          leaveRoom(reg, target); // removes membership + broadcasts peer-left + reaps if empty
           break;
         }
         case "pin": {

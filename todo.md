@@ -1439,3 +1439,40 @@ Five refinements + the v2.44 review fixes.
       `pipSupported` now requires `canvas.captureStream` (hides the button on iOS), filter caches clear on
       filter switch, late-resolving flags fan out via a new `peer-meta` broadcast, PiP stream tracks stopped.
 - [x] 5 new tests/guards (hold broadcast + CSS/markup). 349 tests green, tsc + build clean. Footer → `v2.45.0`.
+
+## v2.45.1 — Tile-chrome fixes from device screenshots (delivered 2026-06-27)
+
+- [x] **Name no longer overlaps the device/speed chip.** Moved the device + live-speed chip to the
+      TOP-right corner (it was bottom-right, colliding with the bottom-left name on narrow tiles); the
+      "connecting…" indicator moved to top-left. The name label is width-capped and truncates with an
+      ellipsis (badge + flag stay). The chip is dropped entirely on tiny spotlight thumbnails.
+- [x] **Flag no longer shows twice on a camera-off tile.** The flag now lives ONLY in the bottom-left
+      name label, not also in the centered cam-off placeholder name — so a black/cam-off tile shows it
+      once. 351 tests green, tsc + build clean. Footer → `v2.45.1`.
+
+## v2.46.0 — Cross-browser screen share, host transfer, cam-on placeholder fix (delivered 2026-06-27)
+
+- [x] **Screen share now shows to EVERYONE (any browser).** Instead of relying on per-browser track-source
+      detection (which the mesh + replaced-track paths don't expose), the sharer now broadcasts a `screen`
+      signal; the relay fans out `peer-screen` so every participant spotlights the sharer's tile. Sent on
+      start AND stop.
+- [x] **Host can transfer the host role.** New `mod action:"makehost"` (host-only): promotes the target to
+      host and demotes the old host to co-host, broadcasting both role changes (+ the new hostPin). A
+      "Make host" button appears per-participant in the host panel (with a confirm).
+- [x] **Camera-on no longer shows the big name over your face.** The self-tile's centered avatar/name
+      placeholder is now hidden once the camera is live (`.relay-tile.you:not(.audio-only) .ph{display:none}`)
+      — it only appears when the camera is off. (Regression from the v2.39 cam-off avatar feature.)
+- [x] 4 new server tests (screen broadcast, host transfer + permission gate). 354 tests green, tsc + build
+      clean. Footer → `v2.46.0`.
+
+## v2.47.0 — Per-tile host menu + remove participant (delivered 2026-06-27)
+
+- [x] **Per-tile ⋮ host menu.** Each remote participant's tile now shows a 3-dots button in the corner,
+      visible ONLY to the host/co-host (`#videoGrid.mod-on`). Tapping it opens a sheet with: Pin to
+      everyone's view, Mute, (host) Make co-host, (host) Make host, and **Remove from call**.
+- [x] **Remove participant (kick).** New host/co-host `mod action:"kick"` force-leaves the target
+      (server `leaveRoom` clears membership + broadcasts peer-left); the kicked client gets a `kicked`
+      message and exits the session with a notice. Permission-gated: nobody can remove the host; only the
+      host can remove a co-host. "Remove" also added to the host-panel rows.
+- [x] 2 new server tests (kick removes membership; can't kick the host) + a CSS guard. 357 tests green,
+      tsc + build clean. Footer → `v2.47.0`.
