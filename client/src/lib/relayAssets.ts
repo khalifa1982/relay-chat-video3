@@ -117,6 +117,15 @@ export const RELAY_MARKUP = `
         <input id="addInput" maxlength="6" inputmode="numeric" placeholder="000000">
         <button id="addGo">Add to call</button>
       </div>
+      <div class="host-panel" id="hostPanel">
+        <div class="host-head"><span>Host controls</span><button id="hostClose" type="button" aria-label="Close" title="Close">&#10005;</button></div>
+        <div class="host-actions">
+          <button id="muteAllBtn" type="button">Mute all</button>
+          <button id="unmuteAllBtn" type="button">Unmute all</button>
+          <button id="gridBtn" type="button">Grid view</button>
+        </div>
+        <div class="host-list" id="hostList"></div>
+      </div>
       <div class="ctrl-bar">
         <button class="ctrl" id="micBtn" title="Mute">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/><path d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.9V21a1 1 0 1 0 2 0v-3.1A7 7 0 0 0 19 11z"/></svg>
@@ -139,6 +148,9 @@ export const RELAY_MARKUP = `
         </button>
         <button class="ctrl" id="addBtn" title="Add person">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button class="ctrl" id="hostBtn" title="Host controls" style="display:none">
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
         </button>
         <button class="ctrl" id="chatBtn" title="Chat">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1z"/></svg>
@@ -495,6 +507,32 @@ export const RELAY_CSS = `
   box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:30}
 .relay-root .addpad.open{display:flex;animation:relayFade .2s ease both}
 .relay-root .addpad-head{display:flex;align-items:center;justify-content:space-between;font-size:13px;font-weight:600;color:var(--text)}
+/* ── role badge + host-controls panel (v2.41) ───────────────────────────── */
+.relay-root .relay-tile .nm .role-badge{background:var(--accent);color:#04201B;font-size:9px;font-weight:800;
+  padding:1px 5px;border-radius:5px;letter-spacing:.02em;text-transform:uppercase}
+.relay-root .host-panel{position:absolute;bottom:84px;right:18px;width:280px;max-width:88vw;max-height:60vh;display:none;
+  flex-direction:column;background:var(--surface);border:1px solid var(--border2);border-radius:18px;
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:31;overflow:hidden}
+.relay-root .host-panel.open{display:flex;animation:relayFade .2s ease both}
+.relay-root .host-head{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid var(--border);
+  font-family:"Bricolage Grotesque";font-weight:600;font-size:14px}
+.relay-root #hostClose{background:none;border:none;color:var(--text2,#9aa);font-size:14px;cursor:pointer;padding:3px 7px;border-radius:8px;font-weight:700}
+.relay-root #hostClose:hover{background:var(--bg2);color:var(--text)}
+.relay-root .host-actions{display:flex;gap:7px;padding:11px 13px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.relay-root .host-actions button{flex:1;min-width:78px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;padding:8px 6px;
+  color:var(--text);font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
+.relay-root .host-actions button:hover{border-color:var(--accent)}
+.relay-root .host-list{overflow-y:auto;padding:6px}
+.relay-root .hl-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 8px;border-radius:10px}
+.relay-root .hl-row:hover{background:var(--bg2)}
+.relay-root .hl-name{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;min-width:0}
+.relay-root .hl-name .hl-pin{font-family:"JetBrains Mono";font-size:10px;color:var(--text2,#9aa);font-weight:500}
+.relay-root .hl-badge{background:var(--accent);color:#04201B;font-size:8px;font-weight:800;padding:1px 4px;border-radius:4px;text-transform:uppercase}
+.relay-root .hl-acts{display:flex;gap:4px;flex-shrink:0}
+.relay-root .hl-acts button{background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:4px 7px;color:var(--text);
+  font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap}
+.relay-root .hl-acts button:hover{border-color:var(--accent);color:var(--accent)}
+.relay-root .hl-empty{padding:18px;text-align:center;font-size:12px;color:var(--text2,#9aa)}
 .relay-root #addClose{background:none;border:none;color:var(--text2,#9aa);font-size:14px;line-height:1;cursor:pointer;padding:3px 7px;border-radius:8px;font-weight:700}
 .relay-root #addClose:hover{background:var(--bg2);color:var(--text)}
 .relay-root .addpad input{background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:12px;text-align:center;

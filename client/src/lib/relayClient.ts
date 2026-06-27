@@ -47,7 +47,12 @@ interface Msg {
   fromName?: string;
   to?: string;
   roomId?: string;
-  members?: Array<{ pin: string; name: string; device?: string }>;
+  // Host moderation / roles. (`on`/`by` are shared with the recording message
+  // below, so they're not re-declared here.)
+  role?: string | null;
+  selfRole?: string | null;
+  hostPin?: string | null;
+  members?: Array<{ pin: string; name: string; device?: string; role?: string }>;
   iceServers?: IceConfig["iceServers"];
   data?: { sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
   message?: string;
@@ -144,6 +149,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
   const peerDevices: Record<string, string> = {};
   let statsSampleT: ReturnType<typeof setInterval> | null = null;
   const statsPrev: Record<string, { bytes: number; ts: number }> = {};
+  // Host moderation (v2.41): my role + everyone's roles for badges + the
+  // host-controls panel. "host" | "cohost" | null.
+  let myRole: string | null = null;
+  let roomHostPin: string | null = null;
+  const peerRoles: Record<string, string> = {};
   // ---------- active-speaker / spotlight view (v2.35) ----------
   let spotlightId: string | null = null;     // tile id manually pinned big, or null
   let manualSpotlight = false;               // user clicked a tile to pin it
@@ -309,6 +319,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         break;
       case "room":
         roomId = m.roomId || null;
+        captureSelfRole(m); // the creator is the host
         // Group call: now that the room exists, ring the remaining invitees.
         if (pendingGroupInvites.length) {
           const q = pendingGroupInvites; pendingGroupInvites = [];
@@ -330,6 +341,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
         if (inCall && aloneInCall()) hangUp("peer-busy");
         break;
       case "peer-left":    removePeer(m.pin!); break;
+      case "force-mute":   onForceMute(m); break;
+      case "role":         onRoleChange(m); break;
+      case "host-pin":     onHostPin(m); break;
       case "signal":       onSignal(m.from!, m.data); break;
       case "ice":          onIceServers(m); break;
       case "error":
@@ -919,6 +933,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function onJoined(m: Msg) {
     roomId = m.roomId || null;
     recordMemberDevices(m.members);
+    recordMemberRoles(m.members);
+    captureSelfRole(m);
     if (livekitEnabled && roomId) {
       // SFU path: media goes through LiveKit, not the mesh. Don't build peers;
       // connect to the room (if the token already arrived — otherwise the
@@ -957,6 +973,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     inCall = true;
     enterCallUI("In call");          // shows the call screen + arms the SFU watchdog
     recordMemberDevices(m.members);
+    recordMemberRoles(m.members);
+    captureSelfRole(m);
     toast("Rejoined the call");
     if (livekitEnabled) {
       diag("rejoin: livekit room " + rid);
@@ -971,6 +989,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function onPeerJoined(m: Msg) {
     if (m.pin && m.device) { peerDevices[m.pin] = m.device; setTileDevice("tile-" + m.pin, m.device); }
+    if (m.pin && m.role) { peerRoles[m.pin] = m.role as string; setTileRole("tile-" + m.pin, m.role as string); }
+    refreshHostPanel();
     // On the SFU path, LiveKit's own ParticipantConnected/TrackSubscribed events
     // drive remote tiles — the mesh offer/answer dance is skipped entirely.
     if (livekitEnabled) return;
@@ -1142,6 +1162,119 @@ export function startRelay(root: HTMLElement): RelayHandle {
         setTileDevice("tile-" + mem.pin, mem.device);
       }
     });
+  }
+
+  // ---------- host moderation (roles, mute, pin) ----------
+  function setMic(on: boolean) {
+    if (!localStream) return;
+    micOn = on;
+    localStream.getAudioTracks().forEach(t => (t.enabled = on));
+    $("micBtn")?.classList.toggle("off", !on);
+  }
+  function setTileRole(tileId: string, role: string | null | undefined) {
+    const el = document.getElementById(tileId);
+    let badge = el?.querySelector(".role-badge") as HTMLElement | null;
+    const nm = el?.querySelector(".nm") as HTMLElement | null;
+    if (role) {
+      if (!badge && nm) {
+        badge = document.createElement("span");
+        badge.className = "role-badge";
+        nm.insertBefore(badge, nm.firstChild);
+      }
+      if (badge) badge.textContent = role === "host" ? "Host" : "Co-Host";
+    } else if (badge) {
+      badge.remove();
+    }
+  }
+  function recordMemberRoles(members?: Array<{ pin: string; role?: string }>) {
+    (members || []).forEach(mem => {
+      if (mem.role) { peerRoles[mem.pin] = mem.role; setTileRole("tile-" + mem.pin, mem.role); }
+      else { delete peerRoles[mem.pin]; setTileRole("tile-" + mem.pin, null); }
+    });
+  }
+  function captureSelfRole(m: Msg) {
+    if (m.selfRole !== undefined) myRole = m.selfRole ?? null;
+    if (m.hostPin !== undefined) roomHostPin = m.hostPin ?? null;
+    if (myRole && me.pin) { peerRoles[me.pin] = myRole; setTileRole("tile-self", myRole); }
+    updateHostUI();
+  }
+  function isModerator(): boolean { return myRole === "host" || myRole === "cohost"; }
+  function updateHostUI() {
+    const b = $("hostBtn");
+    if (b) b.style.display = isModerator() ? "" : "none";
+  }
+  function onForceMute(m: Msg) {
+    if (m.on) { setMic(false); toast("You were muted by the host."); }
+    else { setMic(true); toast("The host unmuted you."); }
+  }
+  function onRoleChange(m: Msg) {
+    const pin = m.pin || "";
+    if (!pin) return;
+    const role = (m.role as string | null) ?? null;
+    if (role) peerRoles[pin] = role; else delete peerRoles[pin];
+    setTileRole(pin === me.pin ? "tile-self" : "tile-" + pin, role);
+    if (pin === me.pin) { myRole = role; updateHostUI(); toast(role === "cohost" ? "You're now a co-host." : "You're no longer a co-host."); }
+    refreshHostPanel();
+  }
+  function onHostPin(m: Msg) {
+    const pin = m.pin || null;
+    if (pin) {
+      manualSpotlight = true;
+      spotlightId = pin === me.pin ? "tile-self" : "tile-" + pin;
+      toast("The host pinned a video.");
+    } else {
+      manualSpotlight = false;
+      spotlightId = null;
+      toast("Switched to grid view.");
+    }
+    layoutGrid();
+  }
+  // Send a moderation action to the server (host/co-host only — server re-checks).
+  function sendMod(action: string, target?: string) {
+    sendWS({ type: "mod", action, target });
+  }
+  function openHostPanel() {
+    if (!isModerator()) { toast("Only the host can do that.", true); return; }
+    refreshHostPanel();
+    $("hostPanel")?.classList.add("open");
+  }
+  function closeHostPanel() { $("hostPanel")?.classList.remove("open"); }
+  // Rebuild the participant list with per-row moderation actions.
+  function refreshHostPanel() {
+    const list = $("hostList"); const grid = $("videoGrid");
+    if (!list || !grid) return;
+    const amHost = myRole === "host";
+    const rows: string[] = [];
+    Array.from(grid.children).forEach(node => {
+      const el = node as HTMLElement;
+      if (el.id === "tile-self") return;
+      const pin = el.id.replace(/^tile-/, "");
+      if (!pin) return;
+      const rawName = (el.querySelector(".nm")?.textContent || pin).replace(/^(Host|Co-Host)/, "").trim();
+      const role = peerRoles[pin];
+      const badge = role ? '<span class="hl-badge">' + (role === "host" ? "Host" : "Co-Host") + "</span>" : "";
+      const cohostLabel = role === "cohost" ? "Remove co-host" : "Make co-host";
+      rows.push(
+        '<div class="hl-row">' +
+          '<div class="hl-name">' + escapeHtml(rawName) + badge + '<span class="hl-pin">' + escapeHtml(pin) + "</span></div>" +
+          '<div class="hl-acts">' +
+            '<button data-act="mute" data-pin="' + pin + '">Mute</button>' +
+            '<button data-act="pin" data-pin="' + pin + '">Pin</button>' +
+            (amHost ? '<button data-act="cohost" data-pin="' + pin + '">' + cohostLabel + "</button>" : "") +
+          "</div>" +
+        "</div>"
+      );
+    });
+    list.innerHTML = rows.join("") || '<div class="hl-empty">No other participants yet.</div>';
+  }
+  function onHostListClick(e: Event) {
+    const btn = (e.target as HTMLElement)?.closest?.("button[data-act]") as HTMLElement | null;
+    if (!btn) return;
+    const act = btn.getAttribute("data-act") || "";
+    const pin = btn.getAttribute("data-pin") || "";
+    if (act === "mute") { sendMod("mute", pin); toast("Muted " + pin); }
+    else if (act === "pin") { sendMod("pin", pin); closeHostPanel(); }
+    else if (act === "cohost") { sendMod("cohost", pin); }
   }
 
   // ---------- live bitrate (getStats) ----------
@@ -2022,9 +2155,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // ---------- controls ----------
   function toggleMic() {
     if (!localStream) return;
-    micOn = !micOn;
-    localStream.getAudioTracks().forEach(t => t.enabled = micOn);
-    $("micBtn")?.classList.toggle("off", !micOn);
+    setMic(!micOn);
   }
   // Set the camera on/off explicitly (shared by the toggle button and the
   // voice-call start path, which begins with the camera off). The track actually
@@ -2206,6 +2337,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     for (const id in peers) delete peers[id];
     pendingGroupInvites = [];
     for (const k in peerDevices) delete peerDevices[k];
+    for (const k in peerRoles) delete peerRoles[k];
+    myRole = null; roomHostPin = null;
+    closeHostPanel(); updateHostUI();
     stopStatsSampler();
     teardownSpeakerMonitor();
     resetSpeakerView();
@@ -2301,6 +2435,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("addBtn") as HTMLElement | null)?.addEventListener("click", openAddPad);
   ($("addGo") as HTMLElement | null)?.addEventListener("click", addToCall);
   ($("addClose") as HTMLElement | null)?.addEventListener("click", closeAddPad);
+  // Host controls
+  ($("hostBtn") as HTMLElement | null)?.addEventListener("click", openHostPanel);
+  ($("hostClose") as HTMLElement | null)?.addEventListener("click", closeHostPanel);
+  ($("muteAllBtn") as HTMLElement | null)?.addEventListener("click", () => { sendMod("mute-all"); toast("Muted everyone."); });
+  ($("unmuteAllBtn") as HTMLElement | null)?.addEventListener("click", () => { sendMod("unmute-all"); toast("Asked everyone to unmute."); });
+  ($("gridBtn") as HTMLElement | null)?.addEventListener("click", () => { sendMod("grid"); closeHostPanel(); });
+  ($("hostList") as HTMLElement | null)?.addEventListener("click", onHostListClick);
   // Dismiss the add-person pad on an outside click (capture phase so it runs
   // before the add-button's own toggle; the add button is excluded so toggling
   // still works). This fixes the "can't close the add window during a call" bug.

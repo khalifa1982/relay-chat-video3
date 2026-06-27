@@ -1306,3 +1306,24 @@ Batch 9 of the UX overhaul (overheating/latency + notifications).
       (`MessagePopups.tsx`) mounted at the app root; fed by the existing realtime SSE layer.
 - [x] 13 new tests (popup store dedup/cap/dismiss + isViewingConversation). 321 tests green, tsc + build
       clean. Footer → `v2.40.0`.
+
+## v2.41.0 — Host controls + call layout (delivered 2026-06-27)
+
+Batch 8 of the UX overhaul. (Host call-continuity + auto-rejoin-on-refresh were already delivered by
+the persistent-room work in v2.33; this batch adds moderation, roles, and host-driven layout.)
+
+- [x] Host designation: the room creator is the host (tracked in RoomMeta.hostPin). Roles flow to
+      clients via the room/joined/rejoin/peer-joined member info; tiles show a "Host"/"Co-Host" badge.
+- [x] Moderation (`mod` signaling message, server-gated to host/co-hosts of the caller's own room):
+      mute individual, mute all, unmute all — relayed to targets as `force-mute`, which the client
+      honours (mutes/unmutes the mic + a toast). 
+- [x] Co-host delegation: only the HOST can promote/demote co-hosts; the change broadcasts a `role`
+      update (badge + grants moderation powers). Co-hosts can mute/pin but not assign other co-hosts.
+- [x] Host-driven layout: the host can PIN a feed to everyone's main spotlight (`host-pin` broadcast →
+      all clients spotlight that tile) or switch everyone to GRID view (clears the pin). Builds on the
+      v2.35 spotlight engine.
+- [x] Host-controls panel (three-dot button in the call bar, shown only to moderators): a live
+      participant list with per-row Mute / Pin / Make-co-host, plus Mute all / Unmute all / Grid view.
+- [x] 9 new tests (7 server moderation: host designation, mute-all, non-mod rejected, co-host promote +
+      moderate, host-only co-host assignment, pin, grid; 2 CSS guards). 330 tests green, tsc + build
+      clean. Footer → `v2.41.0`.

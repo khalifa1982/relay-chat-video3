@@ -70,4 +70,15 @@ describe("relay call UI regression guards", () => {
     expect(RELAY_CSS).toMatch(/@keyframes relaySpeakPulse/);
     expect(RELAY_CSS).toMatch(/prefers-reduced-motion: no-preference/);
   });
+
+  // ── host controls (v2.41) ──────────────────────────────────────────────────
+  it("has a host-controls button + panel with mute-all / grid actions", () => {
+    expect(RELAY_MARKUP).toMatch(/id="hostBtn"/);
+    expect(RELAY_MARKUP).toMatch(/id="hostPanel"/);
+    expect(RELAY_MARKUP).toMatch(/id="muteAllBtn"/);
+    expect(RELAY_MARKUP).toMatch(/id="gridBtn"/);
+  });
+  it("styles the Host/Co-Host role badge on tiles", () => {
+    expect(RELAY_CSS).toMatch(/\.role-badge\{/);
+  });
 });
