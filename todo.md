@@ -1395,3 +1395,25 @@ Folds the v2.43.0 adversarial-review findings (3-dimension workflow, all claims 
 `setSinkId` does not exist on iOS Safari/WKWebView, so the output picker hides there and call-audio
 routing (speaker vs earpiece vs Bluetooth) stays under iOS's control — not fixable from web JS. The picker
 + Bluetooth auto-route work on Chrome Android/desktop.
+
+## v2.44.0 — Tile flags, filter performance, Picture-in-Picture (delivered 2026-06-27)
+
+Three call-experience requests.
+
+- [x] **National flag beside the name on call tiles.** Each client shares its flag (from geoSelf) at
+      register — plumbed exactly like device type (relay member lists + peer-joined; re-affirmed when geo
+      resolves). Rendered in both the tile name label and the cam-off placeholder name. RelayEngine pushes
+      the flag via a new `setSelfFlag` handle method.
+- [x] **Filters no longer tank performance.** The MediaPipe/canvas pipeline now (a) caps processing to
+      480p (was full 720p/1080p — the main heat source), (b) drops to 24fps, and (c) throttles the
+      EXPENSIVE ML inference — segmentation every 2nd frame, face detect every 3rd — reusing the cached
+      mask/box while compositing the CURRENT frame each tick (motion stays smooth). Face-box coords are
+      scaled into the reduced canvas space.
+- [x] **Picture-in-Picture with active speakers.** A new PiP button composites the top-2 active speakers
+      (screen-share first, then loudest) onto a canvas, captures it as a stream, and PiPs the result — so
+      minimizing the mobile browser keeps the call visible + audible in a floating 2-up split that follows
+      whoever's talking. `autoPictureInPicture` set for auto-PiP on background where supported; cleaned up
+      on call end / destroy.
+- [x] 2 server assertions (flag propagation) + 2 CSS guards. 344 tests green, tsc + build clean.
+      A live-engine adversarial review (PiP lifecycle, filter throttle correctness) follows as a patch.
+      Footer → `v2.44.0`.
