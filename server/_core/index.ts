@@ -12,7 +12,8 @@ import { serveStatic, setupVite } from "./vite";
 import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
 import { registerV2Events, publishToIdentity } from "../v2events";
-import { getIdentityByNumber, reapStalePresence, recordMissedCall, ensureSchemaExtensions } from "../v2db";
+import { getIdentityByNumber, reapStalePresence, recordMissedCall, ensureSchemaExtensions, getOrCreateDmConversation } from "../v2db";
+import { inboundConfig, inboundAddress, registerEmailInbound } from "../emailInbound";
 import { getUserById } from "../db";
 import { sendEmail } from "../email";
 
@@ -63,8 +64,24 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
+  // Configure body parser with larger size limit for file uploads.
+  // For the inbound-email webhook ONLY we also stash the exact raw bytes on
+  // req.rawBody (needed to verify the provider's HMAC webhook signature, which
+  // must be computed over the original payload — a re-serialized object won't
+  // byte-match). Scoped by URL so normal/large requests don't pay the cost.
+  app.use(
+    express.json({
+      limit: "50mb",
+      verify: (req, _res, buf) => {
+        const url = (req as { url?: string; originalUrl?: string }).url
+          || (req as { originalUrl?: string }).originalUrl
+          || "";
+        if (url.startsWith("/api/email/inbound")) {
+          (req as { rawBody?: Buffer }).rawBody = buf;
+        }
+      },
+    })
+  );
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // Populate req.cookies for all downstream middleware (tRPC context
   // reads `req.cookies.relay_guest` to resolve guest identities).
@@ -119,10 +136,23 @@ async function startServer() {
           ? `${info.callerName} (${info.callerPin})`
           : info.callerPin;
         const appUrl = process.env.APP_URL || "https://www.your-chat.org";
+        // When inbound email is configured, set a signed Reply-To so the callee
+        // can reply straight from their inbox and it posts into their thread
+        // with the caller.
+        let replyTo: string | undefined;
+        if (inboundConfig().enabled && caller) {
+          try {
+            const convo = await getOrCreateDmConversation(callee.id, caller.id);
+            replyTo = inboundAddress(convo.id, callee.id);
+          } catch {
+            /* reply-to is best-effort */
+          }
+        }
         await sendEmail({
           to: user.email,
           subject: `Missed call from ${callerLabel} on RELAY`,
           html: missedCallHtml({ callerLabel, appUrl }),
+          replyTo,
         });
       } catch (err) {
         console.warn("[missed-call email]", err);
@@ -134,9 +164,14 @@ async function startServer() {
   // v2.0 push channel — SSE that routes message/presence/read events
   // to the right identity. Production gateway is SSE-friendly.
   registerV2Events(app);
+  // Inbound email webhook (reply-to-thread). No-op until INBOUND_EMAIL_DOMAIN.
+  registerEmailInbound(app);
   // Apply additive schema columns to the live DB (idempotent, never
-  // destructive). Best-effort: a failure is logged and never blocks startup.
-  ensureSchemaExtensions().catch((err) => {
+  // destructive) — AWAIT before we start serving so contact SELECTs (which name
+  // the new columns) can't 500 in a startup window on a fresh DB. The function
+  // swallows per-column errors internally, so it won't throw / block boot; the
+  // outer catch is belt-and-suspenders.
+  await ensureSchemaExtensions().catch((err) => {
     console.warn("[v2 schema ensure]", err);
   });
 

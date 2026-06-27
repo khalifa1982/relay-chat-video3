@@ -185,6 +185,12 @@ These are read **per-call** in `iceServers()` so they can be added without resta
 - `RESEND_FROM` — sender; defaults to `onboarding@resend.dev`. Set to a verified-domain address (e.g. `RELAY <notifications@your-chat.org>`) to email arbitrary registered users.
 - `APP_URL` — base URL used in email links; defaults to `https://www.your-chat.org`.
 
+**Inbound email** (optional; reply to a RELAY notification from your inbox and it posts into the thread). When set, missed-call emails get a SIGNED `Reply-To` (`relay+{convId}.{identityId}.{hmac}@domain`); the operator points an inbound provider (Resend Inbound) at `POST /api/email/inbound`. Replies are bound to the mailbox owner (the email `From` must match the signed identity's registered address):
+- `INBOUND_EMAIL_DOMAIN` — enables the feature, e.g. `inbound.your-chat.org`. Add the provider's MX records for this domain + a route/webhook to `https://<app>/api/email/inbound`.
+- `INBOUND_EMAIL_LOCALPART` (optional) — default `relay` (the part before `+`).
+- `INBOUND_EMAIL_SECRET` (optional) — HMAC key for the reply-address signature; falls back to `JWT_SECRET`.
+- `INBOUND_EMAIL_WEBHOOK_SECRET` (optional, recommended) — the provider's Svix signing secret (`whsec_…`) to verify webhook authenticity.
+
 ---
 
 ## Coding conventions

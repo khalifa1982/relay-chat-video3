@@ -908,3 +908,29 @@ desktop and launches standalone (no browser chrome).
 - [x] Contact **cloud sync** already works — contacts are stored server-side per identity, so
       they load on any device a registered user signs into.
 - [x] Footer → `v2.24.0`. tsc clean, build clean.
+
+## v2.25.0 — Inbound email: reply-to-thread (delivered 2026-06-27)
+
+Reply to a RELAY notification straight from your inbox and it posts into the thread.
+Feature-gated on `INBOUND_EMAIL_DOMAIN`; built + reviewed by an adversarial agent pass.
+
+- [x] `server/emailInbound.ts` — SIGNED reply addresses (`relay+{convId}.{identityId}.{hmac}@domain`,
+      HMAC-SHA256, timing-safe + length-checked parse), Svix webhook-signature verification
+      (`whsec_…`, replay window), quote-stripping, recipient/body/From extraction, and the
+      `POST /api/email/inbound` handler.
+- [x] Missed-call emails now carry the signed `Reply-To` (when inbound is configured), so the
+      callee can reply from their inbox → posts a message from them into the caller↔callee thread.
+- [x] Raw-body capture: the global `express.json()` got a path-scoped `verify` callback that
+      stashes `req.rawBody` for `/api/email/inbound` so the signature is verified over exact bytes.
+- [x] **Review fixes folded in:** (1) the boot-migrator is now **awaited** before `listen()` so a
+      fresh-DB startup window can't 500 contacts; (2) replies are **bound to the mailbox owner**
+      (email `From` must equal the signed identity's registered email — stops leaked-address
+      replay); (3) a `sendMessage` DB error now returns **503** (provider retries) instead of
+      silently 200-dropping the reply; (4) dropped a misleading raw-body fallback (fail-closed);
+      (5) bounded the recipient scan.
+- [x] 19 vitest cases (`emailInbound.test.ts`): address round-trip + forgery/tamper rejection,
+      quote-strip, recipient/body/From extraction, Svix signature valid/invalid/stale/missing.
+- [ ] **Needs operator infra to activate**: a domain on the inbound provider (Resend Inbound) +
+      MX/DNS records + the webhook pointed at `/api/email/inbound`. Inbound attachments are a
+      known follow-up (text replies only for now).
+- [x] Footer → `v2.25.0`. tsc clean, 243 tests green, build clean.
