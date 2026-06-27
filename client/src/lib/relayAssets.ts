@@ -11,6 +11,8 @@
  * the CSS won't apply.
  */
 
+import { FOOTER_LINE } from "./buildInfo";
+
 export const RELAY_MARKUP = `
 <div class="relay-bg-fx"><div class="grid"></div><div class="noise"></div></div>
 
@@ -25,7 +27,7 @@ export const RELAY_MARKUP = `
         <input id="nameInput" maxlength="20" placeholder="e.g. Khalifa" autocomplete="off">
       </div>
       <button id="joinBtn" class="relay-btn relay-btn-primary">Get my number &rarr;</button>
-      <p class="hint">Share this page (or just your number) with anyone, anywhere. Each person picks a name, then you dial each other's 6-digit code. Up to 6 in one call.</p>
+      <p class="hint">Share this page (or just your number) with anyone, anywhere. Each person picks a name, then you dial each other's 6-digit code. Up to 10 in one call.</p>
     </div>
   </section>
 
@@ -159,7 +161,7 @@ export const RELAY_MARKUP = `
 
 <div class="boot" id="boot"><div class="spin"></div><div class="t">Connecting&hellip;</div></div>
 
-<div class="version-tag">RELAY &middot; v2.11.0</div>
+<div class="version-tag">${FOOTER_LINE}</div>
 `;
 
 export const RELAY_CSS = `

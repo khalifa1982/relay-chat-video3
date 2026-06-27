@@ -503,6 +503,43 @@ creds, `<expiry>:<user>` username — confirmed via a scripted call to `iceServe
 - [ ] **Action required from you**: set the Manus TURN secrets + Publish, then do the live
       two-device call verification (now reachable from any tab, with caller-cancel).
 
+## v2.12.0 — Phase 1 of the pro-platform spec: login/onboarding redesign (in progress)
+
+Kicking off the large feature spec. Triaged into: buildable-now (this stack), needs-infra
+(SFU media server / email service / native app), and not-possible-on-web (MAC-address
+device tracking → redirected to the existing device-id system; OS auto-launch → needs a
+native/desktop build). Starting with the explicitly-prioritized login redesign.
+
+- [x] **Login / onboarding redesign** (`client/src/app/OnboardingGate.tsx`): fast, glassy,
+      dual-path entry — guest (name → instant 6-digit number) + "Sign in / Register"
+      (OAuth). Lightweight CSS-only animated backdrop (aurora glow + grid), gated behind
+      `prefers-reduced-motion`; brand mark, feature chips (Voice/Video/Chat), forced-dark
+      for a consistent striking look.
+- [x] **Bug caught by screenshot QA + fixed**: the new sign-in link called `getLoginUrl()`
+      during render, which threw `TypeError: Invalid URL` when OAuth env is absent (e.g.
+      local dev) and white-screened the whole entry via the ErrorBoundary. Made
+      `getLoginUrl()` defensive (returns "" instead of throwing) and the gate now renders
+      the sign-in path only when a real URL exists. Verified the fix with a live Playwright
+      screenshot at a phone viewport.
+- [x] Footer → `RELAY · v2.12.0`. tsc clean, 172/173 vitest, production build clean.
+
+### Still to come in Phase 1 (in-stack, no new infra)
+- Call connection sequence (Transmission Connected → Encryption → Join the Call), DND +
+  offline auto-reply + smarter notifications, call waiting (hold/swap/merge/reject),
+  voice↔video toggle + in-call side chat, multi-device simultaneous ring + device
+  management, richer contacts (names/email/mobile+country codes/notes/photo) + cloud sync,
+  groups + link sharing + call invite links.
+
+### Answered by the user
+- [x] **Guest PIN model = sticky until logout.** Session + PIN persist across reloads/
+      reopens; only an explicit logout ends it, after which the next login is a fresh PIN
+      with empty contacts. Implemented: guest sign-out now calls `resetDeviceId()` BEFORE
+      refetching whoami, so the device-id no longer silently restores the old identity
+      (`client/src/app/useIdentity.ts`). Previously logout→login kept the same PIN.
+- [ ] **Infra = ALL three** (SFU media server, email service, native/desktop app). Plan +
+      provisioning hand-offs below; building the in-stack parts now, scaffolding the rest to
+      activate when creds/accounts land (TURN-style feature-gating).
+
 ## v2.9.1 — Live-test fixes: incoming call invisible + app chrome over the call (delivered 2026-06-13)
 
 Reported from a real two-device test: caller sees their own video and "online", but the
@@ -554,3 +591,59 @@ ON TOP of the call, hiding the call's own controls.
 - [ ] **Action required from you**: set the Manus TURN secrets + Publish, then retest a
       two-device call (now from any tab) — the callee should get a ring with Accept, and
       cancelling before they answer should clear their ring immediately.
+
+## v2.12.0 — LiveKit SFU + Resend email + copyright footer (delivered 2026-06-27)
+
+Designed by a 6-agent research workflow (verified against the installed SDK types) and
+hardened by a 22-agent adversarial review (18 findings, 10 confirmed, all fixed bar one
+cosmetic by-design item).
+
+### LiveKit SFU (professional 10-way calling) — feature-gated on `LIVEKIT_*`
+- [x] `server/relay.ts`: `livekitConfig()` + `mintLivekitToken()` (60s join token, minted
+      server-side: identity=caller pin, room=relay roomId, never client-supplied; API
+      secret never leaves the server). `pushLivekitToken` over SSE. Advisory `livekit`
+      flag on registered/joined/peer-joined.
+- [x] `client/src/lib/relayClient.ts`: lazy-imports `livekit-client` (530 kB chunk, only on
+      a real call); `onJoined`/`onPeerJoined` branch to LiveKit when enabled (mesh
+      otherwise); publishes the processed stream; remote tiles reuse the #videoGrid; chat
+      over LiveKit data; teardown disconnects the SFU first.
+
+### Resend missed-call email — feature-gated on `RESEND_API_KEY`
+- [x] `server/email.ts` (fetch-based, never throws); `onMissedCall` hook (leave/reject/
+      disconnect/**offline**) → records `call_history` for everyone + emails REGISTERED
+      callees on a genuine miss (declines recorded, not emailed). Verified by a real send.
+
+### Copyright footer
+- [x] `© <year> RELAY · v2.12.0 · <build-date>` — build date injected via a Vite `define`
+      (`__BUILD_DATE__`); version is a single constant (`buildInfo.ts`). Landing footer
+      bumped + copyright added.
+
+### Review fixes (this batch)
+- [x] **Room-join authorization**: `accept` now requires the joiner to have actually been
+      rung into the room (covers mesh + SFU). Reject only honored for a real ring.
+- [x] **Path-dependent cap**: SFU=10, mesh fallback stays 6 (client + server).
+- [x] **SFU join reliability**: a watchdog re-requests the token (`refresh-livekit`) and,
+      after a few tries, surfaces an error + hangs up instead of a silent dead call; a
+      failed `room.connect()` clears the half-built room so a retry isn't blocked.
+- [x] **Camera-off**: now toggles the PUBLISHED (canvas) track so outgoing video actually
+      stops (fixed on both mesh + SFU); audio-only remote tiles clear the "connecting…"
+      overlay; SFU remote-leave posts a "left the call" notice (mesh parity); offline
+      callees now get a missed-call record/email.
+- [ ] Deferred (cosmetic, by-design): missed/declined calls log `channel:"video"` because
+      the SSE relay is intentionally media-agnostic.
+
+- [x] tsc clean, 185/186 vitest (+13), build code-splits + stamps the footer date, prod
+      bundle boots (external `livekit-server-sdk` resolves), LiveKit creds validated, real
+      test email sent OK.
+- [ ] **Action required from you**: set `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`
+      + `RESEND_API_KEY` (and the TURN ones) in Manus → Secrets, then fetch + Publish.
+
+## v2.13.0 — Do Not Disturb (delivered 2026-06-27)
+
+- [x] **DND** — a per-device toggle (no server/schema change; localStorage-backed). When on:
+      incoming calls are auto-declined by the engine (no ring overlay), and chimes +
+      desktop notifications are silenced at the source (`notifications.ts`). Messages still
+      arrive in-app and missed calls are still recorded. New `client/src/app/dnd.ts` store +
+      `useDnd()` hook; a clean iOS-style toggle in Profile. +4 vitest.
+- [x] Footer → `v2.13.0`. tsc clean, 189/190 vitest, build clean.
+- [ ] Easy follow-up: a one-tap DND toggle in the app header (currently in Profile only).

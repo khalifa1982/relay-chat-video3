@@ -61,6 +61,8 @@
     "framer-motion": "^12.23.22",
     "input-otp": "^1.4.2",
     "jose": "6.1.0",
+    "livekit-client": "^2.20.0",
+    "livekit-server-sdk": "^2.15.5",
     "lucide-react": "^0.453.0",
     "mysql2": "^3.15.0",
     "nanoid": "^5.1.5",

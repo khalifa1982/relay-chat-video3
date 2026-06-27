@@ -21,6 +21,7 @@
 
 import crypto from "crypto";
 import type { Request, Response, Express } from "express";
+import { AccessToken, type VideoGrant } from "livekit-server-sdk";
 
 // TURN credentials are read on every call so the operator can add them via
 // `webdev_request_secrets` without restarting the server, and so unit tests
@@ -163,6 +164,66 @@ export function iceServers(userId: string): IceServer[] {
   return list;
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+ * LiveKit SFU (optional, feature-gated like TURN). When LIVEKIT_URL +
+ * LIVEKIT_API_KEY + LIVEKIT_API_SECRET are all set, call MEDIA is routed through
+ * the LiveKit SFU (10-way, recording-capable) instead of the WebRTC mesh. The
+ * SSE relay below stays the "phone" (presence + ring/accept/leave + roomId);
+ * LiveKit only replaces the per-peer RTCPeerConnection mesh. When unset, the
+ * mesh runs unchanged. Env is read per-call so creds can be added via Manus
+ * Secrets without a restart (same pattern as iceServers()).
+ * ────────────────────────────────────────────────────────────────────────── */
+export function livekitConfig(): { enabled: boolean; url: string } {
+  const url = process.env.LIVEKIT_URL || "";
+  const key = process.env.LIVEKIT_API_KEY || "";
+  const secret = process.env.LIVEKIT_API_SECRET || "";
+  return { enabled: !!(url && key && secret), url };
+}
+
+/**
+ * Mint a short-lived (60s) LiveKit join token for ONE room + identity, minted
+ * server-side from registry state we control — never from client-supplied
+ * room/identity. The API secret is the HMAC key and must NEVER reach the
+ * browser (only this signed JWT does). `toJwt()` is async in v2.
+ */
+export async function mintLivekitToken(
+  identity: string,
+  name: string,
+  room: string
+): Promise<string> {
+  const apiKey = process.env.LIVEKIT_API_KEY || "";
+  const apiSecret = process.env.LIVEKIT_API_SECRET || "";
+  const at = new AccessToken(apiKey, apiSecret, { identity, name, ttl: 60 });
+  const grant: VideoGrant = {
+    roomJoin: true,
+    room,
+    canPublish: true,
+    canSubscribe: true,
+    canPublishData: true,
+  };
+  at.addGrant(grant);
+  return await at.toJwt();
+}
+
+/**
+ * Fire-and-forget: mint a LiveKit join token for `pin` in `roomId` and push it
+ * over that client's SSE channel as a `livekit-token` message. No-op when
+ * LiveKit isn't configured. The JWT is never logged. Authorization is implicit:
+ * the caller only ever passes pins/rooms derived from trusted registry state.
+ */
+function pushLivekitToken(reg: RelayRegistry, pin: string, roomId: string) {
+  const lk = livekitConfig();
+  if (!lk.enabled) return;
+  const client = reg.clients.get(pin);
+  if (!client) return;
+  mintLivekitToken(pin, client.name || "Guest", roomId)
+    .then(token => {
+      const c = reg.clients.get(pin);
+      if (c) safeSend(c.socket, { type: "livekit-token", roomId, token, url: lk.url });
+    })
+    .catch(e => console.warn("[relay] livekit token mint failed:", e));
+}
+
 /**
  * Number of clients currently in a room. Returns 0 for a null/unknown
  * roomId. Used by busy-detection and reject-cleanup so we never report
@@ -180,14 +241,16 @@ function roomSize(reg: RelayRegistry, roomId: string | null): number {
  * call is cancelled, so their incoming-ring UI clears instead of hanging until
  * the client-side timeout. Called when the caller leaves or disconnects.
  */
-export function cancelPendingRings(reg: RelayRegistry, callerPin: string) {
+export function cancelPendingRings(reg: RelayRegistry, callerPin: string): string[] {
   const c = reg.clients.get(callerPin);
-  if (!c || c.ringing.size === 0) return;
-  c.ringing.forEach(calleePin => {
+  if (!c || c.ringing.size === 0) return [];
+  const pins = Array.from(c.ringing);
+  pins.forEach(calleePin => {
     const callee = reg.clients.get(calleePin);
     if (callee) safeSend(callee.socket, { type: "ring-cancel", from: callerPin });
   });
   c.ringing.clear();
+  return pins;
 }
 
 export function leaveRoom(reg: RelayRegistry, pin: string) {
@@ -222,6 +285,18 @@ export type InviteHook = (info: {
 }) => void;
 
 /**
+ * Fired once per callee who was rung but never connected — because the caller
+ * cancelled/left before they answered, or they declined. A higher layer turns
+ * this into a missed-call record + (for registered callees) an email.
+ */
+export type MissedCallHook = (info: {
+  calleePin: string;
+  callerPin: string;
+  callerName: string;
+  reason: "cancelled" | "rejected";
+}) => void;
+
+/**
  * Protocol logic. Kept as a pure function over (registry, socket-state,
  * message) so it's straightforward to unit-test without spinning up an
  * HTTP server. The optional `onInvite` callback is fired exactly once
@@ -233,7 +308,8 @@ export function handleMessage(
   reg: RelayRegistry,
   conn: { socket: RelaySocket; pin: string | null; setPin: (p: string) => void; cid?: string },
   msg: RelayMessage,
-  onInvite?: InviteHook
+  onInvite?: InviteHook,
+  onMissedCall?: MissedCallHook
 ) {
   const type = msg && msg.type;
 
@@ -261,7 +337,8 @@ export function handleMessage(
       const existing = reg.clients.get(conn.pin);
       if (existing) {
         if (msg.name) existing.name = String(msg.name).slice(0, 24);
-        safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin) });
+        const lk = livekitConfig();
+        safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin), livekit: lk.enabled, livekitUrl: lk.url });
       }
       return;
     }
@@ -297,7 +374,8 @@ export function handleMessage(
     } else {
       reg.clients.set(pin, { socket: conn.socket, name, roomId: null, cid: cid || null, graceT: null, ringing: new Set() });
     }
-    safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin) });
+    const lk = livekitConfig();
+    safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin), livekit: lk.enabled, livekitUrl: lk.url });
     return;
   }
 
@@ -326,6 +404,12 @@ export function handleMessage(
           code: "offline",
           message: "That number isn't online.",
         });
+        // The callee was offline — record the miss and (for registered users)
+        // email them. The hook resolves identity from the DB by number, so it
+        // works even though an offline callee has no in-memory registry entry.
+        try {
+          onMissedCall?.({ calleePin: to, callerPin: conn.pin, callerName: self.name, reason: "cancelled" });
+        } catch { /* never let a notification hook break call setup */ }
         break;
       }
       // A target is only "busy" if it's already in an established call with
@@ -344,13 +428,19 @@ export function handleMessage(
         reg.rooms.set(rid, new Set([conn.pin]));
         self.roomId = rid;
         safeSend(conn.socket, { type: "room", roomId: rid });
+        // On the LiveKit path, the caller joins the SFU room immediately (alone)
+        // so the callee connects near-instantly the moment they accept.
+        pushLivekitToken(reg, conn.pin, rid);
       }
       const room = reg.rooms.get(self.roomId!);
-      if (room && room.size >= 6) {
+      // 10-way only on the SFU; the mesh fallback stays capped at 6 (a 10-way
+      // mesh is ~45 peer connections — far too heavy for the fallback path).
+      const inviteCap = livekitConfig().enabled ? 10 : 6;
+      if (room && room.size >= inviteCap) {
         safeSend(conn.socket, {
           type: "error",
           code: "full",
-          message: "Call is full (6 max).",
+          message: `Call is full (${inviteCap} max).`,
         });
         break;
       }
@@ -393,11 +483,26 @@ export function handleMessage(
         });
         break;
       }
-      if (room.size >= 6) {
+      // Authorization: only a pin that was actually rung into this room (i.e.
+      // sits in some current member's `ringing` set) may join it. Without this,
+      // a client that learns a roomId could join an in-progress call — and on
+      // the SFU path be minted a publish/subscribe token. Covers mesh + SFU.
+      const invitedToRoom = Array.from(room).some(p => reg.clients.get(p)?.ringing.has(conn.pin!));
+      if (!invitedToRoom) {
+        safeSend(conn.socket, {
+          type: "error",
+          code: "forbidden",
+          message: "You weren't invited to this call.",
+        });
+        break;
+      }
+      // 10-way only on the SFU; the mesh fallback stays capped at 6.
+      const acceptCap = livekitConfig().enabled ? 10 : 6;
+      if (room.size >= acceptCap) {
         safeSend(conn.socket, {
           type: "error",
           code: "full",
-          message: "Call is full (6 max).",
+          message: `Call is full (${acceptCap} max).`,
         });
         break;
       }
@@ -415,6 +520,11 @@ export function handleMessage(
         }));
       room.add(conn.pin);
       self.roomId = roomId;
+      // On the LiveKit path, the newcomer joins the SFU room; LiveKit's own
+      // ParticipantConnected/TrackSubscribed events drive peer discovery, so the
+      // mesh peer-joined/offer dance is skipped client-side.
+      pushLivekitToken(reg, conn.pin, roomId);
+      const lk = livekitConfig();
       // Newcomer learns existing members and will offer to each (only one
       // side ever offers, which avoids SDP glare in the mesh). Fresh ICE
       // servers keyed to this peer are minted right as it's about to build
@@ -424,6 +534,8 @@ export function handleMessage(
         roomId,
         members,
         iceServers: iceServers(conn.pin),
+        livekit: lk.enabled,
+        livekitUrl: lk.url,
       });
       const newcomerPin = conn.pin;
       members.forEach(m => {
@@ -436,6 +548,8 @@ export function handleMessage(
             pin: newcomerPin,
             name: self.name,
             iceServers: iceServers(m.pin),
+            livekit: lk.enabled,
+            livekitUrl: lk.url,
           });
         }
       });
@@ -445,16 +559,20 @@ export function handleMessage(
     case "reject": {
       const targetPin = String(msg.to || "");
       const target = reg.clients.get(targetPin);
-      if (target) {
-        // We declined — clear ourselves from the caller's pending-ring set.
+      // Only honour a decline for a call that was genuinely ringing us — without
+      // this guard a client could POST reject for an arbitrary live pin and forge
+      // a "declined" call_history row between two parties.
+      if (target && target.ringing.has(conn.pin)) {
         target.ringing.delete(conn.pin);
         safeSend(target.socket, { type: "rejected", from: conn.pin });
-      }
-      // Tear down the caller's solo dialing room so they can be invited again
-      // or place another call without being phantom-busy to themselves or to
-      // future callers.
-      if (target && roomSize(reg, target.roomId) === 1) {
-        leaveRoom(reg, targetPin);
+        // Record the decline (call_history). Caller=targetPin, callee=us.
+        try {
+          onMissedCall?.({ calleePin: conn.pin, callerPin: targetPin, callerName: target.name, reason: "rejected" });
+        } catch { /* never let a notification hook break call teardown */ }
+        // Tear down the caller's solo dialing room so they can be invited again.
+        if (roomSize(reg, target.roomId) === 1) {
+          leaveRoom(reg, targetPin);
+        }
       }
       break;
     }
@@ -463,6 +581,14 @@ export function handleMessage(
       // Client is about to do an ICE restart and wants fresh TURN creds.
       // Mint a per-peer set and ship it back; safe to call frequently.
       safeSend(conn.socket, { type: "ice", iceServers: iceServers(conn.pin) });
+      break;
+    }
+
+    case "refresh-livekit": {
+      // Client lost or never received its SFU token (mint failure / dropped SSE
+      // frame / connect failure). Re-mint for its CURRENT room, derived from
+      // trusted server state — never a client-supplied room name.
+      if (self.roomId) pushLivekitToken(reg, conn.pin, self.roomId);
       break;
     }
 
@@ -478,7 +604,14 @@ export function handleMessage(
     }
 
     case "leave": {
-      cancelPendingRings(reg, conn.pin);
+      // Caller hung up: every callee still ringing just missed the call.
+      const callerName = self.name;
+      const missed = cancelPendingRings(reg, conn.pin);
+      for (const calleePin of missed) {
+        try {
+          onMissedCall?.({ calleePin, callerPin: conn.pin, callerName, reason: "cancelled" });
+        } catch { /* never let a notification hook break call teardown */ }
+      }
       leaveRoom(reg, conn.pin);
       break;
     }
@@ -495,7 +628,8 @@ export function handleMessage(
  */
 export function attachRelay(
   app: Express,
-  onInvite?: InviteHook
+  onInvite?: InviteHook,
+  onMissedCall?: MissedCallHook
 ): RelayRegistry {
   const reg = createRegistry();
 
@@ -612,7 +746,14 @@ export function attachRelay(
             const c = reg.clients.get(pin);
             // Only reap if it wasn't re-bound to a newer live connection.
             if (c && c.graceT) {
-              cancelPendingRings(reg, pin);
+              // A vanished caller's pending callees missed the call.
+              const callerName = c.name;
+              const missed = cancelPendingRings(reg, pin);
+              for (const calleePin of missed) {
+                try {
+                  onMissedCall?.({ calleePin, callerPin: pin, callerName, reason: "cancelled" });
+                } catch { /* never let a notification hook break reaping */ }
+              }
               leaveRoom(reg, pin);
               reg.clients.delete(pin);
               if (reg.cidToPin.get(cid) === pin) reg.cidToPin.delete(cid);
@@ -657,7 +798,8 @@ export function attachRelay(
         },
       },
       message as RelayMessage,
-      onInvite
+      onInvite,
+      onMissedCall
     );
     res.json({ ok: true });
   });

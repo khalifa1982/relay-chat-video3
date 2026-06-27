@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { trpc } from "@/lib/trpc";
-import { getDeviceId } from "@/lib/deviceId";
+import { getDeviceId, resetDeviceId } from "@/lib/deviceId";
 
 /**
  * Hook for v2.0 phone-app identity — a PURE READ (whoami + start/sign-out).
@@ -25,7 +25,14 @@ export function useIdentity() {
     onSuccess: () => utils.identity.whoami.invalidate(),
   });
   const signOutMutation = trpc.identity.signOutGuest.useMutation({
-    onSuccess: () => utils.identity.whoami.invalidate(),
+    onSuccess: () => {
+      // A guest logout must TRULY end the session. Sever the device-id binding
+      // BEFORE refetching whoami so the next login mints a brand-new identity
+      // (fresh PIN, empty contacts) instead of the device-id silently restoring
+      // the old one. This is the "PIN stays the same until you log out" rule.
+      resetDeviceId();
+      utils.identity.whoami.invalidate();
+    },
   });
 
   const startGuest = useCallback(

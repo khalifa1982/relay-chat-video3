@@ -1,9 +1,11 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import {
   createRegistry,
   handleMessage,
   leaveRoom,
   iceServers,
+  livekitConfig,
+  mintLivekitToken,
   type RelayRegistry,
   type RelaySocket,
 } from "./relay";
@@ -651,4 +653,146 @@ function header(type: number, len: number, txid: Buffer) {
     expect(result.ok).toBe(true);
     expect(result.relayed).toBeTruthy();
   }, 14000);
+});
+
+describe("relay — LiveKit SFU token minting", () => {
+  const SAVE = {
+    url: process.env.LIVEKIT_URL,
+    key: process.env.LIVEKIT_API_KEY,
+    secret: process.env.LIVEKIT_API_SECRET,
+  };
+  beforeEach(() => {
+    process.env.LIVEKIT_URL = "wss://example.livekit.cloud";
+    process.env.LIVEKIT_API_KEY = "APItestkey";
+    process.env.LIVEKIT_API_SECRET = "test-secret-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  });
+  afterEach(() => {
+    for (const [k, v] of [
+      ["LIVEKIT_URL", SAVE.url],
+      ["LIVEKIT_API_KEY", SAVE.key],
+      ["LIVEKIT_API_SECRET", SAVE.secret],
+    ] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it("livekitConfig().enabled is true only when all three vars are set", () => {
+    expect(livekitConfig().enabled).toBe(true);
+    expect(livekitConfig().url).toBe("wss://example.livekit.cloud");
+    delete process.env.LIVEKIT_API_SECRET;
+    expect(livekitConfig().enabled).toBe(false);
+  });
+
+  it("mints a scoped, short-lived join token (identity=pin, room, publish+subscribe, 60s, no admin)", async () => {
+    const jwt = await mintLivekitToken("123456", "Alice", "rabc123");
+    expect(typeof jwt).toBe("string");
+    const payload = JSON.parse(Buffer.from(jwt.split(".")[1], "base64url").toString());
+    expect(payload.sub).toBe("123456"); // identity = caller's own pin
+    expect(payload.video.room).toBe("rabc123");
+    expect(payload.video.roomJoin).toBe(true);
+    expect(payload.video.canPublish).toBe(true);
+    expect(payload.video.canSubscribe).toBe(true);
+    expect(payload.video.roomAdmin).toBeFalsy(); // never admin
+    expect(payload.video.roomRecord).toBeFalsy(); // never recorder
+    expect(payload.exp - payload.nbf).toBe(60); // 60s TTL
+  });
+});
+
+describe("relay — missed-call hook", () => {
+  let reg: RelayRegistry;
+  beforeEach(() => { reg = createRegistry(); });
+
+  type Missed = { calleePin: string; callerPin: string; callerName: string; reason: string };
+
+  it("fires onMissedCall (cancelled) for a pending callee when the caller leaves", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    const calls: Missed[] = [];
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    handleMessage(reg, a.asConn(), { type: "leave" }, undefined, (i) => calls.push(i));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ calleePin: b.pin, callerPin: a.pin, reason: "cancelled" });
+  });
+
+  it("fires onMissedCall (rejected) when the callee declines", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    const calls: Missed[] = [];
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    handleMessage(reg, b.asConn(), { type: "reject", to: a.pin! }, undefined, (i) => calls.push(i));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ calleePin: b.pin, callerPin: a.pin, reason: "rejected" });
+  });
+
+  it("does NOT fire onMissedCall when the callee accepted and the caller later leaves", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const room = a.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "room"
+    )!;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: room.roomId });
+    const calls: Missed[] = [];
+    handleMessage(reg, a.asConn(), { type: "leave" }, undefined, (i) => calls.push(i));
+    expect(calls).toHaveLength(0);
+  });
+
+  it("fires onMissedCall (cancelled) when inviting an OFFLINE / unregistered number", () => {
+    const a = register(reg, "Alice");
+    const calls: Missed[] = [];
+    handleMessage(reg, a.asConn(), { type: "invite", to: "999000" }, undefined, (i) => calls.push(i));
+    // Caller gets the offline error, and the miss is reported so the DB layer can
+    // record it + email a registered (but offline) callee.
+    expect((a.last() as { type: string; code?: string }).code).toBe("offline");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ calleePin: "999000", callerPin: a.pin, reason: "cancelled" });
+  });
+
+  it("ignores a `reject` for a call that was never ringing the sender (no forged history)", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    const calls: Missed[] = [];
+    // Bob rejects Alice without Alice ever having rung Bob.
+    handleMessage(reg, b.asConn(), { type: "reject", to: a.pin! }, undefined, (i) => calls.push(i));
+    expect(calls).toHaveLength(0);
+    expect(a.outbox.some((m) => (m as { type?: string }).type === "rejected")).toBe(false);
+  });
+});
+
+describe("relay — room-join authorization", () => {
+  let reg: RelayRegistry;
+  beforeEach(() => { reg = createRegistry(); });
+
+  function roomIdOf(c: FakeConn): string {
+    return (c.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "room"
+    ) as { roomId: string }).roomId;
+  }
+
+  it("rejects an `accept` from a client who was never invited to the room", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    const c = register(reg, "Carol");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! }); // A rings B, room created
+    const rid = roomIdOf(a);
+    // Carol learned the roomId but was never rung — she must NOT be able to join.
+    handleMessage(reg, c.asConn(), { type: "accept", roomId: rid });
+    const last = c.last() as { type: string; code?: string };
+    expect(last.type).toBe("error");
+    expect(last.code).toBe("forbidden");
+    expect(reg.rooms.get(rid)?.has(c.pin!)).toBe(false);
+  });
+
+  it("allows an invited callee to accept", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const rid = roomIdOf(a);
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
+    expect((b.last() as { type: string }).type).toBe("joined");
+    expect(reg.rooms.get(rid)?.has(b.pin!)).toBe(true);
+  });
 });
