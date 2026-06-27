@@ -126,7 +126,7 @@ export const RELAY_MARKUP = `
         <button class="ctrl" id="flipCamBtn" title="Flip camera (front ↔ back)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
         </button>
-        <button class="ctrl" id="screenBtn" title="Share screen">
+        <button class="ctrl" id="screenBtn" title="Share screen" style="display:none">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
         </button>
         <button class="ctrl" id="recordBtn" title="Record call" style="display:none">
@@ -337,7 +337,14 @@ export const RELAY_CSS = `
 .relay-root .relay-tile{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden;
   min-height:0;display:flex;align-items:center;justify-content:center}
 .relay-root .relay-tile video{width:100%;height:100%;object-fit:cover;background:#000}
-.relay-root .relay-tile.audio-only video{display:none}
+/* Hide the inner video for audio-only tiles with visibility, NOT display:none.
+   LiveKit adaptiveStream samples element visibility on track.attach() and PAUSES
+   inbound video for any element whose computed display is none — so an
+   audio-subscribes-before-video race (common with 3+ parties) leaves that
+   participant's camera stuck/black. visibility:hidden keeps display non-none
+   (video keeps flowing) while hiding the empty/old frame; the avatar (.ph)
+   overlays it for true audio-only participants. */
+.relay-root .relay-tile.audio-only video{visibility:hidden}
 .relay-root .relay-tile .ph{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
 .relay-root .relay-tile .ph .av{width:74px;height:74px;border-radius:24px;background:var(--surface2);border:1px solid var(--border);
   display:grid;place-items:center;font-family:"Bricolage Grotesque";font-weight:800;font-size:30px;color:var(--accent)}
@@ -406,9 +413,10 @@ export const RELAY_CSS = `
 .relay-root .call-head-right{display:flex;align-items:center;gap:12px}
 .relay-root .rec-ind{display:flex;align-items:center;gap:6px;font-family:"JetBrains Mono";font-size:12px;font-weight:700;letter-spacing:.06em;color:#ff5d5d}
 .relay-root .rec-blink{width:9px;height:9px;border-radius:50%;background:#ff3b3b;box-shadow:0 0 8px #ff3b3b;animation:relayPulse2 1s ease-in-out infinite}
-/* Screen share is a desktop feature (iOS Safari has no getDisplayMedia, and the
-   mobile control bar is already full) — hide the button on small screens. */
-@media (max-width:680px){.relay-root #screenBtn{display:none}}
+/* The screen-share button is hidden by default and revealed by JS only when the
+   browser actually supports getDisplayMedia (Android Chrome yes, iOS Safari no)
+   — see the capability gate in relayClient.ts. So it now shows on mobile where
+   supported, instead of being blanket-hidden by viewport. */
 
 /* Filter dock (Snapchat-style horizontal strip) */
 .relay-root .filter-dock{position:absolute;left:50%;bottom:96px;transform:translateX(-50%) translateY(12px);width:min(720px,94vw);
@@ -438,7 +446,9 @@ export const RELAY_CSS = `
 .relay-root .relay-filter.active .lbl{color:var(--accent)}
 @media (max-width:680px){
   .relay-root .filter-dock{bottom:108px;width:96vw}
-  .relay-root .ctrl-bar{gap:8px;padding:8px 10px}
+  /* Allow the control bar to wrap to a 2nd row on narrow phones so an extra
+     button (screen-share / record) is never clipped or overflowed. */
+  .relay-root .ctrl-bar{gap:8px;padding:8px 10px;flex-wrap:wrap;justify-content:center;max-width:96vw}
   .relay-root .ctrl{width:44px;height:44px}
   .relay-root .ctrl.hangup{width:58px}
 }

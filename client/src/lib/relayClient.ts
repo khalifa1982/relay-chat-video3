@@ -883,7 +883,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
         bindLkPlaceholder(el, true);
       } else if (track.kind === TrackEnum.Kind.Audio) {
         track.attach(); // detached <audio> element for playback
-        bindLkPlaceholder(el, false); // audio-only: clear "connecting…", keep avatar
+        // Don't flip the tile to audio-only (which hides the video) if this
+        // participant is ALSO publishing camera video — audio commonly
+        // subscribes first, and marking audio-only here is what stalls their
+        // camera on the SFU. Keep video visible when a video publication exists.
+        bindLkPlaceholder(el, lkHasVideo(participant));
       }
     });
     room.on(RoomEventEnum.TrackUnsubscribed, (track, _pub, participant) => {
@@ -956,6 +960,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
     lkParticipantTiles[id] = t;
     grid.appendChild(t);
     layoutGrid();
+  }
+  // True if a LiveKit participant currently publishes a (non-muted) camera video
+  // track — even if it hasn't been SUBSCRIBED yet. Used so an audio-first
+  // subscription doesn't wrongly mark the tile audio-only. LiveKit objects are
+  // dynamically-imported `any`, so probe defensively.
+  function lkHasVideo(participant: { getTrackPublications?: () => unknown[]; videoTrackPublications?: Map<string, unknown> }): boolean {
+    try {
+      const pubs: any[] = typeof participant.getTrackPublications === "function"
+        ? participant.getTrackPublications()
+        : (participant.videoTrackPublications ? Array.from(participant.videoTrackPublications.values()) : []);
+      return pubs.some((p: any) =>
+        (p?.kind === "video" || p?.track?.kind === "video" || p?.source === "camera") && p?.isMuted !== true);
+    } catch {
+      return false;
+    }
   }
   function bindLkPlaceholder(el: HTMLElement, hasVideo: boolean) {
     const ph = el.querySelector(".ph") as HTMLElement | null;
@@ -1794,6 +1813,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => hangUp("user-hangup"));
   ($("flipCamBtn") as HTMLElement | null)?.addEventListener("click", () => { flipCamera(); });
   ($("screenBtn") as HTMLElement | null)?.addEventListener("click", () => { void toggleScreenShare(); });
+  // Reveal the screen-share button only where getDisplayMedia actually exists
+  // (Android Chrome, desktop, iPad — yes; iOS Safari phone — no). Pure client
+  // capability check; mirrors the record-button visibility pattern.
+  {
+    const sb = $("screenBtn") as HTMLElement | null;
+    const md = navigator.mediaDevices as (MediaDevices & { getDisplayMedia?: unknown }) | undefined;
+    if (sb) sb.style.display = md && typeof md.getDisplayMedia === "function" ? "" : "none";
+  }
   ($("recordBtn") as HTMLElement | null)?.addEventListener("click", toggleRecording);
   ($("filterBtn") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("filterClose") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);

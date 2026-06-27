@@ -1044,3 +1044,27 @@ one real flag-ON bug + two low nits; all fixed:
 - [x] (Also fixed CI: removed two review-agent scratch test files that a `git add -A` had
       accidentally committed.)
 - [x] Footer → `v2.31.1`. tsc clean, 255 tests green, build clean.
+
+## v2.32.0 — Multi-party camera fix + mobile screen-share (delivered 2026-06-27)
+
+Two live-call bugs, diagnosed by a parallel investigation workflow.
+
+- [x] **Multi-party camera stuck/black (3+ parties)** — ROOT CAUSE: the `audio-only` tile rule
+      hid the inner `<video>` with `display:none`. LiveKit's `adaptiveStream` samples element
+      visibility on `track.attach()` and **pauses inbound video for any `display:none` element**.
+      Audio commonly subscribes before video, so the tile was audio-only (display:none) when the
+      video attached → that participant's camera stalled. Probability rises with party count
+      (each viewer has N−1 independent races). FIX: hide with `visibility:hidden` (keeps
+      `display` non-none so adaptiveStream keeps delivering) + don't mark a tile audio-only when
+      the participant publishes camera video (`lkHasVideo`). Mesh tiles use the same rule for
+      consistency.
+- [x] **Screen-share button missing on mobile** — it was blanket-hidden by a
+      `@media (max-width:680px){#screenBtn{display:none}}` rule (iPad/desktop are wider → showed).
+      FIX: removed the rule; the button now defaults hidden in markup and is **revealed by a JS
+      capability check** (`getDisplayMedia`) — so Android Chrome/desktop/iPad show it, iOS Safari
+      (no getDisplayMedia) hides it. The mobile control bar now `flex-wrap`s so the extra button
+      never clips.
+- [x] 4 vitest regression guards (`relayAssets.test.ts`): audio-only uses visibility:hidden not
+      display:none; no blanket #screenBtn hide; #screenBtn defaults hidden; ctrl-bar wraps. 259
+      tests green.
+- [x] Footer → `v2.32.0`. tsc clean, build clean.
