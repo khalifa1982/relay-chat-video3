@@ -683,3 +683,21 @@ cosmetic by-design item).
       taking the new one, and **Merge** both into a conference. These require running two
       call contexts at once (or moving participants between rooms) — a larger engine change.
 - [x] Footer → `v2.16.0`. tsc clean, build clean.
+
+## v2.17.0 — App lock (device passcode) (delivered 2026-06-27)
+
+- [x] **Optional device passcode** — Profile → *App lock* lets a user set a 4–8 digit
+      code that gates entry to `/app` on this device. The code is salted + SHA-256 hashed
+      in `localStorage` (plaintext never stored); `relay_pass_hash` + `relay_pass_salt`.
+- [x] `client/src/app/passcode.ts` — store: `hasPasscode`/`setPasscode`/`verifyPasscode`/
+      `clearPasscode` plus an in-memory lock state (`isLocked`/`lockApp`/`unlockApp`/`useLocked`).
+      App starts **locked on load** whenever a passcode exists; setting one mid-session does
+      NOT lock the live tab; removing it unlocks.
+- [x] `client/src/app/PasscodeGate.tsx` — full-screen numeric LockScreen; wired **outermost**
+      in `AppShell` (above OnboardingGate) so the lock covers everything until unlocked.
+- [x] Profile *App lock* section: set / change / remove + **Lock now** (mirrors the DND row).
+- [x] 8 vitest cases (`passcode.test.ts`): hash-not-plaintext, random salt, verify ok/bad,
+      verify-true-when-unset, clear-unlocks, lock no-op without code, lock/unlock transitions.
+- [ ] Deferred (follow-up): **Face ID / fingerprint** unlock via WebAuthn/passkeys — the
+      numeric passcode is the no-prompt, broadly-supported baseline; biometric is additive.
+- [x] Footer → `v2.17.0`. tsc clean, 197 tests green, build clean.

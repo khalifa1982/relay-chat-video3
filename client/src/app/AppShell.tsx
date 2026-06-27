@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { getLoginUrl } from "@/const";
 import { useIdentity } from "./useIdentity";
 import { OnboardingGate } from "./OnboardingGate";
+import { PasscodeGate } from "./PasscodeGate";
 import { useRealtime } from "./useRealtime";
 import { useDnd } from "./dnd";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -65,10 +66,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     document.documentElement.classList.add("relay-v2");
   }, []);
 
+  // PasscodeGate sits outermost: if a device passcode is set the lock
+  // screen covers everything (even onboarding) until the user unlocks.
   return (
-    <OnboardingGate>
-      <Inner>{children}</Inner>
-    </OnboardingGate>
+    <PasscodeGate>
+      <OnboardingGate>
+        <Inner>{children}</Inner>
+      </OnboardingGate>
+    </PasscodeGate>
   );
 }
 
