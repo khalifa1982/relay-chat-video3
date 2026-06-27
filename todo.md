@@ -934,3 +934,22 @@ Feature-gated on `INBOUND_EMAIL_DOMAIN`; built + reviewed by an adversarial agen
       MX/DNS records + the webhook pointed at `/api/email/inbound`. Inbound attachments are a
       known follow-up (text replies only for now).
 - [x] Footer → `v2.25.0`. tsc clean, 243 tests green, build clean.
+
+## v2.26.0 — Voice calls + voice↔video switch (delivered 2026-06-27)
+
+- [x] The Dialer now offers **two call buttons**: a primary **Video call** (green, `Video` icon)
+      and a secondary **Voice call** (`Phone` icon, camera off). Keyboard Enter still places a
+      video call.
+- [x] **Purely additive & zero-regression**: a voice call is just a normal call that starts
+      with the camera toggled off, reusing the existing, tested `setCam()` path (the same
+      mechanism that already powers mid-call camera-off on BOTH the mesh and the SFU). The
+      default video-call path is byte-for-byte unchanged.
+- [x] **Switch to video any time**: tapping the in-call camera button upgrades a voice call to
+      video instantly — no renegotiation (the track is already published, just re-enabled).
+- [x] Engine API: `dial(number, { voice })` threaded through `relayClient` → `RelayEngine` →
+      `Dialer`. `refactor: toggleCam → setCam(on)` so the start path can force camera-off.
+- [ ] Caveat / follow-up: because we reuse the camera-toggle (track disabled, not stopped), the
+      camera is still *acquired* at voice-call start (the camera indicator may briefly show).
+      A true no-camera-acquire voice call with an SFU `publishTrack` upgrade is a noted
+      follow-up; this additive version avoids any risk to the call engine you're validating.
+- [x] Footer → `v2.26.0`. tsc clean, 243 tests green, build clean.

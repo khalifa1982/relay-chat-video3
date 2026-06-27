@@ -66,8 +66,9 @@ export type RelayPhase = "idle" | "dialing" | "ringing" | "in-call";
 
 export interface RelayHandle {
   destroy: () => void;
-  /** Programmatic dial. Returns true if the engine accepted the request. */
-  dial: (number: string) => boolean;
+  /** Programmatic dial. Returns true if the engine accepted the request.
+   *  `opts.voice` starts the call with the camera off (a voice call). */
+  dial: (number: string, opts?: { voice?: boolean }) => boolean;
   /** Set/replace the engine-state callback. Fired whenever phase changes. */
   setOnStateChange: (cb: ((phase: RelayPhase) => void) | null) => void;
   /** Best-effort: cancel an in-flight call/leave the room. */
@@ -708,13 +709,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
     lastPhase = p;
     try { onPhaseChange?.(p); } catch { /* ignore subscriber errors */ }
   }
-  async function programmaticDial(target: string): Promise<boolean> {
+  async function programmaticDial(target: string, opts?: { voice?: boolean }): Promise<boolean> {
     if (!/^\d{6}$/.test(target)) return false;
     if (!me.pin) return false; // not registered yet — caller should retry
     if (target === me.pin) { toast("That's your own number.", true); return false; }
     if (peers[target]) { toast("You're already connected to them.", true); return false; }
     try { await ensureMedia(); } catch { return false; }
-    if (!inCall) { inCall = true; enterCallUI("Calling…"); emitPhase("dialing"); }
+    // Voice call: start with the camera OFF (the existing camera-toggle path).
+    // The other side sees an audio-only tile; tapping the camera button upgrades
+    // to video instantly (no renegotiation — the track is already published,
+    // just disabled). Purely additive: a normal video call is unchanged.
+    if (opts?.voice && localStream && localStream.getVideoTracks().length > 0) {
+      setCam(false);
+    }
+    if (!inCall) { inCall = true; enterCallUI(opts?.voice ? "Voice call…" : "Calling…"); emitPhase("dialing"); }
     sendWS({ type: "invite", to: target });
     toast("Calling " + target + "…");
     return true;
@@ -1528,20 +1536,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
     localStream.getAudioTracks().forEach(t => t.enabled = micOn);
     $("micBtn")?.classList.toggle("off", !micOn);
   }
-  function toggleCam() {
+  // Set the camera on/off explicitly (shared by the toggle button and the
+  // voice-call start path, which begins with the camera off). The track actually
+  // SENT to peers/SFU is the PROCESSED (canvas) track, so toggle THAT to truly
+  // stop outgoing video; also toggle the raw input so the physical camera
+  // capture/light reflects the off state. Works on BOTH mesh and SFU.
+  function setCam(on: boolean) {
     if (!localStream) return;
-    camOn = !camOn;
-    // The track actually SENT to peers/SFU is the PROCESSED (canvas) track, so
-    // toggle THAT to truly stop outgoing video. Toggling only the raw input (the
-    // old behavior) just starves the canvas and keeps forwarding a frozen frame.
-    // This fixes camera-off on BOTH the mesh and the SFU. Also toggle the raw
-    // input so the physical camera capture/light reflects the off state.
+    camOn = on;
     const published = processedStream || localStream;
     published.getVideoTracks().forEach(t => (t.enabled = camOn));
     if (processedStream) localStream.getVideoTracks().forEach(t => (t.enabled = camOn));
     $("camBtn")?.classList.toggle("off", !camOn);
     // Don't flip the self-tile to audio-only while a screen share occupies it.
     const s = $("tile-self"); if (s && !screenSharing) s.classList.toggle("audio-only", !camOn);
+  }
+  function toggleCam() {
+    if (!localStream) return;
+    setCam(!camOn);
   }
   // The camera video track we publish when NOT screen-sharing: the filtered
   // canvas track when a filter is active, else the raw camera.
@@ -1821,14 +1833,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("nameInput") as HTMLInputElement | null)?.focus();
 
   return {
-    dial(target: string): boolean {
+    dial(target: string, opts?: { voice?: boolean }): boolean {
       // returns true synchronously if validation passes; the actual call is async,
       // but the host UI just needs to know whether to flip to in-call mode.
       if (!/^\d{6}$/.test(target)) return false;
       if (!me.pin) return false;
       if (target === me.pin) return false;
       // fire-and-forget the actual async call
-      void programmaticDial(target);
+      void programmaticDial(target, opts);
       return true;
     },
     setOnStateChange(cb) { onPhaseChange = cb; },

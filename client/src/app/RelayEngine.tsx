@@ -13,8 +13,9 @@ import { RELAY_MARKUP, RELAY_CSS } from "@/lib/relayAssets";
 import { trpc } from "@/lib/trpc";
 
 interface RelayEngineValue {
-  /** Programmatic dial. Returns true if the engine accepted the request. */
-  dial: (number: string) => boolean;
+  /** Programmatic dial. Returns true if the engine accepted the request.
+   *  `opts.voice` starts a voice call (camera off). */
+  dial: (number: string, opts?: { voice?: boolean }) => boolean;
   /** End/leave the current call (or cancel an outgoing one). */
   hangup: () => void;
   /** idle | dialing | ringing | in-call. */
@@ -123,7 +124,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   }, [phase]);
 
   const value: RelayEngineValue = {
-    dial: (n) => handleRef.current?.dial(n) ?? false,
+    dial: (n, opts) => handleRef.current?.dial(n, opts) ?? false,
     hangup: () => handleRef.current?.hangup(),
     phase,
     pin,

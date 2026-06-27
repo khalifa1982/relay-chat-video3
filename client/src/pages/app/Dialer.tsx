@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Phone,
+  Video,
   Delete,
   PhoneIncoming,
   PhoneMissed,
@@ -144,9 +145,9 @@ export default function DialerPage() {
     setDialed((s) => s.slice(0, -1));
   }
 
-  function startCallNow() {
+  function startCallNow(opts?: { voice?: boolean }) {
     if (dialed.length !== 6) return;
-    const ok = engine.dial(dialed);
+    const ok = engine.dial(dialed, opts);
     if (ok) {
       // Phase is driven by the engine (via the provider), so we just clear the
       // dialed buffer; the ghost number reappears once the call ends.
@@ -397,11 +398,33 @@ export default function DialerPage() {
               className="grid grid-cols-[1fr_auto_1fr] items-center mx-auto w-full"
               style={{ maxWidth: "min(100%, 360px)" }}
             >
-              <div />
+              {/* Voice call — starts with the camera off (audio-only). */}
+              <div className="flex justify-start">
+                <button
+                  type="button"
+                  disabled={!callable}
+                  onClick={() => startCallNow({ voice: true })}
+                  className="
+                    rounded-full border border-border bg-card/70 text-foreground
+                    grid place-items-center
+                    disabled:opacity-40 disabled:cursor-not-allowed
+                    active:scale-[0.94] transition-transform duration-150
+                  "
+                  style={{
+                    width: "clamp(46px, 11vw, 54px)",
+                    height: "clamp(46px, 11vw, 54px)",
+                    transitionTimingFunction: "var(--ease-out)",
+                  }}
+                  aria-label="Voice call"
+                  title="Voice call (camera off)"
+                >
+                  <Phone className="size-[18px]" />
+                </button>
+              </div>
               <button
                 type="button"
                 disabled={!callable}
-                onClick={startCallNow}
+                onClick={() => startCallNow()}
                 className="
                   rounded-full
                   bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))]
@@ -417,9 +440,10 @@ export default function DialerPage() {
                   height: "clamp(54px, 13vw, 64px)",
                   transitionTimingFunction: "var(--ease-out)",
                 }}
-                aria-label="Call"
+                aria-label="Video call"
+                title="Video call"
               >
-                <Phone className="size-5" />
+                <Video className="size-5" />
               </button>
               <div className="flex justify-end">
                 {dialed.length > 0 ? (
