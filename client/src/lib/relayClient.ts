@@ -55,6 +55,11 @@ interface Msg {
   livekitUrl?: string;
   token?: string;
   url?: string;
+  // Recording (LiveKit Egress). `recording` (boolean) on `registered` advertises
+  // availability; the `recording` status message carries `on` + `by`.
+  recording?: boolean;
+  on?: boolean;
+  by?: string;
 }
 
 export type RelayPhase = "idle" | "dialing" | "ringing" | "in-call";
@@ -119,6 +124,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let micOn = true, camOn = true;
   let screenStream: MediaStream | null = null;       // active getDisplayMedia stream, or null
   let screenSharing = false;
+  let recordingAvailable = false; // server advertised egress+S3 are configured
+  let recordingOn = false;        // a recording is in progress for this room
   let inCall = false;
   let roomId: string | null = null;
   const peers: Record<string, PeerEntry> = {};
@@ -259,8 +266,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
       livekitEnabled = m.livekit;
       livekitUrl = m.livekitUrl || livekitUrl;
     }
+    if (typeof m.recording === "boolean" && m.type === "registered") {
+      recordingAvailable = m.recording;
+      updateRecordBtnVisibility();
+    }
     switch (m.type) {
       case "registered":   onRegistered(m); break;
+      case "recording":      onRecordingStatus(m); break;
+      case "recording-error":
+        toast(m.message || "Recording failed.", true);
+        recordingOn = false; updateRecordingUI();
+        break;
       case "room":         roomId = m.roomId || null; break;
       case "ring":         onRing(m); break;
       case "ring-cancel":  onRingCancel(m); break;
@@ -1604,6 +1620,30 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenBusy = false;
     toast("Stopped screen sharing");
   }
+  // ---------- recording (LiveKit Egress → operator S3) ----------
+  function updateRecordBtnVisibility() {
+    const b = $("recordBtn");
+    if (b) b.style.display = recordingAvailable ? "" : "none";
+  }
+  function updateRecordingUI() {
+    $("recordBtn")?.classList.toggle("on", recordingOn);
+    const ind = $("recIndicator");
+    if (ind) ind.style.display = recordingOn ? "flex" : "none";
+  }
+  function onRecordingStatus(m: Msg) {
+    const was = recordingOn;
+    recordingOn = !!m.on;
+    updateRecordingUI();
+    if (recordingOn && !was) toast("Recording started");
+    else if (!recordingOn && was) toast("Recording stopped");
+  }
+  function toggleRecording() {
+    if (!recordingAvailable) { toast("Recording isn't set up on this server.", true); return; }
+    if (!inCall) { toast("Start a call first.", true); return; }
+    // Optimistic; the server broadcasts the authoritative `recording` status.
+    if (recordingOn) sendWS({ type: "stop-recording" });
+    else sendWS({ type: "start-recording" });
+  }
   function toggleChat() {
     const p = $("chatPanel"); if (!p) return;
     p.classList.toggle("open");
@@ -1671,6 +1711,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenSharing = false;
     screenBusy = false;
     $("screenBtn")?.classList.remove("on");
+    // The server stops the egress when the room empties; just reset local UI.
+    recordingOn = false;
+    updateRecordingUI();
     if (pipeline) { try { pipeline.destroy(); } catch { /* */ } pipeline = null; }
     if (localStream) {
       localStream.getTracks().forEach(t => t.stop());
@@ -1739,6 +1782,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => hangUp("user-hangup"));
   ($("flipCamBtn") as HTMLElement | null)?.addEventListener("click", () => { flipCamera(); });
   ($("screenBtn") as HTMLElement | null)?.addEventListener("click", () => { void toggleScreenShare(); });
+  ($("recordBtn") as HTMLElement | null)?.addEventListener("click", toggleRecording);
   ($("filterBtn") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("filterClose") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("chatSend") as HTMLElement | null)?.addEventListener("click", sendChat);

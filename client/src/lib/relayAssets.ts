@@ -73,7 +73,10 @@ export const RELAY_MARKUP = `
   <section id="call" class="relay-screen">
     <div class="call-head">
       <div class="ct"><span class="live-dot"></span> <span id="callRoomLbl">In call</span></div>
-      <div class="timer" id="timer">00:00</div>
+      <div class="call-head-right">
+        <span id="recIndicator" class="rec-ind" style="display:none"><span class="rec-blink"></span>REC</span>
+        <div class="timer" id="timer">00:00</div>
+      </div>
     </div>
     <div id="connSeq" class="conn-seq">
       <div class="conn-seq-card">
@@ -125,6 +128,9 @@ export const RELAY_MARKUP = `
         </button>
         <button class="ctrl" id="screenBtn" title="Share screen">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        </button>
+        <button class="ctrl" id="recordBtn" title="Record call" style="display:none">
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg>
         </button>
         <button class="ctrl" id="filterBtn" title="Filters">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="7" r="4"/><circle cx="12" cy="16" r="4"/></svg>
@@ -394,6 +400,12 @@ export const RELAY_CSS = `
 .relay-root .relay-tile.you.screen video{transform:none;object-fit:contain;background:#000}
 /* Active control state (e.g. screen-share on) — accent-tinted like .off is red. */
 .relay-root .ctrl.on{background:rgba(63,224,197,.18);border-color:rgba(63,224,197,.4);color:var(--accent)}
+/* Record button, when armed, glows red. */
+.relay-root #recordBtn.on{background:rgba(255,76,76,.22);border-color:rgba(255,76,76,.5);color:#ff5d5d}
+/* "● REC" live indicator in the call header. */
+.relay-root .call-head-right{display:flex;align-items:center;gap:12px}
+.relay-root .rec-ind{display:flex;align-items:center;gap:6px;font-family:"JetBrains Mono";font-size:12px;font-weight:700;letter-spacing:.06em;color:#ff5d5d}
+.relay-root .rec-blink{width:9px;height:9px;border-radius:50%;background:#ff3b3b;box-shadow:0 0 8px #ff3b3b;animation:relayPulse2 1s ease-in-out infinite}
 /* Screen share is a desktop feature (iOS Safari has no getDisplayMedia, and the
    mobile control bar is already full) — hide the button on small screens. */
 @media (max-width:680px){.relay-root #screenBtn{display:none}}

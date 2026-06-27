@@ -22,6 +22,11 @@
 import crypto from "crypto";
 import type { Request, Response, Express } from "express";
 import { AccessToken, type VideoGrant } from "livekit-server-sdk";
+import {
+  recordingConfig,
+  startRoomRecording,
+  stopRoomRecording,
+} from "./recording";
 
 // TURN credentials are read on every call so the operator can add them via
 // `webdev_request_secrets` without restarting the server, and so unit tests
@@ -60,15 +65,29 @@ export interface RelayConnection {
   pin: string | null;   // assigned 6-digit number after `register`
 }
 
+export interface RoomRecording {
+  egressId: string;
+  by: string;   // pin that started it
+  key: string;  // S3 object key
+  startedAt: number;
+}
+
 export interface RelayRegistry {
   clients: Map<string, RelayClient>;          // pin   -> client
   rooms: Map<string, Set<string>>;            // rid   -> set<pin>
   connections: Map<string, RelayConnection>;  // cid   -> connection
   cidToPin: Map<string, string>;              // cid   -> last assigned pin
+  recordings: Map<string, RoomRecording>;     // rid   -> active recording
 }
 
 export function createRegistry(): RelayRegistry {
-  return { clients: new Map(), rooms: new Map(), connections: new Map(), cidToPin: new Map() };
+  return {
+    clients: new Map(),
+    rooms: new Map(),
+    connections: new Map(),
+    cidToPin: new Map(),
+    recordings: new Map(),
+  };
 }
 
 // Grace window before a client is fully removed after its SSE channel drops.
@@ -253,17 +272,42 @@ export function cancelPendingRings(reg: RelayRegistry, callerPin: string): strin
   return pins;
 }
 
+/** Send a message to every member of a room (optionally excluding one pin). */
+function broadcastToRoom(
+  reg: RelayRegistry,
+  roomId: string,
+  obj: unknown,
+  exceptPin?: string
+) {
+  const room = reg.rooms.get(roomId);
+  if (!room) return;
+  room.forEach(p => {
+    if (p === exceptPin) return;
+    const c = reg.clients.get(p);
+    if (c) safeSend(c.socket, obj);
+  });
+}
+
 export function leaveRoom(reg: RelayRegistry, pin: string) {
   const c = reg.clients.get(pin);
   if (!c || !c.roomId) return;
-  const room = reg.rooms.get(c.roomId);
+  const roomId = c.roomId;
+  const room = reg.rooms.get(roomId);
   if (room) {
     room.delete(pin);
     room.forEach(p => {
       const o = reg.clients.get(p);
       if (o) safeSend(o.socket, { type: "peer-left", pin });
     });
-    if (room.size === 0) reg.rooms.delete(c.roomId);
+    if (room.size === 0) {
+      reg.rooms.delete(roomId);
+      // Last person left ⇒ stop any active recording for this room.
+      const rec = reg.recordings.get(roomId);
+      if (rec) {
+        reg.recordings.delete(roomId);
+        if (rec.egressId) stopRoomRecording(rec.egressId).catch(() => { /* best-effort */ });
+      }
+    }
   }
   c.roomId = null;
 }
@@ -338,7 +382,7 @@ export function handleMessage(
       if (existing) {
         if (msg.name) existing.name = String(msg.name).slice(0, 24);
         const lk = livekitConfig();
-        safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin), livekit: lk.enabled, livekitUrl: lk.url });
+        safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
       }
       return;
     }
@@ -375,7 +419,7 @@ export function handleMessage(
       reg.clients.set(pin, { socket: conn.socket, name, roomId: null, cid: cid || null, graceT: null, ringing: new Set() });
     }
     const lk = livekitConfig();
-    safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin), livekit: lk.enabled, livekitUrl: lk.url });
+    safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
     return;
   }
 
@@ -537,6 +581,11 @@ export function handleMessage(
         livekit: lk.enabled,
         livekitUrl: lk.url,
       });
+      // If this room is already being recorded, tell the newcomer right away so
+      // they see the REC indicator (consent/transparency — they joined after the
+      // start broadcast).
+      const activeRec = reg.recordings.get(roomId);
+      if (activeRec) safeSend(conn.socket, { type: "recording", on: true, by: activeRec.by });
       const newcomerPin = conn.pin;
       members.forEach(m => {
         const o = reg.clients.get(m.pin);
@@ -589,6 +638,54 @@ export function handleMessage(
       // frame / connect failure). Re-mint for its CURRENT room, derived from
       // trusted server state — never a client-supplied room name.
       if (self.roomId) pushLivekitToken(reg, conn.pin, self.roomId);
+      break;
+    }
+
+    case "start-recording": {
+      const rid = self.roomId;
+      if (!recordingConfig().enabled) {
+        safeSend(conn.socket, { type: "recording-error", message: "Recording isn't set up on this server." });
+        break;
+      }
+      if (!rid) break;
+      const existing = reg.recordings.get(rid);
+      if (existing) {
+        safeSend(conn.socket, { type: "recording", on: true, by: existing.by });
+        break;
+      }
+      // Reserve the slot SYNCHRONOUSLY so a double-tap (or a second participant)
+      // can't kick off two egresses for the same room while we await the SDK.
+      reg.recordings.set(rid, { egressId: "", by: conn.pin, key: "", startedAt: Date.now() });
+      broadcastToRoom(reg, rid, { type: "recording", on: true, by: conn.pin });
+      startRoomRecording(rid, Date.now())
+        .then(({ egressId, key }) => {
+          const cur = reg.recordings.get(rid);
+          // Room ended (or slot cleared) while we awaited — undo.
+          if (!cur || !reg.rooms.has(rid)) {
+            stopRoomRecording(egressId).catch(() => { /* */ });
+            reg.recordings.delete(rid);
+            return;
+          }
+          cur.egressId = egressId;
+          cur.key = key;
+        })
+        .catch(e => {
+          console.warn("[relay] start recording failed:", e);
+          reg.recordings.delete(rid);
+          broadcastToRoom(reg, rid, { type: "recording", on: false });
+          safeSend(conn.socket, { type: "recording-error", message: "Couldn't start the recording." });
+        });
+      break;
+    }
+
+    case "stop-recording": {
+      const rid = self.roomId;
+      if (!rid) break;
+      const rec = reg.recordings.get(rid);
+      if (!rec) break;
+      reg.recordings.delete(rid);
+      broadcastToRoom(reg, rid, { type: "recording", on: false });
+      if (rec.egressId) stopRoomRecording(rec.egressId).catch(e => console.warn("[relay] stop recording failed:", e));
       break;
     }
 

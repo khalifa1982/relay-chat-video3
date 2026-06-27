@@ -810,3 +810,26 @@ The focused review of v2.20.0 confirmed 4 edge-case bugs (all fixed) + 2 cheap p
       it; `replaceVideoEverywhere(null)` now unpublishes the SFU video (no orphan publication
       when stopping an audio-only SFU share).
 - [x] Footer → `v2.20.1`. tsc clean, 205 tests green, build clean.
+
+## v2.21.0 — Call recording (LiveKit Egress → S3) (delivered 2026-06-27)
+
+Flagship "professional comms" feature. Feature-gated like LiveKit/TURN — dormant until
+the operator provides an S3 bucket (`RECORDING_S3_*`).
+
+- [x] `server/recording.ts` — `recordingConfig()` gate (LiveKit + S3), pure `toHttpUrl` /
+      `recordingKey` helpers, and `startRoomRecording` / `stopRoomRecording` via the SDK's
+      `EgressClient` (room-composite **grid** MP4 written straight to the operator's bucket —
+      bytes never touch this server).
+- [x] Signaling (`server/relay.ts`): `start-recording` / `stop-recording` messages, a per-room
+      `recordings` map with a SYNCHRONOUS slot reservation (no double-start race), a `recording`
+      status broadcast to the whole room, auto-stop when the room empties, and a status push to
+      anyone who **joins mid-recording** (consent/transparency). `registered` now advertises
+      `recording` availability.
+- [x] Client (`relayClient.ts` + `relayAssets.ts`): a **Record** button (hidden unless the
+      server advertises availability) and a red **"● REC"** indicator shown to every
+      participant; resets on hang-up.
+- [x] 8 vitest cases (`recording.test.ts`): the config gate (off when unconfigured / partial,
+      on with full S3, prefix normalization, force-path-style + endpoint) and the pure helpers.
+- [ ] **Needs operator infra to activate**: an S3-compatible bucket. Once `RECORDING_S3_*` are
+      set (alongside LiveKit, already configured), recording goes live — no code change.
+- [x] Footer → `v2.21.0`. tsc clean, 213 tests green, build clean.

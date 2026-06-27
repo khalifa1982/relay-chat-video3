@@ -174,6 +174,12 @@ These are read **per-call** in `iceServers()` so they can be added without resta
 - `LIVEKIT_API_KEY` — LiveKit project API key
 - `LIVEKIT_API_SECRET` — LiveKit project API secret (server-only; HMAC key for all grants; **never** sent to the browser — only short-TTL join JWTs are)
 
+**Recording** (optional; LiveKit Egress → S3. Requires LiveKit above AND all four S3 vars. Records a room-composite grid MP4 straight to the operator's bucket — bytes never touch this server. Read per-call like `LIVEKIT_*`):
+- `RECORDING_S3_BUCKET`, `RECORDING_S3_REGION`, `RECORDING_S3_ACCESS_KEY`, `RECORDING_S3_SECRET` — all four required to enable. When set, the in-call **Record** button appears and a "● REC" indicator shows for every participant.
+- `RECORDING_S3_ENDPOINT` (optional) — custom endpoint for non-AWS S3 (Cloudflare R2, MinIO, …).
+- `RECORDING_S3_PREFIX` (optional) — key prefix, default `recordings/`.
+- `RECORDING_S3_FORCE_PATH_STYLE` (optional) — `1`/`true` for R2/MinIO.
+
 **Email** (optional; missed-call notifications via Resend):
 - `RESEND_API_KEY` — enables outbound email. Without a DNS-verified sending domain, Resend test mode only delivers FROM `onboarding@resend.dev` TO the account owner's address.
 - `RESEND_FROM` — sender; defaults to `onboarding@resend.dev`. Set to a verified-domain address (e.g. `RELAY <notifications@your-chat.org>`) to email arbitrary registered users.
