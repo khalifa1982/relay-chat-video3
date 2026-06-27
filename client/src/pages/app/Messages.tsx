@@ -739,7 +739,7 @@ function NewMessageDialog() {
         <MessageSquarePlus className="size-5" />
       </Button>
       {open && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={resetAll}>
           <div
             className="w-full max-w-sm rounded-2xl bg-card border border-border p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}

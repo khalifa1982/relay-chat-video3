@@ -851,5 +851,21 @@ No migration needed — the schema already had `conversations.kind="group"` + `t
 - [x] Client: group threads render with a group glyph + title; the conversation header shows
       "N members" (no 1:1 call button); group messages show sender names; a **New group**
       mode in the New-Conversation dialog (title + add-members-by-number chips).
-- [x] Reviewed by a focused adversarial agent pass. Footer → `v2.22.0`. tsc clean, 216 tests
-      green, build clean.
+- [x] Footer → `v2.22.0`. tsc clean, 216 tests green, build clean.
+
+## v2.22.1 — Group-messaging review fixes (delivered 2026-06-27)
+
+The focused adversarial review found NO critical/high bugs (the projection refactor verified
+correct — duplication structurally impossible, DM/self behavior field-for-field unchanged).
+Three low-severity findings, all fixed:
+
+- [x] **Non-transactional group creation** — `createGroupConversation` now wraps the
+      conversation + participant inserts in `db.transaction` so a failed participant insert
+      can't orphan a conversation row (matches the `sendMessage` pattern).
+- [x] **DM-with-unresolvable-peer mislabel** — if a 1:1's peer identity failed to load, the
+      refactor would have rendered it as "Notes (You)". Now restores the original behavior
+      (drop it) by distinguishing a true self-note (no participant rows) from an unresolved
+      peer (has a row, identity missing). New unit test pins this (218 tests total).
+- [x] **Backdrop dismissal kept group-builder state** — the New-Conversation overlay backdrop
+      now calls `resetAll` (was `setOpen(false)`), so dismissing mid-build clears title/members.
+- [x] Footer → `v2.22.1`. tsc clean, 217 tests green, build clean.

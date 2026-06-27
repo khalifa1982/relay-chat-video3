@@ -181,6 +181,21 @@ describe("composeThreadSummaries", () => {
     expect(out[0].otherDisplayName).toBe("Anya, Bob");
   });
 
+  it("drops a DM whose peer identity didn't resolve (does NOT mislabel it 'Notes (You)')", () => {
+    // The conversation HAS an other participant row, but that identity is
+    // absent from otherIdentities (deleted/orphaned/transient race).
+    const out = composeThreadSummaries({
+      identityId: me.id,
+      myParts: [{ conversationId: 400, unreadCount: 0 }],
+      others: [{ conversationId: 400, identityId: 9999 }], // unresolved
+      otherIdentities: [], // 9999 not present
+      myIdentity: me,
+      convoRows: [{ id: 400, lastMessageAt: tNow, kind: "dm", title: null }],
+      latestMessageByConvo: new Map(),
+    });
+    expect(out).toEqual([]); // dropped, not a synthetic self-note
+  });
+
   it("tags regular DMs with kind 'dm' and memberCount 2", () => {
     const out = composeThreadSummaries({
       identityId: me.id,

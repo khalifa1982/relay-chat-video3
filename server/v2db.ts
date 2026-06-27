@@ -586,23 +586,27 @@ export async function createGroupConversation(input: {
   if (!db) throw new Error("database unavailable");
   // De-dupe + always include the creator.
   const ids = Array.from(new Set([input.creatorId, ...input.memberIds]));
-  const res = await db.insert(conversations).values({
-    pairKey: null,
-    kind: "group",
-    title: input.title.slice(0, 128),
+  // Both inserts in ONE transaction so a failed participant insert never leaves
+  // an orphaned conversation row behind.
+  return await db.transaction(async (tx) => {
+    const res = await tx.insert(conversations).values({
+      pairKey: null,
+      kind: "group",
+      title: input.title.slice(0, 128),
+    });
+    // mysql2 returns the new row id as insertId on the result header.
+    const insertId = Number(res[0].insertId);
+    if (!insertId) throw new Error("group conversation insert failed");
+    await tx.insert(conversationParticipants).values(
+      ids.map((identityId) => ({ conversationId: insertId, identityId }))
+    );
+    const [row] = await tx
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, insertId))
+      .limit(1);
+    return row;
   });
-  // mysql2 returns the new row id as insertId on the result header.
-  const insertId = Number(res[0].insertId);
-  if (!insertId) throw new Error("group conversation insert failed");
-  await db.insert(conversationParticipants).values(
-    ids.map((identityId) => ({ conversationId: insertId, identityId }))
-  );
-  const [row] = await db
-    .select()
-    .from(conversations)
-    .where(eq(conversations.id, insertId))
-    .limit(1);
-  return row;
 }
 
 export interface ThreadSummary {
@@ -666,7 +670,12 @@ export function composeThreadSummaries(input: {
   const unreadByConvo = new Map(
     input.myParts.map((p) => [p.conversationId, p.unreadCount])
   );
-  // Group the "other" participants by conversation (a group has many).
+  // Conversations that have ANY other participant row (before identity
+  // resolution). Used to tell a true self-note (no others at all) apart from a
+  // DM whose peer identity simply failed to load — the latter must be dropped,
+  // NOT relabelled "Notes (You)".
+  const convoIdsWithRawOther = new Set(input.others.map((o) => o.conversationId));
+  // Group the RESOLVED "other" participants by conversation (a group has many).
   const othersByConvo = new Map<
     number,
     Array<{ id: number; number: string; displayName: string; avatarUrl: string | null }>
@@ -721,8 +730,9 @@ export function composeThreadSummaries(input: {
         otherAvatarUrl: other.avatarUrl ?? null,
         memberCount: 2,
       });
-    } else if (input.myIdentity) {
-      // Self-conversation — synthesise the "Notes (You)" peer row.
+    } else if (input.myIdentity && !convoIdsWithRawOther.has(p.conversationId)) {
+      // TRUE self-conversation (no other participant rows at all) — synthesise
+      // the "Notes (You)" peer row.
       result.push({
         ...base,
         kind: "dm",
@@ -734,7 +744,8 @@ export function composeThreadSummaries(input: {
         memberCount: 1,
       });
     }
-    // else: self-only conversation but myIdentity missing → drop (no crash).
+    // else: a DM whose peer didn't resolve (or myIdentity missing) → drop, just
+    // as the pre-refactor projection did (never mislabel it "Notes (You)").
   }
 
   result.sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime());
