@@ -7,9 +7,11 @@ import { useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { notify, playCallRing, playMessageChime } from "./notifications";
 import { isThreadMuted } from "./mutedThreads";
+import { setTyping, clearTyping } from "./typingStore";
 
 type V2Event =
   | { kind: "message"; conversationId: number; from: number }
+  | { kind: "typing"; conversationId: number; from: number }
   | { kind: "read"; conversationId: number; reader: number }
   | { kind: "presence"; number: string; online: boolean; lastSeenAt: string }
   | { kind: "contact"; from: number }
@@ -71,7 +73,13 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
         }
         if (!payload || payload.kind === "ping") return;
         switch (payload.kind) {
+          case "typing":
+            // Someone is typing — surface it; their actual message will clear it.
+            setTyping(payload.conversationId, payload.from);
+            break;
           case "message":
+            // A real message arrived → they've stopped typing.
+            clearTyping(payload.conversationId, payload.from);
             // refresh threads list + the affected conversation
             utils.messages.threads.invalidate().catch(() => {});
             utils.messages.list

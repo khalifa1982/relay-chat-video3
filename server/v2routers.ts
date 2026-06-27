@@ -825,6 +825,27 @@ export const v2MessagesRouter = router({
       return { ok: true };
     }),
 
+  /** Ephemeral "I'm typing" ping — fanned out to the OTHER participants. No DB. */
+  typing: publicProcedure
+    .input(z.object({ conversationId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      try {
+        for (const pid of await getConversationParticipantIds(input.conversationId)) {
+          if (pid !== me.id) {
+            publishToIdentity(pid, {
+              kind: "typing",
+              conversationId: input.conversationId,
+              from: me.id,
+            });
+          }
+        }
+      } catch {
+        /* best-effort */
+      }
+      return { ok: true };
+    }),
+
   /** Unsend (soft-delete) one of your OWN messages. */
   remove: publicProcedure
     .input(z.object({ messageId: z.number().int().positive() }))

@@ -27,6 +27,7 @@ import { uploadAttachment } from "@/lib/uploadAttachment";
 import { linkify } from "@/lib/linkify";
 import { useIdentity } from "@/app/useIdentity";
 import { useThreadMuted, isThreadMuted, onMutedChange } from "@/app/mutedThreads";
+import { useTypers } from "@/app/typingStore";
 
 const EMOJI_QUICK = [
   "😀","😂","😊","😍","😉","😎","🤔","🙏",
@@ -247,6 +248,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       utils.messages.threads.invalidate();
     },
   });
+  // "I'm typing" ping — throttled to at most once per 3s while actively typing.
+  const typingMutation = trpc.messages.typing.useMutation();
+  const lastTypingRef = useRef(0);
+  function notifyTyping() {
+    const now = Date.now();
+    if (now - lastTypingRef.current < 3000) return;
+    lastTypingRef.current = now;
+    typingMutation.mutate({ conversationId });
+  }
+  // Who's typing in THIS conversation (excludes me; resolved to names below).
+  const typers = useTypers(conversationId).filter((id) => id !== me?.id);
   function deleteMessage(messageId: number) {
     if (!window.confirm("Unsend this message? It will be removed for everyone.")) return;
     removeMutation.mutate({ messageId });
@@ -624,6 +636,22 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         )}
       </div>
 
+      {/* typing indicator */}
+      {typers.length > 0 && (
+        <div className="px-4 md:px-5 pb-1 -mt-1 text-xs text-muted-foreground flex items-center gap-1.5">
+          <span className="inline-flex gap-0.5" aria-hidden="true">
+            <span className="size-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "0ms" }} />
+            <span className="size-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "150ms" }} />
+            <span className="size-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "300ms" }} />
+          </span>
+          {typers.length === 1
+            ? `${senderLabel(typers[0])} is typing…`
+            : typers.length === 2
+              ? `${senderLabel(typers[0])} and ${senderLabel(typers[1])} are typing…`
+              : "Several people are typing…"}
+        </div>
+      )}
+
       {/* composer */}
       <div className="px-3 md:px-5 py-3 border-t border-border bg-card md:rounded-b-2xl">
         {replyingTo && (
@@ -711,7 +739,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           <input ref={fileRef} type="file" className="hidden" onChange={handleFile} />
           <Input
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              if (e.target.value.trim()) notifyTyping();
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();

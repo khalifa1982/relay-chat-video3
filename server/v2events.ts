@@ -24,6 +24,7 @@ const clientsByIdentity = new Map<number, Set<SseClient>>();
 
 export type V2Event =
   | { kind: "message"; conversationId: number; from: number }
+  | { kind: "typing"; conversationId: number; from: number }
   | { kind: "read"; conversationId: number; reader: number }
   | { kind: "presence"; number: string; online: boolean; lastSeenAt: string }
   | { kind: "contact"; from: number }

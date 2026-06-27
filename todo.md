@@ -986,3 +986,19 @@ Feature-gated on `INBOUND_EMAIL_DOMAIN`; built + reviewed by an adversarial agen
 - [x] 5 vitest cases (`mutedThreads.test.ts`): default, toggle isolation, persistence,
       subscribe/unsubscribe, corrupt-storage tolerance. 248 tests green.
 - [x] Footer → `v2.29.0`. tsc clean, build clean.
+
+## v2.30.0 — Typing indicators (delivered 2026-06-27)
+
+Closes a long-standing v2.0 gap ("No typing indicators" in CLAUDE.md).
+
+- [x] Server: `messages.typing` mutation fans an ephemeral `typing` event to the OTHER
+      participants (no DB); new `typing` kind on the SSE `V2Event` bus.
+- [x] Client: `typingStore.ts` — an ephemeral per-(conversation,sender) registry with a 5s
+      auto-expiring TTL (per-entry timeouts, no polling); `useRealtime` records `typing` events
+      and clears a sender the instant their real message arrives.
+- [x] Composer sends a throttled (≤1/3s) typing ping while you type; the conversation shows an
+      animated "X is typing…" / "X and Y are typing…" line above the composer (names resolved
+      via the DM peer or the group roster).
+- [x] 5 vitest cases (`typingStore.test.ts`, with fake timers): per-conversation isolation,
+      TTL expiry, refresh-keeps-alive, clear one/all, change-only notifications. 253 tests green.
+- [x] Footer → `v2.30.0`. tsc clean, build clean.
