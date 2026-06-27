@@ -579,6 +579,80 @@ describe("relay signaling", () => {
     handleMessage(reg, c2.asConn(), { type: "register", name: "X", pin });
     expect((c2.last() as { pin: string }).pin).toBe(pin);
   });
+
+  // ── v2.33.1 hardening (adversarial-review findings) ──────────────────────
+  it("a DIFFERENT user on the SAME browser (cid) is NOT auto-rejoined into the previous user's live call", () => {
+    const { b, rid, aPin, bPin } = setupCall();
+    // The in-call grace reaper deletes A's client but (per the real grace branch)
+    // KEEPS the cid->pin mapping AND the room membership.
+    reg.clients.delete(aPin);
+    expect(reg.cidToPin.get("dev-a")).toBe(aPin);
+    expect(reg.pinRoom.get(aPin)).toBe(rid);
+
+    // A logs out; a different user registers on the same browser, explicitly
+    // requesting THEIR OWN number (any valid pin that isn't A's or B's).
+    let wantPin = "200000";
+    while (wantPin === aPin || wantPin === bPin) wantPin = String(Number(wantPin) + 1);
+    const other = new FakeConn("dev-a");
+    handleMessage(reg, other.asConn(), { type: "register", name: "Mallory", pin: wantPin });
+
+    // They get their OWN number, never A's, and no rejoin into A's call.
+    expect(other.pin).toBe(wantPin);
+    expect(other.pin).not.toBe(aPin);
+    expect(other.outbox.some((m) => rtype(m) === "rejoin")).toBe(false);
+    // A's stale cid binding + membership were severed; B's call is untouched.
+    expect(reg.cidToPin.get("dev-a")).toBe(wantPin);
+    expect(reg.pinRoom.has(aPin)).toBe(false);
+    expect(reg.rooms.get(rid)?.has(bPin)).toBe(true);
+    void b;
+  });
+
+  it("a same-cid reconnect that re-requests its OWN pin still auto-rejoins (identitySwitch stays off)", () => {
+    const { rid, aPin, bPin } = setupCall();
+    reg.clients.delete(aPin); // in-call grace reaped the client, membership kept
+    const a2 = new FakeConn("dev-a");
+    handleMessage(reg, a2.asConn(), { type: "register", name: "A", pin: aPin });
+    expect(a2.pin).toBe(aPin);
+    const rejoin = a2.outbox.find((m) => rtype(m) === "rejoin") as { roomId: string } | undefined;
+    expect(rejoin?.roomId).toBe(rid);
+    void bPin;
+  });
+
+  it("a ghost-only room is reap-armed (not leaked) when the last connected peer explicitly leaves", () => {
+    const { b, rid, aPin, bPin } = setupCall();
+    // A drops mid-call: grace reaped the client, membership KEPT → disconnected ghost.
+    reg.clients.delete(aPin);
+    expect(reg.rooms.get(rid)?.has(aPin)).toBe(true);
+    expect(reg.roomReapT.has(rid)).toBe(false); // not armed while B is connected
+    // B explicitly hangs up. The room now holds only the disconnected ghost A.
+    handleMessage(reg, b.asConn(), { type: "leave" });
+    expect(reg.rooms.get(rid)?.has(bPin)).toBe(false);
+    // The room is no longer leaked: the abandonment reaper is armed for it.
+    expect(reg.roomReapT.has(rid)).toBe(true);
+    const t = reg.roomReapT.get(rid);
+    if (t) clearTimeout(t); // don't leave a 5-min timer dangling in the suite
+  });
+
+  it("refreshing while ALONE in a solo dialing room lands in the lobby (no empty rejoin) and reaps the room", () => {
+    const a = new FakeConn("dev-a");
+    handleMessage(reg, a.asConn(), { type: "register", name: "A" });
+    const b = new FakeConn("dev-b");
+    handleMessage(reg, b.asConn(), { type: "register", name: "B" });
+    // A dials B but B never accepts → A sits alone in a solo dialing room.
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const rid = (a.outbox.find((m) => rtype(m) === "room") as { roomId: string }).roomId;
+    expect(reg.pinRoom.get(a.pin!)).toBe(rid);
+    // A's in-call client is reaped (refresh) but membership kept.
+    const aPin = a.pin!;
+    reg.clients.delete(aPin);
+    // A returns. Being ALONE, A must NOT get an empty rejoin — they go to lobby
+    // and the orphaned solo room is reaped.
+    const a2 = new FakeConn("dev-a");
+    handleMessage(reg, a2.asConn(), { type: "register", name: "A" });
+    expect(a2.outbox.some((m) => rtype(m) === "rejoin")).toBe(false);
+    expect(reg.pinRoom.has(aPin)).toBe(false);
+    expect(reg.rooms.has(rid)).toBe(false);
+  });
 });
 
 /**

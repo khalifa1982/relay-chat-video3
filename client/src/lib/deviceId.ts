@@ -110,6 +110,25 @@ export function resetDeviceId(): string {
 }
 
 /**
+ * Clear the RELAY signaling-channel identity (connection id + cached pin) for
+ * this browser. Call on an explicit logout so the NEXT user on a SHARED browser
+ * gets a brand-new cid -> a brand-new number, and can never be auto-rejoined
+ * into the previous user's still-live call. The server enforces the same
+ * invariant (a differing pin request severs the old binding), but clearing here
+ * is cheap defense-in-depth that also closes the narrow "registers before its
+ * own number loads" race.
+ */
+export function clearRelayChannel(): void {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.removeItem("relay_cid");
+    window.localStorage.removeItem("relay_pin");
+  } catch {
+    /* storage disabled (private mode) — nothing to clear */
+  }
+}
+
+/**
  * Header name the server expects. Keep in sync with
  * `DEVICE_ID_HEADER` on the server.
  */

@@ -174,13 +174,21 @@ function maybeScheduleRoomReap(reg: RelayRegistry, roomId: string) {
 function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string) {
   const rid = reg.pinRoom.get(pin);
   if (!rid || !reg.rooms.has(rid)) return;
+  const members = Array.from(reg.rooms.get(rid) || [])
+    .filter(p => p !== pin)
+    .map(p => ({ pin: p, name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest" }));
+  if (members.length === 0) {
+    // The user is ALONE in this room — a stale solo dialing room (they refreshed
+    // mid-ring before anyone answered) or everyone else already left. Don't drop
+    // them into an empty "call" screen; release the membership so they land back
+    // in the lobby, and reap the orphaned solo room.
+    leaveRoom(reg, pin);
+    return;
+  }
   const t = reg.roomReapT.get(rid);
   if (t) { clearTimeout(t); reg.roomReapT.delete(rid); }
   const cself = reg.clients.get(pin);
   if (cself) cself.roomId = rid;
-  const members = Array.from(reg.rooms.get(rid) || [])
-    .filter(p => p !== pin)
-    .map(p => ({ pin: p, name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest" }));
   const lk = livekitConfig();
   safeSend(socket, {
     type: "rejoin",
@@ -431,7 +439,17 @@ export function leaveRoom(reg: RelayRegistry, pin: string) {
       const o = reg.clients.get(p);
       if (o) safeSend(o.socket, { type: "peer-left", pin });
     });
-    if (room.size === 0) reapRoom(reg, roomId);
+    if (room.size === 0) {
+      reapRoom(reg, roomId);
+    } else {
+      // The room still lists members, but they may ALL be disconnected "ghosts"
+      // (grace-reaped mid-call, membership intentionally kept so they can
+      // auto-rejoin). Without this, a room whose last *connected* peer explicitly
+      // leaves would leak forever — maybeScheduleRoomReap only arms the
+      // abandonment timer when no connected member remains, so a live call with
+      // someone still present is never affected.
+      maybeScheduleRoomReap(reg, roomId);
+    }
   }
 }
 
@@ -521,8 +539,28 @@ export function handleMessage(
     const requested = typeof msg.pin === "string" && /^\d{6}$/.test(msg.pin) ? msg.pin : undefined;
 
     const multiDevice = multiDeviceEnabled();
-    if (ownedPin) {
-      pin = ownedPin;
+    // SECURITY: an explicit, valid pin request that DIFFERS from the pin this
+    // browser (cid) previously owned means a DIFFERENT identity is registering
+    // here — typically a new user after a logout on a shared browser. We must
+    // NOT silently hand them the previous user's number: that would drop them
+    // straight into that user's still-live call (cross-user hijack) and, on the
+    // SFU path, mint them a publish/subscribe token under the wrong identity.
+    // Sever the stale cid→pin binding and, when this browser was that identity's
+    // only connection, tear its room membership down too.
+    const identitySwitch = !!ownedPin && !!requested && requested !== ownedPin;
+    if (identitySwitch && ownedPin) {
+      const stale = reg.clients.get(ownedPin);
+      if (!stale || stale.cid === cid || stale.cid === null) {
+        if (stale?.graceT) { clearTimeout(stale.graceT); stale.graceT = null; }
+        leaveRoom(reg, ownedPin); // clears pinRoom membership + notifies peers
+        reg.clients.delete(ownedPin);
+      }
+      if (cid && reg.cidToPin.get(cid) === ownedPin) reg.cidToPin.delete(cid);
+      deviceRemove(reg, ownedPin, cid);
+    }
+    const effectiveOwned = identitySwitch ? undefined : ownedPin;
+    if (effectiveOwned) {
+      pin = effectiveOwned;
     } else if (
       requested &&
       (multiDevice || !reg.clients.has(requested) || reg.clients.get(requested)!.cid === cid)

@@ -846,7 +846,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (inCall) return;              // already in a call — ignore
     const rid = m.roomId || null;
     if (!rid) return;
-    try { await ensureMedia(); } catch { return; }  // need camera/mic back
+    try {
+      await ensureMedia();
+    } catch {
+      // Couldn't re-acquire camera/mic on this fresh page (permission revoked or
+      // device busy). We can't rejoin — explicitly leave so the server drops our
+      // membership instead of keeping us as a phantom "connected" member that
+      // holds the room open.
+      sendWS({ type: "leave", reason: "rejoin-no-media" });
+      return;
+    }
     roomId = rid;
     inCall = true;
     enterCallUI("In call");          // shows the call screen + arms the SFU watchdog
@@ -1114,6 +1123,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!data) return;
     let peer = peers[from];
     if (data.sdp) {
+      // A fresh OFFER for an EXISTING peer whose connection is already dead means
+      // the remote refreshed/reconnected and is re-offering as a newcomer. Applying
+      // it onto the stale (failed/closed/disconnected) RTCPeerConnection stalls, so
+      // tear the dead peer down and rebuild from scratch.
+      if (
+        peer &&
+        data.sdp.type === "offer" &&
+        (peer.pc.connectionState === "failed" ||
+          peer.pc.connectionState === "closed" ||
+          peer.pc.connectionState === "disconnected")
+      ) {
+        removePeer(from, true);
+        peer = peers[from]; // deleted above → recreated below
+      }
       if (!peer) peer = createPeer(from, "Guest", false);
       try {
         await peer.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
@@ -1151,7 +1174,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       try { p.pc.setConfiguration(iceConfig as RTCConfiguration); } catch { /* */ }
     });
   }
-  function removePeer(pin: string) {
+  function removePeer(pin: string, quiet = false) {
     const e = peers[pin];
     if (!e) return;
     const nm = e.name;
@@ -1161,7 +1184,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (e.el) e.el.remove();
     delete peers[pin];
     layoutGrid();
-    if (inCall) addSysMsg((nm || "Someone") + " left the call.");
+    // `quiet` skips the "X left the call" system message — used when we're
+    // immediately rebuilding the peer (a refresh/reconnect re-offer), not when
+    // they're genuinely leaving.
+    if (inCall && !quiet) addSysMsg((nm || "Someone") + " left the call.");
   }
 
   // ---------- diagnostics ----------

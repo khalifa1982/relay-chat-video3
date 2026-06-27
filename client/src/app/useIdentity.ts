@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { trpc } from "@/lib/trpc";
-import { getDeviceId, resetDeviceId } from "@/lib/deviceId";
+import { getDeviceId, resetDeviceId, clearRelayChannel } from "@/lib/deviceId";
 
 /**
  * Hook for v2.0 phone-app identity — a PURE READ (whoami + start/sign-out).
@@ -31,6 +31,9 @@ export function useIdentity() {
       // (fresh PIN, empty contacts) instead of the device-id silently restoring
       // the old one. This is the "PIN stays the same until you log out" rule.
       resetDeviceId();
+      // Also sever the relay signaling channel so a different user on this
+      // browser can never be auto-rejoined into this guest's live call.
+      clearRelayChannel();
       utils.identity.whoami.invalidate();
     },
   });

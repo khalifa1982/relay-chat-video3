@@ -135,6 +135,25 @@ describe("getDeviceId — sticky per-browser identity", () => {
     expect(DEVICE_ID_HEADER).toBe("x-relay-device-id");
   });
 
+  it("clearRelayChannel removes the relay cid + cached pin (logout severs the call channel)", async () => {
+    const ls = installWindow();
+    ls.setItem("relay_cid", "abc123def456abc1");
+    ls.setItem("relay_pin", "123456");
+    ls.setItem("relay_device_id", "0123456789abcdef"); // must be left intact
+    const { clearRelayChannel } = await freshImport();
+    clearRelayChannel();
+    expect(ls.getItem("relay_cid")).toBeNull();
+    expect(ls.getItem("relay_pin")).toBeNull();
+    // The device id is a SEPARATE concern (handled by resetDeviceId) — untouched.
+    expect(ls.getItem("relay_device_id")).toBe("0123456789abcdef");
+  });
+
+  it("clearRelayChannel is a no-op (no throw) when localStorage is unavailable", async () => {
+    clearWindow();
+    const { clearRelayChannel } = await freshImport();
+    expect(() => clearRelayChannel()).not.toThrow();
+  });
+
   it("survives a localStorage that throws on setItem (Safari private mode)", async () => {
     const ls = installWindow();
     const orig = ls.setItem.bind(ls);

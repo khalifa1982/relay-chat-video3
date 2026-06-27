@@ -1090,3 +1090,35 @@ when the room is fully abandoned.
       locked out (no rejoin); room reaped once the last member leaves. 262 tests green.
 - [x] Reviewed by a focused adversarial agent pass (core change to the LIVE engine).
 - [x] Footer → `v2.33.0`. tsc clean, build clean.
+
+## v2.33.1 — Persistent-rejoin hardening (review findings) (delivered 2026-06-27)
+
+The adversarial review of v2.33.0 found 5 real issues (2 verified with repro tests). All folded here.
+
+- [x] **CRITICAL — cross-user call hijack on a shared browser.** The relay `cid`
+      (`localStorage.relay_cid`) persisted across logout, and `ownedPin = cidToPin.get(cid)`
+      overrode the requested pin — so a NEW user logging in on the same browser was handed the
+      previous user's number and dropped into their still-live call (SFU: a publish/subscribe
+      token under the wrong identity). Fixed three ways: (1) server `register` now treats an
+      explicit pin request that DIFFERS from the cid's owned pin as an *identity switch* — it
+      severs the stale `cid→pin` binding, tears down the old room membership, and honours the new
+      request (`relay.ts` `identitySwitch`); (2) logout clears `relay_cid` + `relay_pin`
+      (`clearRelayChannel` in `deviceId.ts`, wired into `useIdentity.signOut` + `Profile` logout);
+      (3) the server fix is authoritative regardless of client state.
+- [x] **HIGH — room/membership memory leak.** When a grace-reaped "ghost" member remained and the
+      last *connected* peer explicitly left, `leaveRoom` never armed the abandonment reaper, so the
+      room + `pinRoom` entry leaked forever. `leaveRoom` now calls `maybeScheduleRoomReap` when the
+      room still has (ghost-only) members.
+- [x] **MEDIUM — empty rejoin after refreshing mid-dial.** A solo caller who refreshed while
+      ringing was dropped into an empty "call" screen. `sendRejoinIfInRoom` now detects a lone
+      member, releases the membership (reaping the orphaned solo room), and lets them land in the
+      lobby instead.
+- [x] **LOW/MEDIUM — stale dead mesh peer on rejoin.** A fresh SDP offer for an existing peer whose
+      `RTCPeerConnection` is already failed/closed/disconnected now rebuilds the peer from scratch
+      (`onSignal` + a `quiet` flag on `removePeer`) instead of applying the offer onto a dead pc.
+- [x] **LOW — phantom member on rejoin media failure.** If `ensureMedia` fails on rejoin, the
+      client now sends an explicit `leave` so the server drops the membership instead of keeping a
+      "connected" member who isn't in the call.
+- [x] 6 new vitest cases (4 server: identity-switch no-hijack, same-pin still rejoins, ghost-room
+      reap-arm, lone-member lobby; 2 client: `clearRelayChannel`). 268 tests green, tsc + build clean.
+- [x] Footer → `v2.33.1`.
