@@ -117,6 +117,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let facingMode: "user" | "environment" = "user";
   let activeFilter: FilterId = "none";
   let micOn = true, camOn = true;
+  let screenStream: MediaStream | null = null;       // active getDisplayMedia stream, or null
+  let screenSharing = false;
   let inCall = false;
   let roomId: string | null = null;
   const peers: Record<string, PeerEntry> = {};
@@ -522,6 +524,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
    *  wrong track and a duplicate mic capture would leak). */
   async function flipCamera() {
     if (!localStream) { toast("Camera isn't active yet.", true); return; }
+    if (screenSharing) { toast("Stop screen sharing to flip the camera.", true); return; }
     const next: "user" | "environment" = facingMode === "user" ? "environment" : "user";
     let nuVideo: MediaStream;
     try {
@@ -573,6 +576,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let filterBusy = false;
   let pendingFilter: FilterId | null = null;
   async function applyFilter(id: FilterId) {
+    if (screenSharing) { toast("Filters are off while sharing your screen.", true); return; }
     pendingFilter = id;
     // Immediate visual feedback on the strip even while a prior change runs.
     const sel = $("filterStrip");
@@ -1501,6 +1505,65 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("camBtn")?.classList.toggle("off", !camOn);
     const s = $("tile-self"); if (s) s.classList.toggle("audio-only", !camOn);
   }
+  // The camera video track we publish when NOT screen-sharing: the filtered
+  // canvas track when a filter is active, else the raw camera.
+  function currentCameraVideoTrack(): MediaStreamTrack | null {
+    return (processedStream || localStream)?.getVideoTracks()[0] || null;
+  }
+  let screenBusy = false;
+  async function toggleScreenShare() {
+    if (screenBusy) return; // ignore double-taps while a transition is in flight
+    if (screenSharing) { await stopScreenShare(); return; }
+    if (!inCall) { toast("Start a call first.", true); return; }
+    const md = navigator.mediaDevices as MediaDevices & {
+      getDisplayMedia?: (c?: MediaStreamConstraints) => Promise<MediaStream>;
+    };
+    if (!md.getDisplayMedia) { toast("Screen sharing isn't supported on this device.", true); return; }
+    screenBusy = true;
+    let disp: MediaStream;
+    try {
+      disp = await md.getDisplayMedia({ video: true, audio: false });
+    } catch {
+      // User cancelled the picker, or permission denied — no-op.
+      screenBusy = false;
+      return;
+    }
+    const track = disp.getVideoTracks()[0] || null;
+    if (!track) { disp.getTracks().forEach(t => t.stop()); return; }
+    screenStream = disp;
+    screenSharing = true;
+    // Browser "Stop sharing" UI (or the source ending) ⇒ restore the camera.
+    track.onended = () => { void stopScreenShare(); };
+    await replaceVideoEverywhere(track);
+    $("screenBtn")?.classList.add("on");
+    const selfTile = $("tile-self");
+    const selfV = selfTile?.querySelector("video") as HTMLVideoElement | null;
+    if (selfV) selfV.srcObject = disp;
+    // Screen content must never be mirrored, and isn't "audio-only".
+    if (selfTile) { selfTile.classList.add("screen"); selfTile.classList.remove("audio-only"); }
+    screenBusy = false;
+    toast("Sharing your screen");
+  }
+  async function stopScreenShare() {
+    if (!screenSharing) return;
+    screenBusy = true;
+    screenSharing = false;
+    const dying = screenStream;
+    screenStream = null;
+    // Swap the live camera/filtered track back in for every peer + the SFU.
+    await replaceVideoEverywhere(currentCameraVideoTrack());
+    try { dying?.getTracks().forEach(t => { t.onended = null; t.stop(); }); } catch { /* */ }
+    $("screenBtn")?.classList.remove("on");
+    const selfTile = $("tile-self");
+    const selfV = selfTile?.querySelector("video") as HTMLVideoElement | null;
+    if (selfV) selfV.srcObject = processedStream || localStream;
+    if (selfTile) {
+      selfTile.classList.remove("screen");
+      selfTile.classList.toggle("audio-only", !camOn);
+    }
+    screenBusy = false;
+    toast("Stopped screen sharing");
+  }
   function toggleChat() {
     const p = $("chatPanel"); if (!p) return;
     p.classList.toggle("open");
@@ -1561,6 +1624,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("filterDock")?.classList.remove("open");
     unread = 0;
     const b = $("chatBadge"); if (b) b.style.display = "none";
+    if (screenStream) {
+      try { screenStream.getTracks().forEach(t => { t.onended = null; t.stop(); }); } catch { /* */ }
+      screenStream = null;
+    }
+    screenSharing = false;
+    $("screenBtn")?.classList.remove("on");
     if (pipeline) { try { pipeline.destroy(); } catch { /* */ } pipeline = null; }
     if (localStream) {
       localStream.getTracks().forEach(t => t.stop());
@@ -1628,6 +1697,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("addGo") as HTMLElement | null)?.addEventListener("click", addToCall);
   ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => hangUp("user-hangup"));
   ($("flipCamBtn") as HTMLElement | null)?.addEventListener("click", () => { flipCamera(); });
+  ($("screenBtn") as HTMLElement | null)?.addEventListener("click", () => { void toggleScreenShare(); });
   ($("filterBtn") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("filterClose") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("chatSend") as HTMLElement | null)?.addEventListener("click", sendChat);
@@ -1707,6 +1777,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
       for (const id in peers) {
         try { peers[id].pc.close(); } catch { /* */ }
       }
+      if (screenStream) {
+        try { screenStream.getTracks().forEach(t => { t.onended = null; t.stop(); }); } catch { /* */ }
+        screenStream = null;
+      }
+      screenSharing = false;
       if (localStream) {
         localStream.getTracks().forEach(t => t.stop());
         localStream = null;

@@ -123,6 +123,9 @@ export const RELAY_MARKUP = `
         <button class="ctrl" id="flipCamBtn" title="Flip camera (front ↔ back)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
         </button>
+        <button class="ctrl" id="screenBtn" title="Share screen">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        </button>
         <button class="ctrl" id="filterBtn" title="Filters">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="7" r="4"/><circle cx="12" cy="16" r="4"/></svg>
         </button>
@@ -386,6 +389,14 @@ export const RELAY_CSS = `
    back cam not mirrored, and outgoing stream NEVER mirrored. */
 .relay-root .relay-tile.you video{transform:scaleX(-1)}
 .relay-root .relay-tile.you.back-cam video{transform:none}
+/* Screen share: the shared screen must never be mirrored, and should be shown
+   in full (letterboxed) rather than cropped like a camera tile. */
+.relay-root .relay-tile.you.screen video{transform:none;object-fit:contain;background:#000}
+/* Active control state (e.g. screen-share on) — accent-tinted like .off is red. */
+.relay-root .ctrl.on{background:rgba(63,224,197,.18);border-color:rgba(63,224,197,.4);color:var(--accent)}
+/* Screen share is a desktop feature (iOS Safari has no getDisplayMedia, and the
+   mobile control bar is already full) — hide the button on small screens. */
+@media (max-width:680px){.relay-root #screenBtn{display:none}}
 
 /* Filter dock (Snapchat-style horizontal strip) */
 .relay-root .filter-dock{position:absolute;left:50%;bottom:96px;transform:translateX(-50%) translateY(12px);width:min(720px,94vw);

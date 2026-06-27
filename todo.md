@@ -774,3 +774,19 @@ Completes the app-lock story from v2.17.0 — the deferred biometric follow-up.
       unlock short-circuit when unenrolled, and the capability gate (no window / insecure
       context / platform-probe true|false).
 - [x] Footer → `v2.19.0`. tsc clean, 205 tests green, build clean.
+
+## v2.20.0 — Screen sharing (delivered 2026-06-27)
+
+- [x] **Share screen** — a control-bar button calls `getDisplayMedia` and hot-swaps the
+      outgoing video (camera → screen) on every mesh peer AND the LiveKit SFU via
+      `replaceVideoEverywhere` — no renegotiation. Stopping (button or the browser's native
+      "Stop sharing", caught via `track.onended`) swaps back to `currentCameraVideoTrack()`
+      (the filtered canvas track if a filter is active, else the raw camera).
+- [x] State: `screenStream` / `screenSharing` / `screenBusy` (double-tap guard). Cleanup on
+      hang-up and engine destroy stops the capture and clears the button state. flipCamera and
+      filters are gated with a toast while sharing (you can't flip/filter a screen).
+- [x] Self-tile shows the screen un-mirrored and letterboxed (`object-fit:contain`); the
+      button is hidden on mobile (iOS Safari has no `getDisplayMedia` and the mobile control
+      bar is already full) — it's a desktop feature.
+- [x] Reviewed by a focused adversarial agent pass. Footer → `v2.20.0`. tsc clean, 205 tests
+      green, build clean.
