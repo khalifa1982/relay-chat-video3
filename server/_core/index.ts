@@ -12,7 +12,7 @@ import { serveStatic, setupVite } from "./vite";
 import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
 import { registerV2Events, publishToIdentity } from "../v2events";
-import { getIdentityByNumber, reapStalePresence, recordMissedCall, ensureSchemaExtensions, getOrCreateDmConversation } from "../v2db";
+import { getIdentityByNumber, reapStalePresence, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation } from "../v2db";
 import { inboundConfig, inboundAddress, registerEmailInbound } from "../emailInbound";
 import { getUserById } from "../db";
 import { sendEmail } from "../email";
@@ -156,6 +156,21 @@ async function startServer() {
         });
       } catch (err) {
         console.warn("[missed-call email]", err);
+      }
+    },
+    async (info) => {
+      // onConferenceEnd: persist the ended room as conference history. Resolves
+      // each participant pin -> identity (pin === number) inside recordConferenceEnd.
+      try {
+        await recordConferenceEnd({
+          roomId: info.roomId,
+          dialedNumber: info.dialedNumber,
+          startedAt: info.startedAt,
+          endedAt: info.endedAt,
+          participants: info.participants.map((p) => ({ number: p.pin, name: p.name })),
+        });
+      } catch (err) {
+        console.warn("[conference-history]", err);
       }
     }
   );

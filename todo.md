@@ -1122,3 +1122,31 @@ The adversarial review of v2.33.0 found 5 real issues (2 verified with repro tes
 - [x] 6 new vitest cases (4 server: identity-switch no-hijack, same-pin still rejoins, ghost-room
       reap-arm, lone-member lobby; 2 client: `clearRelayChannel`). 268 tests green, tsc + build clean.
 - [x] Footer → `v2.33.1`.
+
+## v2.34.0 — Conference call history (delivered 2026-06-27)
+
+A new **History** tab logs every answered call/conference: which number you dialed, how many parties
+joined, each party's display name + 6-digit PIN, and the call duration. The room is the unit of a
+conference, so a 2-party call and a 10-way SFU call are recorded the same way.
+
+- [x] Schema: new `conference_history` (roomId, dialedNumber, partyCount, started/ended, durationSec,
+      JSON roster) + `conference_participants` (indexed identityId join) tables, created at boot by an
+      extended `ensureSchemaExtensions` (idempotent `CREATE TABLE IF NOT EXISTS`, same additive safety
+      contract as the ADD COLUMN block).
+- [x] Server (`relay.ts`): per-room lifetime `roomMeta` accumulates the full roster (everyone who was
+      EVER in the room, pin → latest name), the seeding `dialedNumber`, the start time, and an
+      `accepted` flag. `reapRoom` (the single teardown path) fires a new `onConferenceEnd` hook with
+      the roster + duration — but ONLY for answered calls with ≥2 parties, so an unanswered dial is
+      never logged as a conference. Idempotent (roster deleted on emit). New `ConferenceEndHook`,
+      4th `attachRelay` param.
+- [x] DB (`v2db.ts`): `recordConferenceEnd` resolves each pin → identity (a relay pin IS the
+      identity's number), writes the conference row + per-identity participant rows;
+      `listConferenceHistory` returns the conferences an identity took part in.
+- [x] Router (`v2routers.ts`): `calls.conferenceHistory` query (roster flagged with `isSelf`).
+- [x] Client: new **History** tab (`pages/app/History.tsx`) + nav entry (Calls · History · Messages ·
+      Contacts, mobile grid → 4-up) + route. Shows answered conferences (name + PIN chips, party
+      count, duration, time, one-tap call-back) merged with missed/declined 1:1 calls into one
+      time-sorted log. Duration/time formatters extracted to `lib/formatCall.ts`.
+- [x] 10 new vitest cases (3 server: roster+dialed-number emit, unanswered-not-logged, left-early
+      stays in roster; 7 client: `formatDuration`/`formatWhen`). 278 tests green, tsc + build clean.
+- [x] Footer → `v2.34.0`.

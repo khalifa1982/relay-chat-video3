@@ -72,6 +72,30 @@ export interface RoomRecording {
   startedAt: number;
 }
 
+/**
+ * Lifetime metadata for a room, accumulated so we can write a CONFERENCE
+ * HISTORY row when the room ends. `roster` keeps EVERYONE who was ever in the
+ * room (pin -> latest display name), so a participant who left early still
+ * appears in the history. `accepted` flips true on the first accept, so a
+ * dial that nobody answered is NOT logged as a conference (the missed-call
+ * path already records that).
+ */
+export interface RoomMeta {
+  startedAt: number;            // unix ms — first invite that created the room
+  dialedNumber: string | null;  // the number that seeded the room
+  accepted: boolean;            // at least one callee answered → a real call
+  roster: Map<string, string>;  // pin -> latest display name
+}
+
+/** Fired once per ENDED room that had ≥2 participants and was actually answered. */
+export type ConferenceEndHook = (info: {
+  roomId: string;
+  startedAt: number;
+  endedAt: number;
+  dialedNumber: string | null;
+  participants: Array<{ pin: string; name: string }>;
+}) => void;
+
 export interface RelayRegistry {
   clients: Map<string, RelayClient>;          // pin   -> primary (in-call) client
   rooms: Map<string, Set<string>>;            // rid   -> set<pin>
@@ -93,6 +117,10 @@ export interface RelayRegistry {
   pinRoom: Map<string, string>;
   /** Per-room abandonment timer (armed when no member is connected). */
   roomReapT: Map<string, ReturnType<typeof setTimeout>>;
+  /** Per-room lifetime metadata for conference-history logging. */
+  roomMeta: Map<string, RoomMeta>;
+  /** Set by attachRelay — fired from reapRoom when a real call ends. */
+  onConferenceEnd?: ConferenceEndHook;
 }
 
 export function createRegistry(): RelayRegistry {
@@ -105,7 +133,14 @@ export function createRegistry(): RelayRegistry {
     devices: new Map(),
     pinRoom: new Map(),
     roomReapT: new Map(),
+    roomMeta: new Map(),
   };
+}
+
+/** Record/refresh a participant in a room's history roster (pin -> name). */
+function rosterTouch(reg: RelayRegistry, roomId: string, pin: string, name: string) {
+  const meta = reg.roomMeta.get(roomId);
+  if (meta) meta.roster.set(pin, name || "Guest");
 }
 
 // How long a room with NO connected members survives before it's reaped. A
@@ -136,6 +171,22 @@ function joinRoomMember(reg: RelayRegistry, roomId: string, pin: string) {
 function reapRoom(reg: RelayRegistry, roomId: string) {
   const t = reg.roomReapT.get(roomId);
   if (t) { clearTimeout(t); reg.roomReapT.delete(roomId); }
+  // Conference history: if this room was a REAL call (answered, ≥2 participants
+  // ever present), emit it for logging before we lose the roster. Fired exactly
+  // once per room — reapRoom is the single teardown path. Best-effort.
+  const meta = reg.roomMeta.get(roomId);
+  reg.roomMeta.delete(roomId);
+  if (meta && meta.accepted && meta.roster.size >= 2 && reg.onConferenceEnd) {
+    try {
+      reg.onConferenceEnd({
+        roomId,
+        startedAt: meta.startedAt,
+        endedAt: Date.now(),
+        dialedNumber: meta.dialedNumber,
+        participants: Array.from(meta.roster.entries()).map(([pin, name]) => ({ pin, name })),
+      });
+    } catch { /* never let history logging break teardown */ }
+  }
   const room = reg.rooms.get(roomId);
   if (room) {
     room.forEach(pin => {
@@ -653,11 +704,22 @@ export function handleMessage(
         const rid = newRoomId();
         joinRoomMember(reg, rid, conn.pin);
         self.roomId = rid;
+        // Seed conference-history metadata: the caller is the first roster
+        // member and `to` is the dialed number. `accepted` flips on the first
+        // accept (below), so an unanswered dial is never logged as a conference.
+        reg.roomMeta.set(rid, {
+          startedAt: Date.now(),
+          dialedNumber: to,
+          accepted: false,
+          roster: new Map([[conn.pin, self.name]]),
+        });
         safeSend(conn.socket, { type: "room", roomId: rid });
         // On the LiveKit path, the caller joins the SFU room immediately (alone)
         // so the callee connects near-instantly the moment they accept.
         pushLivekitToken(reg, conn.pin, rid);
       }
+      // Whether the room is new or growing, make sure the caller is in the roster.
+      rosterTouch(reg, self.roomId!, conn.pin, self.name);
       const room = reg.rooms.get(self.roomId!);
       // 10-way only on the SFU; the mesh fallback stays capped at 6 (a 10-way
       // mesh is ~45 peer connections — far too heavy for the fallback path).
@@ -764,6 +826,12 @@ export function handleMessage(
         }));
       joinRoomMember(reg, roomId, conn.pin);
       self.roomId = roomId;
+      // Conference history: this accept makes the room a REAL (answered) call;
+      // add the accepter to the roster so they appear in the history.
+      {
+        const meta = reg.roomMeta.get(roomId);
+        if (meta) { meta.accepted = true; meta.roster.set(conn.pin, self.name); }
+      }
       // Multi-device: tell this number's OTHER devices the call was answered
       // here, so their incoming-call UI clears ("answered elsewhere"). The
       // `from` matches the ring they received (the caller's pin).
@@ -937,9 +1005,11 @@ export function handleMessage(
 export function attachRelay(
   app: Express,
   onInvite?: InviteHook,
-  onMissedCall?: MissedCallHook
+  onMissedCall?: MissedCallHook,
+  onConferenceEnd?: ConferenceEndHook
 ): RelayRegistry {
   const reg = createRegistry();
+  reg.onConferenceEnd = onConferenceEnd;
 
   // Public ICE config endpoint. Returns the same fresh, time-limited TURN/STUN
   // credentials the signaling layer issues, so browser-side tools (e.g. the

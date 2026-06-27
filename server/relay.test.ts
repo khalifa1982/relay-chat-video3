@@ -655,6 +655,91 @@ describe("relay signaling", () => {
   });
 });
 
+/* ── conference history (v2.34) ─────────────────────────────────────────────
+ * The room is the unit of a "conference". When it ends (reaped), the relay emits
+ * onConferenceEnd with the full roster + duration, which a higher layer persists.
+ * ────────────────────────────────────────────────────────────────────────── */
+describe("relay — conference history", () => {
+  let reg: RelayRegistry;
+  beforeEach(() => { reg = createRegistry(); });
+  const rtype = (m: unknown) => (m as { type?: string })?.type;
+
+  type ConfInfo = {
+    roomId: string;
+    startedAt: number;
+    endedAt: number;
+    dialedNumber: string | null;
+    participants: Array<{ pin: string; name: string }>;
+  };
+
+  function registerConn(cid: string, name: string) {
+    const c = new FakeConn(cid);
+    handleMessage(reg, c.asConn(), { type: "register", name });
+    return c;
+  }
+
+  it("emits onConferenceEnd with the full roster + dialed number when an answered call ends", () => {
+    const a = registerConn("dev-a", "Alice");
+    const b = registerConn("dev-b", "Bob");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const rid = (a.outbox.find((m) => rtype(m) === "room") as { roomId: string }).roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
+
+    let captured: ConfInfo | null = null;
+    reg.onConferenceEnd = (info) => { captured = info as ConfInfo; };
+
+    handleMessage(reg, a.asConn(), { type: "leave" });
+    expect(captured).toBeNull(); // B is still in the call — not ended yet
+    handleMessage(reg, b.asConn(), { type: "leave" }); // last out → reap → emit
+
+    const info = captured as ConfInfo | null;
+    expect(info).not.toBeNull();
+    expect(info!.roomId).toBe(rid);
+    expect(info!.dialedNumber).toBe(b.pin);
+    const pins = info!.participants.map((p) => p.pin).sort();
+    expect(pins).toEqual([a.pin!, b.pin!].sort());
+    const names = Object.fromEntries(info!.participants.map((p) => [p.pin, p.name]));
+    expect(names[a.pin!]).toBe("Alice");
+    expect(names[b.pin!]).toBe("Bob");
+    expect(info!.endedAt).toBeGreaterThanOrEqual(info!.startedAt);
+  });
+
+  it("does NOT log an UNANSWERED dial as a conference (no accept → no history)", () => {
+    const a = registerConn("dev-a", "Alice");
+    const b = registerConn("dev-b", "Bob");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    let called = false;
+    reg.onConferenceEnd = () => { called = true; };
+    handleMessage(reg, a.asConn(), { type: "leave" }); // caller gives up before answer
+    expect(called).toBe(false);
+  });
+
+  it("keeps a participant who LEFT EARLY in the conference roster", () => {
+    const a = registerConn("dev-a", "Alice");
+    const b = registerConn("dev-b", "Bob");
+    const c = registerConn("dev-c", "Carol");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const rid = (a.outbox.find((m) => rtype(m) === "room") as { roomId: string }).roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
+    handleMessage(reg, a.asConn(), { type: "invite", to: c.pin! });
+    handleMessage(reg, c.asConn(), { type: "accept", roomId: rid });
+
+    let captured: ConfInfo | null = null;
+    reg.onConferenceEnd = (info) => { captured = info as ConfInfo; };
+
+    handleMessage(reg, b.asConn(), { type: "leave" }); // Bob bails early
+    expect(captured).toBeNull();
+    handleMessage(reg, a.asConn(), { type: "leave" });
+    handleMessage(reg, c.asConn(), { type: "leave" }); // last out → reap
+
+    const info = captured as ConfInfo | null;
+    expect(info).not.toBeNull();
+    const pins = info!.participants.map((p) => p.pin).sort();
+    expect(pins).toEqual([a.pin!, b.pin!, c.pin!].sort());
+    expect(info!.participants.length).toBe(3);
+  });
+});
+
 /**
  * Live validation of the configured TURN secret/host. This performs a real
  * STUN/TURN Allocate handshake over UDP against the operator coturn server

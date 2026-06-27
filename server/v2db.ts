@@ -29,6 +29,8 @@ import {
 import {
   attachments,
   callHistory,
+  conferenceHistory,
+  conferenceParticipants,
   contacts,
   conversationParticipants,
   conversations,
@@ -485,6 +487,45 @@ export async function ensureSchemaExtensions(): Promise<void> {
       if (!/duplicate column|exists|check that column/i.test(msg)) {
         console.warn(`[schema] ensure ${a.table}.${a.column} skipped:`, msg);
       }
+    }
+  }
+  // Additive TABLE creation (conference history). CREATE TABLE IF NOT EXISTS is
+  // idempotent and never touches existing tables/data — same safety contract as
+  // the ADD COLUMN block above.
+  const tableCreates: Array<{ name: string; ddl: string }> = [
+    {
+      name: "conference_history",
+      ddl: `CREATE TABLE IF NOT EXISTS \`conference_history\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`roomId\` varchar(40) NOT NULL,
+        \`dialedNumber\` varchar(6),
+        \`partyCount\` int NOT NULL DEFAULT 0,
+        \`startedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`endedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`durationSec\` int NOT NULL DEFAULT 0,
+        \`participants\` json,
+        KEY \`conf_started_idx\` (\`startedAt\`),
+        KEY \`conf_room_idx\` (\`roomId\`)
+      )`,
+    },
+    {
+      name: "conference_participants",
+      ddl: `CREATE TABLE IF NOT EXISTS \`conference_participants\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`conferenceId\` int NOT NULL,
+        \`identityId\` int NOT NULL,
+        \`number\` varchar(6) NOT NULL,
+        KEY \`conf_part_identity_idx\` (\`identityId\`),
+        KEY \`conf_part_conf_idx\` (\`conferenceId\`)
+      )`,
+    },
+  ];
+  for (const t of tableCreates) {
+    try {
+      await db.execute(sql.raw(t.ddl));
+    } catch (e) {
+      const msg = (e as Error)?.message || "";
+      if (!/exists/i.test(msg)) console.warn(`[schema] ensure table ${t.name} skipped:`, msg);
     }
   }
 }
@@ -1287,4 +1328,85 @@ export async function listCallHistory(identityId: number, limit = 100) {
     .orderBy(desc(callHistory.id))
     .limit(limit);
   return rows;
+}
+
+/* ── conference history (multi-party calls) ───────────────────── */
+
+export interface ConferenceRosterEntry {
+  number: string;
+  name: string;
+  identityId: number | null;
+}
+
+/**
+ * Persist an ended conference (room). Resolves each participant pin to an
+ * identity (a relay pin IS the identity's 6-digit number), writes one
+ * conference_history row with the full JSON roster, and one
+ * conference_participants row per registered participant so each can query
+ * their own history with an index. Fire-and-forget; a DB hiccup is swallowed.
+ */
+export async function recordConferenceEnd(input: {
+  roomId: string;
+  dialedNumber: string | null;
+  startedAt: number; // unix ms
+  endedAt: number; // unix ms
+  participants: Array<{ number: string; name: string }>;
+}) {
+  const db = await getDb();
+  if (!db) return;
+  const numbers = input.participants.map((p) => p.number);
+  const idents = await getIdentitiesByNumbers(numbers);
+  const byNumber = new Map(idents.map((i) => [i.number, i]));
+  const roster: ConferenceRosterEntry[] = input.participants.map((p) => {
+    const id = byNumber.get(p.number);
+    return {
+      number: p.number,
+      // Prefer the identity's canonical display name; fall back to the relay name.
+      name: id?.displayName || p.name || "Guest",
+      identityId: id?.id ?? null,
+    };
+  });
+  const durationSec = Math.max(0, Math.round((input.endedAt - input.startedAt) / 1000));
+  await db.insert(conferenceHistory).values({
+    roomId: input.roomId,
+    dialedNumber: input.dialedNumber ?? null,
+    partyCount: roster.length,
+    startedAt: new Date(input.startedAt),
+    endedAt: new Date(input.endedAt),
+    durationSec,
+    participants: roster,
+  });
+  // Pull the row back to get its id (MySQL driver doesn't return it inline).
+  const inserted = await db
+    .select()
+    .from(conferenceHistory)
+    .where(eq(conferenceHistory.roomId, input.roomId))
+    .orderBy(desc(conferenceHistory.id))
+    .limit(1);
+  const conf = inserted[0];
+  if (!conf) return;
+  const partRows = roster
+    .filter((r) => r.identityId != null)
+    .map((r) => ({ conferenceId: conf.id, identityId: r.identityId as number, number: r.number }));
+  if (partRows.length) await db.insert(conferenceParticipants).values(partRows);
+}
+
+/** Conferences `identityId` participated in, most recent first. */
+export async function listConferenceHistory(identityId: number, limit = 100) {
+  const db = await getDb();
+  if (!db) return [];
+  const parts = await db
+    .select()
+    .from(conferenceParticipants)
+    .where(eq(conferenceParticipants.identityId, identityId))
+    .orderBy(desc(conferenceParticipants.id))
+    .limit(limit);
+  const confIds = Array.from(new Set(parts.map((p) => p.conferenceId)));
+  if (!confIds.length) return [];
+  const confs = await db
+    .select()
+    .from(conferenceHistory)
+    .where(inArray(conferenceHistory.id, confIds))
+    .orderBy(desc(conferenceHistory.startedAt));
+  return confs;
 }

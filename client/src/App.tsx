@@ -11,13 +11,15 @@ import { AppShell } from "./app/AppShell";
 import { RelayEngineProvider } from "./app/RelayEngine";
 import { PresenceManager } from "./app/PresenceManager";
 import Dialer from "./pages/app/Dialer";
+import History from "./pages/app/History";
 import Messages from "./pages/app/Messages";
 import Contacts from "./pages/app/Contacts";
 import Profile from "./pages/app/Profile";
 
-function ShellRoute({ tab }: { tab: "dialer" | "messages" | "contacts" | "profile" }) {
+function ShellRoute({ tab }: { tab: "dialer" | "history" | "messages" | "contacts" | "profile" }) {
   const View =
     tab === "dialer" ? Dialer :
+    tab === "history" ? History :
     tab === "messages" ? Messages :
     tab === "contacts" ? Contacts :
     Profile;
@@ -36,6 +38,7 @@ function Router() {
       <Route path={"/app"}>{() => <ShellRoute tab="dialer" />}</Route>
       <Route path={"/app/"}>{() => <ShellRoute tab="dialer" />}</Route>
       <Route path={"/app/dialer"}>{() => <ShellRoute tab="dialer" />}</Route>
+      <Route path={"/app/history"}>{() => <ShellRoute tab="history" />}</Route>
       <Route path={"/app/messages"}>{() => <ShellRoute tab="messages" />}</Route>
       <Route path={"/app/contacts"}>{() => <ShellRoute tab="contacts" />}</Route>
       <Route path={"/app/profile"}>{() => <ShellRoute tab="profile" />}</Route>
