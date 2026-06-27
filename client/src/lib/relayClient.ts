@@ -15,6 +15,7 @@
 
 import { MediaPipeline, FILTERS, type FilterId, type FilterDef } from "./mediaPipeline";
 import { computeLayout } from "./callLayout";
+import { buildAudioOutputList } from "./audioOutputs";
 import { detectDeviceType } from "./deviceType";
 import { isDndOn } from "@/app/dnd";
 
@@ -532,7 +533,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     for (const t of targets) {
       const el = t as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> };
       if (typeof el.setSinkId === "function") {
-        try { await el.setSinkId(audioSinkId); } catch { /* sink may have vanished */ }
+        try {
+          await el.setSinkId(audioSinkId);
+        } catch {
+          // The chosen device vanished (e.g. an unplugged Bluetooth headset).
+          // Fall back to the system default so audio is never silently lost and
+          // the UI stops claiming a dead device is selected.
+          if (audioSinkId) {
+            audioSinkId = "";
+            try { window.localStorage.removeItem("relay_audio_sink"); } catch { /* */ }
+            try { await el.setSinkId(""); } catch { /* */ }
+          }
+        }
       }
     }
   }
@@ -540,7 +552,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const b = $("audioBtn");
     if (!b) return;
     b.style.display = audioOutSupported ? "" : "none";
-    // Highlight when a NON-default output is selected.
+    // Highlight only when a real NON-default output is active.
     b.classList.toggle("on", !!audioSinkId);
     if (label) b.setAttribute("title", "Audio output: " + label);
   }
@@ -549,30 +561,30 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!menu) return;
     let devices: MediaDeviceInfo[] = [];
     try { devices = await navigator.mediaDevices.enumerateDevices(); } catch { /* */ }
-    const outs = devices.filter(d => d.kind === "audiooutput");
-    const rows: string[] = [];
-    // A "Default" row first (sinkId "") — follows the OS (earpiece/BT/headset).
-    rows.push(audioRow("", "Automatic (system default)"));
-    let currentLabel = "Automatic";
-    outs.forEach((d, i) => {
-      const label = d.label || ("Output " + (i + 1));
-      if (d.deviceId === audioSinkId) currentLabel = label;
-      // Skip a duplicate "default" pseudo-device label collision.
-      if (d.deviceId && d.deviceId !== "default") rows.push(audioRow(d.deviceId, label));
-      else if (d.deviceId === "default") rows.push(audioRow("default", label));
-    });
-    menu.innerHTML = rows.join("") ||
+    // Pure logic (validates the persisted sink still exists + de-dups defaults).
+    const list = buildAudioOutputList(devices, audioSinkId);
+    // If the persisted device is gone, drop the phantom selection.
+    if (list.validSink !== audioSinkId) {
+      audioSinkId = list.validSink;
+      try {
+        if (audioSinkId) window.localStorage.setItem("relay_audio_sink", audioSinkId);
+        else window.localStorage.removeItem("relay_audio_sink");
+      } catch { /* */ }
+    }
+    menu.innerHTML = list.rows.map(audioRow).join("") ||
       '<div class="ao-empty">No selectable outputs. Your device routes audio automatically.</div>';
-    updateAudioBtn(currentLabel);
+    updateAudioBtn(list.currentLabel);
   }
-  function audioRow(id: string, label: string): string {
-    const sel = id === audioSinkId ? " ao-sel" : "";
-    return '<button type="button" class="ao-item' + sel + '" data-sink="' + escapeHtml(id) + '">' +
-      escapeHtml(label) + "</button>";
+  function audioRow(r: { id: string; label: string; selected: boolean }): string {
+    return '<button type="button" class="ao-item' + (r.selected ? " ao-sel" : "") +
+      '" data-sink="' + escapeHtml(r.id) + '">' + escapeHtml(r.label) + "</button>";
   }
   async function pickAudioSink(id: string) {
     audioSinkId = id;
-    try { window.localStorage.setItem("relay_audio_sink", id); } catch { /* */ }
+    try {
+      if (id) window.localStorage.setItem("relay_audio_sink", id);
+      else window.localStorage.removeItem("relay_audio_sink");
+    } catch { /* */ }
     await applyAudioSink();
     closeAudioMenu();
     void refreshAudioOutputs();
@@ -592,13 +604,44 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!btn) return;
     void pickAudioSink(btn.getAttribute("data-sink") || "");
   }
+  // Snapshot of known output device ids, to detect a NEW one (BT/headset) appearing.
+  let prevOutputIds = new Set<string>();
+  function looksLikeHeadset(label: string): boolean {
+    return /bluetooth|headset|airpod|buds|headphone|hands?-?free|wireless|earbud/i.test(label || "");
+  }
   // A Bluetooth headset (dis)connecting fires devicechange. Re-apply the chosen
-  // sink so audio actually follows to/from it — this is the "can't hear my
-  // Bluetooth headset" fix. Also keep the open menu fresh.
-  const onAudioDeviceChange = () => {
-    void applyAudioSink();
+  // sink (so a disconnect falls back to default), and — the real fix for "can't
+  // hear my Bluetooth headset" — when we're on Automatic and a headset/BT output
+  // newly appears, actively route call audio onto it.
+  const onAudioDeviceChange = async () => {
+    await applyAudioSink();
+    try {
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      const outs = devs.filter(d => d.kind === "audiooutput" && d.deviceId && d.deviceId !== "default");
+      const ids = new Set(outs.map(d => d.deviceId));
+      const added = outs.filter(d => !prevOutputIds.has(d.deviceId));
+      prevOutputIds = ids;
+      if (audioSinkId === "" && added.length) {
+        const bt = added.find(d => looksLikeHeadset(d.label)) || null;
+        if (bt) {
+          audioSinkId = bt.deviceId;
+          try { window.localStorage.setItem("relay_audio_sink", bt.deviceId); } catch { /* */ }
+          await applyAudioSink();
+          updateAudioBtn(bt.label || "Headset");
+          toast("Audio switched to " + (bt.label || "your headset"));
+        }
+      }
+    } catch { /* */ }
     if ($("audioMenu")?.classList.contains("open")) void refreshAudioOutputs();
   };
+  // Seed the known-output snapshot once media is up (so a later connect is "new").
+  async function seedAudioOutputs() {
+    if (!audioOutSupported) return;
+    try {
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      prevOutputIds = new Set(devs.filter(d => d.kind === "audiooutput" && d.deviceId && d.deviceId !== "default").map(d => d.deviceId));
+    } catch { /* */ }
+  }
   // The stream we currently publish to peers. When a filter is active it's the
   // processed (canvas) stream; otherwise it's the RAW camera — which means NO
   // canvas, NO captureStream re-encode, and far less heat in the common case of
@@ -1130,15 +1173,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const el = lkParticipantTiles[participant.identity];
       if (!el) return;
       if (track.kind === TrackEnum.Kind.Video) {
-        const vEl = el.querySelector("video") as HTMLVideoElement;
-        track.attach(vEl);
+        const vEl = el.querySelector("video") as HTMLVideoElement | null;
+        if (vEl) track.attach(vEl);
         bindLkPlaceholder(el, true);
         // A screen-share video → mark the tile so layout auto-focuses it (and
         // the video is letterboxed, not cropped). The tile id is "tile-<identity>".
         if (isScreenPub(_pub)) { screenShareIds.add(el.id); el.classList.add("screen"); }
-        // Re-layout once the real frame dimensions arrive + after paint, so a new
-        // (especially screen-share) video shows without needing a device rotation.
-        if (vEl) vEl.addEventListener("loadedmetadata", () => layoutGrid(), { once: true });
+        // Resume playback + re-layout once the real frame dimensions arrive (and
+        // after paint), so a new (esp. screen-share) video shows without needing
+        // a device rotation — parity with the self-share path.
+        if (vEl) {
+          void vEl.play().catch(() => {});
+          vEl.addEventListener("loadedmetadata", () => { void vEl.play().catch(() => {}); layoutGrid(); }, { once: true });
+        }
         layoutGrid();
         if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutGrid());
       } else if (track.kind === TrackEnum.Kind.Audio) {
@@ -1542,6 +1589,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (lkRoom) { try { void lkRoom.disconnect(); } catch { /* */ } lkRoom = null; }
     for (const id in lkParticipantTiles) { lkParticipantTiles[id].remove(); delete lkParticipantTiles[id]; }
     lkPendingToken = null;
+    // Drop the SFU audio-element refs here too (not just hangUp), so a call-waiting
+    // "Switch" that keeps the call alive doesn't retain the old room's elements.
+    lkAudioEls.length = 0;
   }
   function createPeer(pin: string, name: string, initiator: boolean): PeerEntry {
     if (peers[pin]) return peers[pin];
@@ -1960,6 +2010,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     exitReconnecting();
     resetSpeakerView(); // fresh call → no stale spotlight/active-speaker focus
     startStatsSampler(); // live per-tile bitrate
+    void seedAudioOutputs(); // snapshot outputs so a later BT connect is detected
     runConnSequence();
     // On the SFU path, start the join watchdog so a failed/slow token or connect
     // recovers (re-request) or surfaces an error instead of a silent dead call.
@@ -2341,7 +2392,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // device — the tile wasn't re-laid-out once the capture's real dimensions
       // arrived. Re-run layout on the first frame / a size change, and force a
       // post-paint reflow, so it shows immediately.
-      const reflow = () => layoutGrid();
+      // Resume playback AND re-layout once the real frame arrives — the play()
+      // is the load-bearing part (a late first frame can leave the element
+      // paused on mobile); layoutGrid handles the spotlight sizing.
+      const reflow = () => { void selfV.play().catch(() => {}); layoutGrid(); };
       selfV.addEventListener("loadedmetadata", reflow, { once: true });
       selfV.addEventListener("resize", reflow, { once: true });
       try { await selfV.play(); } catch { /* autoplay is fine; muted self tile */ }

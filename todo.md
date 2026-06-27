@@ -1370,3 +1370,28 @@ Three in-call audio/video fixes requested after the overhaul.
       only after a device rotation.
 - [x] An adversarial review workflow (3 dimensions + independent verification) is in flight; any
       confirmed findings ship as a patch. 337 tests green, tsc + build clean. Footer → `v2.43.0`.
+
+## v2.43.1 — Audio/screen review fixes (delivered 2026-06-27)
+
+Folds the v2.43.0 adversarial-review findings (3-dimension workflow, all claims independently verified).
+
+- [x] **MED — silent setSinkId failure no longer lies.** When the chosen output device is gone (e.g. an
+      unplugged Bluetooth headset), `applyAudioSink` now falls back to the system default and clears the
+      stale preference, so the UI never shows a dead device as "selected".
+- [x] **LOW — de-duped the default rows.** The output list now emits ONE synthetic "Automatic" row and
+      drops the platform "default" pseudo-device. Logic extracted to a pure, tested `buildAudioOutputList`
+      (validates the persisted sink against the live device list).
+- [x] **Real Bluetooth auto-route.** On `devicechange`, when on Automatic and a headset/Bluetooth output
+      newly appears, call audio is actively routed onto it (label-heuristic gated) — the substantive "can't
+      hear my Bluetooth headset" fix, beyond just re-applying the default. A disconnect falls back to default.
+- [x] **LOW — lkAudioEls cleared in `teardownLivekit`** (not just hangUp), closing the call-waiting "Switch"
+      retention gap.
+- [x] **Screen-share resume made explicit.** The reflow handlers (self + SFU remote) now call `play()` too
+      (the load-bearing part on mobile), not just `layoutGrid()`; fixed a dead null-guard on the SFU branch.
+- [x] 6 new `buildAudioOutputList` tests (Automatic dedupe, stale-sink fallback, selection). 342 tests
+      green, tsc + build clean. Footer → `v2.43.1`.
+
+### iOS caveat (honest)
+`setSinkId` does not exist on iOS Safari/WKWebView, so the output picker hides there and call-audio
+routing (speaker vs earpiece vs Bluetooth) stays under iOS's control — not fixable from web JS. The picker
++ Bluetooth auto-route work on Chrome Android/desktop.
