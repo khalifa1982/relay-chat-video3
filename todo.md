@@ -530,11 +530,15 @@ native/desktop build). Starting with the explicitly-prioritized login redesign.
   management, richer contacts (names/email/mobile+country codes/notes/photo) + cloud sync,
   groups + link sharing + call invite links.
 
-### Open questions for the user (don't block Phase 1)
-- Guest PIN: ephemeral-per-session vs sticky-per-device? (the spec says both — they're
-  opposites; current system is sticky-per-device via device-id).
-- Which infra to plan toward: SFU media server (10-way + recording), email service
-  (missed-call email + chat→email), native/desktop app (OS auto-launch)?
+### Answered by the user
+- [x] **Guest PIN model = sticky until logout.** Session + PIN persist across reloads/
+      reopens; only an explicit logout ends it, after which the next login is a fresh PIN
+      with empty contacts. Implemented: guest sign-out now calls `resetDeviceId()` BEFORE
+      refetching whoami, so the device-id no longer silently restores the old identity
+      (`client/src/app/useIdentity.ts`). Previously logout→login kept the same PIN.
+- [ ] **Infra = ALL three** (SFU media server, email service, native/desktop app). Plan +
+      provisioning hand-offs below; building the in-stack parts now, scaffolding the rest to
+      activate when creds/accounts land (TURN-style feature-gating).
 
 ## v2.9.1 — Live-test fixes: incoming call invisible + app chrome over the call (delivered 2026-06-13)
 
