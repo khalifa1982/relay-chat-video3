@@ -48,6 +48,12 @@ interface Msg {
   data?: { sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
   message?: string;
   code?: string;
+  // LiveKit SFU (optional). `livekit`/`livekitUrl` are advisory flags stamped on
+  // registered/joined/peer-joined; `token`+`url` arrive on a `livekit-token` push.
+  livekit?: boolean;
+  livekitUrl?: string;
+  token?: string;
+  url?: string;
 }
 
 export type RelayPhase = "idle" | "dialing" | "ringing" | "in-call";
@@ -113,6 +119,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let inCall = false;
   let roomId: string | null = null;
   const peers: Record<string, PeerEntry> = {};
+  // ---------- LiveKit SFU (optional; null on the mesh path) ----------
+  let livekitEnabled = false;
+  let livekitUrl: string | null = null;
+  // `Room` from livekit-client, lazy-imported only when actually joining a call.
+  let lkRoom: import("livekit-client").Room | null = null;
+  const lkParticipantTiles: Record<string, HTMLElement> = {};
+  let lkPendingToken: { roomId: string; token: string; url: string } | null = null;
   let pendingRing: PendingRing | null = null;
   const recents: Recent[] = [];
   let callStart = 0;
@@ -197,8 +210,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
     } catch { /* */ }
   }
 
+  // True when we're in a call but no remote party is present yet — used to
+  // decide whether a `rejected`/`busy`/error should tear the call down. On the
+  // mesh path that's "no peers"; on the LiveKit path it's "no remote tiles" (so
+  // a declined add-invite in a group call doesn't kill the whole call).
+  function aloneInCall(): boolean {
+    return livekitEnabled
+      ? Object.keys(lkParticipantTiles).length === 0
+      : Object.keys(peers).length === 0;
+  }
+
   // ---------- protocol ----------
   function handle(m: Msg) {
+    // Capture the advisory LiveKit flag whenever the server stamps it
+    // (registered / joined / peer-joined), so we know our media path up front.
+    if (typeof m.livekit === "boolean") {
+      livekitEnabled = m.livekit;
+      livekitUrl = m.livekitUrl || livekitUrl;
+    }
     switch (m.type) {
       case "registered":   onRegistered(m); break;
       case "room":         roomId = m.roomId || null; break;
@@ -206,13 +235,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "ring-cancel":  onRingCancel(m); break;
       case "joined":       onJoined(m); break;
       case "peer-joined":  onPeerJoined(m); break;
+      case "livekit-token": onLivekitToken(m); break;
       case "rejected":
         toast(nameOf(m.from!) + " declined.");
-        if (inCall && Object.keys(peers).length === 0) hangUp("peer-rejected");
+        if (inCall && aloneInCall()) hangUp("peer-rejected");
         break;
       case "busy":
         toast("They're on another call.", true);
-        if (inCall && Object.keys(peers).length === 0) hangUp("peer-busy");
+        if (inCall && aloneInCall()) hangUp("peer-busy");
         break;
       case "peer-left":    removePeer(m.pin!); break;
       case "signal":       onSignal(m.from!, m.data); break;
@@ -220,9 +250,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "error":
         toast(m.message || "Something went wrong.", true);
         if ((m.code === "offline" || m.code === "self" || m.code === "gone")
-            && inCall && Object.keys(peers).length === 0) hangUp("server-error:" + (m.code || "?"));
+            && inCall && aloneInCall()) hangUp("server-error:" + (m.code || "?"));
         break;
     }
+  }
+
+  // A LiveKit join token was pushed for `roomId`. Stash it and, if we're already
+  // the active room and not yet connected, connect to the SFU now.
+  function onLivekitToken(m: Msg) {
+    if (!m.roomId || !m.token) return;
+    lkPendingToken = { roomId: m.roomId, token: m.token, url: m.url || livekitUrl || "" };
+    if (livekitEnabled && roomId === m.roomId && !lkRoom) void joinLivekit(m.roomId);
   }
 
   // ---------- registration ----------
@@ -528,9 +566,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
     emitPhase("idle");
   }
 
-  // ---------- mesh ----------
+  // ---------- mesh / SFU ----------
   function onJoined(m: Msg) {
     roomId = m.roomId || null;
+    if (livekitEnabled && roomId) {
+      // SFU path: media goes through LiveKit, not the mesh. Don't build peers;
+      // connect to the room (if the token already arrived — otherwise the
+      // `livekit-token` push will trigger joinLivekit).
+      diag("livekit: joined room " + roomId + " (SFU path)");
+      if (lkPendingToken && lkPendingToken.roomId === roomId) void joinLivekit(roomId);
+      return;
+    }
     // Apply the fresh, per-peer TURN/STUN credentials the server minted for
     // this room BEFORE building any peer connections, so every RTCPeerConnection
     // gathers relay candidates from our coturn (not the stale register-time set).
@@ -541,6 +587,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     (m.members || []).forEach(mem => callPeer(mem.pin, mem.name));
   }
   function onPeerJoined(m: Msg) {
+    // On the SFU path, LiveKit's own ParticipantConnected/TrackSubscribed events
+    // drive remote tiles — the mesh offer/answer dance is skipped entirely.
+    if (livekitEnabled) return;
     if (peers[m.pin!]) return;
     // Same as onJoined: adopt the fresh relay creds before creating the peer.
     if (m.iceServers && m.iceServers.length) {
@@ -548,6 +597,104 @@ export function startRelay(root: HTMLElement): RelayHandle {
       diag("ice servers from peer-joined (" + m.iceServers.length + ")");
     }
     createPeer(m.pin!, m.name || "Guest", false);
+  }
+
+  // ---------- LiveKit SFU media path ----------
+  // Connect to the LiveKit room (= the relay roomId), publish our processed
+  // stream, and render remote participants into the existing #videoGrid tiles.
+  // Lazy-imports livekit-client so the bundle cost is only paid on a real call.
+  async function joinLivekit(rid: string) {
+    if (lkRoom) return; // never double-connect
+    const tok = lkPendingToken;
+    if (!tok || tok.roomId !== rid || !tok.url || !tok.token) {
+      diag("livekit: waiting for token");
+      return;
+    }
+    let RoomCtor, RoomEventEnum, TrackEnum;
+    try {
+      const lk = await import("livekit-client");
+      RoomCtor = lk.Room; RoomEventEnum = lk.RoomEvent; TrackEnum = lk.Track;
+    } catch (e) {
+      diag("livekit: failed to load client");
+      console.warn("livekit-client load failed", e);
+      return;
+    }
+    const room = new RoomCtor({ adaptiveStream: true, dynacast: true });
+    lkRoom = room;
+
+    room.on(RoomEventEnum.TrackSubscribed, (track, _pub, participant) => {
+      addLkTile(participant.identity, participant.name || participant.identity);
+      const el = lkParticipantTiles[participant.identity];
+      if (!el) return;
+      if (track.kind === TrackEnum.Kind.Video) {
+        track.attach(el.querySelector("video") as HTMLVideoElement);
+        bindLkPlaceholder(el, true);
+      } else if (track.kind === TrackEnum.Kind.Audio) {
+        track.attach(); // detached <audio> element for playback
+      }
+    });
+    room.on(RoomEventEnum.TrackUnsubscribed, (track, _pub, participant) => {
+      try { track.detach(); } catch { /* */ }
+      const el = lkParticipantTiles[participant.identity];
+      if (el && track.kind === TrackEnum.Kind.Video) bindLkPlaceholder(el, false);
+    });
+    room.on(RoomEventEnum.ParticipantConnected, p => addLkTile(p.identity, p.name || p.identity));
+    room.on(RoomEventEnum.ParticipantDisconnected, p => removeLkTile(p.identity));
+    room.on(RoomEventEnum.DataReceived, (payload: Uint8Array) => {
+      try { const d = JSON.parse(new TextDecoder().decode(payload)); addChatMsg(d.name, d.text, false); } catch { /* */ }
+    });
+    room.on(RoomEventEnum.Disconnected, () => { if (lkRoom === room && inCall) hangUp("livekit-disconnected"); });
+
+    try {
+      await room.connect(tok.url, tok.token);
+      // Publish the SAME processed stream the mesh sends, so filters/blur survive.
+      const send = processedStream || localStream;
+      if (send) {
+        for (const t of send.getVideoTracks()) await room.localParticipant.publishTrack(t);
+        for (const t of send.getAudioTracks()) await room.localParticipant.publishTrack(t);
+      }
+      diag("livekit: connected + published");
+    } catch (e) {
+      diag("livekit: connect failed");
+      console.warn("livekit connect failed", e);
+    }
+  }
+
+  // Remote-participant tile shims that reuse the existing #videoGrid DOM/CSS
+  // (keyed by LiveKit participant.identity, which equals the 6-digit pin).
+  function addLkTile(id: string, name: string) {
+    if (lkParticipantTiles[id]) return;
+    const grid = $("videoGrid"); if (!grid) return;
+    const t = document.createElement("div");
+    t.className = "relay-tile"; t.id = "tile-" + id;
+    const v = document.createElement("video");
+    v.autoplay = true; v.playsInline = true;
+    t.appendChild(v);
+    t.insertAdjacentHTML("beforeend", '<div class="ph"><div class="av">' + initials(name) + "</div></div>");
+    t.insertAdjacentHTML("beforeend", '<div class="nm">' + escapeHtml(name) + "</div>");
+    t.insertAdjacentHTML("beforeend", '<div class="connecting">connecting…</div>');
+    lkParticipantTiles[id] = t;
+    grid.appendChild(t);
+    layoutGrid();
+  }
+  function bindLkPlaceholder(el: HTMLElement, hasVideo: boolean) {
+    const ph = el.querySelector(".ph") as HTMLElement | null;
+    if (ph) ph.style.display = hasVideo ? "none" : "flex";
+    el.classList.toggle("audio-only", !hasVideo);
+    const c = el.querySelector(".connecting") as HTMLElement | null;
+    if (c && hasVideo) c.style.display = "none";
+    if (hasVideo) el.dataset.state = "connected";
+  }
+  function removeLkTile(id: string) {
+    lkParticipantTiles[id]?.remove();
+    delete lkParticipantTiles[id];
+    layoutGrid();
+  }
+  // Tear down the LiveKit room + its tiles. Safe to call when not on the SFU path.
+  function teardownLivekit() {
+    if (lkRoom) { try { void lkRoom.disconnect(); } catch { /* */ } lkRoom = null; }
+    for (const id in lkParticipantTiles) { lkParticipantTiles[id].remove(); delete lkParticipantTiles[id]; }
+    lkPendingToken = null;
   }
   function createPeer(pin: string, name: string, initiator: boolean): PeerEntry {
     if (peers[pin]) return peers[pin];
@@ -896,6 +1043,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function broadcastChat(text: string) {
     const p = JSON.stringify({ name: me.name, text });
+    if (livekitEnabled && lkRoom) {
+      // SFU path: there are no per-peer datachannels — fan out over LiveKit data.
+      try { void lkRoom.localParticipant.publishData(new TextEncoder().encode(p), { reliable: true }); } catch { /* */ }
+      return;
+    }
     for (const id in peers) {
       const dc = peers[id].dc;
       if (dc && dc.readyState === "open") {
@@ -989,8 +1141,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const inp = $("addInput") as HTMLInputElement | null;
     const pin = (inp?.value || "").trim();
     if (!/^\d{6}$/.test(pin)) { toast("Enter a 6-digit number.", true); return; }
-    if (pin === me.pin || peers[pin]) { toast("Already in the call.", true); return; }
-    if (Object.keys(peers).length >= 5) { toast("Call is full (6 people max).", true); return; }
+    const here = pin === me.pin || (livekitEnabled ? !!lkParticipantTiles[pin] : !!peers[pin]);
+    if (here) { toast("Already in the call.", true); return; }
+    const n = livekitEnabled ? Object.keys(lkParticipantTiles).length : Object.keys(peers).length;
+    if (n >= 9) { toast("Call is full (10 people max).", true); return; }
     try { await ensureMedia(); } catch { return; }
     sendWS({ type: "invite", to: pin });
     toast("Inviting " + pin + "…");
@@ -1001,6 +1155,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     pendingRing = null;
     $("ringOverlay")?.classList.remove("active");
+    // Disconnect the SFU BEFORE stopping localStream/pipeline below, or LiveKit
+    // errors republishing a dead track during teardown. No-op on the mesh path.
+    // NOTE: keep `livekitEnabled` (it's a stable server-config flag captured at
+    // `registered`); only the room/tiles/token are per-call and get cleared.
+    teardownLivekit();
     for (const id in peers) {
       try { peers[id].pc.close(); } catch { /* */ }
       if (peers[id].el) peers[id].el!.remove();
@@ -1128,6 +1287,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (reconnectT) { clearTimeout(reconnectT); reconnectT = null; }
       if (timerInt) { clearInterval(timerInt); timerInt = null; }
       if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
+      // Disconnect the SFU before stopping local tracks (no-op on the mesh path).
+      teardownLivekit();
       try { ws?.close(); } catch { /* */ }
       ws = null;
       // close peer connections

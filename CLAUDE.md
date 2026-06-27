@@ -167,6 +167,16 @@ pnpm start                # NODE_ENV=production node dist/index.js
 
 These are read **per-call** in `iceServers()` so they can be added without restarting the process.
 
+**LiveKit SFU** (optional; enables professional 10-way calls + recording-ready media). When all three are set, call media routes through the LiveKit SFU instead of the WebRTC mesh; when unset, RELAY falls back to the mesh (≤6 comfortably). Read per-call like `TURN_*`:
+- `LIVEKIT_URL` — `wss://` project URL of the LiveKit SFU
+- `LIVEKIT_API_KEY` — LiveKit project API key
+- `LIVEKIT_API_SECRET` — LiveKit project API secret (server-only; HMAC key for all grants; **never** sent to the browser — only short-TTL join JWTs are)
+
+**Email** (optional; missed-call notifications via Resend):
+- `RESEND_API_KEY` — enables outbound email. Without a DNS-verified sending domain, Resend test mode only delivers FROM `onboarding@resend.dev` TO the account owner's address.
+- `RESEND_FROM` — sender; defaults to `onboarding@resend.dev`. Set to a verified-domain address (e.g. `RELAY <notifications@your-chat.org>`) to email arbitrary registered users.
+- `APP_URL` — base URL used in email links; defaults to `https://www.your-chat.org`.
+
 ---
 
 ## Coding conventions

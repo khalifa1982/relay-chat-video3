@@ -25,7 +25,7 @@ export const RELAY_MARKUP = `
         <input id="nameInput" maxlength="20" placeholder="e.g. Khalifa" autocomplete="off">
       </div>
       <button id="joinBtn" class="relay-btn relay-btn-primary">Get my number &rarr;</button>
-      <p class="hint">Share this page (or just your number) with anyone, anywhere. Each person picks a name, then you dial each other's 6-digit code. Up to 6 in one call.</p>
+      <p class="hint">Share this page (or just your number) with anyone, anywhere. Each person picks a name, then you dial each other's 6-digit code. Up to 10 in one call.</p>
     </div>
   </section>
 

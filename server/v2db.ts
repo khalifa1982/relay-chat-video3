@@ -1018,6 +1018,27 @@ export async function getAttachmentsByIds(ids: number[]) {
 
 /* ── call history ─────────────────────────────────────────────── */
 
+/** Record a missed (caller gave up) or declined call. No schema change — the
+ *  call_history status enum already has "missed"/"declined". Fire-and-forget. */
+export async function recordMissedCall(input: {
+  callerIdentityId: number;
+  calleeIdentityId: number;
+  status?: "missed" | "declined";
+  channel?: "voice" | "video";
+}) {
+  const db = await getDb();
+  if (!db) return;
+  const now = new Date();
+  await db.insert(callHistory).values({
+    callerIdentityId: input.callerIdentityId,
+    calleeIdentityId: input.calleeIdentityId,
+    channel: input.channel ?? "video",
+    status: input.status ?? "missed",
+    startedAt: now,
+    endedAt: now,
+  });
+}
+
 export async function recordCallStart(input: {
   callerIdentityId: number;
   calleeIdentityId: number;
