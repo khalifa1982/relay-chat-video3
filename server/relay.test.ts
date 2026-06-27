@@ -492,13 +492,81 @@ describe("relay signaling", () => {
 
     // A's channel drops but, crucially, we do NOT call leaveRoom here (the
     // server now defers cleanup behind a grace timer). A re-registers on the
-    // same cid and must still be in the room with the same pin.
+    // same cid and must still be in the room with the same pin — AND now gets a
+    // `rejoin` so the fresh page re-enters the call without a new invite.
     const a2 = new FakeConn("cid-a");
     handleMessage(reg, a2.asConn(), { type: "register", name: "A" });
-    const aPin2 = (a2.last() as { pin: string }).pin;
-    expect(aPin2).toBe(aPin);
+    const registered = a2.outbox.find(
+      (m): m is { type: string; pin: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "registered"
+    );
+    expect(registered?.pin).toBe(aPin);
     expect(reg.clients.get(aPin)?.roomId).toBe(roomId);
     expect(reg.rooms.get(roomId)?.has(aPin)).toBe(true);
+    // New: auto-rejoin message for the active call.
+    const rejoin = a2.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "rejoin"
+    );
+    expect(rejoin?.roomId).toBe(roomId);
+  });
+
+  // ── persistent rejoin (v2.33) ────────────────────────────────────────────
+  const rtype = (m: unknown) => (m as { type?: string })?.type;
+  function setupCall() {
+    const a = new FakeConn("dev-a");
+    handleMessage(reg, a.asConn(), { type: "register", name: "A" });
+    const b = new FakeConn("dev-b");
+    handleMessage(reg, b.asConn(), { type: "register", name: "B" });
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const roomMsg = a.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && rtype(m) === "room"
+    );
+    const rid = roomMsg!.roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
+    return { a, b, rid, aPin: a.pin!, bPin: b.pin! };
+  }
+
+  it("a member whose in-call client was reaped keeps membership and AUTO-REJOINS on return", () => {
+    const { b, rid, aPin, bPin } = setupCall();
+    expect(reg.pinRoom.get(aPin)).toBe(rid);
+    // Simulate the grace reaper for an IN-CALL member: client gone, membership KEPT.
+    reg.clients.delete(aPin);
+    expect(reg.pinRoom.get(aPin)).toBe(rid);
+    expect(reg.rooms.get(rid)?.has(aPin)).toBe(true);
+    // A's device returns (same cid → same pin) with a fresh page.
+    const a2 = new FakeConn("dev-a");
+    handleMessage(reg, a2.asConn(), { type: "register", name: "A" });
+    expect(a2.pin).toBe(aPin);
+    const rejoin = a2.outbox.find((m) => rtype(m) === "rejoin") as
+      | { roomId: string; members: Array<{ pin: string }> }
+      | undefined;
+    expect(rejoin?.roomId).toBe(rid);
+    expect(rejoin?.members?.some((mm) => mm.pin === bPin)).toBe(true);
+    expect(reg.clients.get(aPin)?.roomId).toBe(rid);
+    void b;
+  });
+
+  it("an EXPLICIT hang-up removes membership — re-registering does NOT auto-rejoin (locked out)", () => {
+    const { a, rid, aPin } = setupCall();
+    handleMessage(reg, a.asConn(), { type: "leave" });
+    expect(reg.pinRoom.has(aPin)).toBe(false);
+    expect(reg.rooms.get(rid)?.has(aPin)).toBe(false);
+    const a2 = new FakeConn("dev-a");
+    handleMessage(reg, a2.asConn(), { type: "register", name: "A" });
+    expect(a2.outbox.some((m) => rtype(m) === "rejoin")).toBe(false);
+  });
+
+  it("the room is reaped once the LAST member explicitly leaves (no zombie room)", () => {
+    const { a, b, rid, aPin, bPin } = setupCall();
+    handleMessage(reg, a.asConn(), { type: "leave" });
+    expect(reg.rooms.get(rid)?.has(bPin)).toBe(true); // B still in the call
+    expect(reg.rooms.has(rid)).toBe(true);
+    handleMessage(reg, b.asConn(), { type: "leave" });
+    expect(reg.rooms.has(rid)).toBe(false);
+    expect(reg.pinRoom.has(aPin)).toBe(false);
+    expect(reg.pinRoom.has(bPin)).toBe(false);
   });
 
   it("honours an explicit pin request from the same cid that already owns it", () => {

@@ -1068,3 +1068,25 @@ Two live-call bugs, diagnosed by a parallel investigation workflow.
       display:none; no blanket #screenBtn hide; #screenBtn defaults hidden; ctrl-bar wraps. 259
       tests green.
 - [x] Footer → `v2.32.0`. tsc clean, build clean.
+
+## v2.33.0 — Persistent call membership + auto-rejoin (delivered 2026-06-27)
+
+A call now stays active as long as someone's in it; any member (host included) can refresh /
+step away / come back and AUTO-REJOIN with no re-invite. Locked out only on explicit hang-up or
+when the room is fully abandoned.
+
+- [x] Server (`relay.ts`): identity-persistent membership — `pinRoom: Map<pin,rid>` (+ the pin
+      stays in `rooms`) survives a disconnect; on SSE drop the 30s grace reaps only the
+      CONNECTION (membership kept) and arms a `ROOM_ABANDON_MS` (5 min) reaper if no member is
+      still connected. `joinRoomMember` / `reapRoom` / `maybeScheduleRoomReap` /
+      `sendRejoinIfInRoom`. On (re)register, an active member gets a `rejoin` {roomId, members}
+      + a fresh LiveKit token. EXPLICIT `leave` (hang-up/logout) clears `pinRoom` and reaps the
+      room when empty.
+- [x] Client (`relayClient.ts`): `onRejoin` re-acquires media, re-enters the call UI, and
+      rejoins media (SFU: token→joinLivekit; mesh: re-offer to each member). The `beforeunload`
+      handler is now a **no-op** — a refresh no longer ends the call; only the End button
+      (`hangUp`) or the engine destroy (logout / leaving the app) sends `leave`.
+- [x] 3 new vitest cases: reaped-but-kept member auto-rejoins on return; explicit hang-up →
+      locked out (no rejoin); room reaped once the last member leaves. 262 tests green.
+- [x] Reviewed by a focused adversarial agent pass (core change to the LIVE engine).
+- [x] Footer → `v2.33.0`. tsc clean, build clean.

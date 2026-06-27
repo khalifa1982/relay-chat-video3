@@ -84,6 +84,15 @@ export interface RelayRegistry {
    * READ when MULTI_DEVICE_RING is on, so the flag-off path is unaffected.
    */
   devices: Map<string, Map<string, RelaySocket>>;
+  /**
+   * Persistent call membership: pin -> roomId. A member stays here across a
+   * disconnect/refresh (so they can AUTO-REJOIN without a fresh invite); they're
+   * removed ONLY on explicit hang-up (`leave`) or when the room is reaped as
+   * abandoned. This is the source of truth for "are you still in this call?".
+   */
+  pinRoom: Map<string, string>;
+  /** Per-room abandonment timer (armed when no member is connected). */
+  roomReapT: Map<string, ReturnType<typeof setTimeout>>;
 }
 
 export function createRegistry(): RelayRegistry {
@@ -94,7 +103,94 @@ export function createRegistry(): RelayRegistry {
     cidToPin: new Map(),
     recordings: new Map(),
     devices: new Map(),
+    pinRoom: new Map(),
+    roomReapT: new Map(),
   };
+}
+
+// How long a room with NO connected members survives before it's reaped. A
+// member who returns within this window auto-rejoins; longer and the call is
+// considered over. Generous so "refresh / step away / come back" keeps the call.
+export const ROOM_ABANDON_MS = 5 * 60_000;
+
+/** A room "member" who currently has a live client connection (or is in grace). */
+function roomConnectedCount(reg: RelayRegistry, roomId: string): number {
+  const room = reg.rooms.get(roomId);
+  if (!room) return 0;
+  let n = 0;
+  room.forEach(pin => { if (reg.clients.has(pin)) n++; });
+  return n;
+}
+
+/** Add a pin to a room as a persistent member + cancel any abandonment reap. */
+function joinRoomMember(reg: RelayRegistry, roomId: string, pin: string) {
+  let room = reg.rooms.get(roomId);
+  if (!room) { room = new Set(); reg.rooms.set(roomId, room); }
+  room.add(pin);
+  reg.pinRoom.set(pin, roomId);
+  const t = reg.roomReapT.get(roomId);
+  if (t) { clearTimeout(t); reg.roomReapT.delete(roomId); }
+}
+
+/** Fully tear down a room (abandoned, or last member explicitly left). */
+function reapRoom(reg: RelayRegistry, roomId: string) {
+  const t = reg.roomReapT.get(roomId);
+  if (t) { clearTimeout(t); reg.roomReapT.delete(roomId); }
+  const room = reg.rooms.get(roomId);
+  if (room) {
+    room.forEach(pin => {
+      if (reg.pinRoom.get(pin) === roomId) reg.pinRoom.delete(pin);
+      const c = reg.clients.get(pin);
+      if (c && c.roomId === roomId) c.roomId = null;
+    });
+    reg.rooms.delete(roomId);
+  }
+  const rec = reg.recordings.get(roomId);
+  if (rec) {
+    reg.recordings.delete(roomId);
+    if (rec.egressId) stopRoomRecording(rec.egressId).catch(() => { /* best-effort */ });
+  }
+}
+
+/** If a room has no connected members, arm the abandonment reaper. */
+function maybeScheduleRoomReap(reg: RelayRegistry, roomId: string) {
+  if (!reg.rooms.has(roomId)) return;
+  if (roomConnectedCount(reg, roomId) > 0) return; // someone's still here
+  if (reg.roomReapT.has(roomId)) return;            // already counting down
+  reg.roomReapT.set(roomId, setTimeout(() => {
+    reg.roomReapT.delete(roomId);
+    // Re-check at fire time — a member may have rejoined.
+    if (roomConnectedCount(reg, roomId) === 0) reapRoom(reg, roomId);
+  }, ROOM_ABANDON_MS));
+}
+
+/**
+ * If `pin` is still a member of an active call, hand the (re)connecting client a
+ * `rejoin` so it re-enters the call WITHOUT a fresh invite: cancel the room's
+ * abandonment timer, restore the live roomId, send the current member list, and
+ * (SFU) mint a fresh join token. Forward declarations `livekitConfig`,
+ * `iceServers`, `pushLivekitToken` are defined below in the same module.
+ */
+function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string) {
+  const rid = reg.pinRoom.get(pin);
+  if (!rid || !reg.rooms.has(rid)) return;
+  const t = reg.roomReapT.get(rid);
+  if (t) { clearTimeout(t); reg.roomReapT.delete(rid); }
+  const cself = reg.clients.get(pin);
+  if (cself) cself.roomId = rid;
+  const members = Array.from(reg.rooms.get(rid) || [])
+    .filter(p => p !== pin)
+    .map(p => ({ pin: p, name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest" }));
+  const lk = livekitConfig();
+  safeSend(socket, {
+    type: "rejoin",
+    roomId: rid,
+    members,
+    iceServers: iceServers(pin),
+    livekit: lk.enabled,
+    livekitUrl: lk.url,
+  });
+  pushLivekitToken(reg, pin, rid);
 }
 
 /** Multi-device ring is OFF by default — enable per-deploy with MULTI_DEVICE_RING=1.
@@ -316,10 +412,18 @@ function broadcastToRoom(
   });
 }
 
+/**
+ * EXPLICIT leave (hang-up / logout). Removes the pin from the room PERMANENTLY
+ * (clears persistent membership), tells the others, and reaps the room if it's
+ * now empty. NOTE: a mere connection drop does NOT call this — that path keeps
+ * the membership so the member can auto-rejoin (see the grace reaper).
+ */
 export function leaveRoom(reg: RelayRegistry, pin: string) {
+  const roomId = reg.pinRoom.get(pin) ?? reg.clients.get(pin)?.roomId ?? null;
+  reg.pinRoom.delete(pin);
   const c = reg.clients.get(pin);
-  if (!c || !c.roomId) return;
-  const roomId = c.roomId;
+  if (c) c.roomId = null;
+  if (!roomId) return;
   const room = reg.rooms.get(roomId);
   if (room) {
     room.delete(pin);
@@ -327,17 +431,8 @@ export function leaveRoom(reg: RelayRegistry, pin: string) {
       const o = reg.clients.get(p);
       if (o) safeSend(o.socket, { type: "peer-left", pin });
     });
-    if (room.size === 0) {
-      reg.rooms.delete(roomId);
-      // Last person left ⇒ stop any active recording for this room.
-      const rec = reg.recordings.get(roomId);
-      if (rec) {
-        reg.recordings.delete(roomId);
-        if (rec.egressId) stopRoomRecording(rec.egressId).catch(() => { /* best-effort */ });
-      }
-    }
+    if (room.size === 0) reapRoom(reg, roomId);
   }
-  c.roomId = null;
 }
 
 export interface RelayMessage {
@@ -411,6 +506,8 @@ export function handleMessage(
         if (msg.name) existing.name = String(msg.name).slice(0, 24);
         const lk = livekitConfig();
         safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
+        // A within-grace re-attach (same cid) also auto-rejoins its active call.
+        sendRejoinIfInRoom(reg, conn.socket, conn.pin);
       }
       return;
     }
@@ -465,6 +562,8 @@ export function handleMessage(
     }
     const lk = livekitConfig();
     safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
+    // AUTO-REJOIN an active call this number is still a member of (no re-invite).
+    sendRejoinIfInRoom(reg, conn.socket, pin);
     return;
   }
 
@@ -514,7 +613,7 @@ export function handleMessage(
       }
       if (!self.roomId) {
         const rid = newRoomId();
-        reg.rooms.set(rid, new Set([conn.pin]));
+        joinRoomMember(reg, rid, conn.pin);
         self.roomId = rid;
         safeSend(conn.socket, { type: "room", roomId: rid });
         // On the LiveKit path, the caller joins the SFU room immediately (alone)
@@ -625,7 +724,7 @@ export function handleMessage(
           pin: p,
           name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest",
         }));
-      room.add(conn.pin);
+      joinRoomMember(reg, roomId, conn.pin);
       self.roomId = roomId;
       // Multi-device: tell this number's OTHER devices the call was answered
       // here, so their incoming-call UI clears ("answered elsewhere"). The
@@ -959,10 +1058,24 @@ export function attachRelay(
                   onMissedCall?.({ calleePin, callerPin: pin, callerName, reason: "cancelled" });
                 } catch { /* never let a notification hook break reaping */ }
               }
-              leaveRoom(reg, pin);
-              reg.clients.delete(pin);
-              reg.devices.delete(pin);
-              if (reg.cidToPin.get(cid) === pin) reg.cidToPin.delete(cid);
+              const rid = reg.pinRoom.get(pin) ?? null;
+              if (rid) {
+                // In an ACTIVE call: do NOT leave the room. Keep the persistent
+                // membership (reg.pinRoom + the pin in reg.rooms) AND keep
+                // cidToPin, so when this device reconnects/refreshes it
+                // auto-rejoins the same call without a fresh invite. Drop only
+                // the dead connection, then arm the abandonment reaper in case
+                // this was the last connected member.
+                reg.clients.delete(pin);
+                reg.devices.delete(pin);
+                maybeScheduleRoomReap(reg, rid);
+              } else {
+                // Not in a call — full teardown (original behaviour).
+                leaveRoom(reg, pin);
+                reg.clients.delete(pin);
+                reg.devices.delete(pin);
+                if (reg.cidToPin.get(cid) === pin) reg.cidToPin.delete(cid);
+              }
             }
           }, RELAY_DISCONNECT_GRACE_MS);
         }

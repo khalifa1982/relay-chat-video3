@@ -282,6 +282,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "ring":         onRing(m); break;
       case "ring-cancel":  onRingCancel(m); break;
       case "joined":       onJoined(m); break;
+      case "rejoin":       void onRejoin(m); break;
       case "peer-joined":  onPeerJoined(m); break;
       case "livekit-token": onLivekitToken(m); break;
       case "rejected":
@@ -837,6 +838,29 @@ export function startRelay(root: HTMLElement): RelayHandle {
       diag("ice servers from joined (" + m.iceServers.length + ")");
     }
     (m.members || []).forEach(mem => callPeer(mem.pin, mem.name));
+  }
+  // AUTO-REJOIN: the server says this number is still a member of an active call
+  // (after a refresh / reconnect). Re-acquire media, re-enter the call UI, and
+  // re-establish media — no fresh invite, no user action needed.
+  async function onRejoin(m: Msg) {
+    if (inCall) return;              // already in a call — ignore
+    const rid = m.roomId || null;
+    if (!rid) return;
+    try { await ensureMedia(); } catch { return; }  // need camera/mic back
+    roomId = rid;
+    inCall = true;
+    enterCallUI("In call");          // shows the call screen + arms the SFU watchdog
+    toast("Rejoined the call");
+    if (livekitEnabled) {
+      diag("rejoin: livekit room " + rid);
+      // The server pushed a fresh token right after this message; onLivekitToken
+      // will joinLivekit. If it already arrived (race), join now.
+      if (lkPendingToken && lkPendingToken.roomId === rid && !lkRoom) void joinLivekit(rid);
+      return;
+    }
+    // Mesh: re-offer to each existing member (glare-free — we're the newcomer).
+    if (m.iceServers && m.iceServers.length) iceConfig = { iceServers: m.iceServers };
+    (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
   }
   function onPeerJoined(m: Msg) {
     // On the SFU path, LiveKit's own ParticipantConnected/TrackSubscribed events
@@ -1784,14 +1808,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
     else if (e.key === "Enter" && /^\d{6}$/.test(dialed)) startCall();
   };
   const onUnload = () => {
-    try {
-      const body = JSON.stringify({ cid, message: { type: "leave", reason: "page-unload" } });
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon("/api/relay/send", new Blob([body], { type: "application/json" }));
-      } else {
-        sendWS({ type: "leave", reason: "page-unload" });
-      }
-    } catch { /* */ }
+    // IMPORTANT: a page refresh / tab close must NOT leave an active call — the
+    // server keeps the membership so the user AUTO-REJOINS on reload. Only an
+    // explicit hang-up (hangBtn → hangUp) or logout (engine destroy) sends a
+    // `leave`. A truly-abandoned room is reaped server-side after a few minutes.
+    // (Kept as a no-op hook so the beforeunload listener wiring is unchanged.)
   };
 
   ($("joinBtn") as HTMLElement | null)?.addEventListener("click", onJoinClick);
