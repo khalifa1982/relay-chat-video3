@@ -236,7 +236,10 @@ describe("relay signaling", () => {
     expect(relayed.data.sdp.type).toBe("offer");
   });
 
-  it("flags busy when the target is already in a different call", () => {
+  it("rings the callee (call waiting) instead of flagging busy when already in a call", () => {
+    // Call waiting: a third party dialing someone who's mid-call no longer gets a
+    // "busy" bounce. The invite rings through so the callee's client can show a
+    // call-waiting popup (Answer = hold current + switch; Reject = decline).
     const a = register(reg, "Alice");
     const b = register(reg, "Bob");
     const c = register(reg, "Carol");
@@ -250,11 +253,19 @@ describe("relay signaling", () => {
     ) as { roomId: string }).roomId;
     handleMessage(reg, b.asConn(), { type: "accept", roomId });
 
+    b.outbox.length = 0;
     c.outbox.length = 0;
     handleMessage(reg, c.asConn(), { type: "invite", to: bPin });
-    const last = c.last() as { type: string; from: string };
-    expect(last.type).toBe("busy");
-    expect(last.from).toBe(bPin);
+
+    // Carol is NOT told "busy".
+    expect(c.outbox.some(m => (m as { type?: string }).type === "busy")).toBe(false);
+    // Bob receives a ring from Carol — the call-waiting alert.
+    const ring = b.outbox.find(
+      (m): m is { type: string; from: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "ring"
+    );
+    expect(ring).toBeTruthy();
+    expect(ring!.from).toBe(cPin);
     expect(reg.clients.get(cPin)).toBeTruthy();
   });
 
