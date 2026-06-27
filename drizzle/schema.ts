@@ -291,6 +291,54 @@ export const callHistory = mysqlTable(
 export type CallHistory = typeof callHistory.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
+ * conference_history — one row per ENDED multi-party call (room). Captures the
+ * full roster (every number that was ever in the room, with display name), how
+ * many parties, what number seeded the call, and the total duration. Unlike
+ * call_history (rigidly 2-party), this is the source for the "History" tab.
+ * Created at boot by ensureSchemaExtensions (CREATE TABLE IF NOT EXISTS).
+ * ────────────────────────────────────────────────────────────────────────── */
+export const conferenceHistory = mysqlTable(
+  "conference_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    /** Signaling room id (e.g. "r1a2b3…"). */
+    roomId: varchar("roomId", { length: 40 }).notNull(),
+    /** The number that seeded the room (first dial target), if known. */
+    dialedNumber: varchar("dialedNumber", { length: 6 }),
+    partyCount: int("partyCount").notNull().default(0),
+    startedAt: timestamp("startedAt").notNull(),
+    endedAt: timestamp("endedAt").notNull(),
+    durationSec: int("durationSec").notNull().default(0),
+    /** Full roster JSON: [{ number, name, identityId | null }]. */
+    participants: json("participants"),
+  },
+  (t) => ({
+    startedIdx: index("conf_started_idx").on(t.startedAt),
+    roomIdx: index("conf_room_idx").on(t.roomId),
+  }),
+);
+export type ConferenceHistory = typeof conferenceHistory.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * conference_participants — join rows so each identity can query "the
+ * conferences I was in" with an index (instead of scanning the JSON roster).
+ * ────────────────────────────────────────────────────────────────────────── */
+export const conferenceParticipants = mysqlTable(
+  "conference_participants",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    conferenceId: int("conferenceId").notNull(),
+    identityId: int("identityId").notNull(),
+    number: varchar("number", { length: 6 }).notNull(),
+  },
+  (t) => ({
+    identityIdx: index("conf_part_identity_idx").on(t.identityId),
+    confIdx: index("conf_part_conf_idx").on(t.conferenceId),
+  }),
+);
+export type ConferenceParticipant = typeof conferenceParticipants.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
  * signaling — DB-backed WebRTC SDP/ICE mailbox.
  *
  * Each row is a single signaling envelope from caller to callee (or vice

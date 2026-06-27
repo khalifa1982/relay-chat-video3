@@ -3,6 +3,7 @@ import { Bell, BellOff, Check, Lock, Moon, ScanFace, ShieldCheck, Sun } from "lu
 import { trpc } from "@/lib/trpc";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
+import { clearRelayChannel } from "@/lib/deviceId";
 import { getLoginUrl } from "@/const";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -297,6 +298,10 @@ export default function ProfilePage() {
               } catch {
                 /* ignore */
               }
+              // Sever the relay signaling channel before navigating away so the
+              // next user on this browser gets a fresh number and can't be
+              // auto-rejoined into this session's live call.
+              clearRelayChannel();
               window.location.href = "/";
             }}
           >

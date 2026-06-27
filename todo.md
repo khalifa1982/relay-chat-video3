@@ -1002,3 +1002,226 @@ Closes a long-standing v2.0 gap ("No typing indicators" in CLAUDE.md).
 - [x] 5 vitest cases (`typingStore.test.ts`, with fake timers): per-conversation isolation,
       TTL expiry, refresh-keeps-alive, clear one/all, change-only notifications. 253 tests green.
 - [x] Footer → `v2.30.0`. tsc clean, build clean.
+
+## v2.31.0 — Multi-device ring (experimental, flag-gated) (delivered 2026-06-27)
+
+One number rings every signed-in device; first to answer wins. **OFF by default**
+(`MULTI_DEVICE_RING=1` to enable) — the off-path is byte-identical to today, so the LIVE
+call engine is untouched until the operator opts in + tests on two devices.
+
+- [x] `server/relay.ts`: a `devices: Map<pin, Map<cid, RelaySocket>>` registry (all live device
+      sockets per number, always maintained but only READ when the flag is on) + a
+      `multiDeviceEnabled()` gate. The single-`clients`-per-pin model stays as the in-call
+      "primary".
+- [x] **register** (flag on) lets multiple devices share a number and won't let a newcomer
+      hijack the primary while it's mid-call; **invite** rings every idle device; **accept**
+      promotes the answering device to primary (so offer/answer/ice route to it) and sends
+      `ring-cancel` ("answered elsewhere") to the number's other devices; **disconnect** of the
+      primary promotes a surviving device instead of going offline.
+- [x] 2 vitest cases: flag-OFF (2nd device gets a fresh number — unchanged) and flag-ON (shared
+      number, both ring, first-accept cancels the rest, in-call signal routes to the accepter).
+      Reviewed by a focused adversarial agent pass. 255 tests green.
+- [ ] Needs the operator to set `MULTI_DEVICE_RING=1` and validate on two physical devices
+      (it's stateful signaling that can't be fully verified without them).
+- [x] Footer → `v2.31.0`. tsc clean, build clean.
+
+## v2.31.1 — Multi-device ring review fixes (delivered 2026-06-27)
+
+An adversarial review verified the **flag-OFF path is byte-for-byte identical to the original**
+(all 35 relay tests green with the flag unset — the live engine is provably unaffected). Found
+one real flag-ON bug + two low nits; all fixed:
+
+- [x] **(High, flag-ON) Secondary reconnect cancelled the primary's grace timer** — the SSE
+      re-attach cleared `client.graceT` unconditionally, so a secondary device flapping while
+      the primary was disconnecting would strand a dead primary (number becomes a black hole,
+      survivor never promoted). Now the grace-clear is gated on `isPrimaryReconnect` (same guard
+      as the socket re-bind); a secondary reconnect leaves the primary's timer alone.
+- [x] **(Low) Stale `cidToPin` on promotion** — promoting a survivor now drops the dead
+      primary's `cid→pin` mapping before handing over.
+- [x] **(Low, by-design) Mid-call promotion gap** — documented: if the primary drops mid-call,
+      the promoted idle device has no peer/SFU session, so the number stays reachable for NEW
+      calls but the in-progress call doesn't migrate.
+- [x] (Also fixed CI: removed two review-agent scratch test files that a `git add -A` had
+      accidentally committed.)
+- [x] Footer → `v2.31.1`. tsc clean, 255 tests green, build clean.
+
+## v2.32.0 — Multi-party camera fix + mobile screen-share (delivered 2026-06-27)
+
+Two live-call bugs, diagnosed by a parallel investigation workflow.
+
+- [x] **Multi-party camera stuck/black (3+ parties)** — ROOT CAUSE: the `audio-only` tile rule
+      hid the inner `<video>` with `display:none`. LiveKit's `adaptiveStream` samples element
+      visibility on `track.attach()` and **pauses inbound video for any `display:none` element**.
+      Audio commonly subscribes before video, so the tile was audio-only (display:none) when the
+      video attached → that participant's camera stalled. Probability rises with party count
+      (each viewer has N−1 independent races). FIX: hide with `visibility:hidden` (keeps
+      `display` non-none so adaptiveStream keeps delivering) + don't mark a tile audio-only when
+      the participant publishes camera video (`lkHasVideo`). Mesh tiles use the same rule for
+      consistency.
+- [x] **Screen-share button missing on mobile** — it was blanket-hidden by a
+      `@media (max-width:680px){#screenBtn{display:none}}` rule (iPad/desktop are wider → showed).
+      FIX: removed the rule; the button now defaults hidden in markup and is **revealed by a JS
+      capability check** (`getDisplayMedia`) — so Android Chrome/desktop/iPad show it, iOS Safari
+      (no getDisplayMedia) hides it. The mobile control bar now `flex-wrap`s so the extra button
+      never clips.
+- [x] 4 vitest regression guards (`relayAssets.test.ts`): audio-only uses visibility:hidden not
+      display:none; no blanket #screenBtn hide; #screenBtn defaults hidden; ctrl-bar wraps. 259
+      tests green.
+- [x] Footer → `v2.32.0`. tsc clean, build clean.
+
+## v2.33.0 — Persistent call membership + auto-rejoin (delivered 2026-06-27)
+
+A call now stays active as long as someone's in it; any member (host included) can refresh /
+step away / come back and AUTO-REJOIN with no re-invite. Locked out only on explicit hang-up or
+when the room is fully abandoned.
+
+- [x] Server (`relay.ts`): identity-persistent membership — `pinRoom: Map<pin,rid>` (+ the pin
+      stays in `rooms`) survives a disconnect; on SSE drop the 30s grace reaps only the
+      CONNECTION (membership kept) and arms a `ROOM_ABANDON_MS` (5 min) reaper if no member is
+      still connected. `joinRoomMember` / `reapRoom` / `maybeScheduleRoomReap` /
+      `sendRejoinIfInRoom`. On (re)register, an active member gets a `rejoin` {roomId, members}
+      + a fresh LiveKit token. EXPLICIT `leave` (hang-up/logout) clears `pinRoom` and reaps the
+      room when empty.
+- [x] Client (`relayClient.ts`): `onRejoin` re-acquires media, re-enters the call UI, and
+      rejoins media (SFU: token→joinLivekit; mesh: re-offer to each member). The `beforeunload`
+      handler is now a **no-op** — a refresh no longer ends the call; only the End button
+      (`hangUp`) or the engine destroy (logout / leaving the app) sends `leave`.
+- [x] 3 new vitest cases: reaped-but-kept member auto-rejoins on return; explicit hang-up →
+      locked out (no rejoin); room reaped once the last member leaves. 262 tests green.
+- [x] Reviewed by a focused adversarial agent pass (core change to the LIVE engine).
+- [x] Footer → `v2.33.0`. tsc clean, build clean.
+
+## v2.33.1 — Persistent-rejoin hardening (review findings) (delivered 2026-06-27)
+
+The adversarial review of v2.33.0 found 5 real issues (2 verified with repro tests). All folded here.
+
+- [x] **CRITICAL — cross-user call hijack on a shared browser.** The relay `cid`
+      (`localStorage.relay_cid`) persisted across logout, and `ownedPin = cidToPin.get(cid)`
+      overrode the requested pin — so a NEW user logging in on the same browser was handed the
+      previous user's number and dropped into their still-live call (SFU: a publish/subscribe
+      token under the wrong identity). Fixed three ways: (1) server `register` now treats an
+      explicit pin request that DIFFERS from the cid's owned pin as an *identity switch* — it
+      severs the stale `cid→pin` binding, tears down the old room membership, and honours the new
+      request (`relay.ts` `identitySwitch`); (2) logout clears `relay_cid` + `relay_pin`
+      (`clearRelayChannel` in `deviceId.ts`, wired into `useIdentity.signOut` + `Profile` logout);
+      (3) the server fix is authoritative regardless of client state.
+- [x] **HIGH — room/membership memory leak.** When a grace-reaped "ghost" member remained and the
+      last *connected* peer explicitly left, `leaveRoom` never armed the abandonment reaper, so the
+      room + `pinRoom` entry leaked forever. `leaveRoom` now calls `maybeScheduleRoomReap` when the
+      room still has (ghost-only) members.
+- [x] **MEDIUM — empty rejoin after refreshing mid-dial.** A solo caller who refreshed while
+      ringing was dropped into an empty "call" screen. `sendRejoinIfInRoom` now detects a lone
+      member, releases the membership (reaping the orphaned solo room), and lets them land in the
+      lobby instead.
+- [x] **LOW/MEDIUM — stale dead mesh peer on rejoin.** A fresh SDP offer for an existing peer whose
+      `RTCPeerConnection` is already failed/closed/disconnected now rebuilds the peer from scratch
+      (`onSignal` + a `quiet` flag on `removePeer`) instead of applying the offer onto a dead pc.
+- [x] **LOW — phantom member on rejoin media failure.** If `ensureMedia` fails on rejoin, the
+      client now sends an explicit `leave` so the server drops the membership instead of keeping a
+      "connected" member who isn't in the call.
+- [x] 6 new vitest cases (4 server: identity-switch no-hijack, same-pin still rejoins, ghost-room
+      reap-arm, lone-member lobby; 2 client: `clearRelayChannel`). 268 tests green, tsc + build clean.
+- [x] Footer → `v2.33.1`.
+
+## v2.34.0 — Conference call history (delivered 2026-06-27)
+
+A new **History** tab logs every answered call/conference: which number you dialed, how many parties
+joined, each party's display name + 6-digit PIN, and the call duration. The room is the unit of a
+conference, so a 2-party call and a 10-way SFU call are recorded the same way.
+
+- [x] Schema: new `conference_history` (roomId, dialedNumber, partyCount, started/ended, durationSec,
+      JSON roster) + `conference_participants` (indexed identityId join) tables, created at boot by an
+      extended `ensureSchemaExtensions` (idempotent `CREATE TABLE IF NOT EXISTS`, same additive safety
+      contract as the ADD COLUMN block).
+- [x] Server (`relay.ts`): per-room lifetime `roomMeta` accumulates the full roster (everyone who was
+      EVER in the room, pin → latest name), the seeding `dialedNumber`, the start time, and an
+      `accepted` flag. `reapRoom` (the single teardown path) fires a new `onConferenceEnd` hook with
+      the roster + duration — but ONLY for answered calls with ≥2 parties, so an unanswered dial is
+      never logged as a conference. Idempotent (roster deleted on emit). New `ConferenceEndHook`,
+      4th `attachRelay` param.
+- [x] DB (`v2db.ts`): `recordConferenceEnd` resolves each pin → identity (a relay pin IS the
+      identity's number), writes the conference row + per-identity participant rows;
+      `listConferenceHistory` returns the conferences an identity took part in.
+- [x] Router (`v2routers.ts`): `calls.conferenceHistory` query (roster flagged with `isSelf`).
+- [x] Client: new **History** tab (`pages/app/History.tsx`) + nav entry (Calls · History · Messages ·
+      Contacts, mobile grid → 4-up) + route. Shows answered conferences (name + PIN chips, party
+      count, duration, time, one-tap call-back) merged with missed/declined 1:1 calls into one
+      time-sorted log. Duration/time formatters extracted to `lib/formatCall.ts`.
+- [x] 10 new vitest cases (3 server: roster+dialed-number emit, unanswered-not-logged, left-early
+      stays in roster; 7 client: `formatDuration`/`formatWhen`). 278 tests green, tsc + build clean.
+- [x] Footer → `v2.34.0`.
+
+## v2.34.0 review — conference-history findings (to fold into v2.35.1)
+
+A focused adversarial review found: (1) HIGH duration includes ring/dial time (startedAt stamped at
+invite, not accept); (2) MEDIUM abandonment-reaped rooms inflate duration by up to the 5-min abandon
+window (endedAt = reap wall-clock); (3) LOW/MED `recordConferenceEnd` SELECT-back-by-roomId is brittle
+(use the driver `insertId` like the rest of the codebase); (4) LOW unstable secondary sort (order by
+id, not 1-second-granularity startedAt). No leak / no double-emit / auth scoping all verified clean.
+
+## v2.35.0 — Active-speaker / spotlight view (delivered 2026-06-27)
+
+The in-call grid is now smart: it follows whoever's talking, auto-focuses a shared screen, lets you
+tap any tile to blow it up, and collapses to a 2-up of the active speakers when the window is small.
+
+- [x] **Spotlight layout**: one big tile + a thumb row. The focused tile is chosen by precedence
+      **manual pin > screen share > active speaker**. Pure decision logic in `lib/callLayout.ts`
+      (`computeLayout`/`resolveFocus`/`rankTiles`/`pickScreenShareTile`); `relayClient.layoutGrid`
+      just applies it to the real `#videoGrid` tiles (grid template + classes), so the existing
+      add/remove-tile callers get it for free.
+- [x] **Auto active-speaker**: SFU via LiveKit `ActiveSpeakersChanged` (loudest-first identities →
+      tile ids, self excluded); mesh via a lightweight Web Audio `AnalyserNode` per remote stream
+      sampled every 400ms (lazy `AudioContext`, torn down on call end). The big tile follows the
+      loudest speaker unless you've pinned someone.
+- [x] **Screen-share auto-focus**: a remote LiveKit screen-share track (`source === "screen_share"`)
+      or our own local share marks its tile `.screen` (letterboxed) and auto-spotlights it.
+- [x] **Click-to-spotlight**: tap a tile to pin it big; tap it again to unpin (back to auto). Tiles
+      show `cursor:pointer`; the active speaker gets a green `.speaking` outline.
+- [x] **Minimized 2-up**: a `ResizeObserver` on the call host flips to a compact, stacked 2-up of the
+      top-2 active tiles when the window is genuinely small (BOTH width<500 AND height<420 — so a
+      normal tall phone screen still gets the full spotlight, not a forced 2-up).
+- [x] State is reset on every call start (`enterCallUI`) and torn down on hang-up/destroy (interval,
+      AudioContext, ResizeObserver). Spotlight/active state pinned to a tile is cleared when that tile
+      leaves (mesh + SFU).
+- [x] 20 new vitest cases (16 `callLayout` decision logic, 4 `relayAssets` CSS guards). 298 tests
+      green, tsc + build clean.
+- [x] Footer → `v2.35.0`.
+
+## v2.35.1 — Conference-history review fixes (delivered 2026-06-27)
+
+Folds the v2.34.0 adversarial-review findings (duration accuracy + insert robustness).
+
+- [x] **HIGH — duration now measures TALK time, not ring time.** `RoomMeta` gained `answeredAt`
+      (stamped on the first `accept`) and the logged `durationSec` counts from the answer, not the
+      dial. A 2-second call after a 40-second ring no longer shows as "0:42".
+- [x] **MEDIUM — abandoned-room duration no longer inflated by the 5-min reaper.** `RoomMeta` gained
+      `lastActiveAt`, refreshed on accept / explicit leave / in-call grace-disconnect (`roomActivityTouch`).
+      `reapRoom` logs `endedAt = lastActiveAt` (clamped ≥ startedAt) — the real last-active moment, not
+      the wall-clock reap time (which for an abandoned room is up to `ROOM_ABANDON_MS` later).
+- [x] **LOW/MED — `recordConferenceEnd` uses the driver `insertId`** (like `sendMessage` /
+      `createGroupConversation`) instead of a SELECT-back-by-roomId, removing the roomId-reuse
+      ambiguity and an extra query.
+- [x] **LOW — `listConferenceHistory` orders by `id`** (monotonic) instead of 1-second-granularity
+      `startedAt`, for a stable order.
+- [x] Test updated to assert `answeredAt` is set and `startedAt ≤ answeredAt ≤ endedAt`. 298 green,
+      tsc + build clean.
+- [x] Footer → `v2.35.1`.
+
+## v2.35.2 — Active-speaker review fixes (delivered 2026-06-27)
+
+Folds the v2.35.0 adversarial-review findings.
+
+- [x] **MEDIUM — SFU camera blank after a screen share ends.** A participant's camera + screen are two
+      LiveKit publications sharing one tile/`<video>`; detaching the screen on `TrackUnsubscribed` left
+      the element blank (frozen black, no avatar) because the still-live camera was never re-attached.
+      Added `lkCameraTrack(participant)` and re-attach the camera when a screen share ends.
+- [x] **LOW — idle ResizeObserver churn.** The observer now early-returns when `!inCall`, so the
+      parked ~1px off-screen host no longer reads as "minimized" and re-runs layout while idle. Also
+      `hangUp` now clears `#videoGrid` so no dead tiles/srcObjects linger between calls.
+- [x] **LOW — mesh spotlight thrash.** Added hysteresis to the Web Audio active-speaker pick: a new
+      leader must lead 2 consecutive samples (~800ms) before the spotlight switches, and silence holds
+      the last speaker rather than dropping the spotlight. (The SFU path is already debounced by LiveKit.)
+- [x] Verified-NOT-bugs from the review: no AudioContext/interval leak, correct self-exclusion in
+      active-speaker (me.pin == LiveKit identity), clean layout reset between modes, click-to-spotlight
+      survives a tile leaving. 298 tests green, tsc + build clean.
+- [x] Footer → `v2.35.2`.

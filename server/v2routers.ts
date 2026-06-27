@@ -31,6 +31,7 @@ import {
   getPresenceAudienceIds,
   getPresenceForIds,
   listCallHistory,
+  listConferenceHistory,
   listContacts,
   listMessages,
   listThreads,
@@ -944,6 +945,33 @@ export const v2CallsRouter = router({
               avatarUrl: other.avatarUrl,
             }
           : null,
+      };
+    });
+  }),
+
+  /** Multi-party CONFERENCE history — every answered call (2..10 parties) this
+   *  identity took part in, with the full roster (name + PIN) and duration. */
+  conferenceHistory: publicProcedure.query(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    const rows = await listConferenceHistory(me.id, 100);
+    return rows.map((r) => {
+      const roster = Array.isArray(r.participants)
+        ? (r.participants as Array<{ number?: string; name?: string; identityId?: number | null }>)
+        : [];
+      return {
+        id: r.id,
+        roomId: r.roomId,
+        dialedNumber: r.dialedNumber,
+        partyCount: r.partyCount,
+        startedAt: r.startedAt,
+        endedAt: r.endedAt,
+        durationSec: r.durationSec,
+        // Surface everyone EXCEPT me first-class; keep the full list too.
+        participants: roster.map((p) => ({
+          number: p.number ?? "",
+          name: p.name ?? "Guest",
+          isSelf: p.identityId === me.id,
+        })),
       };
     });
   }),

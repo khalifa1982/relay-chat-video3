@@ -492,13 +492,81 @@ describe("relay signaling", () => {
 
     // A's channel drops but, crucially, we do NOT call leaveRoom here (the
     // server now defers cleanup behind a grace timer). A re-registers on the
-    // same cid and must still be in the room with the same pin.
+    // same cid and must still be in the room with the same pin — AND now gets a
+    // `rejoin` so the fresh page re-enters the call without a new invite.
     const a2 = new FakeConn("cid-a");
     handleMessage(reg, a2.asConn(), { type: "register", name: "A" });
-    const aPin2 = (a2.last() as { pin: string }).pin;
-    expect(aPin2).toBe(aPin);
+    const registered = a2.outbox.find(
+      (m): m is { type: string; pin: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "registered"
+    );
+    expect(registered?.pin).toBe(aPin);
     expect(reg.clients.get(aPin)?.roomId).toBe(roomId);
     expect(reg.rooms.get(roomId)?.has(aPin)).toBe(true);
+    // New: auto-rejoin message for the active call.
+    const rejoin = a2.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "rejoin"
+    );
+    expect(rejoin?.roomId).toBe(roomId);
+  });
+
+  // ── persistent rejoin (v2.33) ────────────────────────────────────────────
+  const rtype = (m: unknown) => (m as { type?: string })?.type;
+  function setupCall() {
+    const a = new FakeConn("dev-a");
+    handleMessage(reg, a.asConn(), { type: "register", name: "A" });
+    const b = new FakeConn("dev-b");
+    handleMessage(reg, b.asConn(), { type: "register", name: "B" });
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const roomMsg = a.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && rtype(m) === "room"
+    );
+    const rid = roomMsg!.roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
+    return { a, b, rid, aPin: a.pin!, bPin: b.pin! };
+  }
+
+  it("a member whose in-call client was reaped keeps membership and AUTO-REJOINS on return", () => {
+    const { b, rid, aPin, bPin } = setupCall();
+    expect(reg.pinRoom.get(aPin)).toBe(rid);
+    // Simulate the grace reaper for an IN-CALL member: client gone, membership KEPT.
+    reg.clients.delete(aPin);
+    expect(reg.pinRoom.get(aPin)).toBe(rid);
+    expect(reg.rooms.get(rid)?.has(aPin)).toBe(true);
+    // A's device returns (same cid → same pin) with a fresh page.
+    const a2 = new FakeConn("dev-a");
+    handleMessage(reg, a2.asConn(), { type: "register", name: "A" });
+    expect(a2.pin).toBe(aPin);
+    const rejoin = a2.outbox.find((m) => rtype(m) === "rejoin") as
+      | { roomId: string; members: Array<{ pin: string }> }
+      | undefined;
+    expect(rejoin?.roomId).toBe(rid);
+    expect(rejoin?.members?.some((mm) => mm.pin === bPin)).toBe(true);
+    expect(reg.clients.get(aPin)?.roomId).toBe(rid);
+    void b;
+  });
+
+  it("an EXPLICIT hang-up removes membership — re-registering does NOT auto-rejoin (locked out)", () => {
+    const { a, rid, aPin } = setupCall();
+    handleMessage(reg, a.asConn(), { type: "leave" });
+    expect(reg.pinRoom.has(aPin)).toBe(false);
+    expect(reg.rooms.get(rid)?.has(aPin)).toBe(false);
+    const a2 = new FakeConn("dev-a");
+    handleMessage(reg, a2.asConn(), { type: "register", name: "A" });
+    expect(a2.outbox.some((m) => rtype(m) === "rejoin")).toBe(false);
+  });
+
+  it("the room is reaped once the LAST member explicitly leaves (no zombie room)", () => {
+    const { a, b, rid, aPin, bPin } = setupCall();
+    handleMessage(reg, a.asConn(), { type: "leave" });
+    expect(reg.rooms.get(rid)?.has(bPin)).toBe(true); // B still in the call
+    expect(reg.rooms.has(rid)).toBe(true);
+    handleMessage(reg, b.asConn(), { type: "leave" });
+    expect(reg.rooms.has(rid)).toBe(false);
+    expect(reg.pinRoom.has(aPin)).toBe(false);
+    expect(reg.pinRoom.has(bPin)).toBe(false);
   });
 
   it("honours an explicit pin request from the same cid that already owns it", () => {
@@ -510,6 +578,170 @@ describe("relay signaling", () => {
     const c2 = new FakeConn("cid-x");
     handleMessage(reg, c2.asConn(), { type: "register", name: "X", pin });
     expect((c2.last() as { pin: string }).pin).toBe(pin);
+  });
+
+  // ── v2.33.1 hardening (adversarial-review findings) ──────────────────────
+  it("a DIFFERENT user on the SAME browser (cid) is NOT auto-rejoined into the previous user's live call", () => {
+    const { b, rid, aPin, bPin } = setupCall();
+    // The in-call grace reaper deletes A's client but (per the real grace branch)
+    // KEEPS the cid->pin mapping AND the room membership.
+    reg.clients.delete(aPin);
+    expect(reg.cidToPin.get("dev-a")).toBe(aPin);
+    expect(reg.pinRoom.get(aPin)).toBe(rid);
+
+    // A logs out; a different user registers on the same browser, explicitly
+    // requesting THEIR OWN number (any valid pin that isn't A's or B's).
+    let wantPin = "200000";
+    while (wantPin === aPin || wantPin === bPin) wantPin = String(Number(wantPin) + 1);
+    const other = new FakeConn("dev-a");
+    handleMessage(reg, other.asConn(), { type: "register", name: "Mallory", pin: wantPin });
+
+    // They get their OWN number, never A's, and no rejoin into A's call.
+    expect(other.pin).toBe(wantPin);
+    expect(other.pin).not.toBe(aPin);
+    expect(other.outbox.some((m) => rtype(m) === "rejoin")).toBe(false);
+    // A's stale cid binding + membership were severed; B's call is untouched.
+    expect(reg.cidToPin.get("dev-a")).toBe(wantPin);
+    expect(reg.pinRoom.has(aPin)).toBe(false);
+    expect(reg.rooms.get(rid)?.has(bPin)).toBe(true);
+    void b;
+  });
+
+  it("a same-cid reconnect that re-requests its OWN pin still auto-rejoins (identitySwitch stays off)", () => {
+    const { rid, aPin, bPin } = setupCall();
+    reg.clients.delete(aPin); // in-call grace reaped the client, membership kept
+    const a2 = new FakeConn("dev-a");
+    handleMessage(reg, a2.asConn(), { type: "register", name: "A", pin: aPin });
+    expect(a2.pin).toBe(aPin);
+    const rejoin = a2.outbox.find((m) => rtype(m) === "rejoin") as { roomId: string } | undefined;
+    expect(rejoin?.roomId).toBe(rid);
+    void bPin;
+  });
+
+  it("a ghost-only room is reap-armed (not leaked) when the last connected peer explicitly leaves", () => {
+    const { b, rid, aPin, bPin } = setupCall();
+    // A drops mid-call: grace reaped the client, membership KEPT → disconnected ghost.
+    reg.clients.delete(aPin);
+    expect(reg.rooms.get(rid)?.has(aPin)).toBe(true);
+    expect(reg.roomReapT.has(rid)).toBe(false); // not armed while B is connected
+    // B explicitly hangs up. The room now holds only the disconnected ghost A.
+    handleMessage(reg, b.asConn(), { type: "leave" });
+    expect(reg.rooms.get(rid)?.has(bPin)).toBe(false);
+    // The room is no longer leaked: the abandonment reaper is armed for it.
+    expect(reg.roomReapT.has(rid)).toBe(true);
+    const t = reg.roomReapT.get(rid);
+    if (t) clearTimeout(t); // don't leave a 5-min timer dangling in the suite
+  });
+
+  it("refreshing while ALONE in a solo dialing room lands in the lobby (no empty rejoin) and reaps the room", () => {
+    const a = new FakeConn("dev-a");
+    handleMessage(reg, a.asConn(), { type: "register", name: "A" });
+    const b = new FakeConn("dev-b");
+    handleMessage(reg, b.asConn(), { type: "register", name: "B" });
+    // A dials B but B never accepts → A sits alone in a solo dialing room.
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const rid = (a.outbox.find((m) => rtype(m) === "room") as { roomId: string }).roomId;
+    expect(reg.pinRoom.get(a.pin!)).toBe(rid);
+    // A's in-call client is reaped (refresh) but membership kept.
+    const aPin = a.pin!;
+    reg.clients.delete(aPin);
+    // A returns. Being ALONE, A must NOT get an empty rejoin — they go to lobby
+    // and the orphaned solo room is reaped.
+    const a2 = new FakeConn("dev-a");
+    handleMessage(reg, a2.asConn(), { type: "register", name: "A" });
+    expect(a2.outbox.some((m) => rtype(m) === "rejoin")).toBe(false);
+    expect(reg.pinRoom.has(aPin)).toBe(false);
+    expect(reg.rooms.has(rid)).toBe(false);
+  });
+});
+
+/* ── conference history (v2.34) ─────────────────────────────────────────────
+ * The room is the unit of a "conference". When it ends (reaped), the relay emits
+ * onConferenceEnd with the full roster + duration, which a higher layer persists.
+ * ────────────────────────────────────────────────────────────────────────── */
+describe("relay — conference history", () => {
+  let reg: RelayRegistry;
+  beforeEach(() => { reg = createRegistry(); });
+  const rtype = (m: unknown) => (m as { type?: string })?.type;
+
+  type ConfInfo = {
+    roomId: string;
+    startedAt: number;
+    answeredAt: number | null;
+    endedAt: number;
+    dialedNumber: string | null;
+    participants: Array<{ pin: string; name: string }>;
+  };
+
+  function registerConn(cid: string, name: string) {
+    const c = new FakeConn(cid);
+    handleMessage(reg, c.asConn(), { type: "register", name });
+    return c;
+  }
+
+  it("emits onConferenceEnd with the full roster + dialed number when an answered call ends", () => {
+    const a = registerConn("dev-a", "Alice");
+    const b = registerConn("dev-b", "Bob");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const rid = (a.outbox.find((m) => rtype(m) === "room") as { roomId: string }).roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
+
+    let captured: ConfInfo | null = null;
+    reg.onConferenceEnd = (info) => { captured = info as ConfInfo; };
+
+    handleMessage(reg, a.asConn(), { type: "leave" });
+    expect(captured).toBeNull(); // B is still in the call — not ended yet
+    handleMessage(reg, b.asConn(), { type: "leave" }); // last out → reap → emit
+
+    const info = captured as ConfInfo | null;
+    expect(info).not.toBeNull();
+    expect(info!.roomId).toBe(rid);
+    expect(info!.dialedNumber).toBe(b.pin);
+    const pins = info!.participants.map((p) => p.pin).sort();
+    expect(pins).toEqual([a.pin!, b.pin!].sort());
+    const names = Object.fromEntries(info!.participants.map((p) => [p.pin, p.name]));
+    expect(names[a.pin!]).toBe("Alice");
+    expect(names[b.pin!]).toBe("Bob");
+    expect(info!.endedAt).toBeGreaterThanOrEqual(info!.startedAt);
+    // Duration is measured from the ANSWER (talk time), not the dial.
+    expect(info!.answeredAt).not.toBeNull();
+    expect(info!.answeredAt!).toBeGreaterThanOrEqual(info!.startedAt);
+    expect(info!.endedAt).toBeGreaterThanOrEqual(info!.answeredAt!);
+  });
+
+  it("does NOT log an UNANSWERED dial as a conference (no accept → no history)", () => {
+    const a = registerConn("dev-a", "Alice");
+    const b = registerConn("dev-b", "Bob");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    let called = false;
+    reg.onConferenceEnd = () => { called = true; };
+    handleMessage(reg, a.asConn(), { type: "leave" }); // caller gives up before answer
+    expect(called).toBe(false);
+  });
+
+  it("keeps a participant who LEFT EARLY in the conference roster", () => {
+    const a = registerConn("dev-a", "Alice");
+    const b = registerConn("dev-b", "Bob");
+    const c = registerConn("dev-c", "Carol");
+    handleMessage(reg, a.asConn(), { type: "invite", to: b.pin! });
+    const rid = (a.outbox.find((m) => rtype(m) === "room") as { roomId: string }).roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
+    handleMessage(reg, a.asConn(), { type: "invite", to: c.pin! });
+    handleMessage(reg, c.asConn(), { type: "accept", roomId: rid });
+
+    let captured: ConfInfo | null = null;
+    reg.onConferenceEnd = (info) => { captured = info as ConfInfo; };
+
+    handleMessage(reg, b.asConn(), { type: "leave" }); // Bob bails early
+    expect(captured).toBeNull();
+    handleMessage(reg, a.asConn(), { type: "leave" });
+    handleMessage(reg, c.asConn(), { type: "leave" }); // last out → reap
+
+    const info = captured as ConfInfo | null;
+    expect(info).not.toBeNull();
+    const pins = info!.participants.map((p) => p.pin).sort();
+    expect(pins).toEqual([a.pin!, b.pin!, c.pin!].sort());
+    expect(info!.participants.length).toBe(3);
   });
 });
 
@@ -794,5 +1026,59 @@ describe("relay — room-join authorization", () => {
     handleMessage(reg, b.asConn(), { type: "accept", roomId: rid });
     expect((b.last() as { type: string }).type).toBe("joined");
     expect(reg.rooms.get(rid)?.has(b.pin!)).toBe(true);
+  });
+
+  // ── multi-device ring (feature-flagged) ──────────────────────────────────
+  const typeOf = (m: unknown) => (m as { type?: string })?.type;
+  const has = (c: FakeConn, t: string) => c.outbox.some((m) => typeOf(m) === t);
+
+  it("without MULTI_DEVICE_RING, a 2nd device requesting a taken number gets a DIFFERENT number", () => {
+    delete process.env.MULTI_DEVICE_RING;
+    const d1 = new FakeConn("dev1");
+    handleMessage(reg, d1.asConn(), { type: "register", name: "Sam" });
+    const num = d1.pin!;
+    const d2 = new FakeConn("dev2");
+    handleMessage(reg, d2.asConn(), { type: "register", name: "Sam", pin: num });
+    expect(d2.pin).not.toBe(num); // evicts → fresh number (current behaviour)
+  });
+
+  it("with MULTI_DEVICE_RING: two devices share a number, both ring, first accept cancels the rest, and in-call signal routes to the accepter", () => {
+    process.env.MULTI_DEVICE_RING = "1";
+    try {
+      const caller = new FakeConn("caller");
+      handleMessage(reg, caller.asConn(), { type: "register", name: "Caller" });
+      const callerPin = caller.pin!;
+
+      const d1 = new FakeConn("dev1");
+      handleMessage(reg, d1.asConn(), { type: "register", name: "Callee" });
+      const number = d1.pin!;
+      const d2 = new FakeConn("dev2");
+      handleMessage(reg, d2.asConn(), { type: "register", name: "Callee", pin: number });
+      expect(d2.pin).toBe(number); // SAME number on the 2nd device
+
+      // Caller rings the number → BOTH devices ring.
+      d1.outbox.length = 0; d2.outbox.length = 0;
+      handleMessage(reg, caller.asConn(), { type: "invite", to: number });
+      expect(has(d1, "ring")).toBe(true);
+      expect(has(d2, "ring")).toBe(true);
+      const ring = d1.outbox.find((m) => typeOf(m) === "ring") as { from: string; roomId: string };
+      expect(ring.from).toBe(callerPin);
+
+      // Device 2 answers → device 1 gets "answered elsewhere", device 2 joins.
+      d1.outbox.length = 0; d2.outbox.length = 0;
+      handleMessage(reg, d2.asConn(), { type: "accept", roomId: ring.roomId });
+      expect(has(d2, "joined")).toBe(true);
+      const cancel = d1.outbox.find((m) => typeOf(m) === "ring-cancel") as { from: string } | undefined;
+      expect(cancel?.from).toBe(callerPin);
+
+      // The accepting DEVICE is now primary: an in-call signal to the number
+      // routes to device 2, not device 1.
+      d1.outbox.length = 0; d2.outbox.length = 0;
+      handleMessage(reg, caller.asConn(), { type: "signal", to: number, data: { sdp: { type: "offer" } } });
+      expect(has(d2, "signal")).toBe(true);
+      expect(has(d1, "signal")).toBe(false);
+    } finally {
+      delete process.env.MULTI_DEVICE_RING;
+    }
   });
 });

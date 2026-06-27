@@ -14,6 +14,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { MediaPipeline, FILTERS, type FilterId, type FilterDef } from "./mediaPipeline";
+import { computeLayout } from "./callLayout";
 import { isDndOn } from "@/app/dnd";
 
 interface IceConfig { iceServers: Array<{ urls: string; username?: string; credential?: string }>; }
@@ -130,6 +131,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let inCall = false;
   let roomId: string | null = null;
   const peers: Record<string, PeerEntry> = {};
+  // ---------- active-speaker / spotlight view (v2.35) ----------
+  let spotlightId: string | null = null;     // tile id manually pinned big, or null
+  let manualSpotlight = false;               // user clicked a tile to pin it
+  let activeSpeakerId: string | null = null; // tile id of the loudest speaker (auto)
+  let speakerOrder: string[] = [];           // tile ids, most-recently-loud first
+  let speakerCandidate: string | null = null; // pending new leader (hysteresis)
+  let speakerCandidateCount = 0;             // consecutive samples it has led
+  const screenShareIds = new Set<string>();  // tile ids currently sharing a screen
+  let compactView = false;                   // call container is "minimized" (small)
+  let callResizeObs: ResizeObserver | null = null;
+  // Mesh-only active-speaker detection via Web Audio (the SFU uses LiveKit's
+  // ActiveSpeakersChanged instead). Lazily created on the first remote stream.
+  let meshAudioCtx: AudioContext | null = null;
+  const meshAnalysers: Record<string, { node: AnalyserNode; src: MediaStreamAudioSourceNode; data: Uint8Array<ArrayBuffer> }> = {};
+  let speakerSampleT: ReturnType<typeof setInterval> | null = null;
   // ---------- LiveKit SFU (optional; null on the mesh path) ----------
   let livekitEnabled = false;
   let livekitUrl: string | null = null;
@@ -282,6 +298,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "ring":         onRing(m); break;
       case "ring-cancel":  onRingCancel(m); break;
       case "joined":       onJoined(m); break;
+      case "rejoin":       void onRejoin(m); break;
       case "peer-joined":  onPeerJoined(m); break;
       case "livekit-token": onLivekitToken(m); break;
       case "rejected":
@@ -838,6 +855,38 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     (m.members || []).forEach(mem => callPeer(mem.pin, mem.name));
   }
+  // AUTO-REJOIN: the server says this number is still a member of an active call
+  // (after a refresh / reconnect). Re-acquire media, re-enter the call UI, and
+  // re-establish media — no fresh invite, no user action needed.
+  async function onRejoin(m: Msg) {
+    if (inCall) return;              // already in a call — ignore
+    const rid = m.roomId || null;
+    if (!rid) return;
+    try {
+      await ensureMedia();
+    } catch {
+      // Couldn't re-acquire camera/mic on this fresh page (permission revoked or
+      // device busy). We can't rejoin — explicitly leave so the server drops our
+      // membership instead of keeping us as a phantom "connected" member that
+      // holds the room open.
+      sendWS({ type: "leave", reason: "rejoin-no-media" });
+      return;
+    }
+    roomId = rid;
+    inCall = true;
+    enterCallUI("In call");          // shows the call screen + arms the SFU watchdog
+    toast("Rejoined the call");
+    if (livekitEnabled) {
+      diag("rejoin: livekit room " + rid);
+      // The server pushed a fresh token right after this message; onLivekitToken
+      // will joinLivekit. If it already arrived (race), join now.
+      if (lkPendingToken && lkPendingToken.roomId === rid && !lkRoom) void joinLivekit(rid);
+      return;
+    }
+    // Mesh: re-offer to each existing member (glare-free — we're the newcomer).
+    if (m.iceServers && m.iceServers.length) iceConfig = { iceServers: m.iceServers };
+    (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
+  }
   function onPeerJoined(m: Msg) {
     // On the SFU path, LiveKit's own ParticipantConnected/TrackSubscribed events
     // drive remote tiles — the mesh offer/answer dance is skipped entirely.
@@ -874,6 +923,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const room = new RoomCtor({ adaptiveStream: true, dynacast: true });
     lkRoom = room;
 
+    const isScreenPub = (pub: unknown): boolean => {
+      const src = (pub as { source?: unknown } | null)?.source;
+      // LiveKit Track.Source.ScreenShare === "screen_share".
+      return String(src) === "screen_share" || src === TrackEnum.Source?.ScreenShare;
+    };
     room.on(RoomEventEnum.TrackSubscribed, (track, _pub, participant) => {
       addLkTile(participant.identity, participant.name || participant.identity);
       const el = lkParticipantTiles[participant.identity];
@@ -881,16 +935,52 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (track.kind === TrackEnum.Kind.Video) {
         track.attach(el.querySelector("video") as HTMLVideoElement);
         bindLkPlaceholder(el, true);
+        // A screen-share video → mark the tile so layout auto-focuses it (and
+        // the video is letterboxed, not cropped). The tile id is "tile-<identity>".
+        if (isScreenPub(_pub)) { screenShareIds.add(el.id); el.classList.add("screen"); }
+        layoutGrid();
       } else if (track.kind === TrackEnum.Kind.Audio) {
         track.attach(); // detached <audio> element for playback
-        bindLkPlaceholder(el, false); // audio-only: clear "connecting…", keep avatar
+        // Don't flip the tile to audio-only (which hides the video) if this
+        // participant is ALSO publishing camera video — audio commonly
+        // subscribes first, and marking audio-only here is what stalls their
+        // camera on the SFU. Keep video visible when a video publication exists.
+        bindLkPlaceholder(el, lkHasVideo(participant));
       }
     });
     room.on(RoomEventEnum.TrackUnsubscribed, (track, _pub, participant) => {
       try { track.detach(); } catch { /* */ }
       const el = lkParticipantTiles[participant.identity];
-      if (el && track.kind === TrackEnum.Kind.Video) bindLkPlaceholder(el, false);
+      if (el && track.kind === TrackEnum.Kind.Video) {
+        if (isScreenPub(_pub)) {
+          screenShareIds.delete(el.id);
+          el.classList.remove("screen");
+          // The screen + camera shared one <video>; detaching the screen left it
+          // blank. Re-attach the participant's still-live camera so their tile
+          // shows their face again (not a frozen black frame).
+          const cam = lkCameraTrack(participant);
+          const vid = el.querySelector("video") as HTMLVideoElement | null;
+          if (cam?.attach && vid) { try { cam.attach(vid); } catch { /* */ } }
+        }
+        bindLkPlaceholder(el, lkHasVideo(participant));
+        layoutGrid();
+      }
     });
+    // SFU active-speaker: LiveKit reports speakers loudest-first. Map them to
+    // tile ids, drop ourselves (we don't auto-spotlight self), and relayout so
+    // the spotlight follows whoever's talking.
+    if (RoomEventEnum.ActiveSpeakersChanged) {
+      room.on(RoomEventEnum.ActiveSpeakersChanged, (speakers: Array<{ identity?: string }>) => {
+        const ids = (speakers || [])
+          .map(s => s?.identity)
+          .filter((id): id is string => !!id && id !== me.pin)
+          .map(id => "tile-" + id)
+          .filter(id => !!document.getElementById(id));
+        speakerOrder = ids;
+        const next = ids[0] || null;
+        if (next !== activeSpeakerId) { activeSpeakerId = next; layoutGrid(); }
+      });
+    }
     room.on(RoomEventEnum.ParticipantConnected, p => addLkTile(p.identity, p.name || p.identity));
     room.on(RoomEventEnum.ParticipantDisconnected, p => removeLkTile(p.identity));
     room.on(RoomEventEnum.DataReceived, (payload: Uint8Array) => {
@@ -957,6 +1047,38 @@ export function startRelay(root: HTMLElement): RelayHandle {
     grid.appendChild(t);
     layoutGrid();
   }
+  // True if a LiveKit participant currently publishes a (non-muted) camera video
+  // track — even if it hasn't been SUBSCRIBED yet. Used so an audio-first
+  // subscription doesn't wrongly mark the tile audio-only. LiveKit objects are
+  // dynamically-imported `any`, so probe defensively.
+  function lkHasVideo(participant: { getTrackPublications?: () => unknown[]; videoTrackPublications?: Map<string, unknown> }): boolean {
+    try {
+      const pubs: any[] = typeof participant.getTrackPublications === "function"
+        ? participant.getTrackPublications()
+        : (participant.videoTrackPublications ? Array.from(participant.videoTrackPublications.values()) : []);
+      return pubs.some((p: any) =>
+        (p?.kind === "video" || p?.track?.kind === "video" || p?.source === "camera") && p?.isMuted !== true);
+    } catch {
+      return false;
+    }
+  }
+  // A participant's live CAMERA video track (not their screen share), if any.
+  // Used to RE-ATTACH the camera after a screen share ends — on the SFU a
+  // participant's camera + screen are two publications that share one tile/video
+  // element, so detaching the screen track leaves the element blank otherwise.
+  function lkCameraTrack(participant: { getTrackPublications?: () => unknown[]; videoTrackPublications?: Map<string, unknown> }): { attach?: (el: HTMLMediaElement) => void } | null {
+    try {
+      const pubs: any[] = typeof participant.getTrackPublications === "function"
+        ? participant.getTrackPublications()
+        : (participant.videoTrackPublications ? Array.from(participant.videoTrackPublications.values()) : []);
+      const cam = pubs.find((p: any) =>
+        (p?.source === "camera" || (p?.kind !== "audio" && String(p?.source) !== "screen_share"))
+        && p?.track && p?.isMuted !== true && p?.track?.kind === "video");
+      return cam?.track ?? null;
+    } catch {
+      return null;
+    }
+  }
   function bindLkPlaceholder(el: HTMLElement, hasVideo: boolean) {
     const ph = el.querySelector(".ph") as HTMLElement | null;
     if (ph) ph.style.display = hasVideo ? "none" : "flex"; // keep the avatar for audio-only
@@ -973,6 +1095,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const nm = el?.querySelector(".nm")?.textContent || "Someone";
     el?.remove();
     delete lkParticipantTiles[id];
+    // Drop any spotlight/active state pinned to the gone tile.
+    const goneId = "tile-" + id;
+    if (spotlightId === goneId) { spotlightId = null; manualSpotlight = false; }
+    if (activeSpeakerId === goneId) activeSpeakerId = null;
+    screenShareIds.delete(goneId);
+    speakerOrder = speakerOrder.filter(s => s !== goneId);
     layoutGrid();
     // Parity with the mesh path's removePeer, which posts a "left" notice.
     if (inCall) addSysMsg(nm + " left the call.");
@@ -1071,6 +1199,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!data) return;
     let peer = peers[from];
     if (data.sdp) {
+      // A fresh OFFER for an EXISTING peer whose connection is already dead means
+      // the remote refreshed/reconnected and is re-offering as a newcomer. Applying
+      // it onto the stale (failed/closed/disconnected) RTCPeerConnection stalls, so
+      // tear the dead peer down and rebuild from scratch.
+      if (
+        peer &&
+        data.sdp.type === "offer" &&
+        (peer.pc.connectionState === "failed" ||
+          peer.pc.connectionState === "closed" ||
+          peer.pc.connectionState === "disconnected")
+      ) {
+        removePeer(from, true);
+        peer = peers[from]; // deleted above → recreated below
+      }
       if (!peer) peer = createPeer(from, "Guest", false);
       try {
         await peer.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
@@ -1108,7 +1250,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       try { p.pc.setConfiguration(iceConfig as RTCConfiguration); } catch { /* */ }
     });
   }
-  function removePeer(pin: string) {
+  function removePeer(pin: string, quiet = false) {
     const e = peers[pin];
     if (!e) return;
     const nm = e.name;
@@ -1117,8 +1259,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try { e.pc.close(); } catch { /* */ }
     if (e.el) e.el.remove();
     delete peers[pin];
+    unregisterMeshAnalyser(pin);
+    // Drop any spotlight/active state pinned to the gone tile so layout recovers.
+    const goneId = "tile-" + pin;
+    if (spotlightId === goneId) { spotlightId = null; manualSpotlight = false; }
+    if (activeSpeakerId === goneId) activeSpeakerId = null;
+    screenShareIds.delete(goneId);
+    speakerOrder = speakerOrder.filter(s => s !== goneId);
     layoutGrid();
-    if (inCall) addSysMsg((nm || "Someone") + " left the call.");
+    // `quiet` skips the "X left the call" system message — used when we're
+    // immediately rebuilding the peer (a refresh/reconnect re-offer), not when
+    // they're genuinely leaving.
+    if (inCall && !quiet) addSysMsg((nm || "Someone") + " left the call.");
   }
 
   // ---------- diagnostics ----------
@@ -1376,6 +1528,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     show("call");
     establishedOnce = false;
     exitReconnecting();
+    resetSpeakerView(); // fresh call → no stale spotlight/active-speaker focus
     runConnSequence();
     // On the SFU path, start the join watchdog so a failed/slow token or connect
     // recovers (re-request) or surfaces an error instead of a silent dead call.
@@ -1435,6 +1588,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (v) v.srcObject = stream;
     const c = entry.el.querySelector(".connecting") as HTMLElement | null;
     if (c) c.style.display = "none";
+    // Tap the remote audio for active-speaker metering (mesh path only).
+    registerMeshAnalyser(id, stream);
     const sync = () => {
       const has = stream.getVideoTracks().some(tr => tr.enabled && tr.readyState === "live");
       const ph = entry.el!.querySelector(".ph") as HTMLElement | null;
@@ -1443,12 +1598,148 @@ export function startRelay(root: HTMLElement): RelayHandle {
     sync();
     stream.getVideoTracks().forEach(tr => { tr.onmute = sync; tr.onunmute = sync; tr.onended = sync; });
   }
+  // The single layout brain: equal grid by default, a 1-big-+-thumbs SPOTLIGHT
+  // when there's a focused tile (manual pin > screen share > active speaker), or
+  // a 2-up of the most-active tiles when the call is "minimized" (compact). The
+  // DECISION is the pure computeLayout() in callLayout.ts; this just applies it.
   function layoutGrid() {
     const g = $("videoGrid"); if (!g) return;
-    const n = g.children.length;
+    const tiles = Array.from(g.children) as HTMLElement[];
+    // Reset transient per-tile + container state from the previous pass.
+    tiles.forEach(t => {
+      t.style.gridColumn = ""; t.style.gridRow = ""; t.style.display = "";
+      t.classList.remove("is-spotlight", "is-thumb");
+      t.classList.toggle("speaking", t.id === activeSpeakerId && !screenShareIds.has(t.id));
+    });
+    g.classList.remove("spotlight", "compact");
+    if (tiles.length === 0) return;
+
+    const plan = computeLayout({
+      tileIds: tiles.map(t => t.id),
+      manualSpotlightId: manualSpotlight ? spotlightId : null,
+      screenShareIds: Array.from(screenShareIds),
+      activeSpeakerId,
+      speakerOrder,
+      compact: compactView,
+    });
+    const byId = (id: string) => tiles.find(t => t.id === id) || null;
+
+    if (plan.mode === "compact") {
+      g.classList.add("compact");
+      const shown = new Set(plan.shownIds);
+      tiles.forEach(t => { if (!shown.has(t.id)) t.style.display = "none"; });
+      g.style.gridTemplateColumns = "1fr";
+      g.style.gridTemplateRows = plan.shownIds.length > 1 ? "1fr 1fr" : "1fr";
+      return;
+    }
+
+    if (plan.mode === "spotlight" && plan.focusId) {
+      g.classList.add("spotlight");
+      const cols = Math.max(plan.thumbIds.length, 1);
+      g.style.gridTemplateColumns = "repeat(" + cols + ",minmax(0,1fr))";
+      g.style.gridTemplateRows = plan.thumbIds.length ? "minmax(0,1fr) 22%" : "1fr";
+      const spot = byId(plan.focusId);
+      if (spot) { spot.classList.add("is-spotlight"); spot.style.gridColumn = "1 / -1"; spot.style.gridRow = "1"; }
+      plan.thumbIds.forEach(id => { const t = byId(id); if (t) { t.classList.add("is-thumb"); t.style.gridRow = "2"; } });
+      return;
+    }
+
+    // Default equal grid (the original behaviour).
+    const n = tiles.length;
     let cols = 1; if (n > 1) cols = 2; if (n > 4) cols = 3;
     g.style.gridTemplateColumns = "repeat(" + cols + ",1fr)";
     g.style.gridTemplateRows = "repeat(" + Math.ceil(n / cols) + ",minmax(0,1fr))";
+  }
+
+  /** Click a tile to spotlight it big; click the spotlighted tile again to unpin. */
+  function onGridClick(e: Event) {
+    if (!inCall) return;
+    const tile = (e.target as HTMLElement)?.closest?.(".relay-tile") as HTMLElement | null;
+    if (!tile) return;
+    if (manualSpotlight && spotlightId === tile.id) {
+      manualSpotlight = false; spotlightId = null;
+    } else {
+      manualSpotlight = true; spotlightId = tile.id;
+    }
+    layoutGrid();
+  }
+
+  /** Reset all spotlight/active-speaker state (called when a call (re)starts). */
+  function resetSpeakerView() {
+    spotlightId = null; manualSpotlight = false;
+    activeSpeakerId = null; speakerOrder = [];
+    speakerCandidate = null; speakerCandidateCount = 0;
+    screenShareIds.clear(); compactView = false;
+  }
+
+  // ---------- mesh active-speaker (Web Audio level metering) ----------
+  function ensureMeshSpeakerMonitor() {
+    if (livekitEnabled) return;
+    if (!meshAudioCtx) {
+      try {
+        const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!Ctx) return;
+        meshAudioCtx = new Ctx();
+      } catch { return; }
+    }
+    try { void meshAudioCtx.resume(); } catch { /* */ }
+    if (!speakerSampleT) speakerSampleT = setInterval(sampleMeshSpeakers, 400);
+  }
+  function registerMeshAnalyser(pin: string, stream: MediaStream) {
+    if (livekitEnabled || meshAnalysers[pin]) return;
+    if (!stream.getAudioTracks().length) return;
+    ensureMeshSpeakerMonitor();
+    if (!meshAudioCtx) return;
+    try {
+      const src = meshAudioCtx.createMediaStreamSource(stream);
+      const node = meshAudioCtx.createAnalyser();
+      node.fftSize = 256;
+      src.connect(node); // analyser is a sink only — never connected to destination
+      const data = new Uint8Array(new ArrayBuffer(node.frequencyBinCount));
+      meshAnalysers[pin] = { node, src, data };
+    } catch { /* */ }
+  }
+  function unregisterMeshAnalyser(pin: string) {
+    const a = meshAnalysers[pin];
+    if (!a) return;
+    try { a.src.disconnect(); a.node.disconnect(); } catch { /* */ }
+    delete meshAnalysers[pin];
+  }
+  function sampleMeshSpeakers() {
+    const levels: Array<{ id: string; level: number }> = [];
+    for (const pin in meshAnalysers) {
+      if (!document.getElementById("tile-" + pin)) continue;
+      const a = meshAnalysers[pin];
+      a.node.getByteFrequencyData(a.data);
+      let sum = 0;
+      for (let i = 0; i < a.data.length; i++) sum += a.data[i];
+      levels.push({ id: "tile-" + pin, level: sum / a.data.length });
+    }
+    levels.sort((x, y) => y.level - x.level);
+    const SPEAK = 12; // empirical avg-bin threshold on 0..255
+    const loud = levels.filter(l => l.level > SPEAK).map(l => l.id);
+    speakerOrder = loud;
+    const next = loud[0] || null;
+    // Hysteresis: don't flip the spotlight on a single noisy sample. A new leader
+    // must lead for 2 consecutive samples (~800ms) before we switch — unless
+    // there's no current speaker yet. Silence (next === null) HOLDS the last
+    // speaker rather than dropping the spotlight to nobody.
+    if (next && next !== activeSpeakerId) {
+      if (next === speakerCandidate) speakerCandidateCount++;
+      else { speakerCandidate = next; speakerCandidateCount = 1; }
+      if (activeSpeakerId === null || speakerCandidateCount >= 2) {
+        activeSpeakerId = next;
+        speakerCandidate = null; speakerCandidateCount = 0;
+        layoutGrid();
+      }
+    } else if (next === activeSpeakerId) {
+      speakerCandidate = null; speakerCandidateCount = 0;
+    }
+  }
+  function teardownSpeakerMonitor() {
+    if (speakerSampleT) { clearInterval(speakerSampleT); speakerSampleT = null; }
+    for (const pin in meshAnalysers) unregisterMeshAnalyser(pin);
+    if (meshAudioCtx) { try { void meshAudioCtx.close(); } catch { /* */ } meshAudioCtx = null; }
   }
 
   // ---------- chat (data channels) ----------
@@ -1609,6 +1900,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (selfV) selfV.srcObject = disp;
     // Screen content must never be mirrored, and isn't "audio-only".
     if (selfTile) { selfTile.classList.add("screen"); selfTile.classList.remove("audio-only"); }
+    // Auto-focus our own share in the layout (until someone else's share or a
+    // manual pin overrides it).
+    screenShareIds.add("tile-self");
+    layoutGrid();
     screenBusy = false;
     toast("Sharing your screen");
   }
@@ -1629,6 +1924,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       selfTile.classList.remove("screen");
       selfTile.classList.toggle("audio-only", !camOn);
     }
+    screenShareIds.delete("tile-self");
+    layoutGrid();
     screenBusy = false;
     toast("Stopped screen sharing");
   }
@@ -1708,6 +2005,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (peers[id].el) peers[id].el!.remove();
     }
     for (const id in peers) delete peers[id];
+    teardownSpeakerMonitor();
+    resetSpeakerView();
+    // Clear leftover tiles so an idle/parked grid doesn't keep dead srcObjects.
+    const grid = $("videoGrid"); if (grid) grid.innerHTML = "";
     inCall = false; roomId = null;
     emitPhase("idle");
     if (timerInt) { clearInterval(timerInt); timerInt = null; }
@@ -1765,14 +2066,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
     else if (e.key === "Enter" && /^\d{6}$/.test(dialed)) startCall();
   };
   const onUnload = () => {
-    try {
-      const body = JSON.stringify({ cid, message: { type: "leave", reason: "page-unload" } });
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon("/api/relay/send", new Blob([body], { type: "application/json" }));
-      } else {
-        sendWS({ type: "leave", reason: "page-unload" });
-      }
-    } catch { /* */ }
+    // IMPORTANT: a page refresh / tab close must NOT leave an active call — the
+    // server keeps the membership so the user AUTO-REJOINS on reload. Only an
+    // explicit hang-up (hangBtn → hangUp) or logout (engine destroy) sends a
+    // `leave`. A truly-abandoned room is reaped server-side after a few minutes.
+    // (Kept as a no-op hook so the beforeunload listener wiring is unchanged.)
   };
 
   ($("joinBtn") as HTMLElement | null)?.addEventListener("click", onJoinClick);
@@ -1794,6 +2092,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => hangUp("user-hangup"));
   ($("flipCamBtn") as HTMLElement | null)?.addEventListener("click", () => { flipCamera(); });
   ($("screenBtn") as HTMLElement | null)?.addEventListener("click", () => { void toggleScreenShare(); });
+  // Reveal the screen-share button only where getDisplayMedia actually exists
+  // (Android Chrome, desktop, iPad — yes; iOS Safari phone — no). Pure client
+  // capability check; mirrors the record-button visibility pattern.
+  {
+    const sb = $("screenBtn") as HTMLElement | null;
+    const md = navigator.mediaDevices as (MediaDevices & { getDisplayMedia?: unknown }) | undefined;
+    if (sb) sb.style.display = md && typeof md.getDisplayMedia === "function" ? "" : "none";
+  }
   ($("recordBtn") as HTMLElement | null)?.addEventListener("click", toggleRecording);
   ($("filterBtn") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("filterClose") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
@@ -1807,6 +2113,22 @@ export function startRelay(root: HTMLElement): RelayHandle {
     navigator.clipboard.writeText(box.textContent || "").then(() => toast("Diagnostics copied"));
   });
   document.addEventListener("keydown", onDocKey);
+  // Click a video tile to spotlight it big (click it again to unpin).
+  ($("videoGrid") as HTMLElement | null)?.addEventListener("click", onGridClick);
+  // "Minimize" detection: when the call host shrinks to a small floating window
+  // we switch to a compact 2-up of the active speakers. A normal phone screen is
+  // tall, so we require BOTH dimensions small to avoid triggering on mobile.
+  if (typeof ResizeObserver !== "undefined") {
+    callResizeObs = new ResizeObserver(entries => {
+      // Only react during a call — when idle the engine host is parked at ~1px
+      // off-screen, which would otherwise read as "minimized" and churn layout.
+      if (!inCall) return;
+      const r = entries[0]?.contentRect; if (!r) return;
+      const next = r.width < 500 && r.height < 420;
+      if (next !== compactView) { compactView = next; layoutGrid(); }
+    });
+    try { callResizeObs.observe(root); } catch { /* */ }
+  }
   window.addEventListener("beforeunload", onUnload);
   // Local network loss (Wi-Fi drop, tunnel, airplane toggle) is the clearest
   // "you're disconnected" signal. On the MESH path we own recovery, so show the
@@ -1884,6 +2206,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
         localStream.getTracks().forEach(t => t.stop());
         localStream = null;
       }
+      teardownSpeakerMonitor();
+      if (callResizeObs) { try { callResizeObs.disconnect(); } catch { /* */ } callResizeObs = null; }
       document.removeEventListener("keydown", onDocKey);
       window.removeEventListener("beforeunload", onUnload);
       window.removeEventListener("offline", onOffline);

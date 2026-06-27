@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { Link, useLocation } from "wouter";
-import { Phone, MessageSquare, UserRound, LogOut, Sparkles, Sun, Moon, Bell, BellOff } from "lucide-react";
+import { Phone, MessageSquare, UserRound, Clock, LogOut, Sparkles, Sun, Moon, Bell, BellOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { getLoginUrl } from "@/const";
@@ -40,6 +40,7 @@ function DndToggle() {
  */
 const TABS = [
   { key: "dialer", path: "/app/dialer", label: "Calls", icon: Phone },
+  { key: "history", path: "/app/history", label: "History", icon: Clock },
   { key: "messages", path: "/app/messages", label: "Messages", icon: MessageSquare },
   { key: "contacts", path: "/app/contacts", label: "Contacts", icon: UserRound },
 ] as const;
@@ -325,7 +326,7 @@ function Inner({ children }: { children: React.ReactNode }) {
             paddingBottom: "max(0.4rem, env(safe-area-inset-bottom))",
           }}
         >
-          <div className="grid grid-cols-3">
+          <div className="grid grid-cols-4">
             {TABS.map((tab) => {
               const active = location.startsWith(tab.path);
               const Icon = tab.icon;
@@ -334,7 +335,9 @@ function Inner({ children }: { children: React.ReactNode }) {
                   ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
                   : tab.key === "messages"
                     ? "bg-primary/15 text-primary"
-                    : "bg-accent/20 text-accent";
+                    : tab.key === "history"
+                      ? "bg-primary/10 text-primary"
+                      : "bg-accent/20 text-accent";
               return (
                 <Link
                   key={tab.key}
