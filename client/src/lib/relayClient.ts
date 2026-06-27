@@ -136,6 +136,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let manualSpotlight = false;               // user clicked a tile to pin it
   let activeSpeakerId: string | null = null; // tile id of the loudest speaker (auto)
   let speakerOrder: string[] = [];           // tile ids, most-recently-loud first
+  let speakerCandidate: string | null = null; // pending new leader (hysteresis)
+  let speakerCandidateCount = 0;             // consecutive samples it has led
   const screenShareIds = new Set<string>();  // tile ids currently sharing a screen
   let compactView = false;                   // call container is "minimized" (small)
   let callResizeObs: ResizeObserver | null = null;
@@ -950,7 +952,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
       try { track.detach(); } catch { /* */ }
       const el = lkParticipantTiles[participant.identity];
       if (el && track.kind === TrackEnum.Kind.Video) {
-        if (isScreenPub(_pub)) { screenShareIds.delete(el.id); el.classList.remove("screen"); }
+        if (isScreenPub(_pub)) {
+          screenShareIds.delete(el.id);
+          el.classList.remove("screen");
+          // The screen + camera shared one <video>; detaching the screen left it
+          // blank. Re-attach the participant's still-live camera so their tile
+          // shows their face again (not a frozen black frame).
+          const cam = lkCameraTrack(participant);
+          const vid = el.querySelector("video") as HTMLVideoElement | null;
+          if (cam?.attach && vid) { try { cam.attach(vid); } catch { /* */ } }
+        }
         bindLkPlaceholder(el, lkHasVideo(participant));
         layoutGrid();
       }
@@ -1049,6 +1060,23 @@ export function startRelay(root: HTMLElement): RelayHandle {
         (p?.kind === "video" || p?.track?.kind === "video" || p?.source === "camera") && p?.isMuted !== true);
     } catch {
       return false;
+    }
+  }
+  // A participant's live CAMERA video track (not their screen share), if any.
+  // Used to RE-ATTACH the camera after a screen share ends — on the SFU a
+  // participant's camera + screen are two publications that share one tile/video
+  // element, so detaching the screen track leaves the element blank otherwise.
+  function lkCameraTrack(participant: { getTrackPublications?: () => unknown[]; videoTrackPublications?: Map<string, unknown> }): { attach?: (el: HTMLMediaElement) => void } | null {
+    try {
+      const pubs: any[] = typeof participant.getTrackPublications === "function"
+        ? participant.getTrackPublications()
+        : (participant.videoTrackPublications ? Array.from(participant.videoTrackPublications.values()) : []);
+      const cam = pubs.find((p: any) =>
+        (p?.source === "camera" || (p?.kind !== "audio" && String(p?.source) !== "screen_share"))
+        && p?.track && p?.isMuted !== true && p?.track?.kind === "video");
+      return cam?.track ?? null;
+    } catch {
+      return null;
     }
   }
   function bindLkPlaceholder(el: HTMLElement, hasVideo: boolean) {
@@ -1640,6 +1668,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function resetSpeakerView() {
     spotlightId = null; manualSpotlight = false;
     activeSpeakerId = null; speakerOrder = [];
+    speakerCandidate = null; speakerCandidateCount = 0;
     screenShareIds.clear(); compactView = false;
   }
 
@@ -1691,9 +1720,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const loud = levels.filter(l => l.level > SPEAK).map(l => l.id);
     speakerOrder = loud;
     const next = loud[0] || null;
-    if (next !== activeSpeakerId) {
-      activeSpeakerId = next;
-      layoutGrid();
+    // Hysteresis: don't flip the spotlight on a single noisy sample. A new leader
+    // must lead for 2 consecutive samples (~800ms) before we switch — unless
+    // there's no current speaker yet. Silence (next === null) HOLDS the last
+    // speaker rather than dropping the spotlight to nobody.
+    if (next && next !== activeSpeakerId) {
+      if (next === speakerCandidate) speakerCandidateCount++;
+      else { speakerCandidate = next; speakerCandidateCount = 1; }
+      if (activeSpeakerId === null || speakerCandidateCount >= 2) {
+        activeSpeakerId = next;
+        speakerCandidate = null; speakerCandidateCount = 0;
+        layoutGrid();
+      }
+    } else if (next === activeSpeakerId) {
+      speakerCandidate = null; speakerCandidateCount = 0;
     }
   }
   function teardownSpeakerMonitor() {
@@ -1967,6 +2007,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     for (const id in peers) delete peers[id];
     teardownSpeakerMonitor();
     resetSpeakerView();
+    // Clear leftover tiles so an idle/parked grid doesn't keep dead srcObjects.
+    const grid = $("videoGrid"); if (grid) grid.innerHTML = "";
     inCall = false; roomId = null;
     emitPhase("idle");
     if (timerInt) { clearInterval(timerInt); timerInt = null; }
@@ -2078,6 +2120,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // tall, so we require BOTH dimensions small to avoid triggering on mobile.
   if (typeof ResizeObserver !== "undefined") {
     callResizeObs = new ResizeObserver(entries => {
+      // Only react during a call — when idle the engine host is parked at ~1px
+      // off-screen, which would otherwise read as "minimized" and churn layout.
+      if (!inCall) return;
       const r = entries[0]?.contentRect; if (!r) return;
       const next = r.width < 500 && r.height < 420;
       if (next !== compactView) { compactView = next; layoutGrid(); }

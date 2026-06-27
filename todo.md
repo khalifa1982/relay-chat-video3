@@ -1206,3 +1206,22 @@ Folds the v2.34.0 adversarial-review findings (duration accuracy + insert robust
 - [x] Test updated to assert `answeredAt` is set and `startedAt ≤ answeredAt ≤ endedAt`. 298 green,
       tsc + build clean.
 - [x] Footer → `v2.35.1`.
+
+## v2.35.2 — Active-speaker review fixes (delivered 2026-06-27)
+
+Folds the v2.35.0 adversarial-review findings.
+
+- [x] **MEDIUM — SFU camera blank after a screen share ends.** A participant's camera + screen are two
+      LiveKit publications sharing one tile/`<video>`; detaching the screen on `TrackUnsubscribed` left
+      the element blank (frozen black, no avatar) because the still-live camera was never re-attached.
+      Added `lkCameraTrack(participant)` and re-attach the camera when a screen share ends.
+- [x] **LOW — idle ResizeObserver churn.** The observer now early-returns when `!inCall`, so the
+      parked ~1px off-screen host no longer reads as "minimized" and re-runs layout while idle. Also
+      `hangUp` now clears `#videoGrid` so no dead tiles/srcObjects linger between calls.
+- [x] **LOW — mesh spotlight thrash.** Added hysteresis to the Web Audio active-speaker pick: a new
+      leader must lead 2 consecutive samples (~800ms) before the spotlight switches, and silence holds
+      the last speaker rather than dropping the spotlight. (The SFU path is already debounced by LiveKit.)
+- [x] Verified-NOT-bugs from the review: no AudioContext/interval leak, correct self-exclusion in
+      active-speaker (me.pin == LiveKit identity), clean layout reset between modes, click-to-spotlight
+      survives a tile leaving. 298 tests green, tsc + build clean.
+- [x] Footer → `v2.35.2`.
