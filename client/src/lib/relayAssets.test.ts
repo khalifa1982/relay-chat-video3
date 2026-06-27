@@ -96,4 +96,22 @@ describe("relay call UI regression guards", () => {
   it("has a Picture-in-Picture button", () => {
     expect(RELAY_MARKUP).toMatch(/id="pipBtn"/);
   });
+
+  // ── v2.45 refinements ──────────────────────────────────────────────────────
+  it("speaking tiles show a colourful sound-wave equaliser", () => {
+    expect(RELAY_CSS).toMatch(/@keyframes relayWave/);
+    expect(RELAY_CSS).toMatch(/\.sound-wave/);
+  });
+  it("the mobile chat close button moves off the End-call corner (order:-1)", () => {
+    expect(RELAY_CSS).toMatch(/\.chat-head \.chat-close-btn\{order:-1\}/);
+  });
+  it("the call-waiting popup shows caller details + Answer/Reject", () => {
+    expect(RELAY_MARKUP).toMatch(/id="cwNum"/);
+    expect(RELAY_MARKUP).toMatch(/id="cwFlag"/);
+    expect(RELAY_MARKUP).toMatch(/>Answer</);
+    expect(RELAY_MARKUP).toMatch(/>Reject</);
+  });
+  it("has an on-hold tile badge", () => {
+    expect(RELAY_CSS).toMatch(/\.relay-tile\.on-hold::after/);
+  });
 });

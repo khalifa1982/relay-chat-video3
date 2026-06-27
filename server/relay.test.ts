@@ -834,6 +834,15 @@ describe("relay — host moderation", () => {
     expect(err?.code).toBe("forbidden");
   });
 
+  it("'hold' broadcasts peer-hold to the other room members (call waiting → hold)", () => {
+    const { a, b } = hostAndGuest();
+    b.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "hold", action: "on" });
+    const ph = b.outbox.find((m) => rtype(m) === "peer-hold") as { pin?: string; on?: boolean } | undefined;
+    expect(ph?.on).toBe(true);
+    expect(ph?.pin).toBe(a.pin);
+  });
+
   it("host 'pin' broadcasts host-pin to the room", () => {
     const { a, b } = hostAndGuest();
     b.outbox.length = 0;

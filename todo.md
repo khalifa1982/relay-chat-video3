@@ -1417,3 +1417,25 @@ Three call-experience requests.
 - [x] 2 server assertions (flag propagation) + 2 CSS guards. 344 tests green, tsc + build clean.
       A live-engine adversarial review (PiP lifecycle, filter throttle correctness) follows as a patch.
       Footer → `v2.44.0`.
+
+## v2.45.0 — Speaking wave, chat-close, screen-share visibility, group redial, call-waiting/hold (delivered 2026-06-27)
+
+Five refinements + the v2.44 review fixes.
+
+- [x] **Colourful speaking animation.** Cam-off speakers now show a 5-bar rainbow sound-wave equaliser
+      under the avatar + a heart-beat "breathing" avatar with a colour-cycling glow (motion-gated).
+- [x] **Chat close no longer behind End Call.** On mobile the chat's X moves to the LEFT (`order:-1`)
+      so it's not under the top-right End-call button.
+- [x] **Screen-share button visible.** Moved it into the primary cluster (mic · cam · SCREEN · flip) and
+      added safe-area bottom padding so a wrapped control row is never hidden behind the phone's home bar.
+- [x] **History group redial → conference.** A group/conference history row's call button now rings ALL
+      the other participants back into one conference (engine `dialGroup`), shown with a group icon.
+- [x] **Incoming-call popup + hold.** While in a call, an incoming call shows a popup with the caller's
+      name + number + flag and **Answer / Reject**. Answering sends a `hold` to the current room so its
+      members see a "put you on hold for another call" status + an on-hold tile badge, then switches.
+      (True two-call resume isn't possible under the one-room-per-number model; the held call continues
+      for its other participants.)
+- [x] Folded v2.44 review fixes: PiP requests synchronously within the gesture (no `await play()` first),
+      `pipSupported` now requires `canvas.captureStream` (hides the button on iOS), filter caches clear on
+      filter switch, late-resolving flags fan out via a new `peer-meta` broadcast, PiP stream tracks stopped.
+- [x] 5 new tests/guards (hold broadcast + CSS/markup). 349 tests green, tsc + build clean. Footer → `v2.45.0`.

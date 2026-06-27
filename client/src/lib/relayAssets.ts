@@ -86,10 +86,13 @@ export const RELAY_MARKUP = `
       </div>
     </div>
     <div id="callWaiting" class="call-waiting">
-      <div class="cw-info"><span class="cw-pulse"></span><b id="cwName">Someone</b> is calling&hellip;</div>
+      <div class="cw-info"><span class="cw-pulse"></span>
+        <span class="cw-flag" id="cwFlag"></span>
+        <span class="cw-meta"><b id="cwName">Someone</b><span class="cw-num" id="cwNum"></span><span class="cw-sub">Incoming call &middot; answer to hold your current call</span></span>
+      </div>
       <div class="cw-actions">
-        <button id="cwDecline" class="cw-btn cw-decline">Decline</button>
-        <button id="cwSwitch" class="cw-btn cw-switch">Switch</button>
+        <button id="cwDecline" class="cw-btn cw-decline">Reject</button>
+        <button id="cwSwitch" class="cw-btn cw-switch">Answer</button>
       </div>
     </div>
     <div class="call-main">
@@ -134,11 +137,11 @@ export const RELAY_MARKUP = `
         <button class="ctrl" id="camBtn" title="Camera">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/></svg>
         </button>
-        <button class="ctrl" id="flipCamBtn" title="Flip camera (front ↔ back)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
-        </button>
         <button class="ctrl" id="screenBtn" title="Share screen" style="display:none">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        </button>
+        <button class="ctrl" id="flipCamBtn" title="Flip camera (front ↔ back)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
         </button>
         <button class="ctrl" id="recordBtn" title="Record call" style="display:none">
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg>
@@ -374,6 +377,20 @@ export const RELAY_CSS = `
 .relay-root .relay-tile.is-spotlight{box-shadow:inset 0 0 0 2px var(--accent)}
 .relay-root .relay-tile.speaking{outline:2px solid var(--relay-online,#22c55e);outline-offset:-2px}
 .relay-root .relay-tile.screen video{object-fit:contain;background:#000}
+/* Colourful "I'm talking" sound-wave under the avatar/name (cam-off speakers):
+   five rainbow bars that bounce like an equaliser. Hidden unless .speaking. */
+.relay-root .relay-tile .sound-wave{display:none;align-items:flex-end;justify-content:center;gap:3px;height:18px;margin-top:3px}
+.relay-root .relay-tile.speaking .sound-wave{display:flex}
+.relay-root .relay-tile .sound-wave i{width:3px;height:5px;border-radius:3px;background:#22c55e;display:block}
+@media (prefers-reduced-motion: no-preference){
+  .relay-root .relay-tile.speaking .sound-wave i{animation:relayWave .9s ease-in-out infinite}
+  .relay-root .relay-tile.speaking .sound-wave i:nth-child(1){animation-delay:0s;background:#f43f5e}
+  .relay-root .relay-tile.speaking .sound-wave i:nth-child(2){animation-delay:.12s;background:#f59e0b}
+  .relay-root .relay-tile.speaking .sound-wave i:nth-child(3){animation-delay:.24s;background:#22c55e}
+  .relay-root .relay-tile.speaking .sound-wave i:nth-child(4){animation-delay:.36s;background:#3b82f6}
+  .relay-root .relay-tile.speaking .sound-wave i:nth-child(5){animation-delay:.48s;background:#a855f7}
+}
+@keyframes relayWave{0%,100%{height:5px}50%{height:18px}}
 /* Cam-off display: full name under the avatar (never a blank black box). */
 .relay-root .relay-tile .ph-name{font-size:14px;font-weight:600;color:var(--text);max-width:84%;text-align:center;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -386,10 +403,16 @@ export const RELAY_CSS = `
    The static outline always marks the speaker; the pulse is motion-gated. */
 @media (prefers-reduced-motion: no-preference){
   .relay-root .relay-tile.speaking{animation:relaySpeakPulse 1.4s ease-in-out infinite}
-  .relay-root .relay-tile.speaking .ph .av{animation:relayAvPulse 1.4s ease-in-out infinite}
+  /* Avatar breathes (heart-beat scale) with a colour-cycling glow ring. */
+  .relay-root .relay-tile.speaking .ph .av{animation:relayAvBreath 1.4s ease-in-out infinite}
 }
-@keyframes relaySpeakPulse{0%,100%{box-shadow:inset 0 0 0 0 rgba(34,197,94,0)}50%{box-shadow:inset 0 0 22px 0 rgba(34,197,94,.32)}}
-@keyframes relayAvPulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}70%{box-shadow:0 0 0 16px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+@keyframes relaySpeakPulse{0%,100%{box-shadow:inset 0 0 0 0 rgba(34,197,94,0)}50%{box-shadow:inset 0 0 22px 0 rgba(34,197,94,.30)}}
+@keyframes relayAvBreath{
+  0%{transform:scale(1);box-shadow:0 0 0 0 rgba(244,63,94,.55)}
+  35%{transform:scale(1.07);box-shadow:0 0 0 9px rgba(245,158,11,.0),0 0 20px 5px rgba(245,158,11,.5)}
+  70%{transform:scale(1.02);box-shadow:0 0 0 14px rgba(59,130,246,0),0 0 22px 7px rgba(59,130,246,.42)}
+  100%{transform:scale(1);box-shadow:0 0 0 0 rgba(168,85,247,.55)}
+}
 .relay-root #videoGrid.spotlight .relay-tile.is-thumb .ph .av{width:46px;height:46px;font-size:20px}
 .relay-root #videoGrid.spotlight .relay-tile.is-thumb .nm{font-size:11px;padding:3px 7px}
 .relay-root #videoGrid.compact{padding:8px;gap:8px}
@@ -405,7 +428,10 @@ export const RELAY_CSS = `
 .relay-root .chat{width:320px;border-left:1px solid var(--border);display:none;flex-direction:column;background:var(--bg2)}
 .relay-root .chat.open{display:flex}
 @media (max-width:680px){.relay-root .chat{position:fixed;inset:0;width:100%;z-index:40}
-  .relay-root .chat-head{padding-top:max(15px,env(safe-area-inset-top))}}
+  .relay-root .chat-head{padding-top:max(15px,env(safe-area-inset-top));justify-content:flex-start;gap:12px}
+  /* Close X moves to the LEFT on mobile so it never sits under the top-right
+     End-call button (which floats above the chat at a higher z-index). */
+  .relay-root .chat-head .chat-close-btn{order:-1}}
 .relay-root .chat-head{padding:15px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;
   font-family:"Bricolage Grotesque";font-weight:600;font-size:15px}
 .relay-root .chat-head .chat-title{display:flex;align-items:center;gap:8px}
@@ -496,11 +522,14 @@ export const RELAY_CSS = `
 .relay-root .relay-filter.active .lbl{color:var(--accent)}
 @media (max-width:680px){
   .relay-root .filter-dock{bottom:108px;width:96vw}
-  /* Allow the control bar to wrap to a 2nd row on narrow phones so an extra
-     button (screen-share / record) is never clipped or overflowed. */
-  .relay-root .ctrl-bar{gap:8px;padding:8px 10px;flex-wrap:wrap;justify-content:center;max-width:96vw}
+  /* Allow the control bar to wrap to a 2nd row on narrow phones so every button
+     (screen-share / record / pip / …) is reachable and never clipped. */
+  .relay-root .ctrl-bar{gap:8px;padding:8px 10px;flex-wrap:wrap;justify-content:center;max-width:96vw;max-height:40vh;overflow-y:auto}
   .relay-root .ctrl{width:44px;height:44px}
   .relay-root .ctrl.hangup{width:58px}
+  /* Clear the phone's home indicator so the wrapped 2nd row is never hidden
+     behind it (this is why the screen-share button "couldn't be seen"). */
+  .relay-root .controls{padding-bottom:max(22px,env(safe-area-inset-bottom))}
 }
 
 .relay-root .relay-toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(20px);z-index:80;
@@ -587,7 +616,17 @@ export const RELAY_CSS = `
 .relay-root .call-waiting{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:36;display:none;align-items:center;gap:14px;background:rgba(20,23,29,.92);border:1px solid var(--border2);border-radius:16px;padding:10px 12px 10px 16px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
 .relay-root .call-waiting.show{display:flex;animation:cwIn .3s cubic-bezier(0.23,1,0.32,1) both}
 @keyframes cwIn{from{opacity:0;transform:translateX(-50%) translateY(-16px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
-.relay-root .call-waiting .cw-info{font-size:14px;color:var(--text);white-space:nowrap;display:flex;align-items:center;gap:9px}
+.relay-root .call-waiting .cw-info{font-size:14px;color:var(--text);display:flex;align-items:center;gap:9px}
+.relay-root .call-waiting .cw-flag{font-size:20px;line-height:1}
+.relay-root .call-waiting .cw-flag:empty{display:none}
+.relay-root .call-waiting .cw-meta{display:flex;flex-direction:column;line-height:1.25;min-width:0}
+.relay-root .call-waiting .cw-num{font-family:"JetBrains Mono";font-size:11px;color:var(--text2,#9aa)}
+.relay-root .call-waiting .cw-num:empty{display:none}
+.relay-root .call-waiting .cw-sub{font-size:10.5px;color:var(--text2,#9aa)}
+/* "On hold" badge on a participant's tile when they take another call. */
+.relay-root .relay-tile.on-hold::after{content:"On hold";position:absolute;top:11px;left:12px;z-index:3;
+  background:rgba(245,158,11,.92);color:#0b0c10;font-size:10px;font-weight:800;padding:3px 8px;border-radius:7px;letter-spacing:.02em}
+.relay-root .relay-tile.on-hold video{filter:grayscale(.7) brightness(.6)}
 .relay-root .call-waiting .cw-pulse{width:9px;height:9px;border-radius:50%;background:var(--accent);animation:cwPulse 1.3s ease-out infinite;flex:0 0 auto}
 @keyframes cwPulse{0%{box-shadow:0 0 0 0 rgba(63,224,197,.5)}100%{box-shadow:0 0 0 9px rgba(63,224,197,0)}}
 .relay-root .call-waiting .cw-actions{display:flex;gap:8px}
