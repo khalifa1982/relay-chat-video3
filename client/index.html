@@ -13,6 +13,14 @@
     <meta name="robots" content="index, follow" />
     <link rel="canonical" href="https://relaychat-lduywq6l.manus.space/" />
     <meta name="theme-color" content="#0a0d10" />
+    <!-- PWA: installable, standalone, home-screen icon -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="RELAY" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="RELAY" />
     <meta property="og:url" content="https://relaychat-lduywq6l.manus.space/" />
@@ -45,6 +53,17 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <!-- Register the (no-op, install-enabling) service worker. Skipped on
+         localhost so it never interferes with the Vite dev server / HMR. -->
+    <script>
+      if ("serviceWorker" in navigator &&
+          location.hostname !== "localhost" &&
+          location.hostname !== "127.0.0.1") {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("/sw.js").catch(function () {});
+        });
+      }
+    </script>
     <script
       defer
       src="%VITE_ANALYTICS_ENDPOINT%/umami"

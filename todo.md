@@ -869,3 +869,23 @@ Three low-severity findings, all fixed:
 - [x] **Backdrop dismissal kept group-builder state** — the New-Conversation overlay backdrop
       now calls `resetAll` (was `setOpen(false)`), so dismissing mid-build clears title/members.
 - [x] Footer → `v2.22.1`. tsc clean, 217 tests green, build clean.
+
+## v2.23.0 — Installable PWA (delivered 2026-06-27)
+
+First, zero-cost step toward a "native app": RELAY is now installable to the home screen /
+desktop and launches standalone (no browser chrome).
+
+- [x] `client/public/manifest.webmanifest` — name/short_name, `display: standalone`,
+      `start_url: /app`, theme + background `#0A0D10`, brand icon.
+- [x] `client/public/icon.svg` — RELAY mark (maskable-safe signal-relay glyph). SVG icon works
+      for Chrome/Edge/Android + desktop installs; iOS falls back gracefully (no rasterizer was
+      available to emit PNGs).
+- [x] `client/public/sw.js` — intentionally minimal service worker: a no-op `fetch` handler
+      (never calls `respondWith`) so it satisfies the install criteria WITHOUT caching or
+      intercepting anything — it can't cause stale assets or break the tRPC API / SSE stream.
+- [x] `index.html` — manifest + apple-touch + `apple-mobile-web-app-*` meta; SW registered on
+      load, skipped on localhost so it never touches the Vite dev server / HMR.
+- [ ] Follow-up (needs operator accounts): real native apps — **Capacitor** (iOS/Android;
+      Apple Developer $99/yr + Google Play $25) or **Electron** (desktop, free, supports
+      auto-launch-on-startup). PNG icon set also wanted once a rasterizer is available.
+- [x] Footer → `v2.23.0`. tsc clean, 217 tests green, build clean.
