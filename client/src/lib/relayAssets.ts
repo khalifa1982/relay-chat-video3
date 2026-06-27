@@ -82,6 +82,13 @@ export const RELAY_MARKUP = `
         <div class="conn-step" data-i="2"><span class="conn-tick"></span><span class="conn-lbl">Join the Call</span></div>
       </div>
     </div>
+    <div id="callWaiting" class="call-waiting">
+      <div class="cw-info"><span class="cw-pulse"></span><b id="cwName">Someone</b> is calling&hellip;</div>
+      <div class="cw-actions">
+        <button id="cwDecline" class="cw-btn cw-decline">Decline</button>
+        <button id="cwSwitch" class="cw-btn cw-switch">Switch</button>
+      </div>
+    </div>
     <div class="call-main">
       <div class="grid" id="videoGrid"></div>
       <div class="chat" id="chatPanel">
@@ -432,6 +439,20 @@ export const RELAY_CSS = `
 .relay-root .conn-step.active .conn-tick::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);animation:relayPulse2 1s ease-in-out infinite}
 .relay-root .conn-step.done .conn-tick{border-color:var(--accent);background:var(--accent)}
 .relay-root .conn-step.done .conn-tick::after{content:"✓";color:#04201B;font-size:13px;font-weight:800;line-height:1}
+/* Call waiting — a second incoming call during an active call */
+.relay-root .call-waiting{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:36;display:none;align-items:center;gap:14px;background:rgba(20,23,29,.92);border:1px solid var(--border2);border-radius:16px;padding:10px 12px 10px 16px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
+.relay-root .call-waiting.show{display:flex;animation:cwIn .3s cubic-bezier(0.23,1,0.32,1) both}
+@keyframes cwIn{from{opacity:0;transform:translateX(-50%) translateY(-16px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+.relay-root .call-waiting .cw-info{font-size:14px;color:var(--text);white-space:nowrap;display:flex;align-items:center;gap:9px}
+.relay-root .call-waiting .cw-pulse{width:9px;height:9px;border-radius:50%;background:var(--accent);animation:cwPulse 1.3s ease-out infinite;flex:0 0 auto}
+@keyframes cwPulse{0%{box-shadow:0 0 0 0 rgba(63,224,197,.5)}100%{box-shadow:0 0 0 9px rgba(63,224,197,0)}}
+.relay-root .call-waiting .cw-actions{display:flex;gap:8px}
+.relay-root .call-waiting .cw-btn{border:none;border-radius:11px;padding:8px 14px;font-family:"Bricolage Grotesque";font-weight:700;font-size:13px;cursor:pointer;transition:.14s}
+.relay-root .call-waiting .cw-decline{background:rgba(255,92,114,.16);color:var(--danger);border:1px solid rgba(255,92,114,.3)}
+.relay-root .call-waiting .cw-decline:hover{background:rgba(255,92,114,.26)}
+.relay-root .call-waiting .cw-switch{background:var(--grad);color:#04201B}
+.relay-root .call-waiting .cw-switch:hover{transform:translateY(-1px)}
+@media (max-width:680px){.relay-root .call-waiting{flex-direction:column;gap:10px;top:10px;padding:12px 14px}.relay-root .call-waiting .cw-actions{width:100%}.relay-root .call-waiting .cw-btn{flex:1}}
 .relay-root .version-tag{position:fixed;bottom:8px;right:12px;z-index:5;font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.06em;color:var(--faint);pointer-events:none;opacity:.7}
 
 .relay-root .diag-btn{position:fixed;bottom:14px;left:14px;z-index:60;width:36px;height:36px;border-radius:10px;background:var(--surface);border:1px solid var(--border);color:var(--muted);display:grid;place-items:center;cursor:pointer;transition:.15s}

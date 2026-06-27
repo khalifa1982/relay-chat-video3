@@ -153,6 +153,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     lkWatchdog = setTimeout(tick, 4500);
   }
   let pendingRing: PendingRing | null = null;
+  // Call waiting: a second incoming call while already in a call.
+  let waitingRing: PendingRing | null = null;
+  let waitingTimeoutT: ReturnType<typeof setTimeout> | null = null;
   const recents: Recent[] = [];
   let callStart = 0;
   let timerInt: ReturnType<typeof setInterval> | null = null;
@@ -546,11 +549,51 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
 
   // ---------- incoming ----------
+  // ---------- call waiting ----------
+  function showCallWaiting(name: string) {
+    const cw = $("callWaiting"); if (!cw) return;
+    const n = $("cwName"); if (n) n.textContent = name || "Someone";
+    cw.classList.add("show");
+    if (waitingTimeoutT) clearTimeout(waitingTimeoutT);
+    // Auto-decline if ignored, so the second caller isn't left hanging.
+    waitingTimeoutT = setTimeout(() => declineWaiting(), 30000);
+  }
+  function hideCallWaiting() {
+    $("callWaiting")?.classList.remove("show");
+    if (waitingTimeoutT) { clearTimeout(waitingTimeoutT); waitingTimeoutT = null; }
+  }
+  function declineWaiting() {
+    const w = waitingRing; waitingRing = null;
+    hideCallWaiting();
+    if (w) sendWS({ type: "reject", to: w.from });
+  }
+  function switchCall() {
+    const w = waitingRing; waitingRing = null;
+    hideCallWaiting();
+    if (!w) return;
+    // Leave the current room but KEEP media + the call UI (no idle flash), then
+    // accept the waiting call, reusing the same camera/mic stream.
+    sendWS({ type: "leave", reason: "switch-call" });
+    for (const id in peers) { try { peers[id].pc.close(); } catch { /* */ } if (peers[id].el) peers[id].el!.remove(); delete peers[id]; }
+    teardownLivekit();
+    roomId = w.roomId;
+    enterCallUI("Connecting…");
+    sendWS({ type: "accept", roomId: w.roomId });
+  }
+
   function onRing(m: Msg) {
     // Do Not Disturb: silently auto-decline (no ring overlay, no chime/notify).
     // The caller sees a normal "declined" and the miss is still recorded.
     if (isDndOn()) { sendWS({ type: "reject", to: m.from }); return; }
-    if (inCall) { if (m.roomId === roomId) return; sendWS({ type: "reject", to: m.from }); return; }
+    if (inCall) {
+      if (m.roomId === roomId) return; // already in this room
+      // Call waiting: alert (Switch / Decline) instead of auto-rejecting. Only
+      // one waiter at a time; a second concurrent caller is rejected.
+      if (waitingRing) { sendWS({ type: "reject", to: m.from }); return; }
+      waitingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId! };
+      showCallWaiting(m.fromName || nameOf(m.from!));
+      return;
+    }
     if (pendingRing) { sendWS({ type: "reject", to: m.from }); return; }
     pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId! };
     const ringAv = $("ringAv"); if (ringAv) ringAv.textContent = initials(m.fromName!);
@@ -1252,6 +1295,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     pendingRing = null;
     $("ringOverlay")?.classList.remove("active");
     clearConnSeq();
+    if (waitingRing) declineWaiting(); // reject any pending second caller
     // Disconnect the SFU BEFORE stopping localStream/pipeline below, or LiveKit
     // errors republishing a dead track during teardown. No-op on the mesh path.
     // NOTE: keep `livekitEnabled` (it's a stable server-config flag captured at
@@ -1327,6 +1371,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("callBtn") as HTMLElement | null)?.addEventListener("click", startCall);
   ($("acceptBtn") as HTMLElement | null)?.addEventListener("click", acceptInvite);
   ($("declineBtn") as HTMLElement | null)?.addEventListener("click", declineInvite);
+  ($("cwSwitch") as HTMLElement | null)?.addEventListener("click", switchCall);
+  ($("cwDecline") as HTMLElement | null)?.addEventListener("click", declineWaiting);
   ($("micBtn") as HTMLElement | null)?.addEventListener("click", toggleMic);
   ($("camBtn") as HTMLElement | null)?.addEventListener("click", toggleCam);
   ($("chatBtn") as HTMLElement | null)?.addEventListener("click", toggleChat);
@@ -1384,6 +1430,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (reconnectT) { clearTimeout(reconnectT); reconnectT = null; }
       if (timerInt) { clearInterval(timerInt); timerInt = null; }
       if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
+      if (waitingTimeoutT) { clearTimeout(waitingTimeoutT); waitingTimeoutT = null; }
+      waitingRing = null;
       clearConnSeq();
       // Disconnect the SFU before stopping local tracks (no-op on the mesh path).
       teardownLivekit();

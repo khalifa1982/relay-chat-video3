@@ -671,3 +671,15 @@ cosmetic by-design item).
       `recentAutoReplyExists` dedup. Group threads are excluded (avoids N auto-replies).
 - [ ] Follow-up: a per-user toggle + custom auto-reply text (needs a settings column).
 - [x] Footer → `v2.15.0`. tsc clean, 189/190 vitest, build clean.
+
+## v2.16.0 — Call waiting (delivered 2026-06-27)
+
+- [x] **Call waiting** — a 2nd incoming call during an active call now shows a banner
+      (caller name + **Switch** / **Decline**) instead of being silently rejected. Switch
+      leaves the current room and accepts the new one, REUSING the same camera/mic (no idle
+      flash); Decline rejects the 2nd caller and stays. Auto-declines after 30s if ignored.
+      One waiter at a time (a 3rd concurrent caller is rejected). Cleared on hangup/destroy.
+- [ ] Deferred (needs dual-session/conference support): **Hold** the current call while
+      taking the new one, and **Merge** both into a conference. These require running two
+      call contexts at once (or moving participants between rooms) — a larger engine change.
+- [x] Footer → `v2.16.0`. tsc clean, build clean.
