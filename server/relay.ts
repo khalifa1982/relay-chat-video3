@@ -877,12 +877,15 @@ export function attachRelay(
     if (ownedPin) {
       const client = reg.clients.get(ownedPin);
       if (client) {
-        if (client.graceT) { clearTimeout(client.graceT); client.graceT = null; }
         // Multi-device: a reconnecting SECONDARY device must not hijack the
-        // in-call primary's socket. Only re-bind the primary when this cid IS
-        // the primary (or there's no primary yet). Flag-off → always re-bind
-        // (identical to before).
-        if (!multiDeviceEnabled() || client.cid === cid || client.cid === null) {
+        // in-call primary's socket — NOR cancel the PRIMARY's disconnect-grace
+        // timer (doing so would strand a dead primary and never promote the
+        // survivor). Only the primary's own reconnect touches its socket+grace.
+        // Flag-off → always (identical to before).
+        const isPrimaryReconnect =
+          !multiDeviceEnabled() || client.cid === cid || client.cid === null;
+        if (isPrimaryReconnect) {
+          if (client.graceT) { clearTimeout(client.graceT); client.graceT = null; }
           client.socket = socket;
         }
         conn.pin = ownedPin;
@@ -930,11 +933,18 @@ export function attachRelay(
             if (c && c.graceT) {
               // Multi-device: if the primary device vanished but ANOTHER device
               // for this number is still connected, promote it to primary
-              // instead of marking the number offline (keeps it reachable).
+              // instead of marking the number offline (keeps it reachable for
+              // NEW calls). KNOWN GAP: if the primary dropped mid-call, the
+              // promoted idle device has no RTCPeerConnection/LiveKit session for
+              // that room, so the in-progress call is effectively over on this
+              // side — the number stays reachable but that call doesn't migrate.
               if (multiDeviceEnabled()) {
                 const devs = reg.devices.get(pin);
                 const survivor = devs && Array.from(devs.entries()).find(([dcid]) => dcid !== cid);
                 if (survivor) {
+                  // Drop the dead primary's stale cid→pin mapping before handing
+                  // the number to the survivor.
+                  if (reg.cidToPin.get(cid) === pin) reg.cidToPin.delete(cid);
                   c.graceT = null;
                   c.socket = survivor[1];
                   c.cid = survivor[0];

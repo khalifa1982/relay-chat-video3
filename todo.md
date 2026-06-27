@@ -1024,3 +1024,23 @@ call engine is untouched until the operator opts in + tests on two devices.
 - [ ] Needs the operator to set `MULTI_DEVICE_RING=1` and validate on two physical devices
       (it's stateful signaling that can't be fully verified without them).
 - [x] Footer → `v2.31.0`. tsc clean, build clean.
+
+## v2.31.1 — Multi-device ring review fixes (delivered 2026-06-27)
+
+An adversarial review verified the **flag-OFF path is byte-for-byte identical to the original**
+(all 35 relay tests green with the flag unset — the live engine is provably unaffected). Found
+one real flag-ON bug + two low nits; all fixed:
+
+- [x] **(High, flag-ON) Secondary reconnect cancelled the primary's grace timer** — the SSE
+      re-attach cleared `client.graceT` unconditionally, so a secondary device flapping while
+      the primary was disconnecting would strand a dead primary (number becomes a black hole,
+      survivor never promoted). Now the grace-clear is gated on `isPrimaryReconnect` (same guard
+      as the socket re-bind); a secondary reconnect leaves the primary's timer alone.
+- [x] **(Low) Stale `cidToPin` on promotion** — promoting a survivor now drops the dead
+      primary's `cid→pin` mapping before handing over.
+- [x] **(Low, by-design) Mid-call promotion gap** — documented: if the primary drops mid-call,
+      the promoted idle device has no peer/SFU session, so the number stays reachable for NEW
+      calls but the in-progress call doesn't migrate.
+- [x] (Also fixed CI: removed two review-agent scratch test files that a `git add -A` had
+      accidentally committed.)
+- [x] Footer → `v2.31.1`. tsc clean, 255 tests green, build clean.
