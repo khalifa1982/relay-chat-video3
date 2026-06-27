@@ -1002,3 +1002,25 @@ Closes a long-standing v2.0 gap ("No typing indicators" in CLAUDE.md).
 - [x] 5 vitest cases (`typingStore.test.ts`, with fake timers): per-conversation isolation,
       TTL expiry, refresh-keeps-alive, clear one/all, change-only notifications. 253 tests green.
 - [x] Footer → `v2.30.0`. tsc clean, build clean.
+
+## v2.31.0 — Multi-device ring (experimental, flag-gated) (delivered 2026-06-27)
+
+One number rings every signed-in device; first to answer wins. **OFF by default**
+(`MULTI_DEVICE_RING=1` to enable) — the off-path is byte-identical to today, so the LIVE
+call engine is untouched until the operator opts in + tests on two devices.
+
+- [x] `server/relay.ts`: a `devices: Map<pin, Map<cid, RelaySocket>>` registry (all live device
+      sockets per number, always maintained but only READ when the flag is on) + a
+      `multiDeviceEnabled()` gate. The single-`clients`-per-pin model stays as the in-call
+      "primary".
+- [x] **register** (flag on) lets multiple devices share a number and won't let a newcomer
+      hijack the primary while it's mid-call; **invite** rings every idle device; **accept**
+      promotes the answering device to primary (so offer/answer/ice route to it) and sends
+      `ring-cancel` ("answered elsewhere") to the number's other devices; **disconnect** of the
+      primary promotes a surviving device instead of going offline.
+- [x] 2 vitest cases: flag-OFF (2nd device gets a fresh number — unchanged) and flag-ON (shared
+      number, both ring, first-accept cancels the rest, in-call signal routes to the accepter).
+      Reviewed by a focused adversarial agent pass. 255 tests green.
+- [ ] Needs the operator to set `MULTI_DEVICE_RING=1` and validate on two physical devices
+      (it's stateful signaling that can't be fully verified without them).
+- [x] Footer → `v2.31.0`. tsc clean, build clean.

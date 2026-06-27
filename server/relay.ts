@@ -73,11 +73,17 @@ export interface RoomRecording {
 }
 
 export interface RelayRegistry {
-  clients: Map<string, RelayClient>;          // pin   -> client
+  clients: Map<string, RelayClient>;          // pin   -> primary (in-call) client
   rooms: Map<string, Set<string>>;            // rid   -> set<pin>
   connections: Map<string, RelayConnection>;  // cid   -> connection
   cidToPin: Map<string, string>;              // cid   -> last assigned pin
   recordings: Map<string, RoomRecording>;     // rid   -> active recording
+  /**
+   * Multi-device ring (feature-flagged): every LIVE device socket per number,
+   * keyed pin -> cid -> socket. Always maintained (cheap bookkeeping); only
+   * READ when MULTI_DEVICE_RING is on, so the flag-off path is unaffected.
+   */
+  devices: Map<string, Map<string, RelaySocket>>;
 }
 
 export function createRegistry(): RelayRegistry {
@@ -87,7 +93,29 @@ export function createRegistry(): RelayRegistry {
     connections: new Map(),
     cidToPin: new Map(),
     recordings: new Map(),
+    devices: new Map(),
   };
+}
+
+/** Multi-device ring is OFF by default — enable per-deploy with MULTI_DEVICE_RING=1.
+ *  Read per-call (like the other feature gates) so it can be toggled via Secrets. */
+export function multiDeviceEnabled(): boolean {
+  const v = (process.env.MULTI_DEVICE_RING || "").toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
+/** Record/refresh a device socket for a number. Cheap bookkeeping, always run. */
+function deviceAdd(reg: RelayRegistry, pin: string, cid: string, socket: RelaySocket) {
+  if (!cid) return;
+  let m = reg.devices.get(pin);
+  if (!m) { m = new Map(); reg.devices.set(pin, m); }
+  m.set(cid, socket);
+}
+function deviceRemove(reg: RelayRegistry, pin: string, cid: string) {
+  const m = reg.devices.get(pin);
+  if (!m) return;
+  m.delete(cid);
+  if (m.size === 0) reg.devices.delete(pin);
 }
 
 // Grace window before a client is fully removed after its SSE channel drops.
@@ -395,10 +423,16 @@ export function handleMessage(
     const ownedPin = cid ? reg.cidToPin.get(cid) : undefined;
     const requested = typeof msg.pin === "string" && /^\d{6}$/.test(msg.pin) ? msg.pin : undefined;
 
+    const multiDevice = multiDeviceEnabled();
     if (ownedPin) {
       pin = ownedPin;
-    } else if (requested && (!reg.clients.has(requested) || reg.clients.get(requested)!.cid === cid)) {
+    } else if (
+      requested &&
+      (multiDevice || !reg.clients.has(requested) || reg.clients.get(requested)!.cid === cid)
+    ) {
       // Honour an explicit pin request if it's free or already owned by this cid.
+      // With multi-device ring ON, also honour it when ANOTHER device already
+      // holds the number — that's the whole point (same number, many devices).
       pin = requested;
     } else {
       pin = genPin(reg);
@@ -406,15 +440,26 @@ export function handleMessage(
 
     conn.setPin(pin);
     if (cid) reg.cidToPin.set(cid, pin);
+    // Track this device socket for the number (read only when the flag is on).
+    deviceAdd(reg, pin, cid, conn.socket);
 
     // Reuse/refresh an existing client record (preserves room membership across
     // a reconnect); otherwise create a fresh one.
     const prev = reg.clients.get(pin);
     if (prev) {
       if (prev.graceT) { clearTimeout(prev.graceT); prev.graceT = null; }
-      prev.socket = conn.socket;
+      // Multi-device: if the existing PRIMARY is in a live call, a different
+      // device registering the same number must NOT hijack the in-call routing
+      // (the primary socket is where offer/answer/ice for that call flow). Keep
+      // it; the newcomer is still tracked in `devices` for ringing. When the
+      // flag is off (or it's the same cid, or the primary is idle) behaviour is
+      // identical to before: the latest registration becomes primary.
+      const keepPrimary = multiDevice && !!prev.roomId && prev.cid !== cid && prev.cid !== null;
+      if (!keepPrimary) {
+        prev.socket = conn.socket;
+        prev.cid = cid || prev.cid;
+      }
       prev.name = name;
-      prev.cid = cid || prev.cid;
     } else {
       reg.clients.set(pin, { socket: conn.socket, name, roomId: null, cid: cid || null, graceT: null, ringing: new Set() });
     }
@@ -491,12 +536,22 @@ export function handleMessage(
       if (process.env.RELAY_DIAG === "1" || process.env.NODE_ENV === "development") {
         console.log(`[relay-diag]    invite -> ${to} OK: sending ring (room=${self.roomId})`);
       }
-      safeSend(target.socket, {
+      const ringMsg = {
         type: "ring",
         from: conn.pin,
         fromName: self.name,
         roomId: self.roomId,
-      });
+      };
+      // Multi-device ring: if the callee is idle (not already in a call), ring
+      // EVERY one of their devices — first to accept wins (the accept handler
+      // cancels the rest). When the flag is off, or they're mid-call, we ring
+      // only the single primary socket exactly as before.
+      const devs = reg.devices.get(to);
+      if (multiDeviceEnabled() && !target.roomId && devs && devs.size > 0) {
+        devs.forEach(sock => safeSend(sock, ringMsg));
+      } else {
+        safeSend(target.socket, ringMsg);
+      }
       // Remember we're ringing this callee so we can cancel it if we bail.
       self.ringing.add(to);
       // Fan out a notification hint so the callee's other open tabs
@@ -531,8 +586,8 @@ export function handleMessage(
       // sits in some current member's `ringing` set) may join it. Without this,
       // a client that learns a roomId could join an in-progress call — and on
       // the SFU path be minted a publish/subscribe token. Covers mesh + SFU.
-      const invitedToRoom = Array.from(room).some(p => reg.clients.get(p)?.ringing.has(conn.pin!));
-      if (!invitedToRoom) {
+      const callerPin = Array.from(room).find(p => reg.clients.get(p)?.ringing.has(conn.pin!));
+      if (!callerPin) {
         safeSend(conn.socket, {
           type: "error",
           code: "forbidden",
@@ -550,6 +605,14 @@ export function handleMessage(
         });
         break;
       }
+      // Multi-device: the accepting DEVICE becomes the primary client for this
+      // number, so every subsequent in-call signal (offer/answer/ice/peer-left)
+      // routes to the device that actually answered — not to another idle device
+      // that happened to hold the primary slot. No-op when the flag is off.
+      if (multiDeviceEnabled() && conn.cid && self.cid !== conn.cid) {
+        self.socket = conn.socket;
+        self.cid = conn.cid;
+      }
       // If the accepter was already in a different room (e.g. their own solo
       // dialing room from an outgoing call, or a previous call), leave it
       // first so they're never referenced by two rooms.
@@ -564,6 +627,17 @@ export function handleMessage(
         }));
       room.add(conn.pin);
       self.roomId = roomId;
+      // Multi-device: tell this number's OTHER devices the call was answered
+      // here, so their incoming-call UI clears ("answered elsewhere"). The
+      // `from` matches the ring they received (the caller's pin).
+      if (multiDeviceEnabled()) {
+        const devs = reg.devices.get(conn.pin);
+        if (devs) {
+          devs.forEach((sock, c) => {
+            if (c !== conn.cid) safeSend(sock, { type: "ring-cancel", from: callerPin });
+          });
+        }
+      }
       // On the LiveKit path, the newcomer joins the SFU room; LiveKit's own
       // ParticipantConnected/TrackSubscribed events drive peer discovery, so the
       // mesh peer-joined/offer dance is skipped client-side.
@@ -804,8 +878,15 @@ export function attachRelay(
       const client = reg.clients.get(ownedPin);
       if (client) {
         if (client.graceT) { clearTimeout(client.graceT); client.graceT = null; }
-        client.socket = socket;
+        // Multi-device: a reconnecting SECONDARY device must not hijack the
+        // in-call primary's socket. Only re-bind the primary when this cid IS
+        // the primary (or there's no primary yet). Flag-off → always re-bind
+        // (identical to before).
+        if (!multiDeviceEnabled() || client.cid === cid || client.cid === null) {
+          client.socket = socket;
+        }
         conn.pin = ownedPin;
+        deviceAdd(reg, ownedPin, cid, socket); // track this device for ringing
       }
     }
 
@@ -829,6 +910,10 @@ export function attachRelay(
       if (hb) { clearInterval(hb); hb = null; }
       const existing = reg.connections.get(cid);
       if (existing === conn) reg.connections.delete(cid);
+      // Drop this device socket from the ring set — a dead socket can't receive
+      // a ring, and a reconnecting cid re-adds itself. (Bookkeeping only; the
+      // grace-window client teardown below is unchanged.)
+      if (conn.pin) deviceRemove(reg, conn.pin, cid);
       // Do NOT remove the client immediately. SSE channels are routinely cut by
       // proxies; instead start a grace timer. If the same cid reconnects within
       // the window, the stream handler re-binds and clears this timer, so the
@@ -843,6 +928,19 @@ export function attachRelay(
             const c = reg.clients.get(pin);
             // Only reap if it wasn't re-bound to a newer live connection.
             if (c && c.graceT) {
+              // Multi-device: if the primary device vanished but ANOTHER device
+              // for this number is still connected, promote it to primary
+              // instead of marking the number offline (keeps it reachable).
+              if (multiDeviceEnabled()) {
+                const devs = reg.devices.get(pin);
+                const survivor = devs && Array.from(devs.entries()).find(([dcid]) => dcid !== cid);
+                if (survivor) {
+                  c.graceT = null;
+                  c.socket = survivor[1];
+                  c.cid = survivor[0];
+                  return; // keep the number alive on the surviving device
+                }
+              }
               // A vanished caller's pending callees missed the call.
               const callerName = c.name;
               const missed = cancelPendingRings(reg, pin);
@@ -853,6 +951,7 @@ export function attachRelay(
               }
               leaveRoom(reg, pin);
               reg.clients.delete(pin);
+              reg.devices.delete(pin);
               if (reg.cidToPin.get(cid) === pin) reg.cidToPin.delete(cid);
             }
           }, RELAY_DISCONNECT_GRACE_MS);

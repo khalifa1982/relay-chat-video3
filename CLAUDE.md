@@ -169,6 +169,9 @@ pnpm start                # NODE_ENV=production node dist/index.js
 
 These are read **per-call** in `iceServers()` so they can be added without restarting the process.
 
+**Multi-device ring** (optional, **experimental**; one number rings all signed-in devices):
+- `MULTI_DEVICE_RING` — `1`/`true` to enable. **Default OFF**, and the off-path is byte-identical to the historical single-device behavior (a 2nd device on the same number evicts the 1st). When ON, multiple devices share a number, an incoming call rings every idle device, the first to accept wins (the rest get an "answered elsewhere" `ring-cancel`), and in-call signaling routes to the accepting device. Needs real 2-device testing before relying on it. Read per-call from `multiDeviceEnabled()` in `server/relay.ts`.
+
 **LiveKit SFU** (optional; enables professional 10-way calls + recording-ready media). When all three are set, call media routes through the LiveKit SFU instead of the WebRTC mesh; when unset, RELAY falls back to the mesh (≤6 comfortably). Read per-call like `TURN_*`:
 - `LIVEKIT_URL` — `wss://` project URL of the LiveKit SFU
 - `LIVEKIT_API_KEY` — LiveKit project API key

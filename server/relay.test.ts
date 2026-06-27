@@ -795,4 +795,58 @@ describe("relay — room-join authorization", () => {
     expect((b.last() as { type: string }).type).toBe("joined");
     expect(reg.rooms.get(rid)?.has(b.pin!)).toBe(true);
   });
+
+  // ── multi-device ring (feature-flagged) ──────────────────────────────────
+  const typeOf = (m: unknown) => (m as { type?: string })?.type;
+  const has = (c: FakeConn, t: string) => c.outbox.some((m) => typeOf(m) === t);
+
+  it("without MULTI_DEVICE_RING, a 2nd device requesting a taken number gets a DIFFERENT number", () => {
+    delete process.env.MULTI_DEVICE_RING;
+    const d1 = new FakeConn("dev1");
+    handleMessage(reg, d1.asConn(), { type: "register", name: "Sam" });
+    const num = d1.pin!;
+    const d2 = new FakeConn("dev2");
+    handleMessage(reg, d2.asConn(), { type: "register", name: "Sam", pin: num });
+    expect(d2.pin).not.toBe(num); // evicts → fresh number (current behaviour)
+  });
+
+  it("with MULTI_DEVICE_RING: two devices share a number, both ring, first accept cancels the rest, and in-call signal routes to the accepter", () => {
+    process.env.MULTI_DEVICE_RING = "1";
+    try {
+      const caller = new FakeConn("caller");
+      handleMessage(reg, caller.asConn(), { type: "register", name: "Caller" });
+      const callerPin = caller.pin!;
+
+      const d1 = new FakeConn("dev1");
+      handleMessage(reg, d1.asConn(), { type: "register", name: "Callee" });
+      const number = d1.pin!;
+      const d2 = new FakeConn("dev2");
+      handleMessage(reg, d2.asConn(), { type: "register", name: "Callee", pin: number });
+      expect(d2.pin).toBe(number); // SAME number on the 2nd device
+
+      // Caller rings the number → BOTH devices ring.
+      d1.outbox.length = 0; d2.outbox.length = 0;
+      handleMessage(reg, caller.asConn(), { type: "invite", to: number });
+      expect(has(d1, "ring")).toBe(true);
+      expect(has(d2, "ring")).toBe(true);
+      const ring = d1.outbox.find((m) => typeOf(m) === "ring") as { from: string; roomId: string };
+      expect(ring.from).toBe(callerPin);
+
+      // Device 2 answers → device 1 gets "answered elsewhere", device 2 joins.
+      d1.outbox.length = 0; d2.outbox.length = 0;
+      handleMessage(reg, d2.asConn(), { type: "accept", roomId: ring.roomId });
+      expect(has(d2, "joined")).toBe(true);
+      const cancel = d1.outbox.find((m) => typeOf(m) === "ring-cancel") as { from: string } | undefined;
+      expect(cancel?.from).toBe(callerPin);
+
+      // The accepting DEVICE is now primary: an in-call signal to the number
+      // routes to device 2, not device 1.
+      d1.outbox.length = 0; d2.outbox.length = 0;
+      handleMessage(reg, caller.asConn(), { type: "signal", to: number, data: { sdp: { type: "offer" } } });
+      expect(has(d2, "signal")).toBe(true);
+      expect(has(d1, "signal")).toBe(false);
+    } finally {
+      delete process.env.MULTI_DEVICE_RING;
+    }
+  });
 });
