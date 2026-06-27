@@ -117,6 +117,7 @@ export const RELAY_MARKUP = `
         <input id="addInput" maxlength="6" inputmode="numeric" placeholder="000000">
         <button id="addGo">Add to call</button>
       </div>
+      <div class="audio-menu" id="audioMenu"></div>
       <div class="host-panel" id="hostPanel">
         <div class="host-head"><span>Host controls</span><button id="hostClose" type="button" aria-label="Close" title="Close">&#10005;</button></div>
         <div class="host-actions">
@@ -143,6 +144,9 @@ export const RELAY_MARKUP = `
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg>
         </button>
         <button class="ctrl ctrl-text" id="qualityBtn" title="Streaming quality">HD</button>
+        <button class="ctrl" id="audioBtn" title="Audio output" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg>
+        </button>
         <button class="ctrl" id="filterBtn" title="Filters">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="7" r="4"/><circle cx="12" cy="16" r="4"/></svg>
         </button>
@@ -533,6 +537,18 @@ export const RELAY_CSS = `
   font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap}
 .relay-root .hl-acts button:hover{border-color:var(--accent);color:var(--accent)}
 .relay-root .hl-empty{padding:18px;text-align:center;font-size:12px;color:var(--text2,#9aa)}
+/* ── audio-output picker (speaker / earpiece / headset / Bluetooth) ──────── */
+.relay-root .audio-menu{position:absolute;bottom:84px;right:18px;width:248px;max-width:86vw;max-height:50vh;display:none;
+  flex-direction:column;background:var(--surface);border:1px solid var(--border2);border-radius:16px;overflow-y:auto;
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:31;padding:6px}
+.relay-root .audio-menu.open{display:flex;animation:relayFade .2s ease both}
+.relay-root .ao-item{background:none;border:none;text-align:left;padding:10px 11px;border-radius:9px;color:var(--text);
+  font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:8px}
+.relay-root .ao-item:hover{background:var(--bg2)}
+.relay-root .ao-item.ao-sel{color:var(--accent)}
+.relay-root .ao-item.ao-sel::before{content:"\\2713";font-weight:800}
+.relay-root .ao-item:not(.ao-sel)::before{content:"";width:9px}
+.relay-root .ao-empty{padding:16px;text-align:center;font-size:12px;color:var(--text2,#9aa)}
 .relay-root #addClose{background:none;border:none;color:var(--text2,#9aa);font-size:14px;line-height:1;cursor:pointer;padding:3px 7px;border-radius:8px;font-weight:700}
 .relay-root #addClose:hover{background:var(--bg2);color:var(--text)}
 .relay-root .addpad input{background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:12px;text-align:center;
