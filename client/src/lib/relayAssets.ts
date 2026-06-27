@@ -75,6 +75,13 @@ export const RELAY_MARKUP = `
       <div class="ct"><span class="live-dot"></span> <span id="callRoomLbl">In call</span></div>
       <div class="timer" id="timer">00:00</div>
     </div>
+    <div id="connSeq" class="conn-seq">
+      <div class="conn-seq-card">
+        <div class="conn-step" data-i="0"><span class="conn-tick"></span><span class="conn-lbl">Transmission Connected</span></div>
+        <div class="conn-step" data-i="1"><span class="conn-tick"></span><span class="conn-lbl">Encryption</span></div>
+        <div class="conn-step" data-i="2"><span class="conn-tick"></span><span class="conn-lbl">Join the Call</span></div>
+      </div>
+    </div>
     <div class="call-main">
       <div class="grid" id="videoGrid"></div>
       <div class="chat" id="chatPanel">
@@ -411,6 +418,20 @@ export const RELAY_CSS = `
 @keyframes relaySpin{to{transform:rotate(360deg)}}
 .relay-root .boot .t{color:var(--muted);font-size:14px}
 
+/* Connection sequence — Transmission Connected -> Encryption -> Join the Call */
+.relay-root .conn-seq{position:absolute;inset:0;z-index:25;display:none;align-items:center;justify-content:center;background:rgba(8,9,12,.82);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.relay-root .conn-seq.show{display:flex;animation:relayFade .25s ease both}
+.relay-root .conn-seq.hide{animation:connSeqOut .4s ease both}
+@keyframes connSeqOut{to{opacity:0;visibility:hidden}}
+.relay-root .conn-seq-card{display:flex;flex-direction:column;gap:18px}
+.relay-root .conn-step{display:flex;align-items:center;gap:14px;font-family:"Bricolage Grotesque";font-weight:600;font-size:17px;color:var(--faint);opacity:.4;transform:translateX(-6px);transition:.32s cubic-bezier(0.23,1,0.32,1)}
+.relay-root .conn-step.active{color:var(--text);opacity:1;transform:none}
+.relay-root .conn-step.done{color:var(--accent);opacity:1;transform:none}
+.relay-root .conn-tick{width:24px;height:24px;border-radius:50%;border:2px solid var(--border2);display:grid;place-items:center;flex:0 0 auto;transition:.3s}
+.relay-root .conn-step.active .conn-tick{border-color:var(--accent);box-shadow:0 0 0 4px rgba(63,224,197,.14)}
+.relay-root .conn-step.active .conn-tick::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);animation:relayPulse2 1s ease-in-out infinite}
+.relay-root .conn-step.done .conn-tick{border-color:var(--accent);background:var(--accent)}
+.relay-root .conn-step.done .conn-tick::after{content:"✓";color:#04201B;font-size:13px;font-weight:800;line-height:1}
 .relay-root .version-tag{position:fixed;bottom:8px;right:12px;z-index:5;font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.06em;color:var(--faint);pointer-events:none;opacity:.7}
 
 .relay-root .diag-btn{position:fixed;bottom:14px;left:14px;z-index:60;width:36px;height:36px;border-radius:10px;background:var(--surface);border:1px solid var(--border);color:var(--muted);display:grid;place-items:center;cursor:pointer;transition:.15s}

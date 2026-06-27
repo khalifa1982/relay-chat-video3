@@ -647,3 +647,17 @@ cosmetic by-design item).
       `useDnd()` hook; a clean iOS-style toggle in Profile. +4 vitest.
 - [x] Footer → `v2.13.0`. tsc clean, 189/190 vitest, build clean.
 - [ ] Easy follow-up: a one-tap DND toggle in the app header (currently in Profile only).
+
+## v2.14.0 — UX batch: connection sequence, chat links, header DND, invite links (delivered 2026-06-27)
+
+- [x] **Connection sequence** — a ~2.3s "Transmission Connected → Encryption → Join the
+      Call" handshake overlay shown when a call screen opens (relayAssets markup/CSS +
+      `runConnSequence()` in the engine, cleared on hangup/destroy).
+- [x] **Link sharing in chat** — URLs become safe clickable links in both the SMS chat
+      (`lib/linkify.tsx`, React-escaped) and the in-call chat (`linkifyEscaped` over the
+      already-escaped HTML). http(s)/www only — never javascript:/data:.
+- [x] **Header DND quick-toggle** — one-tap bell/bell-off in the app header (was Profile-only).
+- [x] **Call invite links** — a "Share invite link" action in the Dialer produces
+      `…/app/dialer?to=<number>` (native share sheet on mobile, clipboard else); opening it
+      auto-dials the sharer (the Dialer already honors `?to=`).
+- [x] Footer → `v2.14.0`. tsc clean, build clean.
