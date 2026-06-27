@@ -475,6 +475,12 @@ export const v2ContactsRouter = router({
         avatarUrl: r.avatarUrl,
         favourite: r.favourite,
         notes: r.notes,
+        email: r.email ?? null,
+        phone: r.phone ?? null,
+        company: r.company ?? null,
+        jobTitle: r.jobTitle ?? null,
+        website: r.website ?? null,
+        birthday: r.birthday ?? null,
         identityId: ident ?? null,
         isOnline: pres?.isOnline ?? false,
         lastSeenAt: pres?.lastSeenAt ?? null,
@@ -490,6 +496,12 @@ export const v2ContactsRouter = router({
         avatarUrl: AvatarUrlSchema.nullable().optional(),
         favourite: z.boolean().optional(),
         notes: z.string().max(2000).nullable().optional(),
+        email: z.string().trim().max(320).nullable().optional(),
+        phone: z.string().trim().max(40).nullable().optional(),
+        company: z.string().trim().max(128).nullable().optional(),
+        jobTitle: z.string().trim().max(128).nullable().optional(),
+        website: z.string().trim().max(256).nullable().optional(),
+        birthday: z.string().trim().max(32).nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {

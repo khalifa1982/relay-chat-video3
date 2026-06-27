@@ -116,6 +116,16 @@ export const contacts = mysqlTable(
     /** True when the owner has favourited / pinned the contact. */
     favourite: boolean("favourite").notNull().default(false),
     notes: text("notes"),
+    /* Rich contact fields (v2.24). These additive, nullable columns are applied
+       to existing databases at boot by `ensureSchemaExtensions()` in
+       server/v2db.ts (idempotent ADD COLUMN) rather than a drizzle migration,
+       so they land safely on the live DB without a manual db:push. */
+    email: varchar("email", { length: 320 }),
+    phone: varchar("phone", { length: 40 }),
+    company: varchar("company", { length: 128 }),
+    jobTitle: varchar("jobTitle", { length: 128 }),
+    website: varchar("website", { length: 256 }),
+    birthday: varchar("birthday", { length: 32 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

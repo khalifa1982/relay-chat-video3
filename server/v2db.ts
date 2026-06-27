@@ -456,6 +456,39 @@ export async function getPresenceForIds(ids: number[]): Promise<PresenceLite[]> 
 
 /* ── contacts ─────────────────────────────────────────────────── */
 
+/**
+ * Idempotently apply additive, nullable columns to the live database at boot.
+ * This is how we evolve the schema on an already-provisioned MySQL without a
+ * manual `pnpm db:push`: each `ADD COLUMN` runs once; on subsequent boots (or a
+ * concurrent second Cloud Run instance) the duplicate-column error is swallowed.
+ * STRICTLY additive — never drops or alters existing columns/data. Best-effort:
+ * a DB hiccup is logged and never blocks startup.
+ */
+export async function ensureSchemaExtensions(): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const adds: Array<{ table: string; column: string; ddl: string }> = [
+    { table: "contacts", column: "email", ddl: "ADD COLUMN `email` varchar(320)" },
+    { table: "contacts", column: "phone", ddl: "ADD COLUMN `phone` varchar(40)" },
+    { table: "contacts", column: "company", ddl: "ADD COLUMN `company` varchar(128)" },
+    { table: "contacts", column: "jobTitle", ddl: "ADD COLUMN `jobTitle` varchar(128)" },
+    { table: "contacts", column: "website", ddl: "ADD COLUMN `website` varchar(256)" },
+    { table: "contacts", column: "birthday", ddl: "ADD COLUMN `birthday` varchar(32)" },
+  ];
+  for (const a of adds) {
+    try {
+      await db.execute(sql.raw(`ALTER TABLE \`${a.table}\` ${a.ddl}`));
+      console.log(`[schema] added ${a.table}.${a.column}`);
+    } catch (e) {
+      const msg = (e as Error)?.message || "";
+      // Already present (normal on every boot after the first) → ignore quietly.
+      if (!/duplicate column|exists|check that column/i.test(msg)) {
+        console.warn(`[schema] ensure ${a.table}.${a.column} skipped:`, msg);
+      }
+    }
+  }
+}
+
 export async function listContacts(ownerId: number) {
   const db = await getDb();
   if (!db) return [];
@@ -467,6 +500,27 @@ export async function listContacts(ownerId: number) {
   return rows;
 }
 
+/** Columns that may be updated on a contact (everything except ownerId/number,
+ *  which form the unique key). */
+const CONTACT_UPDATABLE = [
+  "displayName", "avatarUrl", "favourite", "notes",
+  "email", "phone", "company", "jobTitle", "website", "birthday",
+] as const;
+
+/**
+ * Decide which contact columns an upsert should overwrite on conflict: ONLY the
+ * keys the caller explicitly passed (so a partial update never wipes saved
+ * fields). Falls back to a harmless `number` self-assignment when nothing
+ * updatable was provided (onDuplicateKeyUpdate requires a non-empty SET). Pure —
+ * unit-tested without a DB.
+ */
+export function contactUpdateKeys(input: Record<string, unknown>): string[] {
+  const keys = CONTACT_UPDATABLE.filter((k) =>
+    Object.prototype.hasOwnProperty.call(input, k)
+  );
+  return keys.length > 0 ? keys : ["number"];
+}
+
 export async function upsertContact(input: {
   ownerId: number;
   number: string;
@@ -474,6 +528,12 @@ export async function upsertContact(input: {
   avatarUrl?: string | null;
   favourite?: boolean;
   notes?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  company?: string | null;
+  jobTitle?: string | null;
+  website?: string | null;
+  birthday?: string | null;
 }) {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
@@ -484,18 +544,23 @@ export async function upsertContact(input: {
     avatarUrl: input.avatarUrl ?? null,
     favourite: input.favourite ?? false,
     notes: input.notes ?? null,
+    email: input.email ?? null,
+    phone: input.phone ?? null,
+    company: input.company ?? null,
+    jobTitle: input.jobTitle ?? null,
+    website: input.website ?? null,
+    birthday: input.birthday ?? null,
   };
+  // Only overwrite columns the caller explicitly provided, so a partial update
+  // (e.g. a favourite toggle that omits email/notes/…) never wipes saved fields.
+  const set: Record<string, unknown> = {};
+  for (const k of contactUpdateKeys(input)) {
+    set[k] = (values as Record<string, unknown>)[k];
+  }
   await db
     .insert(contacts)
     .values(values)
-    .onDuplicateKeyUpdate({
-      set: {
-        displayName: values.displayName,
-        avatarUrl: values.avatarUrl,
-        favourite: values.favourite,
-        notes: values.notes,
-      },
-    });
+    .onDuplicateKeyUpdate({ set });
   const rows = await db
     .select()
     .from(contacts)

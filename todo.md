@@ -889,3 +889,22 @@ desktop and launches standalone (no browser chrome).
       Apple Developer $99/yr + Google Play $25) or **Electron** (desktop, free, supports
       auto-launch-on-startup). PNG icon set also wanted once a rasterizer is available.
 - [x] Footer → `v2.23.0`. tsc clean, 217 tests green, build clean.
+
+## v2.24.0 — Rich contact fields + safe boot-migrator (delivered 2026-06-27)
+
+- [x] **Additive boot-migrator** (`ensureSchemaExtensions` in `v2db.ts`, called once at server
+      boot): idempotent `ALTER TABLE … ADD COLUMN` that swallows duplicate-column errors —
+      STRICTLY additive, race-safe across Cloud Run instances, never blocks startup. This is
+      how we evolve the live MySQL schema without a manual `pnpm db:push`.
+- [x] **Rich contact columns** on `contacts`: `email`, `phone`, `company`, `jobTitle`,
+      `website`, `birthday` (all nullable). Schema + router input + list mapping updated.
+- [x] **Partial-update preservation fix** — `upsertContact` now overwrites ONLY the columns the
+      caller passed (`contactUpdateKeys`), fixing a latent bug where a Favourite toggle (which
+      omits avatarUrl/notes) would wipe them.
+- [x] Client: the Add/Edit Contact dialog gained Email / Phone / Company / Title / Website /
+      Birthday fields; the contact row shows "title · company" when present.
+- [x] 7 vitest cases: `contactUpdateKeys` preservation + a static-analysis guard that the
+      boot-migrator is ADD-COLUMN-only (no DROP/TRUNCATE/DELETE). 224 tests green.
+- [x] Contact **cloud sync** already works — contacts are stored server-side per identity, so
+      they load on any device a registered user signs into.
+- [x] Footer → `v2.24.0`. tsc clean, build clean.

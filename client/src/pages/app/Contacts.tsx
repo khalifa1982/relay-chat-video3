@@ -56,6 +56,12 @@ export default function ContactsPage() {
     number: string;
     displayName: string;
     notes: string;
+    email?: string;
+    phone?: string;
+    company?: string;
+    jobTitle?: string;
+    website?: string;
+    birthday?: string;
   } | null>(null);
 
   const filtered = useMemo(() => {
@@ -137,6 +143,11 @@ export default function ContactsPage() {
                       <>last seen {relativeTime(c.lastSeenAt)}</>
                     )}
                   </div>
+                  {(c.company || c.jobTitle) && (
+                    <div className="text-xs text-muted-foreground truncate mt-0.5">
+                      {[c.jobTitle, c.company].filter(Boolean).join(" · ")}
+                    </div>
+                  )}
                 </div>
                 <div className="hidden sm:flex items-center gap-1">
                   <Button
@@ -167,6 +178,12 @@ export default function ContactsPage() {
                         number: c.number,
                         displayName: c.displayName ?? "",
                         notes: c.notes ?? "",
+                        email: c.email ?? "",
+                        phone: c.phone ?? "",
+                        company: c.company ?? "",
+                        jobTitle: c.jobTitle ?? "",
+                        website: c.website ?? "",
+                        birthday: c.birthday ?? "",
                       })
                     }
                   >
@@ -243,12 +260,24 @@ function AddContactDialog({
     number: string;
     displayName: string;
     notes: string;
+    email?: string;
+    phone?: string;
+    company?: string;
+    jobTitle?: string;
+    website?: string;
+    birthday?: string;
   };
   onClose: () => void;
   onSave: (values: {
     number: string;
     displayName: string | null;
     notes: string | null;
+    email: string | null;
+    phone: string | null;
+    company: string | null;
+    jobTitle: string | null;
+    website: string | null;
+    birthday: string | null;
     favourite?: boolean;
   }) => void;
   saving: boolean;
@@ -257,6 +286,12 @@ function AddContactDialog({
   const [number, setNumber] = useState(editing.number);
   const [displayName, setDisplayName] = useState(editing.displayName);
   const [notes, setNotes] = useState(editing.notes);
+  const [email, setEmail] = useState(editing.email ?? "");
+  const [phone, setPhone] = useState(editing.phone ?? "");
+  const [company, setCompany] = useState(editing.company ?? "");
+  const [jobTitle, setJobTitle] = useState(editing.jobTitle ?? "");
+  const [website, setWebsite] = useState(editing.website ?? "");
+  const [birthday, setBirthday] = useState(editing.birthday ?? "");
   const [touchedName, setTouchedName] = useState(
     Boolean(editing.displayName)
   );
@@ -427,6 +462,76 @@ function AddContactDialog({
               maxLength={64}
             />
           </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
+                Email
+              </label>
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@example.com"
+                maxLength={320}
+              />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
+                Phone
+              </label>
+              <Input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="+1 555 0100"
+                maxLength={40}
+              />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
+                Company
+              </label>
+              <Input
+                value={company}
+                onChange={(e) => setCompany(e.target.value)}
+                placeholder="Company"
+                maxLength={128}
+              />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
+                Title / role
+              </label>
+              <Input
+                value={jobTitle}
+                onChange={(e) => setJobTitle(e.target.value)}
+                placeholder="Title"
+                maxLength={128}
+              />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
+                Website
+              </label>
+              <Input
+                value={website}
+                onChange={(e) => setWebsite(e.target.value)}
+                placeholder="example.com"
+                maxLength={256}
+              />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
+                Birthday
+              </label>
+              <Input
+                value={birthday}
+                onChange={(e) => setBirthday(e.target.value)}
+                placeholder="e.g. Mar 14"
+                maxLength={32}
+              />
+            </div>
+          </div>
           <div>
             <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
               Notes
@@ -450,6 +555,12 @@ function AddContactDialog({
                 number,
                 displayName: displayName.trim() || null,
                 notes: notes.trim() || null,
+                email: email.trim() || null,
+                phone: phone.trim() || null,
+                company: company.trim() || null,
+                jobTitle: jobTitle.trim() || null,
+                website: website.trim() || null,
+                birthday: birthday.trim() || null,
               })
             }
             disabled={number.length !== 6 || saving}

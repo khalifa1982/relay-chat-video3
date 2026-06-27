@@ -12,7 +12,7 @@ import { serveStatic, setupVite } from "./vite";
 import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
 import { registerV2Events, publishToIdentity } from "../v2events";
-import { getIdentityByNumber, reapStalePresence, recordMissedCall } from "../v2db";
+import { getIdentityByNumber, reapStalePresence, recordMissedCall, ensureSchemaExtensions } from "../v2db";
 import { getUserById } from "../db";
 import { sendEmail } from "../email";
 
@@ -134,6 +134,12 @@ async function startServer() {
   // v2.0 push channel — SSE that routes message/presence/read events
   // to the right identity. Production gateway is SSE-friendly.
   registerV2Events(app);
+  // Apply additive schema columns to the live DB (idempotent, never
+  // destructive). Best-effort: a failure is logged and never blocks startup.
+  ensureSchemaExtensions().catch((err) => {
+    console.warn("[v2 schema ensure]", err);
+  });
+
   // Stale-presence sweep — once a minute, flip users whose heartbeat
   // expired to offline. Cheap UPDATE; safe to run from a single instance.
   setInterval(() => {
