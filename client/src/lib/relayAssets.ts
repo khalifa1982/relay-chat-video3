@@ -118,7 +118,9 @@ export const RELAY_MARKUP = `
       <div class="addpad" id="addpad">
         <div class="addpad-head"><span>Add person</span><button id="addClose" type="button" aria-label="Cancel" title="Cancel">&#10005;</button></div>
         <input id="addInput" maxlength="6" inputmode="numeric" placeholder="000000">
+        <div class="addpad-keys" id="addKeys"></div>
         <button id="addGo">Add to call</button>
+        <div class="addpad-hint">Invites automatically once you enter all 6 digits</div>
       </div>
       <div class="audio-menu" id="audioMenu"></div>
       <div class="tile-menu" id="tileMenu">
@@ -631,7 +633,16 @@ export const RELAY_CSS = `
 .relay-root .addpad input{background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:12px;text-align:center;
   font-family:"JetBrains Mono";font-weight:700;letter-spacing:.18em;color:var(--text);font-size:16px;outline:none}
 .relay-root .addpad input:focus{border-color:var(--accent)}
-.relay-root .addpad button{background:var(--grad);border:none;border-radius:11px;padding:12px;color:#04201B;font-weight:700;cursor:pointer;font-family:inherit}
+.relay-root .addpad #addGo{background:var(--grad);border:none;border-radius:11px;padding:12px;color:#04201B;font-weight:700;cursor:pointer;font-family:inherit}
+/* On-screen keypad inside the add-person window (v2.49) — tap digits to dial the
+   number; the invite fires automatically on the 6th digit. */
+.relay-root .addpad-keys{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.relay-root .addpad-key{background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:9px 0;
+  font-family:"JetBrains Mono";font-weight:700;font-size:17px;color:var(--text);cursor:pointer;transition:background .12s,transform .1s;text-align:center}
+.relay-root .addpad-key:hover{background:var(--surface)}
+.relay-root .addpad-key:active{transform:scale(.93)}
+.relay-root .addpad-key.spacer{visibility:hidden;border:none;background:none}
+.relay-root .addpad-hint{font-size:10.5px;color:var(--text2,#9aa);text-align:center;line-height:1.35}
 
 .relay-root .boot{position:fixed;inset:0;z-index:90;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px}
 .relay-root .boot.hidden{display:none}

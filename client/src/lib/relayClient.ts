@@ -2845,26 +2845,76 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function openAddPad() {
     const a = $("addpad"); if (!a) return;
     a.classList.toggle("open");
-    if (a.classList.contains("open")) ($("addInput") as HTMLInputElement | null)?.focus();
+    // Deliberately do NOT auto-focus the text field: on mobile that pops the OS
+    // keyboard up over the on-screen keypad. The keypad is the primary input.
   }
   function closeAddPad() {
     $("addpad")?.classList.remove("open");
     const inp = $("addInput") as HTMLInputElement | null; if (inp) inp.value = "";
   }
-  async function addToCall() {
+  // On-screen keypad for the add-person window. Build once; each tap appends a
+  // digit and the invite fires automatically on the 6th (no "Add" click needed).
+  const ADD_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "back"];
+  function buildAddPad() {
+    const pad = $("addKeys"); if (!pad) return;
+    pad.innerHTML = "";
+    ADD_KEYS.forEach(k => {
+      if (!k) { const s = document.createElement("span"); s.className = "addpad-key spacer"; pad.appendChild(s); return; }
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "addpad-key" + (k === "back" ? " back" : "");
+      b.textContent = k === "back" ? "⌫" : k;
+      if (k === "back") b.setAttribute("aria-label", "Backspace");
+      b.onclick = k === "back" ? addBackspace : () => addPushDigit(k);
+      pad.appendChild(b);
+    });
+  }
+  function addInputValue(): string {
     const inp = $("addInput") as HTMLInputElement | null;
-    const pin = (inp?.value || "").trim();
+    return (inp?.value || "").replace(/\D/g, "").slice(0, 6);
+  }
+  function setAddInput(v: string) {
+    const inp = $("addInput") as HTMLInputElement | null; if (inp) inp.value = v;
+  }
+  function addPushDigit(d: string) {
+    const cur = addInputValue();
+    if (cur.length >= 6) return;
+    const next = cur + d;
+    setAddInput(next);
+    if (next.length === 6) void addToCall(); // auto-invite on the final digit
+  }
+  function addBackspace() {
+    setAddInput(addInputValue().slice(0, -1));
+  }
+  // Sanitize typed input (desktop) to digits + auto-invite when complete.
+  function onAddInputType() {
+    const v = addInputValue();
+    setAddInput(v);
+    if (v.length === 6) void addToCall();
+  }
+  let addInviting = false; // re-entry guard (auto-fire + Enter + button can overlap)
+  async function addToCall() {
+    if (addInviting) return;
+    const a = $("addpad");
+    if (!a || !a.classList.contains("open")) return; // ignore stray fires once closed
+    const pin = addInputValue();
     if (!/^\d{6}$/.test(pin)) { toast("Enter a 6-digit number.", true); return; }
-    const here = pin === me.pin || (livekitEnabled ? !!lkParticipantTiles[pin] : !!peers[pin]);
+    if (pin === me.pin) { toast("That's your own number.", true); return; }
+    const here = livekitEnabled ? !!lkParticipantTiles[pin] : !!peers[pin];
     if (here) { toast("Already in the call.", true); return; }
     // 10-way only on the SFU; the mesh fallback stays capped at 6.
     const cap = livekitEnabled ? 10 : 6;
     const n = livekitEnabled ? Object.keys(lkParticipantTiles).length : Object.keys(peers).length;
     if (n >= cap - 1) { toast(`Call is full (${cap} people max).`, true); return; }
-    try { await ensureMedia(); } catch { return; }
+    addInviting = true;
+    try { await ensureMedia(); } catch { addInviting = false; return; }
+    // Online → the server rings them in; offline/nonexistent → the server replies
+    // with an "offline" error and the generic handler toasts
+    // "That number doesn't exist or is offline." Either way the pad closes itself.
     sendWS({ type: "invite", to: pin });
     toast("Inviting " + pin + "…");
     closeAddPad();
+    addInviting = false;
   }
   function hangUp(reason: string = "manual") {
     sendWS({ type: "leave", reason });
@@ -2988,6 +3038,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("addBtn") as HTMLElement | null)?.addEventListener("click", openAddPad);
   ($("addGo") as HTMLElement | null)?.addEventListener("click", addToCall);
   ($("addClose") as HTMLElement | null)?.addEventListener("click", closeAddPad);
+  buildAddPad();
+  ($("addInput") as HTMLInputElement | null)?.addEventListener("input", onAddInputType);
   // Host controls
   ($("hostBtn") as HTMLElement | null)?.addEventListener("click", openHostPanel);
   ($("hostClose") as HTMLElement | null)?.addEventListener("click", closeHostPanel);

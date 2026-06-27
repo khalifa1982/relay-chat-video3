@@ -736,7 +736,7 @@ export function handleMessage(
         safeSend(conn.socket, {
           type: "error",
           code: "offline",
-          message: "That number isn't online.",
+          message: "That number doesn't exist or is offline.",
         });
         // The callee was offline — record the miss and (for registered users)
         // email them. The hook resolves identity from the DB by number, so it
@@ -746,15 +746,19 @@ export function handleMessage(
         } catch { /* never let a notification hook break call setup */ }
         break;
       }
-      // A target is only "busy" if it's already in an established call with
-      // someone else (2+ people). A target sitting alone in their own dialing
-      // room is still reachable — that's call-waiting, not busy.
+      // CALL WAITING: we no longer reject the caller as "busy" when the target is
+      // already in another call. Instead the invite rings through and the callee's
+      // client shows a call-waiting popup (Answer = put the current call on hold
+      // and switch; Reject = decline). The callee decides — not the server. A
+      // second concurrent waiter is rejected client-side. The only ring we still
+      // suppress is one into a room the caller is ALREADY in (a redundant invite),
+      // which the callee's client also ignores by roomId.
       if (
         target.roomId &&
-        target.roomId !== self.roomId &&
-        roomSize(reg, target.roomId) > 1
+        self.roomId &&
+        target.roomId === self.roomId
       ) {
-        safeSend(conn.socket, { type: "busy", from: to });
+        // Target is already in THIS room — nothing to do.
         break;
       }
       if (!self.roomId) {
