@@ -70,6 +70,9 @@ export interface RelayHandle {
   /** Programmatic dial. Returns true if the engine accepted the request.
    *  `opts.voice` starts the call with the camera off (a voice call). */
   dial: (number: string, opts?: { voice?: boolean }) => boolean;
+  /** Start a GROUP call — ring up to 10 numbers into one room. Returns true if
+   *  at least one valid number was accepted. */
+  dialGroup: (numbers: string[], opts?: { voice?: boolean }) => boolean;
   /** Set/replace the engine-state callback. Fired whenever phase changes. */
   setOnStateChange: (cb: ((phase: RelayPhase) => void) | null) => void;
   /** Best-effort: cancel an in-flight call/leave the room. */
@@ -131,6 +134,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let inCall = false;
   let roomId: string | null = null;
   const peers: Record<string, PeerEntry> = {};
+  // Group call: extra invitees queued until the server confirms the room, so a
+  // fresh group dial can't race into two separate rooms.
+  let pendingGroupInvites: string[] = [];
   // ---------- active-speaker / spotlight view (v2.35) ----------
   let spotlightId: string | null = null;     // tile id manually pinned big, or null
   let manualSpotlight = false;               // user clicked a tile to pin it
@@ -294,7 +300,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
         toast(m.message || "Recording failed.", true);
         recordingOn = false; updateRecordingUI();
         break;
-      case "room":         roomId = m.roomId || null; break;
+      case "room":
+        roomId = m.roomId || null;
+        // Group call: now that the room exists, ring the remaining invitees.
+        if (pendingGroupInvites.length) {
+          const q = pendingGroupInvites; pendingGroupInvites = [];
+          q.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t }); });
+        }
+        break;
       case "ring":         onRing(m); break;
       case "ring-cancel":  onRingCancel(m); break;
       case "joined":       onJoined(m); break;
@@ -742,6 +755,36 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!inCall) { inCall = true; enterCallUI(opts?.voice ? "Voice call…" : "Calling…"); emitPhase("dialing"); }
     sendWS({ type: "invite", to: target });
     toast("Calling " + target + "…");
+    return true;
+  }
+
+  // Start a GROUP call: ring up to 10 numbers into ONE room. The relay creates
+  // the room on the first invite and rings every subsequent invite into the same
+  // room, so the first to accept joins and the rest keep ringing (call-waiting
+  // style). We gate the extra invites on the server's `room` confirmation so a
+  // fresh group dial can't race into two rooms.
+  async function programmaticGroupDial(targets: string[], opts?: { voice?: boolean }): Promise<boolean> {
+    if (!me.pin) return false;
+    const clean = Array.from(
+      new Set(
+        targets
+          .map(t => String(t).replace(/\D/g, "").slice(0, 6))
+          .filter(t => /^\d{6}$/.test(t) && t !== me.pin)
+      )
+    ).slice(0, 10);
+    if (clean.length === 0) return false;
+    try { await ensureMedia(); } catch { return false; }
+    if (opts?.voice && localStream && localStream.getVideoTracks().length > 0) setCam(false);
+    const alreadyInRoom = inCall && !!roomId;
+    if (!inCall) { inCall = true; enterCallUI(opts?.voice ? "Voice call…" : "Calling…"); emitPhase("dialing"); }
+    if (alreadyInRoom) {
+      clean.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t }); });
+    } else {
+      const [first, ...rest] = clean;
+      pendingGroupInvites = rest;
+      sendWS({ type: "invite", to: first });
+    }
+    toast("Starting group call (" + clean.length + ")…");
     return true;
   }
 
@@ -2005,6 +2048,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (peers[id].el) peers[id].el!.remove();
     }
     for (const id in peers) delete peers[id];
+    pendingGroupInvites = [];
     teardownSpeakerMonitor();
     resetSpeakerView();
     // Clear leftover tiles so an idle/parked grid doesn't keep dead srcObjects.
@@ -2163,6 +2207,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (target === me.pin) return false;
       // fire-and-forget the actual async call
       void programmaticDial(target, opts);
+      return true;
+    },
+    dialGroup(targets: string[], opts?: { voice?: boolean }): boolean {
+      if (!me.pin) return false;
+      const valid = targets.filter(t => /^\d{6}$/.test(String(t)) && t !== me.pin);
+      if (valid.length === 0) return false;
+      void programmaticGroupDial(targets, opts);
       return true;
     },
     setOnStateChange(cb) { onPhaseChange = cb; },

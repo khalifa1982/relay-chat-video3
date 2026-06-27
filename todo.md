@@ -1225,3 +1225,34 @@ Folds the v2.35.0 adversarial-review findings.
       active-speaker (me.pin == LiveKit identity), clean layout reset between modes, click-to-spotlight
       survives a tile leaving. 298 tests green, tsc + build clean.
 - [x] Footer → `v2.35.2`.
+
+## v2.36.0 — Contacts: scrollable add-dialog + 24h guest privacy (delivered 2026-06-27)
+
+Batch 1 of the UX overhaul (large multi-request batch).
+
+- [x] Add-contact dialog is a flex column with a scrollable body + sticky footer, so the
+      Save/"Add to contacts" button is always reachable on small/mobile viewports (it used to be
+      pushed off-screen with no scroll).
+- [x] Guest presence privacy: a GUEST inactive >24h has presence COMPLETELY suppressed (no dot, no
+      "offline", no "last seen") in the contacts list, directory lookup, and add preview. Pure
+      `isGuestPresenceHidden` helper + 5 tests.
+
+## v2.37.0 — Call history Message, Dialer buttons, Group Call, clean share link, device chip (delivered 2026-06-27)
+
+Batches 2–4 of the UX overhaul.
+
+- [x] **Call history Message action**: a Message icon next to the call icon on every History row
+      (conference + missed) opens/creates a 1:1 thread and jumps into it.
+- [x] **Dialer call buttons redesigned**: Voice (blue circle, "Voice Call" label) and Video (green
+      circle, "Video Call" label) are now two equally-prominent labelled circular buttons.
+- [x] **Create Group Call**: a new picker screen (`GroupCallScreen.tsx`) — select up to 10
+      participants from contacts or add numbers manually, choose Voice/Video, Start. New engine
+      `dialGroup(numbers)` rings everyone into ONE room (extra invitees gated on the server `room`
+      confirmation so a fresh group dial can't race into two rooms). Dismissible (X / backdrop /
+      Cancel).
+- [x] **Clean share link**: short `/i/<pin>` route redirects straight into the dialer (auto-dials),
+      replacing the long `?to=` URL. Shared message is structured (header line + link line) and the
+      OS share sheet gets title + url separately (no illegible blob, no unexpected page).
+- [x] **Device chip on the main screen**: a dynamically-detected "Mobile"/"Desktop" chip sits next to
+      the country flag (sidebar + mobile header). New `detectDeviceType()` util + 4 tests.
+- [x] 307 tests green, tsc + build clean. Footer → `v2.37.0`.

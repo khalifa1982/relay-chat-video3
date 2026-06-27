@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { Link, useLocation } from "wouter";
-import { Phone, MessageSquare, UserRound, Clock, LogOut, Sparkles, Sun, Moon, Bell, BellOff } from "lucide-react";
+import { Phone, MessageSquare, UserRound, Clock, LogOut, Sparkles, Sun, Moon, Bell, BellOff, Smartphone, Monitor } from "lucide-react";
+import { detectDeviceType } from "@/lib/deviceType";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { getLoginUrl } from "@/const";
@@ -44,6 +45,25 @@ const TABS = [
   { key: "messages", path: "/app/messages", label: "Messages", icon: MessageSquare },
   { key: "contacts", path: "/app/contacts", label: "Contacts", icon: UserRound },
 ] as const;
+
+/** Small "Mobile"/"Desktop" chip shown next to the country flag, detected
+ *  dynamically from this device. */
+function DeviceChip({ className = "" }: { className?: string }) {
+  const type = detectDeviceType();
+  const Icon = type === "Mobile" ? Smartphone : Monitor;
+  return (
+    <span
+      className={
+        "inline-flex items-center gap-1 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground " +
+        className
+      }
+      title={`Calling from ${type}`}
+    >
+      <Icon className="size-3" />
+      {type}
+    </span>
+  );
+}
 
 function initialsFrom(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
@@ -145,7 +165,7 @@ function Inner({ children }: { children: React.ReactNode }) {
             )}
             <div className="min-w-0">
               <div className="font-semibold truncate group-hover:text-primary transition-colors">{me.displayName}</div>
-              <div className="font-mono text-sm text-muted-foreground flex items-center gap-1.5">
+              <div className="font-mono text-sm text-muted-foreground flex items-center gap-1.5 flex-wrap">
                 {formatNumber(me.number)}
                 {geo.data?.flagEmoji && (
                   <span
@@ -155,6 +175,7 @@ function Inner({ children }: { children: React.ReactNode }) {
                     {geo.data.flagEmoji}
                   </span>
                 )}
+                <DeviceChip />
               </div>
             </div>
           </Link>
@@ -274,7 +295,7 @@ function Inner({ children }: { children: React.ReactNode }) {
             )}
             <div className="min-w-0">
               <div className="text-sm font-semibold truncate">{me.displayName}</div>
-              <div className="font-mono text-xs text-muted-foreground flex items-center gap-1.5">
+              <div className="font-mono text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
                 {formatNumber(me.number)}
                 {geo.data?.flagEmoji && (
                   <span
@@ -284,6 +305,7 @@ function Inner({ children }: { children: React.ReactNode }) {
                     {geo.data.flagEmoji}
                   </span>
                 )}
+                <DeviceChip />
               </div>
             </div>
           </Link>

@@ -7,6 +7,7 @@ import {
   PhoneMissed,
   PhoneOutgoing,
   UserPlus,
+  Users,
   Share2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -14,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { useIdentity } from "@/app/useIdentity";
 import { useRelayEngine } from "@/app/RelayEngine";
+import { GroupCallScreen } from "./GroupCallScreen";
 
 const KEYS: { d: string; sub: string }[] = [
   { d: "1", sub: " " },
@@ -86,6 +88,7 @@ export default function DialerPage() {
   const engine = useRelayEngine();
   const { phase, ready: engineReady, pin: enginePin } = engine;
   const [dialed, setDialed] = useState("");
+  const [showGroup, setShowGroup] = useState(false);
 
   // Honor ?to=<6 digits> — carried over when the user taps "call" from
   // Messages/Contacts (and from the legacy /app/call redirect). Auto-dial once,
@@ -155,17 +158,24 @@ export default function DialerPage() {
     }
   }
 
-  // Share a "call me" invite link. Opening it auto-dials this number (the Dialer
-  // already honors ?to=). Uses the native share sheet on mobile, clipboard else.
+  // Share a "call me" invite link. Uses a SHORT, clean path (/i/<pin>) that
+  // redirects straight into the dialer (auto-dials this number) — no long query
+  // string, and we control where it lands so it never opens an unexpected page.
+  // The shared message is structured: a header line, then the link on its own
+  // line (not one illegible blob).
   function shareInvite() {
     const num = enginePin ?? me?.number ?? null;
     if (!num) return;
-    const url = `${window.location.origin}/app/dialer?to=${num}`;
+    const url = `${window.location.origin}/i/${num}`;
+    const title = "Call me on RELAY";
     if (typeof navigator !== "undefined" && navigator.share) {
-      navigator.share({ title: "Call me on RELAY", text: `Call me on RELAY — dial ${num}`, url }).catch(() => {});
+      // Pass title + url separately so the OS share sheet lays them out cleanly
+      // (header on top, link below) instead of concatenating into one block.
+      navigator.share({ title, text: title, url }).catch(() => {});
     } else {
+      // Clipboard fallback: header line + link line.
       navigator.clipboard
-        ?.writeText(url)
+        ?.writeText(`${title}\n${url}`)
         .then(() => toast.success("Invite link copied"))
         .catch(() => toast.error("Couldn't copy the link"));
     }
@@ -393,70 +403,86 @@ export default function DialerPage() {
               ))}
             </div>
 
-            {/* Call row */}
+            {/* Call actions — two equally-prominent circular buttons, each
+                labelled underneath. Voice = blue, Video = green. */}
             <div
-              className="grid grid-cols-[1fr_auto_1fr] items-center mx-auto w-full"
+              className="relative mx-auto w-full"
               style={{ maxWidth: "min(100%, 360px)" }}
             >
-              {/* Voice call — starts with the camera off (audio-only). */}
-              <div className="flex justify-start">
-                <button
-                  type="button"
-                  disabled={!callable}
-                  onClick={() => startCallNow({ voice: true })}
-                  className="
-                    rounded-full border border-border bg-card/70 text-foreground
-                    grid place-items-center
-                    disabled:opacity-40 disabled:cursor-not-allowed
-                    active:scale-[0.94] transition-transform duration-150
-                  "
-                  style={{
-                    width: "clamp(46px, 11vw, 54px)",
-                    height: "clamp(46px, 11vw, 54px)",
-                    transitionTimingFunction: "var(--ease-out)",
-                  }}
-                  aria-label="Voice call"
-                  title="Voice call (camera off)"
-                >
-                  <Phone className="size-[18px]" />
-                </button>
-              </div>
-              <button
-                type="button"
-                disabled={!callable}
-                onClick={() => startCallNow()}
-                className="
-                  rounded-full
-                  bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))]
-                  text-primary-foreground
-                  shadow-[0_10px_28px_-8px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)]
-                  grid place-items-center
-                  disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none
-                  active:scale-[0.94]
-                  transition-transform duration-150
-                "
-                style={{
-                  width: "clamp(54px, 13vw, 64px)",
-                  height: "clamp(54px, 13vw, 64px)",
-                  transitionTimingFunction: "var(--ease-out)",
-                }}
-                aria-label="Video call"
-                title="Video call"
-              >
-                <Video className="size-5" />
-              </button>
-              <div className="flex justify-end">
-                {dialed.length > 0 ? (
+              <div className="flex items-start justify-center gap-10">
+                {/* Voice call (blue) — starts with the camera off (audio-only). */}
+                <div className="flex flex-col items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={backspace}
-                    className="size-10 grid place-items-center rounded-full text-muted-foreground hover:text-foreground active:scale-95 transition"
-                    aria-label="Backspace"
+                    disabled={!callable}
+                    onClick={() => startCallNow({ voice: true })}
+                    className="
+                      rounded-full text-white grid place-items-center
+                      disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none
+                      active:scale-[0.94] transition-transform duration-150
+                    "
+                    style={{
+                      width: "clamp(54px, 13vw, 64px)",
+                      height: "clamp(54px, 13vw, 64px)",
+                      background: "#2563eb",
+                      boxShadow: "0 10px 28px -8px color-mix(in oklab, #2563eb 70%, transparent)",
+                      transitionTimingFunction: "var(--ease-out)",
+                    }}
+                    aria-label="Voice call"
+                    title="Voice call (camera off)"
                   >
-                    <Delete className="size-[18px]" />
+                    <Phone className="size-5" />
                   </button>
-                ) : null}
+                  <span className="text-xs font-medium text-muted-foreground">Voice Call</span>
+                </div>
+                {/* Video call (green). */}
+                <div className="flex flex-col items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={!callable}
+                    onClick={() => startCallNow()}
+                    className="
+                      rounded-full text-primary-foreground grid place-items-center
+                      disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none
+                      active:scale-[0.94] transition-transform duration-150
+                    "
+                    style={{
+                      width: "clamp(54px, 13vw, 64px)",
+                      height: "clamp(54px, 13vw, 64px)",
+                      background: "var(--relay-online, #06d6a0)",
+                      boxShadow: "0 10px 28px -8px color-mix(in oklab, var(--relay-online,#06d6a0) 70%, transparent)",
+                      transitionTimingFunction: "var(--ease-out)",
+                    }}
+                    aria-label="Video call"
+                    title="Video call"
+                  >
+                    <Video className="size-5" />
+                  </button>
+                  <span className="text-xs font-medium text-muted-foreground">Video Call</span>
+                </div>
               </div>
+              {/* Backspace — kept out of the way of the centred pair. */}
+              {dialed.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={backspace}
+                  className="absolute right-0 top-1.5 size-10 grid place-items-center rounded-full text-muted-foreground hover:text-foreground active:scale-95 transition"
+                  aria-label="Backspace"
+                >
+                  <Delete className="size-[18px]" />
+                </button>
+              ) : null}
+            </div>
+
+            {/* Create Group Call — opens a picker for up to 10 participants. */}
+            <div className="mt-4 flex justify-center">
+              <button
+                type="button"
+                onClick={() => setShowGroup(true)}
+                className="inline-flex items-center gap-2 rounded-full border border-border bg-card/70 px-4 py-2 text-sm font-medium text-foreground hover:bg-card active:scale-[0.97] transition"
+              >
+                <Users className="size-4" /> Create Group Call
+              </button>
             </div>
 
             {/* Quick-add */}
@@ -474,6 +500,8 @@ export default function DialerPage() {
           the End button now live app-wide in RelayEngineProvider, so an incoming
           call surfaces on ANY tab — not just here. The Dialer only renders the
           keypad and drives the engine via useRelayEngine(). */}
+
+      {showGroup && <GroupCallScreen onClose={() => setShowGroup(false)} />}
 
       <style>{`
         @keyframes ghost-flash {

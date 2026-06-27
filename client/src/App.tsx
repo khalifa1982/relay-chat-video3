@@ -54,6 +54,14 @@ function Router() {
           />
         )}
       </Route>
+      {/* Short, clean invite link: /i/<pin> → auto-dials that number. Keeps the
+          shareable URL terse and lands users straight in the dialer. */}
+      <Route path={"/i/:pin"}>
+        {(params) => {
+          const pin = (params.pin ?? "").replace(/\D/g, "").slice(0, 6);
+          return <Redirect to={pin ? `/app/dialer?to=${pin}` : "/app/dialer"} replace />;
+        }}
+      </Route>
       <Route path={"/docs"} component={Docs} />
       <Route path={"/turn-test"} component={TurnTest} />
       <Route path={"/404"} component={NotFound} />
