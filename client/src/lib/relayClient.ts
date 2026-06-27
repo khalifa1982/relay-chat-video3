@@ -445,17 +445,52 @@ export function startRelay(root: HTMLElement): RelayHandle {
             && Math.min(window.screen?.width || 9999, window.screen?.height || 9999) <= 820);
     } catch { return false; }
   })();
+  // Streaming quality (camera + screen). "low" = data saver: far less CPU
+  // (cooler device) and bandwidth (lower latency); "high" = HD. Persisted.
+  type VideoQuality = "high" | "low";
+  let videoQuality: VideoQuality = (() => {
+    try { return window.localStorage.getItem("relay_quality") === "low" ? "low" : "high"; }
+    catch { return "high"; }
+  })();
+  function qualityVideo(q: VideoQuality) {
+    if (q === "low") {
+      return { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 15, max: 20 } };
+    }
+    return {
+      width: { ideal: isMobile ? 960 : 1280 },
+      height: { ideal: isMobile ? 540 : 720 },
+      frameRate: { ideal: 30, max: 30 },
+    };
+  }
   async function acquireRawStream(useFacingMode: "user" | "environment"): Promise<MediaStream> {
     return navigator.mediaDevices.getUserMedia({
       audio: true,
-      video: {
-        width: { ideal: isMobile ? 960 : 1280 },
-        height: { ideal: isMobile ? 540 : 720 },
-        frameRate: { ideal: 30, max: 30 },
-        facingMode: useFacingMode,
-      },
+      video: { ...qualityVideo(videoQuality), facingMode: useFacingMode },
     });
   }
+  function updateQualityBtn() {
+    const b = $("qualityBtn");
+    if (b) {
+      b.textContent = videoQuality === "low" ? "SD" : "HD";
+      b.classList.toggle("on", videoQuality === "high");
+      b.setAttribute("title", videoQuality === "low" ? "Data saver — tap for HD" : "HD — tap for data saver");
+    }
+  }
+  // Switch resolution live (no re-acquire) via applyConstraints on the current
+  // camera and/or screen track, so it's seamless mid-call.
+  async function setVideoQuality(q: VideoQuality) {
+    videoQuality = q;
+    try { window.localStorage.setItem("relay_quality", q); } catch { /* */ }
+    const vc = qualityVideo(q);
+    const ac = { width: vc.width, height: vc.height, frameRate: vc.frameRate };
+    const camTrack = localStream?.getVideoTracks()[0];
+    if (camTrack) { try { await camTrack.applyConstraints(ac); } catch { /* */ } }
+    const scrTrack = screenStream?.getVideoTracks()[0];
+    if (scrTrack) { try { await scrTrack.applyConstraints(ac); } catch { /* */ } }
+    updateQualityBtn();
+    toast(q === "low" ? "Data saver on (low resolution)" : "HD video on");
+  }
+  function toggleQuality() { void setVideoQuality(videoQuality === "high" ? "low" : "high"); }
   // The stream we currently publish to peers. When a filter is active it's the
   // processed (canvas) stream; otherwise it's the RAW camera — which means NO
   // canvas, NO captureStream re-encode, and far less heat in the common case of
@@ -596,12 +631,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try {
       nuVideo = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: {
-          width: { ideal: isMobile ? 960 : 1280 },
-          height: { ideal: isMobile ? 540 : 720 },
-          frameRate: { ideal: 30, max: 30 },
-          facingMode: next,
-        },
+        video: { ...qualityVideo(videoQuality), facingMode: next },
       });
     } catch {
       toast("Couldn't switch camera — this device may only have one.", true);
@@ -2044,7 +2074,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenBusy = true;
     let disp: MediaStream;
     try {
-      disp = await md.getDisplayMedia({ video: true, audio: false });
+      disp = await md.getDisplayMedia({ video: { ...qualityVideo(videoQuality) }, audio: false });
     } catch {
       // User cancelled the picker, or permission denied — no-op.
       screenBusy = false;
@@ -2296,6 +2326,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (sb) sb.style.display = md && typeof md.getDisplayMedia === "function" ? "" : "none";
   }
   ($("recordBtn") as HTMLElement | null)?.addEventListener("click", toggleRecording);
+  ($("qualityBtn") as HTMLElement | null)?.addEventListener("click", toggleQuality);
+  updateQualityBtn();
   ($("filterBtn") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("filterClose") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("chatSend") as HTMLElement | null)?.addEventListener("click", sendChat);

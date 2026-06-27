@@ -8,6 +8,7 @@ import { trpc } from "@/lib/trpc";
 import { notify, playCallRing, playMessageChime } from "./notifications";
 import { isThreadMuted } from "./mutedThreads";
 import { setTyping, clearTyping } from "./typingStore";
+import { pushMessagePopup, isViewingConversation } from "./messagePopups";
 
 type V2Event =
   | { kind: "message"; conversationId: number; from: number }
@@ -95,6 +96,11 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
             ) {
               if (typeof document === "undefined" || document.hidden) {
                 playMessageChime();
+              }
+              // In-app popup with the message content + inline reply — unless the
+              // user is already looking at that conversation.
+              if (!isViewingConversation(payload.conversationId)) {
+                pushMessagePopup(payload.conversationId, payload.from);
               }
               notify({
                 title: "New message",

@@ -133,6 +133,7 @@ export const RELAY_MARKUP = `
         <button class="ctrl" id="recordBtn" title="Record call" style="display:none">
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg>
         </button>
+        <button class="ctrl ctrl-text" id="qualityBtn" title="Streaming quality">HD</button>
         <button class="ctrl" id="filterBtn" title="Filters">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="7" r="4"/><circle cx="12" cy="16" r="4"/></svg>
         </button>
@@ -419,6 +420,8 @@ export const RELAY_CSS = `
 .relay-root .ctrl:hover{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.16);transform:translateY(-1px)}
 .relay-root .ctrl:active{transform:scale(.94)}
 .relay-root .ctrl.off{background:rgba(255,92,114,.18);border-color:rgba(255,92,114,.36);color:var(--danger)}
+.relay-root .ctrl-text{font-family:"JetBrains Mono",monospace;font-weight:800;font-size:13px;letter-spacing:.04em}
+.relay-root .ctrl-text.on{background:rgba(63,224,197,.16);border-color:rgba(63,224,197,.34);color:var(--accent)}
 .relay-root .ctrl svg{width:20px;height:20px}
 .relay-root .ctrl .badge{position:absolute;top:-4px;right:-4px;background:var(--accent);color:#04201B;font-size:10px;font-weight:700;
   min-width:17px;height:17px;border-radius:9px;display:grid;place-items:center;padding:0 4px;border:2px solid var(--bg)}

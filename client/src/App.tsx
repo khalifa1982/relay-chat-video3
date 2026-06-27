@@ -10,6 +10,7 @@ import TurnTest from "./pages/TurnTest";
 import { AppShell } from "./app/AppShell";
 import { RelayEngineProvider } from "./app/RelayEngine";
 import { PresenceManager } from "./app/PresenceManager";
+import { MessagePopups } from "./app/MessagePopups";
 import Dialer from "./pages/app/Dialer";
 import History from "./pages/app/History";
 import Messages from "./pages/app/Messages";
@@ -83,6 +84,7 @@ function App() {
             {/* One presence heartbeat for the whole app (not one per
                 useIdentity() call site). */}
             <PresenceManager />
+            <MessagePopups />
             <Router />
           </RelayEngineProvider>
         </TooltipProvider>

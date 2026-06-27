@@ -1290,3 +1290,19 @@ Batch 7 of the UX overhaul.
       real profile-photo avatar in tiles (the engine only knows name → initials today).
 - [x] 4 new tests (CSS guards + server device propagation). 312 tests green, tsc + build clean.
       Footer → `v2.39.0`.
+
+## v2.40.0 — Resolution selector + in-app message popups (delivered 2026-06-27)
+
+Batch 9 of the UX overhaul (overheating/latency + notifications).
+
+- [x] Streaming-quality selector (HD / SD) in the in-call control bar — applies to BOTH the camera and
+      screen share. "SD" (640×360@15) sharply cuts CPU (cooler device) and bandwidth (lower latency);
+      "HD" is the default. Switches live via applyConstraints (no re-acquire), persisted in localStorage,
+      and honoured by getUserMedia, flip-camera, and getDisplayMedia.
+- [x] Non-intrusive incoming-message popups: when a message arrives while the user is in a call or on
+      another screen, a small card appears (bottom-right) with the sender, the message content, and an
+      inline reply box. Minimizable to a chip, closable with X, or tap to open the full thread.
+      Suppressed when the user is already viewing that conversation. Store (`messagePopups.ts`) + manager
+      (`MessagePopups.tsx`) mounted at the app root; fed by the existing realtime SSE layer.
+- [x] 13 new tests (popup store dedup/cap/dismiss + isViewingConversation). 321 tests green, tsc + build
+      clean. Footer → `v2.40.0`.
