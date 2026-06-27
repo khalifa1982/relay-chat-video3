@@ -86,6 +86,12 @@ export default function HistoryPage() {
   const redial = (num: string) => {
     if (num) engine.dial(num);
   };
+  // Re-create a group call: ring every participant into one conference.
+  const redialGroup = (numbers: string[]) => {
+    const nums = numbers.filter(Boolean);
+    if (nums.length > 1) engine.dialGroup(nums);
+    else if (nums.length === 1) engine.dial(nums[0]);
+  };
   const message = (num: string) => {
     if (num) openThread.mutate({ number: num });
   };
@@ -111,7 +117,7 @@ export default function HistoryPage() {
             <ul>
               {items.map((it) =>
                 it.kind === "conf" ? (
-                  <ConferenceItem key={it.key} conf={it.conf} onRedial={redial} onMessage={message} />
+                  <ConferenceItem key={it.key} conf={it.conf} onRedial={redial} onRedialGroup={redialGroup} onMessage={message} />
                 ) : (
                   <MissedItem key={it.key} call={it.call} onRedial={redial} onMessage={message} />
                 )
@@ -127,14 +133,17 @@ export default function HistoryPage() {
 function ConferenceItem({
   conf,
   onRedial,
+  onRedialGroup,
   onMessage,
 }: {
   conf: ConfRow;
   onRedial: (num: string) => void;
+  onRedialGroup: (numbers: string[]) => void;
   onMessage: (num: string) => void;
 }) {
   const others = conf.participants.filter((p) => !p.isSelf);
-  const isGroup = conf.partyCount > 2;
+  const otherNumbers = others.map((p) => p.number).filter(Boolean);
+  const isGroup = conf.partyCount > 2 || otherNumbers.length > 1;
   const Icon = isGroup ? Users : Phone;
   // Title = the other people on the call (or the dialed number as a fallback).
   const title =
@@ -145,6 +154,12 @@ function ConferenceItem({
         : "Call";
   // Best number to call back: the dialed number, else the first other party.
   const callBack = conf.dialedNumber || others[0]?.number || "";
+  // For a GROUP, the call button rings everyone back into one conference.
+  const callBackAll = () => {
+    if (isGroup && otherNumbers.length > 1) onRedialGroup(otherNumbers);
+    else onRedial(callBack);
+  };
+  const canCall = isGroup ? otherNumbers.length > 0 : !!callBack;
 
   return (
     <li className="border-b border-border/60 px-4 py-3 last:border-b-0 hover:bg-muted/30">
@@ -177,12 +192,12 @@ function ConferenceItem({
         <Button
           size="icon"
           variant="ghost"
-          disabled={!callBack}
-          aria-label="Call back"
-          title="Call back"
-          onClick={() => onRedial(callBack)}
+          disabled={!canCall}
+          aria-label={isGroup ? "Call the group back" : "Call back"}
+          title={isGroup ? "Call everyone back (group)" : "Call back"}
+          onClick={callBackAll}
         >
-          <Phone className="size-4" />
+          {isGroup ? <Users className="size-4" /> : <Phone className="size-4" />}
         </Button>
       </div>
 

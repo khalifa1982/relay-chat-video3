@@ -618,7 +618,16 @@ export function handleMessage(
       if (existing) {
         if (msg.name) existing.name = String(msg.name).slice(0, 24);
         if (msg.device) existing.device = String(msg.device).slice(0, 16);
-        if (msg.flag) existing.flag = String(msg.flag).slice(0, 8);
+        // A re-affirm that carries a NEW flag (geo resolved after we registered)
+        // must reach peers already in the room — push a live `peer-meta` update,
+        // since the join-time flag was empty for them.
+        const newFlag = msg.flag ? String(msg.flag).slice(0, 8) : undefined;
+        if (newFlag && newFlag !== existing.flag) {
+          existing.flag = newFlag;
+          if (existing.roomId) {
+            broadcastToRoom(reg, existing.roomId, { type: "peer-meta", pin: conn.pin, flag: newFlag }, conn.pin);
+          }
+        }
         const lk = livekitConfig();
         safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
         // A within-grace re-attach (same cid) also auto-rejoins its active call.
@@ -791,6 +800,7 @@ export function handleMessage(
         type: "ring",
         from: conn.pin,
         fromName: self.name,
+        flag: self.flag,
         roomId: self.roomId,
       };
       // Multi-device ring: if the callee is idle (not already in a call), ring
@@ -1056,6 +1066,16 @@ export function handleMessage(
         } catch { /* never let a notification hook break call teardown */ }
       }
       leaveRoom(reg, conn.pin);
+      break;
+    }
+
+    case "hold": {
+      // The caller is putting their CURRENT room on hold to take another call.
+      // Tell that room's other members so they see a "put you on hold" status.
+      const rid = self.roomId;
+      if (!rid) break;
+      const on = msg.action !== "off"; // default = on; "off" resumes
+      broadcastToRoom(reg, rid, { type: "peer-hold", pin: conn.pin, on }, conn.pin);
       break;
     }
 

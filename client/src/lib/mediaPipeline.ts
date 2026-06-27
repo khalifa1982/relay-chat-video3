@@ -196,6 +196,9 @@ export class MediaPipeline {
 
   async setFilter(id: FilterId) {
     const def = findFilter(id);
+    // Drop cached inference results when the filter changes, so a quick
+    // blur→other→blur switch can't reuse a seconds-old mask/face box for a frame.
+    if (def.id !== this.filter.id) { this.lastSegMask = null; this.lastFaceBox = null; }
     this.filter = def;
     if (def.backgroundBlur) await this.ensureSegmenter();
     if (def.faceOverlay) await this.ensureFaceDetector();

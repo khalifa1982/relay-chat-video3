@@ -36,7 +36,7 @@ interface PeerEntry {
   /** capped count of ICE restarts attempted for this peer */
   iceRestarts: number;
 }
-interface PendingRing { from: string; fromName: string; roomId: string; }
+interface PendingRing { from: string; fromName: string; roomId: string; flag?: string; }
 interface Recent { id: string; name: string; }
 
 interface Msg {
@@ -359,6 +359,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "force-mute":   onForceMute(m); break;
       case "role":         onRoleChange(m); break;
       case "host-pin":     onHostPin(m); break;
+      case "peer-meta":
+        // Late metadata update (e.g. a peer's flag resolved after they joined).
+        if (m.pin && m.flag) { peerFlags[m.pin] = m.flag; setTileFlag("tile-" + m.pin, m.flag); }
+        if (m.pin && m.device) { peerDevices[m.pin] = m.device; setTileDevice("tile-" + m.pin, m.device); }
+        break;
+      case "peer-hold":    onPeerHold(m); break;
       case "signal":       onSignal(m.from!, m.data); break;
       case "ice":          onIceServers(m); break;
       case "error":
@@ -984,9 +990,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
   // ---------- incoming ----------
   // ---------- call waiting ----------
-  function showCallWaiting(name: string) {
+  function showCallWaiting(name: string, number?: string, flag?: string) {
     const cw = $("callWaiting"); if (!cw) return;
     const n = $("cwName"); if (n) n.textContent = name || "Someone";
+    const num = $("cwNum"); if (num) num.textContent = number || "";
+    const fl = $("cwFlag"); if (fl) fl.textContent = flag || "";
     cw.classList.add("show");
     if (waitingTimeoutT) clearTimeout(waitingTimeoutT);
     // Auto-decline if ignored, so the second caller isn't left hanging.
@@ -1005,8 +1013,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const w = waitingRing; waitingRing = null;
     hideCallWaiting();
     if (!w) return;
-    // Leave the current room but KEEP media + the call UI (no idle flash), then
-    // accept the waiting call, reusing the same camera/mic stream.
+    // Tell the CURRENT room's members we're putting them on hold to take another
+    // call (they'll see an "on hold" status), THEN leave + accept the new call,
+    // reusing the same camera/mic stream (no idle flash).
+    sendWS({ type: "hold", action: "on" });
     sendWS({ type: "leave", reason: "switch-call" });
     for (const id in peers) { try { peers[id].pc.close(); } catch { /* */ } if (peers[id].el) peers[id].el!.remove(); delete peers[id]; }
     teardownLivekit();
@@ -1024,8 +1034,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // Call waiting: alert (Switch / Decline) instead of auto-rejecting. Only
       // one waiter at a time; a second concurrent caller is rejected.
       if (waitingRing) { sendWS({ type: "reject", to: m.from }); return; }
-      waitingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId! };
-      showCallWaiting(m.fromName || nameOf(m.from!));
+      waitingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, flag: m.flag };
+      showCallWaiting(m.fromName || nameOf(m.from!), m.from, m.flag);
       return;
     }
     if (pendingRing) { sendWS({ type: "reject", to: m.from }); return; }
@@ -1296,6 +1306,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
   // Remote-participant tile shims that reuse the existing #videoGrid DOM/CSS
   // (keyed by LiveKit participant.identity, which equals the 6-digit pin).
+  // Five rainbow bars that animate (equaliser) only while the tile is .speaking.
+  const SOUND_WAVE_HTML = '<div class="sound-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>';
   // Placeholder (avatar + full name, shown when the camera is off) + an info
   // chip (device + live speed) used by every tile builder.
   function tileContentHTML(name: string, device: string, flag: string): string {
@@ -1305,7 +1317,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const fl = '<span class="nm-flag">' + (flag ? escapeHtml(flag) : "") + "</span>";
     return (
       '<div class="ph"><div class="av">' + initials(name) + "</div>" +
-      '<div class="ph-name">' + fl + escapeHtml(name) + "</div></div>" +
+      '<div class="ph-name">' + fl + escapeHtml(name) + "</div>" +
+      SOUND_WAVE_HTML + "</div>" +
       '<div class="nm">' + fl + escapeHtml(name) + "</div>" +
       '<div class="tile-info">' + dev + '<span class="ti-speed"></span></div>'
     );
@@ -1380,6 +1393,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function onForceMute(m: Msg) {
     if (m.on) { setMic(false); toast("You were muted by the host."); }
     else { setMic(true); toast("The host unmuted you."); }
+  }
+  // A peer put this call on hold to take another call. Mark their tile + notify.
+  function onPeerHold(m: Msg) {
+    const pin = m.pin || ""; if (!pin) return;
+    const tile = document.getElementById("tile-" + pin);
+    const nm = nameOf(pin);
+    if (m.on) {
+      tile?.classList.add("on-hold");
+      addSysMsg(nm + " put you on hold for another call.");
+      toast(nm + " put you on hold.");
+    } else {
+      tile?.classList.remove("on-hold");
+      addSysMsg(nm + " is back.");
+    }
   }
   function onRoleChange(m: Msg) {
     const pin = m.pin || "";
@@ -2067,7 +2094,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     t.insertAdjacentHTML(
       "beforeend",
       '<div class="ph"><div class="av">' + initials(me.name || "You") + "</div>" +
-        '<div class="ph-name">' + selfFl + "You</div></div>" +
+        '<div class="ph-name">' + selfFl + "You</div>" +
+        SOUND_WAVE_HTML + "</div>" +
         '<div class="nm">' + selfFl + "You</div>" +
         '<div class="tile-info"><span class="ti-dev">' + escapeHtml(detectDeviceType()) + "</span>" +
         '<span class="ti-speed"></span></div>'
@@ -2261,12 +2289,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let pipCanvas: HTMLCanvasElement | null = null;
   let pipCtx: CanvasRenderingContext2D | null = null;
   let pipVideo: HTMLVideoElement | null = null;
+  let pipStream: MediaStream | null = null;
   let pipActive = false;
   let pipTimer: ReturnType<typeof setInterval> | null = null;
   function pipSupported(): boolean {
     return typeof document !== "undefined" &&
       "pictureInPictureEnabled" in document &&
-      !!(document as unknown as { pictureInPictureEnabled?: boolean }).pictureInPictureEnabled;
+      !!(document as unknown as { pictureInPictureEnabled?: boolean }).pictureInPictureEnabled &&
+      // Compositing needs canvas.captureStream; without it (older WebKit / iOS
+      // Safari) the PiP video would be track-less, so hide the control.
+      typeof HTMLCanvasElement !== "undefined" &&
+      typeof (HTMLCanvasElement.prototype as unknown as { captureStream?: unknown }).captureStream === "function";
   }
   function ensurePipCompositor() {
     if (pipCanvas) return;
@@ -2278,7 +2311,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     (pipVideo as unknown as { autoPictureInPicture?: boolean }).autoPictureInPicture = true;
     pipVideo.setAttribute("style", "position:fixed;left:-10000px;top:0;width:2px;height:2px;opacity:0;pointer-events:none");
     const cap = (pipCanvas as unknown as { captureStream?: (fps: number) => MediaStream }).captureStream;
-    if (cap) pipVideo.srcObject = cap.call(pipCanvas, 24);
+    if (cap) { pipStream = cap.call(pipCanvas, 24); pipVideo.srcObject = pipStream; }
     document.body.appendChild(pipVideo);
     pipVideo.addEventListener("leavepictureinpicture", () => { pipActive = false; stopPipLoop(); updatePipBtn(false); });
   }
@@ -2322,8 +2355,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function startPipLoop() {
     stopPipLoop();
-    // ~12fps composite — plenty for a thumbnail, and keeps the captured stream
-    // (and thus the PiP window) updating while the page is backgrounded.
+    // ~12fps composite — plenty for a thumbnail. NOTE: a fully-backgrounded tab
+    // throttles setInterval to ~1Hz (and mobile may freeze it), so the composite
+    // can stall on its last frame while hidden; the PiP window + AUDIO still keep
+    // the call alive, which is the main goal. Works best on Android Chrome/desktop.
     pipTimer = setInterval(pipRender, 80);
     pipRender();
   }
@@ -2339,9 +2374,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
     ensurePipCompositor();
     pipActive = true;
     startPipLoop();
-    try { await pipVideo!.play(); } catch { /* */ }
+    // Request PiP SYNCHRONOUSLY within the click's transient activation — don't
+    // `await play()` first, or the microtask turn can invalidate the user
+    // gesture and PiP intermittently throws NotAllowedError. Kick play() in the
+    // background instead.
+    const playing = pipVideo!.play().catch(() => {});
     try {
       await (pipVideo as unknown as { requestPictureInPicture: () => Promise<unknown> }).requestPictureInPicture();
+      void playing;
       updatePipBtn(true);
       toast("Picture-in-Picture on");
     } catch {
@@ -2363,6 +2403,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function teardownPip() {
     void exitPip();
+    if (pipStream) { try { pipStream.getTracks().forEach(t => t.stop()); } catch { /* */ } pipStream = null; }
     if (pipVideo) { try { pipVideo.srcObject = null; pipVideo.remove(); } catch { /* */ } pipVideo = null; }
     pipCanvas = null; pipCtx = null;
   }
