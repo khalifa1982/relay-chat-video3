@@ -27,6 +27,7 @@ import {
   getIdentityByNumber,
   getOrCreateDmConversation,
   createGroupConversation,
+  deleteMessage,
   getPresenceAudienceIds,
   getPresenceForIds,
   listCallHistory,
@@ -822,6 +823,26 @@ export const v2MessagesRouter = router({
         /* ignore */
       }
       return { ok: true };
+    }),
+
+  /** Unsend (soft-delete) one of your OWN messages. */
+  remove: publicProcedure
+    .input(z.object({ messageId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const conversationId = await deleteMessage({ messageId: input.messageId, identityId: me.id });
+      if (conversationId == null) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "You can only delete your own messages." });
+      }
+      // Fan out so every participant's thread refreshes (the message vanishes).
+      try {
+        for (const pid of await getConversationParticipantIds(conversationId)) {
+          publishToIdentity(pid, { kind: "message", conversationId, from: me.id });
+        }
+      } catch {
+        /* best-effort */
+      }
+      return { ok: true, conversationId };
     }),
 });
 

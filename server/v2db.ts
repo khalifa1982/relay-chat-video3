@@ -1052,6 +1052,32 @@ export async function getConversationParticipantIds(
   return rows.map((r) => r.id);
 }
 
+/**
+ * Soft-delete (unsend) a message. Only the original sender may delete, and only
+ * their own message. Sets `deletedAt` and nulls the body/attachment so the row
+ * stops appearing (listMessages/listThreads already filter `deletedAt`). Returns
+ * the conversationId on success (for push fan-out), or null if not found / not
+ * the sender.
+ */
+export async function deleteMessage(input: {
+  messageId: number;
+  identityId: number;
+}): Promise<number | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.id, input.messageId))
+    .limit(1);
+  if (!row || row.senderIdentityId !== input.identityId || row.deletedAt) return null;
+  await db
+    .update(messages)
+    .set({ deletedAt: new Date(), body: null, attachmentId: null })
+    .where(and(eq(messages.id, input.messageId), eq(messages.senderIdentityId, input.identityId)));
+  return row.conversationId;
+}
+
 export async function markThreadRead(input: { conversationId: number; identityId: number }) {
   const db = await getDb();
   if (!db) return;

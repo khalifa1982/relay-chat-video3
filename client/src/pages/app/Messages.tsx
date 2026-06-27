@@ -15,6 +15,7 @@ import {
   StickyNote,
   Users,
   UserPlus,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -228,6 +229,16 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       utils.messages.threads.invalidate();
     },
   });
+  const removeMutation = trpc.messages.remove.useMutation({
+    onSuccess: () => {
+      utils.messages.list.invalidate({ conversationId });
+      utils.messages.threads.invalidate();
+    },
+  });
+  function deleteMessage(messageId: number) {
+    if (!window.confirm("Unsend this message? It will be removed for everyone.")) return;
+    removeMutation.mutate({ messageId });
+  }
 
   // ── composer state ──
   const [text, setText] = useState("");
@@ -472,8 +483,20 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             return (
               <div
                 key={m.id}
-                className={"flex " + (mine ? "justify-end" : "justify-start")}
+                className={"group flex items-end gap-1.5 " + (mine ? "justify-end" : "justify-start")}
               >
+                {mine && (
+                  <button
+                    type="button"
+                    aria-label="Unsend message"
+                    title="Unsend"
+                    onClick={() => deleteMessage(m.id)}
+                    disabled={removeMutation.isPending}
+                    className="shrink-0 mb-1 size-7 grid place-items-center rounded-full text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-muted/60 hover:text-destructive transition-opacity"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
                 <div
                   className={
                     "max-w-[75%] rounded-2xl px-3.5 py-2 text-sm break-words " +

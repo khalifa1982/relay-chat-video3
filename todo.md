@@ -953,3 +953,15 @@ Feature-gated on `INBOUND_EMAIL_DOMAIN`; built + reviewed by an adversarial agen
       A true no-camera-acquire voice call with an SFU `publishTrack` upgrade is a noted
       follow-up; this additive version avoids any risk to the call engine you're validating.
 - [x] Footer → `v2.26.0`. tsc clean, 243 tests green, build clean.
+
+## v2.27.0 — Unsend message (soft-delete) (delivered 2026-06-27)
+
+- [x] `deleteMessage` in `v2db.ts` — soft-delete (sets `deletedAt`, nulls body/attachment).
+      Sender-only, enforced both on the SELECT (`row.senderIdentityId`) and the UPDATE WHERE
+      clause (defense in depth). No migration — `deletedAt` already existed and
+      `listMessages`/`listThreads` already filter it, so a deleted message cleanly vanishes
+      for everyone on the next refetch.
+- [x] `messages.remove` tRPC procedure (FORBIDDEN unless it's your own message) + push fan-out.
+- [x] Client: a hover/focus-revealed trash button on your OWN message bubbles with a confirm;
+      optimistic invalidation refreshes the thread.
+- [x] Footer → `v2.27.0`. tsc clean, 243 tests green, build clean.
