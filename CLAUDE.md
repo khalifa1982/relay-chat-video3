@@ -10,9 +10,9 @@
 
 Stack: **React 19 + Vite + Tailwind 4 + Express 4 + tRPC 11 + Drizzle ORM (MySQL) + Manus OAuth + Server-Sent Events signaling + native WebRTC + MediaPipe Tasks Vision**. Deployed as a single Node.js process on Cloud Run.
 
-**Current version: v2.19.0** (Phone-app shell with Dialer/Messages/Contacts tabs, guest identities with 30-day cookies, persistent messaging with attachments, presence). The legacy single-screen calling UI is still reachable at `/app/call` for the actual in-call experience.
+**Current version: v2.30.0** (Phone-app shell with Dialer/Messages/Contacts tabs, guest identities with 30-day cookies, persistent messaging with attachments, presence). The legacy single-screen calling UI is still reachable at `/app/call` for the actual in-call experience.
 
-> Versions v2.1–v2.19 layered on a lot since this doc's v2.0 baseline — LiveKit SFU calls, Resend missed-call email, Do-Not-Disturb, in-call connection sequence + chat links, invite links, offline auto-reply, call waiting (switch/decline), a device **passcode app-lock** + **biometric (WebAuthn) unlock**, and a call-engine reliability batch (raw-track publishing to kill mobile heat, a 10s reconnect window, live top-bar status). See `todo.md` for the per-version changelog; treat it as the source of truth for what shipped.
+> Versions v2.1–v2.30 layered on a lot since this doc's v2.0 baseline — LiveKit SFU calls, Resend missed-call email, Do-Not-Disturb, invite links, offline auto-reply, call waiting, device **passcode app-lock** + **biometric (WebAuthn) unlock**, a call-engine reliability batch (raw-track publishing to kill mobile heat, a 10s reconnect window, live top-bar status), **screen sharing**, **call recording (LiveKit Egress → S3)**, **group messaging**, an installable **PWA**, **rich contact fields** (+ an additive boot-migrator), **inbound email reply-to-thread**, **voice calls + voice↔video**, message **unsend** / **reply** / **per-conversation mute**, and **typing indicators**. See `todo.md` for the per-version changelog; treat it as the source of truth for what shipped.
 
 ---
 
@@ -34,7 +34,7 @@ Stack: **React 19 + Vite + Tailwind 4 + Express 4 + tRPC 11 + Drizzle ORM (MySQL
 | Front/back camera flip (`facingMode: user` ↔ `environment`) with `RTCRtpSender.replaceTrack` (no renegotiation) | shipped | `client/src/lib/relayClient.ts` (`flipCamera`) |
 | Snapchat-style live filter dock (color filters via canvas filter, background blur via MediaPipe Selfie Segmentation, face overlays via MediaPipe Face Detector) | shipped | `client/src/lib/mediaPipeline.ts` |
 | Glassmorphic redesigned in-call control bar | shipped | `client/src/pages/Relay.tsx` (CSS in template literal) |
-| Vitest suite (signaling, filter registry, auth, v2 routers, DND, passcode, biometric, geo, …) | **205 passing / 1 skipped** | `server/**/*.test.ts`, `client/src/lib/**/*.test.ts`, `client/src/app/**/*.test.ts`, `client/src/pages/**/*.test.ts` |
+| Vitest suite (signaling, filters, auth, v2 routers, DND, passcode, biometric, geo, recording, inbound-email, contacts, groups, mute, typing, …) | **253 passing / 1 skipped** | `server/**/*.test.ts`, `client/src/lib/**/*.test.ts`, `client/src/app/**/*.test.ts`, `client/src/pages/**/*.test.ts` |
 
 ### v2.0 phone-app surface (added 2026-05-30)
 
@@ -45,7 +45,7 @@ Stack: **React 19 + Vite + Tailwind 4 + Express 4 + tRPC 11 + Drizzle ORM (MySQL
 | Guest sessions with 30-day HttpOnly `relay_guest` cookie, 6-digit number allocation | shipped | `server/v2routers.ts` (`v2AuthRouter`) |
 | Directory: lookup by number, presence heartbeat, go-offline beacon | shipped | `server/v2routers.ts` (`v2DirectoryRouter`) |
 | Contacts CRUD + favorites | shipped | `server/v2routers.ts` (`v2ContactsRouter`) |
-| SMS-style messaging: threads, messages, sendText, sendAttachment, markRead. **No typing indicators or push yet** — client polls (5-10s). | shipped (polling) | `server/v2routers.ts` (`v2MessagesRouter`) |
+| SMS-style messaging: threads, messages, sendText, sendAttachment, markRead, **reply/quote**, **unsend**, **typing indicators**, **per-conversation mute**, **group threads**. Realtime via SSE push (`/api/v2/events`) + polling fallback. | shipped | `server/v2routers.ts` (`v2MessagesRouter`), `server/v2events.ts` |
 | Attachment upload `POST /api/v2/upload` (base64 body, 40 MB cap, writes via `storagePut`) | shipped | `server/v2upload.ts` |
 | Call history (start/end) — independent of the legacy in-memory signaling | shipped | `server/v2routers.ts` (`v2CallsRouter`) |
 | Stale-presence reaper (60s sweep, 2 min timeout) | shipped | `server/_core/index.ts` (setInterval) |
@@ -147,7 +147,7 @@ relay-chat-video/
 ```bash
 pnpm install              # install
 pnpm dev                  # NODE_ENV=development tsx watch server/_core/index.ts (serves React + tRPC + relay on port 3000)
-pnpm test                 # vitest run (205 tests)
+pnpm test                 # vitest run (253 tests)
 pnpm check                # tsc --noEmit
 pnpm format               # prettier --write .
 pnpm db:push              # drizzle-kit generate && drizzle-kit migrate
@@ -212,7 +212,7 @@ These are read **per-call** in `iceServers()` so they can be added without resta
 
 Vitest runs Node-environment tests under `server/**/*.test.ts` and `client/src/lib/**/*.test.ts` (see `vitest.config.ts`). New features must come with tests — focus on protocol shapes, business logic, and pure functions. Browser DOM tests are not currently configured; UI is verified via manual preview.
 
-> Run `pnpm test` before every checkpoint / PR. All 205 must stay green.
+> Run `pnpm test` before every checkpoint / PR. All 253 must stay green.
 
 ---
 
