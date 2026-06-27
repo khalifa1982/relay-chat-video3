@@ -30,6 +30,7 @@ import {
   deleteMessage,
   getPresenceAudienceIds,
   getPresenceForIds,
+  isGuestPresenceHidden,
   listCallHistory,
   listConferenceHistory,
   listContacts,
@@ -343,13 +344,20 @@ export const v2DirectoryRouter = router({
       const id = await getIdentityByNumber(input.number);
       if (!id) return null;
       const [pres] = await getPresenceForIds([id.id]);
+      // Privacy: a guest inactive >24h shows NO status at all.
+      const hidden = isGuestPresenceHidden({
+        isGuest: id.isGuest,
+        isOnline: pres?.isOnline ?? false,
+        lastSeenAt: pres?.lastSeenAt ?? null,
+      });
       return {
         id: id.id,
         number: id.number,
         displayName: id.displayName,
         avatarUrl: id.avatarUrl,
-        isOnline: pres?.isOnline ?? false,
-        lastSeenAt: pres?.lastSeenAt ?? null,
+        isOnline: hidden ? false : (pres?.isOnline ?? false),
+        lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
+        presenceHidden: hidden,
       };
     }),
 
@@ -464,12 +472,20 @@ export const v2ContactsRouter = router({
     // Resolve every contact's identity in ONE query (was N+1: one per contact).
     const idents = await getIdentitiesByNumbers(rows.map((r) => r.number));
     const idByNumber = new Map(idents.map((i) => [i.number, i.id]));
+    // Track which identities are guests (userId == null) for presence privacy.
+    const isGuestById = new Map(idents.map((i) => [i.id, i.userId == null]));
     const ids = idents.map((i) => i.id);
     const presList = await getPresenceForIds(ids);
     const presByIdentity = new Map(presList.map((p) => [p.identityId, p]));
     return rows.map((r) => {
       const ident = idByNumber.get(r.number);
       const pres = ident != null ? presByIdentity.get(ident) : undefined;
+      // Privacy: a guest inactive >24h shows NO status at all.
+      const hidden = isGuestPresenceHidden({
+        isGuest: ident != null ? (isGuestById.get(ident) ?? true) : true,
+        isOnline: pres?.isOnline ?? false,
+        lastSeenAt: pres?.lastSeenAt ?? null,
+      });
       return {
         id: r.id,
         number: r.number,
@@ -484,8 +500,9 @@ export const v2ContactsRouter = router({
         website: r.website ?? null,
         birthday: r.birthday ?? null,
         identityId: ident ?? null,
-        isOnline: pres?.isOnline ?? false,
-        lastSeenAt: pres?.lastSeenAt ?? null,
+        isOnline: hidden ? false : (pres?.isOnline ?? false),
+        lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
+        presenceHidden: hidden,
       };
     });
   }),

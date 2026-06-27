@@ -433,6 +433,26 @@ export interface PresenceLite {
   lastSeenAt: Date | null;
 }
 
+/** A guest's presence is fully suppressed once they've been inactive this long. */
+export const GUEST_PRESENCE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether a contact's presence must be COMPLETELY hidden (no online dot, no
+ * "offline", no "last seen") for privacy. Applies only to GUEST identities that
+ * have been inactive for >24h — a registered user always shows presence, and a
+ * guest still shows "online" / a recent "last seen" within the window. Pure +
+ * unit-tested. `now` is injectable for tests.
+ */
+export function isGuestPresenceHidden(
+  opts: { isGuest: boolean; isOnline: boolean; lastSeenAt: Date | null },
+  now: number = Date.now(),
+): boolean {
+  if (!opts.isGuest) return false; // registered users always show presence
+  if (opts.isOnline) return false; // a live guest still shows online
+  const last = opts.lastSeenAt ? opts.lastSeenAt.getTime() : 0;
+  return now - last > GUEST_PRESENCE_TTL_MS; // stale (or never-seen) guest → hide
+}
+
 export async function getPresenceForIds(ids: number[]): Promise<PresenceLite[]> {
   if (ids.length === 0) return [];
   const db = await getDb();
