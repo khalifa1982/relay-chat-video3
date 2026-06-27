@@ -20,6 +20,8 @@
  *     silently. The visual notification still fires.
  */
 
+import { isDndOn } from "./dnd";
+
 export type NotifPermission = "granted" | "denied" | "default" | "unsupported";
 
 export function getNotifPermission(): NotifPermission {
@@ -94,12 +96,14 @@ function tone(freq: number, durationMs: number, gain = 0.08): void {
 
 /** Two-note rising chime, ~250ms total. Used for incoming SMS. */
 export function playMessageChime(): void {
+  if (isDndOn()) return; // Do Not Disturb
   tone(660, 90);
   setTimeout(() => tone(880, 140), 100);
 }
 
 /** Three-note urgent ring pattern, ~700ms. Used for incoming call. */
 export function playCallRing(): void {
+  if (isDndOn()) return; // Do Not Disturb
   tone(523, 140, 0.1); // C5
   setTimeout(() => tone(659, 140, 0.1), 170); // E5
   setTimeout(() => tone(523, 220, 0.1), 340); // C5 again
@@ -133,6 +137,7 @@ interface NotifyOpts {
  */
 export function notify(opts: NotifyOpts): boolean {
   if (typeof window === "undefined") return false;
+  if (isDndOn()) return false; // Do Not Disturb — no desktop pop-ups
   if (typeof Notification === "undefined") return false;
   if (Notification.permission !== "granted") return false;
   // Only fire if the page is actually backgrounded — otherwise the

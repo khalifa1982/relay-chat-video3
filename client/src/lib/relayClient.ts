@@ -14,6 +14,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { MediaPipeline, FILTERS, type FilterId, type FilterDef } from "./mediaPipeline";
+import { isDndOn } from "@/app/dnd";
 
 interface IceConfig { iceServers: Array<{ urls: string; username?: string; credential?: string }>; }
 interface PeerEntry {
@@ -546,6 +547,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
   // ---------- incoming ----------
   function onRing(m: Msg) {
+    // Do Not Disturb: silently auto-decline (no ring overlay, no chime/notify).
+    // The caller sees a normal "declined" and the miss is still recorded.
+    if (isDndOn()) { sendWS({ type: "reject", to: m.from }); return; }
     if (inCall) { if (m.roomId === roomId) return; sendWS({ type: "reject", to: m.from }); return; }
     if (pendingRing) { sendWS({ type: "reject", to: m.from }); return; }
     pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId! };

@@ -13,6 +13,7 @@ import {
   unlockAudio,
   type NotifPermission,
 } from "@/app/notifications";
+import { useDnd } from "@/app/dnd";
 import { useTheme } from "@/contexts/ThemeContext";
 
 /**
@@ -236,6 +237,9 @@ export default function ProfilePage() {
 
         {/* notifications */}
         <NotificationsSection />
+
+        {/* do not disturb */}
+        <DndSection />
 
         {/* upgrade CTA for guests */}
         {me.isGuest && (
@@ -476,6 +480,66 @@ function NotificationsSection() {
             )}
           </div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+/* ============================================================
+   Do Not Disturb — a one-tap toggle that silences incoming-call
+   rings, chimes, and desktop pop-ups (messages still arrive, and
+   missed calls are still recorded). Persisted per-device.
+   ============================================================ */
+function DndSection() {
+  const [dnd, setDnd] = useDnd();
+  return (
+    <section className="space-y-3">
+      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+        Do Not Disturb
+      </Label>
+      <div className="rounded-2xl border border-border bg-card/40 p-4 flex items-center gap-3">
+        <div
+          className={
+            "shrink-0 size-10 grid place-items-center rounded-xl " +
+            (dnd
+              ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
+              : "bg-muted text-muted-foreground")
+          }
+        >
+          {dnd ? <BellOff className="size-5" /> : <Bell className="size-5" />}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="font-medium">
+            {dnd ? "Do Not Disturb is on" : "Do Not Disturb is off"}
+          </div>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {dnd
+              ? "Incoming calls are auto-declined; chimes and pop-ups are silenced. Messages still arrive."
+              : "Silence call rings, chimes, and desktop pop-ups without going offline."}
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={dnd}
+          aria-label="Toggle Do Not Disturb"
+          onClick={() => setDnd(!dnd)}
+          className={
+            "relative shrink-0 h-7 w-12 rounded-full transition-colors duration-200 " +
+            (dnd
+              ? "bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))]"
+              : "bg-muted-foreground/30")
+          }
+          style={{ transitionTimingFunction: "var(--ease-out)" }}
+        >
+          <span
+            className={
+              "absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform duration-200 " +
+              (dnd ? "translate-x-5" : "translate-x-0")
+            }
+            style={{ transitionTimingFunction: "var(--ease-out)" }}
+          />
+        </button>
       </div>
     </section>
   );

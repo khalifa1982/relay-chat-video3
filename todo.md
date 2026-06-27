@@ -637,3 +637,13 @@ cosmetic by-design item).
       test email sent OK.
 - [ ] **Action required from you**: set `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`
       + `RESEND_API_KEY` (and the TURN ones) in Manus → Secrets, then fetch + Publish.
+
+## v2.13.0 — Do Not Disturb (delivered 2026-06-27)
+
+- [x] **DND** — a per-device toggle (no server/schema change; localStorage-backed). When on:
+      incoming calls are auto-declined by the engine (no ring overlay), and chimes +
+      desktop notifications are silenced at the source (`notifications.ts`). Messages still
+      arrive in-app and missed calls are still recorded. New `client/src/app/dnd.ts` store +
+      `useDnd()` hook; a clean iOS-style toggle in Profile. +4 vitest.
+- [x] Footer → `v2.13.0`. tsc clean, 189/190 vitest, build clean.
+- [ ] Easy follow-up: a one-tap DND toggle in the app header (currently in Profile only).
