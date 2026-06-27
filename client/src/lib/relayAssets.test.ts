@@ -81,4 +81,11 @@ describe("relay call UI regression guards", () => {
   it("styles the Host/Co-Host role badge on tiles", () => {
     expect(RELAY_CSS).toMatch(/\.role-badge\{/);
   });
+
+  // ── audio output picker (v2.43) ────────────────────────────────────────────
+  it("has an audio-output button + menu (speaker / earpiece / Bluetooth)", () => {
+    expect(RELAY_MARKUP).toMatch(/id="audioBtn"/);
+    expect(RELAY_MARKUP).toMatch(/id="audioMenu"/);
+    expect(RELAY_CSS).toMatch(/\.audio-menu\{/);
+  });
 });

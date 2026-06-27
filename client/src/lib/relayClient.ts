@@ -154,6 +154,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let myRole: string | null = null;
   let roomHostPin: string | null = null;
   const peerRoles: Record<string, string> = {};
+  // Audio output routing (v2.43): the chosen output device (speaker / earpiece /
+  // wired / Bluetooth). "" = the system default. We apply it to every remote
+  // media element via setSinkId and RE-APPLY on devicechange so a Bluetooth
+  // headset that connects mid-call is actually heard.
+  let audioSinkId = (() => { try { return window.localStorage.getItem("relay_audio_sink") || ""; } catch { return ""; } })();
+  const lkAudioEls: HTMLMediaElement[] = []; // SFU detached <audio> playback elements
+  const audioOutSupported = typeof HTMLMediaElement !== "undefined"
+    && typeof (HTMLMediaElement.prototype as unknown as { setSinkId?: unknown }).setSinkId === "function";
   // ---------- active-speaker / spotlight view (v2.35) ----------
   let spotlightId: string | null = null;     // tile id manually pinned big, or null
   let manualSpotlight = false;               // user clicked a tile to pin it
@@ -505,6 +513,92 @@ export function startRelay(root: HTMLElement): RelayHandle {
     toast(q === "low" ? "Data saver on (low resolution)" : "HD video on");
   }
   function toggleQuality() { void setVideoQuality(videoQuality === "high" ? "low" : "high"); }
+
+  // ---------- audio output routing (speaker / earpiece / headset / Bluetooth) ----------
+  /** Every remote-audio-producing element: mesh remote <video>s (audio rides the
+   *  video element) + SFU detached <audio>s. */
+  function collectAudioEls(): HTMLMediaElement[] {
+    const els: HTMLMediaElement[] = [];
+    for (const pin in peers) {
+      const v = peers[pin].el?.querySelector("video") as HTMLMediaElement | null;
+      if (v) els.push(v);
+    }
+    for (const a of lkAudioEls) els.push(a);
+    return els;
+  }
+  async function applyAudioSink(only?: HTMLMediaElement) {
+    if (!audioOutSupported) return;
+    const targets = only ? [only] : collectAudioEls();
+    for (const t of targets) {
+      const el = t as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> };
+      if (typeof el.setSinkId === "function") {
+        try { await el.setSinkId(audioSinkId); } catch { /* sink may have vanished */ }
+      }
+    }
+  }
+  function updateAudioBtn(label?: string) {
+    const b = $("audioBtn");
+    if (!b) return;
+    b.style.display = audioOutSupported ? "" : "none";
+    // Highlight when a NON-default output is selected.
+    b.classList.toggle("on", !!audioSinkId);
+    if (label) b.setAttribute("title", "Audio output: " + label);
+  }
+  async function refreshAudioOutputs() {
+    const menu = $("audioMenu");
+    if (!menu) return;
+    let devices: MediaDeviceInfo[] = [];
+    try { devices = await navigator.mediaDevices.enumerateDevices(); } catch { /* */ }
+    const outs = devices.filter(d => d.kind === "audiooutput");
+    const rows: string[] = [];
+    // A "Default" row first (sinkId "") — follows the OS (earpiece/BT/headset).
+    rows.push(audioRow("", "Automatic (system default)"));
+    let currentLabel = "Automatic";
+    outs.forEach((d, i) => {
+      const label = d.label || ("Output " + (i + 1));
+      if (d.deviceId === audioSinkId) currentLabel = label;
+      // Skip a duplicate "default" pseudo-device label collision.
+      if (d.deviceId && d.deviceId !== "default") rows.push(audioRow(d.deviceId, label));
+      else if (d.deviceId === "default") rows.push(audioRow("default", label));
+    });
+    menu.innerHTML = rows.join("") ||
+      '<div class="ao-empty">No selectable outputs. Your device routes audio automatically.</div>';
+    updateAudioBtn(currentLabel);
+  }
+  function audioRow(id: string, label: string): string {
+    const sel = id === audioSinkId ? " ao-sel" : "";
+    return '<button type="button" class="ao-item' + sel + '" data-sink="' + escapeHtml(id) + '">' +
+      escapeHtml(label) + "</button>";
+  }
+  async function pickAudioSink(id: string) {
+    audioSinkId = id;
+    try { window.localStorage.setItem("relay_audio_sink", id); } catch { /* */ }
+    await applyAudioSink();
+    closeAudioMenu();
+    void refreshAudioOutputs();
+    toast("Audio output updated");
+  }
+  function openAudioMenu() {
+    if (!audioOutSupported) {
+      toast("This browser routes call audio automatically (try your device's audio settings).", true);
+      return;
+    }
+    void refreshAudioOutputs();
+    $("audioMenu")?.classList.add("open");
+  }
+  function closeAudioMenu() { $("audioMenu")?.classList.remove("open"); }
+  function onAudioMenuClick(e: Event) {
+    const btn = (e.target as HTMLElement)?.closest?.("button[data-sink]") as HTMLElement | null;
+    if (!btn) return;
+    void pickAudioSink(btn.getAttribute("data-sink") || "");
+  }
+  // A Bluetooth headset (dis)connecting fires devicechange. Re-apply the chosen
+  // sink so audio actually follows to/from it — this is the "can't hear my
+  // Bluetooth headset" fix. Also keep the open menu fresh.
+  const onAudioDeviceChange = () => {
+    void applyAudioSink();
+    if ($("audioMenu")?.classList.contains("open")) void refreshAudioOutputs();
+  };
   // The stream we currently publish to peers. When a filter is active it's the
   // processed (canvas) stream; otherwise it's the RAW camera — which means NO
   // canvas, NO captureStream re-encode, and far less heat in the common case of
@@ -1036,14 +1130,23 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const el = lkParticipantTiles[participant.identity];
       if (!el) return;
       if (track.kind === TrackEnum.Kind.Video) {
-        track.attach(el.querySelector("video") as HTMLVideoElement);
+        const vEl = el.querySelector("video") as HTMLVideoElement;
+        track.attach(vEl);
         bindLkPlaceholder(el, true);
         // A screen-share video → mark the tile so layout auto-focuses it (and
         // the video is letterboxed, not cropped). The tile id is "tile-<identity>".
         if (isScreenPub(_pub)) { screenShareIds.add(el.id); el.classList.add("screen"); }
+        // Re-layout once the real frame dimensions arrive + after paint, so a new
+        // (especially screen-share) video shows without needing a device rotation.
+        if (vEl) vEl.addEventListener("loadedmetadata", () => layoutGrid(), { once: true });
         layoutGrid();
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutGrid());
       } else if (track.kind === TrackEnum.Kind.Audio) {
-        track.attach(); // detached <audio> element for playback
+        const audioEl = track.attach() as HTMLMediaElement; // detached <audio> for playback
+        // Track it so the chosen output device (speaker/earpiece/BT) applies, and
+        // route it to the current sink right away.
+        lkAudioEls.push(audioEl);
+        void applyAudioSink(audioEl);
         // Don't flip the tile to audio-only (which hides the video) if this
         // participant is ALSO publishing camera video — audio commonly
         // subscribes first, and marking audio-only here is what stalls their
@@ -1052,7 +1155,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
       }
     });
     room.on(RoomEventEnum.TrackUnsubscribed, (track, _pub, participant) => {
-      try { track.detach(); } catch { /* */ }
+      let detached: HTMLMediaElement[] = [];
+      try { detached = (track.detach() as HTMLMediaElement[] | HTMLMediaElement) as HTMLMediaElement[]; } catch { /* */ }
+      // Drop any detached audio elements from the sink-tracking list.
+      const arr = Array.isArray(detached) ? detached : (detached ? [detached] : []);
+      arr.forEach(d => { const i = lkAudioEls.indexOf(d); if (i >= 0) lkAudioEls.splice(i, 1); });
       const el = lkParticipantTiles[participant.identity];
       if (el && track.kind === TrackEnum.Kind.Video) {
         if (isScreenPub(_pub)) {
@@ -1917,7 +2024,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!entry.el) return;
     entry.gotStream = true;
     const v = entry.el.querySelector("video") as HTMLVideoElement | null;
-    if (v) v.srcObject = stream;
+    if (v) { v.srcObject = stream; void applyAudioSink(v); }
     const c = entry.el.querySelector(".connecting") as HTMLElement | null;
     if (c) c.style.display = "none";
     // Tap the remote audio for active-speaker metering (mesh path only).
@@ -2227,13 +2334,25 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("screenBtn")?.classList.add("on");
     const selfTile = $("tile-self");
     const selfV = selfTile?.querySelector("video") as HTMLVideoElement | null;
-    if (selfV) selfV.srcObject = disp;
+    if (selfV) {
+      selfV.srcObject = disp;
+      selfV.playsInline = true;
+      // MOBILE FIX: the shared screen used to appear only after rotating the
+      // device — the tile wasn't re-laid-out once the capture's real dimensions
+      // arrived. Re-run layout on the first frame / a size change, and force a
+      // post-paint reflow, so it shows immediately.
+      const reflow = () => layoutGrid();
+      selfV.addEventListener("loadedmetadata", reflow, { once: true });
+      selfV.addEventListener("resize", reflow, { once: true });
+      try { await selfV.play(); } catch { /* autoplay is fine; muted self tile */ }
+    }
     // Screen content must never be mirrored, and isn't "audio-only".
     if (selfTile) { selfTile.classList.add("screen"); selfTile.classList.remove("audio-only"); }
     // Auto-focus our own share in the layout (until someone else's share or a
     // manual pin overrides it).
     screenShareIds.add("tile-self");
     layoutGrid();
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutGrid());
     screenBusy = false;
     toast("Sharing your screen");
   }
@@ -2338,8 +2457,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     pendingGroupInvites = [];
     for (const k in peerDevices) delete peerDevices[k];
     for (const k in peerRoles) delete peerRoles[k];
+    lkAudioEls.length = 0;
     myRole = null; roomHostPin = null;
-    closeHostPanel(); updateHostUI();
+    closeHostPanel(); closeAudioMenu(); updateHostUI();
     stopStatsSampler();
     teardownSpeakerMonitor();
     resetSpeakerView();
@@ -2446,13 +2566,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // before the add-button's own toggle; the add button is excluded so toggling
   // still works). This fixes the "can't close the add window during a call" bug.
   const onDocClickAddPad = (e: Event) => {
-    const pad = $("addpad");
-    if (!pad || !pad.classList.contains("open")) return;
     const t = e.target as Node | null;
     if (!t) return;
-    if (pad.contains(t)) return;
-    if (($("addBtn") as HTMLElement | null)?.contains(t)) return;
-    closeAddPad();
+    const outside = (panelId: string, btnId: string) => {
+      const p = $(panelId);
+      if (!p || !p.classList.contains("open")) return false;
+      if (p.contains(t)) return false;
+      if (($(btnId) as HTMLElement | null)?.contains(t)) return false;
+      return true;
+    };
+    if (outside("addpad", "addBtn")) closeAddPad();
+    if (outside("audioMenu", "audioBtn")) closeAudioMenu();
   };
   document.addEventListener("click", onDocClickAddPad, true);
   ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => hangUp("user-hangup"));
@@ -2469,6 +2593,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("recordBtn") as HTMLElement | null)?.addEventListener("click", toggleRecording);
   ($("qualityBtn") as HTMLElement | null)?.addEventListener("click", toggleQuality);
   updateQualityBtn();
+  // Audio output (speaker / earpiece / headset / Bluetooth).
+  ($("audioBtn") as HTMLElement | null)?.addEventListener("click", () => {
+    if ($("audioMenu")?.classList.contains("open")) closeAudioMenu();
+    else openAudioMenu();
+  });
+  ($("audioMenu") as HTMLElement | null)?.addEventListener("click", onAudioMenuClick);
+  updateAudioBtn();
+  if (typeof navigator !== "undefined" && navigator.mediaDevices?.addEventListener) {
+    try { navigator.mediaDevices.addEventListener("devicechange", onAudioDeviceChange); } catch { /* */ }
+  }
   ($("filterBtn") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("filterClose") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("chatSend") as HTMLElement | null)?.addEventListener("click", sendChat);
@@ -2585,6 +2719,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
       stopStatsSampler();
       if (callResizeObs) { try { callResizeObs.disconnect(); } catch { /* */ } callResizeObs = null; }
       document.removeEventListener("click", onDocClickAddPad, true);
+      if (typeof navigator !== "undefined" && navigator.mediaDevices?.removeEventListener) {
+        try { navigator.mediaDevices.removeEventListener("devicechange", onAudioDeviceChange); } catch { /* */ }
+      }
       document.removeEventListener("keydown", onDocKey);
       window.removeEventListener("beforeunload", onUnload);
       window.removeEventListener("offline", onOffline);

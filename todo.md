@@ -1351,3 +1351,22 @@ buttons + group call, share link + device chip, global UX (sticky nav/back/X), i
 controls, resolution + message popups, and the messaging overhaul. Deferred (noted in-line): per-
 participant national flag on tiles, real photo avatars in tiles, and guest-presence privacy on the
 message thread header (the contacts + directory surfaces are covered).
+
+## v2.43.0 — Audio output routing + Bluetooth + mobile screen-share render (delivered 2026-06-27)
+
+Three in-call audio/video fixes requested after the overhaul.
+
+- [x] **Audio output picker**: a speaker-icon button in the call bar opens an output menu (Automatic /
+      Speakerphone / Earpiece / wired / Bluetooth, listed by label). Applied via `setSinkId` to every
+      remote element — mesh remote `<video>` (audio rides it) + SFU detached `<audio>` (now tracked in
+      `lkAudioEls`). Persisted in localStorage. Shown only where the browser supports output selection
+      (Chrome Android/desktop; iOS routes via the OS, so the button hides).
+- [x] **Bluetooth headset now heard**: a `navigator.mediaDevices` `devicechange` listener re-applies the
+      chosen sink the moment a BT headset connects/disconnects mid-call, so audio follows to/from it.
+      New remote elements get the sink on creation; the listener is removed on destroy.
+- [x] **Mobile screen-share renders without rotating**: the self tile (and the SFU remote screen tile)
+      now re-layout on the capture's first frame (`loadedmetadata`/`resize`) plus a post-paint
+      `requestAnimationFrame`, and call `play()` — so the shared screen shows immediately instead of
+      only after a device rotation.
+- [x] An adversarial review workflow (3 dimensions + independent verification) is in flight; any
+      confirmed findings ship as a patch. 337 tests green, tsc + build clean. Footer → `v2.43.0`.
