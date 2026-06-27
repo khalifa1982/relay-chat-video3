@@ -2168,6 +2168,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const t = $("timer");
       if (t) t.textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
     }, 1000);
+    // If the user has enabled auto-PiP once, warm the compositor now so a later
+    // background auto-opens the PiP window with no tap.
+    primeAutoPip();
   }
   function addSelfTile() {
     const grid = $("videoGrid"); if (!grid) return;
@@ -2390,7 +2393,23 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let pipVideo: HTMLVideoElement | null = null;
   let pipStream: MediaStream | null = null;
   let pipActive = false;
+  let pipPrimed = false;      // compositor kept warm so the browser can AUTO-enter
+  let pipAutoEntered = false; // PiP was opened by backgrounding (not a manual tap)
   let pipTimer: ReturnType<typeof setInterval> | null = null;
+  const PIP_ACTIVE_MS = 80;   // smooth composite while the PiP window is showing
+  const PIP_PRIME_MS = 1000;  // trickle while primed-but-foreground (keeps track live)
+  // "Enable once" preference: when ON, PiP auto-engages whenever the user
+  // backgrounds the app during a call — no per-call tap. Persisted so it survives
+  // reloads / future calls.
+  function autoPipPref(): boolean {
+    try { return window.localStorage.getItem("relay_auto_pip") === "1"; } catch { return false; }
+  }
+  function setAutoPipPref(on: boolean): void {
+    try { window.localStorage.setItem("relay_auto_pip", on ? "1" : "0"); } catch { /* */ }
+  }
+  function isInPip(): boolean {
+    return !!(document as unknown as { pictureInPictureElement?: Element }).pictureInPictureElement;
+  }
   function pipSupported(): boolean {
     return typeof document !== "undefined" &&
       "pictureInPictureEnabled" in document &&
@@ -2412,7 +2431,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const cap = (pipCanvas as unknown as { captureStream?: (fps: number) => MediaStream }).captureStream;
     if (cap) { pipStream = cap.call(pipCanvas, 24); pipVideo.srcObject = pipStream; }
     document.body.appendChild(pipVideo);
-    pipVideo.addEventListener("leavepictureinpicture", () => { pipActive = false; stopPipLoop(); updatePipBtn(false); });
+    pipVideo.addEventListener("leavepictureinpicture", () => {
+      pipActive = false; pipAutoEntered = false;
+      // If auto-PiP is still primed, keep the compositor trickling so it can
+      // re-engage on the next background; otherwise stop the loop entirely.
+      if (pipPrimed) startPipLoop(PIP_PRIME_MS); else stopPipLoop();
+      updatePipBtn();
+    });
   }
   // The ordered <video> elements to feature: screen share first, then loudest
   // speakers, then DOM order, self last. Returns up to 2.
@@ -2437,7 +2462,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try { ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh); } catch { /* not ready */ }
   }
   function pipRender() {
-    if (!pipActive || !pipCanvas || !pipCtx) return;
+    if ((!pipActive && !pipPrimed) || !pipCanvas || !pipCtx) return;
     const W = pipCanvas.width, H = pipCanvas.height;
     pipCtx.fillStyle = "#0b0c10";
     pipCtx.fillRect(0, 0, W, H);
@@ -2452,21 +2477,26 @@ export function startRelay(root: HTMLElement): RelayHandle {
       pipDrawCover(pipCtx, vids[0], 0, 0, W, H);
     }
   }
-  function startPipLoop() {
+  function startPipLoop(intervalMs: number = PIP_ACTIVE_MS) {
     stopPipLoop();
     // ~12fps composite — plenty for a thumbnail. NOTE: a fully-backgrounded tab
     // throttles setInterval to ~1Hz (and mobile may freeze it), so the composite
     // can stall on its last frame while hidden; the PiP window + AUDIO still keep
     // the call alive, which is the main goal. Works best on Android Chrome/desktop.
-    pipTimer = setInterval(pipRender, 80);
+    // A slower interval is used while merely PRIMED (foreground) so we don't burn
+    // CPU compositing a window nobody's looking at yet.
+    pipTimer = setInterval(pipRender, intervalMs);
     pipRender();
   }
   function stopPipLoop() { if (pipTimer) { clearInterval(pipTimer); pipTimer = null; } }
-  function updatePipBtn(on: boolean) {
+  // The PiP control lights up whenever auto-PiP is ENABLED (the persistent pref),
+  // not just while a PiP window happens to be open — so the user can see at a
+  // glance that they've turned the "auto" behaviour on.
+  function updatePipBtn() {
     const b = $("pipBtn");
     if (!b) return;
     b.style.display = pipSupported() ? "" : "none";
-    b.classList.toggle("on", on);
+    b.classList.toggle("on", autoPipPref() || pipActive || isInPip());
   }
   async function enterPip() {
     if (!pipSupported() || !inCall) { toast("Picture-in-Picture isn't available here.", true); return; }
@@ -2481,26 +2511,94 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try {
       await (pipVideo as unknown as { requestPictureInPicture: () => Promise<unknown> }).requestPictureInPicture();
       void playing;
-      updatePipBtn(true);
+      updatePipBtn();
       toast("Picture-in-Picture on");
     } catch {
-      pipActive = false; stopPipLoop(); updatePipBtn(false);
+      pipActive = false;
+      if (pipPrimed) startPipLoop(PIP_PRIME_MS); else stopPipLoop();
+      updatePipBtn();
       toast("Couldn't start Picture-in-Picture.", true);
     }
   }
   async function exitPip() {
-    pipActive = false; stopPipLoop();
+    pipActive = false;
+    if (pipPrimed) startPipLoop(PIP_PRIME_MS); else stopPipLoop();
     try {
       const d = document as unknown as { pictureInPictureElement?: Element; exitPictureInPicture?: () => Promise<void> };
       if (d.pictureInPictureElement && d.exitPictureInPicture) await d.exitPictureInPicture();
     } catch { /* */ }
-    updatePipBtn(false);
+    updatePipBtn();
+  }
+  // Keep the off-screen composite PLAYING during the call so the browser can
+  // AUTO-enter PiP (via the autoPictureInPicture attribute) the instant the app
+  // is backgrounded — no per-call tap. Only primes when the user has enabled the
+  // pref once + the call supports PiP.
+  function primeAutoPip() {
+    if (!autoPipPref() || !pipSupported() || !inCall) return;
+    ensurePipCompositor();
+    pipPrimed = true;
+    if (!pipActive) startPipLoop(PIP_PRIME_MS);
+    pipVideo?.play().catch(() => {});
+    updatePipBtn();
+  }
+  function unprimeAutoPip() {
+    pipPrimed = false;
+    pipAutoEntered = false;
+    if (!pipActive) stopPipLoop();
+    try { pipVideo?.pause(); } catch { /* */ }
+  }
+  // Quiet auto-enter used on background (no user gesture, so no toast and a
+  // failed requestPictureInPicture() just falls back to the attribute path).
+  async function autoEnterPip() {
+    if (!pipSupported() || !inCall || isInPip()) return;
+    ensurePipCompositor();
+    pipActive = true;
+    startPipLoop(PIP_ACTIVE_MS);
+    const playing = pipVideo!.play().catch(() => {});
+    try {
+      await (pipVideo as unknown as { requestPictureInPicture: () => Promise<unknown> }).requestPictureInPicture();
+      void playing;
+    } catch {
+      // Background tab has no transient activation; rely on the autoPictureInPicture
+      // attribute to open it. Stay primed so the composite is live for that path.
+      pipActive = pipPrimed;
+    }
+    updatePipBtn();
+  }
+  // App backgrounded / foregrounded. When auto-PiP is enabled and we're in a
+  // call, open a PiP window on hide and close it (if WE opened it) on return.
+  function onVisibilityChange() {
+    if (typeof document === "undefined") return;
+    if (document.hidden) {
+      if (!inCall || !autoPipPref() || !pipSupported()) return;
+      const wasInPip = isInPip();
+      primeAutoPip();
+      startPipLoop(PIP_ACTIVE_MS);
+      if (!wasInPip) { pipAutoEntered = true; void autoEnterPip(); }
+    } else {
+      // Foreground again: drop an auto-opened PiP (the full grid is back), but
+      // leave a window the user opened by hand. Throttle the primed composite.
+      if (pipAutoEntered) { pipAutoEntered = false; void exitPip(); }
+      else if (pipPrimed && !pipActive) startPipLoop(PIP_PRIME_MS);
+    }
   }
   function togglePip() {
-    const inPip = !!(document as unknown as { pictureInPictureElement?: Element }).pictureInPictureElement;
-    if (pipActive || inPip) void exitPip(); else void enterPip();
+    // The PiP button is the "enable once" switch: ON arms auto-PiP (and opens a
+    // window now so the user sees it work); OFF disarms it.
+    if (autoPipPref() || pipActive || isInPip()) {
+      setAutoPipPref(false);
+      unprimeAutoPip();
+      void exitPip();
+      updatePipBtn();
+      toast("Auto Picture-in-Picture off");
+    } else {
+      setAutoPipPref(true);
+      primeAutoPip();
+      void enterPip();
+    }
   }
   function teardownPip() {
+    unprimeAutoPip();
     void exitPip();
     if (pipStream) { try { pipStream.getTracks().forEach(t => t.stop()); } catch { /* */ } pipStream = null; }
     if (pipVideo) { try { pipVideo.srcObject = null; pipVideo.remove(); } catch { /* */ } pipVideo = null; }
@@ -2794,7 +2892,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     lkAudioEls.length = 0;
     myRole = null; roomHostPin = null;
     closeHostPanel(); closeAudioMenu(); closeTileMenu(); updateHostUI();
-    void exitPip(); // leave PiP when the call ends
+    unprimeAutoPip(); void exitPip(); // leave PiP + stop priming when the call ends
     stopStatsSampler();
     teardownSpeakerMonitor();
     resetSpeakerView();
@@ -2941,9 +3039,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
   });
   ($("audioMenu") as HTMLElement | null)?.addEventListener("click", onAudioMenuClick);
   updateAudioBtn();
-  // Picture-in-Picture (composited active speakers).
+  // Picture-in-Picture (composited active speakers). The button reflects the
+  // persistent auto-PiP pref, so it lights up on load if previously enabled.
   ($("pipBtn") as HTMLElement | null)?.addEventListener("click", togglePip);
-  updatePipBtn(false);
+  updatePipBtn();
+  // Auto-PiP: when enabled, open a PiP window the moment the app is backgrounded
+  // mid-call (and close it on return). One listener for the engine's lifetime.
+  document.addEventListener("visibilitychange", onVisibilityChange);
   if (typeof navigator !== "undefined" && navigator.mediaDevices?.addEventListener) {
     try { navigator.mediaDevices.addEventListener("devicechange", onAudioDeviceChange); } catch { /* */ }
   }
@@ -3079,6 +3181,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         try { navigator.mediaDevices.removeEventListener("devicechange", onAudioDeviceChange); } catch { /* */ }
       }
       document.removeEventListener("keydown", onDocKey);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("beforeunload", onUnload);
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("online", onOnline);

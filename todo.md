@@ -1476,3 +1476,36 @@ Five refinements + the v2.44 review fixes.
       host can remove a co-host. "Remove" also added to the host-panel rows.
 - [x] 2 new server tests (kick removes membership; can't kick the host) + a CSS guard. 357 tests green,
       tsc + build clean. Footer → `v2.47.0`.
+
+## v2.48.0 — Auto-update checker + "enable once" auto Picture-in-Picture (delivered 2026-06-27)
+
+- [x] **Auto-update checker.** The app version now lives in `shared/version.ts` (single source of truth):
+      baked into the client bundle AND served at runtime from a new `GET /api/version` (no-store). A
+      mounted-once `UpdateChecker` polls it **every 30s** and compares the running deploy's version with
+      the version baked into the loaded tab. On a mismatch (a new deploy is live):
+        - **In a call** (engine `phase !== "idle"`) → the page **reloads silently**. Persistent call
+          membership + auto-rejoin (a refresh keeps the server-side membership — see relayClient
+          `onUnload`) re-enter the same room on the fresh bundle, so the user keeps talking without
+          noticing. Guarded against double-reload.
+        - **Idle** → a **centered, clickable** "New version available · Refresh now" modal. "Later"
+          only hides it briefly (`REAPPEAR_MS`); it reappears so an update can't be ignored forever. The
+          card is gated on `phase === "idle"` so it never interrupts an active call.
+- [x] **"Enable once" auto Picture-in-Picture.** The PiP button is now a *persistent* toggle
+      (`relay_auto_pip` in localStorage) — enable it once and PiP auto-engages on every future call.
+      When ON, the compositor is **primed** at call start (`primeAutoPip` in `enterCallUI`) and the
+      off-screen composite video is kept playing, so the browser's `autoPictureInPicture` attribute
+      **auto-opens** a 2-up active-speaker PiP the instant the app is backgrounded mid-call — no per-call
+      tap. A `visibilitychange` listener best-effort-opens it (gesture-free, failures fall back to the
+      attribute) and **closes** an auto-opened window on return (a hand-opened one is left alone). Priming
+      runs a slow trickle (1 fps) foreground, full rate in PiP, and is fully torn down on hang-up
+      (`unprimeAutoPip`) so an idle engine never leaks a compositor/timer. (Camera + mic stay automatic:
+      browser permission persists after the one-time grant, and every call still starts with both on.)
+- [x] **Adversarial review hardening** (3-dimension workflow → verify, all findings independently
+      verified): the updater now acts **only on a strictly-newer** server version (`isNewer` semver
+      compare in `updateVersion.ts`) so a multi-instance Cloud Run rollout — where a tab already on the
+      NEW bundle can poll a still-OLD instance — never flaps/reloads; a **sessionStorage cooldown**
+      (`relay_update_reload_ts`, 60s) survives the reload so a stale CDN/asset edge can't loop; and the
+      silent reload fires **only for an established `in-call`** (not `dialing`/`ringing`, which have no
+      server membership to auto-rejoin and would drop the outgoing dial).
+- [x] 26 new tests (version constant + endpoint, UpdateChecker contract, `isNewer` semver behaviour,
+      auto-PiP wiring). 379 tests green, tsc + build clean. Footer → `v2.48.0`.

@@ -1,9 +1,12 @@
-/* Single source of truth for the app version + the build-stamped footer line. */
+/* The app version + the build-stamped footer line. The version lives in
+ * @shared/version so the SERVER serves the same value at /api/version (the
+ * auto-update checker compares the baked-in version with the server's). */
+
+import { APP_VERSION } from "@shared/version";
+export { APP_VERSION };
 
 // Injected by Vite `define` at build time (see vite.config.ts).
 declare const __BUILD_DATE__: string;
-
-export const APP_VERSION = "2.47.0";
 
 /** Build date (UTC YYYY-MM-DD), stamped at build time. Falls back to the current
  *  date in dev/test where the Vite `define` isn't applied. */

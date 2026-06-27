@@ -11,6 +11,7 @@ import { AppShell } from "./app/AppShell";
 import { RelayEngineProvider } from "./app/RelayEngine";
 import { PresenceManager } from "./app/PresenceManager";
 import { MessagePopups } from "./app/MessagePopups";
+import { UpdateChecker } from "./app/UpdateChecker";
 import Dialer from "./pages/app/Dialer";
 import History from "./pages/app/History";
 import Messages from "./pages/app/Messages";
@@ -85,6 +86,9 @@ function App() {
                 useIdentity() call site). */}
             <PresenceManager />
             <MessagePopups />
+            {/* Polls /api/version every 30s; silent reload mid-call, centered
+                refresh prompt when idle. */}
+            <UpdateChecker />
             <Router />
           </RelayEngineProvider>
         </TooltipProvider>
