@@ -102,7 +102,7 @@ export default function ContactsPage() {
           className="h-11"
         />
       </div>
-      <div className="flex-1 overflow-y-auto md:rounded-2xl md:border md:border-border md:bg-card">
+      <div className="flex-1 overflow-y-auto pb-24 md:pb-0 md:rounded-2xl md:border md:border-border md:bg-card">
         {contacts.isLoading ? (
           <div className="p-6 text-sm text-muted-foreground">Loading…</div>
         ) : filtered.length === 0 ? (

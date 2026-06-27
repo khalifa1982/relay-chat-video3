@@ -52,4 +52,10 @@ describe("relay call UI regression guards", () => {
   it("a screen-share tile letterboxes its video (object-fit:contain, never cropped)", () => {
     expect(RELAY_CSS).toMatch(/\.relay-tile\.screen video\{[^}]*object-fit:contain/);
   });
+
+  // ── dismissible add-person pad (v2.38) ─────────────────────────────────────
+  it("the in-call add-person pad has a visible close (X) control", () => {
+    expect(RELAY_MARKUP).toMatch(/id="addClose"/);
+    expect(RELAY_CSS).toMatch(/#addClose\{/);
+  });
 });

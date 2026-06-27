@@ -113,6 +113,7 @@ export const RELAY_MARKUP = `
 
     <div class="controls">
       <div class="addpad" id="addpad">
+        <div class="addpad-head"><span>Add person</span><button id="addClose" type="button" aria-label="Cancel" title="Cancel">&#10005;</button></div>
         <input id="addInput" maxlength="6" inputmode="numeric" placeholder="000000">
         <button id="addGo">Add to call</button>
       </div>
@@ -474,6 +475,9 @@ export const RELAY_CSS = `
   border:1px solid var(--border2);border-radius:18px;padding:18px;display:none;flex-direction:column;gap:12px;width:240px;
   box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:30}
 .relay-root .addpad.open{display:flex;animation:relayFade .2s ease both}
+.relay-root .addpad-head{display:flex;align-items:center;justify-content:space-between;font-size:13px;font-weight:600;color:var(--text)}
+.relay-root #addClose{background:none;border:none;color:var(--text2,#9aa);font-size:14px;line-height:1;cursor:pointer;padding:3px 7px;border-radius:8px;font-weight:700}
+.relay-root #addClose:hover{background:var(--bg2);color:var(--text)}
 .relay-root .addpad input{background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:12px;text-align:center;
   font-family:"JetBrains Mono";font-weight:700;letter-spacing:.18em;color:var(--text);font-size:16px;outline:none}
 .relay-root .addpad input:focus{border-color:var(--accent)}

@@ -2096,8 +2096,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
   };
   const onBackKey = () => { dialed = dialed.slice(0, -1); refreshDisplay(); };
   const onChatField = (e: KeyboardEvent) => { if (e.key === "Enter") sendChat(); };
-  const onAddInput = (e: KeyboardEvent) => { if (e.key === "Enter") addToCall(); };
+  const onAddInput = (e: KeyboardEvent) => {
+    if (e.key === "Enter") addToCall();
+    else if (e.key === "Escape") closeAddPad();
+  };
   const onDocKey = (e: KeyboardEvent) => {
+    // Escape closes the add-person pad first (a dismissible floating panel).
+    if (e.key === "Escape" && $("addpad")?.classList.contains("open")) {
+      e.preventDefault();
+      closeAddPad();
+      return;
+    }
     // Diagnostics shortcut works on any screen (lower- and upper-case).
     if (e.key === "?" || (e.shiftKey && e.key === "/")) {
       e.preventDefault();
@@ -2133,6 +2142,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("chatClose") as HTMLElement | null)?.addEventListener("click", toggleChat);
   ($("addBtn") as HTMLElement | null)?.addEventListener("click", openAddPad);
   ($("addGo") as HTMLElement | null)?.addEventListener("click", addToCall);
+  ($("addClose") as HTMLElement | null)?.addEventListener("click", closeAddPad);
+  // Dismiss the add-person pad on an outside click (capture phase so it runs
+  // before the add-button's own toggle; the add button is excluded so toggling
+  // still works). This fixes the "can't close the add window during a call" bug.
+  const onDocClickAddPad = (e: Event) => {
+    const pad = $("addpad");
+    if (!pad || !pad.classList.contains("open")) return;
+    const t = e.target as Node | null;
+    if (!t) return;
+    if (pad.contains(t)) return;
+    if (($("addBtn") as HTMLElement | null)?.contains(t)) return;
+    closeAddPad();
+  };
+  document.addEventListener("click", onDocClickAddPad, true);
   ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => hangUp("user-hangup"));
   ($("flipCamBtn") as HTMLElement | null)?.addEventListener("click", () => { flipCamera(); });
   ($("screenBtn") as HTMLElement | null)?.addEventListener("click", () => { void toggleScreenShare(); });
@@ -2259,6 +2282,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       }
       teardownSpeakerMonitor();
       if (callResizeObs) { try { callResizeObs.disconnect(); } catch { /* */ } callResizeObs = null; }
+      document.removeEventListener("click", onDocClickAddPad, true);
       document.removeEventListener("keydown", onDocKey);
       window.removeEventListener("beforeunload", onUnload);
       window.removeEventListener("offline", onOffline);

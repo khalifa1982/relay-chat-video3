@@ -125,7 +125,10 @@ export default function ProfilePage() {
     .join("") || "?";
 
   return (
-    <div className="h-full overflow-auto">
+    // Flow within the AppShell's scroll container (which already reserves space
+    // for the fixed bottom nav) instead of creating a competing scroll area —
+    // otherwise the last controls sit UNDER the nav with no way to reach them.
+    <div className="min-h-full">
       <div className="max-w-xl mx-auto p-6 space-y-8">
         <header>
           <h1 className="text-2xl font-semibold tracking-tight">Profile</h1>

@@ -1256,3 +1256,19 @@ Batches 2–4 of the UX overhaul.
 - [x] **Device chip on the main screen**: a dynamically-detected "Mobile"/"Desktop" chip sits next to
       the country flag (sidebar + mobile header). New `detectDeviceType()` util + 4 tests.
 - [x] 307 tests green, tsc + build clean. Footer → `v2.37.0`.
+
+## v2.38.0 — Global UX: dismissible add-pad, Back button, sticky-nav clearance (delivered 2026-06-27)
+
+Batch 6 of the UX overhaul.
+
+- [x] In-call "add person" pad is now dismissible: a visible X (#addClose), an outside click (capture
+      phase, excludes the add button so toggling still works), and Escape all close it instantly.
+      Fixes the "can't close the add window during a mobile call" lock-up.
+- [x] Universal Back button in the mobile header on the Profile sub-page (history.back, falls back to
+      the dialer).
+- [x] Sticky-nav clearance: Profile no longer creates a competing `h-full overflow-auto` scroll area
+      (its Sign-out control sat UNDER the fixed bottom nav with no way to reach it) — it now flows
+      within the AppShell scroll container, which already reserves nav space. Contacts list gains
+      `pb-24` so the last contact clears the nav. The bottom nav remains fixed to the viewport.
+- [x] X close is present on all modals/popups (contacts dialog, group-call picker, add-pad).
+- [x] 1 new test (add-pad close guard). 308 tests green, tsc + build clean. Footer → `v2.38.0`.

@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { Link, useLocation } from "wouter";
-import { Phone, MessageSquare, UserRound, Clock, LogOut, Sparkles, Sun, Moon, Bell, BellOff, Smartphone, Monitor } from "lucide-react";
+import { Phone, MessageSquare, UserRound, Clock, LogOut, Sparkles, Sun, Moon, Bell, BellOff, Smartphone, Monitor, ArrowLeft } from "lucide-react";
 import { detectDeviceType } from "@/lib/deviceType";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
@@ -100,7 +100,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
 function Inner({ children }: { children: React.ReactNode }) {
   const { me, signOut } = useIdentity();
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
   const utils = trpc.useUtils();
 
   // Open the SSE push channel as soon as we know we have an identity.
@@ -129,6 +129,14 @@ function Inner({ children }: { children: React.ReactNode }) {
     refetchOnWindowFocus: false,
   });
   const { theme, setTheme } = useTheme();
+  // Universal Back: Profile is the one drill-in route off the tab bar (message
+  // threads handle their own in-page back). Go back in history, or fall back to
+  // the dialer if there's nowhere to go.
+  const isSubPage = location.startsWith("/app/profile");
+  const goBack = () => {
+    if (typeof window !== "undefined" && window.history.length > 1) window.history.back();
+    else navigate("/app/dialer");
+  };
   const unreadTotal = useMemo(
     () =>
       (threads.data ?? []).reduce((acc, t) => acc + (t.unreadCount ?? 0), 0),
@@ -278,6 +286,16 @@ function Inner({ children }: { children: React.ReactNode }) {
             "supports-[backdrop-filter]:bg-card/45 supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150"
           }
         >
+          {isSubPage && (
+            <button
+              type="button"
+              onClick={goBack}
+              aria-label="Back"
+              className="mr-1 grid size-9 shrink-0 place-items-center rounded-xl text-foreground hover:bg-muted/50 active:scale-95 transition"
+            >
+              <ArrowLeft className="size-5" />
+            </button>
+          )}
           <Link
             href="/app/profile"
             className="flex items-center gap-3 min-w-0 active:opacity-70 transition-opacity"
