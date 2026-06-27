@@ -42,6 +42,7 @@ import {
   updateIdentityProfile,
   upsertContact,
   getConversationParticipantIds,
+  recentAutoReplyExists,
 } from "./v2db";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 
@@ -667,6 +668,49 @@ export const v2MessagesRouter = router({
       } catch {
         /* push is best-effort; polling is the safety net */
       }
+
+      // Offline auto-reply (1:1 only — avoids group spam). If the single other
+      // party is offline and hasn't auto-replied in the last 10 min, post a
+      // one-time auto-reply FROM them so the sender knows they'll reply later.
+      try {
+        const peerIds = (
+          await getConversationParticipantIds(input.conversationId)
+        ).filter((p) => p !== me.id);
+        if (peerIds.length === 1) {
+          const peerId = peerIds[0];
+          const [pres] = await getPresenceForIds([peerId]);
+          const offline = !pres?.isOnline;
+          if (
+            offline &&
+            !(await recentAutoReplyExists(input.conversationId, peerId, 10 * 60 * 1000))
+          ) {
+            const peer = await getIdentityById(peerId);
+            const name = peer?.displayName || "They";
+            const autoRow = await sendMessage({
+              conversationId: input.conversationId,
+              senderIdentityId: peerId,
+              kind: "text",
+              body: `${name} is away right now and will reply when they're back. (Auto-reply)`,
+              meta: { autoReply: true },
+            });
+            if (autoRow) {
+              publishToIdentity(me.id, {
+                kind: "message",
+                conversationId: input.conversationId,
+                from: peerId,
+              });
+              publishToIdentity(peerId, {
+                kind: "message",
+                conversationId: input.conversationId,
+                from: peerId,
+              });
+            }
+          }
+        }
+      } catch {
+        /* auto-reply is best-effort */
+      }
+
       return row;
     }),
 

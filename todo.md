@@ -661,3 +661,13 @@ cosmetic by-design item).
       `…/app/dialer?to=<number>` (native share sheet on mobile, clipboard else); opening it
       auto-dials the sharer (the Dialer already honors `?to=`).
 - [x] Footer → `v2.14.0`. tsc clean, build clean.
+
+## v2.15.0 — Offline auto-reply (delivered 2026-06-27)
+
+- [x] **Auto-reply when offline** — when you message someone who's offline in a 1:1, the
+      system posts a one-time auto-reply FROM them ("… is away right now and will reply
+      when they're back."), rate-limited to once per 10 min per conversation (no spam),
+      pushed live to both sides. No schema change; marked `meta.autoReply` + a
+      `recentAutoReplyExists` dedup. Group threads are excluded (avoids N auto-replies).
+- [ ] Follow-up: a per-user toggle + custom auto-reply text (needs a settings column).
+- [x] Footer → `v2.15.0`. tsc clean, 189/190 vitest, build clean.

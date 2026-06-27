@@ -860,6 +860,31 @@ export async function sendMessage(input: {
   });
 }
 
+/** True if `senderIdentityId` already posted an auto-reply in this conversation
+ *  within `sinceMs` — used to rate-limit offline auto-replies (one per window). */
+export async function recentAutoReplyExists(
+  conversationId: number,
+  senderIdentityId: number,
+  sinceMs: number
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const cutoff = new Date(Date.now() - sinceMs);
+  const rows = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.senderIdentityId, senderIdentityId),
+        gte(messages.createdAt, cutoff),
+        sql`JSON_EXTRACT(${messages.meta}, '$.autoReply') IS NOT NULL`
+      )
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
 export async function getConversationParticipantIds(
   conversationId: number
 ): Promise<number[]> {
