@@ -82,6 +82,18 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     if (geo.data?.flagEmoji) handleRef.current?.setSelfFlag(geo.data.flagEmoji);
   }, [geo.data?.flagEmoji]);
 
+  // Reconcile the relay signaling pin to the AUTHORITATIVE identity number, so the
+  // dialer's big number == the header number == the actually-dialable pin. The
+  // engine can first register with a stale localStorage pin before whoami's
+  // `number` has loaded; setPreferredPin then switches it to the identity number
+  // while idle. We re-run when `ready` flips true (engine has registered, so its
+  // pin is known and a switch can take effect) AND on any later number change.
+  // Without this the user sees TWO different numbers and the displayed one can't
+  // be reached. setPreferredPin no-ops once the pins already match, so no loop.
+  useEffect(() => {
+    if (ready && me?.number) handleRef.current?.setPreferredPin(me.number);
+  }, [me?.number, ready]);
+
   useEffect(() => {
     if (!inApp || !me) return;
     const el = engineRoot.current;

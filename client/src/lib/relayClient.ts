@@ -3284,7 +3284,22 @@ export function startRelay(root: HTMLElement): RelayHandle {
     setOnStateChange(cb) { onPhaseChange = cb; },
     getPin() { return me.pin; },
     setPreferredPin(pin) {
-      preferredPin = pin && /^\d{6}$/.test(pin) ? pin : null;
+      const next = pin && /^\d{6}$/.test(pin) ? pin : null;
+      preferredPin = next;
+      // Reconcile to the AUTHORITATIVE identity number. If we already registered
+      // under a DIFFERENT pin — e.g. a stale localStorage `relay_pin` reused
+      // before the identity number had loaded, or a number that only arrived
+      // after the first register — switch to it now so the dialer's big number,
+      // the header number, and the actually-dialable signaling pin are ONE
+      // number (otherwise the user sees two numbers and the displayed one can't
+      // be reached). The server treats a new pin from the same cid as an identity
+      // switch (drops the old, takes the new). NEVER switch mid-call: an identity
+      // switch tears down room membership.
+      if (next && me.pin && next !== me.pin && !inCall && ws && ws.readyState === 1) {
+        me.pin = next;
+        try { window.localStorage.setItem("relay_pin", next); } catch { /* */ }
+        sendWS({ type: "register", name: me.name || wantName || "Guest", pin: next, device: detectDeviceType(), flag: selfFlag || undefined });
+      }
     },
     setSelfFlag(flag) {
       const f = (flag || "").slice(0, 8);
