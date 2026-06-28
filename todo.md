@@ -1529,3 +1529,34 @@ Three fixes from on-device feedback about the in-call "+" add-person window and 
       decides. (The only invite still suppressed is a redundant one into a room the caller is already in.)
 - [x] Updated the relay "busy" test to assert the new ring-through (call-waiting) behaviour; added keypad
       markup guards. 381 tests green, tsc + build clean. Footer → `v2.49.0`.
+
+## v2.50.0 — iOS PiP video fix + two call-routing fixes from adversarial review (delivered 2026-06-28)
+
+The reported iPhone bug, plus two real defects the v2.49 adversarial review surfaced (both verified by
+deterministic reproduction).
+
+- [x] **iOS Picture-in-Picture now shows video (not just audio).** iOS Safari can't render a
+      `canvas.captureStream()` source inside a PiP window (it pipes a black frame) and throttles canvas
+      compositing in the background — so the 2-up composite that works on Android Chrome showed audio-only
+      on iPhone. On iOS we now feed the PiP `<video>` a **real remote MediaStream** (the active speaker),
+      driven through the **WebKit presentation-mode API** (`webkitSetPresentationMode`), and follow the
+      talker by swapping `srcObject`. Android/desktop keep the canvas 2-up composite unchanged. (iOS shows
+      a single active speaker, not the 2-up, because a `<video>` only renders one stream — but you now see
+      a face instead of black.)
+- [x] **Call-waiting switch no longer drops you (race fix).** Answering a call-waiting call
+      (`switchCall`) used to fire `{hold}`, `{leave}`, `{accept}` as three un-ordered POSTs; if `accept`
+      landed before `leave`, the late `leave` ran against the room you'd *just* joined and ejected you,
+      collapsing the new caller's call too. Fixed by **dropping the explicit `leave`** — the server's
+      `accept` handler already leaves your prior room before joining the new one, so one message does it
+      atomically. (Newly reachable because v2.49 enabled call waiting for established calls.)
+- [x] **Adding an offline number no longer kills your call.** Auto-inviting an offline/nonexistent number
+      from the in-call "+" pad returned the server's `offline` error, which the generic handler used to
+      treat as "primary dial failed → hang up if alone" — tearing down your in-progress call when you were
+      momentarily alone (e.g. still ringing). A transient **`addInviteOfflineGuard`** (armed around the
+      add-invite) now suppresses that teardown for add-to-call invites; the primary-dial behaviour is
+      unchanged.
+- [x] **Paste fix:** the add-person field `maxlength` was raised 6 → 16 so pasting a formatted number
+      ("12-34-56") isn't truncated to the wrong digits before sanitization (`addInputValue` still caps to
+      6 digits).
+- [x] 6 new tests (server accept-relocates-atomically regression, iOS-PiP + call-fix source guards). 387
+      tests green, tsc + build clean. Footer → `v2.50.0`.
