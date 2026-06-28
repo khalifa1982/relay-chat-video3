@@ -145,6 +145,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let recordingOn = false;        // a recording is in progress for this room
   let inCall = false;
   let roomId: string | null = null;
+  // Set briefly while an add-to-call invite is in flight, so an "offline" error
+  // for THAT invite doesn't trip the call-teardown path in the `error` handler
+  // (which exists for the PRIMARY dial target — dialing someone offline should
+  // end your empty call, but adding an offline number must not kill the call
+  // you're already in, e.g. while it's still ringing and you're momentarily alone).
+  let addInviteOfflineGuard = false;
+  let addInviteGuardT: ReturnType<typeof setTimeout> | null = null;
   const peers: Record<string, PeerEntry> = {};
   // Group call: extra invitees queued until the server confirms the room, so a
   // fresh group dial can't race into two separate rooms.
@@ -372,11 +379,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
         break;
       case "signal":       onSignal(m.from!, m.data); break;
       case "ice":          onIceServers(m); break;
-      case "error":
+      case "error": {
         toast(m.message || "Something went wrong.", true);
-        if ((m.code === "offline" || m.code === "self" || m.code === "gone")
-            && inCall && aloneInCall()) hangUp("server-error:" + (m.code || "?"));
+        const fatalCode = m.code === "offline" || m.code === "self" || m.code === "gone";
+        if (addInviteOfflineGuard && m.code === "offline") {
+          // Offline error for an add-to-call invite — don't tear down our call.
+          addInviteOfflineGuard = false;
+          if (addInviteGuardT) { clearTimeout(addInviteGuardT); addInviteGuardT = null; }
+        } else if (fatalCode && inCall && aloneInCall()) {
+          hangUp("server-error:" + (m.code || "?"));
+        }
         break;
+      }
     }
   }
 
@@ -1019,10 +1033,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
     hideCallWaiting();
     if (!w) return;
     // Tell the CURRENT room's members we're putting them on hold to take another
-    // call (they'll see an "on hold" status), THEN leave + accept the new call,
-    // reusing the same camera/mic stream (no idle flash).
+    // call (they'll see an "on hold" status), then accept the new call, reusing
+    // the same camera/mic stream (no idle flash).
     sendWS({ type: "hold", action: "on" });
-    sendWS({ type: "leave", reason: "switch-call" });
+    // Do NOT send an explicit `leave` here. `accept` already makes the server
+    // leave our prior room (it calls leaveRoom before joining the new one), so a
+    // separate `leave` POST is redundant — and worse, the two un-ordered POSTs
+    // can race: if `accept` lands first, the late `leave` then runs against our
+    // NEW room and ejects us from the call we just answered. One message = atomic.
     for (const id in peers) { try { peers[id].pc.close(); } catch { /* */ } if (peers[id].el) peers[id].el!.remove(); delete peers[id]; }
     teardownLivekit();
     roomId = w.roomId;
@@ -2407,41 +2425,86 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function setAutoPipPref(on: boolean): void {
     try { window.localStorage.setItem("relay_auto_pip", on ? "1" : "0"); } catch { /* */ }
   }
+  // iOS Safari can't render a canvas.captureStream() source inside a PiP window
+  // (it shows black) and throttles canvas compositing in the background — so on
+  // iOS we PiP a REAL remote MediaStream (the single active speaker) instead of
+  // the 2-up canvas composite. iPhone also drives PiP through the older WebKit
+  // presentation-mode API rather than the standard requestPictureInPicture().
+  const IS_IOS = (() => {
+    try {
+      const ua = navigator.userAgent || "";
+      return /iP(hone|od|ad)/.test(ua)
+        || (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1); // iPadOS poses as Mac
+    } catch { return false; }
+  })();
+  type WebkitVideo = HTMLVideoElement & {
+    webkitSupportsPresentationMode?: (m: string) => boolean;
+    webkitSetPresentationMode?: (m: string) => void;
+    webkitPresentationMode?: string;
+  };
+  function iosPipCapable(): boolean {
+    try {
+      const v = document.createElement("video") as WebkitVideo;
+      return typeof v.webkitSetPresentationMode === "function"
+        && (typeof v.webkitSupportsPresentationMode !== "function"
+            || v.webkitSupportsPresentationMode("picture-in-picture"));
+    } catch { return false; }
+  }
   function isInPip(): boolean {
-    return !!(document as unknown as { pictureInPictureElement?: Element }).pictureInPictureElement;
+    if ((document as unknown as { pictureInPictureElement?: Element }).pictureInPictureElement) return true;
+    const wv = pipVideo as WebkitVideo | null;
+    return !!(wv && wv.webkitPresentationMode === "picture-in-picture");
   }
   function pipSupported(): boolean {
-    return typeof document !== "undefined" &&
-      "pictureInPictureEnabled" in document &&
-      !!(document as unknown as { pictureInPictureEnabled?: boolean }).pictureInPictureEnabled &&
-      // Compositing needs canvas.captureStream; without it (older WebKit / iOS
-      // Safari) the PiP video would be track-less, so hide the control.
-      typeof HTMLCanvasElement !== "undefined" &&
-      typeof (HTMLCanvasElement.prototype as unknown as { captureStream?: unknown }).captureStream === "function";
+    if (typeof document === "undefined") return false;
+    // Standard API (Android Chrome / desktop): the 2-up composite needs
+    // canvas.captureStream to feed the PiP <video>.
+    const std =
+      "pictureInPictureEnabled" in document
+      && !!(document as unknown as { pictureInPictureEnabled?: boolean }).pictureInPictureEnabled
+      && typeof HTMLCanvasElement !== "undefined"
+      && typeof (HTMLCanvasElement.prototype as unknown as { captureStream?: unknown }).captureStream === "function";
+    // iOS path: real-stream PiP via the WebKit presentation-mode API.
+    return std || (IS_IOS && iosPipCapable());
+  }
+  // Fired when the PiP window closes (standard `leavepictureinpicture` on
+  // Android/desktop, or a WebKit presentation-mode change to non-PiP on iOS).
+  function onPipLeft() {
+    pipActive = false; pipAutoEntered = false;
+    // If auto-PiP is still primed, keep the compositor trickling so it can
+    // re-engage on the next background; otherwise stop the loop entirely.
+    if (pipPrimed) startPipLoop(PIP_PRIME_MS); else stopPipLoop();
+    updatePipBtn();
   }
   function ensurePipCompositor() {
-    if (pipCanvas) return;
-    pipCanvas = document.createElement("canvas");
-    pipCanvas.width = 640; pipCanvas.height = 360;
-    pipCtx = pipCanvas.getContext("2d");
+    if (pipVideo) return;
     pipVideo = document.createElement("video");
     pipVideo.muted = true; pipVideo.playsInline = true; pipVideo.autoplay = true;
     (pipVideo as unknown as { autoPictureInPicture?: boolean }).autoPictureInPicture = true;
     pipVideo.setAttribute("style", "position:fixed;left:-10000px;top:0;width:2px;height:2px;opacity:0;pointer-events:none");
-    const cap = (pipCanvas as unknown as { captureStream?: (fps: number) => MediaStream }).captureStream;
-    if (cap) { pipStream = cap.call(pipCanvas, 24); pipVideo.srcObject = pipStream; }
+    if (!IS_IOS) {
+      // Android/desktop: composite the top-2 speakers onto a canvas and feed the
+      // PiP <video> from canvas.captureStream (gives the 2-up split).
+      pipCanvas = document.createElement("canvas");
+      pipCanvas.width = 640; pipCanvas.height = 360;
+      pipCtx = pipCanvas.getContext("2d");
+      const cap = (pipCanvas as unknown as { captureStream?: (fps: number) => MediaStream }).captureStream;
+      if (cap) { pipStream = cap.call(pipCanvas, 24); pipVideo.srcObject = pipStream; }
+    }
+    // On iOS the canvas path renders black in PiP, so pipVideo.srcObject is set
+    // to a REAL remote stream (the active speaker) in pipRefreshIosSource().
     document.body.appendChild(pipVideo);
-    pipVideo.addEventListener("leavepictureinpicture", () => {
-      pipActive = false; pipAutoEntered = false;
-      // If auto-PiP is still primed, keep the compositor trickling so it can
-      // re-engage on the next background; otherwise stop the loop entirely.
-      if (pipPrimed) startPipLoop(PIP_PRIME_MS); else stopPipLoop();
-      updatePipBtn();
+    pipVideo.addEventListener("leavepictureinpicture", onPipLeft);
+    pipVideo.addEventListener("webkitpresentationmodechanged", () => {
+      const m = (pipVideo as WebkitVideo | null)?.webkitPresentationMode;
+      if (m && m !== "picture-in-picture") onPipLeft();
     });
   }
   // The ordered <video> elements to feature: screen share first, then loudest
-  // speakers, then DOM order, self last. Returns up to 2.
-  function pipSourceVideos(): HTMLVideoElement[] {
+  // speakers, then DOM order, self last. Returns up to 2 (or up to 4 when
+  // `loose`, which also skips the videoWidth>0 gate — used on iOS where a
+  // backgrounded tile can report 0 width but still carry a live track).
+  function pipSourceVideos(loose = false): HTMLVideoElement[] {
     const ids: string[] = [];
     const push = (id?: string | null) => { if (id && !ids.includes(id) && document.getElementById(id)) ids.push(id); };
     screenShareIds.forEach(push);
@@ -2450,9 +2513,28 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const grid = $("videoGrid");
     if (grid) Array.from(grid.children).forEach(c => { const id = (c as HTMLElement).id; if (id !== "tile-self") push(id); });
     push("tile-self");
-    return ids.slice(0, 2)
+    return ids.slice(0, loose ? 4 : 2)
       .map(id => document.getElementById(id)?.querySelector("video") as HTMLVideoElement | null)
-      .filter((v): v is HTMLVideoElement => !!v && v.videoWidth > 0);
+      .filter((v): v is HTMLVideoElement => !!v && (loose || v.videoWidth > 0));
+  }
+  // iOS: the single best REAL remote stream to show in PiP (screen share >
+  // active speaker > first remote tile with a live video track).
+  function iosPipStream(): MediaStream | null {
+    for (const v of pipSourceVideos(true)) {
+      const s = v.srcObject as MediaStream | null;
+      if (s && s.getVideoTracks().some(t => t.readyState === "live")) return s;
+    }
+    return null;
+  }
+  // iOS: point pipVideo at the current active-speaker stream (called from the
+  // render tick + before entering PiP) so the PiP window follows the talker.
+  function pipRefreshIosSource() {
+    if (!pipVideo) return;
+    const stream = iosPipStream();
+    if (stream && pipVideo.srcObject !== stream) {
+      pipVideo.srcObject = stream;
+      pipVideo.play().catch(() => {});
+    }
   }
   function pipDrawCover(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, dx: number, dy: number, dw: number, dh: number) {
     const vw = video.videoWidth || 16, vh = video.videoHeight || 9;
@@ -2462,7 +2544,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try { ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh); } catch { /* not ready */ }
   }
   function pipRender() {
-    if ((!pipActive && !pipPrimed) || !pipCanvas || !pipCtx) return;
+    if (!pipActive && !pipPrimed) return;
+    if (IS_IOS) { pipRefreshIosSource(); return; } // real-stream path, no canvas
+    if (!pipCanvas || !pipCtx) return;
     const W = pipCanvas.width, H = pipCanvas.height;
     pipCtx.fillStyle = "#0b0c10";
     pipCtx.fillRect(0, 0, W, H);
@@ -2498,6 +2582,28 @@ export function startRelay(root: HTMLElement): RelayHandle {
     b.style.display = pipSupported() ? "" : "none";
     b.classList.toggle("on", autoPipPref() || pipActive || isInPip());
   }
+  // Enter/exit PiP on the right API: iOS uses webkitSetPresentationMode (and a
+  // real remote stream, set first); everyone else uses the standard
+  // requestPictureInPicture / exitPictureInPicture on the canvas composite.
+  async function requestPipEnter() {
+    if (!pipVideo) return;
+    const v = pipVideo as WebkitVideo & { requestPictureInPicture?: () => Promise<unknown> };
+    if (IS_IOS && typeof v.webkitSetPresentationMode === "function") {
+      pipRefreshIosSource();
+      v.webkitSetPresentationMode("picture-in-picture"); // synchronous; no promise
+      return;
+    }
+    if (typeof v.requestPictureInPicture === "function") await v.requestPictureInPicture();
+  }
+  async function requestPipExit() {
+    const v = pipVideo as WebkitVideo | null;
+    if (IS_IOS && v && typeof v.webkitSetPresentationMode === "function") {
+      if (v.webkitPresentationMode === "picture-in-picture") v.webkitSetPresentationMode("inline");
+      return;
+    }
+    const d = document as unknown as { pictureInPictureElement?: Element; exitPictureInPicture?: () => Promise<void> };
+    if (d.pictureInPictureElement && d.exitPictureInPicture) await d.exitPictureInPicture();
+  }
   async function enterPip() {
     if (!pipSupported() || !inCall) { toast("Picture-in-Picture isn't available here.", true); return; }
     ensurePipCompositor();
@@ -2509,7 +2615,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // background instead.
     const playing = pipVideo!.play().catch(() => {});
     try {
-      await (pipVideo as unknown as { requestPictureInPicture: () => Promise<unknown> }).requestPictureInPicture();
+      await requestPipEnter();
       void playing;
       updatePipBtn();
       toast("Picture-in-Picture on");
@@ -2523,10 +2629,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   async function exitPip() {
     pipActive = false;
     if (pipPrimed) startPipLoop(PIP_PRIME_MS); else stopPipLoop();
-    try {
-      const d = document as unknown as { pictureInPictureElement?: Element; exitPictureInPicture?: () => Promise<void> };
-      if (d.pictureInPictureElement && d.exitPictureInPicture) await d.exitPictureInPicture();
-    } catch { /* */ }
+    try { await requestPipExit(); } catch { /* */ }
     updatePipBtn();
   }
   // Keep the off-screen composite PLAYING during the call so the browser can
@@ -2538,6 +2641,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     ensurePipCompositor();
     pipPrimed = true;
     if (!pipActive) startPipLoop(PIP_PRIME_MS);
+    if (IS_IOS) pipRefreshIosSource(); // give iOS a real stream to auto-PiP
     pipVideo?.play().catch(() => {});
     updatePipBtn();
   }
@@ -2556,11 +2660,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     startPipLoop(PIP_ACTIVE_MS);
     const playing = pipVideo!.play().catch(() => {});
     try {
-      await (pipVideo as unknown as { requestPictureInPicture: () => Promise<unknown> }).requestPictureInPicture();
+      await requestPipEnter();
       void playing;
     } catch {
       // Background tab has no transient activation; rely on the autoPictureInPicture
-      // attribute to open it. Stay primed so the composite is live for that path.
+      // attribute (Android) / iOS's native auto-PiP to open it. Stay primed so the
+      // composite/stream is live for that path.
       pipActive = pipPrimed;
     }
     updatePipBtn();
@@ -2911,6 +3016,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // Online → the server rings them in; offline/nonexistent → the server replies
     // with an "offline" error and the generic handler toasts
     // "That number doesn't exist or is offline." Either way the pad closes itself.
+    // Arm the offline guard so that error doesn't tear down the call we're in.
+    addInviteOfflineGuard = true;
+    if (addInviteGuardT) clearTimeout(addInviteGuardT);
+    addInviteGuardT = setTimeout(() => { addInviteOfflineGuard = false; addInviteGuardT = null; }, 6000);
     sendWS({ type: "invite", to: pin });
     toast("Inviting " + pin + "…");
     closeAddPad();

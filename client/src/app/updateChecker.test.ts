@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.49.0)", () => {
-    expect(APP_VERSION).toBe("2.49.0");
+  it("is the current release (2.50.0)", () => {
+    expect(APP_VERSION).toBe("2.50.0");
   });
 });
 
@@ -148,5 +148,41 @@ describe("auto Picture-in-Picture (enable once)", () => {
     expect(RELAY_CLIENT).toMatch(/function unprimeAutoPip\(\)/);
     const hang = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf("function hangUp"));
     expect(hang.slice(0, 2000)).toMatch(/unprimeAutoPip\(\)/);
+  });
+});
+
+describe("iOS Picture-in-Picture (real-stream path, v2.50)", () => {
+  it("detects iOS and drives PiP via the WebKit presentation-mode API", () => {
+    expect(RELAY_CLIENT).toMatch(/const IS_IOS =/);
+    expect(RELAY_CLIENT).toMatch(/webkitSetPresentationMode/);
+    expect(RELAY_CLIENT).toMatch(/webkitPresentationMode/);
+  });
+  it("feeds the PiP video a REAL remote stream on iOS (canvas renders black there)", () => {
+    expect(RELAY_CLIENT).toMatch(/function iosPipStream\(\)/);
+    expect(RELAY_CLIENT).toMatch(/function pipRefreshIosSource\(\)/);
+    // pipRender takes the iOS branch before touching the canvas.
+    const render = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf("function pipRender"));
+    expect(render.slice(0, 400)).toMatch(/if \(IS_IOS\)\s*\{\s*pipRefreshIosSource\(\)/);
+  });
+  it("skips the canvas compositor on iOS in ensurePipCompositor", () => {
+    const ens = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf("function ensurePipCompositor"));
+    expect(ens.slice(0, 900)).toMatch(/if \(!IS_IOS\)/);
+  });
+});
+
+describe("call-routing fixes (v2.50)", () => {
+  it("switchCall no longer sends an explicit switch-call leave (accept relocates atomically)", () => {
+    const sc = RELAY_CLIENT.slice(
+      RELAY_CLIENT.indexOf("function switchCall"),
+      RELAY_CLIENT.indexOf("function switchCall") + 1200,
+    );
+    expect(sc).not.toMatch(/type:\s*["']leave["'][^}]*switch-call/);
+    expect(sc).toMatch(/type:\s*["']accept["']/);
+  });
+  it("an offline error from an add-to-call invite does not tear down the call", () => {
+    expect(RELAY_CLIENT).toMatch(/addInviteOfflineGuard/);
+    // The error handler checks the guard before the alone-in-call hangUp.
+    const errCase = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf('case "error"'));
+    expect(errCase.slice(0, 600)).toMatch(/addInviteOfflineGuard\s*&&\s*m\.code === ["']offline["']/);
   });
 });

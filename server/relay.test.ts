@@ -269,6 +269,49 @@ describe("relay signaling", () => {
     expect(reg.clients.get(cPin)).toBeTruthy();
   });
 
+  it("answering a call-waiting call (accept) atomically moves the switcher out of the old room", () => {
+    // switchCall() answers a waiting call by sending ONLY {hold} then {accept} —
+    // no explicit {leave} (which used to race the accept and eject the switcher).
+    // This pins that `accept` alone relocates Bob: out of room A, into room R,
+    // and notifies Alice — so the explicit leave is unnecessary.
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    const c = register(reg, "Carol");
+    const aPin = (a.last() as { pin: string }).pin;
+    const bPin = (b.last() as { pin: string }).pin;
+
+    // Room A: Alice + Bob.
+    handleMessage(reg, a.asConn(), { type: "invite", to: bPin });
+    const roomA = (a.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "room"
+    ) as { roomId: string }).roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: roomA });
+
+    // Carol rings Bob (call waiting) → Carol's room R is created.
+    handleMessage(reg, c.asConn(), { type: "invite", to: bPin });
+    const roomR = (c.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "room"
+    ) as { roomId: string }).roomId;
+    expect(roomR).not.toBe(roomA);
+
+    a.outbox.length = 0;
+    // Bob answers Carol WITHOUT a separate leave — accept alone must relocate him.
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: roomR });
+
+    expect(reg.rooms.get(roomR)?.has(bPin)).toBe(true);   // Bob is in Carol's room
+    expect(reg.rooms.get(roomA)?.has(bPin)).toBe(false);  // …and out of Alice's
+    expect(reg.clients.get(bPin)?.roomId).toBe(roomR);
+    // Alice is told Bob left her room.
+    const left = a.outbox.find(
+      (m): m is { type: string; pin: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "peer-left"
+    );
+    expect(left?.pin).toBe(bPin);
+    expect(reg.rooms.get(roomA)?.has(aPin)).toBe(true);
+  });
+
   it("notifies remaining peers when one leaves the room", () => {
     const a = register(reg, "Alice");
     const b = register(reg, "Bob");
