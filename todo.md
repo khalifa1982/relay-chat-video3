@@ -1560,3 +1560,20 @@ deterministic reproduction).
       6 digits).
 - [x] 6 new tests (server accept-relocates-atomically regression, iOS-PiP + call-fix source guards). 387
       tests green, tsc + build clean. Footer → `v2.50.0`.
+
+## v2.50.1 — Add-person window (and other centered popups) overflowed off-screen on mobile (delivered 2026-06-28)
+
+- [x] **The in-call "Add person" window was clipped off the right edge on mobile** (the third keypad
+      column, the right of "Add to call", and the hint were cut off). Root cause: the pad centered with
+      `transform:translateX(-50%)`, but its open animation `relayFade` ends on `transform:none` with
+      fill-mode `both` — which **wipes the centering transform** once the 0.2s animation finishes, leaving
+      the pad's left edge at the container centre so it overflowed right. Fixed by centering with **auto
+      margins** (`left:0;right:0;margin-inline:auto`) instead of a transform the animation clobbers,
+      clamping width to the viewport (`min(260px, 100vw − 24px)`), and adding `max-height` + `overflow-y`
+      so a tall keypad scrolls rather than clips.
+- [x] **Applied system-wide:** the same latent bug affected two other `relayFade`-animated centred panels —
+      the **filter dock** and the **per-tile host ⋮ menu** — both converted to the same auto-margin
+      centering. (The toast and call-waiting popup were already correct — they re-specify the transform in
+      their end state / use a dedicated keyframe.)
+- [x] 3 new CSS regression guards (each panel centers via `margin-inline:auto`, clamps `width:min(...)`,
+      and carries no `translateX(-50%)`). 390 tests green, tsc + build clean. Footer → `v2.50.1`.
