@@ -37,6 +37,7 @@ import {
   identities,
   messages,
   presence,
+  users,
 } from "../drizzle/schema";
 import { getDb } from "./db";
 
@@ -1429,4 +1430,51 @@ export async function listConferenceHistory(identityId: number, limit = 100) {
     .where(inArray(conferenceHistory.id, confIds))
     .orderBy(desc(conferenceHistory.id));
   return confs;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Public landing-page stats. Aggregate counts only — never exposes any
+ * personal data, just headline totals for the marketing page:
+ *   - registeredUsers: rows in `users` (OAuth accounts)
+ *   - guestsServed:    identities that never upgraded (userId IS NULL)
+ *   - totalParties:    every identity ever provisioned (guest or registered)
+ *   - onlineNow:       identities currently flagged online in `presence`
+ * All counts are cheap COUNT(*) queries. Returns zeros if the DB is down so
+ * the landing page degrades gracefully instead of throwing.
+ * ────────────────────────────────────────────────────────────────────────── */
+export interface PublicStats {
+  registeredUsers: number;
+  guestsServed: number;
+  totalParties: number;
+  onlineNow: number;
+}
+
+export async function getPublicStats(): Promise<PublicStats> {
+  const db = await getDb();
+  if (!db) {
+    return { registeredUsers: 0, guestsServed: 0, totalParties: 0, onlineNow: 0 };
+  }
+
+  const [usersRow] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(users);
+  const [totalRow] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(identities);
+  const [guestRow] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(identities)
+    .where(isNull(identities.userId));
+  const [onlineRow] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(presence)
+    .where(eq(presence.isOnline, true));
+
+  return {
+    registeredUsers: Number(usersRow?.n ?? 0),
+    guestsServed: Number(guestRow?.n ?? 0),
+    totalParties: Number(totalRow?.n ?? 0),
+    onlineNow: Number(onlineRow?.n ?? 0),
+  };
 }

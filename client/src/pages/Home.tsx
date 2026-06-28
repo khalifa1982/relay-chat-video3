@@ -1,372 +1,579 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from "react";
+import { trpc } from "@/lib/trpc";
+import { APP_VERSION } from "@shared/version";
 
-// Data structure for the six story sections
-interface SectionData {
-  id: string;
-  kicker: string;
-  title: string;
-  p1: string;
-  p2: string;
-  bullets: string[];
-  img: string;
-}
+/* -------------------------------------------------------------------------- */
+/*  Bilingual landing page (AR / EN).                                          */
+/*  Language is a local UI preference only; it does NOT touch the in-app       */
+/*  experience. Arabic flips the document to RTL.                              */
+/* -------------------------------------------------------------------------- */
 
-const SECTIONS_DATA: SectionData[] = [
-  {
-    id: 'section-1',
-    kicker: 'INSTANT IDENTITY',
-    title: 'Your number',
-    p1: 'Every time you open RELAY, you are instantly allocated a temporary, secure 6-digit identity. No registration forms, no email verifications, and absolutely zero personal data required.',
-    p2: 'The dialer displays your ephemeral number ghosted in faint green above the keypad. Anyone on the network can call this number directly as long as your tab remains active.',
-    bullets: [
-      'Zero-setup instant provisioning',
-      'Faint green status indicators',
-      'Completely ephemeral session binding'
-    ],
-    img: '/manus-storage/dialer-empty_98fa535c.png'
-  },
-  {
-    id: 'section-2',
-    kicker: 'REAL-TIME TELEMETRY',
-    title: 'Live check',
-    p1: 'Dialing on RELAY is coupled with real-time connectivity feedback. As you type a 6-digit destination, the network instantly queries the active peer registry.',
-    p2: 'If the targeted node isn\'t online, a sub-line feedback message immediately lets you know the line is not reachable, saving you from waiting on dead connections.',
-    bullets: [
-      'Active registry lookup on-the-fly',
-      'Instant status feedback below the input',
-      'Smart routing prevention for dead lines'
-    ],
-    img: '/manus-storage/dialer-typed_8ad4c6c2.png'
-  },
-  {
-    id: 'section-3',
-    kicker: 'EPHEMERAL CHANNELS',
-    title: 'Messages',
-    p1: 'Communication isn\'t limited to voice. RELAY provides a super-fast, zero-overhead messaging console built directly into your active browser session.',
-    p2: 'The empty state keeps distraction to a minimum. A simple, prominent plus button allows you to initiate a secure message thread instantly with any active peer.',
-    bullets: [
-      'Minimalist, clutter-free messaging hub',
-      'Direct peer-to-peer message routing',
-      'One-click thread creation'
-    ],
-    img: '/manus-storage/messages-empty_014c8014.png'
-  },
-  {
-    id: 'section-4',
-    kicker: 'SECURE SANDBOX',
-    title: 'Notes to self',
-    p1: 'Need a secure scratchpad or a way to test your connection? RELAY supports self-threading so you can send notes, files, and audio clips to your own active session.',
-    p2: 'The rich composer panel features microphone, attachment, image, and emoji triggers. Everything you write is rendered in gorgeous cyan bubbles and stored purely in RAM.',
-    bullets: [
-      'Self-loopback testing and secure scratchpad',
-      'Rich media attachment and voice memo controls',
-      'Pure RAM storage with zero server footprint'
-    ],
-    img: '/manus-storage/messages-thread_3b435df8.png'
-  },
-  {
-    id: 'section-5',
-    kicker: 'ZERO PERSISTENCE',
-    title: 'Contacts',
-    p1: 'Keep track of your frequent collaborators without sacrificing privacy. RELAY includes an in-memory contact directory that lets you quickly search and trigger calls.',
-    p2: 'Because we store nothing on our servers, this directory is built completely on-the-fly and vanishes the moment you close the browser tab.',
-    bullets: [
-      'Lightning-fast local search bar',
-      'Instant click-to-dial functionality',
-      '100% client-side memory storage'
-    ],
-    img: '/manus-storage/contacts-empty_ee775a4f.png'
-  },
-  {
-    id: 'section-6',
-    kicker: 'PERSONALIZED NODES',
-    title: 'Profile',
-    p1: 'Express yourself within your ephemeral session. Customize your node with a dynamically generated AR avatar, editable display name, and quick preferences.',
-    p2: 'Toggle between dark and light modes seamlessly while keeping your 6-digit number visible. Your preferences live in local browser memory and never touch a centralized DB.',
-    bullets: [
-      'Generative AR-style avatar hashes',
-      'On-the-fly display name editing',
-      'No-latency dark/light interface toggle'
-    ],
-    img: '/manus-storage/profile_15ca08be.png'
-  }
-];
+type Lang = "en" | "ar";
 
-// Faux Phone Bezel Component
-const PhoneBezel = ({ src, alt }: { src: string; alt: string }) => {
-  return (
-    <div className="relative mx-auto w-full max-w-[290px] aspect-[9/19.5] rounded-[48px] border-[11px] border-[#1e293b] bg-black shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] ring-1 ring-white/10 overflow-hidden">
-      {/* Notch / Dynamic Island */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 w-28 h-5 bg-black rounded-full z-30 flex items-center justify-between px-3.5">
-        <div className="w-2.5 h-2.5 rounded-full bg-[#111] border border-slate-900 flex items-center justify-center">
-          <div className="w-1 h-1 rounded-full bg-blue-950" />
-        </div>
-        <div className="w-1.5 h-1.5 rounded-full bg-[#111]" />
-      </div>
-
-      {/* Speaker grill / Ear piece */}
-      <div className="absolute top-1.5 left-1/2 -translate-x-1/2 w-12 h-1 bg-[#222] rounded-full z-30" />
-
-      {/* Side Buttons (Faux physical chrome) */}
-      <div className="absolute top-24 -left-[13px] w-[2px] h-10 bg-slate-700 rounded-l z-10" />
-      <div className="absolute top-38 -left-[13px] w-[2px] h-14 bg-slate-700 rounded-l z-10" />
-      <div className="absolute top-56 -left-[13px] w-[2px] h-14 bg-slate-700 rounded-l z-10" />
-      <div className="absolute top-32 -right-[13px] w-[2px] h-16 bg-slate-700 rounded-r z-10" />
-
-      {/* Glossy glare effect overlay */}
-      <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/[0.02] to-white/[0.06] pointer-events-none z-20" />
-
-      {/* Screen Content */}
-      <div className="absolute inset-0 w-full h-full bg-slate-950 overflow-hidden">
-        <img
-          src={src}
-          alt={alt}
-          className="w-full h-full object-cover select-none"
-          loading="lazy"
-        />
-      </div>
-    </div>
-  );
+/* Gemini-generated UI mockups + hero (asset URLs tied to project lifecycle). */
+const IMG = {
+  heroBg:
+    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-hero-bg-m43wUbmhFJxmSvgbRcZFv8.webp",
+  dialer:
+    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-mock-dialer-gcoPfnkvde3dFVut46iKCy.webp",
+  chat:
+    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-mock-chat-hGJhpsCBXS5cLUw4HGe3bL.webp",
+  group:
+    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-mock-group-2cGZZ9qxsVwAymc3Kyuu8j.webp",
+  mobile:
+    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-mock-mobile-5LCbQpS65QerasETd6Hr8w.webp",
 };
 
-export default function Home() {
-  const [stickyVisible, setStickyVisible] = useState(false);
-  const prefersReducedMotion = useRef<boolean>(false);
+const T = {
+  en: {
+    dir: "ltr" as const,
+    nav_open: "Open the app",
+    hero_kicker: "BROWSER VOICE · VIDEO · CHAT",
+    hero_title_1: "Call anyone, right in",
+    hero_title_2: "the tab you work in",
+    hero_sub:
+      "Pick a name, get a 6-digit number, and start voice, video, group calls and chat — straight in the browser. No install, no account required.",
+    hero_cta: "Open RELAY",
+    hero_note: "Free · works on desktop and mobile · nothing to download.",
+    stats_title: "Live on RELAY right now",
+    stats_sub: "Real numbers, pulled live from the network.",
+    stat_registered: "Registered users",
+    stat_guests: "Guests served",
+    stat_total: "Total identities",
+    stat_online: "Online now",
+    feat_kicker: "WHAT'S NEW",
+    feat_title: "Everything you need to stay connected",
+    feat_sub:
+      "RELAY has grown into a full communication suite — calls, conferences, messaging and host controls, all in the browser.",
+    features: [
+      {
+        t: "6-digit instant identity",
+        d: "Open RELAY and get a personal 6-digit number in seconds. Share it, and anyone can call you — no sign-up needed.",
+      },
+      {
+        t: "Voice & video calls",
+        d: "Crystal-clear 1:1 voice and video powered by WebRTC, with multi-device ringing so you never miss a call.",
+      },
+      {
+        t: "Group conferences",
+        d: "Create a group call, share an invite link, and bring everyone together with active-speaker spotlight and grid layouts.",
+      },
+      {
+        t: "Host controls",
+        d: "Mute-all, co-host roles, pin & remove participants, and transfer host — keep large calls organised.",
+      },
+      {
+        t: "Rich messaging",
+        d: "Send messages, files, images and voice notes with full-screen media, reactions and in-app popups.",
+      },
+      {
+        t: "Screen sharing & PiP",
+        d: "Share your screen across browsers and pop the call into Picture-in-Picture while you keep working.",
+      },
+      {
+        t: "Audio routing",
+        d: "Pick your output device, route to Bluetooth automatically, and switch the camera or mic mid-call.",
+      },
+      {
+        t: "Call history & redial",
+        d: "A full history tab with one-tap redial — including group redial to bring the same people back instantly.",
+      },
+      {
+        t: "Privacy first",
+        d: "Guests stay on the device for 30 days. Register to keep your number forever. Call media is peer-to-peer.",
+      },
+    ],
+    shots_title: "See it in action",
+    shot_dialer_t: "The dialer",
+    shot_dialer_d:
+      "Your number glows above the keypad. Dial 6 digits or start a voice, video or group call in one tap.",
+    shot_chat_t: "Messages",
+    shot_chat_d:
+      "A fast, clean messaging console with files, images, voice notes and read state — built right into your session.",
+    shot_group_t: "Group video",
+    shot_group_d:
+      "Active-speaker spotlight, mute indicators, screen share and host controls for calls of every size.",
+    mobile_t: "Built for mobile too",
+    mobile_d:
+      "RELAY works in your phone browser — no app store, no download. Voice, video and chat with the same number, everywhere.",
+    cta_title: "Ready to talk?",
+    cta_sub: "Open RELAY in your browser and get your number in seconds.",
+    cta_btn: "Open RELAY",
+    footer_tag: "Browser voice, video & chat. No install, no account.",
+    footer_design: "Designed by Gemini",
+    footer_rights: "All rights reserved.",
+  },
+  ar: {
+    dir: "rtl" as const,
+    nav_open: "افتح التطبيق",
+    hero_kicker: "صوت · فيديو · دردشة في المتصفح",
+    hero_title_1: "اتصل بأي شخص، مباشرةً",
+    hero_title_2: "من نفس التبويب الذي تعمل فيه",
+    hero_sub:
+      "اختر اسماً، احصل على رقم من ٦ خانات، وابدأ مكالمات صوتية وفيديو وجماعية ودردشة — مباشرةً في المتصفح. بدون تثبيت، وبدون حساب.",
+    hero_cta: "افتح RELAY",
+    hero_note: "مجاني · يعمل على الكمبيوتر والجوال · لا شيء للتحميل.",
+    stats_title: "مباشر على RELAY الآن",
+    stats_sub: "أرقام حقيقية، محدّثة مباشرةً من الشبكة.",
+    stat_registered: "مستخدمون مسجّلون",
+    stat_guests: "ضيوف استخدموا النظام",
+    stat_total: "إجمالي الهويات",
+    stat_online: "متصل الآن",
+    feat_kicker: "الجديد",
+    feat_title: "كل ما تحتاجه لتبقى على تواصل",
+    feat_sub:
+      "تطوّر RELAY إلى منصة تواصل متكاملة — مكالمات ومؤتمرات ورسائل وأدوات تحكم للمضيف، كلها في المتصفح.",
+    features: [
+      {
+        t: "هوية فورية من ٦ خانات",
+        d: "افتح RELAY واحصل على رقم شخصي من ٦ خانات خلال ثوانٍ. شاركه ليتمكّن أي شخص من الاتصال بك — دون تسجيل.",
+      },
+      {
+        t: "مكالمات صوت وفيديو",
+        d: "صوت وفيديو فردي عالي الوضوح عبر WebRTC، مع رنين متعدد الأجهزة حتى لا تفوتك أي مكالمة.",
+      },
+      {
+        t: "مؤتمرات جماعية",
+        d: "أنشئ مكالمة جماعية، شارك رابط الدعوة، واجمع الجميع مع إبراز المتحدث النشط وتخطيطات الشبكة.",
+      },
+      {
+        t: "أدوات تحكم المضيف",
+        d: "كتم الجميع، أدوار المضيف المساعد، تثبيت وإزالة المشاركين، ونقل دور المضيف — لتنظيم المكالمات الكبيرة.",
+      },
+      {
+        t: "رسائل غنية",
+        d: "أرسل رسائل وملفات وصوراً وملاحظات صوتية مع عرض وسائط بملء الشاشة وتفاعلات ونوافذ منبثقة داخل التطبيق.",
+      },
+      {
+        t: "مشاركة الشاشة و PiP",
+        d: "شارك شاشتك عبر المتصفحات وانقل المكالمة إلى وضع صورة-داخل-صورة بينما تواصل عملك.",
+      },
+      {
+        t: "توجيه الصوت",
+        d: "اختر جهاز الإخراج، ووجّه الصوت إلى البلوتوث تلقائياً، وبدّل الكاميرا أو الميكروفون أثناء المكالمة.",
+      },
+      {
+        t: "سجل المكالمات وإعادة الاتصال",
+        d: "تبويب سجل كامل مع إعادة اتصال بلمسة واحدة — بما في ذلك إعادة الاتصال الجماعي لإعادة الأشخاص أنفسهم فوراً.",
+      },
+      {
+        t: "الخصوصية أولاً",
+        d: "يبقى الضيوف على الجهاز لمدة ٣٠ يوماً. سجّل للاحتفاظ برقمك للأبد. وسائط المكالمة بين الأطراف مباشرةً.",
+      },
+    ],
+    shots_title: "شاهده أثناء العمل",
+    shot_dialer_t: "لوحة الاتصال",
+    shot_dialer_d:
+      "يتوهّج رقمك فوق لوحة المفاتيح. اطلب ٦ خانات أو ابدأ مكالمة صوت أو فيديو أو جماعية بلمسة واحدة.",
+    shot_chat_t: "الرسائل",
+    shot_chat_d:
+      "وحدة رسائل سريعة ونظيفة مع ملفات وصور وملاحظات صوتية وحالة القراءة — مدمجة في جلستك مباشرةً.",
+    shot_group_t: "فيديو جماعي",
+    shot_group_d:
+      "إبراز المتحدث النشط، مؤشرات الكتم، مشاركة الشاشة وأدوات تحكم المضيف لمكالمات بكل الأحجام.",
+    mobile_t: "مصمّم للجوال أيضاً",
+    mobile_d:
+      "يعمل RELAY في متصفح هاتفك — بلا متجر تطبيقات وبلا تحميل. صوت وفيديو ودردشة بنفس الرقم، في كل مكان.",
+    cta_title: "جاهز للتحدّث؟",
+    cta_sub: "افتح RELAY في متصفحك واحصل على رقمك خلال ثوانٍ.",
+    cta_btn: "افتح RELAY",
+    footer_tag: "صوت وفيديو ودردشة في المتصفح. بدون تثبيت، وبدون حساب.",
+    footer_design: "تصميم بواسطة Gemini",
+    footer_rights: "جميع الحقوق محفوظة.",
+  },
+};
 
+function useCountUp(target: number, run: boolean, duration = 1200) {
+  const [value, setValue] = useState(0);
   useEffect(() => {
-    // Check user preference for reduced motion
-    prefersReducedMotion.current = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-    let rafId: number;
-
-    const handleScroll = () => {
-      const scrollY = window.scrollY;
-      
-      // Hard contract: comparison must literally be scrollY > 480
-      setStickyVisible(scrollY > 480);
-
-      if (prefersReducedMotion.current) return;
-
-      // Animate sections based on scroll position
-      const sections = document.querySelectorAll('.story-section');
-      sections.forEach((sec, idx) => {
-        const rect = sec.getBoundingClientRect();
-        const viewHeight = window.innerHeight;
-        
-        // Calculate relative position to viewport center (-1.5 to 1.5)
-        const sectionCenter = rect.top + rect.height / 2;
-        const viewportCenter = viewHeight / 2;
-        const distanceFromCenter = (sectionCenter - viewportCenter) / viewportCenter;
-        const t = Math.max(-1.5, Math.min(1.5, distanceFromCenter));
-
-        const phone = sec.querySelector('.phone-wrapper') as HTMLElement;
-        const text = sec.querySelector('.text-wrapper') as HTMLElement;
-        const halo = sec.querySelector('.halo-bg') as HTMLElement;
-
-        if (phone) {
-          // Phones translate vertically and tilt slightly depending on scroll
-          const translateY = t * 40;
-          const rotate = t * -3;
-          phone.style.transform = `translateY(${translateY}px) rotate(${rotate}deg)`;
-        }
-
-        if (text) {
-          // Text fades in and moves slightly vertically
-          const opacity = Math.max(0, 1 - Math.abs(t) * 1.3);
-          const translateY = t * 15;
-          text.style.opacity = `${opacity}`;
-          text.style.transform = `translateY(${translateY}px)`;
-        }
-
-        if (halo) {
-          // Halos shift scale and fade
-          const scale = 1 + (1 - Math.min(1, Math.abs(t))) * 0.25;
-          const opacity = Math.max(0, 0.12 - Math.abs(t) * 0.08);
-          halo.style.transform = `translate(-50%, -50%) scale(${scale})`;
-          halo.style.opacity = `${opacity}`;
-        }
-      });
+    if (!run) return;
+    if (target <= 0) {
+      setValue(0);
+      return;
+    }
+    let raf = 0;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setValue(Math.round(target * eased));
+      if (p < 1) raf = requestAnimationFrame(tick);
     };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, run, duration]);
+  return value;
+}
 
-    const onScroll = () => {
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(handleScroll);
-    };
+const CYAN = "oklch(0.78 0.18 195)";
 
-    window.addEventListener('scroll', onScroll, { passive: true });
-    handleScroll(); // Initial run
+export default function Home() {
+  const [lang, setLang] = useState<Lang>("en");
+  const [statsVisible, setStatsVisible] = useState(false);
+  const t = T[lang];
+  const isAr = lang === "ar";
 
+  const { data: stats } = trpc.stats.public.useQuery(undefined, {
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  });
+
+  // Reflect language on <html> for correct RTL rendering.
+  useEffect(() => {
+    const html = document.documentElement;
+    const prevDir = html.getAttribute("dir");
+    const prevLang = html.getAttribute("lang");
+    html.setAttribute("dir", t.dir);
+    html.setAttribute("lang", lang);
     return () => {
-      window.removeEventListener('scroll', onScroll);
-      cancelAnimationFrame(rafId);
+      if (prevDir) html.setAttribute("dir", prevDir);
+      else html.removeAttribute("dir");
+      if (prevLang) html.setAttribute("lang", prevLang);
+      else html.removeAttribute("lang");
     };
+  }, [lang, t.dir]);
+
+  // Trigger count-up once the stats band scrolls into view.
+  useEffect(() => {
+    const el = document.getElementById("stats-band");
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setStatsVisible(true);
+          io.disconnect();
+        }
+      },
+      { threshold: 0.3 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
   }, []);
 
+  const registered = useCountUp(stats?.registeredUsers ?? 0, statsVisible);
+  const guests = useCountUp(stats?.guestsServed ?? 0, statsVisible);
+  const total = useCountUp(stats?.totalParties ?? 0, statsVisible);
+  const online = stats?.onlineNow ?? 0;
+
+  const fmt = (n: number) =>
+    new Intl.NumberFormat(isAr ? "ar-EG" : "en-US").format(n);
+
   return (
-    <div 
-      className="min-h-screen text-slate-100 selection:bg-[oklch(0.78_0.18_195)] selection:text-slate-950 overflow-x-hidden relative font-sans"
-      style={{ backgroundColor: 'oklch(0.10 0.012 220)' }}
+    <div
+      dir={t.dir}
+      className="min-h-screen text-slate-100 overflow-x-hidden relative font-sans selection:bg-[oklch(0.78_0.18_195)] selection:text-slate-950"
+      style={{ backgroundColor: "oklch(0.10 0.012 220)" }}
     >
-      {/* Custom Styles */}
       <style>{`
-        @keyframes pulse-glow {
-          0%, 100% { opacity: 0.15; transform: scale(1); }
-          50% { opacity: 0.25; transform: scale(1.05); }
+        @keyframes pulse-glow { 0%,100%{opacity:.15;transform:scale(1)} 50%{opacity:.28;transform:scale(1.05)} }
+        .animate-pulse-glow{animation:pulse-glow 8s infinite ease-in-out}
+        .grid-bg{background-image:linear-gradient(rgba(255,255,255,.015) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.015) 1px,transparent 1px);background-size:40px 40px}
+        @keyframes fade-up { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+        @media (prefers-reduced-motion: no-preference){
+          .fade-up{animation:fade-up .6s cubic-bezier(0.23,1,0.32,1) both}
         }
-        .animate-pulse-glow {
-          animation: pulse-glow 8s infinite ease-in-out;
-        }
-        .grid-bg {
-          background-image: linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
-                            linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
-          background-size: 40px 40px;
-        }
+        .shot-img{box-shadow:0 30px 80px -20px rgba(0,0,0,.85);}
       `}</style>
 
-      {/* Grid Pattern Overlay */}
       <div className="absolute inset-0 grid-bg pointer-events-none z-0" />
 
-      {/* Header & Sticky CTA */}
-      <header className="fixed top-0 inset-x-0 h-20 z-50 flex items-center justify-between px-6 md:px-12 pointer-events-none">
-        <div className="flex items-center gap-3 bg-slate-950/40 backdrop-blur-md px-4 py-2 rounded-full border border-white/5 pointer-events-auto shadow-lg">
-          <div className="w-2.5 h-2.5 rounded-full bg-[oklch(0.78_0.18_195)] animate-pulse shadow-[0_0_10px_oklch(0.78_0.18_195)]" />
+      {/* Header */}
+      <header className="fixed top-0 inset-x-0 h-20 z-50 flex items-center justify-between px-5 md:px-12 pointer-events-none">
+        <div className="flex items-center gap-3 bg-slate-950/50 backdrop-blur-md px-4 py-2 rounded-full border border-white/5 pointer-events-auto shadow-lg">
+          <span
+            className="w-2.5 h-2.5 rounded-full animate-pulse"
+            style={{ backgroundColor: CYAN, boxShadow: `0 0 10px ${CYAN}` }}
+          />
           <span className="font-semibold tracking-wider text-sm text-white">RELAY</span>
         </div>
 
-        {/* Sticky CTA (fades in after 480px scroll) */}
-        <div 
-          className={`transition-all duration-300 transform pointer-events-auto ${
-            stickyVisible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'
-          }`}
-        >
-          <a 
+        <div className="flex items-center gap-2 pointer-events-auto">
+          {/* Language toggle */}
+          <div className="flex items-center rounded-full bg-slate-950/50 backdrop-blur-md border border-white/10 p-0.5 text-xs font-semibold">
+            <button
+              onClick={() => setLang("en")}
+              className={`px-3 py-1.5 rounded-full transition-all duration-200 ${
+                lang === "en" ? "bg-white text-slate-950" : "text-slate-300 hover:text-white"
+              }`}
+              aria-pressed={lang === "en"}
+            >
+              EN
+            </button>
+            <button
+              onClick={() => setLang("ar")}
+              className={`px-3 py-1.5 rounded-full transition-all duration-200 ${
+                lang === "ar" ? "bg-white text-slate-950" : "text-slate-300 hover:text-white"
+              }`}
+              aria-pressed={lang === "ar"}
+            >
+              ع
+            </button>
+          </div>
+          <a
             href="/app"
-            className="inline-flex items-center justify-center px-5 py-2.5 rounded-full text-sm font-semibold bg-[oklch(0.78_0.18_195)] text-slate-950 hover:bg-[oklch(0.83_0.15_195)] active:scale-98 transition-all shadow-[0_0_20px_rgba(38,230,255,0.25)] hover:shadow-[0_0_25px_rgba(38,230,255,0.4)]"
+            className="hidden sm:inline-flex items-center justify-center px-5 py-2.5 rounded-full text-sm font-semibold text-slate-950 transition-all active:scale-[0.97]"
+            style={{ backgroundColor: CYAN, boxShadow: "0 0 20px rgba(38,230,255,.25)" }}
           >
-            Open the app
+            {t.nav_open}
           </a>
         </div>
       </header>
 
-      {/* Hero Section */}
-      <section className="relative min-h-[95vh] flex flex-col justify-center items-center px-6 text-center pt-24 pb-16 z-10 overflow-hidden">
-        {/* Background glow */}
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full bg-[oklch(0.78_0.18_195)]/10 blur-[100px] pointer-events-none animate-pulse-glow" />
+      {/* Hero */}
+      <section className="relative min-h-[92vh] flex flex-col justify-center items-center px-6 text-center pt-28 pb-16 z-10 overflow-hidden">
+        <div
+          className="absolute inset-0 z-0 opacity-70"
+          style={{
+            backgroundImage: `url(${IMG.heroBg})`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+          }}
+        />
+        <div
+          className="absolute inset-0 z-0"
+          style={{
+            background:
+              "radial-gradient(circle at 50% 35%, transparent 0%, oklch(0.10 0.012 220 / 0.7) 60%, oklch(0.10 0.012 220) 100%)",
+          }}
+        />
 
-        <div className="max-w-4xl mx-auto flex flex-col items-center">
-          <span className="text-xs md:text-sm font-bold tracking-[0.25em] text-[oklch(0.78_0.18_195)] uppercase mb-6 drop-shadow-sm">
-            BROWSER CALLS
+        <div className="max-w-4xl mx-auto flex flex-col items-center relative z-10 fade-up">
+          <span
+            className="text-[11px] md:text-xs font-bold tracking-[0.25em] uppercase mb-6"
+            style={{ color: CYAN }}
+          >
+            {t.hero_kicker}
           </span>
-          <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold text-white tracking-tight leading-[1.1] mb-8">
-            Voice in the same <br className="hidden sm:block" />
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-white via-[oklch(0.78_0.18_195)] to-white">
-              tab you work in
+          <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold text-white tracking-tight leading-[1.12] mb-7">
+            {t.hero_title_1}
+            <br className="hidden sm:block" />{" "}
+            <span
+              className="text-transparent bg-clip-text"
+              style={{
+                backgroundImage: `linear-gradient(90deg, #fff, ${CYAN}, #fff)`,
+              }}
+            >
+              {t.hero_title_2}
             </span>
           </h1>
-          <p className="text-lg md:text-xl text-slate-300 max-w-2xl leading-relaxed mb-10 font-normal">
-            Open a dial pad, type a number, speak. No installs, no accounts, nothing left behind when the tab closes.
+          <p className="text-lg md:text-xl text-slate-300 max-w-2xl leading-relaxed mb-10">
+            {t.hero_sub}
           </p>
-          
           <div className="flex flex-col items-center gap-4">
-            <a 
+            <a
               href="/app"
-              className="group inline-flex items-center justify-center px-8 py-4 rounded-full text-base font-bold bg-[oklch(0.78_0.18_195)] text-slate-950 hover:bg-[oklch(0.83_0.15_195)] active:scale-98 transition-all shadow-[0_0_30px_rgba(38,230,255,0.3)] hover:shadow-[0_0_40px_rgba(38,230,255,0.5)]"
+              className="inline-flex items-center justify-center px-8 py-4 rounded-full text-base font-bold text-slate-950 transition-all active:scale-[0.97]"
+              style={{ backgroundColor: CYAN, boxShadow: "0 0 32px rgba(38,230,255,.35)" }}
             >
-              Open RELAY →
+              {t.hero_cta} {isAr ? "←" : "→"}
             </a>
-            <span className="text-xs text-slate-500 max-w-xs leading-normal">
-              No call audio, video, or text is stored on any server.
-            </span>
+            <span className="text-xs text-slate-400 max-w-xs leading-normal">{t.hero_note}</span>
           </div>
         </div>
       </section>
 
-      {/* Story Sections */}
-      <div className="relative py-12 space-y-36 lg:space-y-48 max-w-7xl mx-auto px-6 md:px-12 z-10">
-        {SECTIONS_DATA.map((section, idx) => {
-          const isEven = idx % 2 === 0;
-          return (
-            <section 
-              key={section.id} 
-              id={section.id}
-              className="story-section relative grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-20 items-center min-h-[60vh]"
+      {/* Live stats band */}
+      <section id="stats-band" className="relative z-10 px-6 py-16 md:py-20">
+        <div className="max-w-5xl mx-auto text-center mb-10">
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-white mb-3">{t.stats_title}</h2>
+          <p className="text-slate-400">{t.stats_sub}</p>
+        </div>
+        <div className="max-w-5xl mx-auto grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+          {[
+            { label: t.stat_registered, value: fmt(registered), live: false },
+            { label: t.stat_guests, value: fmt(guests), live: false },
+            { label: t.stat_total, value: fmt(total), live: false },
+            { label: t.stat_online, value: fmt(online), live: true },
+          ].map((s, i) => (
+            <div
+              key={i}
+              className="relative rounded-2xl border border-white/10 bg-slate-900/40 backdrop-blur-sm p-6 md:p-8 text-center overflow-hidden"
             >
-              {/* Radial Cyan Glow behind each phone */}
-              <div 
-                className="halo-bg absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[350px] lg:w-[450px] aspect-square rounded-full bg-[oklch(0.78_0.18_195)]/5 blur-[80px] pointer-events-none transition-all duration-300 ease-out opacity-0"
-                style={{
-                  left: isEven ? '70%' : '30%'
-                }}
+              <div
+                className="absolute -top-10 left-1/2 -translate-x-1/2 w-32 h-32 rounded-full blur-3xl opacity-20"
+                style={{ backgroundColor: CYAN }}
               />
-
-              {/* Text content */}
-              <div className={`lg:col-span-5 text-wrapper transition-all duration-300 ease-out opacity-100 ${
-                isEven ? 'lg:order-first' : 'lg:order-last'
-              }`}>
-                <span className="text-xs font-bold tracking-[0.2em] text-[oklch(0.78_0.18_195)] uppercase block mb-3">
-                  {section.kicker}
-                </span>
-                <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-6">
-                  {section.title}
-                </h2>
-                <div className="space-y-4 text-slate-300 text-base sm:text-lg leading-relaxed mb-8">
-                  <p>{section.p1}</p>
-                  <p>{section.p2}</p>
+              <div className="relative">
+                {s.live && (
+                  <span className="inline-flex items-center gap-1.5 mb-2 text-[10px] font-semibold tracking-wider text-emerald-400 uppercase">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    LIVE
+                  </span>
+                )}
+                <div
+                  className="text-3xl md:text-5xl font-extrabold tabular-nums"
+                  style={{ color: s.live ? "#34d399" : "#fff" }}
+                >
+                  {s.value}
                 </div>
-                
-                {/* 3 Bullet Facts */}
-                <ul className="space-y-3">
-                  {section.bullets.map((bullet, bIdx) => (
-                    <li key={bIdx} className="flex items-start gap-3 text-sm text-slate-400">
-                      <span className="mt-1 flex-shrink-0 w-1.5 h-1.5 rounded-full bg-[oklch(0.78_0.18_195)] shadow-[0_0_6px_oklch(0.78_0.18_195)]" />
-                      <span>{bullet}</span>
-                    </li>
-                  ))}
-                </ul>
+                <div className="mt-2 text-xs md:text-sm text-slate-400">{s.label}</div>
               </div>
+            </div>
+          ))}
+        </div>
+      </section>
 
-              {/* Phone Bezel */}
-              <div className={`lg:col-span-7 flex justify-center phone-wrapper transition-all duration-300 ease-out will-change-transform ${
-                isEven ? 'lg:order-last' : 'lg:order-first'
-              }`}>
-                <PhoneBezel src={section.img} alt={section.title} />
-              </div>
-            </section>
-          );
-        })}
-      </div>
-
-      {/* Finale Section */}
-      <section className="relative min-h-[80vh] flex flex-col justify-center items-center px-6 text-center py-24 z-10 overflow-hidden">
-        {/* Background glow */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[450px] h-[450px] rounded-full bg-[oklch(0.78_0.18_195)]/10 blur-[90px] pointer-events-none" />
-
-        <div className="max-w-3xl mx-auto flex flex-col items-center">
-          <span className="text-xs md:text-sm font-bold tracking-[0.25em] text-[oklch(0.78_0.18_195)] uppercase mb-6">
-            END OF SCROLL
-          </span>
-          <h2 className="text-4xl sm:text-5xl md:text-6xl font-extrabold text-white tracking-tight mb-8">
-            Close the tab and <br className="hidden sm:block" />
-            the call ends
-          </h2>
-          <p className="text-lg md:text-xl text-slate-300 max-w-xl leading-relaxed mb-10 font-normal">
-            Numbers and messages exist only while the browsers stay open. Nothing remains on any server afterward.
-          </p>
-          
-          <a 
-            href="/app"
-            className="group inline-flex items-center justify-center px-8 py-4 rounded-full text-base font-bold bg-[oklch(0.78_0.18_195)] text-slate-950 hover:bg-[oklch(0.83_0.15_195)] active:scale-98 transition-all shadow-[0_0_30px_rgba(38,230,255,0.3)] hover:shadow-[0_0_40px_rgba(38,230,255,0.5)]"
+      {/* Features grid */}
+      <section className="relative z-10 px-6 py-16 md:py-24">
+        <div className="max-w-3xl mx-auto text-center mb-14">
+          <span
+            className="text-xs font-bold tracking-[0.2em] uppercase block mb-3"
+            style={{ color: CYAN }}
           >
-            Open RELAY →
+            {t.feat_kicker}
+          </span>
+          <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-4">
+            {t.feat_title}
+          </h2>
+          <p className="text-slate-400 text-lg leading-relaxed">{t.feat_sub}</p>
+        </div>
+        <div className="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          {t.features.map((f, i) => (
+            <div
+              key={i}
+              className="group rounded-2xl border border-white/10 bg-slate-900/30 p-6 transition-all duration-200 hover:border-[oklch(0.78_0.18_195)]/40 hover:bg-slate-900/60"
+            >
+              <div
+                className="w-10 h-10 rounded-xl flex items-center justify-center mb-4 font-bold text-slate-950 text-sm"
+                style={{ backgroundColor: CYAN }}
+              >
+                {String(i + 1).padStart(2, "0")}
+              </div>
+              <h3 className="text-lg font-bold text-white mb-2">{f.t}</h3>
+              <p className="text-sm text-slate-400 leading-relaxed">{f.d}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Screenshot showcase */}
+      <section className="relative z-10 px-6 py-16 md:py-24">
+        <div className="max-w-3xl mx-auto text-center mb-16">
+          <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+            {t.shots_title}
+          </h2>
+        </div>
+
+        <div className="max-w-6xl mx-auto space-y-20 lg:space-y-28">
+          {[
+            { img: IMG.dialer, title: t.shot_dialer_t, desc: t.shot_dialer_d },
+            { img: IMG.chat, title: t.shot_chat_t, desc: t.shot_chat_d },
+            { img: IMG.group, title: t.shot_group_t, desc: t.shot_group_d },
+          ].map((s, i) => {
+            const flip = i % 2 === 1;
+            return (
+              <div
+                key={i}
+                className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-14 items-center"
+              >
+                <div
+                  className={`lg:col-span-7 ${flip ? "lg:order-last" : ""}`}
+                >
+                  <div className="relative rounded-2xl overflow-hidden border border-white/10 shot-img">
+                    <div
+                      className="absolute -inset-8 blur-3xl opacity-20 -z-10"
+                      style={{ backgroundColor: CYAN }}
+                    />
+                    <img
+                      src={s.img}
+                      alt={s.title}
+                      loading="lazy"
+                      className="w-full h-auto block"
+                    />
+                  </div>
+                </div>
+                <div className="lg:col-span-5">
+                  <h3 className="text-2xl sm:text-3xl font-extrabold text-white mb-4">
+                    {s.title}
+                  </h3>
+                  <p className="text-slate-300 text-base sm:text-lg leading-relaxed">
+                    {s.desc}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Mobile */}
+      <section className="relative z-10 px-6 py-16 md:py-24">
+        <div className="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+          <div className={isAr ? "lg:order-last" : ""}>
+            <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-5">
+              {t.mobile_t}
+            </h2>
+            <p className="text-slate-300 text-lg leading-relaxed">{t.mobile_d}</p>
+            <a
+              href="/app"
+              className="mt-8 inline-flex items-center justify-center px-6 py-3 rounded-full text-sm font-bold text-slate-950 transition-all active:scale-[0.97]"
+              style={{ backgroundColor: CYAN, boxShadow: "0 0 24px rgba(38,230,255,.3)" }}
+            >
+              {t.nav_open} {isAr ? "←" : "→"}
+            </a>
+          </div>
+          <div className="flex justify-center">
+            <div className="relative w-full max-w-[300px]">
+              <div
+                className="absolute -inset-10 blur-3xl opacity-25 -z-10 rounded-full"
+                style={{ backgroundColor: CYAN }}
+              />
+              <img
+                src={IMG.mobile}
+                alt={t.mobile_t}
+                loading="lazy"
+                className="w-full h-auto block drop-shadow-2xl"
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Final CTA */}
+      <section className="relative z-10 px-6 py-20 md:py-28">
+        <div className="max-w-3xl mx-auto text-center relative">
+          <div
+            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] rounded-full blur-[100px] opacity-15 animate-pulse-glow pointer-events-none"
+            style={{ backgroundColor: CYAN }}
+          />
+          <h2 className="relative text-3xl sm:text-5xl font-extrabold text-white tracking-tight mb-5">
+            {t.cta_title}
+          </h2>
+          <p className="relative text-slate-300 text-lg mb-9">{t.cta_sub}</p>
+          <a
+            href="/app"
+            className="relative inline-flex items-center justify-center px-9 py-4 rounded-full text-base font-bold text-slate-950 transition-all active:scale-[0.97]"
+            style={{ backgroundColor: CYAN, boxShadow: "0 0 36px rgba(38,230,255,.4)" }}
+          >
+            {t.cta_btn} {isAr ? "←" : "→"}
           </a>
         </div>
       </section>
 
       {/* Footer */}
-      <footer className="relative border-t border-white/5 py-12 text-center z-10">
-        <p className="text-xs text-slate-500 tracking-wider">
-          © 2026 RELAY · v2.50.1 · Designed by gemini-3.5-flash
-        </p>
+      <footer className="relative z-10 border-t border-white/10 px-6 py-10">
+        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-center md:text-start">
+          <div className="flex items-center gap-3">
+            <span
+              className="w-2.5 h-2.5 rounded-full"
+              style={{ backgroundColor: CYAN, boxShadow: `0 0 10px ${CYAN}` }}
+            />
+            <div>
+              <div className="font-semibold tracking-wider text-white text-sm">RELAY</div>
+              <div className="text-xs text-slate-500">{t.footer_tag}</div>
+            </div>
+          </div>
+          <div className="text-xs text-slate-500 flex flex-col md:items-end gap-1">
+            <span>
+              © {new Date().getFullYear()} RELAY · {t.footer_rights}
+            </span>
+            <span className="flex items-center gap-2">
+              <span>v{APP_VERSION}</span>
+              <span className="opacity-40">·</span>
+              <span>{t.footer_design}</span>
+            </span>
+          </div>
+        </div>
       </footer>
     </div>
   );

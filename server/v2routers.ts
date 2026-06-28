@@ -47,6 +47,7 @@ import {
   upsertContact,
   getConversationParticipantIds,
   recentAutoReplyExists,
+  getPublicStats,
 } from "./v2db";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 
@@ -1014,4 +1015,16 @@ export const v2CallsRouter = router({
       });
       return row;
     }),
+});
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Stats router — public, aggregate-only counters surfaced on the landing page.
+ * No auth required and no personal data leaves the server; just headline
+ * totals so the marketing page can show live network size.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const v2StatsRouter = router({
+  public: publicProcedure.query(async () => {
+    return await getPublicStats();
+  }),
 });

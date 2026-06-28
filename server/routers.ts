@@ -9,6 +9,7 @@ import {
   v2MessagesRouter,
   v2AttachmentsRouter,
   v2CallsRouter,
+  v2StatsRouter,
 } from "./v2routers";
 
 export const appRouter = router({
@@ -29,6 +30,7 @@ export const appRouter = router({
   messages: v2MessagesRouter,
   attachments: v2AttachmentsRouter,
   calls: v2CallsRouter,
+  stats: v2StatsRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -1577,3 +1577,15 @@ deterministic reproduction).
       their end state / use a dedicated keyframe.)
 - [x] 3 new CSS regression guards (each panel centers via `margin-inline:auto`, clamps `width:min(...)`,
       and carries no `translateX(-50%)`). 390 tests green, tsc + build clean. Footer → `v2.50.1`.
+
+## Bilingual landing page redesign (Gemini visuals + live stats) — delivered 2026-06-28
+- [x] Backend `stats.public` tRPC procedure + `getPublicStats` db helper returning registeredUsers, guestsServed, totalParties, onlineNow (live from DB)
+- [x] Vitest coverage for stats helper (shape + invariants), wired into appRouter
+- [x] Generated 5 Gemini UI mockups: dialer, chat, group video, mobile, hero background — uploaded to project CDN
+- [x] Rewrote Home.tsx: bilingual EN/AR with language toggle + full RTL handling (document dir/lang, Arabic-Indic numerals)
+- [x] Hero with Gemini background, animated count-up live-stats band (registered/guests/total/online with LIVE badge)
+- [x] 9-feature grid covering current v2.50.1 capabilities (calls, conferences, host controls, messaging, screen share/PiP, audio routing, history/redial, privacy)
+- [x] Screenshot showcase (dialer/messages/group) + mobile section, both bilingual
+- [x] Footer shows APP_VERSION (v2.50.1) and "Designed by Gemini" / "تصميم بواسطة Gemini"
+- [x] Rewrote Home.test.ts to validate bilingual copy, toggle, RTL, live-stats query, Gemini assets, version footer + count-up easing math
+- [x] Verified EN + AR (RTL) rendering in browser; 384 tests green, tsc clean
