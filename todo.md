@@ -1577,3 +1577,22 @@ deterministic reproduction).
       their end state / use a dedicated keyframe.)
 - [x] 3 new CSS regression guards (each panel centers via `margin-inline:auto`, clamps `width:min(...)`,
       and carries no `translateX(-50%)`). 390 tests green, tsc + build clean. Footer → `v2.50.1`.
+
+## v2.50.2 — Two different numbers after login (identity number ≠ relay pin) (delivered 2026-06-28)
+
+- [x] **The header showed one 6-digit number and the big dialer showed another.** Root cause: the dialer's
+      big number is the relay SIGNALING pin (`enginePin`), while the header shows the v2 IDENTITY number
+      (`me.number`) — and they could diverge. The relay engine auto-registers as soon as the display NAME
+      is known, but if whoami's `number` hadn't loaded yet, `setPreferredPin` got `null`, so the engine
+      fell back to a **stale `localStorage relay_pin`** from a previous session (the server keeps any free
+      requested pin), and it **never switched** once the real number arrived. Result: two numbers, and the
+      header/shared number couldn't actually be dialed.
+- [x] **Fix — reconcile the engine pin to the authoritative identity number.** `setPreferredPin(pin)` now,
+      when it's handed a number that differs from the engine's current pin (and we're registered + idle),
+      **re-registers under it** (the server treats a new pin from the same cid as an identity switch:
+      drops the old, takes the new) and updates `localStorage relay_pin`. The engine provider runs this
+      whenever the engine becomes `ready` and whenever `me.number` changes, so the big dialer number, the
+      header number, and the actually-dialable pin converge to ONE number. Never switches mid-call (an
+      identity switch tears down room membership); no-ops once the pins already match (no loop).
+- [x] 2 new regression guards (setPreferredPin switch logic + the provider reconcile effect). 392 tests
+      green, tsc + build clean. Footer → `v2.50.2`.
