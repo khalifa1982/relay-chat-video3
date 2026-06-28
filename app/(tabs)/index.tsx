@@ -1,48 +1,67 @@
-import { ScrollView, Text, View, TouchableOpacity } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
 
-import { ScreenContainer } from "@/components/screen-container";
+import { RelayWebView } from "@/components/relay-webview";
+import { RELAY_APP_URL } from "@/lib/relay-config";
 
 /**
- * Home Screen - NativeWind Example
+ * Main screen — a full-screen WebView shell that mirrors the live RELAY web
+ * app. Everything (dialer, calls, messages, contacts) is served by the web,
+ * so any web update is reflected here automatically.
  *
- * This template uses NativeWind (Tailwind CSS for React Native).
- * You can use familiar Tailwind classes directly in className props.
- *
- * Key patterns:
- * - Use `className` instead of `style` for most styling
- * - Theme colors: use tokens directly (bg-background, text-foreground, bg-primary, etc.); no dark: prefix needed
- * - Responsive: standard Tailwind breakpoints work on web
- * - Custom colors defined in tailwind.config.js
+ * On web (Expo preview) WebView/native features aren't available, so we show a
+ * lightweight notice with the target URL instead of an embedded frame.
  */
 export default function HomeScreen() {
+  if (Platform.OS === "web") {
+    return (
+      <View style={styles.webFallback}>
+        <Text style={styles.webFallbackTitle}>RELAY Mobile Shell</Text>
+        <Text style={styles.webFallbackBody}>
+          On a phone, this screen loads the live RELAY web app full-screen.
+        </Text>
+        <Text style={styles.webFallbackUrl}>{RELAY_APP_URL}</Text>
+      </View>
+    );
+  }
+
   return (
-    <ScreenContainer className="p-6">
-      <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
-        <View className="flex-1 gap-8">
-          {/* Hero Section */}
-          <View className="items-center gap-2">
-            <Text className="text-4xl font-bold text-foreground">Welcome</Text>
-            <Text className="text-base text-muted text-center">
-              Edit app/(tabs)/index.tsx to get started
-            </Text>
-          </View>
-
-          {/* Example Card */}
-          <View className="w-full max-w-sm self-center bg-surface rounded-2xl p-6 shadow-sm border border-border">
-            <Text className="text-lg font-semibold text-foreground mb-2">NativeWind Ready</Text>
-            <Text className="text-sm text-muted leading-relaxed">
-              Use Tailwind CSS classes directly in your React Native components.
-            </Text>
-          </View>
-
-          {/* Example Button */}
-          <View className="items-center">
-            <TouchableOpacity className="bg-primary px-6 py-3 rounded-full active:opacity-80">
-              <Text className="text-background font-semibold">Get Started</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </ScrollView>
-    </ScreenContainer>
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right", "bottom"]}>
+      <StatusBar style="light" />
+      <RelayWebView />
+    </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: "#0B1020",
+  },
+  webFallback: {
+    flex: 1,
+    backgroundColor: "#0B1020",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 32,
+  },
+  webFallbackTitle: {
+    color: "#E5E9F5",
+    fontSize: 22,
+    fontWeight: "800",
+    letterSpacing: 3,
+  },
+  webFallbackBody: {
+    color: "#8B93AD",
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: "center",
+    marginTop: 12,
+  },
+  webFallbackUrl: {
+    color: "#06B6D4",
+    fontSize: 14,
+    marginTop: 16,
+  },
+});
