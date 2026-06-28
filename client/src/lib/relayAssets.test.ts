@@ -143,4 +143,20 @@ describe("relay call UI regression guards", () => {
     expect(RELAY_MARKUP).toMatch(/class="addpad-hint"/);
     expect(RELAY_MARKUP).toMatch(/automatically/i);
   });
+
+  // ── centered popups must not overflow on mobile (v2.50.1) ──────────────────
+  // These open with `animation:relayFade … both`, whose final keyframe is
+  // `transform:none` — which WIPES a `translateX(-50%)` centering transform and
+  // shoves the panel off the right edge. They must center via auto margins
+  // instead, and clamp width to the viewport.
+  for (const sel of ["addpad", "filter-dock", "tile-menu"]) {
+    it(`.${sel} centers via auto margins (not a relayFade-clobbered transform) and clamps width`, () => {
+      const rule = RELAY_CSS.match(new RegExp(`\\.relay-root \\.${sel}\\{([^}]*)\\}`));
+      expect(rule, `.${sel} rule must exist`).toBeTruthy();
+      const decls = rule![1];
+      expect(decls).toMatch(/margin-inline:auto/);
+      expect(decls).not.toMatch(/transform:translateX\(-50%\)/);
+      expect(decls).toMatch(/width:min\(/);
+    });
+  }
 });
