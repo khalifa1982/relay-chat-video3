@@ -1589,3 +1589,9 @@ deterministic reproduction).
 - [x] Footer shows APP_VERSION (v2.50.1) and "Designed by Gemini" / "تصميم بواسطة Gemini"
 - [x] Rewrote Home.test.ts to validate bilingual copy, toggle, RTL, live-stats query, Gemini assets, version footer + count-up easing math
 - [x] Verified EN + AR (RTL) rendering in browser; 384 tests green, tsc clean
+
+
+## Landing page polish (bottom gap + scroll animations) — requested 2026-06-28
+- [x] Fix the large black gap below the footer on mobile (html/body background + overscroll) — verified footerBottom == scrollHeight at 390px
+- [x] Add scroll-reveal animations (IntersectionObserver + staggered + directional, prefers-reduced-motion gated) — 25/25 revealed
+- [x] Verified on 390px viewport (no gap, reveals fire); 394 tests + tsc green

@@ -183,6 +183,34 @@ const T = {
   },
 };
 
+const PAGE_BG = "oklch(0.10 0.012 220)";
+
+/* Reveal-on-scroll: adds `.is-in` to any [data-reveal] element the first time
+   it scrolls into view. One observer for the whole page, disconnected on
+   unmount. Honors prefers-reduced-motion via the CSS (animation is gated). */
+function useScrollReveal(deps: unknown[] = []) {
+  useEffect(() => {
+    const els = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-reveal]"),
+    );
+    if (els.length === 0) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            e.target.classList.add("is-in");
+            io.unobserve(e.target);
+          }
+        }
+      },
+      { threshold: 0.15, rootMargin: "0px 0px -8% 0px" },
+    );
+    els.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+}
+
 function useCountUp(target: number, run: boolean, duration = 1200) {
   const [value, setValue] = useState(0);
   useEffect(() => {
@@ -233,6 +261,32 @@ export default function Home() {
     };
   }, [lang, t.dir]);
 
+  // Fix the black overscroll gap on mobile: paint <html> and <body> with the
+  // page background so any rubber-band scroll past the footer matches the page
+  // instead of revealing the theme's near-black body color. Restored on unmount
+  // so the in-app routes keep their own background.
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const prev = {
+      htmlBg: html.style.backgroundColor,
+      bodyBg: body.style.backgroundColor,
+      overscroll: html.style.overscrollBehaviorY,
+    };
+    html.style.backgroundColor = PAGE_BG;
+    body.style.backgroundColor = PAGE_BG;
+    html.style.overscrollBehaviorY = "none";
+    return () => {
+      html.style.backgroundColor = prev.htmlBg;
+      body.style.backgroundColor = prev.bodyBg;
+      html.style.overscrollBehaviorY = prev.overscroll;
+    };
+  }, []);
+
+  // Progressive reveal of section content while scrolling. Re-scan when the
+  // language changes since the DOM subtree is rebuilt.
+  useScrollReveal([lang]);
+
   // Trigger count-up once the stats band scrolls into view.
   useEffect(() => {
     const el = document.getElementById("stats-band");
@@ -269,10 +323,30 @@ export default function Home() {
         .animate-pulse-glow{animation:pulse-glow 8s infinite ease-in-out}
         .grid-bg{background-image:linear-gradient(rgba(255,255,255,.015) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.015) 1px,transparent 1px);background-size:40px 40px}
         @keyframes fade-up { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+        .shot-img{box-shadow:0 30px 80px -20px rgba(0,0,0,.85);}
+
+        /* Scroll-reveal: elements start slightly down + faded, then ease into
+           place once .is-in is added by the IntersectionObserver. transform +
+           opacity only (GPU-friendly). Staggered via inline --d delay. */
+        [data-reveal]{
+          opacity:1;transform:none;
+        }
         @media (prefers-reduced-motion: no-preference){
           .fade-up{animation:fade-up .6s cubic-bezier(0.23,1,0.32,1) both}
+          [data-reveal]{
+            opacity:0;
+            transform:translateY(34px) scale(0.985);
+            transition:opacity .7s cubic-bezier(0.23,1,0.32,1),
+                       transform .7s cubic-bezier(0.23,1,0.32,1);
+            transition-delay:var(--d, 0ms);
+            will-change:opacity, transform;
+          }
+          [data-reveal="left"]{transform:translateX(-40px)}
+          [data-reveal="right"]{transform:translateX(40px)}
+          [data-reveal].is-in{
+            opacity:1;transform:none;
+          }
         }
-        .shot-img{box-shadow:0 30px 80px -20px rgba(0,0,0,.85);}
       `}</style>
 
       <div className="absolute inset-0 grid-bg pointer-events-none z-0" />
@@ -374,7 +448,7 @@ export default function Home() {
 
       {/* Live stats band */}
       <section id="stats-band" className="relative z-10 px-6 py-16 md:py-20">
-        <div className="max-w-5xl mx-auto text-center mb-10">
+        <div className="max-w-5xl mx-auto text-center mb-10" data-reveal>
           <h2 className="text-2xl sm:text-3xl font-extrabold text-white mb-3">{t.stats_title}</h2>
           <p className="text-slate-400">{t.stats_sub}</p>
         </div>
@@ -387,6 +461,8 @@ export default function Home() {
           ].map((s, i) => (
             <div
               key={i}
+              data-reveal
+              style={{ "--d": `${i * 90}ms` } as React.CSSProperties}
               className="relative rounded-2xl border border-white/10 bg-slate-900/40 backdrop-blur-sm p-6 md:p-8 text-center overflow-hidden"
             >
               <div
@@ -415,7 +491,7 @@ export default function Home() {
 
       {/* Features grid */}
       <section className="relative z-10 px-6 py-16 md:py-24">
-        <div className="max-w-3xl mx-auto text-center mb-14">
+        <div className="max-w-3xl mx-auto text-center mb-14" data-reveal>
           <span
             className="text-xs font-bold tracking-[0.2em] uppercase block mb-3"
             style={{ color: CYAN }}
@@ -431,7 +507,9 @@ export default function Home() {
           {t.features.map((f, i) => (
             <div
               key={i}
-              className="group rounded-2xl border border-white/10 bg-slate-900/30 p-6 transition-all duration-200 hover:border-[oklch(0.78_0.18_195)]/40 hover:bg-slate-900/60"
+              data-reveal
+              style={{ "--d": `${(i % 3) * 80}ms` } as React.CSSProperties}
+              className="group rounded-2xl border border-white/10 bg-slate-900/30 p-6 transition-all duration-200 hover:border-[oklch(0.78_0.18_195)]/40 hover:bg-slate-900/60 hover:-translate-y-1"
             >
               <div
                 className="w-10 h-10 rounded-xl flex items-center justify-center mb-4 font-bold text-slate-950 text-sm"
@@ -448,7 +526,7 @@ export default function Home() {
 
       {/* Screenshot showcase */}
       <section className="relative z-10 px-6 py-16 md:py-24">
-        <div className="max-w-3xl mx-auto text-center mb-16">
+        <div className="max-w-3xl mx-auto text-center mb-16" data-reveal>
           <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
             {t.shots_title}
           </h2>
@@ -467,6 +545,7 @@ export default function Home() {
                 className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-14 items-center"
               >
                 <div
+                  data-reveal={flip ? "right" : "left"}
                   className={`lg:col-span-7 ${flip ? "lg:order-last" : ""}`}
                 >
                   <div className="relative rounded-2xl overflow-hidden border border-white/10 shot-img">
@@ -482,7 +561,11 @@ export default function Home() {
                     />
                   </div>
                 </div>
-                <div className="lg:col-span-5">
+                <div
+                  className="lg:col-span-5"
+                  data-reveal={flip ? "left" : "right"}
+                  style={{ "--d": "120ms" } as React.CSSProperties}
+                >
                   <h3 className="text-2xl sm:text-3xl font-extrabold text-white mb-4">
                     {s.title}
                   </h3>
@@ -499,7 +582,10 @@ export default function Home() {
       {/* Mobile */}
       <section className="relative z-10 px-6 py-16 md:py-24">
         <div className="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-          <div className={isAr ? "lg:order-last" : ""}>
+          <div
+            className={isAr ? "lg:order-last" : ""}
+            data-reveal={isAr ? "right" : "left"}
+          >
             <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-5">
               {t.mobile_t}
             </h2>
@@ -512,7 +598,11 @@ export default function Home() {
               {t.nav_open} {isAr ? "←" : "→"}
             </a>
           </div>
-          <div className="flex justify-center">
+          <div
+            className="flex justify-center"
+            data-reveal={isAr ? "left" : "right"}
+            style={{ "--d": "120ms" } as React.CSSProperties}
+          >
             <div className="relative w-full max-w-[300px]">
               <div
                 className="absolute -inset-10 blur-3xl opacity-25 -z-10 rounded-full"
@@ -531,7 +621,7 @@ export default function Home() {
 
       {/* Final CTA */}
       <section className="relative z-10 px-6 py-20 md:py-28">
-        <div className="max-w-3xl mx-auto text-center relative">
+        <div className="max-w-3xl mx-auto text-center relative" data-reveal>
           <div
             className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] rounded-full blur-[100px] opacity-15 animate-pulse-glow pointer-events-none"
             style={{ backgroundColor: CYAN }}

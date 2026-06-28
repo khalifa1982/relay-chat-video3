@@ -73,6 +73,61 @@ describe("Home.tsx — bilingual landing page", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 1b. Bottom-gap fix + scroll-reveal animations
+// ---------------------------------------------------------------------------
+describe("Home.tsx — bottom gap fix", () => {
+  it("paints html and body with the page background to kill the overscroll gap", () => {
+    expect(HOME_TSX).toMatch(/html\.style\.backgroundColor\s*=\s*PAGE_BG/);
+    expect(HOME_TSX).toMatch(/body\.style\.backgroundColor\s*=\s*PAGE_BG/);
+  });
+
+  it("disables vertical overscroll bounce", () => {
+    expect(HOME_TSX).toMatch(/overscrollBehaviorY\s*=\s*["']none["']/);
+  });
+
+  it("restores the previous html/body styles on unmount", () => {
+    expect(HOME_TSX).toMatch(/html\.style\.backgroundColor\s*=\s*prev\.htmlBg/);
+    expect(HOME_TSX).toMatch(/body\.style\.backgroundColor\s*=\s*prev\.bodyBg/);
+  });
+});
+
+describe("Home.tsx — scroll-reveal animations", () => {
+  it("defines a scroll-reveal hook backed by IntersectionObserver", () => {
+    expect(HOME_TSX).toMatch(/function\s+useScrollReveal/);
+    expect(HOME_TSX).toMatch(/new IntersectionObserver/);
+    expect(HOME_TSX).toMatch(/classList\.add\(["']is-in["']\)/);
+  });
+
+  it("invokes the reveal hook and re-scans on language change", () => {
+    expect(HOME_TSX).toMatch(/useScrollReveal\(\[lang\]\)/);
+  });
+
+  it("marks multiple sections with data-reveal", () => {
+    const count = (HOME_TSX.match(/data-reveal/g) ?? []).length;
+    expect(count).toBeGreaterThanOrEqual(6);
+  });
+
+  it("uses directional reveals for the alternating showcase/mobile rows", () => {
+    expect(HOME_TSX).toMatch(/data-reveal=\{flip \? ["']right["'] : ["']left["']\}/);
+    expect(HOME_TSX).toMatch(/data-reveal=\{isAr \? /);
+  });
+
+  it("staggers grouped reveals with a per-item --d delay", () => {
+    expect(HOME_TSX).toMatch(/["']--d["']:\s*`\$\{/);
+  });
+
+  it("gates reveal motion behind prefers-reduced-motion", () => {
+    expect(HOME_TSX).toMatch(/prefers-reduced-motion: no-preference/);
+    expect(HOME_TSX).toMatch(/\[data-reveal\]\.is-in/);
+  });
+
+  it("only animates transform and opacity (GPU-friendly)", () => {
+    // the reveal transition list must not animate layout props
+    expect(HOME_TSX).not.toMatch(/transition:[^;]*\b(width|height|margin|padding|top|left)\b/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 2. Visual assets — Gemini-generated mockups served from the CDN
 // ---------------------------------------------------------------------------
 describe("Home.tsx — Gemini visual assets", () => {
