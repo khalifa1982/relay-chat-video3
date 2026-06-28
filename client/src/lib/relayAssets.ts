@@ -515,7 +515,7 @@ export const RELAY_CSS = `
    supported, instead of being blanket-hidden by viewport. */
 
 /* Filter dock (Snapchat-style horizontal strip) */
-.relay-root .filter-dock{position:absolute;left:50%;bottom:96px;transform:translateX(-50%) translateY(12px);width:min(720px,94vw);
+.relay-root .filter-dock{position:absolute;left:0;right:0;margin-inline:auto;bottom:96px;width:min(720px,94vw);
   background:rgba(20,23,29,.78);border:1px solid rgba(255,255,255,.10);border-radius:22px;padding:14px 14px 16px;
   box-shadow:0 24px 60px -22px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.05);
   backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);
@@ -558,8 +558,15 @@ export const RELAY_CSS = `
 .relay-root .relay-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .relay-root .relay-toast.err{border-color:rgba(255,92,114,.4)}
 
-.relay-root .addpad{position:absolute;bottom:84px;left:50%;transform:translateX(-50%);background:var(--surface);
-  border:1px solid var(--border2);border-radius:18px;padding:18px;display:none;flex-direction:column;gap:12px;width:240px;
+/* Centered via auto margins (NOT transform): the open animation (relayFade) ends
+   on transform:none with fill-mode both, which would otherwise wipe a
+   translateX(-50%) and shove the pad off the right edge on mobile. Width is
+   clamped to the viewport and it scrolls if the keypad makes it taller than the
+   screen, so it can never overflow. */
+.relay-root .addpad{position:absolute;bottom:84px;left:0;right:0;margin-inline:auto;
+  width:min(260px,calc(100vw - 24px));max-height:calc(100dvh - 200px);overflow-y:auto;overflow-x:hidden;
+  background:var(--surface);
+  border:1px solid var(--border2);border-radius:18px;padding:18px;display:none;flex-direction:column;gap:12px;
   box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:30}
 .relay-root .addpad.open{display:flex;animation:relayFade .2s ease both}
 .relay-root .addpad-head{display:flex;align-items:center;justify-content:space-between;font-size:13px;font-weight:600;color:var(--text)}
@@ -602,7 +609,7 @@ export const RELAY_CSS = `
 .relay-root #videoGrid.mod-on .relay-tile:not(.you) .tile-menu-btn{display:grid}
 .relay-root .relay-tile .tile-menu-btn:hover{background:var(--accent);color:#04201B}
 /* Shared bottom-sheet action menu opened by a tile's ⋮ button. */
-.relay-root .tile-menu{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);width:260px;max-width:90vw;display:none;
+.relay-root .tile-menu{position:absolute;left:0;right:0;margin-inline:auto;bottom:96px;width:min(260px,90vw);display:none;
   flex-direction:column;background:var(--surface);border:1px solid var(--border2);border-radius:16px;overflow:hidden;
   box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:32}
 .relay-root .tile-menu.open{display:flex;animation:relayFade .2s ease both}
