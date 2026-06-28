@@ -15,16 +15,12 @@ type Lang = "en" | "ar";
    live RELAY app (asset URLs tied to the project lifecycle — they do not
    expire). */
 const IMG = {
-  heroBg:
-    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-real-hero-GPbFBbSdTgZL74jWSGrDDE.webp",
-  dialer:
-    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-real-dialer-GFNyvPZrUHoEncgrFJxfGq.webp",
-  chat:
-    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-real-messages-YPEBaFa4YZ3xjnWzG8KPwW.webp",
-  group:
-    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-real-group-6tfEB8PTqFhiMg66EyEGe3.webp",
-  mobile:
-    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-real-mobile-4RfnjNdHdfzRYwT6L66yEj.webp",
+  // Real screenshots captured directly from the live app at your-chat.org/app
+  heroBg: "/manus-storage/relay-real-call_913247ed.png",
+  dialer: "/manus-storage/relay-real-dialer_7eafdee6.png",
+  chat: "/manus-storage/relay-real-messages_ee881e78.png",
+  group: "/manus-storage/relay-real-call_913247ed.png",
+  mobile: "/manus-storage/relay-real-mobile_a5c81f70.png",
 };
 
 const T = {
@@ -207,14 +203,13 @@ function WordReveal({
   return (
     <span className={className} data-reveal="words">
       {words.map((w, i) => (
-        <span key={i} className="word-wrap">
-          <span
-            className="word"
-            style={{ "--wd": `${baseDelay + i * step}ms` } as React.CSSProperties}
-          >
-            {w}
-          </span>
-          {i < words.length - 1 ? " " : ""}
+        <span
+          key={i}
+          className="word"
+          style={{ "--wd": `${baseDelay + i * step}ms` } as React.CSSProperties}
+        >
+          {w}
+          {i < words.length - 1 ? "\u00A0" : ""}
         </span>
       ))}
     </span>
@@ -472,11 +467,10 @@ export default function Home() {
           /* Word-by-word headline reveal: the wrapper itself does not move/fade
              (it is just a layout container); each child .word rises into place. */
           [data-reveal="words"]{ opacity:1;transform:none; }
-          .word-wrap{ display:inline-block; overflow:hidden; vertical-align:bottom; }
           .word{
             display:inline-block;
             opacity:0;
-            transform:translateY(0.9em) rotate(2deg);
+            transform:translateY(0.5em);
             transition:opacity .55s cubic-bezier(0.23,1,0.32,1),
                        transform .55s cubic-bezier(0.23,1,0.32,1);
           }
@@ -595,15 +589,14 @@ export default function Home() {
       <section id="stats-band" className="relative z-10 px-6 py-16 md:py-20">
         <div className="max-w-5xl mx-auto text-center mb-10">
           <h2 className="text-2xl sm:text-3xl font-extrabold text-white mb-3" data-reveal="words">
-            {t.stats_title.split(" ").map((w, i) => (
-              <span key={i} className="word-wrap">
-                <span
-                  className="word"
-                  style={{ "--wd": `${i * 60}ms` } as React.CSSProperties}
-                >
-                  {w}
-                </span>
-                {i < t.stats_title.split(" ").length - 1 ? " " : ""}
+            {t.stats_title.split(" ").map((w, i, arr) => (
+              <span
+                key={i}
+                className="word"
+                style={{ "--wd": `${i * 60}ms` } as React.CSSProperties}
+              >
+                {w}
+                {i < arr.length - 1 ? "\u00A0" : ""}
               </span>
             ))}
           </h2>
@@ -662,15 +655,14 @@ export default function Home() {
             className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-4"
             data-reveal="words"
           >
-            {t.feat_title.split(" ").map((w, i) => (
-              <span key={i} className="word-wrap">
-                <span
-                  className="word"
-                  style={{ "--wd": `${i * 50}ms` } as React.CSSProperties}
-                >
-                  {w}
-                </span>
-                {i < t.feat_title.split(" ").length - 1 ? " " : ""}
+            {t.feat_title.split(" ").map((w, i, arr) => (
+              <span
+                key={i}
+                className="word"
+                style={{ "--wd": `${i * 60}ms` } as React.CSSProperties}
+              >
+                {w}
+                {i < arr.length - 1 ? "\u00A0" : ""}
               </span>
             ))}
           </h2>
@@ -706,15 +698,14 @@ export default function Home() {
             className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight"
             data-reveal="words"
           >
-            {t.shots_title.split(" ").map((w, i) => (
-              <span key={i} className="word-wrap">
-                <span
-                  className="word"
-                  style={{ "--wd": `${i * 55}ms` } as React.CSSProperties}
-                >
-                  {w}
-                </span>
-                {i < t.shots_title.split(" ").length - 1 ? " " : ""}
+            {t.shots_title.split(" ").map((w, i, arr) => (
+              <span
+                key={i}
+                className="word"
+                style={{ "--wd": `${i * 55}ms` } as React.CSSProperties}
+              >
+                {w}
+                {i < arr.length - 1 ? "\u00A0" : ""}
               </span>
             ))}
           </h2>
@@ -818,15 +809,14 @@ export default function Home() {
             className="relative text-3xl sm:text-5xl font-extrabold text-white tracking-tight mb-5"
             data-reveal="words"
           >
-            {t.cta_title.split(" ").map((w, i) => (
-              <span key={i} className="word-wrap">
-                <span
-                  className="word"
-                  style={{ "--wd": `${i * 50}ms` } as React.CSSProperties}
-                >
-                  {w}
-                </span>
-                {i < t.cta_title.split(" ").length - 1 ? " " : ""}
+            {t.cta_title.split(" ").map((w, i, arr) => (
+              <span
+                key={i}
+                className="word"
+                style={{ "--wd": `${i * 50}ms` } as React.CSSProperties}
+              >
+                {w}
+                {i < arr.length - 1 ? "\u00A0" : ""}
               </span>
             ))}
           </h2>

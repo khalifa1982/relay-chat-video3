@@ -1618,3 +1618,14 @@ deterministic reproduction).
 - [x] Add richer full-page scroll animations: text reveal + scroll-linked color shift
 - [x] Update Home.test.ts for changed copy/structure
 - [x] Tests + tsc + CDP verify, checkpoint, push to GitHub
+- [ ] Fix word-by-word headline spacing (spaces collapsed between inline-block word wrappers)
+
+## Real app screenshots (requested)
+- [x] Open the app and register a guest identity
+- [x] Capture real screenshot: dialer / keypad
+- [x] Capture real screenshot: messages / chat
+- [x] Made a real video call (two parties) and captured the call screen
+- [x] Capture real screenshot: mobile view
+- [x] Crop/tune screenshots and upload as webdev static assets
+- [x] Replace AI visuals in Home.tsx IMG map with real screenshots
+- [x] Update Home.test.ts asset checks, verify, checkpoint, push

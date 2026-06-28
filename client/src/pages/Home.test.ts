@@ -170,12 +170,11 @@ describe("Home.tsx — visual assets", () => {
     }
   });
 
-  it("uses the project CDN host for every image asset", () => {
-    const urls = HOME_TSX.match(/https?:\/\/[^"'\s]+/g) ?? [];
-    expect(urls.length).toBeGreaterThanOrEqual(5);
-    for (const u of urls) {
-      expect(u).toMatch(/cloudfront\.net/);
-    }
+  it("serves images from the project storage path (real captured screenshots)", () => {
+    // The landing visuals are real screenshots captured from the live app and
+    // served via the persistent /manus-storage path.
+    const storageRefs = HOME_TSX.match(/\/manus-storage\/relay-real-[^"'\s]+/g) ?? [];
+    expect(storageRefs.length).toBeGreaterThanOrEqual(4);
   });
 
   it("does not import images from the local filesystem", () => {
