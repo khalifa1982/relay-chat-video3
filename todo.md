@@ -1595,3 +1595,26 @@ deterministic reproduction).
 - [x] Fix the large black gap below the footer on mobile (html/body background + overscroll) — verified footerBottom == scrollHeight at 390px
 - [x] Add scroll-reveal animations (IntersectionObserver + staggered + directional, prefers-reduced-motion gated) — 25/25 revealed
 - [x] Verified on 390px viewport (no gap, reveals fire); 394 tests + tsc green
+
+
+## Authentic landing visuals + pro rebuild — requested 2026-06-28
+- [ ] Capture real screenshots of the actual RELAY app (dialer, messages, history, contacts, profile, in-call) via logged-in browser
+- [ ] Generate realistic Gemini visuals grounded on the real screenshots (match real layout/colors/elements)
+- [ ] Professionally rebuild the bilingual landing page with the authentic visuals
+- [ ] Verify EN + AR (RTL), no bottom gap, scroll-reveal, tests + tsc green
+- [ ] Checkpoint + push to GitHub + deliver
+
+## Landing copy + full-page scroll animations
+- [ ] Remove all "Gemini" mentions from the landing page (footer + code comments)
+- [ ] Rewrite product copy (EN + AR) to be simple, clear and friendly (drafted via Gemini 2.5 Flash)
+- [ ] Add full-page scroll-driven animations: section reveal, hero parallax, scroll-linked color/gradient motion
+- [ ] Keep prefers-reduced-motion support
+- [ ] Verify tests + tsc + mobile, checkpoint, push to GitHub
+
+## Landing copy + animation refresh (requested)
+- [x] Remove leftover "Gemini-inspired" comment in client/src/lib/relayAssets.ts (cleanup, not user-visible)
+- [x] Regenerate clearer, smoother bilingual (AR/EN) landing copy via Gemini 3.5 Flash
+- [x] Apply new copy into Home.tsx T dictionary
+- [x] Add richer full-page scroll animations: text reveal + scroll-linked color shift
+- [x] Update Home.test.ts for changed copy/structure
+- [x] Tests + tsc + CDP verify, checkpoint, push to GitHub

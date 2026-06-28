@@ -1,0 +1,126 @@
+{
+  "en": {
+    "hero_kicker": "No downloads. No signups.",
+    "hero_title_1": "The simplest way to call",
+    "hero_title_2": "right from your browser.",
+    "hero_sub": "Type your name and get a personal 6-digit number. Share it with friends or family so they can call you instantly.",
+    "hero_note": "*Your number stays on this device for 30 days. Register anytime to keep it forever.",
+    "stats_title": "Zero barriers to connect",
+    "stats_sub": "No app store visits. No passwords to remember. Just open a link and start talking.",
+    "feat_kicker": "Everything you need",
+    "feat_title": "Simple tools for better conversations",
+    "feat_sub": "We built all the essential features you expect, without any of the clutter.",
+    "features": [
+      {
+        "t": "Your own number",
+        "d": "Get a unique 6-digit number instantly without giving away your personal details."
+      },
+      {
+        "t": "Clear audio and video",
+        "d": "Enjoy high-quality one-on-one calls that connect directly between you and your friend."
+      },
+      {
+        "t": "Easy group links",
+        "d": "Create a room and send a link to bring everyone together in a video call."
+      },
+      {
+        "t": "Helpful host controls",
+        "d": "Mute everyone, add co-hosts, or pin important speakers to keep your meetings organized."
+      },
+      {
+        "t": "Rich chat messaging",
+        "d": "Send files, share photos, and record quick voice notes right inside the chat."
+      },
+      {
+        "t": "Share your screen",
+        "d": "Show your screen to others while keeping their video in a small, floating window."
+      },
+      {
+        "t": "Flexible audio options",
+        "d": "Switch easily between your phone speaker, headphones, or Bluetooth devices."
+      },
+      {
+        "t": "One-tap redial",
+        "d": "See your past calls and quickly call back a friend or a whole group with one tap."
+      },
+      {
+        "t": "Private by design",
+        "d": "Your data stays on your device, and your calls go directly from person to person."
+      }
+    ],
+    "shots_title": "Designed for daily life",
+    "shot_dialer_t": "The dialer",
+    "shot_dialer_d": "Just type a 6-digit number and call. No contact lists or setup needed.",
+    "shot_chat_t": "Interactive chat",
+    "shot_chat_d": "Share photos, drop files, and send voice notes while you talk.",
+    "shot_group_t": "Group meetings",
+    "shot_group_d": "Invite anyone with a link. The active speaker automatically takes center stage.",
+    "mobile_t": "Works on your phone too",
+    "mobile_d": "Open the website on your mobile browser. It rings just like a normal phone call, even when you are on the go.",
+    "cta_title": "Ready to start your first call?",
+    "cta_sub": "Get your 6-digit number in two seconds. No email required.",
+    "footer_tag": "RELAY — Simple calls, straight from your browser."
+  },
+  "ar": {
+    "hero_kicker": "بدون تحميل. بدون تسجيل.",
+    "hero_title_1": "أسهل طريقة للاتصال",
+    "hero_title_2": "مباشرة من متصفحك.",
+    "hero_sub": "اكتب اسمك واحصل فوراً على رقم شخصي من 6 أرقام. شاركه مع الآخرين ليتصلوا بك مباشرة.",
+    "hero_note": "*يبقى رقمك على هذا الجهاز لمدة 30 يوماً. يمكنك تسجيله مجاناً للاحتفاظ به للأبد.",
+    "stats_title": "تواصل بلا عوائق",
+    "stats_sub": "لا حاجة لزيارة متجر التطبيقات ولا كلمات مرور لتذكرها. فقط افتح الرابط وابدأ التحدث.",
+    "feat_kicker": "كل ما تحتاجه",
+    "feat_title": "أدوات بسيطة لمحادثات أفضل",
+    "feat_sub": "لقد صممنا الميزات الأساسية التي تحتاجها، بدون أي تعقيد.",
+    "features": [
+      {
+        "t": "رقم خاص بك",
+        "d": "احصل على رقم فريد من 6 أرقام فوراً دون الحاجة لمشاركة بياناتك الشخصية."
+      },
+      {
+        "t": "مكالمات واضحة",
+        "d": "استمتع بمكالمات صوت وفيديو عالية الجودة مباشرة بينك وبين أصدقائك."
+      },
+      {
+        "t": "روابط جماعية سهلة",
+        "d": "أنشئ غرفة محادثة وأرسل الرابط لجمع الجميع في مكالمة فيديو واحدة."
+      },
+      {
+        "t": "تحكم كامل للمضيف",
+        "d": "كتم صوت الجميع، تعيين مضيفين مساعدين، أو تثبيت المتحدثين لتنظيم اجتماعك."
+      },
+      {
+        "t": "محادثات نصية غنية",
+        "d": "أرسل الملفات، شارك الصور، وسجل ملاحظات صوتية سريعة داخل الدردشة."
+      },
+      {
+        "t": "مشاركة الشاشة",
+        "d": "اعرض شاشتك للآخرين مع إبقاء صورتهم في نافذة صغيرة عائمة."
+      },
+      {
+        "t": "خيارات صوت مرنة",
+        "d": "تنقل بسهولة بين مكبر الصوت، سماعات الرأس، أو أجهزة البلوتوث."
+      },
+      {
+        "t": "إعادة اتصال بلمسة",
+        "d": "شاهد سجل مكالماتك السابقة وأعد الاتصال بصديق أو بمجموعة كاملة بلمسة واحدة."
+      },
+      {
+        "t": "خصوصية تامة",
+        "d": "تبقى بياناتك على جهازك وتتم مكالماتك مباشرة من جهاز إلى آخر."
+      }
+    ],
+    "shots_title": "مصمم لحياتك اليومية",
+    "shot_dialer_t": "لوحة الاتصال",
+    "shot_dialer_d": "اكتب الرقم المكون من 6 أرقام واتصل مباشرة، دون الحاجة لقوائم جهات اتصال.",
+    "shot_chat_t": "دردشة تفاعلية",
+    "shot_chat_d": "شارك الصور والملفات وأرسل رسائل صوتية أثناء التحدث.",
+    "shot_group_t": "الاجتماعات الجماعية",
+    "shot_group_d": "ادعُ أي شخص عبر رابط، وسيركز التطبيق تلقائياً على الشخص الذي يتحدث.",
+    "mobile_t": "يعمل على هاتفك أيضاً",
+    "mobile_d": "افتح الموقع من متصفح هاتفك. سيرن الهاتف تماماً كأي مكالمة عادية حتى أثناء التنقل.",
+    "cta_title": "جاهز لبدء مكالمتك الأولى؟",
+    "cta_sub": "احصل على رقمك المكون من 6 أرقام في ثانيتين. لا يتطلب بريداً إلكترونياً.",
+    "footer_tag": "RELAY — مكالمات بسيطة، مباشرة من متصفحك."
+  }
+}

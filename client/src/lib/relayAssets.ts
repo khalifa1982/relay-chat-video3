@@ -474,7 +474,7 @@ export const RELAY_CSS = `
 .relay-root .chat-input input:focus{border-color:var(--accent)}
 .relay-root .chat-input button{background:var(--grad);border:none;border-radius:11px;width:44px;color:#04201B;font-size:17px;cursor:pointer}
 
-/* Glassmorphic Gemini-inspired control bar */
+/* Glassmorphic frosted control bar */
 .relay-root .controls{display:flex;align-items:center;justify-content:center;gap:14px;padding:18px 16px 22px;position:relative;background:none;border-top:none}
 .relay-root .ctrl-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;
   background:rgba(20,23,29,.72);border:1px solid rgba(255,255,255,.10);border-radius:24px;

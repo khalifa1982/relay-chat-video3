@@ -6,184 +6,220 @@ import { APP_VERSION } from "@shared/version";
 /*  Bilingual landing page (AR / EN).                                          */
 /*  Language is a local UI preference only; it does NOT touch the in-app       */
 /*  experience. Arabic flips the document to RTL.                              */
+/*  Copy is intentionally plain and friendly (rewritten for clarity).          */
 /* -------------------------------------------------------------------------- */
 
 type Lang = "en" | "ar";
 
-/* Gemini-generated UI mockups + hero (asset URLs tied to project lifecycle). */
+/* Authentic UI visuals grounded on the REAL in-app screens captured from the
+   live RELAY app (asset URLs tied to the project lifecycle — they do not
+   expire). */
 const IMG = {
   heroBg:
-    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-hero-bg-m43wUbmhFJxmSvgbRcZFv8.webp",
+    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-real-hero-GPbFBbSdTgZL74jWSGrDDE.webp",
   dialer:
-    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-mock-dialer-gcoPfnkvde3dFVut46iKCy.webp",
+    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-real-dialer-GFNyvPZrUHoEncgrFJxfGq.webp",
   chat:
-    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-mock-chat-hGJhpsCBXS5cLUw4HGe3bL.webp",
+    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-real-messages-YPEBaFa4YZ3xjnWzG8KPwW.webp",
   group:
-    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-mock-group-2cGZZ9qxsVwAymc3Kyuu8j.webp",
+    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-real-group-6tfEB8PTqFhiMg66EyEGe3.webp",
   mobile:
-    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-mock-mobile-5LCbQpS65QerasETd6Hr8w.webp",
+    "https://d2xsxph8kpxj0f.cloudfront.net/86205309/LDUyWQ6Lzxde96UDvwdvU2/relay-real-mobile-4RfnjNdHdfzRYwT6L66yEj.webp",
 };
 
 const T = {
   en: {
     dir: "ltr" as const,
     nav_open: "Open the app",
-    hero_kicker: "BROWSER VOICE · VIDEO · CHAT",
-    hero_title_1: "Call anyone, right in",
-    hero_title_2: "the tab you work in",
+    hero_kicker: "No downloads. No signups.",
+    hero_title_1: "The simplest way to call",
+    hero_title_2: "right from your browser.",
     hero_sub:
-      "Pick a name, get a 6-digit number, and start voice, video, group calls and chat — straight in the browser. No install, no account required.",
+      "Type your name and get a personal 6-digit number. Share it with friends or family so they can call you instantly.",
     hero_cta: "Open RELAY",
-    hero_note: "Free · works on desktop and mobile · nothing to download.",
-    stats_title: "Live on RELAY right now",
-    stats_sub: "Real numbers, pulled live from the network.",
+    hero_note:
+      "Your number stays on this device for 30 days. Register anytime to keep it forever.",
+    stats_title: "Zero barriers to connect",
+    stats_sub:
+      "No app store visits. No passwords to remember. Just open a link and start talking.",
     stat_registered: "Registered users",
     stat_guests: "Guests served",
     stat_total: "Total identities",
     stat_online: "Online now",
-    feat_kicker: "WHAT'S NEW",
-    feat_title: "Everything you need to stay connected",
+    feat_kicker: "Everything you need",
+    feat_title: "Simple tools for better conversations",
     feat_sub:
-      "RELAY has grown into a full communication suite — calls, conferences, messaging and host controls, all in the browser.",
+      "We built all the essential features you expect, without any of the clutter.",
     features: [
       {
-        t: "6-digit instant identity",
-        d: "Open RELAY and get a personal 6-digit number in seconds. Share it, and anyone can call you — no sign-up needed.",
+        t: "Your own number",
+        d: "Get a unique 6-digit number instantly without giving away your personal details.",
       },
       {
-        t: "Voice & video calls",
-        d: "Crystal-clear 1:1 voice and video powered by WebRTC, with multi-device ringing so you never miss a call.",
+        t: "Clear audio and video",
+        d: "Enjoy high-quality one-on-one calls that connect directly between you and your friend.",
       },
       {
-        t: "Group conferences",
-        d: "Create a group call, share an invite link, and bring everyone together with active-speaker spotlight and grid layouts.",
+        t: "Easy group links",
+        d: "Create a room and send a link to bring everyone together in a video call.",
       },
       {
-        t: "Host controls",
-        d: "Mute-all, co-host roles, pin & remove participants, and transfer host — keep large calls organised.",
+        t: "Helpful host controls",
+        d: "Mute everyone, add co-hosts, or pin important speakers to keep your meetings organized.",
       },
       {
-        t: "Rich messaging",
-        d: "Send messages, files, images and voice notes with full-screen media, reactions and in-app popups.",
+        t: "Rich chat messaging",
+        d: "Send files, share photos, and record quick voice notes right inside the chat.",
       },
       {
-        t: "Screen sharing & PiP",
-        d: "Share your screen across browsers and pop the call into Picture-in-Picture while you keep working.",
+        t: "Share your screen",
+        d: "Show your screen to others while keeping their video in a small, floating window.",
       },
       {
-        t: "Audio routing",
-        d: "Pick your output device, route to Bluetooth automatically, and switch the camera or mic mid-call.",
+        t: "Flexible audio options",
+        d: "Switch easily between your phone speaker, headphones, or Bluetooth devices.",
       },
       {
-        t: "Call history & redial",
-        d: "A full history tab with one-tap redial — including group redial to bring the same people back instantly.",
+        t: "One-tap redial",
+        d: "See your past calls and quickly call back a friend or a whole group with one tap.",
       },
       {
-        t: "Privacy first",
-        d: "Guests stay on the device for 30 days. Register to keep your number forever. Call media is peer-to-peer.",
+        t: "Private by design",
+        d: "Your data stays on your device, and your calls go directly from person to person.",
       },
     ],
-    shots_title: "See it in action",
+    shots_title: "Designed for daily life",
     shot_dialer_t: "The dialer",
     shot_dialer_d:
-      "Your number glows above the keypad. Dial 6 digits or start a voice, video or group call in one tap.",
-    shot_chat_t: "Messages",
+      "Just type a 6-digit number and call. No contact lists or setup needed.",
+    shot_chat_t: "Interactive chat",
     shot_chat_d:
-      "A fast, clean messaging console with files, images, voice notes and read state — built right into your session.",
-    shot_group_t: "Group video",
+      "Share photos, drop files, and send voice notes while you talk.",
+    shot_group_t: "Group meetings",
     shot_group_d:
-      "Active-speaker spotlight, mute indicators, screen share and host controls for calls of every size.",
-    mobile_t: "Built for mobile too",
+      "Invite anyone with a link. The active speaker automatically takes center stage.",
+    mobile_t: "Works on your phone too",
     mobile_d:
-      "RELAY works in your phone browser — no app store, no download. Voice, video and chat with the same number, everywhere.",
-    cta_title: "Ready to talk?",
-    cta_sub: "Open RELAY in your browser and get your number in seconds.",
+      "Open the website on your mobile browser. It rings just like a normal phone call, even when you are on the go.",
+    cta_title: "Ready to start your first call?",
+    cta_sub: "Get your 6-digit number in two seconds. No email required.",
     cta_btn: "Open RELAY",
-    footer_tag: "Browser voice, video & chat. No install, no account.",
-    footer_design: "Designed by Gemini",
+    footer_tag: "Simple calls, straight from your browser.",
     footer_rights: "All rights reserved.",
   },
   ar: {
     dir: "rtl" as const,
     nav_open: "افتح التطبيق",
-    hero_kicker: "صوت · فيديو · دردشة في المتصفح",
-    hero_title_1: "اتصل بأي شخص، مباشرةً",
-    hero_title_2: "من نفس التبويب الذي تعمل فيه",
+    hero_kicker: "بدون تحميل. بدون تسجيل.",
+    hero_title_1: "أسهل طريقة للاتصال",
+    hero_title_2: "مباشرة من متصفحك.",
     hero_sub:
-      "اختر اسماً، احصل على رقم من ٦ خانات، وابدأ مكالمات صوتية وفيديو وجماعية ودردشة — مباشرةً في المتصفح. بدون تثبيت، وبدون حساب.",
+      "اكتب اسمك واحصل فوراً على رقم شخصي من ٦ أرقام. شاركه مع الأصدقاء أو العائلة ليتصلوا بك مباشرة.",
     hero_cta: "افتح RELAY",
-    hero_note: "مجاني · يعمل على الكمبيوتر والجوال · لا شيء للتحميل.",
-    stats_title: "مباشر على RELAY الآن",
-    stats_sub: "أرقام حقيقية، محدّثة مباشرةً من الشبكة.",
+    hero_note:
+      "يبقى رقمك على هذا الجهاز لمدة ٣٠ يوماً. يمكنك تسجيله في أي وقت للاحتفاظ به للأبد.",
+    stats_title: "تواصل بلا عوائق",
+    stats_sub:
+      "لا حاجة لزيارة متجر التطبيقات ولا كلمات مرور لتذكّرها. فقط افتح الرابط وابدأ التحدّث.",
     stat_registered: "مستخدمون مسجّلون",
     stat_guests: "ضيوف استخدموا النظام",
     stat_total: "إجمالي الهويات",
     stat_online: "متصل الآن",
-    feat_kicker: "الجديد",
-    feat_title: "كل ما تحتاجه لتبقى على تواصل",
-    feat_sub:
-      "تطوّر RELAY إلى منصة تواصل متكاملة — مكالمات ومؤتمرات ورسائل وأدوات تحكم للمضيف، كلها في المتصفح.",
+    feat_kicker: "كل ما تحتاجه",
+    feat_title: "أدوات بسيطة لمحادثات أفضل",
+    feat_sub: "صمّمنا كل الميزات الأساسية التي تحتاجها، دون أي تعقيد.",
     features: [
       {
-        t: "هوية فورية من ٦ خانات",
-        d: "افتح RELAY واحصل على رقم شخصي من ٦ خانات خلال ثوانٍ. شاركه ليتمكّن أي شخص من الاتصال بك — دون تسجيل.",
+        t: "رقم خاص بك",
+        d: "احصل على رقم فريد من ٦ أرقام فوراً دون الحاجة لمشاركة بياناتك الشخصية.",
       },
       {
-        t: "مكالمات صوت وفيديو",
-        d: "صوت وفيديو فردي عالي الوضوح عبر WebRTC، مع رنين متعدد الأجهزة حتى لا تفوتك أي مكالمة.",
+        t: "مكالمات واضحة",
+        d: "استمتع بمكالمات صوت وفيديو عالية الجودة مباشرة بينك وبين أصدقائك.",
       },
       {
-        t: "مؤتمرات جماعية",
-        d: "أنشئ مكالمة جماعية، شارك رابط الدعوة، واجمع الجميع مع إبراز المتحدث النشط وتخطيطات الشبكة.",
+        t: "روابط جماعية سهلة",
+        d: "أنشئ غرفة محادثة وأرسل الرابط لجمع الجميع في مكالمة فيديو واحدة.",
       },
       {
-        t: "أدوات تحكم المضيف",
-        d: "كتم الجميع، أدوار المضيف المساعد، تثبيت وإزالة المشاركين، ونقل دور المضيف — لتنظيم المكالمات الكبيرة.",
+        t: "تحكّم كامل للمضيف",
+        d: "اكتم صوت الجميع، عيّن مضيفين مساعدين، أو ثبّت المتحدثين لتنظيم اجتماعك.",
       },
       {
-        t: "رسائل غنية",
-        d: "أرسل رسائل وملفات وصوراً وملاحظات صوتية مع عرض وسائط بملء الشاشة وتفاعلات ونوافذ منبثقة داخل التطبيق.",
+        t: "محادثات نصية غنية",
+        d: "أرسل الملفات، وشارك الصور، وسجّل ملاحظات صوتية سريعة داخل الدردشة.",
       },
       {
-        t: "مشاركة الشاشة و PiP",
-        d: "شارك شاشتك عبر المتصفحات وانقل المكالمة إلى وضع صورة-داخل-صورة بينما تواصل عملك.",
+        t: "مشاركة الشاشة",
+        d: "اعرض شاشتك للآخرين مع إبقاء صورتهم في نافذة صغيرة عائمة.",
       },
       {
-        t: "توجيه الصوت",
-        d: "اختر جهاز الإخراج، ووجّه الصوت إلى البلوتوث تلقائياً، وبدّل الكاميرا أو الميكروفون أثناء المكالمة.",
+        t: "خيارات صوت مرنة",
+        d: "تنقّل بسهولة بين مكبّر الصوت، أو سماعات الرأس، أو أجهزة البلوتوث.",
       },
       {
-        t: "سجل المكالمات وإعادة الاتصال",
-        d: "تبويب سجل كامل مع إعادة اتصال بلمسة واحدة — بما في ذلك إعادة الاتصال الجماعي لإعادة الأشخاص أنفسهم فوراً.",
+        t: "إعادة اتصال بلمسة",
+        d: "شاهد سجلّ مكالماتك السابقة وأعد الاتصال بصديق أو بمجموعة كاملة بلمسة واحدة.",
       },
       {
-        t: "الخصوصية أولاً",
-        d: "يبقى الضيوف على الجهاز لمدة ٣٠ يوماً. سجّل للاحتفاظ برقمك للأبد. وسائط المكالمة بين الأطراف مباشرةً.",
+        t: "خصوصية تامة",
+        d: "تبقى بياناتك على جهازك وتتم مكالماتك مباشرة من جهاز إلى آخر.",
       },
     ],
-    shots_title: "شاهده أثناء العمل",
+    shots_title: "مصمّم لحياتك اليومية",
     shot_dialer_t: "لوحة الاتصال",
     shot_dialer_d:
-      "يتوهّج رقمك فوق لوحة المفاتيح. اطلب ٦ خانات أو ابدأ مكالمة صوت أو فيديو أو جماعية بلمسة واحدة.",
-    shot_chat_t: "الرسائل",
-    shot_chat_d:
-      "وحدة رسائل سريعة ونظيفة مع ملفات وصور وملاحظات صوتية وحالة القراءة — مدمجة في جلستك مباشرةً.",
-    shot_group_t: "فيديو جماعي",
+      "اكتب الرقم المكوّن من ٦ أرقام واتصل مباشرة، دون الحاجة لقوائم جهات اتصال.",
+    shot_chat_t: "دردشة تفاعلية",
+    shot_chat_d: "شارك الصور والملفات وأرسل رسائل صوتية أثناء التحدّث.",
+    shot_group_t: "الاجتماعات الجماعية",
     shot_group_d:
-      "إبراز المتحدث النشط، مؤشرات الكتم، مشاركة الشاشة وأدوات تحكم المضيف لمكالمات بكل الأحجام.",
-    mobile_t: "مصمّم للجوال أيضاً",
+      "ادعُ أي شخص عبر رابط، وسيركّز التطبيق تلقائياً على الشخص الذي يتحدّث.",
+    mobile_t: "يعمل على هاتفك أيضاً",
     mobile_d:
-      "يعمل RELAY في متصفح هاتفك — بلا متجر تطبيقات وبلا تحميل. صوت وفيديو ودردشة بنفس الرقم، في كل مكان.",
-    cta_title: "جاهز للتحدّث؟",
-    cta_sub: "افتح RELAY في متصفحك واحصل على رقمك خلال ثوانٍ.",
+      "افتح الموقع من متصفح هاتفك. سيرنّ تماماً كأي مكالمة عادية حتى أثناء تنقّلك.",
+    cta_title: "جاهز لبدء مكالمتك الأولى؟",
+    cta_sub:
+      "احصل على رقمك المكوّن من ٦ أرقام في ثانيتين. لا يتطلّب بريداً إلكترونياً.",
     cta_btn: "افتح RELAY",
-    footer_tag: "صوت وفيديو ودردشة في المتصفح. بدون تثبيت، وبدون حساب.",
-    footer_design: "تصميم بواسطة Gemini",
+    footer_tag: "ريليه — مكالمات بسيطة، مباشرة من متصفحك.",
     footer_rights: "جميع الحقوق محفوظة.",
   },
 };
 
 const PAGE_BG = "oklch(0.10 0.012 220)";
+const CYAN = "oklch(0.78 0.18 195)";
+
+/* Splits a string into <span> words so each word can be revealed with its own
+   staggered delay. Keeps spaces between words. Works for both LTR and RTL. */
+function WordReveal({
+  text,
+  className,
+  baseDelay = 0,
+  step = 55,
+}: {
+  text: string;
+  className?: string;
+  baseDelay?: number;
+  step?: number;
+}) {
+  const words = text.split(" ");
+  return (
+    <span className={className} data-reveal="words">
+      {words.map((w, i) => (
+        <span key={i} className="word-wrap">
+          <span
+            className="word"
+            style={{ "--wd": `${baseDelay + i * step}ms` } as React.CSSProperties}
+          >
+            {w}
+          </span>
+          {i < words.length - 1 ? " " : ""}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 /* Reveal-on-scroll: adds `.is-in` to any [data-reveal] element the first time
    it scrolls into view. One observer for the whole page, disconnected on
@@ -233,7 +269,48 @@ function useCountUp(target: number, run: boolean, duration = 1200) {
   return value;
 }
 
-const CYAN = "oklch(0.78 0.18 195)";
+/* Drives full-page scroll-linked motion. Writes three CSS custom properties on
+   <html> on every animation frame:
+     --sp  = overall scroll progress 0..1   (progress bar width)
+     --sy  = raw scrollY in px               (hero parallax)
+     --hue = scroll-driven hue offset in deg (page-wide color shift)
+   rAF-throttled and passive so it never blocks scrolling. Gated by
+   prefers-reduced-motion. */
+function useScrollMotion() {
+  useEffect(() => {
+    if (
+      window.matchMedia &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
+    const root = document.documentElement;
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      const max = root.scrollHeight - window.innerHeight;
+      const sp = max > 0 ? Math.min(1, window.scrollY / max) : 0;
+      root.style.setProperty("--sp", String(sp));
+      root.style.setProperty("--sy", String(window.scrollY));
+      // Drift the page accent through a calm cyan→green→violet arc as you scroll.
+      root.style.setProperty("--hue", String(Math.round(sp * 90)));
+    };
+    const onScroll = () => {
+      if (!raf) raf = requestAnimationFrame(update);
+    };
+    update();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+      root.style.removeProperty("--sp");
+      root.style.removeProperty("--sy");
+      root.style.removeProperty("--hue");
+    };
+  }, []);
+}
 
 export default function Home() {
   const [lang, setLang] = useState<Lang>("en");
@@ -287,6 +364,9 @@ export default function Home() {
   // language changes since the DOM subtree is rebuilt.
   useScrollReveal([lang]);
 
+  // Full-page scroll-linked motion (progress bar + hero parallax + hue shift).
+  useScrollMotion();
+
   // Trigger count-up once the stats band scrolls into view.
   useEffect(() => {
     const el = document.getElementById("stats-band");
@@ -316,7 +396,7 @@ export default function Home() {
     <div
       dir={t.dir}
       className="min-h-screen text-slate-100 overflow-x-hidden relative font-sans selection:bg-[oklch(0.78_0.18_195)] selection:text-slate-950"
-      style={{ backgroundColor: "oklch(0.10 0.012 220)" }}
+      style={{ backgroundColor: PAGE_BG }}
     >
       <style>{`
         @keyframes pulse-glow { 0%,100%{opacity:.15;transform:scale(1)} 50%{opacity:.28;transform:scale(1.05)} }
@@ -325,12 +405,58 @@ export default function Home() {
         @keyframes fade-up { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
         .shot-img{box-shadow:0 30px 80px -20px rgba(0,0,0,.85);}
 
+        /* Page-wide accent that drifts with scroll (--hue set by useScrollMotion).
+           Everything that reads var(--accent) shifts hue together as you scroll. */
+        :root{ --accent: ${CYAN}; }
+        @media (prefers-reduced-motion: no-preference){
+          .accent-shift{ filter: hue-rotate(calc(var(--hue, 0) * 1deg)); }
+        }
+
+        /* Top scroll-progress bar driven by --sp; its hue drifts with --hue too. */
+        .scroll-progress{
+          position:fixed;top:0;left:0;right:0;height:3px;z-index:60;
+          transform-origin:0 50%;
+          transform:scaleX(var(--sp, 0));
+          background:linear-gradient(90deg, ${CYAN}, #34d399);
+          box-shadow:0 0 12px rgba(38,230,255,.5);
+        }
+        @media (prefers-reduced-motion: no-preference){
+          .scroll-progress{ filter: hue-rotate(calc(var(--hue, 0) * 1deg)); }
+        }
+        [dir="rtl"] .scroll-progress{transform-origin:100% 50%;}
+
+        /* Slow drifting aurora behind the whole page. Two large radial blobs that
+           rotate/translate forever; very low opacity so text stays readable.
+           Hue also drifts with scroll so the ambient color changes as you move. */
+        @keyframes aurora-drift {
+          0%   { transform: translate3d(-8%, -6%, 0) rotate(0deg); }
+          50%  { transform: translate3d(8%, 6%, 0) rotate(180deg); }
+          100% { transform: translate3d(-8%, -6%, 0) rotate(360deg); }
+        }
+        .aurora{
+          position:fixed;inset:-20%;z-index:0;pointer-events:none;
+          background:
+            radial-gradient(40% 40% at 25% 30%, oklch(0.78 0.18 195 / 0.10), transparent 70%),
+            radial-gradient(45% 45% at 75% 70%, oklch(0.72 0.16 160 / 0.10), transparent 70%);
+          filter:blur(20px);
+        }
+        @media (prefers-reduced-motion: no-preference){
+          .aurora{
+            animation:aurora-drift 36s linear infinite;
+            filter:blur(20px) hue-rotate(calc(var(--hue, 0) * 1.4deg));
+          }
+        }
+
+        /* Hero parallax: nudge the bg layer up as the user scrolls (--sy in px). */
+        @media (prefers-reduced-motion: no-preference){
+          .hero-parallax{ transform: translate3d(0, calc(var(--sy, 0) * 0.18px), 0) scale(1.06); }
+          .hero-fade{ opacity: clamp(0, calc(1 - var(--sy, 0) * 0.0018), 1); }
+        }
+
         /* Scroll-reveal: elements start slightly down + faded, then ease into
            place once .is-in is added by the IntersectionObserver. transform +
            opacity only (GPU-friendly). Staggered via inline --d delay. */
-        [data-reveal]{
-          opacity:1;transform:none;
-        }
+        [data-reveal]{ opacity:1;transform:none; }
         @media (prefers-reduced-motion: no-preference){
           .fade-up{animation:fade-up .6s cubic-bezier(0.23,1,0.32,1) both}
           [data-reveal]{
@@ -343,19 +469,35 @@ export default function Home() {
           }
           [data-reveal="left"]{transform:translateX(-40px)}
           [data-reveal="right"]{transform:translateX(40px)}
-          [data-reveal].is-in{
-            opacity:1;transform:none;
+          /* Word-by-word headline reveal: the wrapper itself does not move/fade
+             (it is just a layout container); each child .word rises into place. */
+          [data-reveal="words"]{ opacity:1;transform:none; }
+          .word-wrap{ display:inline-block; overflow:hidden; vertical-align:bottom; }
+          .word{
+            display:inline-block;
+            opacity:0;
+            transform:translateY(0.9em) rotate(2deg);
+            transition:opacity .55s cubic-bezier(0.23,1,0.32,1),
+                       transform .55s cubic-bezier(0.23,1,0.32,1);
           }
+          [data-reveal="words"].is-in .word{
+            opacity:1;
+            transform:none;
+            transition-delay:var(--wd, 0ms);
+          }
+          [data-reveal].is-in{ opacity:1;transform:none; }
         }
       `}</style>
 
+      <div className="scroll-progress" aria-hidden="true" />
+      <div className="aurora" aria-hidden="true" />
       <div className="absolute inset-0 grid-bg pointer-events-none z-0" />
 
       {/* Header */}
       <header className="fixed top-0 inset-x-0 h-20 z-50 flex items-center justify-between px-5 md:px-12 pointer-events-none">
         <div className="flex items-center gap-3 bg-slate-950/50 backdrop-blur-md px-4 py-2 rounded-full border border-white/5 pointer-events-auto shadow-lg">
           <span
-            className="w-2.5 h-2.5 rounded-full animate-pulse"
+            className="w-2.5 h-2.5 rounded-full animate-pulse accent-shift"
             style={{ backgroundColor: CYAN, boxShadow: `0 0 10px ${CYAN}` }}
           />
           <span className="font-semibold tracking-wider text-sm text-white">RELAY</span>
@@ -385,7 +527,7 @@ export default function Home() {
           </div>
           <a
             href="/app"
-            className="hidden sm:inline-flex items-center justify-center px-5 py-2.5 rounded-full text-sm font-semibold text-slate-950 transition-all active:scale-[0.97]"
+            className="hidden sm:inline-flex items-center justify-center px-5 py-2.5 rounded-full text-sm font-semibold text-slate-950 transition-all active:scale-[0.97] accent-shift"
             style={{ backgroundColor: CYAN, boxShadow: "0 0 20px rgba(38,230,255,.25)" }}
           >
             {t.nav_open}
@@ -396,7 +538,7 @@ export default function Home() {
       {/* Hero */}
       <section className="relative min-h-[92vh] flex flex-col justify-center items-center px-6 text-center pt-28 pb-16 z-10 overflow-hidden">
         <div
-          className="absolute inset-0 z-0 opacity-70"
+          className="absolute inset-0 z-0 opacity-70 hero-parallax"
           style={{
             backgroundImage: `url(${IMG.heroBg})`,
             backgroundSize: "cover",
@@ -411,23 +553,26 @@ export default function Home() {
           }}
         />
 
-        <div className="max-w-4xl mx-auto flex flex-col items-center relative z-10 fade-up">
+        <div className="max-w-4xl mx-auto flex flex-col items-center relative z-10 fade-up hero-fade">
           <span
-            className="text-[11px] md:text-xs font-bold tracking-[0.25em] uppercase mb-6"
+            className="text-[11px] md:text-xs font-bold tracking-[0.25em] uppercase mb-6 accent-shift"
             style={{ color: CYAN }}
           >
             {t.hero_kicker}
           </span>
           <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold text-white tracking-tight leading-[1.12] mb-7">
-            {t.hero_title_1}
+            <WordReveal text={t.hero_title_1} />
             <br className="hidden sm:block" />{" "}
             <span
-              className="text-transparent bg-clip-text"
+              className="text-transparent bg-clip-text accent-shift"
               style={{
                 backgroundImage: `linear-gradient(90deg, #fff, ${CYAN}, #fff)`,
               }}
             >
-              {t.hero_title_2}
+              <WordReveal
+                text={t.hero_title_2}
+                baseDelay={t.hero_title_1.split(" ").length * 55}
+              />
             </span>
           </h1>
           <p className="text-lg md:text-xl text-slate-300 max-w-2xl leading-relaxed mb-10">
@@ -436,7 +581,7 @@ export default function Home() {
           <div className="flex flex-col items-center gap-4">
             <a
               href="/app"
-              className="inline-flex items-center justify-center px-8 py-4 rounded-full text-base font-bold text-slate-950 transition-all active:scale-[0.97]"
+              className="inline-flex items-center justify-center px-8 py-4 rounded-full text-base font-bold text-slate-950 transition-all active:scale-[0.97] accent-shift"
               style={{ backgroundColor: CYAN, boxShadow: "0 0 32px rgba(38,230,255,.35)" }}
             >
               {t.hero_cta} {isAr ? "←" : "→"}
@@ -448,9 +593,23 @@ export default function Home() {
 
       {/* Live stats band */}
       <section id="stats-band" className="relative z-10 px-6 py-16 md:py-20">
-        <div className="max-w-5xl mx-auto text-center mb-10" data-reveal>
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-white mb-3">{t.stats_title}</h2>
-          <p className="text-slate-400">{t.stats_sub}</p>
+        <div className="max-w-5xl mx-auto text-center mb-10">
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-white mb-3" data-reveal="words">
+            {t.stats_title.split(" ").map((w, i) => (
+              <span key={i} className="word-wrap">
+                <span
+                  className="word"
+                  style={{ "--wd": `${i * 60}ms` } as React.CSSProperties}
+                >
+                  {w}
+                </span>
+                {i < t.stats_title.split(" ").length - 1 ? " " : ""}
+              </span>
+            ))}
+          </h2>
+          <p className="text-slate-400" data-reveal style={{ "--d": "120ms" } as React.CSSProperties}>
+            {t.stats_sub}
+          </p>
         </div>
         <div className="max-w-5xl mx-auto grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
           {[
@@ -466,7 +625,7 @@ export default function Home() {
               className="relative rounded-2xl border border-white/10 bg-slate-900/40 backdrop-blur-sm p-6 md:p-8 text-center overflow-hidden"
             >
               <div
-                className="absolute -top-10 left-1/2 -translate-x-1/2 w-32 h-32 rounded-full blur-3xl opacity-20"
+                className="absolute -top-10 left-1/2 -translate-x-1/2 w-32 h-32 rounded-full blur-3xl opacity-20 accent-shift"
                 style={{ backgroundColor: CYAN }}
               />
               <div className="relative">
@@ -491,17 +650,33 @@ export default function Home() {
 
       {/* Features grid */}
       <section className="relative z-10 px-6 py-16 md:py-24">
-        <div className="max-w-3xl mx-auto text-center mb-14" data-reveal>
+        <div className="max-w-3xl mx-auto text-center mb-14">
           <span
-            className="text-xs font-bold tracking-[0.2em] uppercase block mb-3"
+            className="text-xs font-bold tracking-[0.2em] uppercase block mb-3 accent-shift"
             style={{ color: CYAN }}
+            data-reveal
           >
             {t.feat_kicker}
           </span>
-          <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-4">
-            {t.feat_title}
+          <h2
+            className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-4"
+            data-reveal="words"
+          >
+            {t.feat_title.split(" ").map((w, i) => (
+              <span key={i} className="word-wrap">
+                <span
+                  className="word"
+                  style={{ "--wd": `${i * 50}ms` } as React.CSSProperties}
+                >
+                  {w}
+                </span>
+                {i < t.feat_title.split(" ").length - 1 ? " " : ""}
+              </span>
+            ))}
           </h2>
-          <p className="text-slate-400 text-lg leading-relaxed">{t.feat_sub}</p>
+          <p className="text-slate-400 text-lg leading-relaxed" data-reveal style={{ "--d": "120ms" } as React.CSSProperties}>
+            {t.feat_sub}
+          </p>
         </div>
         <div className="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {t.features.map((f, i) => (
@@ -512,7 +687,7 @@ export default function Home() {
               className="group rounded-2xl border border-white/10 bg-slate-900/30 p-6 transition-all duration-200 hover:border-[oklch(0.78_0.18_195)]/40 hover:bg-slate-900/60 hover:-translate-y-1"
             >
               <div
-                className="w-10 h-10 rounded-xl flex items-center justify-center mb-4 font-bold text-slate-950 text-sm"
+                className="w-10 h-10 rounded-xl flex items-center justify-center mb-4 font-bold text-slate-950 text-sm accent-shift"
                 style={{ backgroundColor: CYAN }}
               >
                 {String(i + 1).padStart(2, "0")}
@@ -526,9 +701,22 @@ export default function Home() {
 
       {/* Screenshot showcase */}
       <section className="relative z-10 px-6 py-16 md:py-24">
-        <div className="max-w-3xl mx-auto text-center mb-16" data-reveal>
-          <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-            {t.shots_title}
+        <div className="max-w-3xl mx-auto text-center mb-16">
+          <h2
+            className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight"
+            data-reveal="words"
+          >
+            {t.shots_title.split(" ").map((w, i) => (
+              <span key={i} className="word-wrap">
+                <span
+                  className="word"
+                  style={{ "--wd": `${i * 55}ms` } as React.CSSProperties}
+                >
+                  {w}
+                </span>
+                {i < t.shots_title.split(" ").length - 1 ? " " : ""}
+              </span>
+            ))}
           </h2>
         </div>
 
@@ -550,7 +738,7 @@ export default function Home() {
                 >
                   <div className="relative rounded-2xl overflow-hidden border border-white/10 shot-img">
                     <div
-                      className="absolute -inset-8 blur-3xl opacity-20 -z-10"
+                      className="absolute -inset-8 blur-3xl opacity-20 -z-10 accent-shift"
                       style={{ backgroundColor: CYAN }}
                     />
                     <img
@@ -592,7 +780,7 @@ export default function Home() {
             <p className="text-slate-300 text-lg leading-relaxed">{t.mobile_d}</p>
             <a
               href="/app"
-              className="mt-8 inline-flex items-center justify-center px-6 py-3 rounded-full text-sm font-bold text-slate-950 transition-all active:scale-[0.97]"
+              className="mt-8 inline-flex items-center justify-center px-6 py-3 rounded-full text-sm font-bold text-slate-950 transition-all active:scale-[0.97] accent-shift"
               style={{ backgroundColor: CYAN, boxShadow: "0 0 24px rgba(38,230,255,.3)" }}
             >
               {t.nav_open} {isAr ? "←" : "→"}
@@ -605,7 +793,7 @@ export default function Home() {
           >
             <div className="relative w-full max-w-[300px]">
               <div
-                className="absolute -inset-10 blur-3xl opacity-25 -z-10 rounded-full"
+                className="absolute -inset-10 blur-3xl opacity-25 -z-10 rounded-full accent-shift"
                 style={{ backgroundColor: CYAN }}
               />
               <img
@@ -623,16 +811,29 @@ export default function Home() {
       <section className="relative z-10 px-6 py-20 md:py-28">
         <div className="max-w-3xl mx-auto text-center relative" data-reveal>
           <div
-            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] rounded-full blur-[100px] opacity-15 animate-pulse-glow pointer-events-none"
+            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] rounded-full blur-[100px] opacity-15 animate-pulse-glow pointer-events-none accent-shift"
             style={{ backgroundColor: CYAN }}
           />
-          <h2 className="relative text-3xl sm:text-5xl font-extrabold text-white tracking-tight mb-5">
-            {t.cta_title}
+          <h2
+            className="relative text-3xl sm:text-5xl font-extrabold text-white tracking-tight mb-5"
+            data-reveal="words"
+          >
+            {t.cta_title.split(" ").map((w, i) => (
+              <span key={i} className="word-wrap">
+                <span
+                  className="word"
+                  style={{ "--wd": `${i * 50}ms` } as React.CSSProperties}
+                >
+                  {w}
+                </span>
+                {i < t.cta_title.split(" ").length - 1 ? " " : ""}
+              </span>
+            ))}
           </h2>
           <p className="relative text-slate-300 text-lg mb-9">{t.cta_sub}</p>
           <a
             href="/app"
-            className="relative inline-flex items-center justify-center px-9 py-4 rounded-full text-base font-bold text-slate-950 transition-all active:scale-[0.97]"
+            className="relative inline-flex items-center justify-center px-9 py-4 rounded-full text-base font-bold text-slate-950 transition-all active:scale-[0.97] accent-shift"
             style={{ backgroundColor: CYAN, boxShadow: "0 0 36px rgba(38,230,255,.4)" }}
           >
             {t.cta_btn} {isAr ? "←" : "→"}
@@ -645,7 +846,7 @@ export default function Home() {
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-center md:text-start">
           <div className="flex items-center gap-3">
             <span
-              className="w-2.5 h-2.5 rounded-full"
+              className="w-2.5 h-2.5 rounded-full accent-shift"
               style={{ backgroundColor: CYAN, boxShadow: `0 0 10px ${CYAN}` }}
             />
             <div>
@@ -659,8 +860,6 @@ export default function Home() {
             </span>
             <span className="flex items-center gap-2">
               <span>v{APP_VERSION}</span>
-              <span className="opacity-40">·</span>
-              <span>{t.footer_design}</span>
             </span>
           </div>
         </div>

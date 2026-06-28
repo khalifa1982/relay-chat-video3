@@ -40,8 +40,8 @@ describe("Home.tsx — bilingual landing page", () => {
   it("contains real Arabic feature copy", () => {
     // RELAY brand kept Latin, but the body copy must be Arabic.
     expect(HOME_TSX).toMatch(/مكالمات/); // "calls"
-    expect(HOME_TSX).toMatch(/المتصفح/); // "the browser"
-    expect(HOME_TSX).toMatch(/الخصوصية/); // "privacy"
+    expect(HOME_TSX).toMatch(/متصفحك/); // "your browser"
+    expect(HOME_TSX).toMatch(/خصوصية/); // "privacy"
   });
 
   it("queries the live public-stats endpoint with a refetch interval", () => {
@@ -66,9 +66,13 @@ describe("Home.tsx — bilingual landing page", () => {
     expect(HOME_TSX).toMatch(/©\s*{?\s*new Date\(\)\.getFullYear\(\)/);
   });
 
-  it("credits the design to Gemini in both languages", () => {
-    expect(HOME_TSX).toMatch(/Designed by Gemini/);
-    expect(HOME_TSX).toMatch(/تصميم بواسطة Gemini/);
+  it("does not credit or mention Gemini anywhere on the page", () => {
+    expect(HOME_TSX).not.toMatch(/Gemini/);
+  });
+
+  it("uses the authentic app-grounded visuals (not the old imaginary mockups)", () => {
+    expect(HOME_TSX).toMatch(/relay-real-/);
+    expect(HOME_TSX).not.toMatch(/relay-mock-/);
   });
 });
 
@@ -121,6 +125,35 @@ describe("Home.tsx — scroll-reveal animations", () => {
     expect(HOME_TSX).toMatch(/\[data-reveal\]\.is-in/);
   });
 
+  it("drives full-page scroll-linked motion via a rAF-throttled hook", () => {
+    expect(HOME_TSX).toMatch(/function\s+useScrollMotion/);
+    expect(HOME_TSX).toMatch(/useScrollMotion\(\)/);
+    expect(HOME_TSX).toMatch(/requestAnimationFrame/);
+    expect(HOME_TSX).toMatch(/setProperty\("--sp"/);
+    expect(HOME_TSX).toMatch(/setProperty\("--sy"/);
+  });
+
+  it("renders a scroll-progress bar and an animated aurora layer", () => {
+    expect(HOME_TSX).toMatch(/scroll-progress/);
+    expect(HOME_TSX).toMatch(/aurora/);
+    expect(HOME_TSX).toMatch(/hero-parallax/);
+  });
+  it("reveals headlines word-by-word with a per-word delay", () => {
+    expect(HOME_TSX).toMatch(/data-reveal="words"/);
+    expect(HOME_TSX).toMatch(/class="word"|className="word"/);
+    expect(HOME_TSX).toMatch(/--wd/);
+    expect(HOME_TSX).toMatch(/\[data-reveal="words"\]\.is-in \.word/);
+  });
+  it("shifts the page accent color as the user scrolls (hue-rotate via --hue)", () => {
+    expect(HOME_TSX).toMatch(/setProperty\("--hue"/);
+    expect(HOME_TSX).toMatch(/hue-rotate\(calc\(var\(--hue/);
+    expect(HOME_TSX).toMatch(/accent-shift/);
+  });
+
+  it("bails out of scroll motion when reduced motion is preferred", () => {
+    expect(HOME_TSX).toMatch(/prefers-reduced-motion: reduce/);
+  });
+
   it("only animates transform and opacity (GPU-friendly)", () => {
     // the reveal transition list must not animate layout props
     expect(HOME_TSX).not.toMatch(/transition:[^;]*\b(width|height|margin|padding|top|left)\b/);
@@ -130,7 +163,7 @@ describe("Home.tsx — scroll-reveal animations", () => {
 // ---------------------------------------------------------------------------
 // 2. Visual assets — Gemini-generated mockups served from the CDN
 // ---------------------------------------------------------------------------
-describe("Home.tsx — Gemini visual assets", () => {
+describe("Home.tsx — visual assets", () => {
   it("references the dialer, chat, group, mobile mockups and hero background", () => {
     for (const key of ["dialer", "chat", "group", "mobile", "heroBg"]) {
       expect(HOME_TSX).toMatch(new RegExp(`${key}\\s*:`));
