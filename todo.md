@@ -1648,3 +1648,30 @@ deterministic reproduction).
       identity switch tears down room membership); no-ops once the pins already match (no loop).
 - [x] 2 new regression guards (setPreferredPin switch logic + the provider reconcile effect). 392 tests
       green, tsc + build clean. Footer → `v2.50.2`.
+
+## v2.51.0 — Backend hardening: faster call connect + security backstops (delivered 2026-06-28)
+
+A backend-only pass (no UI changes) to speed up call setup and harden the signaling server.
+
+- [x] **Faster voice/video connect.** The mesh `RTCPeerConnection` config was only `{ iceServers }`. A new
+      `buildIceConfig()` (used at EVERY assignment site) now also sets `iceCandidatePoolSize: 4`
+      (pre-gathers host/srflx candidates so the FIRST offer already carries them → fewer trickle
+      round-trips), `bundlePolicy: "max-bundle"` (audio+video share ONE transport → a single ICE check
+      list instead of one per m-line), and `rtcpMuxPolicy: "require"` (RTCP shares the RTP port → half the
+      candidates). All three are well-supported, low-risk, and cut call-setup latency. (LiveKit's SFU path
+      manages its own peer connection and is unaffected.)
+- [x] **Rate-limit backstop on the raw signaling POST.** New `server/rateLimit.ts` (pure, unit-tested
+      token bucket). `/api/relay/send` is now gated by a generous per-IP limiter (~200 msg/s sustained,
+      1000 burst — a 6-way mesh setup is ~17 msg/s, and many users behind one office/campus NAT stay
+      under; only a runaway flood gets a 429). Keyed by IP from `X-Forwarded-For` so it runs cheaply
+      BEFORE the body parser. Idle buckets swept every 5 min. Opt out with `RELAY_RATELIMIT_OFF=1`.
+- [x] **Signaling payload cap.** `/api/relay/send` now rejects a `message` larger than 256 KB (SDP/ICE are
+      ≤~20 KB; in-call chat rides the WebRTC data channel, not this endpoint) and caps the `cid` length —
+      a cheap anti-abuse guard.
+- [x] **Safe security headers** on every response: `X-Content-Type-Options: nosniff`,
+      `Referrer-Policy: strict-origin-when-cross-origin`, `X-DNS-Prefetch-Control: off`,
+      `Strict-Transport-Security: max-age=15552000`. Deliberately CONSERVATIVE — no CSP (inline styles +
+      `dangerouslySetInnerHTML`), no `X-Frame-Options`/`frame-ancestors` (the Manus editor frames the app),
+      no `Permissions-Policy`/COOP (could block `getUserMedia` or the OAuth popup) — so nothing breaks.
+- [x] 11 new tests (token-bucket math, refill, sweep, key isolation, realistic-burst headroom,
+      `clientIpOf`). 409 tests green, tsc + build clean. Footer → `v2.51.0`.

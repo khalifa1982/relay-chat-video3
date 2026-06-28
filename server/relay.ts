@@ -1399,8 +1399,17 @@ export function attachRelay(
     const body = req.body || {};
     const cid = String(body.cid || "");
     const message = body.message;
-    if (!cid || typeof message !== "object" || message === null) {
+    if (!cid || cid.length > 200 || typeof message !== "object" || message === null) {
       res.status(400).json({ error: "bad request" });
+      return;
+    }
+    // Cap signaling payload size. SDP/ICE/control messages are all small (a big
+    // SDP is ~10-20 KB; the in-call chat rides the WebRTC data channel, NOT this
+    // endpoint), so 256 KB is generous headroom while rejecting abusive floods.
+    let approxLen = 0;
+    try { approxLen = JSON.stringify(message).length; } catch { approxLen = Infinity; }
+    if (approxLen > 256_000) {
+      res.status(413).json({ error: "payload_too_large" });
       return;
     }
     const conn = reg.connections.get(cid);

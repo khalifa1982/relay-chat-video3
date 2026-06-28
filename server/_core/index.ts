@@ -18,6 +18,7 @@ import { getIdentityByNumber, reapStalePresence, recordMissedCall, recordConfere
 import { inboundConfig, inboundAddress, registerEmailInbound } from "../emailInbound";
 import { getUserById } from "../db";
 import { sendEmail } from "../email";
+import { createRateLimiter, clientIpOf } from "../rateLimit";
 
 function escapeHtml(s: string): string {
   return s.replace(
@@ -66,6 +67,40 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+  // Security headers on every response. Kept deliberately CONSERVATIVE so they
+  // can't break the inline-style/script-heavy SPA, the WebRTC media stack, or the
+  // Manus editor embed:
+  //   - No Content-Security-Policy (the app uses many inline styles +
+  //     dangerouslySetInnerHTML; a strict CSP would break rendering).
+  //   - No X-Frame-Options/frame-ancestors (the Manus Space Editor frames the app).
+  //   - No Permissions-Policy / COOP (could block getUserMedia or the OAuth popup).
+  // What's left is pure-win and risk-free:
+  app.use((_req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("X-DNS-Prefetch-Control", "off");
+    // HTTPS-only (Manus serves over TLS). No includeSubDomains/preload so sibling
+    // *.manus.space hosts are unaffected.
+    res.setHeader("Strict-Transport-Security", "max-age=15552000");
+    next();
+  });
+  // Abuse/DoS backstop for the raw signaling POST endpoint (the tRPC API is
+  // separate). Per-IP token bucket sized so it ONLY ever catches a true flood:
+  // ~200 msg/s sustained, 1000 burst. A 6-way mesh blasting ICE candidates during
+  // setup is ~17 msg/s; even ~10 users sharing ONE office/campus NAT doing
+  // simultaneous calls stay well under it — but a runaway loop (thousands/s) gets
+  // a 429. Keyed by IP (read from headers, so it runs cheaply BEFORE the body
+  // parser and before attachRelay's route). Disable with RELAY_RATELIMIT_OFF=1.
+  const rateLimitOff = process.env.RELAY_RATELIMIT_OFF === "1";
+  const relaySendLimiter = createRateLimiter({ capacity: 1000, refillPerSec: 200 });
+  if (!rateLimitOff) {
+    app.use("/api/relay/send", (req, res, next) => {
+      if (relaySendLimiter.allow(clientIpOf(req), Date.now())) return next();
+      res.status(429).json({ error: "rate_limited" });
+    });
+    // Drop idle buckets every 5 min so the map can't grow unbounded.
+    setInterval(() => relaySendLimiter.sweep(Date.now(), 5 * 60_000), 5 * 60_000).unref();
+  }
   // Configure body parser with larger size limit for file uploads.
   // For the inbound-email webhook ONLY we also stash the exact raw bytes on
   // req.rawBody (needed to verify the provider's HMAC webhook signature, which

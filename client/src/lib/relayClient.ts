@@ -19,7 +19,36 @@ import { buildAudioOutputList } from "./audioOutputs";
 import { detectDeviceType } from "./deviceType";
 import { isDndOn } from "@/app/dnd";
 
-interface IceConfig { iceServers: Array<{ urls: string; username?: string; credential?: string }>; }
+interface IceConfig {
+  iceServers: Array<{ urls: string; username?: string; credential?: string }>;
+  // Connect-speed tuning (see buildIceConfig): pre-gather candidates, bundle all
+  // media onto ONE transport, and mux RTCP — so the first offer already carries
+  // candidates and only one ICE negotiation runs. Cuts call-setup latency.
+  iceCandidatePoolSize?: number;
+  bundlePolicy?: RTCBundlePolicy;
+  rtcpMuxPolicy?: RTCRtcpMuxPolicy;
+}
+/**
+ * Build the RTCPeerConnection config from a server list, always applying the
+ * connect-speed tuning. Centralised so every place that swaps in fresh ICE
+ * servers keeps the pool/bundle/mux settings (a bare `{ iceServers }` would drop
+ * them and slow the next connection back down).
+ *   - iceCandidatePoolSize: pre-gathers host/srflx candidates before the offer,
+ *     so the SDP already includes them (fewer trickle round-trips → faster).
+ *   - bundlePolicy "max-bundle": one transport for audio+video → a single ICE
+ *     check list instead of one per m-line.
+ *   - rtcpMuxPolicy "require": RTCP shares the RTP port (half the candidates).
+ */
+function buildIceConfig(
+  servers: IceConfig["iceServers"]
+): IceConfig {
+  return {
+    iceServers: servers,
+    iceCandidatePoolSize: 4,
+    bundlePolicy: "max-bundle",
+    rtcpMuxPolicy: "require",
+  };
+}
 interface PeerEntry {
   pc: RTCPeerConnection;
   name: string;
@@ -132,7 +161,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let wsReady = false;
   const wsOpenCbs: Array<() => void> = [];
   const me: { pin: string | null; name: string | null } = { pin: null, name: null };
-  let iceConfig: IceConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+  let iceConfig: IceConfig = buildIceConfig([{ urls: "stun:stun.l.google.com:19302" }]);
   let localStream: MediaStream | null = null;        // RAW camera stream (input)
   let processedStream: MediaStream | null = null;    // post-pipeline stream (sent to peers)
   let pipeline: MediaPipeline | null = null;
@@ -434,7 +463,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // this the page showed a separate identity number and every dial to it was
     // rejected as "offline".
     emitPin();
-    if (m.iceServers && m.iceServers.length) iceConfig = { iceServers: m.iceServers };
+    if (m.iceServers && m.iceServers.length) iceConfig = buildIceConfig(m.iceServers);
     if (!registeredOnce) {
       registeredOnce = true;
       const meName = $("meName"); if (meName) meName.textContent = me.name;
@@ -1123,7 +1152,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // this room BEFORE building any peer connections, so every RTCPeerConnection
     // gathers relay candidates from our coturn (not the stale register-time set).
     if (m.iceServers && m.iceServers.length) {
-      iceConfig = { iceServers: m.iceServers };
+      iceConfig = buildIceConfig(m.iceServers);
       diag("ice servers from joined (" + m.iceServers.length + ")");
     }
     (m.members || []).forEach(mem => callPeer(mem.pin, mem.name));
@@ -1160,7 +1189,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       return;
     }
     // Mesh: re-offer to each existing member (glare-free — we're the newcomer).
-    if (m.iceServers && m.iceServers.length) iceConfig = { iceServers: m.iceServers };
+    if (m.iceServers && m.iceServers.length) iceConfig = buildIceConfig(m.iceServers);
     (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
   }
   function onPeerJoined(m: Msg) {
@@ -1174,7 +1203,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (peers[m.pin!]) return;
     // Same as onJoined: adopt the fresh relay creds before creating the peer.
     if (m.iceServers && m.iceServers.length) {
-      iceConfig = { iceServers: m.iceServers };
+      iceConfig = buildIceConfig(m.iceServers);
       diag("ice servers from peer-joined (" + m.iceServers.length + ")");
     }
     createPeer(m.pin!, m.name || "Guest", false);
@@ -1881,7 +1910,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // setConfiguration so an in-flight restart can use the fresh relay.
   function onIceServers(m: Msg) {
     if (!m.iceServers || !m.iceServers.length) return;
-    iceConfig = { iceServers: m.iceServers };
+    iceConfig = buildIceConfig(m.iceServers);
     diag("ice servers refreshed (" + m.iceServers.length + ")");
     Object.values(peers).forEach(p => {
       try { p.pc.setConfiguration(iceConfig as RTCConfiguration); } catch { /* */ }
