@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus, Platform } from "react-native";
 import * as Updates from "expo-updates";
+import { isCallActive } from "@/hooks/use-call-session";
 
 /**
  * Possible states of the OTA self-update flow.
@@ -60,7 +61,10 @@ export function useOtaUpdate(options?: { autoRestart?: boolean }) {
         const fetched = await Updates.fetchUpdateAsync();
         if (fetched.isNew) {
           setUpdateReady(true);
-          if (autoRestart) {
+          // Never restart in the middle of a call — it would drop the call.
+          // The ready state stays set; we apply on the next resume when idle,
+          // or the user can tap the banner.
+          if (autoRestart && !isCallActive()) {
             await applyUpdate();
             return;
           }
@@ -81,14 +85,21 @@ export function useOtaUpdate(options?: { autoRestart?: boolean }) {
     void checkForUpdate();
   }, [checkForUpdate]);
 
-  // Re-check when the app returns to the foreground.
+  // Re-check when the app returns to the foreground. Also apply a previously
+  // downloaded update once we're idle (e.g. a call that blocked the restart
+  // has now ended).
   useEffect(() => {
     const onChange = (state: AppStateStatus) => {
-      if (state === "active") void checkForUpdate();
+      if (state !== "active") return;
+      if (updateReady && autoRestart && !isCallActive()) {
+        void applyUpdate();
+        return;
+      }
+      void checkForUpdate();
     };
     const sub = AppState.addEventListener("change", onChange);
     return () => sub.remove();
-  }, [checkForUpdate]);
+  }, [checkForUpdate, applyUpdate, updateReady, autoRestart]);
 
   return { status, updateReady, checkForUpdate, applyUpdate } as const;
 }

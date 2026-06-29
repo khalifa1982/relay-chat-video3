@@ -77,6 +77,8 @@ const config: ExpoConfig = {
         "RELAY needs camera access so you can make video calls.",
       NSMicrophoneUsageDescription:
         "RELAY needs microphone access so you can make voice and video calls.",
+      // Keep the call's audio session alive while backgrounded (voice/video calls).
+      UIBackgroundModes: ["audio", "voip"],
     },
   },
   android: {
@@ -123,6 +125,14 @@ const config: ExpoConfig = {
       },
     ],
     [
+      "expo-notifications",
+      {
+        // Bundle the incoming-call ringtone so the Android channel + iOS
+        // notification can play it as the call sound.
+        sounds: ["./assets/audio/ringtone.wav"],
+      },
+    ],
+    [
       "expo-video",
       {
         supportsBackgroundPlayback: true,
@@ -150,6 +160,8 @@ const config: ExpoConfig = {
         },
       },
     ],
+    // Local plugin: enable Android picture-in-picture for active calls.
+    "./plugins/with-android-pip.js",
   ],
   experiments: {
     typedRoutes: true,

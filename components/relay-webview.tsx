@@ -19,6 +19,10 @@ import type { WebViewErrorEvent } from "react-native-webview/lib/WebViewTypes";
 
 import { RELAY_APP_URL, isInternalUrl } from "@/lib/relay-config";
 import { reconcileVersion } from "@/lib/version-watch";
+import { INJECTED_JS } from "@/lib/injected-scripts";
+import { parseRelayMessage } from "@/lib/call-messages";
+import { useCallSession } from "@/hooks/use-call-session";
+import { useCallNotifications } from "@/hooks/use-call-notifications";
 
 const COLORS = {
   navy: "#0B1020",
@@ -32,37 +36,9 @@ const COLORS = {
 
 const RELAY_LOGO = require("@/assets/images/relay-logo.png");
 
-/**
- * Injected into the web app to watch its footer version string (e.g. "v2.51.0")
- * and report it to native. When the deployed web version changes while the app
- * is open, native shows a lightweight "reload" prompt so users get the freshest
- * web content immediately. Must be self-contained and end with `true;`.
- */
-const VERSION_WATCH_JS = `(() => {
-  try {
-    if (window.__relayVersionWatch) return;
-    window.__relayVersionWatch = true;
-    var post = function (v) {
-      try {
-        window.ReactNativeWebView &&
-          window.ReactNativeWebView.postMessage(
-            JSON.stringify({ type: 'relay-version', version: v })
-          );
-      } catch (e) {}
-    };
-    var read = function () {
-      var m = (document.body && document.body.innerText || '').match(/v\\d+\\.\\d+\\.\\d+/);
-      return m ? m[0] : null;
-    };
-    var report = function () { var v = read(); if (v) post(v); };
-    report();
-    setInterval(report, 60000);
-    document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'visible') report();
-    });
-  } catch (e) {}
-})();
-true;`;
+// Script that asks the page to refresh its camera track (clears frozen preview).
+const REACQUIRE_CAMERA_JS =
+  "try { window.__relayReacquireCamera && window.__relayReacquireCamera(); } catch (e) {} true;";
 
 /**
  * RelayWebView renders the RELAY web app inside a native WebView and adds the
@@ -123,6 +99,16 @@ export function RelayWebView() {
     canGoBackRef.current = nav.canGoBack;
   }, []);
 
+  // Ask the page (via injected helper) to re-acquire the camera on resume.
+  const reacquireCamera = useCallback(() => {
+    webViewRef.current?.injectJavaScript(REACQUIRE_CAMERA_JS);
+  }, []);
+
+  // Call lifecycle: background audio, keep-awake, PiP, camera re-acquire.
+  const { setCallState } = useCallSession(reacquireCamera);
+  // Incoming-call ringtone + notification.
+  const { showIncomingCall, dismissIncomingCall } = useCallNotifications();
+
   // --- Web-content version change detection ---
   const [webUpdateAvailable, setWebUpdateAvailable] = useState(false);
   const webVersionRef = useRef<string | null>(null);
@@ -178,19 +164,28 @@ export function RelayWebView() {
     return true;
   }, []);
 
-  // Receive messages from the injected version watcher.
+  // Receive messages from the injected scripts (version, call, ring).
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
-      try {
-        const data = JSON.parse(event.nativeEvent.data);
-        if (data && data.type === "relay-version" && data.version) {
-          handleVersion(String(data.version));
-        }
-      } catch {
-        // Ignore non-JSON messages.
+      const msg = parseRelayMessage(event.nativeEvent.data);
+      switch (msg.type) {
+        case "version":
+          handleVersion(msg.version);
+          break;
+        case "call":
+          setCallState({ active: msg.active, hasVideo: msg.hasVideo });
+          // A connected call cancels any pending ringtone.
+          if (msg.active) void dismissIncomingCall();
+          break;
+        case "ring":
+          if (msg.ringing) void showIncomingCall(msg.caller ?? undefined);
+          else void dismissIncomingCall();
+          break;
+        default:
+          break;
       }
     },
-    [handleVersion],
+    [handleVersion, setCallState, showIncomingCall, dismissIncomingCall],
   );
 
   return (
@@ -202,6 +197,7 @@ export function RelayWebView() {
         // --- Media / WebRTC ---
         mediaCapturePermissionGrantType="grant"
         allowsInlineMediaPlayback
+        allowsPictureInPictureMediaPlayback
         mediaPlaybackRequiresUserAction={false}
         allowsProtectedMedia
         // --- Storage / cookies so the guest identity persists ---
@@ -227,7 +223,7 @@ export function RelayWebView() {
         onNavigationStateChange={handleNavStateChange}
         onShouldStartLoadWithRequest={handleShouldStartLoad}
         onMessage={handleMessage}
-        injectedJavaScript={VERSION_WATCH_JS}
+        injectedJavaScript={INJECTED_JS}
       />
 
       {webUpdateAvailable && !loading && !hasError ? (
