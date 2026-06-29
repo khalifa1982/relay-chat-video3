@@ -26,13 +26,11 @@ const bundleId =
 const timestamp = bundleId.split(".").pop()?.replace(/^t/, "") ?? "";
 const schemeFromBundleId = `manus${timestamp}`;
 
-// OTA self-update endpoint. Point this at your Expo Updates-compatible
-// manifest server (e.g. EAS Update, or your own self-hosted endpoint). When a
-// new app bundle is published there, installed apps download and apply it
-// automatically on launch — no manual APK reinstall. Override via env.
-const updatesUrl =
-  (process.env.EXPO_PUBLIC_UPDATES_URL ?? "").trim() ||
-  "https://your-chat.org/app-updates";
+// Android native build number (versionCode). The self-hosted APK updater
+// compares the server manifest's buildNumber against THIS value to decide
+// whether a newer APK is available. Bump this every time you publish a new APK
+// (and set the manifest's buildNumber to match the new release).
+const ANDROID_BUILD_NUMBER = 1;
 
 const env = {
   // App branding - update these values directly (do not use env vars)
@@ -55,19 +53,6 @@ const config: ExpoConfig = {
   scheme: env.scheme,
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
-  // --- OTA self-update (expo-updates) ---
-  // runtimeVersion ties a JS bundle to a compatible native build. Using the
-  // app version policy means updates apply as long as the native version matches.
-  runtimeVersion: { policy: "appVersion" },
-  updates: {
-    url: updatesUrl,
-    enabled: true,
-    // Check for a new bundle automatically every time the app launches.
-    checkAutomatically: "ON_LOAD",
-    // Wait briefly for an update on cold start so users land on the latest UI;
-    // if it takes too long, the cached bundle loads and the update applies next time.
-    fallbackToCacheTimeout: 8000,
-  },
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
@@ -91,11 +76,18 @@ const config: ExpoConfig = {
     edgeToEdgeEnabled: true,
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
+    // versionCode is the integer build number the APK updater compares against.
+    versionCode: ANDROID_BUILD_NUMBER,
     permissions: [
       "POST_NOTIFICATIONS",
       "CAMERA",
       "RECORD_AUDIO",
       "MODIFY_AUDIO_SETTINGS",
+      // Required so the app can launch the system installer for the downloaded APK.
+      "REQUEST_INSTALL_PACKAGES",
+      // Allow the call/notification service + WebRTC to keep running in background.
+      "FOREGROUND_SERVICE",
+      "WAKE_LOCK",
     ],
     intentFilters: [
       {

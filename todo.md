@@ -32,3 +32,17 @@
 - [x] FEATURE: Fully automatic OTA self-update — auto-check on launch + resume, download, restart; deferred during active calls
 - [x] Test all changes (tsc clean + 21 unit tests pass incl. live reachability)
 - [x] Deliver updated app + setup notes
+
+## Round 4 — Self-hosted APK auto-update + full-screen call notifications
+- [x] Replaced Expo OTA with self-hosted APK updater (Android); removed expo-updates
+- [x] Check fixed manifest URL (your-chat.org/update/version.json) on each launch + resume
+- [x] Compare server buildNumber vs installed versionCode; trigger update when newer
+- [x] Download APK from fixed URL (your-chat.org/update/app.apk) with a live progress bar
+- [x] Launch Android package installer (REQUEST_INSTALL_PACKAGES) to install + restart
+- [x] iOS safe no-op (Android-only sideload)
+- [x] Defer APK install/restart during an active call
+- [x] Full-screen-style incoming-call notification: MAX-importance sticky heads-up + Accept/Decline + ringtone; USE_FULL_SCREEN_INTENT + showWhenLocked/turnScreenOn via plugin
+- [x] Incoming-message notification when unread badge increases
+- [x] Server-side hosting instructions (SELF_HOSTED_UPDATE.md)
+- [x] tsc clean + 32 unit tests pass; expo config validated
+- [x] Checkpoint and deliver

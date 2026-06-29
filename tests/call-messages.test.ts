@@ -36,6 +36,20 @@ describe("parseRelayMessage", () => {
     expect(m).toEqual({ type: "ring", ringing: false, caller: null });
   });
 
+  it("parses an incoming-message event", () => {
+    const m = parseRelayMessage(
+      JSON.stringify({ type: "relay-message", count: 3 }),
+    );
+    expect(m).toEqual({ type: "message", count: 3 });
+  });
+
+  it("defaults message count to 0 when invalid", () => {
+    const m = parseRelayMessage(
+      JSON.stringify({ type: "relay-message", count: "x" }),
+    );
+    expect(m).toEqual({ type: "message", count: 0 });
+  });
+
   it("returns unknown for malformed / non-string / empty version", () => {
     expect(parseRelayMessage("{not json").type).toBe("unknown");
     expect(parseRelayMessage(42 as unknown).type).toBe("unknown");

@@ -106,8 +106,17 @@ export function RelayWebView() {
 
   // Call lifecycle: background audio, keep-awake, PiP, camera re-acquire.
   const { setCallState } = useCallSession(reacquireCamera);
-  // Incoming-call ringtone + notification.
-  const { showIncomingCall, dismissIncomingCall } = useCallNotifications();
+  // Incoming-call ringtone + notification (with Accept/Decline handling).
+  const { showIncomingCall, dismissIncomingCall, showIncomingMessage } =
+    useCallNotifications({
+      onAccept: () => {
+        // Bring the call back into view and refresh the camera frame.
+        reacquireCamera();
+      },
+      onDecline: () => {
+        void dismissIncomingCall();
+      },
+    });
 
   // --- Web-content version change detection ---
   const [webUpdateAvailable, setWebUpdateAvailable] = useState(false);
@@ -181,11 +190,20 @@ export function RelayWebView() {
           if (msg.ringing) void showIncomingCall(msg.caller ?? undefined);
           else void dismissIncomingCall();
           break;
+        case "message":
+          void showIncomingMessage();
+          break;
         default:
           break;
       }
     },
-    [handleVersion, setCallState, showIncomingCall, dismissIncomingCall],
+    [
+      handleVersion,
+      setCallState,
+      showIncomingCall,
+      dismissIncomingCall,
+      showIncomingMessage,
+    ],
   );
 
   return (

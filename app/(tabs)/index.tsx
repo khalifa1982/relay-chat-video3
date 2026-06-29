@@ -3,8 +3,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 
 import { RelayWebView } from "@/components/relay-webview";
-import { OtaUpdateBanner } from "@/components/ota-update-banner";
-import { useOtaUpdate } from "@/hooks/use-ota-update";
+import { ApkUpdateBanner } from "@/components/apk-update-banner";
+import { useApkUpdate } from "@/hooks/use-apk-update";
 import { RELAY_APP_URL } from "@/lib/relay-config";
 
 /**
@@ -12,16 +12,17 @@ import { RELAY_APP_URL } from "@/lib/relay-config";
  * app. Everything (dialer, calls, messages, contacts) is served by the web,
  * so any web update is reflected here automatically.
  *
- * In addition, the app updates ITSELF over-the-air: on launch and on resume it
- * checks the configured update server, downloads any new app bundle, and
- * restarts into it automatically — no manual APK reinstall.
+ * The app also updates ITSELF from a self-hosted APK: on launch and on resume
+ * it checks a fixed manifest URL for a higher build number, and if found it
+ * downloads the APK with a progress bar and launches the Android installer to
+ * update + restart — no manual download. (Android only.)
  *
  * On web (Expo preview) WebView/native features aren't available, so we show a
  * lightweight notice with the target URL instead of an embedded frame.
  */
 export default function HomeScreen() {
-  // OTA self-update: auto-check + auto-restart into the newest app bundle.
-  const { status, updateReady, applyUpdate } = useOtaUpdate({ autoRestart: true });
+  // Self-hosted APK auto-update.
+  const { status, progress, manifest, installNow } = useApkUpdate();
 
   if (Platform.OS === "web") {
     return (
@@ -39,10 +40,11 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.safe} edges={["top", "left", "right", "bottom"]}>
       <StatusBar style="light" />
       <RelayWebView />
-      <OtaUpdateBanner
+      <ApkUpdateBanner
         status={status}
-        updateReady={updateReady}
-        onRestart={applyUpdate}
+        progress={progress}
+        versionName={manifest?.versionName}
+        onInstallNow={installNow}
       />
     </SafeAreaView>
   );

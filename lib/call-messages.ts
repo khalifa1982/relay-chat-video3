@@ -7,6 +7,7 @@ export type RelayMessage =
   | { type: "version"; version: string }
   | { type: "call"; active: boolean; hasVideo: boolean }
   | { type: "ring"; ringing: boolean; caller: string | null }
+  | { type: "message"; count: number }
   | { type: "unknown" };
 
 /**
@@ -40,6 +41,13 @@ export function parseRelayMessage(raw: unknown): RelayMessage {
         ringing: Boolean(data.ringing),
         caller: typeof data.caller === "string" ? data.caller : null,
       };
+    case "relay-message": {
+      const count = Number(data.count);
+      return {
+        type: "message",
+        count: Number.isFinite(count) ? count : 0,
+      };
+    }
     default:
       return { type: "unknown" };
   }

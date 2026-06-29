@@ -185,8 +185,35 @@ export const CALL_WATCH_JS = `(() => {
       }
     });
 
+    // --- Incoming-message detection ---
+    // Track unread badge / new message rows so native can post a message
+    // notification when the count increases while backgrounded.
+    var lastUnread = 0;
+    var detectMessages = function () {
+      try {
+        var n = 0;
+        var badge = document.querySelector(
+          '[data-unread-count], .unread-count, .badge-unread'
+        );
+        if (badge) {
+          var bv = parseInt((badge.getAttribute('data-unread-count') || badge.textContent || '0').replace(/[^0-9]/g, ''), 10);
+          if (!isNaN(bv)) n = bv;
+        }
+        if (n > lastUnread) {
+          try {
+            window.ReactNativeWebView &&
+              window.ReactNativeWebView.postMessage(
+                JSON.stringify({ type: 'relay-message', count: n })
+              );
+          } catch (e) {}
+        }
+        lastUnread = n;
+      } catch (e) {}
+    };
+
     // Poll the DOM for the incoming-call UI and react to changes.
     setInterval(detectRinging, 1200);
+    setInterval(detectMessages, 1500);
     if (window.MutationObserver) {
       try {
         var mo = new MutationObserver(function () { detectRinging(); });
