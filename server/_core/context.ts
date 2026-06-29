@@ -1,6 +1,8 @@
 import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
 import type { User } from "../../drizzle/schema";
 import { sdk } from "./sdk";
+import { getUserById } from "../db";
+import { userIdFromLocalSession } from "../authLocal";
 import {
   bindDeviceIdToIdentity,
   ensureUserIdentity,
@@ -51,6 +53,16 @@ export async function createContext(
     user = await sdk.authenticateRequest(opts.req);
   } catch {
     user = null;
+  }
+  // Fall back to a self-hosted email/password session (relay_session cookie) when
+  // there's no Manus OAuth session. Both auth methods resolve to the same `user`.
+  if (!user) {
+    try {
+      const uid = userIdFromLocalSession(opts.req);
+      if (uid != null) user = (await getUserById(uid)) ?? null;
+    } catch {
+      user = null;
+    }
   }
 
   const deviceId = extractDeviceId(opts.req);

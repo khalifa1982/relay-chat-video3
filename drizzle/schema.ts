@@ -19,18 +19,48 @@ import {
  * ────────────────────────────────────────────────────────────────────────── */
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
-  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
+  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per
+   *  user. Self-hosted email/password accounts get a synthetic `local:<rand>`. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  /* Self-hosted email/password auth (v2.54). Additive + nullable, applied to the
+     live DB by `ensureSchemaExtensions()`. Null for OAuth-only accounts. */
+  /** scrypt password hash (`scrypt$N$salt$hash`) for email/password accounts. */
+  passwordHash: text("passwordHash"),
+  /** True once the email-verification link has been clicked (local flow). */
+  emailVerified: boolean("emailVerified"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * email_verifications — one-time tokens for the self-hosted registration flow.
+ * A row is minted on register / resend; clicking the link consumes it and flips
+ * users.emailVerified. Created by the boot-migrator (CREATE TABLE IF NOT EXISTS).
+ * ────────────────────────────────────────────────────────────────────────── */
+export const emailVerifications = mysqlTable(
+  "email_verifications",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("userId").notNull(),
+    email: varchar("email", { length: 320 }).notNull(),
+    token: varchar("token", { length: 128 }).notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    consumedAt: timestamp("consumedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    tokenIdx: uniqueIndex("email_verif_token_unique").on(t.token),
+    userIdx: index("email_verif_user_idx").on(t.userId),
+  }),
+);
+export type EmailVerification = typeof emailVerifications.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
  * identities — every "party" on RELAY, whether a guest or a registered user.

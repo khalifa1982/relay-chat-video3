@@ -1697,8 +1697,35 @@ PIN management, self-hosted auth+verification, cross-platform media QA). This sh
       preview now shows the live status — "online now" / "away" / "travelling ✈️" / "last seen …".
 - [x] 14 new tests (social/mobile/status sanitization, social-URL builders, last-seen formatting). 423
       tests green, tsc + build clean. Footer → `v2.52.0`.
-- [ ] **Still to come (this batch):** Phase 3 self-hosted email+password auth + verification, Phase 4
-      cross-platform media QA.
+- [ ] **Still to come (this batch):** Phase 4 cross-platform media QA.
+
+## v2.54.0 — Self-hosted email + password auth + verification (delivered 2026-06-28)
+
+Phase 3 — a proprietary registration/login (NO third-party identity provider), served alongside the
+existing Manus OAuth.
+
+- [x] **Security foundation** (`server/authCrypto.ts`, pure + unit-tested): scrypt password hashing with a
+      per-hash salt + timing-safe verify; random hex tokens + timing-safe compare; a signed (HMAC) stateless
+      session token; email normalize/validate + a password policy (≥8 chars, letter+number).
+- [x] **Auth routes** (`server/authLocal.ts`, raw Express): `POST /api/auth/register` (creates an
+      UNVERIFIED user + identity, migrating a guest in place, and emails a verification link),
+      `GET /api/auth/verify?token=` (single-use, 24h, consumes the token → flips `emailVerified` → renders
+      a **"You have been verified. Please return to your previous screen or the other tab to continue."**
+      page), `GET /api/auth/status` (the registration tab polls this — **never hangs**),
+      `POST /api/auth/resend` (**1-minute cooldown** — the "regenerate activation link" ask),
+      `POST /api/auth/login` (password + verified gate, sets the session cookie; uniform failure message so
+      emails can't be enumerated), `POST /api/auth/logout`. All rate-limited per-IP.
+- [x] **Session integration:** a signed `relay_session` HttpOnly+Secure+SameSite cookie; the tRPC context
+      now resolves a user from EITHER the Manus OAuth session OR this local session.
+- [x] **Schema (additive):** `users` gains `passwordHash` + `emailVerified`; new `email_verifications`
+      table — both applied to the live DB by the boot-migrator.
+- [x] **Client** (`AuthPanel.tsx`): a register/sign-in modal with a "check your email" stage that polls
+      status, shows a live **Resend link in Ns** countdown, and **auto-signs-in and proceeds** the instant
+      the link is clicked in the other tab. Surfaced from the guest upgrade CTA ("Create account with email"
+      next to "Use Manus sign-in").
+- [x] 10 new tests (scrypt hash/verify, token compare, email/password policy, signed-session round-trip +
+      tamper/expiry). 437 tests green, tsc + build clean. Footer → `v2.54.0`.
+  (Without `RESEND_API_KEY` the verification link is logged server-side so self-hosters can still verify.)
 
 ## v2.53.0 — PIN management: regenerate + auto-propagate to contacts (delivered 2026-06-28)
 

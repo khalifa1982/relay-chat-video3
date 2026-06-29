@@ -19,6 +19,7 @@ import { inboundConfig, inboundAddress, registerEmailInbound } from "../emailInb
 import { getUserById } from "../db";
 import { sendEmail } from "../email";
 import { createRateLimiter, clientIpOf } from "../rateLimit";
+import { registerLocalAuth } from "../authLocal";
 
 function escapeHtml(s: string): string {
   return s.replace(
@@ -226,6 +227,9 @@ async function startServer() {
   registerV2Events(app);
   // Inbound email webhook (reply-to-thread). No-op until INBOUND_EMAIL_DOMAIN.
   registerEmailInbound(app);
+  // Self-hosted email/password auth (register / verify / login / resend), served
+  // alongside the Manus OAuth. The tRPC context recognizes its session cookie.
+  registerLocalAuth(app);
   // Apply additive schema columns to the live DB (idempotent, never
   // destructive) — AWAIT before we start serving so contact SELECTs (which name
   // the new columns) can't 500 in a startup window on a fresh DB. The function

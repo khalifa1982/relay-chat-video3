@@ -21,6 +21,7 @@ import {
   ContactInfoSection,
   SocialLinksSection,
 } from "./ProfileHubSections";
+import { AuthPanel } from "@/app/AuthPanel";
 import {
   hasPasscode,
   setPasscode,
@@ -49,6 +50,7 @@ export default function ProfilePage() {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [showAuth, setShowAuth] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -284,19 +286,30 @@ export default function ProfilePage() {
           <section className="rounded-xl border border-primary/30 bg-primary/5 p-5 space-y-3">
             <h2 className="text-lg font-semibold">Keep this number forever</h2>
             <p className="text-sm text-muted-foreground">
-              Guests are kept on this device for 30 days. Sign in to save your number and
-              contacts permanently across all your devices.
+              Guests are kept on this device for 30 days. Create an account to save your
+              number, contacts, and profile permanently across all your devices.
             </p>
-            <Button
-              type="button"
-              onClick={() => {
-                window.location.href = getLoginUrl();
-              }}
-            >
-              Sign in to upgrade
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button type="button" className="flex-1" onClick={() => setShowAuth(true)}>
+                Create account with email
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                className="flex-1"
+                onClick={() => {
+                  window.location.href = getLoginUrl();
+                }}
+              >
+                Use Manus sign-in
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Your current number and contacts carry over automatically.
+            </p>
           </section>
         )}
+        {showAuth && <AuthPanel onClose={() => setShowAuth(false)} />}
 
         {/* sign out */}
         {/* (the upgrade CTA above stays in place — sign-out is the

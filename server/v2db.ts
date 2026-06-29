@@ -599,6 +599,9 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "identities", column: "statusOverride", ddl: "ADD COLUMN `statusOverride` varchar(16)" },
     { table: "identities", column: "mobiles", ddl: "ADD COLUMN `mobiles` text" },
     { table: "identities", column: "socials", ddl: "ADD COLUMN `socials` text" },
+    // Self-hosted email/password auth (v2.54).
+    { table: "users", column: "passwordHash", ddl: "ADD COLUMN `passwordHash` text" },
+    { table: "users", column: "emailVerified", ddl: "ADD COLUMN `emailVerified` boolean" },
   ];
   for (const a of adds) {
     try {
@@ -640,6 +643,20 @@ export async function ensureSchemaExtensions(): Promise<void> {
         \`number\` varchar(6) NOT NULL,
         KEY \`conf_part_identity_idx\` (\`identityId\`),
         KEY \`conf_part_conf_idx\` (\`conferenceId\`)
+      )`,
+    },
+    {
+      name: "email_verifications",
+      ddl: `CREATE TABLE IF NOT EXISTS \`email_verifications\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`userId\` int NOT NULL,
+        \`email\` varchar(320) NOT NULL,
+        \`token\` varchar(128) NOT NULL,
+        \`expiresAt\` timestamp NOT NULL,
+        \`consumedAt\` timestamp NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY \`email_verif_token_unique\` (\`token\`),
+        KEY \`email_verif_user_idx\` (\`userId\`)
       )`,
     },
   ];
