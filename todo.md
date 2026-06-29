@@ -1697,8 +1697,26 @@ PIN management, self-hosted auth+verification, cross-platform media QA). This sh
       preview now shows the live status — "online now" / "away" / "travelling ✈️" / "last seen …".
 - [x] 14 new tests (social/mobile/status sanitization, social-URL builders, last-seen formatting). 423
       tests green, tsc + build clean. Footer → `v2.52.0`.
-- [ ] **Still to come (this batch):** Phase 2 PIN management (regenerate + auto-propagate to contacts),
-      Phase 3 self-hosted email+password auth + verification, Phase 4 cross-platform media QA. Honest
-      constraints flagged to the user: a guest PIN can't survive a full cookie+cache wipe (true permanence
-      needs registration); Android Chrome genuinely lacks web audio-output selection (a real browser limit,
-      not a bug).
+- [ ] **Still to come (this batch):** Phase 3 self-hosted email+password auth + verification, Phase 4
+      cross-platform media QA.
+
+## v2.53.0 — PIN management: regenerate + auto-propagate to contacts (delivered 2026-06-28)
+
+Phase 2 of the overhaul.
+
+- [x] **Regenerate your number anytime.** A "Regenerate number" control in Profile → Your number issues a
+      fresh unique 6-digit number (confirm dialog spells out the consequences). The relay engine adopts it
+      on the next whoami via the existing `setPreferredPin` reconcile (v2.50.2), so the dialer + header +
+      dialable pin all stay in sync.
+- [x] **Auto-propagation to the whole contact network.** `regenerateIdentityNumber()` rewrites EVERY
+      `contacts` row that saved the old number to the new one, so nobody has to re-add you. Collisions with
+      a stale `(ownerId, newNumber)` row are resolved by a pure, unit-tested planner (`planRenumber`) that
+      drops the duplicate before the update — so the unique key can never blow up.
+- [x] **Keep-or-regenerate on conversion** is satisfied: conversion already migrates (KEEPS) the guest's
+      number in place by default; regenerating is one tap away in the profile.
+- [x] 4 new tests (planRenumber: rewrite-all, stale-dup drop, no-op, unrelated-rows). 427 tests green,
+      tsc + build clean. Footer → `v2.53.0`.
+- [ ] **Note on guest PIN across logout:** an explicit guest "Sign out" still forgets the number on that
+      device (a deliberate shared-browser privacy guard). Durable cross-session/device PIN persistence is
+      delivered by registration (Phase 3); a guest's number already survives cookie clears via the
+      device-id, just not an explicit sign-out or a full localStorage wipe.

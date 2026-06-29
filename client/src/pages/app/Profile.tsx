@@ -252,6 +252,7 @@ export default function ProfilePage() {
         {/* number */}
         <NumberAndFlag
           number={me.number}
+          onRegenerated={refresh}
         />
 
         {/* status (auto / away / travelling) */}
@@ -340,11 +341,32 @@ export default function ProfilePage() {
    is purely informational; if the geo lookup fails (e.g. private
    IP, network error) we silently render the number alone.
    ============================================================ */
-function NumberAndFlag({ number }: { number: string }) {
+function NumberAndFlag({ number, onRegenerated }: { number: string; onRegenerated: () => void }) {
   const geo = trpc.directory.geoSelf.useQuery(undefined, {
     staleTime: 60 * 60 * 1000, // 1h — country doesn't change often
     retry: false,
   });
+  const [regenNotice, setRegenNotice] = useState<string | null>(null);
+  const regen = trpc.identity.regenerateNumber.useMutation({
+    onSuccess: (res) => {
+      setRegenNotice(
+        `New number ${res.number.slice(0, 3)} ${res.number.slice(3)} — your contacts were updated automatically.`
+      );
+      onRegenerated();
+      window.setTimeout(() => setRegenNotice(null), 6000);
+    },
+  });
+
+  function doRegenerate() {
+    const ok = window.confirm(
+      "Generate a NEW 6-digit number?\n\n" +
+        "• Everyone who has you saved as a contact is updated automatically — they can keep reaching you.\n" +
+        "• Your old number stops working immediately.\n" +
+        "• Anyone who only has your old number written down elsewhere will need the new one."
+    );
+    if (ok) regen.mutate();
+  }
+
   return (
     <section className="space-y-2">
       <Label className="text-xs uppercase tracking-wider text-muted-foreground">
@@ -378,6 +400,23 @@ function NumberAndFlag({ number }: { number: string }) {
       <p className="text-xs text-muted-foreground">
         Share this 6-digit number for people to call or message you.
       </p>
+      <div className="flex flex-wrap items-center gap-3 pt-1">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={doRegenerate}
+          disabled={regen.isPending}
+        >
+          {regen.isPending ? "Generating…" : "Regenerate number"}
+        </Button>
+        {regenNotice && (
+          <span className="text-xs text-[color:var(--relay-online,#06d6a0)]">{regenNotice}</span>
+        )}
+        {regen.isError && (
+          <span className="text-xs text-destructive">Couldn't regenerate — try again.</span>
+        )}
+      </div>
     </section>
   );
 }

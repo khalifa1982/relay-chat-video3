@@ -362,6 +362,68 @@ export async function updateIdentityProfile(
   await db.update(identities).set(set).where(eq(identities.id, id));
 }
 
+/**
+ * Pure planner for renumbering: given every contact row that references EITHER
+ * the old OR the new number, decide which rows to UPDATE to the new number and
+ * which to DELETE (a stale pre-existing new-number row owned by the same person,
+ * which would otherwise collide with the unique (ownerId, number) key). Pure so
+ * the tricky collision logic is unit-tested without a DB.
+ */
+export function planRenumber(
+  rows: Array<{ id: number; ownerId: number; number: string }>,
+  oldNumber: string,
+  newNumber: string
+): { updateIds: number[]; deleteIds: number[] } {
+  if (oldNumber === newNumber) return { updateIds: [], deleteIds: [] };
+  const newRowByOwner = new Map<number, number>(); // ownerId -> row id holding newNumber
+  for (const r of rows) if (r.number === newNumber) newRowByOwner.set(r.ownerId, r.id);
+  const updateIds: number[] = [];
+  const deleteIds: number[] = [];
+  for (const r of rows) {
+    if (r.number !== oldNumber) continue;
+    updateIds.push(r.id);
+    const collidingId = newRowByOwner.get(r.ownerId);
+    if (collidingId !== undefined) deleteIds.push(collidingId); // drop the stale dup
+  }
+  return { updateIds, deleteIds };
+}
+
+/**
+ * Regenerate this identity's 6-digit number and PROPAGATE it across the network:
+ * every contact that saved the OLD number is rewritten to the NEW one, so people
+ * keep reaching them without re-adding. Collisions with a stale (ownerId,new)
+ * contact are resolved by dropping the stale row first. Returns the old/new pair.
+ */
+export async function regenerateIdentityNumber(
+  identityId: number
+): Promise<{ oldNumber: string; newNumber: string } | null> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  const id = await getIdentityById(identityId);
+  if (!id) return null;
+  const oldNumber = id.number;
+  const newNumber = await allocateNumber();
+  // Point the identity at the new number first (unique index guarantees it's free).
+  await db.update(identities).set({ number: newNumber }).where(eq(identities.id, identityId));
+  // Propagate to contacts. Fetch the rows touching either number, plan, apply.
+  try {
+    const affected = await db
+      .select({ id: contacts.id, ownerId: contacts.ownerId, number: contacts.number })
+      .from(contacts)
+      .where(or(eq(contacts.number, oldNumber), eq(contacts.number, newNumber)));
+    const plan = planRenumber(affected, oldNumber, newNumber);
+    if (plan.deleteIds.length > 0) {
+      await db.delete(contacts).where(inArray(contacts.id, plan.deleteIds));
+    }
+    if (plan.updateIds.length > 0) {
+      await db.update(contacts).set({ number: newNumber }).where(inArray(contacts.id, plan.updateIds));
+    }
+  } catch (e) {
+    console.warn("[regen] contact propagation failed:", e);
+  }
+  return { oldNumber, newNumber };
+}
+
 /* ── presence ─────────────────────────────────────────────────── */
 
 export async function markOnline(

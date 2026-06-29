@@ -44,6 +44,7 @@ import {
   sendMessage,
   touchGuestExpiry,
   updateIdentityProfile,
+  regenerateIdentityNumber,
   upsertContact,
   getConversationParticipantIds,
   recentAutoReplyExists,
@@ -283,6 +284,22 @@ export const v2AuthRouter = router({
       const fresh = await getIdentityById(me.id);
       return fresh;
     }),
+
+  /**
+   * Regenerate the caller's 6-digit number and AUTO-PROPAGATE it to every
+   * contact that saved the old number, so their contacts keep reaching them
+   * without re-adding. The relay engine adopts the new number on the client's
+   * next whoami (see RelayEngine's setPreferredPin reconcile).
+   */
+  regenerateNumber: publicProcedure.mutation(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    const result = await regenerateIdentityNumber(me.id);
+    const fresh = await getIdentityById(me.id);
+    return {
+      number: fresh?.number ?? me.number,
+      previousNumber: result?.oldNumber ?? me.number,
+    };
+  }),
 });
 
 /* ── directory (numbers / lookups) ────────────────────────────── */
