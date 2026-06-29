@@ -17,6 +17,7 @@ import { MediaPipeline, FILTERS, type FilterId, type FilterDef } from "./mediaPi
 import { computeLayout } from "./callLayout";
 import { buildAudioOutputList } from "./audioOutputs";
 import { detectDeviceType } from "./deviceType";
+import { probeBrowserMedia, buildCapabilityReport } from "@shared/mediaCapabilities";
 import { isDndOn } from "@/app/dnd";
 
 interface IceConfig {
@@ -611,7 +612,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function updateAudioBtn(label?: string) {
     const b = $("audioBtn");
     if (!b) return;
-    b.style.display = audioOutSupported ? "" : "none";
+    // VISIBLE on every platform during a call (cross-platform parity). Where the
+    // browser can't select an audio output (e.g. Android Chrome — the OS/Bluetooth
+    // routes it), openAudioMenu() explains that on tap instead of the control
+    // silently disappearing.
+    b.style.display = "";
     // Highlight only when a real NON-default output is active.
     b.classList.toggle("on", !!audioSinkId);
     if (label) b.setAttribute("title", "Audio output: " + label);
@@ -2074,6 +2079,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
           " remote=" + (e.remoteSet ? "y" : "n") +
           " stream=" + (e.gotStream ? "y" : "n")),
         "",
+        "--- device capabilities (cross-platform QA) ---",
+        ...buildCapabilityReport(probeBrowserMedia()).rows.map(
+          r => "  " + (r.supported ? "✓" : "✗") + " " + r.label + (r.note ? " — " + r.note : "")
+        ),
+        "",
         "--- recent events ---",
         ...diagLog,
       ];
@@ -3211,13 +3221,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => hangUp("user-hangup"));
   ($("flipCamBtn") as HTMLElement | null)?.addEventListener("click", () => { flipCamera(); });
   ($("screenBtn") as HTMLElement | null)?.addEventListener("click", () => { void toggleScreenShare(); });
-  // Reveal the screen-share button only where getDisplayMedia actually exists
-  // (Android Chrome, desktop, iPad — yes; iOS Safari phone — no). Pure client
-  // capability check; mirrors the record-button visibility pattern.
+  // Screen share is VISIBLE on every platform during a call (cross-platform
+  // parity — it used to vanish on iOS / in-app webviews, which read as a missing
+  // feature). Where the browser genuinely can't capture (iOS Safari, some in-app
+  // webviews), toggleScreenShare() explains it on tap instead of the control
+  // silently disappearing.
   {
     const sb = $("screenBtn") as HTMLElement | null;
-    const md = navigator.mediaDevices as (MediaDevices & { getDisplayMedia?: unknown }) | undefined;
-    if (sb) sb.style.display = md && typeof md.getDisplayMedia === "function" ? "" : "none";
+    if (sb) sb.style.display = "";
   }
   ($("recordBtn") as HTMLElement | null)?.addEventListener("click", toggleRecording);
   ($("qualityBtn") as HTMLElement | null)?.addEventListener("click", toggleQuality);

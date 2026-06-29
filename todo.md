@@ -1697,7 +1697,32 @@ PIN management, self-hosted auth+verification, cross-platform media QA). This sh
       preview now shows the live status — "online now" / "away" / "travelling ✈️" / "last seen …".
 - [x] 14 new tests (social/mobile/status sanitization, social-URL builders, last-seen formatting). 423
       tests green, tsc + build clean. Footer → `v2.52.0`.
-- [ ] **Still to come (this batch):** Phase 4 cross-platform media QA.
+## v2.55.0 — Cross-platform media QA: visible controls + capability readout (delivered 2026-06-28)
+
+Phase 4 — the final phase of the overhaul. The complaint was that audio-output + screen-share controls were
+"conspicuously absent" on some platforms (Android, in-app webviews) vs others.
+
+- [x] **Controls are now VISIBLE on every platform during a call.** The audio-output and screen-share
+      buttons no longer silently vanish where a capability is missing — they show on all platforms, and
+      where the browser genuinely can't deliver, tapping explains it honestly (audio: "your device routes
+      call audio automatically — use the system/Bluetooth controls"; screen-share: the existing
+      "isn't supported on this device" toast). This is real cross-platform parity of the *visible UI*.
+- [x] **Honest about real browser limits.** Android Chrome genuinely has no web audio-OUTPUT selection
+      (`setSinkId`) — the OS/Bluetooth routes it; iPhone/iPad browsers genuinely can't screen-share a web
+      page (Apple). We surface the control + a plain explanation rather than pretending parity the browser
+      can't provide.
+- [x] **Capability readout for QA** (`shared/mediaCapabilities.ts`, pure + tested): the in-call
+      diagnostics overlay (press `?`) now lists exactly what THIS device/browser supports — camera/mic,
+      screen sharing, audio-output selection, Picture-in-Picture — with ✓/✗ and an honest note per row.
+      A real QA tool for auditing Safari / Firefox / Brave / Chrome across desktop + mobile.
+- [x] 5 new tests (desktop / Android / iOS / in-app-webview capability matrices + PiP paths). 442 tests
+      green, tsc + build clean. Footer → `v2.55.0`.
+
+### Overhaul batch COMPLETE (v2.52 → v2.55)
+All four requested areas shipped: **profile hub** (v2.52), **PIN regenerate + propagate** (v2.53),
+**self-hosted email/password auth + verification** (v2.54), **cross-platform media QA** (v2.55). Honest
+constraints stated up front held: guest PIN can't survive a full cookie+cache wipe (registration is the
+durable path); Android web audio-output selection isn't a thing (a real browser limit).
 
 ## v2.54.0 — Self-hosted email + password auth + verification (delivered 2026-06-28)
 
