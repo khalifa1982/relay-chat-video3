@@ -12,10 +12,14 @@
 - [x] Set brand colors in theme.config.js
 - [x] Add unit test validating RELAY URL config + live reachability
 - [x] Verify tsc / dev server has no errors
-- [ ] Save checkpoint and deliver preview to user
+- [x] Save checkpoint v1.0 and deliver preview to user
 
-## Notes
-- The app is a thin shell: all features come from the live web app at
-  https://your-chat.org/app. Web updates/upgrades reflect automatically.
-- WebView only renders on native (iOS/Android via Expo Go); the Expo web
-  preview shows an informational fallback by design.
+## Round 2 — Reported issues
+- [x] BUG: After login, web app bottom nav loaded forever — root cause: loading overlay re-showed on every SPA navigation and never dismissed. Fixed: overlay shows only on first load + 12s safety timeout.
+- [x] Investigate root cause (confirmed via live browser: /app/* anchor routes are internal; overlay was the blocker)
+- [x] Keep the "reload" prompt when the WEB content updates (footer version watcher + Reload banner)
+- [x] FEATURE: OTA self-update via expo-updates — auto check on launch/resume, download, restart
+- [x] Add expo-updates and configure runtimeVersion + update URL (EXPO_PUBLIC_UPDATES_URL override)
+- [x] Add in-app update check + apply + restart flow (use-ota-update hook + OtaUpdateBanner)
+- [x] Add unit tests for version-watch logic; tsc + tests pass
+- [ ] Checkpoint and deliver

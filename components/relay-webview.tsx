@@ -18,6 +18,7 @@ import type {
 import type { WebViewErrorEvent } from "react-native-webview/lib/WebViewTypes";
 
 import { RELAY_APP_URL, isInternalUrl } from "@/lib/relay-config";
+import { reconcileVersion } from "@/lib/version-watch";
 
 const COLORS = {
   navy: "#0B1020",
@@ -32,6 +33,38 @@ const COLORS = {
 const RELAY_LOGO = require("@/assets/images/relay-logo.png");
 
 /**
+ * Injected into the web app to watch its footer version string (e.g. "v2.51.0")
+ * and report it to native. When the deployed web version changes while the app
+ * is open, native shows a lightweight "reload" prompt so users get the freshest
+ * web content immediately. Must be self-contained and end with `true;`.
+ */
+const VERSION_WATCH_JS = `(() => {
+  try {
+    if (window.__relayVersionWatch) return;
+    window.__relayVersionWatch = true;
+    var post = function (v) {
+      try {
+        window.ReactNativeWebView &&
+          window.ReactNativeWebView.postMessage(
+            JSON.stringify({ type: 'relay-version', version: v })
+          );
+      } catch (e) {}
+    };
+    var read = function () {
+      var m = (document.body && document.body.innerText || '').match(/v\\d+\\.\\d+\\.\\d+/);
+      return m ? m[0] : null;
+    };
+    var report = function () { var v = read(); if (v) post(v); };
+    report();
+    setInterval(report, 60000);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') report();
+    });
+  } catch (e) {}
+})();
+true;`;
+
+/**
  * RelayWebView renders the RELAY web app inside a native WebView and adds the
  * shell chrome: a branded loading overlay until first paint, an offline / load
  * error screen with retry, Android hardware-back navigation through web
@@ -39,9 +72,35 @@ const RELAY_LOGO = require("@/assets/images/relay-logo.png");
  */
 export function RelayWebView() {
   const webViewRef = useRef<WebView>(null);
+  // `loading` only controls the FIRST-load splash overlay. Subsequent in-app
+  // (SPA) navigations must never re-show a full-screen overlay, otherwise the
+  // spinner can get stuck covering an already-rendered page.
   const [loading, setLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const canGoBackRef = useRef(false);
+  const firstLoadDoneRef = useRef(false);
+  const loadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Safety net: never let the first-load splash hang forever. If the first
+  // load has not reported completion within 12s, dismiss the overlay anyway.
+  useEffect(() => {
+    loadTimeoutRef.current = setTimeout(() => {
+      firstLoadDoneRef.current = true;
+      setLoading(false);
+    }, 12000);
+    return () => {
+      if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
+    };
+  }, []);
+
+  const finishFirstLoad = useCallback(() => {
+    firstLoadDoneRef.current = true;
+    if (loadTimeoutRef.current) {
+      clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
+    }
+    setLoading(false);
+  }, []);
 
   // Android hardware back button -> navigate WebView history when possible.
   useEffect(() => {
@@ -64,30 +123,75 @@ export function RelayWebView() {
     canGoBackRef.current = nav.canGoBack;
   }, []);
 
+  // --- Web-content version change detection ---
+  const [webUpdateAvailable, setWebUpdateAvailable] = useState(false);
+  const webVersionRef = useRef<string | null>(null);
+
+  const handleVersion = useCallback((version: string) => {
+    const { next, shouldPromptReload } = reconcileVersion(
+      webVersionRef.current,
+      version,
+    );
+    webVersionRef.current = next;
+    if (shouldPromptReload) setWebUpdateAvailable(true);
+  }, []);
+
+  const reloadWebContent = useCallback(() => {
+    setWebUpdateAvailable(false);
+    webViewRef.current?.reload();
+  }, []);
+
   const reload = useCallback(() => {
     setHasError(false);
+    firstLoadDoneRef.current = false;
     setLoading(true);
+    if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
+    loadTimeoutRef.current = setTimeout(() => {
+      firstLoadDoneRef.current = true;
+      setLoading(false);
+    }, 12000);
     webViewRef.current?.reload();
   }, []);
 
   const handleError = useCallback((_event: WebViewErrorEvent) => {
     setHasError(true);
-    setLoading(false);
-  }, []);
+    finishFirstLoad();
+  }, [finishFirstLoad]);
 
-  // Route external (non-RELAY) links to the system browser / native handler.
+  // Route ONLY genuinely external links to the system browser. Everything on
+  // the RELAY site (including all /app/* sub-routes) stays inside the WebView.
   const handleShouldStartLoad = useCallback((req: WebViewNavigation) => {
     const url = req.url;
+    // Keep all internal RELAY navigation in the WebView.
     if (isInternalUrl(url)) return true;
-    if (/^(https?:|mailto:|tel:|sms:)/i.test(url)) {
+    // mailto/tel/sms always go to the native handler.
+    if (/^(mailto:|tel:|sms:)/i.test(url)) {
       Linking.openURL(url).catch(() => {});
       return false;
     }
+    // External http(s) links open in the system browser.
+    if (/^https?:/i.test(url)) {
+      Linking.openURL(url).catch(() => {});
+      return false;
+    }
+    // Anything else (custom schemes, etc.) — let the WebView decide.
     return true;
   }, []);
 
-  // Keep a no-op message bridge available for future web<->native messaging.
-  const handleMessage = useCallback((_event: WebViewMessageEvent) => {}, []);
+  // Receive messages from the injected version watcher.
+  const handleMessage = useCallback(
+    (event: WebViewMessageEvent) => {
+      try {
+        const data = JSON.parse(event.nativeEvent.data);
+        if (data && data.type === "relay-version" && data.version) {
+          handleVersion(String(data.version));
+        }
+      } catch {
+        // Ignore non-JSON messages.
+      }
+    },
+    [handleVersion],
+  );
 
   return (
     <View style={styles.container}>
@@ -111,14 +215,40 @@ export function RelayWebView() {
         startInLoadingState={false}
         originWhitelist={["*"]}
         setSupportMultipleWindows={false}
-        onLoadStart={() => setLoading(true)}
-        onLoadEnd={() => setLoading(false)}
+        // Only show the splash on the very first load. Do NOT toggle `loading`
+        // back on for subsequent SPA navigations — that is what made other tabs
+        // appear stuck on an endless spinner.
+        onLoadStart={() => {
+          if (!firstLoadDoneRef.current) setLoading(true);
+        }}
+        onLoadEnd={finishFirstLoad}
         onError={handleError}
         onHttpError={() => {}}
         onNavigationStateChange={handleNavStateChange}
         onShouldStartLoadWithRequest={handleShouldStartLoad}
         onMessage={handleMessage}
+        injectedJavaScript={VERSION_WATCH_JS}
       />
+
+      {webUpdateAvailable && !loading && !hasError ? (
+        <View style={styles.webUpdateWrap}>
+          <View style={styles.webUpdateBanner}>
+            <Text style={styles.webUpdateText}>
+              RELAY was updated. Reload for the latest.
+            </Text>
+            <Pressable
+              onPress={reloadWebContent}
+              style={({ pressed }) => [
+                styles.webUpdateButton,
+                pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
+              ]}
+              accessibilityRole="button"
+            >
+              <Text style={styles.webUpdateButtonText}>Reload</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       {loading && !hasError ? (
         <View style={styles.overlay} pointerEvents="none">
@@ -228,5 +358,45 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 15,
     fontWeight: "700",
+  },
+  webUpdateWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+  webUpdateBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: COLORS.surface,
+    borderColor: COLORS.border,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    maxWidth: 460,
+    width: "100%",
+  },
+  webUpdateText: {
+    color: COLORS.foreground,
+    fontSize: 13,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
+  webUpdateButton: {
+    marginLeft: "auto",
+    backgroundColor: COLORS.cyan,
+    paddingVertical: 8,
+    paddingHorizontal: 18,
+    borderRadius: 999,
+  },
+  webUpdateButtonText: {
+    color: "#04121A",
+    fontSize: 13,
+    fontWeight: "800",
   },
 });

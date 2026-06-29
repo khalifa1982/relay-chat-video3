@@ -26,6 +26,14 @@ const bundleId =
 const timestamp = bundleId.split(".").pop()?.replace(/^t/, "") ?? "";
 const schemeFromBundleId = `manus${timestamp}`;
 
+// OTA self-update endpoint. Point this at your Expo Updates-compatible
+// manifest server (e.g. EAS Update, or your own self-hosted endpoint). When a
+// new app bundle is published there, installed apps download and apply it
+// automatically on launch — no manual APK reinstall. Override via env.
+const updatesUrl =
+  (process.env.EXPO_PUBLIC_UPDATES_URL ?? "").trim() ||
+  "https://your-chat.org/app-updates";
+
 const env = {
   // App branding - update these values directly (do not use env vars)
   appName: "RELAY",
@@ -47,6 +55,19 @@ const config: ExpoConfig = {
   scheme: env.scheme,
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
+  // --- OTA self-update (expo-updates) ---
+  // runtimeVersion ties a JS bundle to a compatible native build. Using the
+  // app version policy means updates apply as long as the native version matches.
+  runtimeVersion: { policy: "appVersion" },
+  updates: {
+    url: updatesUrl,
+    enabled: true,
+    // Check for a new bundle automatically every time the app launches.
+    checkAutomatically: "ON_LOAD",
+    // Wait briefly for an update on cold start so users land on the latest UI;
+    // if it takes too long, the cached bundle loads and the update applies next time.
+    fallbackToCacheTimeout: 8000,
+  },
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
