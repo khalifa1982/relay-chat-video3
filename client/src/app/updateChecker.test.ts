@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.56.0)", () => {
-    expect(APP_VERSION).toBe("2.56.0");
+  it("is the current release (2.57.0)", () => {
+    expect(APP_VERSION).toBe("2.57.0");
   });
 });
 
@@ -184,5 +184,38 @@ describe("call-routing fixes (v2.50)", () => {
     // The error handler checks the guard before the alone-in-call hangUp.
     const errCase = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf('case "error"'));
     expect(errCase.slice(0, 600)).toMatch(/addInviteOfflineGuard\s*&&\s*m\.code === ["']offline["']/);
+  });
+});
+
+describe("robust auto-rejoin across the Update reload (v2.57)", () => {
+  it("snapshots the active call on unload and restores it at boot", () => {
+    expect(RELAY_CLIENT).toMatch(/from "\.\/rejoinSnapshot"/);
+    // onUnload writes the snapshot while in a call.
+    expect(RELAY_CLIENT).toMatch(/if \(inCall && roomId && me\.pin\) \{\s*writeSnapshot\(\{/);
+    // Boot reads it + arms a watchdog.
+    expect(RELAY_CLIENT).toMatch(/pendingRejoin = readSnapshot\(Date\.now\(\)\)/);
+    expect(RELAY_CLIENT).toMatch(/rejoinWatchT = setTimeout/);
+  });
+  it("registers under the IN-CALL pin during a pending rejoin (so the server room matches)", () => {
+    expect(RELAY_CLIENT).toMatch(/if \(pendingRejoin && \/\^\\d\{6\}\$\/\.test\(pendingRejoin\.pin\)\) me\.pin = pendingRejoin\.pin/);
+  });
+  it("onRejoin retries media + restores mic/cam, never dropping on a transient failure", () => {
+    expect(RELAY_CLIENT).toMatch(/let gotMedia = false/);
+    expect(RELAY_CLIENT).toMatch(/if \(!pendingRejoin\.micOn\) setMic\(false\)/);
+    expect(RELAY_CLIENT).toMatch(/if \(!pendingRejoin\.camOn\) setCam\(false\)/);
+  });
+  it("does not switch the pin while a rejoin is pending", () => {
+    expect(RELAY_CLIENT).toMatch(/!inCall && !pendingRejoin && ws && ws\.readyState === 1/);
+  });
+});
+
+describe("Android loudspeaker force (Web Audio routing, v2.57)", () => {
+  it("offers a reversible loudspeaker toggle on Android (not iOS)", () => {
+    expect(RELAY_CLIENT).toMatch(/const IS_ANDROID =/);
+    expect(RELAY_CLIENT).toMatch(/if \(IS_ANDROID\) void toggleLoudspeaker\(\)/);
+  });
+  it("only mutes source elements AFTER the context is confirmed running (never silence)", () => {
+    const en = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf("async function loudspeakerEnable"));
+    expect(en.slice(0, 600)).toMatch(/if \(loudspeakerCtx\.state !== "running"\) return false/);
   });
 });

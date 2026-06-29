@@ -1805,3 +1805,29 @@ rest are sequenced below.
   device (can't be fixed blind).
 - **Headset/Bluetooth auto-route** → output auto-route already exists for desktop (setSinkId) and the OS
   handles it on mobile; mic auto-switch (re-acquire getUserMedia) is the remaining piece (risky mid-call).
+
+## v2.57.0 — Bulletproof auto-rejoin across the Update reload + Android loudspeaker force (delivered 2026-06-29)
+
+- [x] **Mid-call Update refresh now reliably rejoins the call.** The auto-updater's silent in-call reload
+      already kept server-side room membership (30s grace), but the rejoin was fragile — a transient
+      getUserMedia hiccup made `onRejoin` send `leave` (dropping the user), mic/cam state was lost, and a
+      reconciled pin could miss the server's room lookup. Now: on unload during a call the engine
+      **snapshots** `{ roomId, pin, micOn, camOn }` to sessionStorage (`rejoinSnapshot.ts`); at boot it
+      **registers under the in-call pin** (so the server's membership lookup matches), **restores mic/cam**,
+      and `onRejoin` **retries media** (with the existing audio-only fallback) instead of dropping on a
+      transient failure. A 10s watchdog clears the snapshot if no rejoin arrives — the ONLY exception being
+      a call that genuinely ended during the refresh. The pin-reconcile (v2.50.2) is suppressed while a
+      rejoin is pending. Works when several/all participants refresh at once (the server room rides the 30s
+      grace). Snapshot cleared on explicit hang-up / logout.
+- [x] **Android loudspeaker force (interim audio fix).** Android Chrome exposes no web output-picker and
+      pins WebRTC audio to the earpiece. Tapping the speaker icon on Android now toggles a **Web-Audio
+      loudspeaker route** (remote audio → an AudioContext whose destination is the device's media output =
+      loudspeaker, following a connected headset/Bluetooth). It mutes the source elements **only after the
+      context is confirmed `running`**, so the worst case is "no change / earpiece" — **never silence** —
+      and it's fully reversible (tap again to turn off). **Scoped to Android only**; iOS (which works
+      natively) and desktop are untouched. The old misleading "try your device settings" toast is gone.
+      Honest caveat: forcing the loudspeaker on Android Chrome isn't guaranteed on every device — this is
+      the best the web platform allows and needs on-device confirmation; a full dynamic-switch fix may
+      require a native shell.
+- [x] 10 new tests (rejoin-snapshot validation + freshness, rejoin/loudspeaker wiring guards). 453 tests
+      green, tsc + build clean. Footer → `v2.57.0`.

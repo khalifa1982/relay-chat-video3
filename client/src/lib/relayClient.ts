@@ -18,6 +18,7 @@ import { computeLayout } from "./callLayout";
 import { buildAudioOutputList } from "./audioOutputs";
 import { detectDeviceType } from "./deviceType";
 import { probeBrowserMedia, buildCapabilityReport } from "@shared/mediaCapabilities";
+import { readSnapshot, writeSnapshot, clearSnapshot, type RejoinSnapshot } from "./rejoinSnapshot";
 import { isDndOn } from "@/app/dnd";
 
 interface IceConfig {
@@ -169,6 +170,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let facingMode: "user" | "environment" = "user";
   let activeFilter: FilterId = "none";
   let micOn = true, camOn = true;
+  // Pending auto-rejoin after a mid-call reload (e.g. the auto-updater). Read from
+  // sessionStorage at boot; drives register() to use the in-call pin and onRejoin
+  // to restore mic/cam. Cleared once we rejoin, the call proves ended, or on a
+  // real hang-up.
+  let pendingRejoin: RejoinSnapshot | null = null;
+  let rejoinWatchT: ReturnType<typeof setTimeout> | null = null;
+  function clearPendingRejoin() {
+    pendingRejoin = null;
+    if (rejoinWatchT) { clearTimeout(rejoinWatchT); rejoinWatchT = null; }
+    clearSnapshot();
+  }
   let screenStream: MediaStream | null = null;       // active getDisplayMedia stream, or null
   let screenSharing = false;
   let recordingAvailable = false; // server advertised egress+S3 are configured
@@ -444,12 +456,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
     let savedPin: string | undefined;
     try { savedPin = window.localStorage.getItem("relay_pin") || undefined; } catch { /* */ }
     // Priority for the number we ask the server to register us under:
-    //   1. preferredPin — the stable identity number from the host. This is
-    //      what unifies the big number with the profile number.
+    //   0. pendingRejoin.pin — when rejoining an active call after a reload, we
+    //      MUST register under the SAME pin we held in the call, or the server's
+    //      membership lookup (sendRejoinIfInRoom, keyed by pin) won't find the
+    //      room and the rejoin silently fails. This wins for the brief window.
+    //   1. preferredPin — the stable identity number from the host.
     //   2. savedPin — a number we were previously issued (reload continuity).
     // The server still has final say (it rejects a pin already taken by
     // someone else) and reports the authoritative value back via onRegistered.
-    if (preferredPin && /^\d{6}$/.test(preferredPin)) me.pin = preferredPin;
+    if (pendingRejoin && /^\d{6}$/.test(pendingRejoin.pin)) me.pin = pendingRejoin.pin;
+    else if (preferredPin && /^\d{6}$/.test(preferredPin)) me.pin = preferredPin;
     else if (savedPin && !me.pin) me.pin = savedPin;
     const btn = $("joinBtn") as HTMLButtonElement | null;
     if (btn) { btn.disabled = true; btn.textContent = "Connecting…"; }
@@ -613,12 +629,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const b = $("audioBtn");
     if (!b) return;
     // VISIBLE on every platform during a call (cross-platform parity). Where the
-    // browser can't select an audio output (e.g. Android Chrome — the OS/Bluetooth
-    // routes it), openAudioMenu() explains that on tap instead of the control
-    // silently disappearing.
+    // browser can't select an audio output (e.g. Android Chrome), tapping toggles
+    // the Web-Audio loudspeaker force instead of the control silently vanishing.
     b.style.display = "";
-    // Highlight only when a real NON-default output is active.
-    b.classList.toggle("on", !!audioSinkId);
+    // Highlight when a real NON-default output is active OR loudspeaker force is on.
+    b.classList.toggle("on", !!audioSinkId || loudspeakerOn);
     if (label) b.setAttribute("title", "Audio output: " + label);
   }
   async function refreshAudioOutputs() {
@@ -655,9 +670,73 @@ export function startRelay(root: HTMLElement): RelayHandle {
     void refreshAudioOutputs();
     toast("Audio output updated");
   }
+  // ── Android loudspeaker force (Web Audio routing) ──────────────────────────
+  // Android Chrome exposes NO web API to pick the call's audio OUTPUT, and routes
+  // WebRTC audio to the EARPIECE while a mic is captured. Routing the remote audio
+  // through an AudioContext (whose destination is the device's MEDIA output)
+  // forces the LOUDSPEAKER (and follows a connected headset/Bluetooth). We mute
+  // the source elements ONLY after the context is confirmed `running`, so the
+  // worst case is "no change" (earpiece) — NEVER silence. Fully reversible.
+  const IS_ANDROID = (() => { try { return /Android/i.test(navigator.userAgent || ""); } catch { return false; } })();
+  let loudspeakerCtx: AudioContext | null = null;
+  let loudspeakerOn = false;
+  let loudspeakerScanT: ReturnType<typeof setInterval> | null = null;
+  const loudspeakerNodes: AudioNode[] = [];
+  const loudspeakerMutedEls = new Set<HTMLMediaElement>();
+  function routeElToLoudspeaker(el: HTMLMediaElement) {
+    if (!loudspeakerCtx || loudspeakerMutedEls.has(el)) return;
+    const stream = el.srcObject as MediaStream | null;
+    if (!stream || stream.getAudioTracks().length === 0) return;
+    try {
+      const src = loudspeakerCtx.createMediaStreamSource(stream);
+      src.connect(loudspeakerCtx.destination);
+      loudspeakerNodes.push(src);
+      el.muted = true; // play ONLY via the loudspeaker path (no double audio)
+      loudspeakerMutedEls.add(el);
+    } catch { /* a stream can only be tapped once — ignore */ }
+  }
+  /** Re-route any NEW remote audio onto the loudspeaker (called when participants
+   *  join while loudspeaker mode is on). No-op when off. */
+  function refreshLoudspeakerRouting() {
+    if (loudspeakerOn) collectAudioEls().forEach(routeElToLoudspeaker);
+  }
+  async function loudspeakerEnable(): Promise<boolean> {
+    try {
+      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctx) return false;
+      if (!loudspeakerCtx) loudspeakerCtx = new Ctx();
+      await loudspeakerCtx.resume();
+      if (loudspeakerCtx.state !== "running") return false; // never mute → never silent
+      loudspeakerOn = true;
+      collectAudioEls().forEach(routeElToLoudspeaker);
+      // Catch participants who join AFTER loudspeaker mode is on (cheap; the Set
+      // guard skips already-routed elements).
+      if (!loudspeakerScanT) loudspeakerScanT = setInterval(refreshLoudspeakerRouting, 2000);
+      return true;
+    } catch { return false; }
+  }
+  function loudspeakerDisable() {
+    if (loudspeakerScanT) { clearInterval(loudspeakerScanT); loudspeakerScanT = null; }
+    loudspeakerNodes.forEach(n => { try { n.disconnect(); } catch { /* */ } });
+    loudspeakerNodes.length = 0;
+    loudspeakerMutedEls.forEach(el => { try { el.muted = false; } catch { /* */ } });
+    loudspeakerMutedEls.clear();
+    loudspeakerOn = false;
+    try { void loudspeakerCtx?.suspend(); } catch { /* */ }
+  }
+  async function toggleLoudspeaker() {
+    if (loudspeakerOn) { loudspeakerDisable(); updateAudioBtn(); toast("Loudspeaker off"); return; }
+    const ok = await loudspeakerEnable();
+    updateAudioBtn();
+    toast(ok ? "Loudspeaker on 🔊" : "Couldn't switch the output on this device.", !ok);
+  }
   function openAudioMenu() {
     if (!audioOutSupported) {
-      toast("This browser routes call audio automatically (try your device's audio settings).", true);
+      // No web output-picker here. On ANDROID, offer the loudspeaker-force toggle
+      // (a real, reversible control) instead of a dead-end message. On iOS, audio
+      // routing already works natively — don't touch it; just say so honestly.
+      if (IS_ANDROID) void toggleLoudspeaker();
+      else toast("Your device routes call audio automatically (headset/Bluetooth switches on its own).");
       return;
     }
     void refreshAudioOutputs();
@@ -1169,13 +1248,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (inCall) return;              // already in a call — ignore
     const rid = m.roomId || null;
     if (!rid) return;
-    try {
-      await ensureMedia();
-    } catch {
-      // Couldn't re-acquire camera/mic on this fresh page (permission revoked or
-      // device busy). We can't rejoin — explicitly leave so the server drops our
-      // membership instead of keeping us as a phantom "connected" member that
-      // holds the room open.
+    // Re-acquire media RESILIENTLY. A transient getUserMedia failure on a fresh
+    // page (devices momentarily busy while the previous page's tracks release)
+    // must NOT drop us from the call — retry once before giving up. (ensureMedia
+    // already falls back to audio-only if only the camera is unavailable.)
+    let gotMedia = false;
+    try { await ensureMedia(); gotMedia = true; }
+    catch {
+      await new Promise(r => setTimeout(r, 600));
+      try { await ensureMedia(); gotMedia = true; } catch { /* truly hopeless */ }
+    }
+    if (!gotMedia) {
+      // We genuinely can't get a mic — leave so the server drops our membership
+      // instead of holding the room open with a phantom member.
+      clearPendingRejoin();
       sendWS({ type: "leave", reason: "rejoin-no-media" });
       return;
     }
@@ -1185,6 +1271,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
     recordMemberDevices(m.members);
     recordMemberRoles(m.members);
     captureSelfRole(m);
+    // Restore the mic/cam state the user had BEFORE the reload (default = both on,
+    // so we only need to flip OFF the ones that were off).
+    if (pendingRejoin) {
+      if (!pendingRejoin.micOn) setMic(false);
+      if (!pendingRejoin.camOn) setCam(false);
+    }
+    clearPendingRejoin();
     toast("Rejoined the call");
     if (livekitEnabled) {
       diag("rejoin: livekit room " + rid);
@@ -3066,6 +3159,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function hangUp(reason: string = "manual") {
     sendWS({ type: "leave", reason });
+    // The user explicitly ended the call — don't auto-rejoin it on a later reload.
+    clearPendingRejoin();
+    loudspeakerDisable(); // stop the loudspeaker scan + release the audio context
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     pendingRing = null;
     $("ringOverlay")?.classList.remove("active");
@@ -3163,10 +3259,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   };
   const onUnload = () => {
     // IMPORTANT: a page refresh / tab close must NOT leave an active call — the
-    // server keeps the membership so the user AUTO-REJOINS on reload. Only an
-    // explicit hang-up (hangBtn → hangUp) or logout (engine destroy) sends a
-    // `leave`. A truly-abandoned room is reaped server-side after a few minutes.
-    // (Kept as a no-op hook so the beforeunload listener wiring is unchanged.)
+    // server keeps the membership (30s grace) so the user AUTO-REJOINS on reload.
+    // Only an explicit hang-up (hangBtn → hangUp) or logout (engine destroy) sends
+    // a `leave`. A truly-abandoned room is reaped server-side after the grace.
+    // Snapshot the call so the fresh page rejoins the SAME room with the SAME
+    // mic/cam state (instead of stranding the user idle on the dialer).
+    if (inCall && roomId && me.pin) {
+      writeSnapshot({ roomId, pin: me.pin, micOn, camOn, ts: Date.now() });
+    }
   };
 
   ($("joinBtn") as HTMLElement | null)?.addEventListener("click", onJoinClick);
@@ -3299,6 +3399,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
   window.addEventListener("online", onOnline);
 
   // ---------- boot ----------
+  // Pending auto-rejoin? (set by onUnload before a mid-call reload.) If a fresh
+  // snapshot exists, register under the IN-CALL pin so the server's room lookup
+  // matches, and arm a watchdog: if no `rejoin` arrives within 10s the call must
+  // have ended during the refresh — clear it and stay idle (the one valid
+  // exception to auto-rejoin).
+  pendingRejoin = readSnapshot(Date.now());
+  if (pendingRejoin) {
+    me.pin = pendingRejoin.pin;
+    rejoinWatchT = setTimeout(() => { clearPendingRejoin(); }, 10_000);
+  }
   $("boot")?.classList.add("hidden");
   connectWS();
   ($("nameInput") as HTMLInputElement | null)?.focus();
@@ -3335,7 +3445,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // be reached). The server treats a new pin from the same cid as an identity
       // switch (drops the old, takes the new). NEVER switch mid-call: an identity
       // switch tears down room membership.
-      if (next && me.pin && next !== me.pin && !inCall && ws && ws.readyState === 1) {
+      // NEVER switch the pin while an auto-rejoin is pending — the server's room
+      // lookup is keyed by the in-call pin, so changing it would break the rejoin.
+      if (next && me.pin && next !== me.pin && !inCall && !pendingRejoin && ws && ws.readyState === 1) {
         me.pin = next;
         try { window.localStorage.setItem("relay_pin", next); } catch { /* */ }
         sendWS({ type: "register", name: me.name || wantName || "Guest", pin: next, device: detectDeviceType(), flag: selfFlag || undefined });
@@ -3363,6 +3475,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     },
     destroy() {
       destroyed = true;
+      // Logout / engine teardown → don't carry a pending auto-rejoin into the
+      // next session, and release the loudspeaker context.
+      if (rejoinWatchT) { clearTimeout(rejoinWatchT); rejoinWatchT = null; }
+      try { loudspeakerDisable(); loudspeakerCtx?.close?.(); } catch { /* */ }
       if (reconnectT) { clearTimeout(reconnectT); reconnectT = null; }
       if (timerInt) { clearInterval(timerInt); timerInt = null; }
       if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
