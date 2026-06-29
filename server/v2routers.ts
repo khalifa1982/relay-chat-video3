@@ -9,7 +9,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { getDb } from "./db";
+import { getDb, getUserById } from "./db";
 import { identities } from "../drizzle/schema";
 import { router, publicProcedure } from "./_core/trpc";
 import { GUEST_COOKIE } from "./_core/context";
@@ -121,6 +121,16 @@ export const v2AuthRouter = router({
         /* swallow */
       }
     }
+    // Registered users: surface their validated email (read-only on the profile).
+    let email: string | null = null;
+    if (ctx.identity.userId != null) {
+      try {
+        const u = await getUserById(ctx.identity.userId);
+        email = u?.email ?? null;
+      } catch {
+        /* email is best-effort */
+      }
+    }
     return {
       id: ctx.identity.id,
       number: ctx.identity.number,
@@ -128,6 +138,11 @@ export const v2AuthRouter = router({
       avatarUrl: ctx.identity.avatarUrl,
       isGuest: ctx.identity.isGuest,
       guestExpiresAt: ctx.identity.guestExpiresAt,
+      email,
+      bio: ctx.identity.bio,
+      statusOverride: (ctx.identity.statusOverride as "" | "away" | "travel" | null) ?? "",
+      mobiles: ctx.identity.mobiles,
+      socials: ctx.identity.socials,
     };
   }),
 
@@ -252,10 +267,18 @@ export const v2AuthRouter = router({
       z.object({
         displayName: DisplayNameSchema.optional(),
         avatarUrl: AvatarUrlSchema.nullable().optional(),
+        bio: z.string().max(500).nullable().optional(),
+        statusOverride: z.enum(["", "away", "travel"]).optional(),
+        mobiles: z.array(z.string().max(32)).max(20).optional(),
+        socials: z
+          .array(z.object({ platform: z.string().max(20), value: z.string().max(200) }))
+          .max(20)
+          .optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
+      // updateIdentityProfile sanitizes mobiles/socials/status server-side.
       await updateIdentityProfile(me.id, input);
       const fresh = await getIdentityById(me.id);
       return fresh;
@@ -358,6 +381,7 @@ export const v2DirectoryRouter = router({
         avatarUrl: id.avatarUrl,
         isOnline: hidden ? false : (pres?.isOnline ?? false),
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
+        statusOverride: hidden ? "" : ((id.statusOverride as "" | "away" | "travel" | null) ?? ""),
         presenceHidden: hidden,
       };
     }),

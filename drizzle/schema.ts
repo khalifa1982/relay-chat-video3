@@ -67,6 +67,17 @@ export const identities = mysqlTable(
      * header). Format is a random 16-byte hex string (32 chars).
      */
     deviceId: varchar("deviceId", { length: 64 }),
+    /* Profile-hub fields (v2.52). Additive + nullable, applied to existing DBs at
+       boot by `ensureSchemaExtensions()` (idempotent ADD COLUMN), same contract
+       as the contacts rich fields. */
+    /** Short "about me" line shown on the profile. */
+    bio: text("bio"),
+    /** Manual status override: "away" | "travel" | null/"" (= auto from presence). */
+    statusOverride: varchar("statusOverride", { length: 16 }),
+    /** JSON array of optional mobile numbers (strings). */
+    mobiles: text("mobiles"),
+    /** JSON array of { platform, value } social/link entries. */
+    socials: text("socials"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

@@ -16,6 +16,24 @@ import { trpc } from "@/lib/trpc";
 import { useIdentity } from "@/app/useIdentity";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { GroupCallScreen } from "./GroupCallScreen";
+import { effectiveStatus, formatLastSeen, type StatusOverride } from "@shared/profileFields";
+
+/**
+ * Compact presence line for a looked-up peer: "online now" / "away" /
+ * "travelling" / WhatsApp-style "last seen …" when offline. Exported for tests.
+ */
+export function peerStatus(p: {
+  isOnline: boolean;
+  lastSeenAt: string | Date | null | undefined;
+  statusOverride?: string | null;
+}): { text: string; online: boolean } {
+  const eff = effectiveStatus(!!p.isOnline, (p.statusOverride ?? "") as StatusOverride);
+  if (eff === "online") return { text: "online now", online: true };
+  if (eff === "away") return { text: "away", online: true };
+  if (eff === "travel") return { text: "travelling ✈️", online: false };
+  const ts = p.lastSeenAt ? new Date(p.lastSeenAt).getTime() : 0;
+  return { text: formatLastSeen(ts, Date.now()) || "offline", online: false };
+}
 
 const KEYS: { d: string; sub: string }[] = [
   { d: "1", sub: " " },
@@ -329,21 +347,24 @@ export default function DialerPage() {
                   previewQuery.isLoading ? (
                     "Looking up…"
                   ) : previewIdentity ? (
-                    <span>
-                      <span className="font-semibold text-foreground">
-                        {previewIdentity.displayName}
-                      </span>
-                      {" · "}
-                      <span
-                        className={
-                          previewIdentity.isOnline
-                            ? "text-[color:var(--relay-online)]"
-                            : "text-muted-foreground"
-                        }
-                      >
-                        {previewIdentity.isOnline ? "online now" : "offline"}
-                      </span>
-                    </span>
+                    (() => {
+                      const st = peerStatus({
+                        isOnline: previewIdentity.isOnline,
+                        lastSeenAt: previewIdentity.lastSeenAt,
+                        statusOverride: previewIdentity.statusOverride,
+                      });
+                      return (
+                        <span>
+                          <span className="font-semibold text-foreground">
+                            {previewIdentity.displayName}
+                          </span>
+                          {" · "}
+                          <span className={st.online ? "text-[color:var(--relay-online)]" : "text-muted-foreground"}>
+                            {st.text}
+                          </span>
+                        </span>
+                      );
+                    })()
                   ) : (
                     "No RELAY user with this number"
                   )

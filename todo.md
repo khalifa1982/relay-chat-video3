@@ -1675,3 +1675,30 @@ A backend-only pass (no UI changes) to speed up call setup and harden the signal
       no `Permissions-Policy`/COOP (could block `getUserMedia` or the OAuth popup) — so nothing breaks.
 - [x] 11 new tests (token-bucket math, refill, sweep, key isolation, realistic-burst headroom,
       `clientIpOf`). 409 tests green, tsc + build clean. Footer → `v2.51.0`.
+
+## v2.52.0 — Profile hub, phase 1 (bio, mobiles, social links, status, last-seen) (delivered 2026-06-28)
+
+First slice of a larger profile/identity/auth overhaul the user requested across four areas (profile hub,
+PIN management, self-hosted auth+verification, cross-platform media QA). This ships the **profile hub**.
+
+- [x] **Schema (additive):** `identities` gains `bio`, `statusOverride` (away|travel|null), `mobiles`
+      (JSON), `socials` (JSON), applied to the live DB by the boot-migrator `ensureSchemaExtensions()` —
+      no destructive migration.
+- [x] **Server:** `whoami` now returns `email` (the registered user's validated address, read-only),
+      `bio`, `statusOverride`, `mobiles`, `socials`. `updateProfile` accepts + validates them
+      (`shared/profileFields.ts` sanitizes server-side). `directory.lookup` returns `statusOverride`
+      alongside the existing `lastSeenAt`.
+- [x] **Profile UI hub** (`ProfileHubSections.tsx`): a **Status** picker (Auto / Away / Travelling), an
+      **About/bio** box (500 chars), **Email** (read-only for registered users), **Mobile numbers**
+      (add/remove list), and **Links & social** — a platform dropdown (**X**, **Website**, **Snapchat**,
+      **WhatsApp**) with add/remove and canonical tappable URLs (`x.com/…`, `wa.me/…`, `snapchat.com/add/…`).
+- [x] **WhatsApp-style "last seen"** (`shared/profileFields.ts` `formatLastSeen`): "just now",
+      "N minutes ago", "today at H:MM AM", "yesterday at 10:30 PM", "on Jun 20". The dialer's number
+      preview now shows the live status — "online now" / "away" / "travelling ✈️" / "last seen …".
+- [x] 14 new tests (social/mobile/status sanitization, social-URL builders, last-seen formatting). 423
+      tests green, tsc + build clean. Footer → `v2.52.0`.
+- [ ] **Still to come (this batch):** Phase 2 PIN management (regenerate + auto-propagate to contacts),
+      Phase 3 self-hosted email+password auth + verification, Phase 4 cross-platform media QA. Honest
+      constraints flagged to the user: a guest PIN can't survive a full cookie+cache wipe (true permanence
+      needs registration); Android Chrome genuinely lacks web audio-output selection (a real browser limit,
+      not a bug).

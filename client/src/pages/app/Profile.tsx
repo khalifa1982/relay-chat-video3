@@ -16,6 +16,12 @@ import {
 } from "@/app/notifications";
 import { useDnd } from "@/app/dnd";
 import {
+  BioSection,
+  StatusSection,
+  ContactInfoSection,
+  SocialLinksSection,
+} from "./ProfileHubSections";
+import {
   hasPasscode,
   setPasscode,
   clearPasscode,
@@ -247,6 +253,18 @@ export default function ProfilePage() {
         <NumberAndFlag
           number={me.number}
         />
+
+        {/* status (auto / away / travelling) */}
+        <StatusSection me={me} onSaved={refresh} />
+
+        {/* about / bio */}
+        <BioSection me={me} onSaved={refresh} />
+
+        {/* email + mobile numbers */}
+        <ContactInfoSection me={me} onSaved={refresh} />
+
+        {/* links & social accounts */}
+        <SocialLinksSection me={me} onSaved={refresh} />
 
         {/* theme */}
         <ThemeToggleSection />
