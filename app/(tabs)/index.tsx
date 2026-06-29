@@ -23,8 +23,16 @@ import { RELAY_APP_URL } from "@/lib/relay-config";
  */
 export default function HomeScreen() {
   // Self-hosted APK auto-update.
-  const { status, progress, manifest, mandatory, installedBuild, check, installNow } =
-    useApkUpdate();
+  const {
+    status,
+    progress,
+    manifest,
+    mandatory,
+    installedBuild,
+    check,
+    startDownload,
+    applyUpdate,
+  } = useApkUpdate();
 
   if (Platform.OS === "web") {
     return (
@@ -50,7 +58,10 @@ export default function HomeScreen() {
         installedBuild={installedBuild}
         latestBuild={manifest?.buildNumber}
         status={status}
+        progress={progress}
         onCheck={() => void check()}
+        onDownload={startDownload}
+        onApply={() => void applyUpdate()}
       />
 
       {/* Update banner (or full blocking overlay when the update is mandatory). */}
@@ -59,7 +70,8 @@ export default function HomeScreen() {
         progress={progress}
         versionName={manifest?.versionName}
         mandatory={mandatory}
-        onInstallNow={installNow}
+        onDownload={startDownload}
+        onApply={() => void applyUpdate()}
       />
     </SafeAreaView>
   );

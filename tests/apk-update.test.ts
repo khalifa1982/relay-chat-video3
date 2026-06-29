@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isMandatoryUpdate,
   isUpdateAvailable,
   parseManifest,
   resolveApkUrl,
@@ -68,5 +69,30 @@ describe("resolveApkUrl", () => {
 
   it("falls back to the default APK URL", () => {
     expect(resolveApkUrl(parseManifest({ buildNumber: 2 }))).toContain("/app.apk");
+  });
+});
+
+describe("isMandatoryUpdate", () => {
+  it("is true only when an update is available AND marked mandatory", () => {
+    const m = parseManifest({ buildNumber: 9, mandatory: true });
+    expect(isMandatoryUpdate(2, m)).toBe(true);
+  });
+
+  it("is false when mandatory flag is set but no newer build", () => {
+    const m = parseManifest({ buildNumber: 2, mandatory: true });
+    expect(isMandatoryUpdate(2, m)).toBe(false);
+  });
+
+  it("is false when a newer build exists but mandatory flag is absent/false", () => {
+    expect(isMandatoryUpdate(2, parseManifest({ buildNumber: 5 }))).toBe(false);
+    expect(
+      isMandatoryUpdate(2, parseManifest({ buildNumber: 5, mandatory: false })),
+    ).toBe(false);
+  });
+
+  it("is false when installed build is unknown", () => {
+    expect(
+      isMandatoryUpdate(null, parseManifest({ buildNumber: 5, mandatory: true })),
+    ).toBe(false);
   });
 });

@@ -8,7 +8,10 @@ interface Props {
   /** 0..1 download progress. */
   progress: number;
   versionName?: string;
-  onInstallNow?: () => void;
+  /** Start downloading the available build. */
+  onDownload?: () => void;
+  /** Apply the downloaded APK + restart. */
+  onApply?: () => void;
   /** When true, the update is required: show a full blocking overlay. */
   mandatory?: boolean;
 }
@@ -35,7 +38,8 @@ export function ApkUpdateBanner({
   status,
   progress,
   versionName,
-  onInstallNow,
+  onDownload,
+  onApply,
   mandatory = false,
 }: Props) {
   const widthAnim = useRef(new Animated.Value(0)).current;
@@ -48,16 +52,16 @@ export function ApkUpdateBanner({
     }).start();
   }, [progress, widthAnim]);
 
-  if (status === "idle" || status === "checking") return null;
-
   const pct = Math.round(Math.max(0, Math.min(1, progress)) * 100);
   const label =
     versionName != null ? `RELAY ${versionName}` : "A new RELAY version";
 
-  // Mandatory updates take over the screen so the user cannot keep using an
-  // outdated build. The download/install still runs automatically; this overlay
-  // just communicates that the app is required to update before continuing.
-  if (mandatory) {
+  // The compact, non-blocking update experience lives in the footer
+  // BuildStatusRow. The banner is now reserved exclusively for MANDATORY
+  // updates, where we take over the screen so the user must update to continue.
+  if (!mandatory) return null;
+
+  {
     return (
       <View style={styles.blockOverlay} pointerEvents="auto">
         <View style={styles.blockCard}>
@@ -86,9 +90,19 @@ export function ApkUpdateBanner({
             <Text style={styles.sub}>
               Confirm the system prompt to install and restart RELAY.
             </Text>
+          ) : status === "ready" ? (
+            <Pressable
+              onPress={onApply}
+              style={({ pressed }) => [
+                styles.button,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={styles.buttonText}>Restart to install</Text>
+            </Pressable>
           ) : (
             <Pressable
-              onPress={onInstallNow}
+              onPress={onDownload}
               style={({ pressed }) => [
                 styles.button,
                 pressed && { opacity: 0.85 },
@@ -103,74 +117,6 @@ export function ApkUpdateBanner({
       </View>
     );
   }
-
-  return (
-    <View style={styles.wrap} pointerEvents="box-none">
-      <View style={styles.card}>
-        {status === "available" && (
-          <>
-            <Text style={styles.title}>{label} is available</Text>
-            <Text style={styles.sub}>
-              Tap to download and install the latest version.
-            </Text>
-            <Pressable
-              onPress={onInstallNow}
-              style={({ pressed }) => [
-                styles.button,
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <Text style={styles.buttonText}>Download update</Text>
-            </Pressable>
-          </>
-        )}
-
-        {status === "downloading" && (
-          <>
-            <Text style={styles.title}>Downloading update… {pct}%</Text>
-            <View style={styles.track}>
-              <Animated.View
-                style={[
-                  styles.fill,
-                  {
-                    width: widthAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: ["0%", "100%"],
-                    }),
-                  },
-                ]}
-              />
-            </View>
-            <Text style={styles.sub}>Please keep the app open.</Text>
-          </>
-        )}
-
-        {status === "installing" && (
-          <>
-            <Text style={styles.title}>Installing update…</Text>
-            <Text style={styles.sub}>
-              Confirm the system prompt to install and restart RELAY.
-            </Text>
-          </>
-        )}
-
-        {status === "error" && (
-          <>
-            <Text style={styles.title}>Update failed</Text>
-            <Pressable
-              onPress={onInstallNow}
-              style={({ pressed }) => [
-                styles.button,
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <Text style={styles.buttonText}>Try again</Text>
-            </Pressable>
-          </>
-        )}
-      </View>
-    </View>
-  );
 }
 
 const styles = StyleSheet.create({

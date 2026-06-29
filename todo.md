@@ -57,3 +57,13 @@
 - [x] Refined incoming-call + unread-message + online detection selectors
 - [x] tsc clean + 34 unit tests pass; expo config validated (perms + bg modes + plugin)
 - [x] Checkpoint and deliver
+
+## Round 6 — Professional in-app update flow (footer)
+- [x] Split update flow into discrete phases: check -> available -> downloading (progress bar) -> ready -> restart
+- [x] Footer build/status row shows build number + "Up to date" and, when an update exists, a live download progress bar below it
+- [x] Footer action button adapts: Check -> Update -> (progress %) -> Restart
+- [x] Download no longer auto-starts for normal updates (user taps Update); mandatory updates still auto-download + block
+- [x] Restart button applies the downloaded APK via the system installer and relaunches
+- [x] Removed the redundant non-mandatory bottom banner; banner is now mandatory-only overlay
+- [x] tsc clean + 38 unit tests pass (added isMandatoryUpdate tests)
+- [x] Checkpoint and deliver
