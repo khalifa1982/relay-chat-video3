@@ -563,14 +563,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 )}
                 <div
                   className={
-                    "max-w-[75%] rounded-2xl px-3.5 py-2 text-sm break-words " +
+                    "max-w-[75%] rounded-2xl px-3.5 py-2 text-sm break-words shadow-sm " +
+                    // Yours = green (right), theirs = blue (left) — SMS-style.
                     (mine
-                      ? "bg-primary text-primary-foreground rounded-br-sm"
-                      : "bg-muted text-foreground rounded-bl-sm")
+                      ? "bg-[color:var(--relay-online,#06d6a0)] text-[#04201b] rounded-br-sm"
+                      : "bg-[#2563eb] text-white rounded-bl-sm")
                   }
                 >
                   {isGroup && !mine && (
-                    <div className="text-[11px] font-semibold text-accent mb-0.5">
+                    <div className="text-[11px] font-semibold text-white/90 mb-0.5">
                       {nameById.get(m.senderIdentityId) || "Member"}
                     </div>
                   )}
@@ -579,8 +580,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       className={
                         "mb-1 rounded-lg border-l-2 pl-2 py-0.5 text-[11px] leading-tight " +
                         (mine
-                          ? "border-primary-foreground/50 bg-primary-foreground/10 text-primary-foreground/80"
-                          : "border-accent/60 bg-foreground/5 text-muted-foreground")
+                          ? "border-[#04201b]/40 bg-[#04201b]/10 text-[#04201b]/80"
+                          : "border-white/50 bg-white/10 text-white/85")
                       }
                     >
                       <span className="font-semibold">{senderLabel(msgById.get(m.replyToId)?.senderIdentityId ?? -1)}</span>
@@ -601,7 +602,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   <div
                     className={
                       "text-[10px] mt-1 " +
-                      (mine ? "text-primary-foreground/70" : "text-muted-foreground")
+                      (mine ? "text-[#04201b]/70" : "text-white/70")
                     }
                   >
                     {formatTime(m.createdAt)}

@@ -1780,3 +1780,28 @@ Phase 2 of the overhaul.
       a soft glow and a gentle 1.3s blink** (motion-gated via `prefers-reduced-motion`), so they stand out;
       the "© year RELAY" stays muted like a copyright line. The whole line's base contrast was also bumped.
 - [x] 1 new markup/CSS guard. 443 tests green, tsc + build clean. Footer → `v2.55.1`.
+
+## v2.56.0 — SMS-style message bubbles + richer in-call message popup (delivered 2026-06-29)
+
+First slice of a 5-part feedback batch (call-waiting hold/swap, Android background-keepalive, headset
+auto-route, in-call message reply popup, Messages UI). This ships the two concrete, low-risk wins; the
+rest are sequenced below.
+
+- [x] **Message bubbles are now blue (theirs) / green (yours)** — SMS-style, as requested. Incoming =
+      `#2563eb` with white text on the left; outgoing = the RELAY green (`--relay-online`) with dark text
+      on the right. Reply-quote + timestamp colors updated for contrast on each.
+- [x] **In-call message popup enriched:** the small reply popup (shown over the call, mounted app-wide so
+      it appears during active calls) now shows the sender's **6-digit number + date/time** under the
+      name, alongside the existing inline reply box (type any length → Send, or minimize/close).
+- [x] 443 tests green, tsc + build clean. Footer → `v2.56.0`.
+
+### Sequenced next (from the same batch — honest scoping)
+- **Call-waiting "ghost lost"** → a proper hold/SWAP/MERGE/end-one screen. The current `switchCall` LEAVES
+  the first room, so it can't be resumed. True two-line hold needs the SIGNALING SERVER to let one number
+  be a member of two rooms at once (one active, one held) — and on the LiveKit SFU path, two simultaneous
+  room connections. This is a real architectural change (server + engine), to be done as a focused effort.
+- **Android background drop** (call dies a few seconds after minimizing) → needs Wake Lock + reliable
+  background-keepalive (audio/auto-PiP) + a visibilitychange-driven reconnect, verified on a real Android
+  device (can't be fixed blind).
+- **Headset/Bluetooth auto-route** → output auto-route already exists for desktop (setSinkId) and the OS
+  handles it on mobile; mic auto-switch (re-acquire getUserMedia) is the remaining piece (risky mid-call).

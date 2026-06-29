@@ -59,10 +59,19 @@ function PopupCard({ popup }: { popup: MessagePopup }) {
 
   const thread = (threads.data ?? []).find((t) => t.conversationId === popup.conversationId);
   const name = thread?.title || thread?.peerDisplayName || thread?.peerNumber || "New message";
+  const peerNumber = thread?.peerNumber ?? "";
   const msgs = list.data ?? [];
   const last =
     [...msgs].reverse().find((m) => m.senderIdentityId === popup.from) ?? msgs[msgs.length - 1];
   const preview = last ? previewOf(last.kind, last.body) : "New message";
+  const when = last?.createdAt
+    ? new Date(last.createdAt as string | Date).toLocaleString([], {
+        hour: "numeric",
+        minute: "2-digit",
+        month: "short",
+        day: "numeric",
+      })
+    : "";
 
   const open = () => {
     navigate(`/app/messages?c=${popup.conversationId}`);
@@ -94,15 +103,22 @@ function PopupCard({ popup }: { popup: MessagePopup }) {
         <button
           type="button"
           onClick={open}
-          className="flex-1 truncate text-left text-sm font-semibold hover:underline"
+          className="flex-1 min-w-0 text-left"
         >
-          {name}
+          <span className="block truncate text-sm font-semibold hover:underline">{name}</span>
+          {(peerNumber || when) && (
+            <span className="block truncate text-[11px] text-muted-foreground">
+              {peerNumber && <span className="font-mono">{peerNumber.replace(/(\d{3})(\d{3})/, "$1 $2")}</span>}
+              {peerNumber && when ? " · " : ""}
+              {when}
+            </span>
+          )}
         </button>
         <button
           type="button"
           onClick={() => setMinimized(true)}
           aria-label="Minimize"
-          className="rounded p-1 hover:bg-muted"
+          className="rounded p-1 hover:bg-muted self-start"
         >
           <Minus className="size-4" />
         </button>
