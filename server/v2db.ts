@@ -40,6 +40,12 @@ import {
   users,
 } from "../drizzle/schema";
 import { getDb } from "./db";
+import {
+  sanitizeMobiles,
+  sanitizeSocials,
+  sanitizeStatusOverride,
+  type SocialLink,
+} from "@shared/profileFields";
 
 /* ── identity ─────────────────────────────────────────────────── */
 
@@ -87,6 +93,15 @@ export interface ResolvedIdentity {
   userId: number | null;
   isGuest: boolean;
   guestExpiresAt: Date | null;
+  bio: string | null;
+  statusOverride: string | null;
+  mobiles: string[];
+  socials: SocialLink[];
+}
+
+function parseJsonSafe(text: string | null | undefined): unknown {
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return null; }
 }
 
 function rowToResolved(row: typeof identities.$inferSelect): ResolvedIdentity {
@@ -98,6 +113,10 @@ function rowToResolved(row: typeof identities.$inferSelect): ResolvedIdentity {
     userId: row.userId ?? null,
     isGuest: row.userId == null,
     guestExpiresAt: row.guestExpiresAt ?? null,
+    bio: row.bio ?? null,
+    statusOverride: row.statusOverride ?? null,
+    mobiles: sanitizeMobiles(parseJsonSafe(row.mobiles)),
+    socials: sanitizeSocials(parseJsonSafe(row.socials)),
   };
 }
 
@@ -313,7 +332,14 @@ export async function ensureUserIdentity(input: {
 
 export async function updateIdentityProfile(
   id: number,
-  patch: { displayName?: string; avatarUrl?: string | null }
+  patch: {
+    displayName?: string;
+    avatarUrl?: string | null;
+    bio?: string | null;
+    statusOverride?: string;
+    mobiles?: unknown;
+    socials?: unknown;
+  }
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -323,6 +349,15 @@ export async function updateIdentityProfile(
     if (n.length > 0) set.displayName = n;
   }
   if (patch.avatarUrl !== undefined) set.avatarUrl = patch.avatarUrl;
+  if (patch.bio !== undefined) {
+    const b = (patch.bio ?? "").toString().trim().slice(0, 500);
+    set.bio = b || null;
+  }
+  if (patch.statusOverride !== undefined) {
+    set.statusOverride = sanitizeStatusOverride(patch.statusOverride) || null;
+  }
+  if (patch.mobiles !== undefined) set.mobiles = JSON.stringify(sanitizeMobiles(patch.mobiles));
+  if (patch.socials !== undefined) set.socials = JSON.stringify(sanitizeSocials(patch.socials));
   if (Object.keys(set).length === 0) return;
   await db.update(identities).set(set).where(eq(identities.id, id));
 }
@@ -497,6 +532,11 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "contacts", column: "jobTitle", ddl: "ADD COLUMN `jobTitle` varchar(128)" },
     { table: "contacts", column: "website", ddl: "ADD COLUMN `website` varchar(256)" },
     { table: "contacts", column: "birthday", ddl: "ADD COLUMN `birthday` varchar(32)" },
+    // Profile-hub fields (v2.52).
+    { table: "identities", column: "bio", ddl: "ADD COLUMN `bio` text" },
+    { table: "identities", column: "statusOverride", ddl: "ADD COLUMN `statusOverride` varchar(16)" },
+    { table: "identities", column: "mobiles", ddl: "ADD COLUMN `mobiles` text" },
+    { table: "identities", column: "socials", ddl: "ADD COLUMN `socials` text" },
   ];
   for (const a of adds) {
     try {
