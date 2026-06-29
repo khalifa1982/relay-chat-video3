@@ -159,4 +159,15 @@ describe("relay call UI regression guards", () => {
       expect(decls).toMatch(/width:min\(/);
     });
   }
+
+  // ── highlighted, blinking version/build footer (v2.55.1) ───────────────────
+  it("highlights the in-call version + build with white, glowing, blinking spans", () => {
+    // Version + build date are wrapped (the template interpolates the real values).
+    expect(RELAY_MARKUP).toMatch(/<span class="ver-hl">v\d+\.\d+\.\d+<\/span>/);
+    expect(RELAY_MARKUP).toMatch(/<span class="ver-hl">\d{4}-\d{2}-\d{2}<\/span>/);
+    // White + a blink keyframe, gated by prefers-reduced-motion.
+    expect(RELAY_CSS).toMatch(/\.ver-hl\{[^}]*color:#fff/);
+    expect(RELAY_CSS).toMatch(/@keyframes relayVerBlink/);
+    expect(RELAY_CSS).toMatch(/prefers-reduced-motion: no-preference\)\{[^@]*\.ver-hl\{[^}]*animation:relayVerBlink/);
+  });
 });

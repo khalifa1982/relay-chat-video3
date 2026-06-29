@@ -1772,3 +1772,11 @@ Phase 2 of the overhaul.
       device (a deliberate shared-browser privacy guard). Durable cross-session/device PIN persistence is
       delivered by registration (Phase 3); a guest's number already survives cookie clears via the
       device-id, just not an explicit sign-out or a full localStorage wipe.
+
+## v2.55.1 — Highlight + blink the in-call version/build footer (delivered 2026-06-29)
+
+- [x] The in-call footer (`© 2026 RELAY · v… · build-date`) was too faint to read on the dark call screen.
+      The **version number and build date** are now wrapped in `.ver-hl` spans rendered **bright white with
+      a soft glow and a gentle 1.3s blink** (motion-gated via `prefers-reduced-motion`), so they stand out;
+      the "© year RELAY" stays muted like a copyright line. The whole line's base contrast was also bumped.
+- [x] 1 new markup/CSS guard. 443 tests green, tsc + build clean. Footer → `v2.55.1`.

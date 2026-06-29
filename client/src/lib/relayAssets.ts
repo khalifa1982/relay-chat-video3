@@ -11,7 +11,7 @@
  * the CSS won't apply.
  */
 
-import { FOOTER_LINE } from "./buildInfo";
+import { APP_VERSION, BUILD_DATE, BUILD_YEAR } from "./buildInfo";
 
 export const RELAY_MARKUP = `
 <div class="relay-bg-fx"><div class="grid"></div><div class="noise"></div></div>
@@ -214,7 +214,7 @@ export const RELAY_MARKUP = `
 
 <div class="boot" id="boot"><div class="spin"></div><div class="t">Connecting&hellip;</div></div>
 
-<div class="version-tag">${FOOTER_LINE}</div>
+<div class="version-tag">© ${BUILD_YEAR} RELAY · <span class="ver-hl">v${APP_VERSION}</span> · <span class="ver-hl">${BUILD_DATE}</span></div>
 `;
 
 export const RELAY_CSS = `
@@ -695,7 +695,15 @@ export const RELAY_CSS = `
 .relay-root .call-waiting .cw-switch{background:var(--grad);color:#04201B}
 .relay-root .call-waiting .cw-switch:hover{transform:translateY(-1px)}
 @media (max-width:680px){.relay-root .call-waiting{flex-direction:column;gap:10px;top:10px;padding:12px 14px}.relay-root .call-waiting .cw-actions{width:100%}.relay-root .call-waiting .cw-btn{flex:1}}
-.relay-root .version-tag{position:fixed;bottom:8px;right:12px;z-index:5;font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.06em;color:var(--faint);pointer-events:none;opacity:.7}
+.relay-root .version-tag{position:fixed;bottom:8px;right:12px;z-index:5;font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.06em;color:var(--text2,#9aa);pointer-events:none;opacity:.92}
+/* Make the VERSION + BUILD numbers pop on the dark call screen: bright white with
+   a soft glow, and a gentle blink so they're easy to spot (the © year stays
+   muted, like a copyright line). Blink is motion-gated. */
+.relay-root .version-tag .ver-hl{color:#fff;font-weight:700;text-shadow:0 0 6px rgba(255,255,255,.45)}
+@media (prefers-reduced-motion: no-preference){
+  .relay-root .version-tag .ver-hl{animation:relayVerBlink 1.3s ease-in-out infinite}
+}
+@keyframes relayVerBlink{0%,100%{opacity:1}50%{opacity:.32}}
 
 /* Diagnostics button is hidden from users (the "?" floater). The panel is
    still reachable for debugging via the keyboard shortcut. */
