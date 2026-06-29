@@ -185,6 +185,81 @@ export const CALL_WATCH_JS = `(() => {
       }
     });
 
+    // --- Audio output (speaker) route detection ---
+    // RELAY shows a speaker/audio-output control during a call. We watch for an
+    // active 'speaker on' state and a Bluetooth indicator, and report the chosen
+    // route to native so it can route audio to earpiece / loudspeaker / Bluetooth.
+    var lastRoute = null;
+    var detectAudioRoute = function () {
+      try {
+        var route = null;
+        // Explicit hooks the web app can expose (preferred).
+        var el = document.querySelector('[data-audio-route]');
+        if (el) route = (el.getAttribute('data-audio-route') || '').toLowerCase();
+        if (!route) {
+          var btOn = document.querySelector(
+            '[data-bluetooth-active], .bluetooth-active, [aria-label*="Bluetooth" i][aria-pressed="true"]'
+          );
+          var spkOn = document.querySelector(
+            '[data-speaker-active], .speaker-active, [aria-label*="speaker" i][aria-pressed="true"], button.speaker.active'
+          );
+          if (btOn) route = 'bluetooth';
+          else if (spkOn) route = 'speaker';
+          else if (state.active) route = 'earpiece';
+        }
+        if (route && route !== lastRoute) {
+          lastRoute = route;
+          try {
+            window.ReactNativeWebView &&
+              window.ReactNativeWebView.postMessage(
+                JSON.stringify({ type: 'relay-audio-route', route: route })
+              );
+          } catch (e) {}
+        }
+      } catch (e) {}
+    };
+
+    // --- Online presence detection ---
+    // The user is "online" (available for calls) once they're past the name-entry
+    // screen. We infer this from the URL being an /app sub-route AND the absence
+    // of a name-entry form. Native uses this to keep the app reachable in the
+    // background so incoming calls still ring when minimized.
+    var lastOnline = null;
+    var detectOnline = function () {
+      try {
+        var path = (location.pathname || '').toLowerCase();
+        var onAppRoute = path.indexOf('/app') === 0;
+        var entry = document.querySelector(
+          'input[name="name" i], input[placeholder*="name" i], [data-name-entry], [data-login-screen]'
+        );
+        var explicit = document.querySelector('[data-online="true"]');
+        var online = !!explicit || (onAppRoute && !entry);
+        if (online !== lastOnline) {
+          lastOnline = online;
+          try {
+            window.ReactNativeWebView &&
+              window.ReactNativeWebView.postMessage(
+                JSON.stringify({ type: 'relay-online', online: online })
+              );
+          } catch (e) {}
+        }
+      } catch (e) {}
+    };
+
+    // --- Screen-share enablement ---
+    // Some Android WebView builds expose getDisplayMedia but the page may guard
+    // it behind a feature check. Ensure the API is present so RELAY's share-screen
+    // button works; the actual capture permission is auto-granted natively.
+    try {
+      if (navigator.mediaDevices && !navigator.mediaDevices.getDisplayMedia &&
+          navigator.mediaDevices.getUserMedia) {
+        navigator.mediaDevices.getDisplayMedia = function (constraints) {
+          var c = constraints || { video: true };
+          return navigator.mediaDevices.getUserMedia(c);
+        };
+      }
+    } catch (e) {}
+
     // --- Incoming-message detection ---
     // Track unread badge / new message rows so native can post a message
     // notification when the count increases while backgrounded.
@@ -214,6 +289,9 @@ export const CALL_WATCH_JS = `(() => {
     // Poll the DOM for the incoming-call UI and react to changes.
     setInterval(detectRinging, 1200);
     setInterval(detectMessages, 1500);
+    setInterval(detectAudioRoute, 1000);
+    setInterval(detectOnline, 1500);
+    detectOnline();
     if (window.MutationObserver) {
       try {
         var mo = new MutationObserver(function () { detectRinging(); });

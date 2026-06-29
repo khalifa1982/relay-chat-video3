@@ -23,6 +23,7 @@ import { INJECTED_JS } from "@/lib/injected-scripts";
 import { parseRelayMessage } from "@/lib/call-messages";
 import { useCallSession } from "@/hooks/use-call-session";
 import { useCallNotifications } from "@/hooks/use-call-notifications";
+import { useBackgroundPresence } from "@/hooks/use-background-presence";
 
 const COLORS = {
   navy: "#0B1020",
@@ -104,8 +105,15 @@ export function RelayWebView() {
     webViewRef.current?.injectJavaScript(REACQUIRE_CAMERA_JS);
   }, []);
 
-  // Call lifecycle: background audio, keep-awake, PiP, camera re-acquire.
-  const { setCallState } = useCallSession(reacquireCamera);
+  // Call lifecycle: background audio, keep-awake, PiP, camera re-acquire,
+  // plus audio output routing (earpiece/speaker/Bluetooth).
+  const { setCallState, applyAudioRoute } = useCallSession(reacquireCamera);
+
+  // Online presence: keep RELAY reachable in the background so calls ring even
+  // when minimized. The injected script reports whether the user is signed in;
+  // we treat "logged in" (past the name-entry screen) as online.
+  const [online, setOnline] = useState(false);
+  useBackgroundPresence(online);
   // Incoming-call ringtone + notification (with Accept/Decline handling).
   const { showIncomingCall, dismissIncomingCall, showIncomingMessage } =
     useCallNotifications({
@@ -193,6 +201,12 @@ export function RelayWebView() {
         case "message":
           void showIncomingMessage();
           break;
+        case "audio-route":
+          applyAudioRoute(msg.route);
+          break;
+        case "online":
+          setOnline(msg.online);
+          break;
         default:
           break;
       }
@@ -200,6 +214,7 @@ export function RelayWebView() {
     [
       handleVersion,
       setCallState,
+      applyAudioRoute,
       showIncomingCall,
       dismissIncomingCall,
       showIncomingMessage,

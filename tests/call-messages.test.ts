@@ -50,6 +50,33 @@ describe("parseRelayMessage", () => {
     expect(m).toEqual({ type: "message", count: 0 });
   });
 
+  it("parses audio-route messages and rejects unknown routes", () => {
+    expect(
+      parseRelayMessage(
+        JSON.stringify({ type: "relay-audio-route", route: "speaker" }),
+      ),
+    ).toEqual({ type: "audio-route", route: "speaker" });
+    expect(
+      parseRelayMessage(
+        JSON.stringify({ type: "relay-audio-route", route: "bluetooth" }),
+      ),
+    ).toEqual({ type: "audio-route", route: "bluetooth" });
+    expect(
+      parseRelayMessage(
+        JSON.stringify({ type: "relay-audio-route", route: "headphones" }),
+      ).type,
+    ).toBe("unknown");
+  });
+
+  it("parses online presence messages", () => {
+    expect(
+      parseRelayMessage(JSON.stringify({ type: "relay-online", online: true })),
+    ).toEqual({ type: "online", online: true });
+    expect(
+      parseRelayMessage(JSON.stringify({ type: "relay-online", online: 0 })),
+    ).toEqual({ type: "online", online: false });
+  });
+
   it("returns unknown for malformed / non-string / empty version", () => {
     expect(parseRelayMessage("{not json").type).toBe("unknown");
     expect(parseRelayMessage(42 as unknown).type).toBe("unknown");

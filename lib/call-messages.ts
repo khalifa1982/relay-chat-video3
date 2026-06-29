@@ -8,6 +8,8 @@ export type RelayMessage =
   | { type: "call"; active: boolean; hasVideo: boolean }
   | { type: "ring"; ringing: boolean; caller: string | null }
   | { type: "message"; count: number }
+  | { type: "audio-route"; route: "earpiece" | "speaker" | "bluetooth" }
+  | { type: "online"; online: boolean }
   | { type: "unknown" };
 
 /**
@@ -48,6 +50,15 @@ export function parseRelayMessage(raw: unknown): RelayMessage {
         count: Number.isFinite(count) ? count : 0,
       };
     }
+    case "relay-audio-route": {
+      const route = String(data.route);
+      if (route === "earpiece" || route === "speaker" || route === "bluetooth") {
+        return { type: "audio-route", route };
+      }
+      return { type: "unknown" };
+    }
+    case "relay-online":
+      return { type: "online", online: Boolean(data.online) };
     default:
       return { type: "unknown" };
   }

@@ -12,6 +12,9 @@ export interface CallState {
 
 const IDLE: CallState = { active: false, hasVideo: false };
 
+/** Audio output routes the in-call speaker control can switch between. */
+export type AudioRoute = "earpiece" | "speaker" | "bluetooth";
+
 /**
  * Module-level flag for whether a call is currently active. Other subsystems
  * (e.g. the OTA self-updater) read this to avoid disruptive actions like
@@ -50,6 +53,32 @@ async function exitCallAudioMode() {
     });
   } catch {
     // ignore
+  }
+}
+
+/**
+ * Switch the in-call audio output route.
+ *
+ * `expo-audio` exposes `shouldRouteThroughEarpiece` (Android), which lets us
+ * toggle between the earpiece and the loudspeaker. Bluetooth routing is handled
+ * by the OS once `allowsRecording`/communication mode is active and a headset is
+ * connected; selecting "bluetooth" disables the earpiece-force so the system
+ * routes to the connected Bluetooth device. A dedicated native module can be
+ * added later for explicit device selection if needed.
+ */
+export async function setAudioRoute(route: AudioRoute): Promise<void> {
+  try {
+    await setAudioModeAsync({
+      playsInSilentMode: true,
+      shouldPlayInBackground: true,
+      allowsRecording: true,
+      interruptionMode: "doNotMix",
+      interruptionModeAndroid: "doNotMix",
+      // Earpiece route forces audio through the earpiece; speaker/bluetooth do not.
+      shouldRouteThroughEarpiece: route === "earpiece",
+    });
+  } catch {
+    // Non-fatal: route change is best-effort on web/Expo Go.
   }
 }
 
@@ -102,6 +131,11 @@ export function useCallSession(onResumeReacquireCamera: () => void) {
     setCall(next);
   }, []);
 
+  // Apply an audio output route requested from the web app's speaker control.
+  const applyAudioRoute = useCallback((route: AudioRoute) => {
+    void setAudioRoute(route);
+  }, []);
+
   // Apply / release the call session when the active flag flips.
   useEffect(() => {
     let cancelled = false;
@@ -137,5 +171,5 @@ export function useCallSession(onResumeReacquireCamera: () => void) {
     return () => sub.remove();
   }, [onResumeReacquireCamera]);
 
-  return { call, setCallState } as const;
+  return { call, setCallState, applyAudioRoute } as const;
 }

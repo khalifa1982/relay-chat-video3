@@ -87,7 +87,13 @@ const config: ExpoConfig = {
       "REQUEST_INSTALL_PACKAGES",
       // Allow the call/notification service + WebRTC to keep running in background.
       "FOREGROUND_SERVICE",
+      "FOREGROUND_SERVICE_MICROPHONE",
+      "FOREGROUND_SERVICE_CAMERA",
+      "FOREGROUND_SERVICE_MEDIA_PROJECTION",
       "WAKE_LOCK",
+      // Audio output routing to Bluetooth headsets (earpiece/speaker/Bluetooth switch).
+      "BLUETOOTH",
+      "BLUETOOTH_CONNECT",
     ],
     intentFilters: [
       {

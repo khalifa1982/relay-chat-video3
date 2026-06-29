@@ -4,6 +4,7 @@ import { StatusBar } from "expo-status-bar";
 
 import { RelayWebView } from "@/components/relay-webview";
 import { ApkUpdateBanner } from "@/components/apk-update-banner";
+import { BuildStatusRow } from "@/components/build-status-row";
 import { useApkUpdate } from "@/hooks/use-apk-update";
 import { RELAY_APP_URL } from "@/lib/relay-config";
 
@@ -12,17 +13,18 @@ import { RELAY_APP_URL } from "@/lib/relay-config";
  * app. Everything (dialer, calls, messages, contacts) is served by the web,
  * so any web update is reflected here automatically.
  *
- * The app also updates ITSELF from a self-hosted APK: on launch and on resume
- * it checks a fixed manifest URL for a higher build number, and if found it
- * downloads the APK with a progress bar and launches the Android installer to
- * update + restart — no manual download. (Android only.)
+ * The app also updates ITSELF from a self-hosted APK: on launch, on resume, and
+ * every 10 minutes it checks a fixed manifest URL for a higher build number,
+ * and if found it downloads the APK with a progress bar and launches the
+ * Android installer to update + restart — no manual download. (Android only.)
  *
  * On web (Expo preview) WebView/native features aren't available, so we show a
  * lightweight notice with the target URL instead of an embedded frame.
  */
 export default function HomeScreen() {
   // Self-hosted APK auto-update.
-  const { status, progress, manifest, installNow } = useApkUpdate();
+  const { status, progress, manifest, mandatory, installedBuild, check, installNow } =
+    useApkUpdate();
 
   if (Platform.OS === "web") {
     return (
@@ -39,11 +41,24 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right", "bottom"]}>
       <StatusBar style="light" />
-      <RelayWebView />
+      <View style={styles.webviewWrap}>
+        <RelayWebView />
+      </View>
+
+      {/* Compact build/status footer with manual re-check. */}
+      <BuildStatusRow
+        installedBuild={installedBuild}
+        latestBuild={manifest?.buildNumber}
+        status={status}
+        onCheck={() => void check()}
+      />
+
+      {/* Update banner (or full blocking overlay when the update is mandatory). */}
       <ApkUpdateBanner
         status={status}
         progress={progress}
         versionName={manifest?.versionName}
+        mandatory={mandatory}
         onInstallNow={installNow}
       />
     </SafeAreaView>
@@ -54,6 +69,9 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: "#0B1020",
+  },
+  webviewWrap: {
+    flex: 1,
   },
   webFallback: {
     flex: 1,

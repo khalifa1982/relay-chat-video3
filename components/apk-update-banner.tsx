@@ -9,6 +9,8 @@ interface Props {
   progress: number;
   versionName?: string;
   onInstallNow?: () => void;
+  /** When true, the update is required: show a full blocking overlay. */
+  mandatory?: boolean;
 }
 
 const COLORS = {
@@ -34,6 +36,7 @@ export function ApkUpdateBanner({
   progress,
   versionName,
   onInstallNow,
+  mandatory = false,
 }: Props) {
   const widthAnim = useRef(new Animated.Value(0)).current;
 
@@ -50,6 +53,56 @@ export function ApkUpdateBanner({
   const pct = Math.round(Math.max(0, Math.min(1, progress)) * 100);
   const label =
     versionName != null ? `RELAY ${versionName}` : "A new RELAY version";
+
+  // Mandatory updates take over the screen so the user cannot keep using an
+  // outdated build. The download/install still runs automatically; this overlay
+  // just communicates that the app is required to update before continuing.
+  if (mandatory) {
+    return (
+      <View style={styles.blockOverlay} pointerEvents="auto">
+        <View style={styles.blockCard}>
+          <Text style={styles.blockTitle}>Update required</Text>
+          <Text style={styles.sub}>
+            {label} must be installed to continue using RELAY.
+          </Text>
+          {status === "downloading" ? (
+            <>
+              <Text style={styles.title}>Downloading… {pct}%</Text>
+              <View style={styles.track}>
+                <Animated.View
+                  style={[
+                    styles.fill,
+                    {
+                      width: widthAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: ["0%", "100%"],
+                      }),
+                    },
+                  ]}
+                />
+              </View>
+            </>
+          ) : status === "installing" ? (
+            <Text style={styles.sub}>
+              Confirm the system prompt to install and restart RELAY.
+            </Text>
+          ) : (
+            <Pressable
+              onPress={onInstallNow}
+              style={({ pressed }) => [
+                styles.button,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={styles.buttonText}>
+                {status === "error" ? "Try again" : "Update now"}
+              </Text>
+            </Pressable>
+          )}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.wrap} pointerEvents="box-none">
@@ -169,5 +222,27 @@ const styles = StyleSheet.create({
     color: "#04121A",
     fontWeight: "800",
     fontSize: 14,
+  },
+  blockOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(7,11,26,0.96)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+  },
+  blockCard: {
+    width: "100%",
+    maxWidth: 380,
+    backgroundColor: COLORS.bg,
+    borderColor: COLORS.border,
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 24,
+    gap: 12,
+  },
+  blockTitle: {
+    color: COLORS.text,
+    fontSize: 20,
+    fontWeight: "800",
   },
 });

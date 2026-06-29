@@ -54,29 +54,48 @@ function withRelayAndroidCall(config) {
     activity.$["android:configChanges"] = Array.from(merged).join("|");
 
     // --- USE_FULL_SCREEN_INTENT permission ---
-    try {
-      AndroidConfig.Permissions.addPermission(
-        manifest,
-        "android.permission.USE_FULL_SCREEN_INTENT",
-      );
-    } catch {
-      // Fallback: add manually if helper is unavailable.
-      manifest.manifest["uses-permission"] =
-        manifest.manifest["uses-permission"] || [];
-      const has = manifest.manifest["uses-permission"].some(
-        (p) =>
-          p.$?.["android:name"] ===
-          "android.permission.USE_FULL_SCREEN_INTENT",
-      );
-      if (!has) {
-        manifest.manifest["uses-permission"].push({
-          $: { "android:name": "android.permission.USE_FULL_SCREEN_INTENT" },
-        });
-      }
+    addPermission(manifest, "android.permission.USE_FULL_SCREEN_INTENT");
+
+    // --- Screen-capture (media projection) foreground service ---
+    // Android requires a foreground service with type "mediaProjection" for
+    // getDisplayMedia()/screen sharing to keep running. react-native-webview's
+    // ScreenCastService is registered here so the WebView's screen share works.
+    application.service = application.service || [];
+    const hasProjection = application.service.some(
+      (s) =>
+        s.$?.["android:name"] ===
+        "com.reactnativecommunity.webview.ScreenCastService",
+    );
+    if (!hasProjection) {
+      application.service.push({
+        $: {
+          "android:name":
+            "com.reactnativecommunity.webview.ScreenCastService",
+          "android:exported": "false",
+          "android:foregroundServiceType": "mediaProjection",
+        },
+      });
     }
 
     return cfg;
   });
+}
+
+function addPermission(manifest, name) {
+  try {
+    AndroidConfig.Permissions.addPermission(manifest, name);
+  } catch {
+    manifest.manifest["uses-permission"] =
+      manifest.manifest["uses-permission"] || [];
+    const has = manifest.manifest["uses-permission"].some(
+      (p) => p.$?.["android:name"] === name,
+    );
+    if (!has) {
+      manifest.manifest["uses-permission"].push({
+        $: { "android:name": name },
+      });
+    }
+  }
 }
 
 module.exports = withRelayAndroidCall;

@@ -39,17 +39,23 @@ defaults above match what we agreed.
 | `versionName` | No | Shown to the user (e.g. in the update banner). |
 | `apkUrl` | No | APK download URL. Falls back to `https://your-chat.org/update/app.apk`. |
 | `notes` | No | Release notes (reserved for display). |
-| `mandatory` | No | Reserved for forcing the update. |
+| `mandatory` | No | When `true`, the app shows a full **blocking "Update required"** screen and the user cannot keep using the old build until it installs. |
 
 ## 2. How the app decides to update
 
-1. On every launch — and every time the app returns to the foreground — it
-   fetches `version.json` (cache-busted).
+1. On every launch, every time the app returns to the foreground, **and every 10
+   minutes while the app is running**, it fetches `version.json` (cache-busted).
 2. It reads the installed Android build number (`versionCode`).
 3. If `manifest.buildNumber > installedBuildNumber`, it downloads the APK with a
    live progress bar, then launches the Android package installer to install +
    restart.
 4. If a call is active, the install prompt is deferred so it won't drop the call.
+5. If `mandatory: true`, a blocking "Update required" screen is shown until the
+   update installs.
+
+The app also has a small footer status row showing the current build number and
+a **Check** button so users can re-check on demand and see whether they are up
+to date.
 
 The installed `versionCode` is set in `app.config.ts`:
 

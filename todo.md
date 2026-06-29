@@ -46,3 +46,14 @@
 - [x] Server-side hosting instructions (SELF_HOSTED_UPDATE.md)
 - [x] tsc clean + 32 unit tests pass; expo config validated
 - [x] Checkpoint and deliver
+
+## Round 5 — Audio routing, screen share, background ringing, 10-min auto-update, prior suggestions
+- [x] Audio output switching: earpiece / loudspeaker / Bluetooth via setAudioRoute (web speaker control reported to native; BLUETOOTH/MODIFY_AUDIO_SETTINGS perms added)
+- [x] Enable Android screen share: mediaCapturePermissionGrantType=grant + getDisplayMedia shim + FOREGROUND_SERVICE_MEDIA_PROJECTION service
+- [x] Reliable background ringing when minimized & online (useBackgroundPresence ongoing notification + online detection from injected script)
+- [x] Auto-update poll every 10 minutes (POLL_INTERVAL_MS) in addition to launch/resume
+- [x] Mandatory update mode: blocking "Update required" overlay via manifest `mandatory`
+- [x] In-app build/status row: shows current build + latest + manual Check button
+- [x] Refined incoming-call + unread-message + online detection selectors
+- [x] tsc clean + 34 unit tests pass; expo config validated (perms + bg modes + plugin)
+- [x] Checkpoint and deliver

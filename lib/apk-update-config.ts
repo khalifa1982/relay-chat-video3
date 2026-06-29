@@ -91,3 +91,17 @@ export function isUpdateAvailable(
 export function resolveApkUrl(manifest: UpdateManifest | null): string {
   return (manifest && manifest.apkUrl) || UPDATE_APK_URL;
 }
+
+/**
+ * Whether the available update is mandatory (blocking). True only when an update
+ * is actually available AND the manifest marks it mandatory.
+ */
+export function isMandatoryUpdate(
+  installedBuild: number | null | undefined,
+  manifest: UpdateManifest | null,
+): boolean {
+  return (
+    isUpdateAvailable(installedBuild, manifest) === true &&
+    manifest?.mandatory === true
+  );
+}

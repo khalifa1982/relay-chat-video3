@@ -9,6 +9,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import {
   UPDATE_MANIFEST_URL,
   type UpdateManifest,
+  isMandatoryUpdate,
   isUpdateAvailable,
   parseManifest,
   resolveApkUrl,
@@ -27,6 +28,9 @@ export type ApkUpdateStatus =
   | "error"; // a recoverable error occurred
 
 const MIN_CHECK_INTERVAL_MS = 30_000;
+// Poll the update manifest on this cadence while the app is running, in addition
+// to launch + foreground-resume checks. The user asked for a 10-minute auto check.
+const POLL_INTERVAL_MS = 10 * 60_000;
 
 /**
  * Reads the currently installed Android build number as an integer.
@@ -55,6 +59,8 @@ export function useApkUpdate() {
   const busyRef = useRef(false);
   const lastCheckRef = useRef(0);
   const startedRef = useRef(false);
+  const [mandatory, setMandatory] = useState(false);
+  const installedBuild = getInstalledBuild();
 
   /** Download the APK (with progress) then launch the Android installer. */
   const downloadAndInstall = useCallback(async (m: UpdateManifest) => {
@@ -145,6 +151,7 @@ export function useApkUpdate() {
         setManifest(m);
 
         const installed = getInstalledBuild();
+        setMandatory(isMandatoryUpdate(installed, m));
         if (isUpdateAvailable(installed, m) && m) {
           setStatus("available");
           // Don't interrupt an active call with an install prompt.
@@ -186,5 +193,24 @@ export function useApkUpdate() {
     return () => sub.remove();
   }, [check]);
 
-  return { status, progress, manifest, error, check, installNow } as const;
+  // Poll every 10 minutes while the app is running so a freshly published build
+  // is picked up automatically without needing a relaunch. The MIN_CHECK_INTERVAL
+  // guard inside `check` prevents redundant overlapping checks.
+  useEffect(() => {
+    const id = setInterval(() => {
+      void check({ auto: true });
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [check]);
+
+  return {
+    status,
+    progress,
+    manifest,
+    error,
+    mandatory,
+    installedBuild,
+    check,
+    installNow,
+  } as const;
 }
