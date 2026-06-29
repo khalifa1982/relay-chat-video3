@@ -45,6 +45,14 @@ function getInstalledBuild(): number | null {
 }
 
 /**
+ * Reads the human-readable installed version name, e.g. "1.0.4".
+ * `Application.nativeApplicationVersion` is the versionName on Android.
+ */
+function getInstalledVersionName(): string | null {
+  return Application.nativeApplicationVersion ?? null;
+}
+
+/**
  * useApkUpdate drives the self-hosted APK update flow. On each app launch, on
  * foreground resume, and every 10 minutes it checks a fixed manifest URL for a
  * higher build number.
@@ -68,12 +76,17 @@ export function useApkUpdate() {
   const [error, setError] = useState<string | null>(null);
   const [mandatory, setMandatory] = useState(false);
 
+  // Human-readable explanation of the last check outcome, shown in the footer
+  // so "Check" never silently says "no update" without a reason.
+  const [lastReason, setLastReason] = useState<string | null>(null);
+
   const busyRef = useRef(false);
   const lastCheckRef = useRef(0);
   const startedRef = useRef(false);
   // Path to a fully-downloaded APK that's ready to install.
   const readyFileRef = useRef<string | null>(null);
   const installedBuild = getInstalledBuild();
+  const installedVersionName = getInstalledVersionName();
 
   /** Download the APK with progress, then mark it ready to install. */
   const download = useCallback(async (m: UpdateManifest) => {
@@ -178,17 +191,40 @@ export function useApkUpdate() {
         const res = await fetch(`${UPDATE_MANIFEST_URL}?t=${now}`, {
           cache: "no-store",
         });
-        if (!res.ok) throw new Error(`Manifest HTTP ${res.status}`);
-        const json = await res.json();
+        if (!res.ok) throw new Error(`Manifest not reachable (HTTP ${res.status})`);
+
+        // Read as text first so we can detect the common failure where the server
+        // returns an HTML page (SPA fallback) instead of a JSON manifest.
+        const text = await res.text();
+        const trimmed = text.trim();
+        if (trimmed.startsWith("<")) {
+          throw new Error(
+            "Update manifest URL returned a web page, not JSON. Host version.json on the server.",
+          );
+        }
+        let json: unknown;
+        try {
+          json = JSON.parse(trimmed);
+        } catch {
+          throw new Error("Update manifest is not valid JSON.");
+        }
         const m = parseManifest(json);
+        if (!m) {
+          throw new Error("Update manifest is missing a valid buildNumber.");
+        }
         setManifest(m);
 
         const installed = getInstalledBuild();
-        const isMandatory = isMandatoryUpdate(installed, m);
+        const installedName = getInstalledVersionName();
+        const isMandatory = isMandatoryUpdate(installed, m, installedName);
         setMandatory(isMandatory);
 
-        if (isUpdateAvailable(installed, m) && m) {
+        if (isUpdateAvailable(installed, m, installedName) && m) {
           setStatus("available");
+          setLastReason(
+            `Update available: ${m.versionName ?? `build ${m.buildNumber}`} ` +
+              `(installed ${installedName ?? installed ?? "unknown"}).`,
+          );
           // Auto-start the download for mandatory updates or when explicitly
           // requested. Never interrupt an active call with an install prompt.
           if ((isMandatory || opts?.autoDownload) && !isCallActive()) {
@@ -199,10 +235,18 @@ export function useApkUpdate() {
           }
         } else {
           setStatus("idle");
+          setLastReason(
+            `You're on the latest version ` +
+              `(${installedName ?? installed ?? "unknown"}; server ` +
+              `${m.versionName ?? `build ${m.buildNumber}`}).`,
+          );
         }
       } catch (e) {
-        // Network / parse errors are non-fatal — try again next time.
-        setError(e instanceof Error ? e.message : "Update check failed");
+        // Network / parse errors are non-fatal — try again next time, but surface
+        // the real reason so the user isn't told a misleading "no update".
+        const msg = e instanceof Error ? e.message : "Update check failed";
+        setError(msg);
+        setLastReason(msg);
         setStatus("idle");
       } finally {
         busyRef.current = false;
@@ -213,7 +257,10 @@ export function useApkUpdate() {
 
   /** Footer "Update" button: start downloading the known available build. */
   const startDownload = useCallback(() => {
-    if (manifest && isUpdateAvailable(getInstalledBuild(), manifest)) {
+    if (
+      manifest &&
+      isUpdateAvailable(getInstalledBuild(), manifest, getInstalledVersionName())
+    ) {
       void download(manifest);
     }
   }, [manifest, download]);
@@ -250,6 +297,9 @@ export function useApkUpdate() {
     error,
     mandatory,
     installedBuild,
+    installedVersionName,
+    /** Human-readable explanation of the last check result. */
+    lastReason,
     /** Re-check the manifest (detect only). */
     check,
     /** Begin downloading the available build (footer "Update" button). */

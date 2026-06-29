@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  compareVersionNames,
   isMandatoryUpdate,
   isUpdateAvailable,
   parseManifest,
@@ -57,6 +58,45 @@ describe("isUpdateAvailable", () => {
   it("is false (conservative) when installed build is unknown", () => {
     expect(isUpdateAvailable(null, m(5))).toBe(false);
     expect(isUpdateAvailable(undefined, m(5))).toBe(false);
+  });
+});
+
+describe("compareVersionNames", () => {
+  it("orders dotted versions numerically", () => {
+    expect(compareVersionNames("1.0.5", "1.0.4")).toBe(1);
+    expect(compareVersionNames("1.0.4", "1.0.5")).toBe(-1);
+    expect(compareVersionNames("1.0.5", "1.0.5")).toBe(0);
+    expect(compareVersionNames("1.2.0", "1.10.0")).toBe(-1); // numeric, not lexical
+    expect(compareVersionNames("2.0", "1.9.9")).toBe(1);
+    expect(compareVersionNames("v1.0.5", "1.0.4")).toBe(1); // tolerates leading v
+  });
+
+  it("returns 0 when either side is missing", () => {
+    expect(compareVersionNames(undefined, "1.0.0")).toBe(0);
+    expect(compareVersionNames("1.0.0", null)).toBe(0);
+  });
+});
+
+describe("isUpdateAvailable with version names", () => {
+  it("detects an update by version name even if buildNumber is equal", () => {
+    // Real-world case: 1.0.4 installed, server says 1.0.5, same/lower versionCode.
+    const m = parseManifest({ buildNumber: 4, versionName: "1.0.5" });
+    expect(isUpdateAvailable(4, m, "1.0.4")).toBe(true);
+  });
+
+  it("reports up-to-date when version names match", () => {
+    const m = parseManifest({ buildNumber: 4, versionName: "1.0.5" });
+    expect(isUpdateAvailable(4, m, "1.0.5")).toBe(false);
+  });
+
+  it("does not offer a downgrade by version name", () => {
+    const m = parseManifest({ buildNumber: 9, versionName: "1.0.3" });
+    expect(isUpdateAvailable(4, m, "1.0.4")).toBe(false);
+  });
+
+  it("falls back to buildNumber when version names are absent", () => {
+    const m = parseManifest({ buildNumber: 6 });
+    expect(isUpdateAvailable(4, m)).toBe(true);
   });
 });
 

@@ -6,8 +6,14 @@ import type { ApkUpdateStatus } from "@/hooks/use-apk-update";
 interface Props {
   /** Installed Android build number (versionCode), or null on web/iOS. */
   installedBuild: number | null;
+  /** Installed human version name, e.g. "1.0.4". */
+  installedVersionName?: string | null;
   /** Latest build number reported by the manifest, if known. */
   latestBuild?: number;
+  /** Latest human version name reported by the manifest, if known. */
+  latestVersionName?: string | null;
+  /** Human-readable explanation of the last check result. */
+  reason?: string | null;
   status: ApkUpdateStatus;
   /** Download progress 0..1 (only meaningful while downloading). */
   progress?: number;
@@ -46,13 +52,18 @@ const COLORS = {
  */
 export function BuildStatusRow({
   installedBuild,
+  installedVersionName,
   latestBuild,
+  latestVersionName,
+  reason,
   status,
   progress = 0,
   onCheck,
   onDownload,
   onApply,
 }: Props) {
+  const installedLabel = installedVersionName ?? (installedBuild != null ? String(installedBuild) : "—");
+  const latestLabel = latestVersionName ?? (latestBuild != null ? String(latestBuild) : null);
   const upToDate =
     latestBuild != null && installedBuild != null
       ? installedBuild >= latestBuild
@@ -71,8 +82,8 @@ export function BuildStatusRow({
       case "checking":
         return "Checking for updates…";
       case "available":
-        return latestBuild != null
-          ? `Update available (build ${latestBuild}) — tap Update`
+        return latestLabel != null
+          ? `Update available (${latestLabel}) — tap Update`
           : "Update available — tap Update";
       case "downloading":
         return `Downloading update… ${Math.round(progress * 100)}%`;
@@ -81,7 +92,7 @@ export function BuildStatusRow({
       case "installing":
         return "Installing update…";
       case "error":
-        return "Update check failed — tap Retry";
+        return reason ?? "Update check failed — tap Retry";
       default:
         return upToDate ? "Up to date" : "Ready";
     }
@@ -130,8 +141,8 @@ export function BuildStatusRow({
       <View style={styles.row}>
         <View style={styles.left}>
           <Text style={styles.build} numberOfLines={1}>
-            Build {installedBuild ?? "—"}
-            {latestBuild != null ? ` · latest ${latestBuild}` : ""}
+            Version {installedLabel}
+            {latestLabel != null ? ` · latest ${latestLabel}` : ""}
           </Text>
           <Text
             style={[
@@ -143,6 +154,11 @@ export function BuildStatusRow({
           >
             {statusLabel}
           </Text>
+          {reason && status === "idle" ? (
+            <Text style={styles.reason} numberOfLines={2}>
+              {reason}
+            </Text>
+          ) : null}
         </View>
         <Pressable
           onPress={action.onPress}
@@ -207,6 +223,12 @@ const styles = StyleSheet.create({
   },
   statusWarn: {
     color: COLORS.warn,
+  },
+  reason: {
+    color: COLORS.sub,
+    fontSize: 11,
+    marginTop: 2,
+    opacity: 0.8,
   },
   button: {
     backgroundColor: COLORS.accent,

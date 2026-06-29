@@ -29,6 +29,8 @@ export default function HomeScreen() {
     manifest,
     mandatory,
     installedBuild,
+    installedVersionName,
+    lastReason,
     check,
     startDownload,
     applyUpdate,
@@ -56,7 +58,10 @@ export default function HomeScreen() {
       {/* Compact build/status footer with manual re-check. */}
       <BuildStatusRow
         installedBuild={installedBuild}
+        installedVersionName={installedVersionName}
         latestBuild={manifest?.buildNumber}
+        latestVersionName={manifest?.versionName}
+        reason={lastReason}
         status={status}
         progress={progress}
         onCheck={() => void check()}

@@ -67,3 +67,11 @@
 - [x] Removed the redundant non-mandatory bottom banner; banner is now mandatory-only overlay
 - [x] tsc clean + 38 unit tests pass (added isMandatoryUpdate tests)
 - [x] Checkpoint and deliver
+
+## Round 7 — Fix "no new build" + hosting clarity
+- [x] Diagnosed root cause: /update/version.json and /update/app.apk return the web app HTML (no manifest/APK hosted)
+- [x] Updater now compares human version name (1.0.5 > 1.0.4) as primary signal, buildNumber as fallback
+- [x] Check button now reports the REAL reason (manifest not JSON / not reachable / up to date / available) instead of silent "no update"
+- [x] Footer shows Version name (installed + latest) instead of only build number
+- [x] Added semver compare + version-name update-detection unit tests (19 apk-update tests)
+- [ ] Provide hosting options for Manus-hosted domain (manifest + APK) and confirm approach with user

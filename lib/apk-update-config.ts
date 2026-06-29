@@ -39,6 +39,25 @@ export const UPDATE_APK_URL =
   (process.env.EXPO_PUBLIC_UPDATE_APK_URL ?? "").trim() ||
   `${UPDATE_BASE_URL}/app.apk`;
 
+/**
+ * Compare two dotted version-name strings (e.g. "1.0.5" vs "1.0.4").
+ * Returns 1 if a>b, -1 if a<b, 0 if equal/uncomparable.
+ * Non-numeric or missing segments are treated as 0.
+ */
+export function compareVersionNames(a?: string | null, b?: string | null): number {
+  if (!a || !b) return 0;
+  const pa = String(a).trim().replace(/^v/i, "").split(".");
+  const pb = String(b).trim().replace(/^v/i, "").split(".");
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const na = Math.floor(Number(pa[i] ?? 0)) || 0;
+    const nb = Math.floor(Number(pb[i] ?? 0)) || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
+
 /** Shape of the version manifest hosted at UPDATE_MANIFEST_URL. */
 export interface UpdateManifest {
   /** Latest available native build number (integer, monotonically increasing). */
@@ -77,8 +96,17 @@ export function parseManifest(raw: unknown): UpdateManifest | null {
 export function isUpdateAvailable(
   installedBuild: number | null | undefined,
   manifest: UpdateManifest | null,
+  installedVersionName?: string | null,
 ): boolean {
   if (!manifest) return false;
+  // Primary, robust signal: compare the human version name (e.g. 1.0.5 > 1.0.4)
+  // when both sides provide one. This matches how releases are reasoned about
+  // and works even if the native versionCode was not bumped.
+  if (installedVersionName && manifest.versionName) {
+    const cmp = compareVersionNames(manifest.versionName, installedVersionName);
+    if (cmp !== 0) return cmp > 0;
+    // Equal version names -> fall through to buildNumber as a tie-breaker.
+  }
   if (installedBuild == null || !Number.isFinite(installedBuild)) {
     // If we can't read the installed build, be conservative and do NOT prompt
     // (avoids an endless update loop on a misconfigured build).
@@ -99,9 +127,10 @@ export function resolveApkUrl(manifest: UpdateManifest | null): string {
 export function isMandatoryUpdate(
   installedBuild: number | null | undefined,
   manifest: UpdateManifest | null,
+  installedVersionName?: string | null,
 ): boolean {
   return (
-    isUpdateAvailable(installedBuild, manifest) === true &&
+    isUpdateAvailable(installedBuild, manifest, installedVersionName) === true &&
     manifest?.mandatory === true
   );
 }
