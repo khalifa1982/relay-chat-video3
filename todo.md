@@ -128,3 +128,7 @@
 - [x] Unit tests: hasher vs Node crypto, base64 round-trip, manifest parsing (13 new; 65 pass)
 - [x] Document integrity verification in SELF_HOSTED_UPDATE.md
 - [ ] NOT actionable here: backend hostname mismatch + server v2.65.0 fixes (separate mobile project com.app.relaymobile)
+
+## Round 12 — Footer cleanup
+- [x] Remove the verbose "You're on the latest version (…; server …)." line; keep concise "Up to date" status
+- [x] tsc clean + 65 tests pass

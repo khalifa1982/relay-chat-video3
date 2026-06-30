@@ -265,11 +265,9 @@ export function useApkUpdate() {
           }
         } else {
           setStatus("idle");
-          setLastReason(
-            `You're on the latest version ` +
-              `(${installedName ?? installed ?? "unknown"}; server ` +
-              `${m.versionName ?? `build ${m.buildNumber}`}).`,
-          );
+          // Up-to-date is already conveyed by the concise "Up to date" status
+          // label; don't surface a verbose secondary line for it.
+          setLastReason(null);
         }
       } catch (e) {
         // Network / parse errors are non-fatal — try again next time, but surface
