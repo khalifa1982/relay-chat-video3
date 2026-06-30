@@ -29,6 +29,23 @@ describe("Android incoming-audio fixes", () => {
   it("LiveKit detached <audio> is inserted into the DOM on Android only", () => {
     expect(CLIENT).toMatch(/if \(IS_ANDROID\) \{[\s\S]*?root\.appendChild\(audioEl\)/);
   });
+
+  it("stopRingtone() drains scheduled oscillator/gain nodes, not just the interval", () => {
+    // Root cause of the Android mid-call \"peep peep peep\": a suspended AudioContext
+    // (Android's autoplay policy) can leave fire()'s oscillators queued; clearing only
+    // the setInterval left them in the Web Audio graph to fire audibly once the
+    // context later resumed (e.g. loudspeakerEnable()'s own resume()) — long after the
+    // call connected. stopRingtone() must stop+disconnect every tracked node too.
+    expect(CLIENT).toMatch(/const ringtoneNodes = new Set<AudioScheduledSourceNode \| AudioNode>\(\);/);
+    expect(CLIENT).toMatch(
+      /function stopRingtone\(\) \{[\s\S]*?clearInterval\(ringtoneTimer\)[\s\S]*?ringtoneNodes\.forEach\(n => \{[\s\S]*?\.stop\?\.\(0\)[\s\S]*?n\.disconnect\(\)[\s\S]*?ringtoneNodes\.clear\(\)/,
+    );
+  });
+
+  it("every fire() burst registers its nodes and self-prunes on end", () => {
+    expect(CLIENT).toMatch(/ringtoneNodes\.add\(osc\); ringtoneNodes\.add\(gain\);/);
+    expect(CLIENT).toMatch(/osc\.onended = \(\) => \{ ringtoneNodes\.delete\(osc\); ringtoneNodes\.delete\(gain\); \};/);
+  });
 });
 
 describe("camera QA fixes (verified)", () => {

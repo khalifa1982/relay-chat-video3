@@ -1309,11 +1309,26 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // matching onRing's existing DND auto-decline) and a persisted opt-out.
   let ringtoneCtx: AudioContext | null = null;
   let ringtoneTimer: ReturnType<typeof setInterval> | null = null;
+  // Every oscillator/gain fire() schedules is tracked so stopRingtone() can tear
+  // them out of the Web Audio graph. On Android the context starts SUSPENDED
+  // (autoplay policy); oscillators scheduled while suspended stay queued and fire
+  // audibly the moment the context later resumes for an unrelated reason (e.g.
+  // loudspeakerEnable()'s own resume(), or any mid-call gesture) — long after the
+  // call connected. Clearing only the setInterval left those queued nodes in the
+  // graph, which is what produced a "peep peep peep" mid-call on Android.
+  const ringtoneNodes = new Set<AudioScheduledSourceNode | AudioNode>();
   function ringtoneEnabled(): boolean {
     try { return window.localStorage.getItem("relay_ringtone_off") !== "1"; } catch { return true; }
   }
   function stopRingtone() {
     if (ringtoneTimer) { clearInterval(ringtoneTimer); ringtoneTimer = null; }
+    // Stop + disconnect every scheduled node so nothing can fire after this point,
+    // even if the context resumes later (Android).
+    ringtoneNodes.forEach(n => {
+      try { (n as AudioScheduledSourceNode).stop?.(0); } catch { /* not an osc / already stopped */ }
+      try { n.disconnect(); } catch { /* already disconnected */ }
+    });
+    ringtoneNodes.clear();
   }
   function playRingtone(kind: "incoming" | "outgoing") {
     stopRingtone();
@@ -1340,6 +1355,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
           gain.gain.exponentialRampToValueAtTime(0.12, t0 + 0.05);
           gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
           osc.connect(gain); gain.connect(ctx.destination);
+          ringtoneNodes.add(osc); ringtoneNodes.add(gain);
+          // Self-prune once this burst finishes so the Set never grows unbounded
+          // across a long ring.
+          osc.onended = () => { ringtoneNodes.delete(osc); ringtoneNodes.delete(gain); };
           osc.start(t0); osc.stop(t0 + dur + 0.05);
         });
       };

@@ -2149,3 +2149,34 @@ in-house Workflow multi-agent tooling, not a literal framework swap.
       whitespace-only-body rejection, no-identity rejection, and the email/phone/website validators (both
       reject and accept paths, including the `javascript:` URI block). 527 tests green (1 pre-existing skip),
       tsc + build clean. Footer → `v2.65.0`.
+
+## v2.65.1 — Fix: residual "peep peep peep" ringtone heard mid-call on Android (delivered 2026-06-30)
+
+User reported a repeating "peep, peep, peep" tone during voice/video calls, Android-only, with no idea
+where it came from. Root-caused via a 5-theory diagnostic Workflow (parallel investigation, each theory
+adversarially re-verified by an independent reader) before touching any code — 4 of 5 theories (engine
+double-mount, a loudspeaker-routing audio artifact, duplicate/late SSE `call_offer` ring delivery, and a
+broad "anything else Android-specific" sweep) were refuted on independent re-read; only one survived.
+
+- [x] **Root cause confirmed:** `client/src/lib/relayClient.ts`'s synthesized ringtone/dial-tone system
+      (`playRingtone`/`stopRingtone`, ~line 1306) schedules Web Audio oscillators on a reused `AudioContext`
+      every 2-3s while dialing/ringing. `stopRingtone()` only ever cleared the `setInterval` — it never
+      stopped or disconnected the oscillator/gain nodes `fire()` had already scheduled. On Android, a freshly
+      created `AudioContext` starts **suspended** under the stricter autoplay policy; oscillators scheduled
+      while suspended stay queued in the Web Audio graph rather than playing immediately. The call connects,
+      `stopRingtone()` runs (stopping only the timer), and later — e.g. when the user opens the Android-only
+      forced-loudspeaker toggle, which calls `await loudspeakerCtx.resume()` — the *ringtone's own* context
+      can also transition to `running`, and every queued, now-past-due oscillator fires audibly: a repeating
+      beep heard well into an already-connected call. `onRing`'s existing `if (inCall)` guard means the
+      ringtone is never *re-triggered* mid-call — this is a stale-node cleanup bug, not a duplicate-trigger
+      one, which is why the other four theories (each assuming a second `playRingtone()` call) didn't hold up.
+- [x] **Fix:** `stopRingtone()` now tracks every oscillator/gain node `fire()` creates (`ringtoneNodes`, a
+      `Set`) and calls `.stop(0)` + `.disconnect()` on each before clearing the set, so nothing can play after
+      `stopRingtone()` runs regardless of when the context later resumes. Nodes self-prune via `osc.onended`
+      once a burst finishes normally, so the set never grows across a long ring. Single surgical change, one
+      function — every existing `stopRingtone()` call site (accept, decline, ring-cancel, joined, hang-up,
+      engine teardown) gets the fix for free; no changes to `onRing`, the server, or the loudspeaker path.
+- [x] 2 new static source-pinning tests in `client/src/lib/androidAudioCamera.test.ts` (matching the existing
+      pattern for this huge imperative, not-booted-in-tests engine file) confirming `stopRingtone()` drains
+      `ringtoneNodes` and that `fire()` registers + self-prunes them. 529 tests green (1 pre-existing skip),
+      tsc + build clean. Footer → `v2.65.1`.
