@@ -1923,3 +1923,42 @@ rest are sequenced below.
       `missedCallsSeenAt` high-water mark (additive nullable column, applied by the boot-migrator). Unseen =
       incoming `missed`/`declined` calls newer than the mark. Works for guests and registered users alike.
 - [x] 7 new source-guard tests. 473 tests green, tsc + build clean. Footer → `v2.61.0`.
+
+## v2.62.0 — Android incoming-audio fix + 10-tester camera QA fixes (delivered 2026-06-30)
+
+A 31-agent adversarial workflow (4 audio-diagnosis angles + 10 QA-tester camera lenses → adversarial
+verification → synthesis) drove this batch. Root causes were each confirmed by an independent refuter.
+
+- [x] **Android incoming audio — root cause found + fixed.** The mesh remote `<video>` was created with
+      `autoplay` but **never `.play()`'d** after `srcObject`; Android Chrome gates an unmuted element's
+      autoplay-with-audio, so the element stayed **paused → incoming audio entirely silent** (outgoing
+      unaffected; iOS doesn't gate this, which is why iOS worked). `attachRemote` now calls
+      `v.play().catch(() => armAudioUnlock())`, mirroring the LiveKit path, plus a **one-tap audio-unlock**
+      fallback that replays every remote element on the next user tap if autoplay was blocked.
+- [x] **Loudspeaker no longer silences audio.** The v2.57 force-route set `el.muted = true` BEFORE
+      `createMediaStreamSource` — which throws when the stream is already tapped (the active-speaker
+      analyser taps it) — leaving the element muted with no route = **silence**. Muting is now the LAST
+      step after the Web-Audio route is wired, so a failed tap leaves the element audible (earpiece),
+      never silent.
+- [x] **LiveKit SFU detached `<audio>` inserted into the DOM (Android-gated).** `track.attach()` returns a
+      DETACHED element that Android Chrome won't reliably initialize audio for; it's now appended (hidden)
+      to the call root **only on Android** (iOS works without it and a 2nd gated element there can hurt).
+- [x] **Camera QA fixes (verified, deduped to 5):**
+      **C1 (critical)** filter-OFF disposed the canvas `captureStream` track while peers still referenced it
+      → froze peers; now defers `dispose()` one tick after the raw track is accepted.
+      **C2 (critical)** iOS Safari reports an empty `deviceId`, so the flip's "pick a different device"
+      check (`deviceId !== curId`) was always true → re-grabbed the SAME camera; now normalizes `curId` to
+      `""` and requires both ids truthy, correctly falling through to soft facingMode.
+      **C3 (high)** `captureStream` was read before any frame was drawn AND at full-res (then popped to the
+      downscaled size) → black/empty first frames + a resolution jump; `setInputStream` now sizes the canvas
+      to the downscaled processing resolution and draws one frame before exposing the capture (no double-RAF
+      on flip — guarded by `rafId`).
+      **C4 (high)** self-tile showed the old camera after a flip with a filter active (same stream object);
+      now nulls `srcObject` to force a rebind + replays.
+      **C5 (high)** browsers lacking `canvas.captureStream` silently shipped an empty stream (frozen video);
+      now surfaced via `onError`.
+- [x] 8 new source-guard tests. 481 tests green, tsc + build clean. Footer → `v2.62.0`.
+- [ ] **On-device verification needed:** smoke-test an iOS↔iOS mesh call (confirm the new mesh `.play()` is
+      a no-op there) and an Android incoming call (confirm audio is now present). The loudspeaker route on
+      Android Chrome is best-effort (a remote WebRTC stream can only be Web-Audio-tapped once; the analyser
+      wins) — the fix guarantees no silence, not guaranteed speaker routing.

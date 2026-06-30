@@ -151,37 +151,52 @@ export class MediaPipeline {
     this.input = stream;
     this.inputVideo.srcObject = stream;
     try { await this.inputVideo.play(); } catch { /* */ }
-    // size canvas to actual track resolution once metadata arrives
+    // Size the canvas to the DOWNSCALED processing resolution (the same cap
+    // loop() applies), NOT the full track resolution. Sizing to full-res here
+    // meant captureStream was born oversized and then "popped" to the smaller
+    // size on the first RAF tick — a visible resolution jump for the peer.
+    const sizeCanvas = () => {
+      const vh = this.inputVideo.videoHeight || 480;
+      const vw = this.inputVideo.videoWidth || 640;
+      const scale = Math.min(1, MediaPipeline.MAX_PROC_HEIGHT / vh);
+      this.canvas.width = Math.max(2, Math.round(vw * scale));
+      this.canvas.height = Math.max(2, Math.round(vh * scale));
+    };
     const wait = () =>
       new Promise<void>(res => {
-        if (this.inputVideo.videoWidth && this.inputVideo.videoHeight) {
-          this.canvas.width = this.inputVideo.videoWidth;
-          this.canvas.height = this.inputVideo.videoHeight;
-          res();
-        } else {
-          this.inputVideo.onloadedmetadata = () => {
-            this.canvas.width = this.inputVideo.videoWidth || 640;
-            this.canvas.height = this.inputVideo.videoHeight || 480;
-            res();
-          };
-        }
+        if (this.inputVideo.videoWidth && this.inputVideo.videoHeight) { sizeCanvas(); res(); }
+        else this.inputVideo.onloadedmetadata = () => { sizeCanvas(); res(); };
       });
     await wait();
 
-    // Build the output stream once.
+    // Build the output stream once (first call only).
     if (!this.outputStream) {
-      const out = (this.canvas as any).captureStream
-        ? (this.canvas as any).captureStream(MediaPipeline.TARGET_FPS)
+      // Draw ONE real frame BEFORE reading captureStream, so peers never receive
+      // a burst of black/empty frames at filter activation. loop() schedules the
+      // RAF and, called with ts=0, also draws immediately — safe here because this
+      // is the first-time branch (rafId is still null, so no double-loop).
+      this.loop();
+      if (!(this.canvas as { captureStream?: unknown }).captureStream) {
+        // Old Safari/Edge lack canvas.captureStream → we'd otherwise ship a SILENT
+        // empty MediaStream and the user's video would just freeze. Surface it so
+        // the caller can fall back to the raw camera instead of failing blindly.
+        this.cb.onError?.("Live video filters aren't supported on this browser.");
+      }
+      const out = (this.canvas as unknown as { captureStream?: (fps: number) => MediaStream }).captureStream
+        ? (this.canvas as unknown as { captureStream: (fps: number) => MediaStream }).captureStream(MediaPipeline.TARGET_FPS)
         : new MediaStream();
       // Add audio tracks from the input.
       stream.getAudioTracks().forEach(t => out.addTrack(t));
       this.outputStream = out;
     } else {
-      // Replace audio tracks if input changed.
+      // Replace audio tracks if input changed (e.g. camera flip carries new audio).
       this.outputStream.getAudioTracks().forEach(t => this.outputStream!.removeTrack(t));
       stream.getAudioTracks().forEach(t => this.outputStream!.addTrack(t));
     }
 
+    // Ensure the RAF loop is running. No-op if loop() above already started it
+    // (first call) or if it's still running from a prior setInputStream (flip) —
+    // this guard is what prevents a second, orphaned RAF loop on camera flip.
     if (this.rafId === null) this.loop();
   }
 

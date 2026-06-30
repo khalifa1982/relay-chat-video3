@@ -624,6 +624,23 @@ export function startRelay(root: HTMLElement): RelayHandle {
     for (const a of lkAudioEls) els.push(a);
     return els;
   }
+  // Mobile autoplay belt-and-suspenders: if a remote element's play() is blocked
+  // because there hasn't been a user gesture yet, REPLAY every remote element on
+  // the next tap anywhere. The user always taps something in a call, so incoming
+  // audio recovers within a tap instead of staying silent. Self-clears on fire.
+  let audioUnlockArmed = false;
+  function armAudioUnlock() {
+    if (audioUnlockArmed || typeof document === "undefined") return;
+    audioUnlockArmed = true;
+    const unlock = () => {
+      collectAudioEls().forEach(el => { try { void el.play?.(); } catch { /* */ } });
+      audioUnlockArmed = false;
+      document.removeEventListener("pointerdown", unlock);
+      document.removeEventListener("touchend", unlock);
+    };
+    document.addEventListener("pointerdown", unlock);
+    document.addEventListener("touchend", unlock);
+  }
   async function applyAudioSink(only?: HTMLMediaElement) {
     if (!audioOutSupported) return;
     const targets = only ? [only] : collectAudioEls();
@@ -711,9 +728,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const src = loudspeakerCtx.createMediaStreamSource(stream);
       src.connect(loudspeakerCtx.destination);
       loudspeakerNodes.push(src);
-      el.muted = true; // play ONLY via the loudspeaker path (no double audio)
+      // Mute the element ONLY AFTER the Web-Audio loudspeaker path is wired. A
+      // remote WebRTC stream can be tapped by just ONE MediaStreamAudioSourceNode
+      // (the active-speaker analyser already taps it), so createMediaStreamSource
+      // can throw here — and if we'd muted FIRST, that throw would leave the
+      // element muted with no working route = total silence. Muting last means a
+      // failed tap simply leaves the element audible (earpiece), never silent.
       loudspeakerMutedEls.add(el);
-    } catch { /* a stream can only be tapped once — ignore */ }
+      el.muted = true;
+    } catch { /* stream already tapped — leave el UNMUTED so audio still plays */ }
   }
   /** Re-route any NEW remote audio onto the loudspeaker (called when participants
    *  join while loudspeaker mode is on). No-op when off. */
@@ -953,10 +976,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
       return await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...q, facingMode: { exact: next } } });
     } catch { /* no exact match / only one camera / unsupported — fall through */ }
     // 2) Enumerate inputs and pick a DIFFERENT device than the current one.
+    //    NOTE: iOS Safari (and some others) can report an EMPTY deviceId. The old
+    //    `d.deviceId !== curId` was `something !== undefined` → always true → it
+    //    re-grabbed an arbitrary (often the SAME) camera. Normalize curId to "" and
+    //    require BOTH ids truthy so an unknown current id falls through to step 3
+    //    (soft facingMode) instead of silently shipping the same camera.
     try {
-      const curId = localStream?.getVideoTracks()[0]?.getSettings?.().deviceId;
+      const curId = localStream?.getVideoTracks()[0]?.getSettings?.().deviceId || "";
       const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
-      const other = cams.find(d => d.deviceId && d.deviceId !== curId);
+      const other = cams.find(d => d.deviceId && curId && d.deviceId !== curId);
       if (other) {
         return await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...q, deviceId: { exact: other.deviceId } } });
       }
@@ -1000,9 +1028,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // Preserve the camera-OFF (mute) state across the flip — a fresh track
       // defaults to enabled, which would otherwise turn the camera back ON.
       syncCamEnabled();
-      // Update the local self-tile's video (if shown)
+      // Update the local self-tile's video (if shown). With a filter active the
+      // processedStream is the SAME object across the flip, so reassigning it
+      // alone won't flush the stale buffered frame — null it first to force a
+      // rebind, then replay.
       const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
-      if (selfV) selfV.srcObject = processedStream || nu;
+      if (selfV) {
+        selfV.srcObject = null;
+        selfV.srcObject = processedStream || nu;
+        void selfV.play().catch(() => {});
+      }
       // back camera shouldn't be mirrored on self preview
       const selfTile = $("tile-self");
       if (selfTile) selfTile.classList.toggle("back-cam", facingMode === "environment");
@@ -1056,6 +1091,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
       await replaceVideoEverywhere(rawTrack);
       const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
       if (selfV) selfV.srcObject = localStream;
+      // replaceTrack resolves when senders ACCEPT the raw track, but the encoder
+      // may still be draining buffered canvas frames. dispose() stops the canvas
+      // captureStream track immediately, which can freeze peers mid-switch — yield
+      // one tick so the encoder fully moves to the raw track first.
+      await new Promise(r => setTimeout(r, 0));
       // dispose() (NOT destroy()) — keep the shared camera/mic alive.
       try { dying?.dispose(); } catch { /* */ }
       return;
@@ -1618,6 +1658,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // route it to the current sink right away.
         lkAudioEls.push(audioEl);
         void applyAudioSink(audioEl);
+        // ANDROID ONLY: a DETACHED <audio> element doesn't reliably initialize the
+        // WebRTC audio output pipeline on Android Chrome (incoming SFU audio stays
+        // silent). Insert it (hidden) into the scoped call root so playback inits,
+        // and kick play() with a one-tap fallback. iOS works WITHOUT DOM insertion
+        // and a 2nd gated media element there can hurt, so we leave iOS untouched.
+        if (IS_ANDROID) {
+          try {
+            audioEl.style.display = "none";
+            root.appendChild(audioEl);
+            void audioEl.play?.().catch(() => armAudioUnlock());
+          } catch { /* */ }
+        }
         // Don't flip the tile to audio-only (which hides the video) if this
         // participant is ALSO publishing camera video — audio commonly
         // subscribes first, and marking audio-only here is what stalls their
@@ -2644,7 +2696,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!entry.el) return;
     entry.gotStream = true;
     const v = entry.el.querySelector("video") as HTMLVideoElement | null;
-    if (v) { v.srcObject = stream; void applyAudioSink(v); }
+    if (v) {
+      v.srcObject = stream;
+      void applyAudioSink(v);
+      // Android Chrome gates an unmuted element's autoplay until an explicit
+      // play() — without this the remote <video> stays PAUSED and INCOMING AUDIO
+      // is silent (outgoing is unaffected). Mirrors the LiveKit video path. iOS
+      // treats this as a no-op, so it's safe there. If play() is rejected (no
+      // user gesture yet), arm a one-tap recovery so audio is never stuck silent.
+      void v.play().catch(() => armAudioUnlock());
+    }
     const c = entry.el.querySelector(".connecting") as HTMLElement | null;
     if (c) c.style.display = "none";
     // Tap the remote audio for active-speaker metering (mesh path only).
