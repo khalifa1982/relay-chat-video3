@@ -53,7 +53,8 @@ describe("Messages — conversation-view layout no longer collapses (WebKit flex
     expect(MSG).not.toMatch(/className="absolute inset-0 overflow-y-auto/);
   });
 
-  it("the page cancels AppShell's mobile pb-28 instead of inheriting a stray 112px gap", () => {
-    expect(MSG).toMatch(/className="h-full -mb-28 md:mb-0 flex md:p-6 gap-0 md:gap-6 min-h-0"/);
+  it("does NOT cancel AppShell's mobile pb-28 — that padding is the only clearance keeping the fixed bottom tab bar from overlapping the composer, not reclaimable dead space", () => {
+    expect(MSG).toMatch(/className="h-full flex md:p-6 gap-0 md:gap-6 min-h-0"/);
+    expect(MSG).not.toMatch(/className="h-full -mb-28/);
   });
 });

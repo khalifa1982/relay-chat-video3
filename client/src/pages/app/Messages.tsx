@@ -97,13 +97,16 @@ export default function MessagesPage() {
   });
 
   return (
-    // -mb-28 cancels AppShell's mobile pb-28 (reserved for simple scrolling-list
-    // pages) specifically for this page: ConversationView below builds its OWN
-    // self-contained flex layout (header + scrollable list + a composer pinned
-    // to the viewport bottom) and doesn't rely on the page-level scroll, so that
-    // padding was silently eating 112px the composer needed. md:mb-0 keeps this
-    // a no-op on desktop, where the padding is already md:pb-0.
-    <div className="h-full -mb-28 md:mb-0 flex md:p-6 gap-0 md:gap-6 min-h-0">
+    // NOTE: AppShell's mobile pb-28 is NOT wasted space to reclaim — it's the
+    // ONLY clearance keeping the FIXED (floating, z-30) bottom tab bar from
+    // overlapping page content, since a `position:fixed` element is out of
+    // flow and paints on top of whatever sits beneath it. A prior attempt to
+    // cancel that padding here (-mb-28) "fixed" the wrong problem: it let this
+    // page grow 112px taller, which pushed the composer DOWN into the zone the
+    // floating nav covers — hiding the composer behind it. Do not reintroduce
+    // that cancellation; the message-list flex fix below (flex-col instead of
+    // relative-with-only-absolute-children) is what actually fixes the layout.
+    <div className="h-full flex md:p-6 gap-0 md:gap-6 min-h-0">
       {/* ── thread list (always visible on desktop; hidden when a thread is open on mobile) ── */}
       <aside
         className={

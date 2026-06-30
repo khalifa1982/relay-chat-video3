@@ -2069,3 +2069,16 @@ investigation → adversarial verification → synthesis) root-caused both befor
       affordance in the header at all — it now does, via the same panel).
 - [x] 8 new regression tests pinning both fixes (and correcting a prior test that had been asserting the
       *buggy* layout pattern as if it were correct). 517 tests green, tsc + build clean. Footer → `v2.64.0`.
+
+## v2.64.1 — Hotfix: composer hidden behind the fixed bottom tab bar (delivered 2026-06-30)
+
+The v2.64.0 layout fix went one step too far. AppShell's mobile `pb-28` isn't reclaimable dead space — it's
+the **only clearance keeping the `position:fixed` (floating, `z-30`) bottom tab bar from overlapping page
+content**, since a fixed element is out of normal flow and just paints on top of whatever's beneath it.
+Cancelling that padding for Messages (`-mb-28 md:mb-0`) let the page grow 112px taller than it should,
+pushing the composer DOWN into the exact zone the floating nav covers — hiding the input box behind it
+(confirmed by a follow-up screenshot: the last message bubble was visible peeking out from under the tab
+bar). **Reverted the `-mb-28 md:mb-0` cancellation**; the message-list flex-column fix (the actual root
+cause from v2.64.0, confirmed correct) is what was doing the real work and needed no change. 2 tests
+updated to assert the padding is preserved (and to stop a prior test from pinning the regression as if it
+were correct). 517 tests green, tsc + build clean. Footer → `v2.64.1`.

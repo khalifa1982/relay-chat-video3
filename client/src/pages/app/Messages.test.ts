@@ -24,8 +24,9 @@ describe("Messages.tsx — messaging overhaul", () => {
     expect(SRC).not.toMatch(/className="absolute inset-0 overflow-y-auto/);
   });
 
-  it("the Messages page cancels AppShell's mobile pb-28 (it builds its own pinned-composer layout)", () => {
-    expect(SRC).toMatch(/className="h-full -mb-28 md:mb-0 flex md:p-6 gap-0 md:gap-6 min-h-0"/);
+  it("does NOT cancel AppShell's mobile pb-28 — it's the only clearance keeping the fixed bottom tab bar from covering the composer (a prior attempt to cancel it regressed to a hidden-behind-the-nav composer)", () => {
+    expect(SRC).toMatch(/className="h-full flex md:p-6 gap-0 md:gap-6 min-h-0"/);
+    expect(SRC).not.toMatch(/className="h-full -mb-28/);
   });
 
   it("messages use a three-dot context menu (not hover-only buttons)", () => {
