@@ -10,10 +10,12 @@ import path from "node:path";
 const SRC = fs.readFileSync(path.resolve(__dirname, "Messages.tsx"), "utf8");
 
 describe("Messages.tsx — messaging overhaul", () => {
-  it("the message list has min-h-0 so the composer stays pinned to the bottom", () => {
-    // The scroll container must include min-h-0 (the flexbox fix that stops the
-    // input from floating into the middle of the screen).
-    expect(SRC).toMatch(/flex-1 min-h-0 overflow-y-auto/);
+  it("the message list stays pinned to the bottom (composer never gets pushed down)", () => {
+    // The scroll area's parent is a flex-1 min-h-0 box; the actual scroll div
+    // fills it via absolute inset-0 — fully decoupled from flex sizing, so its
+    // content height can never push the composer around.
+    expect(SRC).toMatch(/className="relative flex-1 min-h-0"/);
+    expect(SRC).toMatch(/className="absolute inset-0 overflow-y-auto/);
   });
 
   it("messages use a three-dot context menu (not hover-only buttons)", () => {
@@ -52,5 +54,25 @@ describe("Messages.tsx — messaging overhaul", () => {
     expect(SRC).toMatch(/lastOfGroup/);
     // the rounded tail is conditional on being the last of a run
     expect(SRC).toMatch(/lastOfGroup \? "rounded-br-sm"/);
+  });
+
+  it("supports in-conversation message search via trpc.messages.search", () => {
+    expect(SRC).toMatch(/trpc\.messages\.search\.useQuery/);
+    expect(SRC).toMatch(/setSearchOpen/);
+  });
+
+  it("persists the composer draft (text + reply target) per conversation", () => {
+    expect(SRC).toMatch(/import \{ useDraft \} from "@\/app\/draftStore"/);
+    expect(SRC).toMatch(/useDraft\(conversationId\)/);
+  });
+
+  it("supports pasting an image/video straight into the composer", () => {
+    expect(SRC).toMatch(/function handlePaste/);
+    expect(SRC).toMatch(/onPaste=\{handlePaste\}/);
+  });
+
+  it("shows a scroll-to-bottom button when scrolled away from the latest message", () => {
+    expect(SRC).toMatch(/showScrollButton/);
+    expect(SRC).toMatch(/function scrollToBottom/);
   });
 });

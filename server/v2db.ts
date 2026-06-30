@@ -22,6 +22,7 @@ import {
   gte,
   inArray,
   isNull,
+  like,
   lt,
   lte,
   or,
@@ -1132,6 +1133,52 @@ export async function listMessages(input: {
     .orderBy(desc(messages.id))
     .limit(limit);
   return rows.reverse(); // ascending by id (oldest first) for rendering
+}
+
+/** Search message bodies within ONE conversation (membership-gated, mirrors
+ *  listMessages). The LIKE '%term%' scan can't use an index either way (the
+ *  leading wildcard rules that out), but it's bounded to one conversation's
+ *  rows via the existing messages_conversation_idx, so this stays cheap at the
+ *  message volumes this app sees. */
+export async function searchMessages(input: {
+  conversationId: number;
+  identityId: number;
+  query: string;
+  limit?: number;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+  const member = await db
+    .select()
+    .from(conversationParticipants)
+    .where(
+      and(
+        eq(conversationParticipants.conversationId, input.conversationId),
+        eq(conversationParticipants.identityId, input.identityId)
+      )
+    )
+    .limit(1);
+  if (member.length === 0) return [];
+
+  const q = input.query.trim();
+  if (!q) return [];
+  // Escape LIKE wildcards so a literal "%" or "_" in the search text is matched
+  // literally, not treated as a pattern.
+  const escaped = q.replace(/[\\%_]/g, (c) => "\\" + c);
+  const limit = Math.min(input.limit ?? 50, 100);
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, input.conversationId),
+        isNull(messages.deletedAt),
+        like(messages.body, `%${escaped}%`)
+      )
+    )
+    .orderBy(desc(messages.id))
+    .limit(limit);
+  return rows;
 }
 
 export async function sendMessage(input: {

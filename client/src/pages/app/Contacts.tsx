@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle, EmptyDescription, EmptyContent } from "@/components/ui/empty";
 import { trpc } from "@/lib/trpc";
 
 function initialsFrom(name: string): string {
@@ -95,21 +96,45 @@ export default function ContactsPage() {
         </Button>
       </header>
       <div className="px-4 md:px-0">
-        <Input
-          placeholder="Search by name or number"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="h-11"
-        />
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by name or number"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-11 pl-10"
+          />
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto pb-24 md:pb-0 md:rounded-2xl md:border md:border-border md:bg-card">
         {contacts.isLoading ? (
           <div className="p-6 text-sm text-muted-foreground">Loading…</div>
         ) : filtered.length === 0 ? (
-          <div className="p-10 text-center text-sm text-muted-foreground">
-            <p>{search ? "No matches." : "No contacts yet."}</p>
-            <p className="mt-1">Tap “Add” or dial a number to save someone.</p>
-          </div>
+          <Empty className="border-none p-10">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <UserPlus />
+              </EmptyMedia>
+              <EmptyTitle>{search ? "No matches" : "No contacts yet"}</EmptyTitle>
+              <EmptyDescription>
+                {search
+                  ? `Nobody matches "${search}".`
+                  : "Save someone's number to call or message them in one tap."}
+              </EmptyDescription>
+            </EmptyHeader>
+            {!search && (
+              <EmptyContent>
+                <Button
+                  onClick={() =>
+                    setEditing({ id: undefined, number: "", displayName: "", notes: "" })
+                  }
+                  size="sm"
+                >
+                  <UserPlus className="size-4 mr-1.5" /> Add a contact
+                </Button>
+              </EmptyContent>
+            )}
+          </Empty>
         ) : (
           <ul>
             {filtered.map((c) => (

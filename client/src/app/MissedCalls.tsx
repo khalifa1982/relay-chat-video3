@@ -57,7 +57,7 @@ export function MissedCallToast({
           <button
             type="button"
             onClick={onView}
-            className="flex-1 min-w-0 text-left"
+            className="flex-1 min-w-0 text-left outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-lg"
           >
             <div className="text-sm font-semibold text-foreground">
               {count === 1 ? "Missed call" : `${count} missed calls`}
@@ -73,7 +73,7 @@ export function MissedCallToast({
             type="button"
             onClick={onDismiss}
             aria-label="Dismiss"
-            className="shrink-0 grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            className="shrink-0 grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
           >
             <X className="size-4" />
           </button>
@@ -81,7 +81,7 @@ export function MissedCallToast({
         <button
           type="button"
           onClick={onView}
-          className="flex w-full items-center justify-center gap-1.5 border-t border-border/60 py-2.5 text-sm font-semibold text-destructive hover:bg-destructive/5 rounded-b-2xl"
+          className="flex w-full items-center justify-center gap-1.5 border-t border-border/60 py-2.5 text-sm font-semibold text-destructive hover:bg-destructive/5 rounded-b-2xl outline-none focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 focus-visible:ring-[3px]"
         >
           View missed {count === 1 ? "call" : "calls"}
           <ChevronRight className="size-4" />
@@ -126,7 +126,7 @@ export function NotificationBell({
         aria-label={total > 0 ? `${total} notifications` : "Notifications"}
         title="Notifications"
         onClick={() => setOpen((v) => !v)}
-        className="relative grid size-9 place-items-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50 active:scale-95 transition-colors"
+        className="relative grid size-9 place-items-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50 active:scale-95 transition-colors outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
       >
         <Bell className="size-[18px]" />
         {total > 0 && (
@@ -149,7 +149,7 @@ export function NotificationBell({
                   <button
                     type="button"
                     onClick={() => { setOpen(false); onOpenHistory(); }}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/40"
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/40 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
                   >
                     <span className="grid size-9 place-items-center rounded-xl bg-destructive/15 text-destructive">
                       <PhoneMissed className="size-4" />
@@ -167,7 +167,7 @@ export function NotificationBell({
                   <button
                     type="button"
                     onClick={() => { setOpen(false); onOpenMessages(); }}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/40"
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/40 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
                   >
                     <span className="grid size-9 place-items-center rounded-xl bg-primary/15 text-primary">
                       <MessageSquare className="size-4" />

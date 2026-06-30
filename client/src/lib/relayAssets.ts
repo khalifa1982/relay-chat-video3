@@ -512,6 +512,14 @@ export const RELAY_CSS = `
 .relay-root .relay-tile.you.screen video{transform:none;object-fit:contain;background:#000}
 /* Active control state (e.g. screen-share on) — accent-tinted like .off is red. */
 .relay-root .ctrl.on{background:rgba(63,224,197,.18);border-color:rgba(63,224,197,.4);color:var(--accent)}
+/* Mic VU feedback: a soft accent ring pulses on #micBtn while YOUR mic is picking
+   up sound (live AnalyserNode on the local track) — so a forgotten mute (or a
+   hot mic you meant to mute) is obvious without anyone having to say something.
+   Never applied while .off (muted). transform/opacity-friendly box-shadow ring,
+   matching the existing speaking-pulse / call-waiting-pulse pattern. */
+.relay-root .ctrl.voiced:not(.off){animation:relayMicVoiced 1.1s ease-out infinite}
+@keyframes relayMicVoiced{0%{box-shadow:0 0 0 0 rgba(63,224,197,.45)}100%{box-shadow:0 0 0 7px rgba(63,224,197,0)}}
+@media (prefers-reduced-motion: reduce){.relay-root .ctrl.voiced:not(.off){animation:none;box-shadow:0 0 0 3px rgba(63,224,197,.35)}}
 /* Record button, when armed, glows red. */
 .relay-root #recordBtn.on{background:rgba(255,76,76,.22);border-color:rgba(255,76,76,.5);color:#ff5d5d}
 /* "● REC" live indicator in the call header. */
@@ -752,4 +760,10 @@ export const RELAY_CSS = `
 .relay-root .relay-tile[data-state="failed"] .connecting{color:var(--danger);border-color:rgba(255,92,114,.5)}
 .relay-root .relay-tile[data-state="disconnected"] .connecting{color:var(--warn);border-color:rgba(255,180,84,.5)}
 .relay-root .relay-tile[data-state="connected"] .connecting{display:none!important}
+/* First connect to a peer still hasn't produced media after 15s — the generic
+   "connecting…" pill is swapped for a named "Waiting for X…" and the tile's
+   placeholder avatar dims slightly so a stuck connect doesn't look identical to
+   a fresh one. transform/opacity only, matching the project's animation rule. */
+.relay-root .relay-tile.slow-connect .ph{opacity:.55}
+.relay-root .relay-tile.slow-connect .connecting{color:var(--warn);border-color:rgba(255,180,84,.5)}
 `;

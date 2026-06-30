@@ -66,9 +66,18 @@ interface PeerEntry {
   restartT: ReturnType<typeof setTimeout> | null;
   /** capped count of ICE restarts attempted for this peer */
   iceRestarts: number;
+  /** wall-clock ms of the last ACTUAL restart attempt — hardens the per-call
+   *  RESTART_DEBOUNCE_MS timer against flapping iceconnectionstatechange events
+   *  that each re-arm a fresh debounce (the timer only blocks while PENDING, not
+   *  right after it fires), which could otherwise fire restarts back-to-back. */
+  lastRestartTime?: number;
   /** When this peer's call is on HOLD, the senders we detached (replaceTrack
    *  null) so we can re-attach the right track kind on resume. null = live. */
   frozen?: Array<{ sender: RTCRtpSender; kind: string }> | null;
+  /** Fires once if the FIRST connect to this peer is still pending after 15s —
+   *  upgrades the generic "connecting…" placeholder to a named "Waiting for
+   *  X…" so a slow/stuck first connect doesn't look identical to a normal one. */
+  slowT?: ReturnType<typeof setTimeout> | null;
 }
 interface PendingRing { from: string; fromName: string; roomId: string; flag?: string; }
 interface Recent { id: string; name: string; }
@@ -582,9 +591,29 @@ export function startRelay(root: HTMLElement): RelayHandle {
       frameRate: { ideal: 30, max: 30 },
     };
   }
+  // Screen share is mostly STATIC content (slides, a document, a desktop) — a
+  // capped, lower framerate than the camera is plenty smooth and saves real
+  // bandwidth/CPU. Previously getDisplayMedia was called with ONLY the camera's
+  // qualityVideo() constraint, which on a 4K/retina display could request a
+  // 720p-WIDTH-ideal-but-uncapped-framerate capture at full native resolution and
+  // up to 60fps — a much heavier publish than any camera ever sends.
+  function qualityScreenShare(q: VideoQuality) {
+    if (q === "low") {
+      return { width: { ideal: 1024 }, height: { ideal: 576 }, frameRate: { ideal: 8, max: 12 } };
+    }
+    return { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 10, max: 15 } };
+  }
+  // Echo cancellation / noise suppression / auto-gain are constraint HINTS the
+  // browser applies on its own audio pipeline (no renegotiation, no SFU impact)
+  // and degrade gracefully where unsupported — a clear call-quality win for free.
+  const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
   async function acquireRawStream(useFacingMode: "user" | "environment"): Promise<MediaStream> {
     return navigator.mediaDevices.getUserMedia({
-      audio: true,
+      audio: AUDIO_CONSTRAINTS,
       video: { ...qualityVideo(videoQuality), facingMode: useFacingMode },
     });
   }
@@ -605,8 +634,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const ac = { width: vc.width, height: vc.height, frameRate: vc.frameRate };
     const camTrack = localStream?.getVideoTracks()[0];
     if (camTrack) { try { await camTrack.applyConstraints(ac); } catch { /* */ } }
+    // Screen share gets its OWN (capped-framerate) constraint set — applying the
+    // camera's uncapped-resolution constraint here would silently re-uncap an
+    // in-progress share's framerate back up to 30fps on a Data-saver→HD toggle.
     const scrTrack = screenStream?.getVideoTracks()[0];
-    if (scrTrack) { try { await scrTrack.applyConstraints(ac); } catch { /* */ } }
+    if (scrTrack) {
+      const sc = qualityScreenShare(q);
+      try { await scrTrack.applyConstraints({ width: sc.width, height: sc.height, frameRate: sc.frameRate }); } catch { /* */ }
+    }
     updateQualityBtn();
     toast(q === "low" ? "Data saver on (low resolution)" : "HD video on");
   }
@@ -865,7 +900,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       localStream = await acquireRawStream(facingMode);
     } catch {
       try {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
         camOn = false;
         toast("No camera found — joining with audio only.");
       } catch (e2) {
@@ -877,6 +912,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (activeFilter !== "none" && localStream.getVideoTracks().length > 0) {
       await ensurePipeline();
     }
+    ensureLocalLevelMonitor();
     return outStream();
   }
   // Keep the outgoing video track's enabled flag in sync with camOn after any
@@ -1150,7 +1186,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (peers[dialed]) { toast("You're already connected to them.", true); return; }
     try { await ensureMedia(); } catch { return; }
     const target = dialed; dialed = ""; refreshDisplay(); closeAddPad();
-    if (!inCall) { inCall = true; enterCallUI("Calling…"); emitPhase("dialing"); }
+    if (!inCall) { inCall = true; enterCallUI("Calling…"); emitPhase("dialing"); playRingtone("outgoing"); }
     sendWS({ type: "invite", to: target });
     toast("Calling " + target + "…");
   }
@@ -1176,7 +1212,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (opts?.voice && localStream && localStream.getVideoTracks().length > 0) {
       setCam(false);
     }
-    if (!inCall) { inCall = true; enterCallUI(opts?.voice ? "Voice call…" : "Calling…"); emitPhase("dialing"); }
+    if (!inCall) {
+      inCall = true;
+      enterCallUI(opts?.voice ? "Voice call…" : "Calling…");
+      emitPhase("dialing");
+      playRingtone("outgoing");
+    }
     sendWS({ type: "invite", to: target });
     toast("Calling " + target + "…");
     return true;
@@ -1260,6 +1301,51 @@ export function startRelay(root: HTMLElement): RelayHandle {
         osc.start(t0); osc.stop(t0 + 0.16);
       });
     } catch { /* audio blocked — the visual "on hold" status still shows */ }
+  }
+
+  // ---------- ringtone / dial-tone ----------
+  // Looping Web-Audio tones so an incoming ring and an outgoing dial both have
+  // AUDIBLE feedback, not just the visual overlay. Respects Do Not Disturb (silent,
+  // matching onRing's existing DND auto-decline) and a persisted opt-out.
+  let ringtoneCtx: AudioContext | null = null;
+  let ringtoneTimer: ReturnType<typeof setInterval> | null = null;
+  function ringtoneEnabled(): boolean {
+    try { return window.localStorage.getItem("relay_ringtone_off") !== "1"; } catch { return true; }
+  }
+  function stopRingtone() {
+    if (ringtoneTimer) { clearInterval(ringtoneTimer); ringtoneTimer = null; }
+  }
+  function playRingtone(kind: "incoming" | "outgoing") {
+    stopRingtone();
+    if (!ringtoneEnabled() || isDndOn()) return;
+    try {
+      const Ctx = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext | undefined;
+      if (!Ctx) return;
+      if (!ringtoneCtx) ringtoneCtx = new Ctx();
+      void ringtoneCtx.resume();
+      const fire = () => {
+        const ctx = ringtoneCtx; if (!ctx) return;
+        const now = ctx.currentTime;
+        // Incoming: classic two-burst ring (480Hz then 440Hz). Outgoing: a single
+        // soft repeating dial-tone beep so the caller hears it's actually ringing.
+        const bursts: Array<[number, number]> = kind === "incoming" ? [[480, 0], [440, 0.45]] : [[425, 0]];
+        bursts.forEach(([freq, offset]) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.value = freq;
+          const t0 = now + offset;
+          const dur = kind === "incoming" ? 0.4 : 0.9;
+          gain.gain.setValueAtTime(0.0001, t0);
+          gain.gain.exponentialRampToValueAtTime(0.12, t0 + 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.start(t0); osc.stop(t0 + dur + 0.05);
+        });
+      };
+      fire();
+      ringtoneTimer = setInterval(fire, kind === "incoming" ? 3000 : 2000);
+    } catch { /* best-effort — visual ring overlay still shows */ }
   }
 
   // Call-waiting HOLD state: the OTHER call we've parked while we talk on the
@@ -1477,6 +1563,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const ringWho = $("ringWho"); if (ringWho) ringWho.textContent = m.fromName!;
     const ringSub = $("ringSub"); if (ringSub) ringSub.textContent = "is calling you…";
     $("ringOverlay")?.classList.add("active");
+    playRingtone("incoming");
     // Promote the embedding host (Dialer) to fullscreen so the callee actually
     // SEES the Accept/Decline overlay. Without this the engine stays parked
     // off-screen for an incoming call and the callee can never answer — which
@@ -1491,6 +1578,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const r = pendingRing; pendingRing = null;
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     $("ringOverlay")?.classList.remove("active");
+    stopRingtone();
     if (!r) { emitPhase("idle"); return; }
     try { await ensureMedia(); } catch { sendWS({ type: "reject", to: r.from }); emitPhase("idle"); return; }
     inCall = true; roomId = r.roomId; enterCallUI("In call");
@@ -1500,6 +1588,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const r = pendingRing; pendingRing = null;
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     $("ringOverlay")?.classList.remove("active");
+    stopRingtone();
     if (r) sendWS({ type: "reject", to: r.from });
     emitPhase("idle");
   }
@@ -1511,12 +1600,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
     pendingRing = null;
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     $("ringOverlay")?.classList.remove("active");
+    stopRingtone();
     toast("Caller cancelled the call");
     emitPhase("idle");
   }
 
   // ---------- mesh / SFU ----------
   function onJoined(m: Msg) {
+    stopRingtone(); // peer connected — stop the outgoing dial tone
     roomId = m.roomId || null;
     recordMemberDevices(m.members);
     recordMemberRoles(m.members);
@@ -1742,7 +1833,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // Publish the SAME processed stream the mesh sends, so filters/blur survive.
       const send = processedStream || localStream;
       if (send) {
-        for (const t of send.getVideoTracks()) await room.localParticipant.publishTrack(t);
+        // A VOICE call (camOn already false here — set before enterCallUI) must
+        // not publish a video track at all: an unconditional publish meant every
+        // "voice-only" call still occupied a video publication/subscription on
+        // the SFU (just disabled), wasting bandwidth and showing peers a black
+        // tile instead of a clean voice-call UI.
+        if (camOn) {
+          for (const t of send.getVideoTracks()) await room.localParticipant.publishTrack(t);
+        }
         for (const t of send.getAudioTracks()) await room.localParticipant.publishTrack(t);
       }
       lkConnected = true;
@@ -2191,11 +2289,31 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // "Switch" that keeps the call alive doesn't retain the old room's elements.
     lkAudioEls.length = 0;
   }
+  // Clear a peer's slow-connect timer and revert the placeholder text/class.
+  function clearSlowConnect(peer: PeerEntry) {
+    if (peer.slowT) { clearTimeout(peer.slowT); peer.slowT = null; }
+    if (!peer.el) return;
+    peer.el.classList.remove("slow-connect");
+    const c = peer.el.querySelector(".connecting") as HTMLElement | null;
+    if (c) c.textContent = "connecting…";
+  }
   function createPeer(pin: string, name: string, initiator: boolean): PeerEntry {
     if (peers[pin]) return peers[pin];
     const pc = new RTCPeerConnection(iceConfig);
-    const peer: PeerEntry = { pc, name: name || "Guest", dc: null, el: null, candQ: [], remoteSet: false, gotStream: false, initiator, graceT: null, restartT: null, iceRestarts: 0 };
+    const peer: PeerEntry = { pc, name: name || "Guest", dc: null, el: null, candQ: [], remoteSet: false, gotStream: false, initiator, graceT: null, restartT: null, iceRestarts: 0, slowT: null };
     peers[pin] = peer;
+    // No media after 15s of trying = upgrade the generic "connecting…" tile
+    // text to a named "Waiting for X…" (diagnostics panel covers ICE detail;
+    // this is just an honest signal in the grid itself, not a new "offline" claim).
+    peer.slowT = setTimeout(() => {
+      peer.slowT = null;
+      if (peer.gotStream || !peer.el) return;
+      const st = peer.pc.connectionState;
+      if (st === "connected" || st === "failed" || st === "closed") return;
+      peer.el.classList.add("slow-connect");
+      const c = peer.el.querySelector(".connecting") as HTMLElement | null;
+      if (c) c.textContent = "Waiting for " + (peer.name || "them") + "…";
+    }, 15000);
     // We send the PROCESSED stream to peers (so they see filters), but if
     // there's no pipeline (audio-only) fall back to the raw stream. Audio always
     // comes from the camera stream; the VIDEO is the SCREEN while sharing, so a
@@ -2226,6 +2344,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // Recovered (or first connect): cancel any pending teardown.
         if (peer.graceT) { clearTimeout(peer.graceT); peer.graceT = null; }
         peer.iceRestarts = 0;
+        clearSlowConnect(peer);
         markEstablished(); // first live media → top bar shows "Connected"
       } else if (st === "closed") {
         removePeer(pin);
@@ -2347,6 +2466,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const nm = e.name;
     if (e.graceT) { clearTimeout(e.graceT); e.graceT = null; }
     if (e.restartT) { clearTimeout(e.restartT); e.restartT = null; }
+    if (e.slowT) { clearTimeout(e.slowT); e.slowT = null; }
     try { e.pc.close(); } catch { /* */ }
     if (e.el) e.el.remove();
     delete peers[pin];
@@ -2442,8 +2562,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const peer = peers[pin];
     if (!peer) return;
     if (peer.restartT) return;
+    // Hard floor between actual restart attempts, independent of the pending-timer
+    // debounce above — stops a flapping ICE state from re-triggering immediately
+    // after a restart just fired.
+    if (Date.now() - (peer.lastRestartTime || 0) < 5000) return;
     peer.restartT = setTimeout(() => {
       peer.restartT = null;
+      peer.lastRestartTime = Date.now();
       tryIceRestart(pin).catch(() => { /* */ });
     }, RESTART_DEBOUNCE_MS);
   }
@@ -2695,6 +2820,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!entry.el) addTile(id, entry.name);
     if (!entry.el) return;
     entry.gotStream = true;
+    clearSlowConnect(entry);
     const v = entry.el.querySelector("video") as HTMLVideoElement | null;
     if (v) {
       v.srcObject = stream;
@@ -2867,6 +2993,52 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (speakerSampleT) { clearInterval(speakerSampleT); speakerSampleT = null; }
     for (const pin in meshAnalysers) unregisterMeshAnalyser(pin);
     if (meshAudioCtx) { try { void meshAudioCtx.close(); } catch { /* */ } meshAudioCtx = null; }
+  }
+
+  // ---------- local mic level (VU) feedback ----------
+  // A muted mic that's still "hot" — or the reverse, a forgotten mute — is
+  // invisible without this: a small accent pulse on #micBtn whenever YOUR voice
+  // is detected, so it's obvious before a peer has to say "you're on mute".
+  // Independent of livekitEnabled/meshAudioCtx (which only taps REMOTE streams).
+  let localLevelCtx: AudioContext | null = null;
+  let localLevelAnalyser: { src: MediaStreamAudioSourceNode; node: AnalyserNode; data: Uint8Array<ArrayBuffer> } | null = null;
+  let localLevelT: ReturnType<typeof setInterval> | null = null;
+  function ensureLocalLevelMonitor() {
+    if (localLevelAnalyser || !localStream || localStream.getAudioTracks().length === 0) return;
+    try {
+      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctx) return;
+      if (!localLevelCtx) localLevelCtx = new Ctx();
+      void localLevelCtx.resume();
+      // Tap via a NEW MediaStream wrapping the same track — never the destination,
+      // so this can't interfere with anything else reading the track (e.g. the
+      // RTCRtpSender publishing it to peers).
+      const src = localLevelCtx.createMediaStreamSource(new MediaStream([localStream.getAudioTracks()[0]]));
+      const node = localLevelCtx.createAnalyser();
+      node.fftSize = 256;
+      src.connect(node);
+      localLevelAnalyser = { src, node, data: new Uint8Array(new ArrayBuffer(node.frequencyBinCount)) };
+      if (!localLevelT) localLevelT = setInterval(sampleLocalLevel, 400);
+    } catch { /* best-effort — silent if Web Audio is unavailable */ }
+  }
+  function sampleLocalLevel() {
+    const a = localLevelAnalyser;
+    const btn = $("micBtn");
+    if (!a || !btn) return;
+    a.node.getByteFrequencyData(a.data);
+    let sum = 0;
+    for (let i = 0; i < a.data.length; i++) sum += a.data[i];
+    const level = sum / a.data.length;
+    btn.classList.toggle("voiced", micOn && level > 12);
+  }
+  function teardownLocalLevelMonitor() {
+    if (localLevelT) { clearInterval(localLevelT); localLevelT = null; }
+    if (localLevelAnalyser) {
+      try { localLevelAnalyser.src.disconnect(); localLevelAnalyser.node.disconnect(); } catch { /* */ }
+      localLevelAnalyser = null;
+    }
+    if (localLevelCtx) { try { void localLevelCtx.close(); } catch { /* */ } localLevelCtx = null; }
+    $("micBtn")?.classList.remove("voiced");
   }
 
   // ---------- Picture-in-Picture (composited active speakers) ----------
@@ -3266,6 +3438,30 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // SENT to peers/SFU is the PROCESSED (canvas) track, so toggle THAT to truly
   // stop outgoing video; also toggle the raw input so the physical camera
   // capture/light reflects the off state. Works on BOTH mesh and SFU.
+  // Publish/unpublish the camera video track on the SFU to match `enabled` — a
+  // disabled MediaStreamTrack still occupies a LiveKit publication (and every
+  // subscriber's bandwidth) unless we explicitly unpublish it. No-op on the mesh
+  // (which only ever has `enabled` toggling — no separate publish step) and
+  // while screen-sharing (that publication is owned by toggleScreenShare).
+  async function syncLivekitVideoPublication(enabled: boolean) {
+    if (!lkRoom || screenSharing) return;
+    try {
+      const lp: any = (lkRoom as any).localParticipant;
+      const pubs: any[] = typeof lp.getTrackPublications === "function"
+        ? lp.getTrackPublications()
+        : (lp.videoTrackPublications ? Array.from(lp.videoTrackPublications.values()) : []);
+      const videoPubs = pubs.filter((pub: any) => pub?.kind === "video" || pub?.track?.kind === "video");
+      if (enabled && videoPubs.length === 0) {
+        const track = currentCameraVideoTrack();
+        if (track) await lp.publishTrack(track);
+      } else if (!enabled && videoPubs.length > 0) {
+        for (const pub of videoPubs) {
+          const lt = pub?.track;
+          if (lt?.mediaStreamTrack) { try { await lp.unpublishTrack(lt.mediaStreamTrack); } catch { /* */ } }
+        }
+      }
+    } catch { /* best-effort — mute/unmute (track.enabled) below already happened */ }
+  }
   function setCam(on: boolean) {
     if (!localStream) return;
     camOn = on;
@@ -3275,6 +3471,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("camBtn")?.classList.toggle("off", !camOn);
     // Don't flip the self-tile to audio-only while a screen share occupies it.
     const s = $("tile-self"); if (s && !screenSharing) s.classList.toggle("audio-only", !camOn);
+    if (livekitEnabled) void syncLivekitVideoPublication(camOn);
   }
   function toggleCam() {
     if (!localStream) return;
@@ -3309,7 +3506,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenBusy = true;
     let disp: MediaStream;
     try {
-      disp = await md.getDisplayMedia({ video: { ...qualityVideo(videoQuality) }, audio: false });
+      disp = await md.getDisplayMedia({ video: { ...qualityScreenShare(videoQuality) }, audio: false });
     } catch {
       // User cancelled the picker, or permission denied — no-op.
       screenBusy = false;
@@ -3497,6 +3694,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     sendWS({ type: "leave", reason });
     // The user explicitly ended the call — don't auto-rejoin it on a later reload.
     clearPendingRejoin();
+    stopRingtone();
     loudspeakerDisable(); // stop the loudspeaker scan + release the audio context
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     pendingRing = null;
@@ -3526,6 +3724,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     unprimeAutoPip(); void exitPip(); // leave PiP + stop priming when the call ends
     stopStatsSampler();
     teardownSpeakerMonitor();
+    teardownLocalLevelMonitor();
     resetSpeakerView();
     // Clear leftover tiles so an idle/parked grid doesn't keep dead srcObjects.
     const grid = $("videoGrid"); if (grid) grid.innerHTML = "";
@@ -3853,6 +4052,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       }
       heldRoomId = null;
       try { cueCtx?.close?.(); cueCtx = null; } catch { /* */ }
+      stopRingtone();
+      try { ringtoneCtx?.close?.(); ringtoneCtx = null; } catch { /* */ }
       if (screenStream) {
         try { screenStream.getTracks().forEach(t => { t.onended = null; t.stop(); }); } catch { /* */ }
         screenStream = null;
@@ -3864,6 +4065,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         localStream = null;
       }
       teardownSpeakerMonitor();
+      teardownLocalLevelMonitor();
       stopStatsSampler();
       teardownPip();
       if (callResizeObs) { try { callResizeObs.disconnect(); } catch { /* */ } callResizeObs = null; }

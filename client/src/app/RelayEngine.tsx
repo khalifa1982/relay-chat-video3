@@ -194,7 +194,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
         <button
           type="button"
           onClick={() => handleRef.current?.hangup()}
-          className="fixed top-3 right-3 z-[70] inline-flex items-center gap-1.5 rounded-full bg-destructive/90 hover:bg-destructive text-destructive-foreground px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur-md"
+          className="fixed top-3 right-3 z-[70] inline-flex items-center gap-1.5 rounded-full bg-destructive/90 hover:bg-destructive text-destructive-foreground px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur-md outline-none focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 focus-visible:ring-[3px]"
           aria-label="End call"
         >
           <X className="size-3.5" />
@@ -225,7 +225,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
               handleRef.current?.cancelRejoin();
               setRejoining(false);
             }}
-            className="inline-flex items-center gap-2 rounded-full bg-destructive px-5 py-2.5 text-sm font-semibold text-destructive-foreground shadow-lg hover:bg-destructive/90"
+            className="inline-flex items-center gap-2 rounded-full bg-destructive px-5 py-2.5 text-sm font-semibold text-destructive-foreground shadow-lg hover:bg-destructive/90 outline-none focus-visible:ring-destructive/30 dark:focus-visible:ring-destructive/50 focus-visible:ring-[3px]"
           >
             <PhoneOff className="size-4" />
             Exit the call

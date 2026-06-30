@@ -155,6 +155,46 @@ describe("messages.openThread", () => {
   });
 });
 
+describe("messages.search", () => {
+  it("refuses without an identity", async () => {
+    const caller = appRouter.createCaller(makeCtx(null));
+    await expect(
+      caller.messages.search({ conversationId: 1, query: "hello" })
+    ).rejects.toThrow(/no identity/i);
+  });
+
+  it("rejects an empty query at the validation layer", async () => {
+    const fake = {
+      id: 7,
+      number: "123456",
+      displayName: "Search Tester",
+      avatarUrl: null,
+      userId: null,
+      isGuest: true,
+      guestExpiresAt: new Date(),
+    };
+    const caller = appRouter.createCaller(makeCtx(fake));
+    await expect(
+      caller.messages.search({ conversationId: 1, query: "" })
+    ).rejects.toThrow();
+  });
+
+  it("returns no results without a live DB (never throws past validation)", async () => {
+    const fake = {
+      id: 7,
+      number: "123456",
+      displayName: "Search Tester",
+      avatarUrl: null,
+      userId: null,
+      isGuest: true,
+      guestExpiresAt: new Date(),
+    };
+    const caller = appRouter.createCaller(makeCtx(fake));
+    const rows = await caller.messages.search({ conversationId: 1, query: "hello" });
+    expect(rows).toEqual([]);
+  });
+});
+
 describe("identity.updateProfile validation", () => {
   it("rejects when no identity is present", async () => {
     const caller = appRouter.createCaller(makeCtx(null));

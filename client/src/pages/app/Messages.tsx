@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent } from "react";
 import { useLocation, useSearch } from "wouter";
 import {
   ArrowLeft,
@@ -22,6 +22,7 @@ import {
   MoreVertical,
   Copy,
   Play,
+  ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,6 +32,7 @@ import { linkify } from "@/lib/linkify";
 import { useIdentity } from "@/app/useIdentity";
 import { useThreadMuted, isThreadMuted, onMutedChange } from "@/app/mutedThreads";
 import { useTypers } from "@/app/typingStore";
+import { useDraft } from "@/app/draftStore";
 
 const EMOJI_QUICK = [
   "😀","😂","😊","😍","😉","😎","🤔","🙏",
@@ -285,22 +287,41 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   }
 
   // ── composer state ──
-  const [text, setText] = useState("");
+  // The in-progress text + active reply target persist to localStorage (per
+  // conversation) so navigating away mid-draft — or a reload — doesn't lose it.
+  const { draft, update: updateDraft, clear: clearDraft } = useDraft(conversationId);
+  const text = draft.text;
+  function setText(updater: string | ((s: string) => string)) {
+    updateDraft({ text: typeof updater === "function" ? updater(draft.text) : updater });
+  }
   const [emojiOpen, setEmojiOpen] = useState(false);
   // Fullscreen media preview (image/video lightbox).
   const [lightbox, setLightbox] = useState<{ url: string; type: "image" | "video"; name?: string } | null>(null);
-  const [replyingTo, setReplyingTo] = useState<{
+  const [replyingTo, setReplyingToState] = useState<{
     id: number;
     senderIdentityId: number;
     body: string | null;
     kind: string;
   } | null>(null);
+  function setReplyingTo(m: { id: number; senderIdentityId: number; body: string | null; kind: string } | null) {
+    setReplyingToState(m);
+    updateDraft({ replyToId: m?.id ?? null });
+  }
   // Quick lookup of a message by id (to render the quoted reply preview).
   const msgById = useMemo(() => {
     const m = new Map<number, { senderIdentityId: number; body: string | null; kind: string }>();
     for (const x of messagesQuery.data ?? []) m.set(x.id, x);
     return m;
   }, [messagesQuery.data]);
+  // A saved draft's reply target is just an id — reconstruct the rich preview
+  // object once its message is available (it's near-always already loaded,
+  // since a draft reply was set on a recently-visible message).
+  useEffect(() => {
+    if (draft.replyToId == null || replyingTo) return;
+    const m = msgById.get(draft.replyToId);
+    if (m) setReplyingToState({ id: draft.replyToId, senderIdentityId: m.senderIdentityId, body: m.body, kind: m.kind });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.replyToId, msgById]);
   function senderLabel(identityId: number): string {
     if (me && identityId === me.id) return "You";
     return nameById.get(identityId) || thread?.peerDisplayName || "Them";
@@ -319,6 +340,24 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const [pendingUpload, setPendingUpload] = useState<{ id: number; url: string; mimeType: string; filename?: string } | null>(null);
   const [uploading, setUploading] = useState(false);
 
+  // ── in-conversation search ──
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+  const searchResults = trpc.messages.search.useQuery(
+    { conversationId, query: debouncedSearch },
+    { enabled: !!me && searchOpen && debouncedSearch.length > 0 }
+  );
+  function closeSearch() {
+    setSearchOpen(false);
+    setSearchInput("");
+    setDebouncedSearch("");
+  }
+
   // scroll-to-bottom on new message
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -326,10 +365,26 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messagesQuery.data?.length, conversationId]);
 
-  async function handleFile(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // reset so re-picking the same file fires onChange
-    if (!file) return;
+  // "Scroll to bottom" floating button — shown once the user has scrolled UP
+  // away from the latest message, so catching back up after reading history
+  // doesn't require manually dragging the scrollbar.
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setShowScrollButton(fromBottom > 150);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [conversationId]);
+  function scrollToBottom() {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }
+
+  async function uploadFile(file: File) {
     if (file.size > 40 * 1024 * 1024) {
       alert("File exceeds 40 MB limit");
       return;
@@ -346,6 +401,23 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     } finally {
       setUploading(false);
     }
+  }
+  async function handleFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // reset so re-picking the same file fires onChange
+    if (!file) return;
+    await uploadFile(file);
+  }
+  // Paste an image/video straight from the clipboard (e.g. a screenshot) into
+  // the composer, reusing the same upload path + 40MB limit as the picker.
+  // Plain-text pastes are a no-op here — the browser handles those natively.
+  function handlePaste(e: ClipboardEvent<HTMLInputElement>) {
+    const file = Array.from(e.clipboardData?.files || []).find(
+      (f) => f.type.startsWith("image/") || f.type.startsWith("video/")
+    );
+    if (!file) return;
+    e.preventDefault();
+    void uploadFile(file);
   }
 
   function send() {
@@ -367,10 +439,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       attachmentId: pendingUpload?.id ?? null,
       replyToId: replyingTo?.id ?? null,
     });
-    setText("");
+    clearDraft();
+    setReplyingToState(null);
     setPendingUpload(null);
     setEmojiOpen(false);
-    setReplyingTo(null);
   }
 
   function insertEmoji(e: string) {
@@ -537,6 +609,16 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         >
           {muted ? <BellOff className="size-5" /> : <Bell className="size-5" />}
         </Button>
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
+          aria-label={searchOpen ? "Close search" : "Search this conversation"}
+          title={searchOpen ? "Close search" : "Search messages"}
+          className={searchOpen ? "text-primary" : ""}
+        >
+          {searchOpen ? <X className="size-5" /> : <Search className="size-5" />}
+        </Button>
         {!isGroup && thread?.peerNumber && (
           <Button
             size="icon"
@@ -551,10 +633,83 @@ function ConversationView({ conversationId }: { conversationId: number }) {
 
       {/* message list — min-h-0 lets this flex child shrink so the composer
           stays pinned at the bottom (without it, the list grows to fit content
-          and shoves the input into the middle of the screen). */}
+          and shoves the input into the middle of the screen). Wrapped in a
+          relative container so the search overlay + scroll-to-bottom button can
+          be positioned over it without disturbing the scroll container itself. */}
+      <div className="relative flex-1 min-h-0">
+      {searchOpen && (
+        <div className="absolute inset-0 z-20 flex flex-col bg-background md:bg-card">
+          <div className="px-3 md:px-5 py-2.5 border-b border-border">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+              <Input
+                autoFocus
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="Search in this conversation…"
+                className="pl-10"
+              />
+            </div>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto px-3 md:px-5 py-3 space-y-2">
+            {debouncedSearch.length === 0 ? (
+              <div className="text-center text-sm text-muted-foreground mt-10">
+                Type to search this conversation.
+              </div>
+            ) : searchResults.isLoading ? (
+              <div className="text-sm text-muted-foreground">Searching…</div>
+            ) : (searchResults.data?.length ?? 0) === 0 ? (
+              <div className="text-center text-sm text-muted-foreground mt-10">
+                No messages match “{debouncedSearch}”.
+              </div>
+            ) : (
+              <>
+                <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-1">
+                  Results
+                </div>
+                {searchResults.data?.map((m) => {
+                  const mine = m.senderIdentityId === me.id;
+                  return (
+                    <div key={m.id} className={"flex " + (mine ? "justify-end" : "justify-start")}>
+                      <div
+                        className={
+                          "max-w-[85%] rounded-2xl px-3.5 py-2 text-sm break-words shadow-sm " +
+                          (mine
+                            ? "bg-[color:var(--relay-online,#06d6a0)] text-[#04201b]"
+                            : "bg-[#2563eb] text-white")
+                        }
+                      >
+                        {isGroup && !mine && (
+                          <div className="text-[11px] font-semibold text-white/90 mb-0.5">
+                            {nameById.get(m.senderIdentityId) || "Member"}
+                          </div>
+                        )}
+                        {m.attachment && (
+                          <AttachmentView
+                            mimeType={m.attachment.mimeType}
+                            url={m.attachment.url}
+                            filename={m.attachment.filename ?? undefined}
+                            onOpen={setLightbox}
+                          />
+                        )}
+                        {m.body && (
+                          <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body)}</div>
+                        )}
+                        <div className={"text-[10px] mt-1 " + (mine ? "text-[#04201b]/70" : "text-white/70")}>
+                          {formatTime(m.createdAt)}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        </div>
+      )}
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto px-3 md:px-5 py-4 space-y-0.5 bg-background md:bg-card"
+        className="absolute inset-0 overflow-y-auto px-3 md:px-5 py-4 space-y-0.5 bg-background md:bg-card"
       >
         {messagesQuery.isLoading ? (
           <div className="text-sm text-muted-foreground">Loading…</div>
@@ -668,6 +823,18 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             );
           })
         )}
+      </div>
+      {showScrollButton && !searchOpen && (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          aria-label="Scroll to latest messages"
+          title="Scroll to latest"
+          className="absolute bottom-4 right-4 z-10 grid place-items-center size-10 rounded-full bg-card border border-border shadow-lg text-foreground hover:bg-muted/60 transition-opacity motion-reduce:transition-none"
+        >
+          <ChevronDown className="size-5" />
+        </button>
+      )}
       </div>
 
       {/* typing indicator */}
@@ -783,6 +950,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 send();
               }
             }}
+            onPaste={handlePaste}
             placeholder={uploading ? "Uploading…" : "Type a message"}
             disabled={uploading || recording}
             className="flex-1 h-11"

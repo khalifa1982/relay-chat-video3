@@ -186,6 +186,7 @@ function ConferenceItem({
           aria-label="Message"
           title="Message"
           onClick={() => onMessage(callBack)}
+          className="size-11"
         >
           <MessageSquare className="size-4" />
         </Button>
@@ -196,6 +197,7 @@ function ConferenceItem({
           aria-label={isGroup ? "Call the group back" : "Call back"}
           title={isGroup ? "Call everyone back (group)" : "Call back"}
           onClick={callBackAll}
+          className="size-11"
         >
           {isGroup ? <Users className="size-4" /> : <Phone className="size-4" />}
         </Button>
@@ -267,6 +269,7 @@ function MissedItem({
           aria-label="Message"
           title="Message"
           onClick={() => onMessage(peerNum)}
+          className="size-11"
         >
           <MessageSquare className="size-4" />
         </Button>
@@ -277,6 +280,7 @@ function MissedItem({
           aria-label="Call back"
           title="Call back"
           onClick={() => onRedial(peerNum)}
+          className="size-11"
         >
           <Phone className="size-4" />
         </Button>

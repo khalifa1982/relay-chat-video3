@@ -1962,3 +1962,64 @@ verification → synthesis) drove this batch. Root causes were each confirmed by
       a no-op there) and an Android incoming call (confirm audio is now present). The loudspeaker route on
       Android Chrome is best-effort (a remote WebRTC stream can only be Web-Audio-tapped once; the analyser
       wins) — the fix guarantees no silence, not guaranteed speaker routing.
+
+## v2.63.0 — Voice / video / text / UI-UX improvement sweep (delivered 2026-06-30)
+
+A 6-domain adversarial audit (find → verify against project rules → prioritize) surfaced 72 candidate
+improvements; 61 were confirmed real and rule-compliant. The 16 highest impact/effort items were implemented.
+
+**Voice:**
+- [x] **Echo cancellation / noise suppression / auto-gain** are now requested on every mic acquisition
+      (`AUDIO_CONSTRAINTS`, applied in `acquireRawStream` + the audio-only fallback) — a free call-quality win
+      (constraint hints, no renegotiation, degrade gracefully where unsupported).
+- [x] **Audible ringtone** on incoming (`playRingtone("incoming")`) and outgoing (`playRingtone("outgoing")`)
+      calls — synthesized Web-Audio tones (no asset), respects Do Not Disturb + a `relay_ringtone_off`
+      opt-out, stops on accept/decline/cancel/connect/hang-up.
+- [x] **Mic VU feedback**: `#micBtn` now pulses (accent ring, transform/opacity-friendly) while YOUR mic
+      picks up sound, so a forgotten mute — or a hot mic you meant to mute — is obvious without a peer
+      having to say something. Independent local `AnalyserNode` tap, never touches the published track.
+- [x] **ICE restart flap-hardening**: a `lastRestartTime` floor (5s) between actual restart attempts, on top
+      of the existing per-call debounce, stops a flapping `iceconnectionstatechange` from firing restarts
+      back-to-back.
+
+**Video:**
+- [x] **Voice-only calls no longer publish a (disabled) video track to the SFU.** `joinLivekit`'s initial
+      publish now skips video when `camOn` is false, and a new `syncLivekitVideoPublication()` publishes /
+      unpublishes the camera track on every `setCam()` toggle — saving SFU bandwidth and showing peers a
+      clean voice-call UI instead of a black tile.
+- [x] **Screen share gets its own (capped) quality profile** — `qualityScreenShare()` (8–10fps, ≤720p)
+      instead of inheriting the camera's uncapped-framerate HD constraint; the live quality toggle applies
+      it to an in-progress share too.
+- [x] **Filter model loads now time out (8s)** instead of leaving the loading dot stuck forever on a
+      slow/flaky connection — `ensureSegmenter`/`ensureFaceDetector` both surface an error and unstick the
+      UI (the underlying fetch isn't aborted; if it succeeds later the model just becomes available
+      silently). `ensureFaceDetector` also gained the single-flight guard `ensureSegmenter` already had.
+- [x] **A stuck first peer connect gets a named placeholder** — after 15s with no media, a tile's generic
+      "connecting…" pill becomes "Waiting for X…" (dimmed), instead of looking identical to a fresh connect.
+
+**Text / messaging:**
+- [x] **In-conversation message search** — `messages.search` (membership-gated, LIKE-scan within one
+      conversation) + a search overlay in the conversation header (results styled like normal bubbles).
+- [x] **Composer drafts persist per conversation** (`client/src/app/draftStore.ts`, mirrors `mutedThreads.ts`)
+      — in-progress text + an active reply target survive navigating away or a reload; restored from
+      localStorage, debounce-saved (500ms), cleared on send.
+- [x] **Paste an image/video straight into the composer** (e.g. a screenshot) — reuses the existing
+      upload/40MB-limit path; plain-text pastes are untouched (native browser handling).
+- [x] **"Scroll to latest" floating button** appears once you've scrolled away from the bottom of a
+      conversation, so catching back up doesn't require dragging the scrollbar.
+
+**UI/UX:**
+- [x] **Focus-visible keyboard rings** swept across every RAW (non-`<Button>`) interactive element in
+      `AppShell.tsx`, `RelayEngine.tsx`, and `MissedCalls.tsx` — DND toggle, profile links, sidebar/bottom-nav
+      tabs, theme toggle, back button, the End/Exit-the-call buttons (destructive-themed ring), and the
+      notification bell + its panel rows. (Every shadcn `<Button>` already had this baked into its base
+      class — the gap was specifically the hand-rolled `<button>`/`<Link>` elements.)
+- [x] **History action buttons bumped to the 44px touch-target minimum** (was 36px `size="icon"`).
+      *(Scope note: the in-call control bar's mobile buttons stayed at 44px — already WCAG-compliant — rather
+      than bumping to 48px, since that's a carefully-tuned flex-wrap layout for 12+ buttons on narrow phones
+      with prior-documented clipping bugs; the marginal gain wasn't worth the regression risk.)*
+- [x] **Contacts search field gets a leading search icon** (matching the pattern already used in the
+      add-contact dialog) and the **empty state now uses the shared `Empty` component** with an icon, a
+      search-aware message, and an "Add a contact" CTA (was a bare two-line paragraph).
+- [x] 27 new tests (Messages/draftStore/v2routers/source-guards). 508 tests green, tsc + build clean.
+      Footer → `v2.63.0`.

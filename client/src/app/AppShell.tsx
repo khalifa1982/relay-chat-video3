@@ -26,6 +26,7 @@ function DndToggle() {
       onClick={() => setDnd(!dnd)}
       className={
         "grid size-9 place-items-center rounded-xl transition-colors active:scale-95 " +
+        "outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
         (dnd
           ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
           : "text-muted-foreground hover:text-foreground hover:bg-muted/50")
@@ -208,7 +209,7 @@ function Inner({ children }: { children: React.ReactNode }) {
           </div>
           <Link
             href="/app/profile"
-            className="flex items-center gap-3 group rounded-xl -mx-1 px-1 py-1 hover:bg-muted/40 transition-colors"
+            className="flex items-center gap-3 group rounded-xl -mx-1 px-1 py-1 hover:bg-muted/40 transition-colors outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
           >
             {me.avatarUrl ? (
               <img
@@ -264,6 +265,7 @@ function Inner({ children }: { children: React.ReactNode }) {
                 href={tab.path}
                 className={
                   "group flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1 transition-colors " +
+                  "outline-none focus-visible:ring-sidebar-ring focus-visible:ring-[3px] " +
                   (active
                     ? "bg-sidebar-accent text-sidebar-accent-foreground font-semibold"
                     : "hover:bg-sidebar-accent/15 text-sidebar-foreground")
@@ -298,6 +300,7 @@ function Inner({ children }: { children: React.ReactNode }) {
               onClick={() => setTheme("dark")}
               className={
                 "flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 " +
+                "outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
                 (theme === "dark"
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground")
@@ -312,6 +315,7 @@ function Inner({ children }: { children: React.ReactNode }) {
               onClick={() => setTheme("light")}
               className={
                 "flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 " +
+                "outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
                 (theme === "light"
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground")
@@ -346,14 +350,14 @@ function Inner({ children }: { children: React.ReactNode }) {
               type="button"
               onClick={goBack}
               aria-label="Back"
-              className="mr-1 grid size-9 shrink-0 place-items-center rounded-xl text-foreground hover:bg-muted/50 active:scale-95 transition"
+              className="mr-1 grid size-9 shrink-0 place-items-center rounded-xl text-foreground hover:bg-muted/50 active:scale-95 transition outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
             >
               <ArrowLeft className="size-5" />
             </button>
           )}
           <Link
             href="/app/profile"
-            className="flex items-center gap-3 min-w-0 active:opacity-70 transition-opacity"
+            className="flex items-center gap-3 min-w-0 active:opacity-70 transition-opacity rounded-xl outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
           >
             {me.avatarUrl ? (
               <img
@@ -443,7 +447,7 @@ function Inner({ children }: { children: React.ReactNode }) {
                 <Link
                   key={tab.key}
                   href={tab.path}
-                  className="flex flex-col items-center gap-0.5 py-2.5 transition-all duration-150 active:scale-[0.96]"
+                  className="flex flex-col items-center gap-0.5 py-2.5 transition-all duration-150 active:scale-[0.96] outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-xl"
                   style={{ transitionTimingFunction: "cubic-bezier(0.23,1,0.32,1)" }}
                 >
                   <span

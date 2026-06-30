@@ -219,10 +219,24 @@ export class MediaPipeline {
     if (def.faceOverlay) await this.ensureFaceDetector();
   }
 
+  // Models are fetched over the network (lazy-loaded, per CLAUDE.md — never
+  // preloaded). On a slow/flaky connection that fetch could hang indefinitely,
+  // leaving the loading dot spinning forever with no way out. This is a SOFT
+  // timeout: it un-stalls the UI (clears the loading flag, surfaces an error) at
+  // 8s without aborting the underlying fetch — if it succeeds later anyway, the
+  // model just becomes available silently. A real network failure already
+  // rejects much faster via the existing catch block.
+  private static readonly MODEL_LOAD_TIMEOUT_MS = 8000;
+
   private async ensureSegmenter() {
     if (this.segmenter || this.mlBootInProgress) return;
     this.mlBootInProgress = true;
     this.cb.onLoading?.(true);
+    const timeoutT = setTimeout(() => {
+      this.mlBootInProgress = false;
+      this.cb.onLoading?.(false);
+      this.cb.onError?.("Background blur model timed out loading. Try again or pick a different filter.");
+    }, MediaPipeline.MODEL_LOAD_TIMEOUT_MS);
     try {
       const vision: any = await import("@mediapipe/tasks-vision");
       const fileset = await vision.FilesetResolver.forVisionTasks(WASM_BASE);
@@ -235,14 +249,23 @@ export class MediaPipeline {
     } catch (e: any) {
       this.cb.onError?.("Couldn't load background blur model. " + (e?.message || e));
     } finally {
+      clearTimeout(timeoutT);
       this.mlBootInProgress = false;
       this.cb.onLoading?.(false);
     }
   }
 
   private async ensureFaceDetector() {
-    if (this.faceDetector) return;
+    // Mirrors ensureSegmenter's single-flight guard — without it two rapid
+    // filter taps could kick off overlapping createFromOptions() calls.
+    if (this.faceDetector || this.mlBootInProgress) return;
+    this.mlBootInProgress = true;
     this.cb.onLoading?.(true);
+    const timeoutT = setTimeout(() => {
+      this.mlBootInProgress = false;
+      this.cb.onLoading?.(false);
+      this.cb.onError?.("Face overlay model timed out loading. Try again or pick a different filter.");
+    }, MediaPipeline.MODEL_LOAD_TIMEOUT_MS);
     try {
       const vision: any = await import("@mediapipe/tasks-vision");
       const fileset = await vision.FilesetResolver.forVisionTasks(WASM_BASE);
@@ -253,6 +276,8 @@ export class MediaPipeline {
     } catch (e: any) {
       this.cb.onError?.("Couldn't load face overlay model. " + (e?.message || e));
     } finally {
+      clearTimeout(timeoutT);
+      this.mlBootInProgress = false;
       this.cb.onLoading?.(false);
     }
   }

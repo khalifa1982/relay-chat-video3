@@ -35,6 +35,7 @@ import {
   listConferenceHistory,
   listContacts,
   listMessages,
+  searchMessages,
   listThreads,
   listUnseenMissedCalls,
   markMissedCallsSeen,
@@ -766,6 +767,38 @@ export const v2MessagesRouter = router({
         editedAt: r.editedAt,
         attachment: r.attachmentId ? (attById.get(r.attachmentId) ?? null) : null,
         replyToId: r.replyToId ?? null,
+      }));
+    }),
+
+  /** Search message bodies within one conversation. */
+  search: publicProcedure
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        query: z.string().min(1).max(200),
+        limit: z.number().int().min(1).max(100).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const rows = await searchMessages({
+        conversationId: input.conversationId,
+        identityId: me.id,
+        query: input.query,
+        limit: input.limit,
+      });
+      const attIds = rows
+        .map((r) => r.attachmentId)
+        .filter((x): x is number => typeof x === "number");
+      const attById = new Map((await getAttachmentsByIds(attIds)).map((a) => [a.id, a]));
+      return rows.map((r) => ({
+        id: r.id,
+        conversationId: r.conversationId,
+        senderIdentityId: r.senderIdentityId,
+        kind: r.kind,
+        body: r.body,
+        createdAt: r.createdAt,
+        attachment: r.attachmentId ? (attById.get(r.attachmentId) ?? null) : null,
       }));
     }),
 
