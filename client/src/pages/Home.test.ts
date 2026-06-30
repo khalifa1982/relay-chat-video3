@@ -71,7 +71,7 @@ describe("Home.tsx — bilingual landing page", () => {
   });
 
   it("uses the authentic app-grounded visuals (not the old imaginary mockups)", () => {
-    expect(HOME_TSX).toMatch(/relay-real-/);
+    expect(HOME_TSX).toMatch(/relay-v2-/);
     expect(HOME_TSX).not.toMatch(/relay-mock-/);
   });
 });
@@ -133,10 +133,10 @@ describe("Home.tsx — scroll-reveal animations", () => {
     expect(HOME_TSX).toMatch(/setProperty\("--sy"/);
   });
 
-  it("renders a scroll-progress bar and an animated aurora layer", () => {
+  it("renders a scroll-progress bar and an animated background layer", () => {
     expect(HOME_TSX).toMatch(/scroll-progress/);
-    expect(HOME_TSX).toMatch(/aurora/);
-    expect(HOME_TSX).toMatch(/hero-parallax/);
+    expect(HOME_TSX).toMatch(/blobs/);
+    expect(HOME_TSX).toMatch(/hero-img/);
   });
   it("reveals headlines word-by-word with a per-word delay", () => {
     expect(HOME_TSX).toMatch(/data-reveal="words"/);
@@ -164,8 +164,8 @@ describe("Home.tsx — scroll-reveal animations", () => {
 // 2. Visual assets — Gemini-generated mockups served from the CDN
 // ---------------------------------------------------------------------------
 describe("Home.tsx — visual assets", () => {
-  it("references the dialer, chat, group, mobile mockups and hero background", () => {
-    for (const key of ["dialer", "chat", "group", "mobile", "heroBg"]) {
+  it("references the call, dialer, messages, contacts and mobile screenshots", () => {
+    for (const key of ["call", "dialer", "messages", "contacts", "mobile"]) {
       expect(HOME_TSX).toMatch(new RegExp(`${key}\\s*:`));
     }
   });
@@ -173,7 +173,7 @@ describe("Home.tsx — visual assets", () => {
   it("serves images from the project storage path (real captured screenshots)", () => {
     // The landing visuals are real screenshots captured from the live app and
     // served via the persistent /manus-storage path.
-    const storageRefs = HOME_TSX.match(/\/manus-storage\/relay-real-[^"'\s]+/g) ?? [];
+    const storageRefs = HOME_TSX.match(/\/manus-storage\/relay-v2-[^"'\s]+/g) ?? [];
     expect(storageRefs.length).toBeGreaterThanOrEqual(4);
   });
 

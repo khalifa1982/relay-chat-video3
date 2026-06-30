@@ -2023,3 +2023,15 @@ improvements; 61 were confirmed real and rule-compliant. The 16 highest impact/e
       search-aware message, and an "Add a contact" CTA (was a bare two-line paragraph).
 - [x] 27 new tests (Messages/draftStore/v2routers/source-guards). 508 tests green, tsc + build clean.
       Footer → `v2.63.0`.
+
+## Landing redesign (Gemini 3.5 Flash copy, light/unique, animated)
+- [x] Verify stored GEMINI_API_KEY works with gemini-3.5-flash
+- [x] Generate richer bilingual copy (identity-hiding, one-to-many, fast/free/unique) via Gemini 3.5 Flash
+- [x] Capture fresh real app screenshots (dialer, messages, contacts, mobile, real video call)
+- [x] Process call screen with realistic faces + upload all 5 as static assets
+- [x] Rebuild Home.tsx: light unique design, full-page scroll animation, sticky Open RELAY button
+- [x] Live stats fitted inside boxes (no overflow)
+- [x] Real screenshots per section with explanations (added contacts as 4th showcase row)
+- [x] Dedicated privacy/identity-hiding section
+- [x] Update Home.test.ts assertions for new design (482/482 passing)
+- [x] CDP verify desktop + mobile (images load, sticky CTA, stats fit, no gap, no Gemini text)
