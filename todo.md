@@ -1855,3 +1855,38 @@ rest are sequenced below.
       leaves the room and drops the snapshot so the next reload stays idle. Wired via a new
       `setOnRejoinChange` / `cancelRejoin` on the engine handle.
 - [x] tsc + build clean, 453 tests green. Footer → `v2.58.0`.
+
+## v2.59.0 — Call waiting: real HOLD / SWAP / MERGE (no more dropped first call) (delivered 2026-06-30)
+
+- [x] **Answering a second call now HOLDS the first instead of dropping it.** The old `switchCall` closed
+      the first call's peer connections and the server `leaveRoom`'d it — the first line was gone for good
+      ("ghost lost"). Now the server tracks a per-pin **`heldRoom`** alongside the active `pinRoom`: when you
+      accept a call-waiting call, your prior **real** call (one with other members) is moved to HOLD — you
+      stay a member of BOTH rooms — and its members get a `peer-hold {on:true}` (a solo dialing room is still
+      just dropped, so the normal 1-on-1 / group flow is byte-identical). Client-side the held call's mesh
+      peer connections are kept **alive but frozen** (our outgoing tracks `replaceTrack(null)`, tiles
+      detached) so resuming is instant; on the SFU path the held room's LiveKit connection is dropped and
+      rejoined on resume (membership persists server-side).
+- [x] **Swap back and forth, and a "toot" on resume.** A new on-screen **"On hold" bar** (amber, top-center)
+      shows the held caller with **Swap** and **Merge**. `swap` flips active↔held server-side (re-pointing
+      `pinRoom`/`heldRoom`, notifying both rooms with peer-hold on/off) and thaws the resumed call's media;
+      the held party gets explicit **visual confirmation** ("X put you on hold" / "X is back") **and an
+      audible cue** — a soft descending tone when held, a brighter rising **toot** when resumed (synthesized
+      via Web Audio, best-effort). The red **End** button now ends THIS line and **auto-resumes the held
+      one** (`end-active` → server leaves the active room and promotes the held one); a full hang-up / logout
+      drops both.
+- [x] **Merge into a 3-way.** **Merge** folds the held call into the active room — every held member is moved
+      in (fresh `joined` so they mesh-link with everyone), the active members get `peer-joined`, and the old
+      room is reaped — secondary to hold/swap stability, as requested.
+- [x] **Unanswered call-waiting logs a missed call.** Declining or ignoring (30s auto-decline) a waiting
+      call records a missed call for the would-be answerer (verified) — the existing reject→`onMissedCall`
+      path, now covered by a test.
+- [x] **Held rooms never leak.** A full `leave`, a logout/`destroy`, and the grace-expiry disconnect all
+      `releaseHeldRoom`; a held partner hanging up first clears the hold without touching the active call.
+- [x] **11 new deterministic server tests** for the whole state machine (hold, swap, swap-back, end-active,
+      merge, full-leave-drops-both, missed-call, solo-room-not-held, nohold guards, releaseHeldRoom,
+      held-partner-leaves) — the "eliminate dropped calls" requirement is pinned by asserting the held member
+      stays in BOTH rooms across every transition. 464 tests green, tsc + build clean. Footer → `v2.59.0`.
+- [ ] **SFU note:** hold/swap is seamless on the WebRTC **mesh** (default). On a **LiveKit** deployment the
+      held call drops + rejoins its SFU room on resume (a brief reconnect, not a frozen-PC hold) — a fully
+      seamless two-connection SFU hold is the follow-up if the live deploy uses LiveKit.

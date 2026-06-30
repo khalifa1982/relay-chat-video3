@@ -66,6 +66,9 @@ interface PeerEntry {
   restartT: ReturnType<typeof setTimeout> | null;
   /** capped count of ICE restarts attempted for this peer */
   iceRestarts: number;
+  /** When this peer's call is on HOLD, the senders we detached (replaceTrack
+   *  null) so we can re-attach the right track kind on resume. null = live. */
+  frozen?: Array<{ sender: RTCRtpSender; kind: string }> | null;
 }
 interface PendingRing { from: string; fromName: string; roomId: string; flag?: string; }
 interface Recent { id: string; name: string; }
@@ -409,6 +412,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "ring-cancel":  onRingCancel(m); break;
       case "joined":       onJoined(m); break;
       case "rejoin":       void onRejoin(m); break;
+      case "resumed":      void onResumed(m); break;
+      case "merged":       onMerged(m); break;
       case "peer-joined":  onPeerJoined(m); break;
       case "livekit-token": onLivekitToken(m); break;
       case "rejected":
@@ -1188,24 +1193,229 @@ export function startRelay(root: HTMLElement): RelayHandle {
     hideCallWaiting();
     if (w) sendWS({ type: "reject", to: w.from });
   }
+  // ---------- hold / swap / merge (call waiting) ----------
+  // A short synthesized tone so a held / resumed caller gets an audible cue even
+  // when no remote audio is flowing. Best-effort; silent if Web Audio is blocked.
+  let cueCtx: AudioContext | null = null;
+  function playCue(kind: "hold" | "resume") {
+    try {
+      const Ctx = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext | undefined;
+      if (!Ctx) return;
+      if (!cueCtx) cueCtx = new Ctx();
+      void cueCtx.resume();
+      const ctx = cueCtx;
+      const now = ctx.currentTime;
+      // "hold" = two soft descending beeps; "resume" = a brighter rising toot.
+      const notes = kind === "resume" ? [660, 990] : [520, 392];
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        const t0 = now + i * 0.16;
+        gain.gain.setValueAtTime(0.0001, t0);
+        gain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.15);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(t0); osc.stop(t0 + 0.16);
+      });
+    } catch { /* audio blocked — the visual "on hold" status still shows */ }
+  }
+
+  // Call-waiting HOLD state: the OTHER call we've parked while we talk on the
+  // active one. On the mesh path we keep its peer connections alive but FROZEN
+  // (no media flowing, tiles detached) so a swap-back is instant; on the SFU path
+  // we drop the LiveKit connection (the server keeps room membership) and rejoin
+  // on resume. At most one held call (a 3rd concurrent caller is rejected).
+  let heldRoomId: string | null = null;
+  const heldPeers: Record<string, PeerEntry> = {};
+  let heldLabel: string | null = null;
+
+  function outAudioTrack(): MediaStreamTrack | null {
+    // Audio is always the raw mic (the processed stream carries only video).
+    return localStream?.getAudioTracks()[0] || outStream().getAudioTracks()[0] || null;
+  }
+  function outVideoTrack(): MediaStreamTrack | null {
+    if (screenSharing && screenStream) return screenStream.getVideoTracks()[0] || null;
+    return outStream().getVideoTracks()[0] || null;
+  }
+  // Freeze a peer: stop sending it our media (keeps the PC/ICE alive) and detach
+  // its tile from the grid (kept in memory so a swap-back re-appends it).
+  function freezePeerMedia(e: PeerEntry) {
+    try {
+      const fz: Array<{ sender: RTCRtpSender; kind: string }> = [];
+      e.pc.getSenders().forEach(s => {
+        if (s.track) { fz.push({ sender: s, kind: s.track.kind }); void s.replaceTrack(null).catch(() => {}); }
+      });
+      e.frozen = fz;
+    } catch { /* */ }
+    if (e.el && e.el.parentNode) e.el.parentNode.removeChild(e.el);
+  }
+  // Thaw a peer: re-attach our current media tracks and re-append its tile.
+  function thawPeerMedia(e: PeerEntry) {
+    const v = outVideoTrack(), a = outAudioTrack();
+    (e.frozen || []).forEach(({ sender, kind }) => {
+      void sender.replaceTrack(kind === "video" ? v : a).catch(() => {});
+    });
+    e.frozen = null;
+    const grid = $("videoGrid");
+    if (e.el && grid && !e.el.parentNode) grid.appendChild(e.el);
+  }
+  function updateHeldBar() {
+    const bar = $("heldBar");
+    if (!bar) return;
+    const has = !!heldRoomId;
+    bar.classList.toggle("show", has);
+    if (has) { const nm = $("heldName"); if (nm) nm.textContent = heldLabel || "Another call"; }
+  }
+  // Park the CURRENT active call as HELD (freeze its peers; drop SFU connection).
+  function parkActiveAsHeld() {
+    heldRoomId = roomId;
+    heldLabel = null;
+    for (const id in peers) {
+      const e = peers[id];
+      heldLabel = heldLabel || e.name;
+      freezePeerMedia(e);
+      heldPeers[id] = e;
+      delete peers[id];
+    }
+    // SFU: the server keeps our membership; drop the live connection and rejoin
+    // it when we resume (mesh peers stay connected, so this is a no-op there).
+    if (livekitEnabled) teardownLivekit();
+    updateHeldBar();
+  }
+  // Tear down whatever is in `heldPeers` (held call ended or merged away).
+  function dropHeld() {
+    for (const id in heldPeers) {
+      const e = heldPeers[id];
+      if (e.graceT) { clearTimeout(e.graceT); e.graceT = null; }
+      if (e.restartT) { clearTimeout(e.restartT); e.restartT = null; }
+      try { e.pc.close(); } catch { /* */ }
+      if (e.el && e.el.parentNode) e.el.parentNode.removeChild(e.el);
+      delete heldPeers[id];
+    }
+    heldRoomId = null;
+    heldLabel = null;
+    updateHeldBar();
+  }
+
   function switchCall() {
     const w = waitingRing; waitingRing = null;
     hideCallWaiting();
     if (!w) return;
-    // Tell the CURRENT room's members we're putting them on hold to take another
-    // call (they'll see an "on hold" status), then accept the new call, reusing
-    // the same camera/mic stream (no idle flash).
-    sendWS({ type: "hold", action: "on" });
-    // Do NOT send an explicit `leave` here. `accept` already makes the server
-    // leave our prior room (it calls leaveRoom before joining the new one), so a
-    // separate `leave` POST is redundant — and worse, the two un-ordered POSTs
-    // can race: if `accept` lands first, the late `leave` then runs against our
-    // NEW room and ejects us from the call we just answered. One message = atomic.
-    for (const id in peers) { try { peers[id].pc.close(); } catch { /* */ } if (peers[id].el) peers[id].el!.remove(); delete peers[id]; }
-    teardownLivekit();
+    // If we somehow already hold a call, drop it — we only juggle two lines.
+    if (heldRoomId) dropHeld();
+    // Put the CURRENT call on HOLD (keep its peers frozen) and accept the new one.
+    // The server's `accept` handler detects our prior real call and holds it
+    // (broadcasting peer-hold to its members) — no separate `hold`/`leave` needed,
+    // which also avoids the old switch race. One message = atomic.
+    parkActiveAsHeld();
     roomId = w.roomId;
     enterCallUI("Connecting…");
     sendWS({ type: "accept", roomId: w.roomId });
+  }
+
+  // Swap the ACTIVE and HELD calls: freeze the current peers, thaw the held ones,
+  // and tell the server to flip the rooms. The server replies `resumed` (handled
+  // by onResumed) which re-renders / reconnects the resumed call.
+  function swapCall() {
+    if (!heldRoomId) { toast("No call on hold.", true); return; }
+    // Freeze the currently-active peers into a temp bucket.
+    const parking: Record<string, PeerEntry> = {};
+    const parkingRoom = roomId;
+    let parkingLabel: string | null = null;
+    for (const id in peers) {
+      const e = peers[id]; parkingLabel = parkingLabel || e.name;
+      freezePeerMedia(e); parking[id] = e; delete peers[id];
+    }
+    if (livekitEnabled) teardownLivekit();
+    // Promote the held peers to active.
+    for (const id in heldPeers) { peers[id] = heldPeers[id]; delete heldPeers[id]; }
+    const resumingRoom = heldRoomId;
+    // Move the parked set into held.
+    for (const id in parking) heldPeers[id] = parking[id];
+    heldRoomId = parkingRoom;
+    heldLabel = parkingLabel;
+    roomId = resumingRoom;
+    sendWS({ type: "swap" });
+    // onResumed (server reply) re-renders the now-active call + thaws media.
+  }
+
+  // Merge the held call into the active call → a single conference.
+  function mergeCall() {
+    if (!heldRoomId) { toast("No call on hold.", true); return; }
+    // Bring the held peers back as ACTIVE members of the current room, thawed.
+    for (const id in heldPeers) {
+      const e = heldPeers[id];
+      peers[id] = e;
+      delete heldPeers[id];
+      thawPeerMedia(e);
+      if (!e.el) addTile(id, e.name); else { const grid = $("videoGrid"); if (grid && !e.el.parentNode) grid.appendChild(e.el); }
+    }
+    heldRoomId = null; heldLabel = null;
+    updateHeldBar();
+    layoutGrid();
+    sendWS({ type: "merge" });
+    toast("Calls merged");
+    addSysMsg("You merged both calls into one conference.");
+  }
+
+  // End the ACTIVE line and resume the HELD one (phone-style). With nothing held
+  // this is a normal hang-up.
+  function endActiveLine() {
+    if (!heldRoomId) { hangUp("user-hangup"); return; }
+    // Close the active peers; the server's `end-active` leaves the active room and
+    // promotes the held one, replying `resumed` to re-activate it here.
+    for (const id in peers) {
+      try { peers[id].pc.close(); } catch { /* */ }
+      if (peers[id].el && peers[id].el!.parentNode) peers[id].el!.parentNode!.removeChild(peers[id].el!);
+      delete peers[id];
+    }
+    if (livekitEnabled) teardownLivekit();
+    sendWS({ type: "end-active" });
+    addSysMsg("Ended this line — resuming your held call…");
+  }
+
+  // Server confirmed a swap / end-active: the named room is now ACTIVE. Thaw its
+  // (frozen) mesh peers or reconnect the SFU, re-render, and play the resume cue.
+  async function onResumed(m: Msg) {
+    const rid = m.roomId || null;
+    if (!rid) return;
+    roomId = rid;
+    inCall = true;
+    enterCallUI("In call");
+    recordMemberDevices(m.members);
+    recordMemberRoles(m.members);
+    captureSelfRole(m);
+    if (livekitEnabled) {
+      if (m.iceServers && m.iceServers.length) iceConfig = buildIceConfig(m.iceServers);
+      // The server pushed a fresh token; reconnect to the resumed SFU room.
+      if (lkPendingToken && lkPendingToken.roomId === rid && !lkRoom) void joinLivekit(rid);
+    } else {
+      // Mesh: the resumed peers are FROZEN in `peers` (moved there by swapCall) —
+      // thaw each so media flows and tiles re-appear. Any member the server lists
+      // that we DON'T have a live peer for (e.g. it died during hold) is re-dialed.
+      if (m.iceServers && m.iceServers.length) iceConfig = buildIceConfig(m.iceServers);
+      for (const id in peers) thawPeerMedia(peers[id]);
+      (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
+    }
+    updateHeldBar();
+    layoutGrid();
+    playCue("resume");
+    toast("Back on your other call");
+  }
+
+  // Server confirmed a merge: everyone's now in one room. Make sure all listed
+  // members have a live, thawed tile (held peers were already promoted client-side
+  // in mergeCall; this reconciles anyone the server moved that we lack).
+  function onMerged(m: Msg) {
+    if (m.roomId) roomId = m.roomId;
+    if (!livekitEnabled) {
+      (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
+    }
+    heldRoomId = null; heldLabel = null;
+    updateHeldBar();
+    layoutGrid();
   }
 
   function onRing(m: Msg) {
@@ -1657,7 +1867,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     layoutGrid();
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutGrid());
   }
-  // A peer put this call on hold to take another call. Mark their tile + notify.
+  // A peer put this call on hold to take another call. Mark their tile + notify,
+  // and give the HELD party an explicit audible cue (a low tone when put on hold,
+  // a brighter rising "toot" when the call resumes).
   function onPeerHold(m: Msg) {
     const pin = m.pin || ""; if (!pin) return;
     const tile = document.getElementById("tile-" + pin);
@@ -1666,9 +1878,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
       tile?.classList.add("on-hold");
       addSysMsg(nm + " put you on hold for another call.");
       toast(nm + " put you on hold.");
+      playCue("hold");
     } else {
       tile?.classList.remove("on-hold");
       addSysMsg(nm + " is back.");
+      toast(nm + " is back.");
+      playCue("resume");
     }
   }
   function onRoleChange(m: Msg) {
@@ -2062,6 +2277,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
     });
   }
   function removePeer(pin: string, quiet = false) {
+    // A member of the HELD call left (their hang-up while we're on the other
+    // line). Clean it out of the held bucket; if the held call is now empty,
+    // clear the hold so the "on hold" bar disappears.
+    if (heldPeers[pin]) {
+      const h = heldPeers[pin];
+      if (h.graceT) { clearTimeout(h.graceT); h.graceT = null; }
+      if (h.restartT) { clearTimeout(h.restartT); h.restartT = null; }
+      try { h.pc.close(); } catch { /* */ }
+      if (h.el && h.el.parentNode) h.el.parentNode.removeChild(h.el);
+      delete heldPeers[pin];
+      if (Object.keys(heldPeers).length === 0) { heldRoomId = null; heldLabel = null; updateHeldBar(); }
+      if (!peers[pin]) return; // nothing more to do if they weren't also active
+    }
     const e = peers[pin];
     if (!e) return;
     const nm = e.name;
@@ -3216,6 +3444,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     exitReconnecting();
     establishedOnce = false;
     if (waitingRing) declineWaiting(); // reject any pending second caller
+    dropHeld();                        // a full hang-up drops any held call too
     // Disconnect the SFU BEFORE stopping localStream/pipeline below, or LiveKit
     // errors republishing a dead track during teardown. No-op on the mesh path.
     // NOTE: keep `livekitEnabled` (it's a stable server-config flag captured at
@@ -3326,6 +3555,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("declineBtn") as HTMLElement | null)?.addEventListener("click", declineInvite);
   ($("cwSwitch") as HTMLElement | null)?.addEventListener("click", switchCall);
   ($("cwDecline") as HTMLElement | null)?.addEventListener("click", declineWaiting);
+  ($("heldSwap") as HTMLElement | null)?.addEventListener("click", swapCall);
+  ($("heldMerge") as HTMLElement | null)?.addEventListener("click", mergeCall);
   ($("micBtn") as HTMLElement | null)?.addEventListener("click", toggleMic);
   ($("camBtn") as HTMLElement | null)?.addEventListener("click", toggleCam);
   ($("chatBtn") as HTMLElement | null)?.addEventListener("click", toggleChat);
@@ -3365,7 +3596,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (tm && tm.classList.contains("open") && !tm.contains(t) && !(t as HTMLElement)?.closest?.(".tile-menu-btn")) closeTileMenu();
   };
   document.addEventListener("click", onDocClickAddPad, true);
-  ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => hangUp("user-hangup"));
+  // The red End button ends THIS line. If a call is on hold, it ends the active
+  // line and resumes the held one (phone-style); otherwise it hangs up fully.
+  ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => endActiveLine());
   ($("flipCamBtn") as HTMLElement | null)?.addEventListener("click", () => { flipCamera(); });
   ($("screenBtn") as HTMLElement | null)?.addEventListener("click", () => { void toggleScreenShare(); });
   // Screen share is VISIBLE on every platform during a call (cross-platform
@@ -3549,10 +3782,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
       teardownLivekit();
       try { ws?.close(); } catch { /* */ }
       ws = null;
-      // close peer connections
+      // close peer connections (active + any held call)
       for (const id in peers) {
         try { peers[id].pc.close(); } catch { /* */ }
       }
+      for (const id in heldPeers) {
+        try { heldPeers[id].pc.close(); } catch { /* */ }
+        delete heldPeers[id];
+      }
+      heldRoomId = null;
+      try { cueCtx?.close?.(); cueCtx = null; } catch { /* */ }
       if (screenStream) {
         try { screenStream.getTracks().forEach(t => { t.onended = null; t.stop(); }); } catch { /* */ }
         screenStream = null;

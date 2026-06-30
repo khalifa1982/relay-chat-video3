@@ -269,11 +269,11 @@ describe("relay signaling", () => {
     expect(reg.clients.get(cPin)).toBeTruthy();
   });
 
-  it("answering a call-waiting call (accept) atomically moves the switcher out of the old room", () => {
-    // switchCall() answers a waiting call by sending ONLY {hold} then {accept} —
-    // no explicit {leave} (which used to race the accept and eject the switcher).
-    // This pins that `accept` alone relocates Bob: out of room A, into room R,
-    // and notifies Alice — so the explicit leave is unnecessary.
+  it("answering a call-waiting call HOLDS the first call instead of dropping it", () => {
+    // switchCall() answers a waiting call with ONLY {accept} (no {leave}). The
+    // server now detects that Bob's prior room is a REAL call (Alice is in it) and
+    // puts it ON HOLD — Bob stays a member of room A (held) while talking in room R
+    // (active) — instead of ejecting him. Alice is told he's on hold, NOT gone.
     const a = register(reg, "Alice");
     const b = register(reg, "Bob");
     const c = register(reg, "Carol");
@@ -297,18 +297,26 @@ describe("relay signaling", () => {
     expect(roomR).not.toBe(roomA);
 
     a.outbox.length = 0;
-    // Bob answers Carol WITHOUT a separate leave — accept alone must relocate him.
+    // Bob answers Carol — accept alone relocates the ACTIVE pointer and HOLDS A.
     handleMessage(reg, b.asConn(), { type: "accept", roomId: roomR });
 
-    expect(reg.rooms.get(roomR)?.has(bPin)).toBe(true);   // Bob is in Carol's room
-    expect(reg.rooms.get(roomA)?.has(bPin)).toBe(false);  // …and out of Alice's
-    expect(reg.clients.get(bPin)?.roomId).toBe(roomR);
-    // Alice is told Bob left her room.
+    expect(reg.rooms.get(roomR)?.has(bPin)).toBe(true);   // Bob active in Carol's room
+    expect(reg.rooms.get(roomA)?.has(bPin)).toBe(true);   // …and STILL a member of A (held)
+    expect(reg.clients.get(bPin)?.roomId).toBe(roomR);    // active pointer = R
+    expect(reg.pinRoom.get(bPin)).toBe(roomR);
+    expect(reg.heldRoom.get(bPin)).toBe(roomA);           // A is the held room
+    // Alice is told Bob put her ON HOLD — not that he left.
+    const hold = a.outbox.find(
+      (m): m is { type: string; pin: string; on: boolean } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "peer-hold"
+    );
+    expect(hold?.pin).toBe(bPin);
+    expect(hold?.on).toBe(true);
     const left = a.outbox.find(
-      (m): m is { type: string; pin: string } =>
+      (m): m is { type: string } =>
         typeof m === "object" && m !== null && (m as { type: string }).type === "peer-left"
     );
-    expect(left?.pin).toBe(bPin);
+    expect(left).toBeUndefined();
     expect(reg.rooms.get(roomA)?.has(aPin)).toBe(true);
   });
 

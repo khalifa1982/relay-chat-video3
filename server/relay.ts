@@ -135,6 +135,15 @@ export interface RelayRegistry {
    * abandoned. This is the source of truth for "are you still in this call?".
    */
   pinRoom: Map<string, string>;
+  /**
+   * Call-waiting HOLD: pin -> the roomId that pin has on hold while it talks in
+   * its (different) ACTIVE room (`pinRoom`). The pin stays in BOTH rooms' member
+   * Sets — `pinRoom` is the active one, `heldRoom` the frozen one. Media to/from
+   * the held room is paused client-side; the server just remembers the link so a
+   * `swap` can resume it and a hang-up of the active call can auto-promote it. At
+   * most one held room per pin (a 3rd concurrent call is rejected client-side).
+   */
+  heldRoom: Map<string, string>;
   /** Per-room abandonment timer (armed when no member is connected). */
   roomReapT: Map<string, ReturnType<typeof setTimeout>>;
   /** Per-room lifetime metadata for conference-history logging. */
@@ -152,6 +161,7 @@ export function createRegistry(): RelayRegistry {
     recordings: new Map(),
     devices: new Map(),
     pinRoom: new Map(),
+    heldRoom: new Map(),
     roomReapT: new Map(),
     roomMeta: new Map(),
   };
@@ -543,6 +553,81 @@ export function leaveRoom(reg: RelayRegistry, pin: string) {
   }
 }
 
+/** Build the member list (excluding `selfPin`) for a room, with names/roles. */
+function membersOf(reg: RelayRegistry, roomId: string, selfPin: string) {
+  const rmeta = reg.roomMeta.get(roomId);
+  return Array.from(reg.rooms.get(roomId) || [])
+    .filter(p => p !== selfPin)
+    .map(p => ({
+      pin: p,
+      name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest",
+      device: reg.clients.get(p)?.device,
+      flag: reg.clients.get(p)?.flag,
+      role: roleOf(rmeta, p),
+    }));
+}
+
+/**
+ * Release a pin's HELD room (if any): drop the pin from that room's member Set,
+ * tell the held peers it left, reap the room if now empty, and clear the hold
+ * mapping. Does NOT touch the pin's ACTIVE room (`pinRoom`). Used on a full
+ * hang-up / disconnect, and when a 3rd call would otherwise displace the hold.
+ */
+export function releaseHeldRoom(reg: RelayRegistry, pin: string) {
+  const heldRid = reg.heldRoom.get(pin);
+  reg.heldRoom.delete(pin);
+  if (!heldRid) return;
+  const room = reg.rooms.get(heldRid);
+  if (!room) return;
+  roomActivityTouch(reg, heldRid);
+  room.delete(pin);
+  room.forEach(p => {
+    const o = reg.clients.get(p);
+    if (o) safeSend(o.socket, { type: "peer-left", pin });
+  });
+  if (room.size === 0) reapRoom(reg, heldRid);
+  else maybeScheduleRoomReap(reg, heldRid);
+}
+
+/**
+ * Promote a pin's HELD room to ACTIVE (phone-style "resume the other line"):
+ * repoint `pinRoom`, clear the hold, cancel any reap, tell the resumed room the
+ * pin is back (peer-hold off), and hand the client a `resumed` envelope (member
+ * list + fresh ICE / SFU token) so it can re-activate that call's media. Returns
+ * false (and clears a dangling mapping) if there's nothing valid to promote.
+ */
+function promoteHeldRoom(
+  reg: RelayRegistry,
+  conn: { socket: RelaySocket; pin: string | null },
+  self: RelayClient | undefined,
+): boolean {
+  const pin = conn.pin;
+  if (!pin) return false;
+  const heldRid = reg.heldRoom.get(pin);
+  reg.heldRoom.delete(pin);
+  if (!heldRid || !reg.rooms.has(heldRid)) return false;
+  reg.pinRoom.set(pin, heldRid);
+  if (self) self.roomId = heldRid;
+  const t = reg.roomReapT.get(heldRid);
+  if (t) { clearTimeout(t); reg.roomReapT.delete(heldRid); }
+  roomActivityTouch(reg, heldRid);
+  broadcastToRoom(reg, heldRid, { type: "peer-hold", pin, on: false }, pin);
+  const rmeta = reg.roomMeta.get(heldRid);
+  const lk = livekitConfig();
+  safeSend(conn.socket, {
+    type: "resumed",
+    roomId: heldRid,
+    members: membersOf(reg, heldRid, pin),
+    selfRole: roleOf(rmeta, pin),
+    hostPin: rmeta?.hostPin ?? null,
+    iceServers: iceServers(pin),
+    livekit: lk.enabled,
+    livekitUrl: lk.url,
+  });
+  pushLivekitToken(reg, pin, heldRid);
+  return true;
+}
+
 export interface RelayMessage {
   type?: string;
   name?: string;
@@ -878,11 +963,29 @@ export function handleMessage(
         self.socket = conn.socket;
         self.cid = conn.cid;
       }
-      // If the accepter was already in a different room (e.g. their own solo
-      // dialing room from an outgoing call, or a previous call), leave it
-      // first so they're never referenced by two rooms.
+      // If the accepter was already in a different room, decide: HOLD it or DROP
+      // it. A prior room with OTHER connected members is a REAL call (call
+      // waiting) → put it on HOLD so it isn't dropped (the user can swap back).
+      // A solo dialing room (only us) is just left, exactly as before. We never
+      // hold more than one call: if a hold already exists it is released first.
       if (self.roomId && self.roomId !== roomId) {
-        leaveRoom(reg, conn.pin);
+        const priorRid = self.roomId;
+        const priorRoom = reg.rooms.get(priorRid);
+        const priorOthers = priorRoom
+          ? Array.from(priorRoom).filter(p => p !== conn.pin && reg.clients.has(p))
+          : [];
+        if (priorOthers.length > 0) {
+          // Real call → HOLD it. Keep the pin in the prior room's Set + roster;
+          // only detach the ACTIVE pointer (set to the new room just below).
+          const existingHeld = reg.heldRoom.get(conn.pin);
+          if (existingHeld && existingHeld !== priorRid) releaseHeldRoom(reg, conn.pin);
+          reg.heldRoom.set(conn.pin, priorRid);
+          reg.pinRoom.delete(conn.pin); // about to be re-set to the new room
+          roomActivityTouch(reg, priorRid);
+          broadcastToRoom(reg, priorRid, { type: "peer-hold", pin: conn.pin, on: true }, conn.pin);
+        } else {
+          leaveRoom(reg, conn.pin);
+        }
       }
       const roomMetaForRoles = reg.roomMeta.get(roomId);
       const members = Array.from(room)
@@ -1061,7 +1164,8 @@ export function handleMessage(
     }
 
     case "leave": {
-      // Caller hung up: every callee still ringing just missed the call.
+      // Caller hung up everything: every callee still ringing just missed the
+      // call, and any call we had on hold is dropped too (full teardown).
       const callerName = self.name;
       const missed = cancelPendingRings(reg, conn.pin);
       for (const calleePin of missed) {
@@ -1069,6 +1173,7 @@ export function handleMessage(
           onMissedCall?.({ calleePin, callerPin: conn.pin, callerName, reason: "cancelled" });
         } catch { /* never let a notification hook break call teardown */ }
       }
+      releaseHeldRoom(reg, conn.pin);
       leaveRoom(reg, conn.pin);
       break;
     }
@@ -1080,6 +1185,116 @@ export function handleMessage(
       if (!rid) break;
       const on = msg.action !== "off"; // default = on; "off" resumes
       broadcastToRoom(reg, rid, { type: "peer-hold", pin: conn.pin, on }, conn.pin);
+      break;
+    }
+
+    case "swap": {
+      // Call waiting: switch the ACTIVE call and the HELD call. The held room
+      // becomes active (its peers resume, peer-hold off) and the previously
+      // active room is put on hold (peer-hold on). Media is re-activated
+      // client-side; the server just flips the pointers + notifies both rooms.
+      const activeRid = self.roomId;
+      const heldRid = reg.heldRoom.get(conn.pin);
+      if (!activeRid || !heldRid || !reg.rooms.has(heldRid) || !reg.rooms.has(activeRid)) {
+        safeSend(conn.socket, { type: "error", code: "nohold", message: "No call on hold." });
+        break;
+      }
+      reg.heldRoom.set(conn.pin, activeRid);
+      reg.pinRoom.set(conn.pin, heldRid);
+      self.roomId = heldRid;
+      const t = reg.roomReapT.get(heldRid);
+      if (t) { clearTimeout(t); reg.roomReapT.delete(heldRid); }
+      roomActivityTouch(reg, heldRid);
+      roomActivityTouch(reg, activeRid);
+      broadcastToRoom(reg, heldRid, { type: "peer-hold", pin: conn.pin, on: false }, conn.pin);
+      broadcastToRoom(reg, activeRid, { type: "peer-hold", pin: conn.pin, on: true }, conn.pin);
+      const rmeta = reg.roomMeta.get(heldRid);
+      const lk = livekitConfig();
+      safeSend(conn.socket, {
+        type: "resumed",
+        roomId: heldRid,
+        heldRoomId: activeRid,
+        members: membersOf(reg, heldRid, conn.pin),
+        selfRole: roleOf(rmeta, conn.pin),
+        hostPin: rmeta?.hostPin ?? null,
+        iceServers: iceServers(conn.pin),
+        livekit: lk.enabled,
+        livekitUrl: lk.url,
+      });
+      pushLivekitToken(reg, conn.pin, heldRid);
+      break;
+    }
+
+    case "end-active": {
+      // Phone-style "end this line": leave the ACTIVE call and, if a call is on
+      // hold, resume it (promote held → active). With nothing held this is just a
+      // plain hang-up of the current call.
+      leaveRoom(reg, conn.pin);
+      promoteHeldRoom(reg, conn, self);
+      break;
+    }
+
+    case "merge": {
+      // Merge the HELD call into the ACTIVE call → one conference. Every other
+      // held member is moved into the active room (they get a fresh `joined` so
+      // they mesh-link with everyone), the active members are told a peer joined,
+      // and the hold is cleared. Best-effort; secondary to hold/swap.
+      const activeRid = self.roomId;
+      const heldRid = reg.heldRoom.get(conn.pin);
+      if (!activeRid || !heldRid || !reg.rooms.has(heldRid) || !reg.rooms.has(activeRid)) {
+        safeSend(conn.socket, { type: "error", code: "nohold", message: "No call on hold." });
+        break;
+      }
+      reg.heldRoom.delete(conn.pin);
+      const heldRoom = reg.rooms.get(heldRid)!;
+      const activeMeta = reg.roomMeta.get(activeRid);
+      const lkm = livekitConfig();
+      const movers = Array.from(heldRoom).filter(p => p !== conn.pin);
+      // Remove the holder from the held room first so movers don't try to link to
+      // a "ghost" copy of us in the old room (we're already in the active room).
+      heldRoom.delete(conn.pin);
+      for (const p of movers) {
+        const pc = reg.clients.get(p);
+        heldRoom.delete(p);
+        joinRoomMember(reg, activeRid, p);
+        if (pc) pc.roomId = activeRid;
+        if (activeMeta) {
+          activeMeta.roster.set(p, pc?.name || "Guest");
+          activeMeta.accepted = true;
+          activeMeta.lastActiveAt = Date.now();
+        }
+        if (pc) {
+          safeSend(pc.socket, {
+            type: "joined",
+            roomId: activeRid,
+            members: membersOf(reg, activeRid, p),
+            selfRole: roleOf(activeMeta, p),
+            hostPin: activeMeta?.hostPin ?? null,
+            iceServers: iceServers(p),
+            livekit: lkm.enabled,
+            livekitUrl: lkm.url,
+          });
+          pushLivekitToken(reg, p, activeRid);
+        }
+        broadcastToRoom(reg, activeRid, {
+          type: "peer-joined",
+          pin: p,
+          name: pc?.name || "Guest",
+          device: pc?.device,
+          flag: pc?.flag,
+          role: roleOf(activeMeta, p),
+          iceServers: undefined,
+        }, p);
+      }
+      // The held room is now empty of real members — reap it (no history; it was
+      // folded into the active call, which carries the full roster).
+      if (heldRoom.size === 0) {
+        const t = reg.roomReapT.get(heldRid);
+        if (t) { clearTimeout(t); reg.roomReapT.delete(heldRid); }
+        reg.roomMeta.delete(heldRid);
+        reg.rooms.delete(heldRid);
+      }
+      safeSend(conn.socket, { type: "merged", roomId: activeRid, members: membersOf(reg, activeRid, conn.pin) });
       break;
     }
 
@@ -1357,6 +1572,10 @@ export function attachRelay(
                   onMissedCall?.({ calleePin, callerPin: pin, callerName, reason: "cancelled" });
                 } catch { /* never let a notification hook break reaping */ }
               }
+              // A call held by this (now gone) member can't be auto-rejoined — only
+              // the ACTIVE room is restored on reconnect — so drop it instead of
+              // leaking a ghost member into it.
+              releaseHeldRoom(reg, pin);
               const rid = reg.pinRoom.get(pin) ?? null;
               if (rid) {
                 // In an ACTIVE call: do NOT leave the room. Keep the persistent

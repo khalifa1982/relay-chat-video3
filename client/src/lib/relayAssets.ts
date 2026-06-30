@@ -95,6 +95,15 @@ export const RELAY_MARKUP = `
         <button id="cwSwitch" class="cw-btn cw-switch">Answer</button>
       </div>
     </div>
+    <div id="heldBar" class="held-bar">
+      <div class="held-info"><span class="held-pulse"></span>
+        <span class="held-meta"><b>On hold</b><span class="held-name" id="heldName"></span></span>
+      </div>
+      <div class="held-actions">
+        <button id="heldSwap" class="held-btn held-swap" title="Switch to the held call">Swap</button>
+        <button id="heldMerge" class="held-btn held-merge" title="Merge both calls into a conference">Merge</button>
+      </div>
+    </div>
     <div class="call-main">
       <div class="grid" id="videoGrid"></div>
       <div class="chat" id="chatPanel">
@@ -695,6 +704,22 @@ export const RELAY_CSS = `
 .relay-root .call-waiting .cw-switch{background:var(--grad);color:#04201B}
 .relay-root .call-waiting .cw-switch:hover{transform:translateY(-1px)}
 @media (max-width:680px){.relay-root .call-waiting{flex-direction:column;gap:10px;top:10px;padding:12px 14px}.relay-root .call-waiting .cw-actions{width:100%}.relay-root .call-waiting .cw-btn{flex:1}}
+/* "On hold" bar — shown while a second call is parked, with Swap / Merge. */
+.relay-root .held-bar{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:35;display:none;align-items:center;gap:14px;background:rgba(28,24,16,.94);border:1px solid rgba(245,180,80,.34);border-radius:16px;padding:9px 12px 9px 16px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
+.relay-root .held-bar.show{display:flex;animation:cwIn .3s cubic-bezier(0.23,1,0.32,1) both}
+.relay-root .held-bar .held-info{font-size:14px;color:var(--text);display:flex;align-items:center;gap:9px}
+.relay-root .held-bar .held-pulse{width:9px;height:9px;border-radius:50%;background:#f5b450;animation:cwPulse 1.3s ease-out infinite;flex:0 0 auto}
+.relay-root .held-bar .held-meta{display:flex;flex-direction:column;line-height:1.25;min-width:0}
+.relay-root .held-bar .held-meta b{font-size:12px;color:#f5b450;letter-spacing:.04em}
+.relay-root .held-bar .held-name{font-size:13px;color:var(--text)}
+.relay-root .held-bar .held-name:empty{display:none}
+.relay-root .held-bar .held-actions{display:flex;gap:8px}
+.relay-root .held-bar .held-btn{border:none;border-radius:11px;padding:8px 14px;font-family:"Bricolage Grotesque";font-weight:700;font-size:13px;cursor:pointer;transition:.14s}
+.relay-root .held-bar .held-swap{background:var(--grad);color:#04201B}
+.relay-root .held-bar .held-swap:hover{transform:translateY(-1px)}
+.relay-root .held-bar .held-merge{background:rgba(245,180,80,.16);color:#f5b450;border:1px solid rgba(245,180,80,.34)}
+.relay-root .held-bar .held-merge:hover{background:rgba(245,180,80,.26)}
+@media (max-width:680px){.relay-root .held-bar{flex-direction:column;gap:10px;top:10px;padding:12px 14px}.relay-root .held-bar .held-actions{width:100%}.relay-root .held-bar .held-btn{flex:1}}
 .relay-root .version-tag{position:fixed;bottom:8px;right:12px;z-index:5;font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.06em;color:var(--text2,#9aa);pointer-events:none;opacity:.92}
 /* Make the VERSION + BUILD numbers pop on the dark call screen: bright white with
    a soft glow, and a gentle blink so they're easy to spot (the © year stays
