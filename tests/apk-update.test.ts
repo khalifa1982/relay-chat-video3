@@ -108,8 +108,38 @@ describe("resolveApkUrl", () => {
   });
 
   it("falls back to the default APK URL", () => {
-    expect(resolveApkUrl(parseManifest({ buildNumber: 2 }))).toContain("/app.apk");
+    expect(resolveApkUrl(parseManifest({ buildNumber: 2 }))).toContain("relay-mobile.apk");
   });
+});
+
+describe("live GitHub Releases manifest (end-to-end)", () => {
+  const MANIFEST_URL =
+    "https://github.com/khalifa1982/relay-app-releases/releases/latest/download/version.json";
+
+  it("fetches a valid, parseable manifest from the public release host", async () => {
+    const res = await fetch(MANIFEST_URL, { redirect: "follow" });
+    expect(res.ok).toBe(true);
+    const json = await res.json();
+    const manifest = parseManifest(json);
+    expect(manifest).not.toBeNull();
+    expect(manifest!.buildNumber).toBeGreaterThanOrEqual(6);
+    expect(manifest!.versionName).toBeTruthy();
+    // The APK URL must be reachable and an actual binary, not an HTML page.
+    const apkUrl = resolveApkUrl(manifest);
+    const head = await fetch(apkUrl, { method: "GET", redirect: "follow" });
+    expect(head.ok).toBe(true);
+    const ct = head.headers.get("content-type") ?? "";
+    expect(ct).not.toContain("text/html");
+  }, 60000);
+
+  it("detects 1.0.6 as an update for an installed 1.0.5 device", async () => {
+    const res = await fetch(MANIFEST_URL, { redirect: "follow" });
+    const manifest = parseManifest(await res.json());
+    // Simulate a phone on an older version name.
+    expect(isUpdateAvailable(5, manifest, "1.0.5")).toBe(true);
+    // And reports up-to-date once the phone is on the same version.
+    expect(isUpdateAvailable(6, manifest, manifest!.versionName)).toBe(false);
+  }, 60000);
 });
 
 describe("isMandatoryUpdate", () => {

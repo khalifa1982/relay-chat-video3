@@ -74,4 +74,17 @@
 - [x] Check button now reports the REAL reason (manifest not JSON / not reachable / up to date / available) instead of silent "no update"
 - [x] Footer shows Version name (installed + latest) instead of only build number
 - [x] Added semver compare + version-name update-detection unit tests (19 apk-update tests)
-- [ ] Provide hosting options for Manus-hosted domain (manifest + APK) and confirm approach with user
+- [x] Provided hosting options; user chose GitHub Releases path (see Round 8)
+
+## Round 8 — GitHub Releases auto-update hosting (live)
+- [x] Received built APK v1.0.6 from user; confirmed versionName 1.0.6
+- [x] Diagnosed private-repo download URLs return "Not Found" (no public auth)
+- [x] Created PUBLIC release host repo khalifa1982/relay-app-releases
+- [x] Published v1.0.6 release with relay-mobile.apk + version.json assets
+- [x] Verified public URLs: version.json returns JSON; APK returns vnd.android.package-archive (52.9 MB, 200)
+- [x] Pointed app default update URLs at the public release host (latest/download)
+- [x] Synced app version to 1.0.6 / ANDROID_BUILD_NUMBER 6
+- [x] Added live end-to-end test (fetch manifest + APK content-type) — 46 tests pass, tsc clean
+- [x] Added scripts/publish-release.sh one-command release helper
+- [x] Rewrote SELF_HOSTED_UPDATE.md for the GitHub Releases workflow
+- [x] Checkpoint and deliver

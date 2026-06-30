@@ -16,12 +16,16 @@
  */
 
 /**
- * Base URL of the update folder on your server. Override via
- * EXPO_PUBLIC_UPDATE_BASE_URL. Defaults to the agreed location.
+ * Base URL of the update folder. Override via EXPO_PUBLIC_UPDATE_BASE_URL.
+ *
+ * Default: the PUBLIC GitHub Releases host `khalifa1982/relay-app-releases`.
+ * GitHub's `releases/latest/download/<asset>` always points at the newest
+ * published release, so the app never needs to change when a new build ships —
+ * you just publish a new release with `version.json` + `relay-mobile.apk`.
  */
 export const UPDATE_BASE_URL = (
   (process.env.EXPO_PUBLIC_UPDATE_BASE_URL ?? "").trim() ||
-  "https://your-chat.org/update"
+  "https://github.com/khalifa1982/relay-app-releases/releases/latest/download"
 ).replace(/\/+$/, "");
 
 /**
@@ -37,7 +41,7 @@ export const UPDATE_MANIFEST_URL =
  */
 export const UPDATE_APK_URL =
   (process.env.EXPO_PUBLIC_UPDATE_APK_URL ?? "").trim() ||
-  `${UPDATE_BASE_URL}/app.apk`;
+  `${UPDATE_BASE_URL}/relay-mobile.apk`;
 
 /**
  * Compare two dotted version-name strings (e.g. "1.0.5" vs "1.0.4").
