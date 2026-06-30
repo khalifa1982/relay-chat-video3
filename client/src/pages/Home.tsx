@@ -193,11 +193,15 @@ const ACCENT = "oklch(0.55 0.22 268)"; // electric indigo
 function WordReveal({
   text,
   className,
+  wordClassName,
+  wordStyle,
   baseDelay = 0,
   step = 55,
 }: {
   text: string;
   className?: string;
+  wordClassName?: string;
+  wordStyle?: React.CSSProperties;
   baseDelay?: number;
   step?: number;
 }) {
@@ -207,8 +211,8 @@ function WordReveal({
       {words.map((w, i) => (
         <span
           key={i}
-          className="word"
-          style={{ "--wd": `${baseDelay + i * step}ms` } as React.CSSProperties}
+          className={`word${wordClassName ? ` ${wordClassName}` : ""}`}
+          style={{ "--wd": `${baseDelay + i * step}ms`, ...wordStyle } as React.CSSProperties}
         >
           {w}
           {i < words.length - 1 ? "\u00A0" : ""}
@@ -574,18 +578,15 @@ export default function Home() {
             >
               {t.hero_kicker}
             </span>
-            <h1 className="text-4xl sm:text-6xl md:text-[4.2rem] font-extrabold tracking-tight leading-[1.08] mb-6" style={{ color: "oklch(0.2 0.03 265)" }}>
+            <h1 className="text-[2.6rem] sm:text-5xl md:text-[3.4rem] lg:text-[3.6rem] font-extrabold tracking-tight leading-[1.06] mb-6" style={{ color: "oklch(0.2 0.03 265)" }}>
               <WordReveal text={t.hero_title_1} />
               <br />
-              <span
-                className="text-transparent bg-clip-text accent-shift"
-                style={{ backgroundImage: `linear-gradient(90deg, ${ACCENT}, oklch(0.62 0.18 210))` }}
-              >
-                <WordReveal
-                  text={t.hero_title_2}
-                  baseDelay={t.hero_title_1.split(" ").length * 55}
-                />
-              </span>
+              <WordReveal
+                text={t.hero_title_2}
+                wordClassName="text-transparent bg-clip-text accent-shift"
+                wordStyle={{ backgroundImage: `linear-gradient(90deg, ${ACCENT}, oklch(0.62 0.18 210))` }}
+                baseDelay={t.hero_title_1.split(" ").length * 55}
+              />
             </h1>
             <p className="text-lg md:text-xl text-slate-600 max-w-xl mx-auto lg:mx-0 leading-relaxed mb-8">
               {t.hero_sub}
