@@ -1962,3 +1962,15 @@ verification → synthesis) drove this batch. Root causes were each confirmed by
       a no-op there) and an Android incoming call (confirm audio is now present). The loudspeaker route on
       Android Chrome is best-effort (a remote WebRTC stream can only be Web-Audio-tapped once; the analyser
       wins) — the fix guarantees no silence, not guaranteed speaker routing.
+
+## Landing redesign (Gemini 3.5 Flash copy, light/unique, animated)
+- [x] Verify stored GEMINI_API_KEY works with gemini-3.5-flash
+- [x] Generate richer bilingual copy (identity-hiding, one-to-many, fast/free/unique) via Gemini 3.5 Flash
+- [x] Capture fresh real app screenshots (dialer, messages, contacts, mobile, real video call)
+- [x] Process call screen with realistic faces + upload all 5 as static assets
+- [x] Rebuild Home.tsx: light unique design, full-page scroll animation, sticky Open RELAY button
+- [x] Live stats fitted inside boxes (no overflow)
+- [x] Real screenshots per section with explanations (added contacts as 4th showcase row)
+- [x] Dedicated privacy/identity-hiding section
+- [x] Update Home.test.ts assertions for new design (482/482 passing)
+- [x] CDP verify desktop + mobile (images load, sticky CTA, stats fit, no gap, no Gemini text)

@@ -1,126 +1,186 @@
 {
   "en": {
-    "hero_kicker": "No downloads. No signups.",
-    "hero_title_1": "The simplest way to call",
-    "hero_title_2": "right from your browser.",
-    "hero_sub": "Type your name and get a personal 6-digit number. Share it with friends or family so they can call you instantly.",
-    "hero_note": "*Your number stays on this device for 30 days. Register anytime to keep it forever.",
-    "stats_title": "Zero barriers to connect",
-    "stats_sub": "No app store visits. No passwords to remember. Just open a link and start talking.",
-    "feat_kicker": "Everything you need",
-    "feat_title": "Simple tools for better conversations",
-    "feat_sub": "We built all the essential features you expect, without any of the clutter.",
-    "features": [
+    "hero_kicker": "MEET RELAY",
+    "hero_title_1": "Share your number.",
+    "hero_title_2": "Hide your self.",
+    "hero_sub": "Instant voice, video, and chat right in your browser. No sign-ups, no installs, and absolutely no personal data shared. Just a disposable 6-digit code.",
+    "hero_note": "Zero setup. 100% free.",
+    "hero_cta": "Get Your Number",
+    "sticky_cta": "Open RELAY",
+    "stats_title": "Relay by the numbers",
+    "stats_sub": "Fast, private connections happening everywhere, every second.",
+    "stat_registered": "Active Numbers",
+    "stat_guests": "Quick Guests",
+    "stat_total": "Total Calls",
+    "stat_online": "Online Now",
+    "privacy_kicker": "TOTAL PRIVACY",
+    "privacy_title": "Keep your real life real private.",
+    "privacy_sub": "With RELAY, your real contacts, phone number, and email stay locked away. You get a unique 6-digit code to share. Anyone can call you on the web, but nobody can trace who you are.",
+    "feat_kicker": "POWERFUL COMMUNICATOR",
+    "feat_title": "Everything you need, built for the web.",
+    "feat_sub": "Ditch the heavy apps. Experience high-quality calls, rich chats, and complete meeting control directly from any browser.",
+    "shots_kicker": "INSIDE RELAY",
+    "shots_title": "Clean. Fast. Frictionless.",
+    "shots_sub": "Take a look at how simple talking online should actually be.",
+    "shot_dialer_t": "The Smart Dialer",
+    "shot_dialer_d": "Just type a 6-digit code and hit call. It's that easy.",
+    "shot_chat_t": "Rich Chat Rooms",
+    "shot_chat_d": "Send files, images, and voice notes instantly in-call.",
+    "shot_group_t": "One-Link Gathering",
+    "shot_group_d": "Host entire group video rooms with a single invite link.",
+    "shot_mobile_t": "Mobile-First Design",
+    "shot_mobile_d": "Works flawlessly on any phone browser, no apps required.",
+    "cta_title": "Ready to claim your code?",
+    "cta_sub": "Start calling instantly. No emails. No passwords. No strings.",
+    "cta_button": "Launch RELAY Now",
+    "footer_tag": "Talk freely, stay hidden.",
+    "pillars": [
       {
-        "t": "Your own number",
-        "d": "Get a unique 6-digit number instantly without giving away your personal details."
+        "t": "Hide Your Identity",
+        "d": "Share your temporary 6-digit number, never your personal contacts or email."
       },
       {
-        "t": "Clear audio and video",
-        "d": "Enjoy high-quality one-on-one calls that connect directly between you and your friend."
+        "t": "One-To-Many Rooms",
+        "d": "Launch full group video spaces with just one simple invite link."
       },
       {
-        "t": "Easy group links",
-        "d": "Create a room and send a link to bring everyone together in a video call."
+        "t": "Fast & Easy",
+        "d": "No downloads, no logins, and zero installs. It works instantly in your browser."
       },
       {
-        "t": "Helpful host controls",
-        "d": "Mute everyone, add co-hosts, or pin important speakers to keep your meetings organized."
-      },
-      {
-        "t": "Rich chat messaging",
-        "d": "Send files, share photos, and record quick voice notes right inside the chat."
-      },
-      {
-        "t": "Share your screen",
-        "d": "Show your screen to others while keeping their video in a small, floating window."
-      },
-      {
-        "t": "Flexible audio options",
-        "d": "Switch easily between your phone speaker, headphones, or Bluetooth devices."
-      },
-      {
-        "t": "One-tap redial",
-        "d": "See your past calls and quickly call back a friend or a whole group with one tap."
-      },
-      {
-        "t": "Private by design",
-        "d": "Your data stays on your device, and your calls go directly from person to person."
+        "t": "Free & Unique",
+        "d": "A completely peer-to-peer connection that costs you absolutely nothing."
       }
     ],
-    "shots_title": "Designed for daily life",
-    "shot_dialer_t": "The dialer",
-    "shot_dialer_d": "Just type a 6-digit number and call. No contact lists or setup needed.",
-    "shot_chat_t": "Interactive chat",
-    "shot_chat_d": "Share photos, drop files, and send voice notes while you talk.",
-    "shot_group_t": "Group meetings",
-    "shot_group_d": "Invite anyone with a link. The active speaker automatically takes center stage.",
-    "mobile_t": "Works on your phone too",
-    "mobile_d": "Open the website on your mobile browser. It rings just like a normal phone call, even when you are on the go.",
-    "cta_title": "Ready to start your first call?",
-    "cta_sub": "Get your 6-digit number in two seconds. No email required.",
-    "footer_tag": "RELAY — Simple calls, straight from your browser."
+    "features": [
+      {
+        "t": "6-Digit Numbers",
+        "d": "Get a unique, instant code that keeps your real phone number hidden."
+      },
+      {
+        "t": "HD Voice & Video",
+        "d": "Crystal clear one-on-one calling directly through your web browser."
+      },
+      {
+        "t": "Group Rooms",
+        "d": "Host large video gatherings effortlessly with a single shareable link."
+      },
+      {
+        "t": "Host Controls",
+        "d": "Mute everyone, spotlight speakers, transfer host duties, or pin users easily."
+      },
+      {
+        "t": "Rich Messaging",
+        "d": "Share files, photos, and voice notes inside an active, private chat."
+      },
+      {
+        "t": "Screen Share & PiP",
+        "d": "Present your screen or watch calls in Picture-in-Picture mode."
+      },
+      {
+        "t": "Smart Audio Routing",
+        "d": "Switch audio outputs seamlessly to Bluetooth or external speakers."
+      },
+      {
+        "t": "Call History",
+        "d": "Track past sessions and redial your contacts with a single tap."
+      },
+      {
+        "t": "100% Peer-to-Peer",
+        "d": "Your calls are direct, fast, highly private, and completely anonymous."
+      }
+    ]
   },
   "ar": {
-    "hero_kicker": "بدون تحميل. بدون تسجيل.",
-    "hero_title_1": "أسهل طريقة للاتصال",
-    "hero_title_2": "مباشرة من متصفحك.",
-    "hero_sub": "اكتب اسمك واحصل فوراً على رقم شخصي من 6 أرقام. شاركه مع الآخرين ليتصلوا بك مباشرة.",
-    "hero_note": "*يبقى رقمك على هذا الجهاز لمدة 30 يوماً. يمكنك تسجيله مجاناً للاحتفاظ به للأبد.",
-    "stats_title": "تواصل بلا عوائق",
-    "stats_sub": "لا حاجة لزيارة متجر التطبيقات ولا كلمات مرور لتذكرها. فقط افتح الرابط وابدأ التحدث.",
-    "feat_kicker": "كل ما تحتاجه",
-    "feat_title": "أدوات بسيطة لمحادثات أفضل",
-    "feat_sub": "لقد صممنا الميزات الأساسية التي تحتاجها، بدون أي تعقيد.",
-    "features": [
+    "hero_kicker": "تعرّف على ريليه",
+    "hero_title_1": "شارك رقمك فقط.",
+    "hero_title_2": "واحمِ هويتك.",
+    "hero_sub": "اتصالات صوتية وفيديو ومحادثات فورية من متصفحك مباشرة. بدون تسجيل، بدون تحميل، وبدون مشاركة أي بيانات شخصية. رمز من 6 أرقام فقط.",
+    "hero_note": "بدون إعدادات. مجاني بالكامل.",
+    "hero_cta": "احصل على رقمك الآن",
+    "sticky_cta": "افتح ريليه",
+    "stats_title": "ريليه بالأرقام",
+    "stats_sub": "اتصالات سريعة وآمنة تحدث في كل مكان، وفي كل ثانية.",
+    "stat_registered": "الأرقام النشطة",
+    "stat_guests": "الضيوف السريعين",
+    "stat_total": "إجمالي المكالمات",
+    "stat_online": "المتصلون الآن",
+    "privacy_kicker": "خصوصية مطلقة",
+    "privacy_title": "أبقِ حياتك الحقيقية سرية للغاية.",
+    "privacy_sub": "مع ريليه، تظل جهات اتصالك الحقيقية ورقم هاتفك وبريدك الإلكتروني مخفية تماماً. تحصل على رمز فريد من 6 أرقام لمشاركته. يمكن لأي شخص الاتصال بك عبر الويب، لكن لا أحد يمكنه تتبع هويتك.",
+    "feat_kicker": "أداة تواصل قوية",
+    "feat_title": "كل ما تحتاجه، مصمم للويب.",
+    "feat_sub": "تخلّص من التطبيقات الثقيلة. جرب مكالمات عالية الجودة، ومحادثات غنية، وتحكماً كاملاً بالاجتماعات مباشرة من أي متصفح.",
+    "shots_kicker": "داخل ريليه",
+    "shots_title": "بساطة. سرعة. سلاسة.",
+    "shots_sub": "ألقِ نظرة على مدى السهولة التي يجب أن تكون عليها المحادثات عبر الإنترنت.",
+    "shot_dialer_t": "الطلب الذكي",
+    "shot_dialer_d": "اكتب الرمز المكون من 6 أرقام واضغط اتصال. بهذه البساطة.",
+    "shot_chat_t": "غرف دردشة غنية",
+    "shot_chat_d": "أرسل الملفات والصور والملاحظات الصوتية فوراً أثناء المكالمة.",
+    "shot_group_t": "تجمّع برابط واحد",
+    "shot_group_d": "استضف غرف فيديو جماعية كاملة برابط دعوة واحد وبسيط.",
+    "shot_mobile_t": "تصميم للهواتف",
+    "shot_mobile_d": "يعمل بسلاسة على متصفح أي هاتف، دون الحاجة لتطبيقات.",
+    "cta_title": "هل أنت جاهز لطلب رمزك؟",
+    "cta_sub": "ابدأ الاتصال فوراً. لا بريد إلكتروني، لا كلمات مرور، لا شروط مسبقة.",
+    "cta_button": "شغّل ريليه الآن",
+    "footer_tag": "تحدّث بحرية، وابقَ مخفياً.",
+    "pillars": [
       {
-        "t": "رقم خاص بك",
-        "d": "احصل على رقم فريد من 6 أرقام فوراً دون الحاجة لمشاركة بياناتك الشخصية."
+        "t": "اخفِ هويتك",
+        "d": "شارك رقمك المؤقت المكون من 6 أرقام، ولا تشارك جهات اتصالك أو بريدك."
       },
       {
-        "t": "مكالمات واضحة",
-        "d": "استمتع بمكالمات صوت وفيديو عالية الجودة مباشرة بينك وبين أصدقائك."
+        "t": "غرف جماعية",
+        "d": "أنشئ مساحات فيديو جماعية كاملة برابط دعوة واحد وبسيط."
       },
       {
-        "t": "روابط جماعية سهلة",
-        "d": "أنشئ غرفة محادثة وأرسل الرابط لجمع الجميع في مكالمة فيديو واحدة."
+        "t": "سريع وسهل",
+        "d": "بدون تنزيل أو تسجيل دخول. يعمل فوراً على متصفحك مباشرة."
       },
       {
-        "t": "تحكم كامل للمضيف",
-        "d": "كتم صوت الجميع، تعيين مضيفين مساعدين، أو تثبيت المتحدثين لتنظيم اجتماعك."
-      },
-      {
-        "t": "محادثات نصية غنية",
-        "d": "أرسل الملفات، شارك الصور، وسجل ملاحظات صوتية سريعة داخل الدردشة."
-      },
-      {
-        "t": "مشاركة الشاشة",
-        "d": "اعرض شاشتك للآخرين مع إبقاء صورتهم في نافذة صغيرة عائمة."
-      },
-      {
-        "t": "خيارات صوت مرنة",
-        "d": "تنقل بسهولة بين مكبر الصوت، سماعات الرأس، أو أجهزة البلوتوث."
-      },
-      {
-        "t": "إعادة اتصال بلمسة",
-        "d": "شاهد سجل مكالماتك السابقة وأعد الاتصال بصديق أو بمجموعة كاملة بلمسة واحدة."
-      },
-      {
-        "t": "خصوصية تامة",
-        "d": "تبقى بياناتك على جهازك وتتم مكالماتك مباشرة من جهاز إلى آخر."
+        "t": "مجاني وفريد",
+        "d": "اتصال مباشر بالكامل من جهاز لجهاز لا يكلفك أي شيء مطلقاً."
       }
     ],
-    "shots_title": "مصمم لحياتك اليومية",
-    "shot_dialer_t": "لوحة الاتصال",
-    "shot_dialer_d": "اكتب الرقم المكون من 6 أرقام واتصل مباشرة، دون الحاجة لقوائم جهات اتصال.",
-    "shot_chat_t": "دردشة تفاعلية",
-    "shot_chat_d": "شارك الصور والملفات وأرسل رسائل صوتية أثناء التحدث.",
-    "shot_group_t": "الاجتماعات الجماعية",
-    "shot_group_d": "ادعُ أي شخص عبر رابط، وسيركز التطبيق تلقائياً على الشخص الذي يتحدث.",
-    "mobile_t": "يعمل على هاتفك أيضاً",
-    "mobile_d": "افتح الموقع من متصفح هاتفك. سيرن الهاتف تماماً كأي مكالمة عادية حتى أثناء التنقل.",
-    "cta_title": "جاهز لبدء مكالمتك الأولى؟",
-    "cta_sub": "احصل على رقمك المكون من 6 أرقام في ثانيتين. لا يتطلب بريداً إلكترونياً.",
-    "footer_tag": "RELAY — مكالمات بسيطة، مباشرة من متصفحك."
+    "features": [
+      {
+        "t": "رقم من 6 أرقام",
+        "d": "احصل على رمز فوري وفريد يحافظ على سرية رقم هاتفك الحقيقي."
+      },
+      {
+        "t": "صوت وفيديو HD",
+        "d": "مكالمات ثنائية فائقة الوضوح مباشرة من خلال متصفح الويب الخاص بك."
+      },
+      {
+        "t": "غرف جماعية",
+        "d": "استضف اجتماعات فيديو جماعية كبيرة بسهولة تامة عبر رابط واحد قابل للمشاركة."
+      },
+      {
+        "t": "تحكم المضيف",
+        "d": "اكتم صوت الجميع، سلّط الضوء على المتحدثين، أو انقل صلاحية المضيف بسهولة."
+      },
+      {
+        "t": "مراسلة غنية",
+        "d": "شارك الملفات والصور والرسائل الصوتية داخل دردشة نشطة وآمنة."
+      },
+      {
+        "t": "مشاركة الشاشة و PiP",
+        "d": "اعرض شاشتك أو تابع مكالماتك في وضع صورة داخل صورة بسلاسة."
+      },
+      {
+        "t": "توجيه الصوت الذكي",
+        "d": "بدّل مخرجات الصوت بسهولة إلى البلوتوث أو مكبرات الصوت الخارجية."
+      },
+      {
+        "t": "سجل المكالمات",
+        "d": "تتبع جلساتك السابقة وأعد الاتصال بجهات اتصالك بضغطة واحدة."
+      },
+      {
+        "t": "اتصال مباشر آمن",
+        "d": "مكالماتك مباشرة وسريعة وذات خصوصية تامة دون أي تتبع لهويتك."
+      }
+    ]
   }
 }
