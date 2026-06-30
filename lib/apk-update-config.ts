@@ -81,6 +81,24 @@ export interface UpdateManifest {
   notes?: string;
   /** Optional flag to force the update (no skip). Reserved for future use. */
   mandatory?: boolean;
+  /**
+   * Optional lowercase hex SHA-256 of the APK. When present, the downloaded
+   * file MUST hash to exactly this value before the installer is launched.
+   * This protects against a corrupted or tampered download even though the
+   * transport is already HTTPS.
+   */
+  sha256?: string;
+}
+
+/**
+ * Normalize a user/manifest-supplied SHA-256 string to canonical lowercase hex,
+ * or return null when it isn't a valid 64-char hex digest. Accepts optional
+ * "sha256:" prefixes and surrounding whitespace.
+ */
+export function normalizeSha256(raw?: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const hex = raw.trim().toLowerCase().replace(/^sha-?256:/, "");
+  return /^[0-9a-f]{64}$/.test(hex) ? hex : null;
 }
 
 /**
@@ -97,6 +115,8 @@ export function parseManifest(raw: unknown): UpdateManifest | null {
   if (typeof obj.apkUrl === "string" && obj.apkUrl) manifest.apkUrl = obj.apkUrl;
   if (typeof obj.notes === "string") manifest.notes = obj.notes;
   if (typeof obj.mandatory === "boolean") manifest.mandatory = obj.mandatory;
+  const sha = normalizeSha256(obj.sha256);
+  if (sha) manifest.sha256 = sha;
   return manifest;
 }
 

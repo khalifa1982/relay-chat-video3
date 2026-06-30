@@ -93,6 +93,7 @@ export function BuildStatusRow({
   const readyToInstall = status === "ready";
   const showBar =
     status === "downloading" ||
+    status === "verifying" ||
     status === "installing" ||
     status === "ready" ||
     status === "available";
@@ -107,6 +108,8 @@ export function BuildStatusRow({
           : "Update available — tap Update";
       case "downloading":
         return `Downloading update… ${Math.round(progress * 100)}%`;
+      case "verifying":
+        return "Verifying update…";
       case "ready":
         return "Download complete — tap Restart to apply";
       case "installing":

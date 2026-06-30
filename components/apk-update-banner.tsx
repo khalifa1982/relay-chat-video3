@@ -86,6 +86,8 @@ export function ApkUpdateBanner({
                 />
               </View>
             </>
+          ) : status === "verifying" ? (
+            <Text style={styles.sub}>Verifying update…</Text>
           ) : status === "installing" ? (
             <Text style={styles.sub}>
               Confirm the system prompt to install and restart RELAY.

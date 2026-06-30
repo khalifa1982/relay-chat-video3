@@ -30,7 +30,7 @@ const schemeFromBundleId = `manus${timestamp}`;
 // compares the server manifest's buildNumber against THIS value to decide
 // whether a newer APK is available. Bump this every time you publish a new APK
 // (and set the manifest's buildNumber to match the new release).
-const ANDROID_BUILD_NUMBER = 8;
+const ANDROID_BUILD_NUMBER = 9;
 
 const env = {
   // App branding - update these values directly (do not use env vars)
@@ -47,7 +47,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.8",
+  version: "1.0.9",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -94,6 +94,13 @@ const config: ExpoConfig = {
       // Audio output routing to Bluetooth headsets (earpiece/speaker/Bluetooth switch).
       "BLUETOOTH",
       "BLUETOOTH_CONNECT",
+    ],
+    // Defense-in-depth (audit follow-up): even if a transitive dependency tries
+    // to merge these in, strip them. The app downloads updates to its private
+    // cache dir, so it never needs shared/external storage access.
+    blockedPermissions: [
+      "android.permission.WRITE_EXTERNAL_STORAGE",
+      "android.permission.READ_EXTERNAL_STORAGE",
     ],
     intentFilters: [
       {

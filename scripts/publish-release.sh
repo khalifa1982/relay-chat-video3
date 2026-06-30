@@ -46,11 +46,28 @@ TAG="v${VERSION_NAME}"
 TMP="$(mktemp -d)"
 cp "$APK_PATH" "$TMP/relay-mobile.apk"
 
+# Integrity: compute the APK's SHA-256 and embed it in the manifest. Installed
+# apps recompute this over the downloaded file and refuse to install on a
+# mismatch (audit follow-up). Prefer sha256sum, fall back to shasum / openssl.
+if command -v sha256sum >/dev/null 2>&1; then
+  SHA256="$(sha256sum "$TMP/relay-mobile.apk" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  SHA256="$(shasum -a 256 "$TMP/relay-mobile.apk" | awk '{print $1}')"
+else
+  SHA256="$(openssl dgst -sha256 "$TMP/relay-mobile.apk" | awk '{print $NF}')"
+fi
+if [[ -z "$SHA256" ]]; then
+  echo "ERROR: could not compute the APK SHA-256." >&2
+  exit 1
+fi
+echo "APK SHA-256: ${SHA256}"
+
 cat > "$TMP/version.json" <<JSON
 {
   "buildNumber": ${BUILD_NUMBER},
   "versionName": "${VERSION_NAME}",
   "apkUrl": "https://github.com/${REPO}/releases/latest/download/relay-mobile.apk",
+  "sha256": "${SHA256}",
   "mandatory": false,
   "notes": "RELAY ${VERSION_NAME}"
 }

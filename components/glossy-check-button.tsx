@@ -71,7 +71,10 @@ export function GlossyCheckButton({
   const isDownloading = status === "downloading";
   const isReady = status === "ready";
   const isSpinning =
-    status === "checking" || status === "downloading" || status === "installing";
+    status === "checking" ||
+    status === "downloading" ||
+    status === "verifying" ||
+    status === "installing";
 
   // While idle/checking, recompute the remaining fraction periodically so the
   // ring visibly drains. Cheap: a state bump that re-reads Date.now().
@@ -135,12 +138,21 @@ export function GlossyCheckButton({
   const handlePress = () => {
     if (isReady) return onApply?.();
     if (status === "available" || status === "error") return onDownload?.();
-    if (isDownloading || status === "installing" || status === "checking") return;
+    if (
+      isDownloading ||
+      status === "verifying" ||
+      status === "installing" ||
+      status === "checking"
+    )
+      return;
     return onCheck?.();
   };
 
   const disabled =
-    isDownloading || status === "installing" || status === "checking";
+    isDownloading ||
+    status === "verifying" ||
+    status === "installing" ||
+    status === "checking";
 
   const onPressIn = () =>
     Animated.timing(scaleAnim, {

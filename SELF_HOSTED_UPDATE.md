@@ -109,3 +109,24 @@ Point the app elsewhere without code changes via env vars (Secrets panel):
 On the first auto-update, Android asks the user to allow "Install unknown apps"
 for RELAY (because the APK is not from the Play Store). This is a standard
 one-time prompt; after granting it, future updates install smoothly.
+
+## Integrity verification (SHA-256)
+
+As of build 9, every published release embeds a SHA-256 of the APK in
+`version.json` (the `sha256` field). The `scripts/publish-release.sh` helper
+computes this automatically.
+
+On the device, after the APK finishes downloading, the app recomputes the
+file's SHA-256 (streamed in 1 MiB windows so the ~53 MB file never sits fully in
+memory) and compares it to the manifest value. If they don't match, the
+download is deleted and the install is refused with a clear error — the app
+never hands a corrupted or tampered file to the Android installer.
+
+This is backward compatible: a manifest with no `sha256` field simply skips the
+check and installs as before, so older releases keep working.
+
+Manual hash (if you ever publish without the script):
+
+```bash
+sha256sum relay-mobile.apk   # copy the 64-char hex into version.json "sha256"
+```

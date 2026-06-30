@@ -6,6 +6,7 @@ import * as IntentLauncher from "expo-intent-launcher";
 // File API does not, so we use it for the resumable APK download.
 import * as FileSystem from "expo-file-system/legacy";
 
+import { verifyFileSha256 } from "@/lib/apk-integrity";
 import {
   UPDATE_MANIFEST_URL,
   type UpdateManifest,
@@ -25,6 +26,7 @@ export type ApkUpdateStatus =
   | "checking" // fetching the manifest
   | "available" // a newer build exists (download not started yet)
   | "downloading" // APK is downloading (see `progress`)
+  | "verifying" // APK downloaded, verifying its SHA-256 before install
   | "ready" // APK fully downloaded, waiting for the user to apply/restart
   | "installing" // handing the APK to the Android installer
   | "error"; // a recoverable error occurred
@@ -129,8 +131,31 @@ export function useApkUpdate() {
         throw new Error("Download failed");
       }
       setProgress(1);
+
+      // Integrity verification: if the manifest declares a SHA-256, the
+      // downloaded APK MUST hash to exactly that value before we hand it to the
+      // installer. This guards against a corrupted or tampered download even
+      // though the transport is HTTPS. Releases without a hash skip this step
+      // and install as before (backward compatible).
+      if (m.sha256) {
+        try {
+          setStatus("verifying");
+          await verifyFileSha256(result.uri, m.sha256);
+        } catch (verifyErr) {
+          // Delete the suspect file so a retry starts clean, and refuse to install.
+          try {
+            await FileSystem.deleteAsync(result.uri, { idempotent: true });
+          } catch {
+            // ignore cleanup failure
+          }
+          throw verifyErr instanceof Error
+            ? verifyErr
+            : new Error("Integrity check failed");
+        }
+      }
+
       readyFileRef.current = result.uri;
-      // Fully downloaded — wait for the user to apply (or auto-apply if mandatory).
+      // Fully downloaded + verified — wait for the user to apply (or auto-apply).
       setStatus("ready");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Update download failed");

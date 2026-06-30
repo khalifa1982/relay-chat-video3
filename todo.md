@@ -115,3 +115,16 @@
 - [x] Bumped app.config.ts to 1.0.8 / build 8
 - [x] tsc clean + 52 tests pass; temp footer lab route removed
 - [x] Checkpoint and deliver
+
+## Round 11 — APK audit response
+- [x] Add SHA-256 manifest field + parser (`lib/apk-update-config.ts`)
+- [x] Pure, dependency-free streaming SHA-256 + base64 decoder (`lib/sha256.ts`)
+- [x] On-device, memory-safe file hashing + verification (`lib/apk-integrity.ts`)
+- [x] Wire verify step into update flow with a new "verifying" phase (`hooks/use-apk-update.ts`)
+- [x] Show "verifying" state in footer button + mandatory overlay
+- [x] publish-release.sh embeds APK sha256 in version.json
+- [x] Strip external-storage perms via blockedPermissions; keep permission set minimal
+- [x] Bump version to 1.0.9 / build 9 to align source with releases
+- [x] Unit tests: hasher vs Node crypto, base64 round-trip, manifest parsing (13 new; 65 pass)
+- [x] Document integrity verification in SELF_HOSTED_UPDATE.md
+- [ ] NOT actionable here: backend hostname mismatch + server v2.65.0 fixes (separate mobile project com.app.relaymobile)
