@@ -88,3 +88,13 @@
 - [x] Added scripts/publish-release.sh one-command release helper
 - [x] Rewrote SELF_HOSTED_UPDATE.md for the GitHub Releases workflow
 - [x] Checkpoint and deliver
+
+## Round 9 — Glossy Check button with 10-min countdown ring
+- [x] Published v1.0.7 APK to GitHub Releases host (build 7)
+- [x] Expose poll interval + next-check time (lastCheckAt + pollIntervalMs) from useApkUpdate
+- [x] Redesign the footer Check control as a glossy blue circular icon button (gradient/sheen)
+- [x] Add a ring/arc that drains over the 10-min poll window (no numbers), triggers a check at 0, then refills
+- [x] Keep adaptive states (refresh / download / % / restart) working with the new look
+- [x] Added pure countdown helper + unit tests; made live APK test version-agnostic
+- [x] Visually verified all phases; tsc clean + 52 tests pass
+- [ ] Bump app.config.ts to 1.0.8 / build 8 for the next APK build (pending user request)

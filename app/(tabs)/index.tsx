@@ -31,6 +31,8 @@ export default function HomeScreen() {
     installedBuild,
     installedVersionName,
     lastReason,
+    lastCheckAt,
+    pollIntervalMs,
     check,
     startDownload,
     applyUpdate,
@@ -64,6 +66,8 @@ export default function HomeScreen() {
         reason={lastReason}
         status={status}
         progress={progress}
+        lastCheckAt={lastCheckAt}
+        pollIntervalMs={pollIntervalMs}
         onCheck={() => void check()}
         onDownload={startDownload}
         onApply={() => void applyUpdate()}

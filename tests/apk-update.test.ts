@@ -132,13 +132,17 @@ describe("live GitHub Releases manifest (end-to-end)", () => {
     expect(ct).not.toContain("text/html");
   }, 60000);
 
-  it("detects 1.0.6 as an update for an installed 1.0.5 device", async () => {
+  it("flags an older device as needing an update, and a same-version device as up to date", async () => {
     const res = await fetch(MANIFEST_URL, { redirect: "follow" });
     const manifest = parseManifest(await res.json());
-    // Simulate a phone on an older version name.
-    expect(isUpdateAvailable(5, manifest, "1.0.5")).toBe(true);
-    // And reports up-to-date once the phone is on the same version.
-    expect(isUpdateAvailable(6, manifest, manifest!.versionName)).toBe(false);
+    expect(manifest).not.toBeNull();
+    // A phone one build behind the published manifest must see an update.
+    const olderBuild = manifest!.buildNumber - 1;
+    expect(isUpdateAvailable(olderBuild, manifest, "0.0.1")).toBe(true);
+    // A phone already on the published version must report up to date.
+    expect(
+      isUpdateAvailable(manifest!.buildNumber, manifest, manifest!.versionName),
+    ).toBe(false);
   }, 60000);
 });
 

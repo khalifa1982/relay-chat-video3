@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
-import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
+import { Animated, StyleSheet, Text, View } from "react-native";
 
 import type { ApkUpdateStatus } from "@/hooks/use-apk-update";
+import { GlossyCheckButton } from "@/components/glossy-check-button";
 
 interface Props {
   /** Installed Android build number (versionCode), or null on web/iOS. */
@@ -17,6 +18,10 @@ interface Props {
   status: ApkUpdateStatus;
   /** Download progress 0..1 (only meaningful while downloading). */
   progress?: number;
+  /** Epoch ms of the last update check (anchors the countdown ring). */
+  lastCheckAt?: number;
+  /** Poll window length in ms (the countdown ring drains over this). */
+  pollIntervalMs?: number;
   /** Re-check the manifest for a newer build. */
   onCheck?: () => void;
   /** Start downloading the available build ("Update" button). */
@@ -58,6 +63,8 @@ export function BuildStatusRow({
   reason,
   status,
   progress = 0,
+  lastCheckAt = Date.now(),
+  pollIntervalMs = 10 * 60_000,
   onCheck,
   onDownload,
   onApply,
@@ -96,29 +103,6 @@ export function BuildStatusRow({
       default:
         return upToDate ? "Up to date" : "Ready";
     }
-  })();
-
-  // Choose the action button label + handler for the current phase.
-  const action = (() => {
-    if (status === "ready") {
-      return { label: "Restart", onPress: onApply, disabled: false };
-    }
-    if (status === "downloading") {
-      return { label: `${Math.round(progress * 100)}%`, onPress: undefined, disabled: true };
-    }
-    if (status === "installing") {
-      return { label: "Installing", onPress: undefined, disabled: true };
-    }
-    if (status === "available") {
-      return { label: "Update", onPress: onDownload, disabled: false };
-    }
-    if (status === "error") {
-      return { label: "Retry", onPress: onCheck, disabled: false };
-    }
-    if (status === "checking") {
-      return { label: "…", onPress: undefined, disabled: true };
-    }
-    return { label: "Check", onPress: onCheck, disabled: false };
   })();
 
   // Animate the progress bar width smoothly.
@@ -160,20 +144,15 @@ export function BuildStatusRow({
             </Text>
           ) : null}
         </View>
-        <Pressable
-          onPress={action.onPress}
-          disabled={action.disabled}
-          style={({ pressed }) => [
-            styles.button,
-            readyToInstall && styles.buttonReady,
-            action.disabled && { opacity: 0.5 },
-            pressed && !action.disabled && { opacity: 0.85 },
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel={`Update action: ${action.label}`}
-        >
-          <Text style={styles.buttonText}>{action.label}</Text>
-        </Pressable>
+        <GlossyCheckButton
+          status={status}
+          progress={progress}
+          lastCheckAt={lastCheckAt}
+          pollIntervalMs={pollIntervalMs}
+          onCheck={onCheck}
+          onDownload={onDownload}
+          onApply={onApply}
+        />
       </View>
 
       {showBar ? (
@@ -229,22 +208,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 2,
     opacity: 0.8,
-  },
-  button: {
-    backgroundColor: COLORS.accent,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 999,
-    minWidth: 76,
-    alignItems: "center",
-  },
-  buttonReady: {
-    backgroundColor: COLORS.ok,
-  },
-  buttonText: {
-    color: "#04121A",
-    fontWeight: "800",
-    fontSize: 13,
   },
   track: {
     height: 4,

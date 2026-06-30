@@ -44,6 +44,13 @@ export const UPDATE_APK_URL =
   `${UPDATE_BASE_URL}/relay-mobile.apk`;
 
 /**
+ * How often (ms) the app polls the manifest for a newer build while running.
+ * The footer Check control drains its ring over exactly this window, then
+ * triggers a check at zero and refills. The user asked for a 10-minute cycle.
+ */
+export const POLL_INTERVAL_MS = 10 * 60_000;
+
+/**
  * Compare two dotted version-name strings (e.g. "1.0.5" vs "1.0.4").
  * Returns 1 if a>b, -1 if a<b, 0 if equal/uncomparable.
  * Non-numeric or missing segments are treated as 0.

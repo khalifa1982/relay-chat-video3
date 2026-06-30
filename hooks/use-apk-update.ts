@@ -13,6 +13,7 @@ import {
   isUpdateAvailable,
   parseManifest,
   resolveApkUrl,
+  POLL_INTERVAL_MS,
 } from "@/lib/apk-update-config";
 import { isCallActive } from "@/hooks/use-call-session";
 
@@ -29,9 +30,8 @@ export type ApkUpdateStatus =
   | "error"; // a recoverable error occurred
 
 const MIN_CHECK_INTERVAL_MS = 30_000;
-// Poll the update manifest on this cadence while the app is running, in addition
-// to launch + foreground-resume checks. The user asked for a 10-minute auto check.
-const POLL_INTERVAL_MS = 10 * 60_000;
+// Poll cadence (10 min) is defined once in apk-update-config so the footer
+// countdown ring drains over exactly the same window.
 
 /**
  * Reads the currently installed Android build number as an integer.
@@ -75,6 +75,10 @@ export function useApkUpdate() {
   const [manifest, setManifest] = useState<UpdateManifest | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mandatory, setMandatory] = useState(false);
+  // Timestamp (ms epoch) of when the most recent check STARTED. The footer uses
+  // this together with POLL_INTERVAL_MS to render the draining countdown ring,
+  // and resets the ring whenever it changes.
+  const [lastCheckAt, setLastCheckAt] = useState<number>(() => Date.now());
 
   // Human-readable explanation of the last check outcome, shown in the footer
   // so "Check" never silently says "no update" without a reason.
@@ -183,6 +187,7 @@ export function useApkUpdate() {
         return;
       }
       lastCheckRef.current = now;
+      setLastCheckAt(now);
       busyRef.current = true;
       setError(null);
 
@@ -265,11 +270,12 @@ export function useApkUpdate() {
     }
   }, [manifest, download]);
 
-  // Check once on first mount.
+  // Check once on first mount (not throttled, so the countdown ring anchors to
+  // a real check time right away).
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    void check({ auto: true });
+    void check();
   }, [check]);
 
   // Re-check whenever the app returns to the foreground.
@@ -281,14 +287,18 @@ export function useApkUpdate() {
     return () => sub.remove();
   }, [check]);
 
-  // Poll every 10 minutes while the app is running so a freshly published build
-  // is picked up automatically without needing a relaunch.
+  // Poll on the 10-minute cadence, anchored to the LAST check time. Re-arming on
+  // `lastCheckAt` keeps the automatic check aligned with the footer countdown
+  // ring: whenever a check happens (manual, resume, or auto), the ring resets to
+  // full and the next auto check is scheduled exactly POLL_INTERVAL_MS later.
   useEffect(() => {
-    const id = setInterval(() => {
+    const elapsed = Date.now() - lastCheckAt;
+    const remaining = Math.max(0, POLL_INTERVAL_MS - elapsed);
+    const id = setTimeout(() => {
       void check({ auto: true });
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [check]);
+    }, remaining);
+    return () => clearTimeout(id);
+  }, [check, lastCheckAt]);
 
   return {
     status,
@@ -300,6 +310,10 @@ export function useApkUpdate() {
     installedVersionName,
     /** Human-readable explanation of the last check result. */
     lastReason,
+    /** Epoch ms of when the most recent check started (drives the countdown ring). */
+    lastCheckAt,
+    /** Poll window length in ms (the countdown ring drains over this). */
+    pollIntervalMs: POLL_INTERVAL_MS,
     /** Re-check the manifest (detect only). */
     check,
     /** Begin downloading the available build (footer "Update" button). */
