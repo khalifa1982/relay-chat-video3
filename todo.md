@@ -2035,3 +2035,37 @@ improvements; 61 were confirmed real and rule-compliant. The 16 highest impact/e
 - [x] Dedicated privacy/identity-hiding section
 - [x] Update Home.test.ts assertions for new design (482/482 passing)
 - [x] CDP verify desktop + mobile (images load, sticky CTA, stats fit, no gap, no Gemini text)
+
+## v2.64.0 — Messages layout collapse fix + duplicate bell icon consolidation (delivered 2026-06-30)
+
+Reported by the user with screenshots: in the Messages conversation view, the message thread was reduced
+to an invisible sliver and the composer floated mid-screen with large blank gaps above and below it; and
+the app header showed two visually-identical bell icons side by side. A diagnostic workflow (parallel
+investigation → adversarial verification → synthesis) root-caused both before any fix was written.
+
+- [x] **Messages conversation-view layout collapse — root cause confirmed and fixed.** The v2.63.0 message-
+      list wrapper was `<div className="relative flex-1 min-h-0">` whose ENTIRE content was
+      `position:absolute` children (the scroll container, the search overlay, the scroll-to-bottom button) —
+      a flex item with no in-flow content at all. Safari/WebKit doesn't reliably compute a flex-grow height
+      for that shape, so the wrapper collapsed to near-zero height, which is exactly what produced the
+      symptom: a sliver of one message, a large blank gap, the composer floating mid-screen instead of
+      pinned to the bottom. Fixed by making the wrapper a real flex column
+      (`relative flex flex-col flex-1 min-h-0`) and making the scroll container an in-flow `flex-1 min-h-0`
+      child instead of `absolute inset-0` — the search overlay and scroll-to-bottom button stay `absolute`
+      (now correctly positioned against a wrapper with a definite, properly-computed height). A secondary,
+      compounding factor was also confirmed and fixed: AppShell's mobile `pb-28` (112px), meant for simple
+      scrolling-list pages (Contacts/History/Dialer), was silently eating 112px from Messages' self-contained
+      layout (header + internal scroll + pinned composer, which doesn't use the page-level scroll at all).
+      Scoped the fix to `MessagesPage`'s own root (`-mb-28 md:mb-0`) rather than touching AppShell's shared
+      wrapper, so Dialer/Contacts/History — which DO depend on that padding and have no defensive padding of
+      their own — are completely untouched.
+- [x] **Duplicate bell icons consolidated to one.** The mobile (and desktop) header rendered both a
+      `NotificationBell` (missed-calls + unread badge, opens a panel) and a separate `DndToggle` — both
+      literal `Bell`/`BellOff` lucide icons sitting side by side, reading as a confusing duplicate. Do Not
+      Disturb is now a toggle row (shadcn `Switch`) inside the `NotificationBell` dropdown panel itself,
+      above the missed/unread list; the bell button's own icon swaps to `BellOff` (tinted) when DND is on,
+      so the state is visible without opening the panel. `DndToggle` is deleted entirely. Net result: exactly
+      one bell-family icon in the header, on both mobile AND desktop (desktop previously had no DND
+      affordance in the header at all — it now does, via the same panel).
+- [x] 8 new regression tests pinning both fixes (and correcting a prior test that had been asserting the
+      *buggy* layout pattern as if it were correct). 517 tests green, tsc + build clean. Footer → `v2.64.0`.

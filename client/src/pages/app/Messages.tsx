@@ -97,7 +97,13 @@ export default function MessagesPage() {
   });
 
   return (
-    <div className="h-full flex md:p-6 gap-0 md:gap-6 min-h-0">
+    // -mb-28 cancels AppShell's mobile pb-28 (reserved for simple scrolling-list
+    // pages) specifically for this page: ConversationView below builds its OWN
+    // self-contained flex layout (header + scrollable list + a composer pinned
+    // to the viewport bottom) and doesn't rely on the page-level scroll, so that
+    // padding was silently eating 112px the composer needed. md:mb-0 keeps this
+    // a no-op on desktop, where the padding is already md:pb-0.
+    <div className="h-full -mb-28 md:mb-0 flex md:p-6 gap-0 md:gap-6 min-h-0">
       {/* ── thread list (always visible on desktop; hidden when a thread is open on mobile) ── */}
       <aside
         className={
@@ -634,9 +640,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       {/* message list — min-h-0 lets this flex child shrink so the composer
           stays pinned at the bottom (without it, the list grows to fit content
           and shoves the input into the middle of the screen). Wrapped in a
-          relative container so the search overlay + scroll-to-bottom button can
-          be positioned over it without disturbing the scroll container itself. */}
-      <div className="relative flex-1 min-h-0">
+          relative + flex-col container (NOT a relative-with-only-absolute-
+          children box — Safari doesn't reliably compute flex-grow height for a
+          flex item whose entire content is taken out of flow, which collapsed
+          this whole area to near-zero height) so the search overlay +
+          scroll-to-bottom button can still be positioned over the real,
+          properly-sized scroll container. */}
+      <div className="relative flex flex-col flex-1 min-h-0">
       {searchOpen && (
         <div className="absolute inset-0 z-20 flex flex-col bg-background md:bg-card">
           <div className="px-3 md:px-5 py-2.5 border-b border-border">
@@ -709,7 +719,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       )}
       <div
         ref={scrollRef}
-        className="absolute inset-0 overflow-y-auto px-3 md:px-5 py-4 space-y-0.5 bg-background md:bg-card"
+        className="flex-1 min-h-0 overflow-y-auto px-3 md:px-5 py-4 space-y-0.5 bg-background md:bg-card"
       >
         {messagesQuery.isLoading ? (
           <div className="text-sm text-muted-foreground">Loading…</div>

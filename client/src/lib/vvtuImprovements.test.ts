@@ -69,7 +69,7 @@ describe("video improvements", () => {
 });
 
 describe("UI/UX improvements", () => {
-  it("focus-visible rings are applied to raw interactive elements (DndToggle, sidebar, theme toggle, nav)", () => {
+  it("focus-visible rings are applied to raw interactive elements (sidebar, theme toggle, nav)", () => {
     expect(APPSHELL).toMatch(/focus-visible:ring-ring\/50 focus-visible:ring-\[3px\]/);
     expect(APPSHELL).toMatch(/focus-visible:ring-sidebar-ring/);
   });

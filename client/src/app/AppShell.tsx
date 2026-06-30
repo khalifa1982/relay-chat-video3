@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Phone, MessageSquare, UserRound, Clock, LogOut, Sparkles, Sun, Moon, Bell, BellOff, Smartphone, Monitor, ArrowLeft } from "lucide-react";
+import { Phone, MessageSquare, UserRound, Clock, LogOut, Sparkles, Sun, Moon, Smartphone, Monitor, ArrowLeft } from "lucide-react";
 import { detectDeviceType } from "@/lib/deviceType";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
@@ -12,30 +12,6 @@ import { useRealtime } from "./useRealtime";
 import { useDnd } from "./dnd";
 import { useTheme } from "@/contexts/ThemeContext";
 import { MissedCallToast, NotificationBell } from "./MissedCalls";
-
-/** One-tap Do Not Disturb toggle for the app header. */
-function DndToggle() {
-  const [dnd, setDnd] = useDnd();
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={dnd}
-      aria-label={dnd ? "Do Not Disturb is on — tap to turn off" : "Turn on Do Not Disturb"}
-      title={dnd ? "Do Not Disturb: on" : "Do Not Disturb: off"}
-      onClick={() => setDnd(!dnd)}
-      className={
-        "grid size-9 place-items-center rounded-xl transition-colors active:scale-95 " +
-        "outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
-        (dnd
-          ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
-          : "text-muted-foreground hover:text-foreground hover:bg-muted/50")
-      }
-    >
-      {dnd ? <BellOff className="size-[18px]" /> : <Bell className="size-[18px]" />}
-    </button>
-  );
-}
 
 /**
  * Tab keys used by the bottom-nav / sidebar. We hard-code the routes here
@@ -104,6 +80,9 @@ function Inner({ children }: { children: React.ReactNode }) {
   const { me, signOut } = useIdentity();
   const [location, navigate] = useLocation();
   const utils = trpc.useUtils();
+  // Do Not Disturb now lives inside the NotificationBell panel (it used to be a
+  // SECOND, visually-identical bell icon next to the notification bell).
+  const [dnd, setDnd] = useDnd();
 
   // Open the SSE push channel as soon as we know we have an identity.
   // Server pushes message/read/presence/contact hints → hook invalidates the
@@ -205,6 +184,8 @@ function Inner({ children }: { children: React.ReactNode }) {
               unreadCount={unreadTotal}
               onOpenHistory={() => navigate("/app/history")}
               onOpenMessages={() => navigate("/app/messages")}
+              dnd={dnd}
+              onDndChange={setDnd}
             />
           </div>
           <Link
@@ -392,8 +373,9 @@ function Inner({ children }: { children: React.ReactNode }) {
               unreadCount={unreadTotal}
               onOpenHistory={() => navigate("/app/history")}
               onOpenMessages={() => navigate("/app/messages")}
+              dnd={dnd}
+              onDndChange={setDnd}
             />
-            <DndToggle />
             {me.isGuest ? (
               <a
                 href={getLoginUrl()}

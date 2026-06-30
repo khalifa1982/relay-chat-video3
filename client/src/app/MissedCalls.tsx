@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { PhoneMissed, X, Bell, MessageSquare, Clock, ChevronRight } from "lucide-react";
+import { PhoneMissed, X, Bell, BellOff, MessageSquare, Clock, ChevronRight } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 
 /** "3m" / "2h" / "5d" / date — compact relative time. */
 function ago(iso: string | Date): string {
@@ -93,19 +94,26 @@ export function MissedCallToast({
 
 /**
  * Global notification bell with a cumulative badge (missed calls + unread
- * messages). Tapping opens a small panel with one row per category that routes
- * to the detailed list — the History tab for missed calls, Messages for unread.
+ * messages). Tapping opens a small panel with a Do Not Disturb toggle at the
+ * top (the ONLY bell-family control in the app header — DND used to be a
+ * second, visually-identical bell icon sitting right next to this one, which
+ * read as a confusing duplicate) and one row per category below that routes to
+ * the detailed list — the History tab for missed calls, Messages for unread.
  */
 export function NotificationBell({
   missedCount,
   unreadCount,
   onOpenHistory,
   onOpenMessages,
+  dnd,
+  onDndChange,
 }: {
   missedCount: number;
   unreadCount: number;
   onOpenHistory: () => void;
   onOpenMessages: () => void;
+  dnd: boolean;
+  onDndChange: (value: boolean) => void;
 }) {
   const total = missedCount + unreadCount;
   const [open, setOpen] = useState(false);
@@ -124,11 +132,16 @@ export function NotificationBell({
       <button
         type="button"
         aria-label={total > 0 ? `${total} notifications` : "Notifications"}
-        title="Notifications"
+        title={dnd ? "Notifications (Do Not Disturb is on)" : "Notifications"}
         onClick={() => setOpen((v) => !v)}
-        className="relative grid size-9 place-items-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50 active:scale-95 transition-colors outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+        className={
+          "relative grid size-9 place-items-center rounded-xl active:scale-95 transition-colors outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
+          (dnd
+            ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
+            : "text-muted-foreground hover:text-foreground hover:bg-muted/50")
+        }
       >
-        <Bell className="size-[18px]" />
+        {dnd ? <BellOff className="size-[18px]" /> : <Bell className="size-[18px]" />}
         {total > 0 && (
           <span className="absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-destructive text-white text-[10px] items-center justify-center font-bold ring-2 ring-card">
             {total > 99 ? "99+" : total}
@@ -140,6 +153,21 @@ export function NotificationBell({
           <div className="px-4 py-2.5 border-b border-border text-xs font-semibold text-muted-foreground">
             Notifications
           </div>
+          {/* Do Not Disturb lives here — the toggle stays in the panel rather
+              than closing it, so it reads as "the notification center" rather
+              than a second header icon. */}
+          <label className="flex items-center gap-3 px-4 py-3 border-b border-border/60 cursor-pointer">
+            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
+              {dnd ? <BellOff className="size-4" /> : <Bell className="size-4" />}
+            </span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-sm font-medium">Do Not Disturb</span>
+              <span className="block text-xs text-muted-foreground">
+                {dnd ? "Incoming calls are silenced" : "Calls ring normally"}
+              </span>
+            </span>
+            <Switch checked={dnd} onCheckedChange={onDndChange} aria-label="Toggle Do Not Disturb" />
+          </label>
           {total === 0 ? (
             <div className="px-4 py-6 text-center text-sm text-muted-foreground">You're all caught up 🎉</div>
           ) : (
