@@ -1890,3 +1890,18 @@ rest are sequenced below.
 - [ ] **SFU note:** hold/swap is seamless on the WebRTC **mesh** (default). On a **LiveKit** deployment the
       held call drops + rejoins its SFU room on resume (a brief reconnect, not a frozen-PC hold) — a fully
       seamless two-connection SFU hold is the follow-up if the live deploy uses LiveKit.
+
+## v2.60.0 — WhatsApp-style messaging: date dividers + message grouping (delivered 2026-06-30)
+
+- [x] **Date dividers.** The conversation now inserts a centered **"Today" / "Yesterday" / "June 28, 2026"**
+      pill whenever the calendar day changes between messages — the classic WhatsApp day separator — so a
+      long thread is easy to scan by date.
+- [x] **Consecutive-message grouping.** Runs of messages from the same sender within ~5 minutes are now
+      **stacked tightly** (0.5 vs 2 spacing) with the rounded **tail only on the last bubble** of the run,
+      and in group chats the **sender name shows once** at the top of a run instead of on every bubble —
+      matching WhatsApp's grouped look. Per-bubble timestamps + read ticks are kept (WhatsApp shows time on
+      every message). Bubble colors (yours = green right, theirs = blue left), the bottom-pinned composer,
+      reply/quote, unsend, voice notes, emoji, attachments, and the typing indicator are unchanged from the
+      v2.56 pass.
+- [x] 2 new source-guard tests (date dividers + grouping). 466 tests green, tsc + build clean. Footer →
+      `v2.60.0`.

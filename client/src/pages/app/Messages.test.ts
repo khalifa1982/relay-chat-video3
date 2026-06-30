@@ -38,4 +38,19 @@ describe("Messages.tsx — messaging overhaul", () => {
     expect(SRC).toMatch(/e\.key === "Escape" && onClose/);
     expect(SRC).toMatch(/aria-label="Close preview"/);
   });
+
+  it("renders WhatsApp-style date dividers (Today / Yesterday) between days", () => {
+    expect(SRC).toMatch(/function dayLabel/);
+    expect(SRC).toMatch(/"Today"/);
+    expect(SRC).toMatch(/"Yesterday"/);
+    // a divider is inserted when the calendar day changes
+    expect(SRC).toMatch(/const showDay =/);
+  });
+
+  it("groups consecutive same-sender messages (tail only on the last bubble)", () => {
+    expect(SRC).toMatch(/sameAsPrev/);
+    expect(SRC).toMatch(/lastOfGroup/);
+    // the rounded tail is conditional on being the last of a run
+    expect(SRC).toMatch(/lastOfGroup \? "rounded-br-sm"/);
+  });
 });

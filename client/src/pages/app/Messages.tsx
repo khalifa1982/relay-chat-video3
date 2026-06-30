@@ -59,6 +59,23 @@ function formatTime(iso: string | Date): string {
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
+/** Local Y-M-D key so messages can be grouped under a date divider. */
+function dayKey(iso: string | Date): string {
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+/** WhatsApp-style date pill: "Today" / "Yesterday" / "June 28, 2026". */
+function dayLabel(iso: string | Date): string {
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  const today = new Date();
+  const yest = new Date(today);
+  yest.setDate(today.getDate() - 1);
+  if (dayKey(d) === dayKey(today)) return "Today";
+  if (dayKey(d) === dayKey(yest)) return "Yesterday";
+  return d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
+}
+
 export default function MessagesPage() {
   const { me } = useIdentity();
   const [location, setLocation] = useLocation();
@@ -537,7 +554,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           and shoves the input into the middle of the screen). */}
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto px-3 md:px-5 py-4 space-y-2 bg-background md:bg-card"
+        className="flex-1 min-h-0 overflow-y-auto px-3 md:px-5 py-4 space-y-0.5 bg-background md:bg-card"
       >
         {messagesQuery.isLoading ? (
           <div className="text-sm text-muted-foreground">Loading…</div>
@@ -546,13 +563,40 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             No messages yet. Say hi 👋
           </div>
         ) : (
-          messagesQuery.data?.map((m) => {
+          messagesQuery.data?.map((m, i, arr) => {
             const mine = m.senderIdentityId === me.id;
+            const prev = arr[i - 1];
+            const next = arr[i + 1];
+            // Insert a date pill whenever the calendar day changes.
+            const showDay = !prev || dayKey(prev.createdAt) !== dayKey(m.createdAt);
+            // WhatsApp-style grouping: tighten consecutive runs from the same
+            // sender within ~5 min, and only the LAST bubble of a run gets the
+            // tail + timestamp (the rest are "stacked").
+            const GROUP_MS = 5 * 60_000;
+            const sameAsPrev =
+              !showDay && !!prev && prev.senderIdentityId === m.senderIdentityId &&
+              new Date(m.createdAt).getTime() - new Date(prev.createdAt).getTime() < GROUP_MS;
+            const sameAsNext =
+              !!next && next.senderIdentityId === m.senderIdentityId &&
+              dayKey(next.createdAt) === dayKey(m.createdAt) &&
+              new Date(next.createdAt).getTime() - new Date(m.createdAt).getTime() < GROUP_MS;
+            const lastOfGroup = !sameAsNext;
+            const tail = mine ? (lastOfGroup ? "rounded-br-sm" : "") : (lastOfGroup ? "rounded-bl-sm" : "");
             return (
-              <div
-                key={m.id}
-                className={"group flex items-end gap-1.5 " + (mine ? "justify-end" : "justify-start")}
-              >
+              <div key={m.id}>
+                {showDay && (
+                  <div className="flex justify-center my-3">
+                    <span className="px-3 py-1 rounded-full bg-muted/70 text-[11px] font-medium text-muted-foreground shadow-sm">
+                      {dayLabel(m.createdAt)}
+                    </span>
+                  </div>
+                )}
+                <div
+                  className={
+                    "group flex items-end gap-1.5 " + (mine ? "justify-end" : "justify-start") +
+                    (sameAsPrev ? " mt-0.5" : " mt-2")
+                  }
+                >
                 {mine && (
                   <MessageMenu
                     mine
@@ -566,11 +610,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     "max-w-[75%] rounded-2xl px-3.5 py-2 text-sm break-words shadow-sm " +
                     // Yours = green (right), theirs = blue (left) — SMS-style.
                     (mine
-                      ? "bg-[color:var(--relay-online,#06d6a0)] text-[#04201b] rounded-br-sm"
-                      : "bg-[#2563eb] text-white rounded-bl-sm")
+                      ? "bg-[color:var(--relay-online,#06d6a0)] text-[#04201b] "
+                      : "bg-[#2563eb] text-white ") + tail
                   }
                 >
-                  {isGroup && !mine && (
+                  {isGroup && !mine && !sameAsPrev && (
                     <div className="text-[11px] font-semibold text-white/90 mb-0.5">
                       {nameById.get(m.senderIdentityId) || "Member"}
                     </div>
@@ -619,6 +663,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     onCopy={m.body ? () => navigator.clipboard?.writeText(m.body!) : undefined}
                   />
                 )}
+                </div>
               </div>
             );
           })
