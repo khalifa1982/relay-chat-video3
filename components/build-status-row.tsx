@@ -9,6 +9,8 @@ interface Props {
   installedBuild: number | null;
   /** Installed human version name, e.g. "1.0.4". */
   installedVersionName?: string | null;
+  /** The version bundled into this app build (shown as the "Beta" line). */
+  betaVersionName?: string | null;
   /** Latest build number reported by the manifest, if known. */
   latestBuild?: number;
   /** Latest human version name reported by the manifest, if known. */
@@ -31,12 +33,12 @@ interface Props {
 }
 
 const COLORS = {
-  bg: "#0F1630",
-  border: "#1F2A4D",
-  track: "#1B2647",
-  text: "#E5E9F5",
-  sub: "#9AA3BD",
-  accent: "#06B6D4",
+  bg: "#080A0F",
+  border: "#161B26",
+  track: "#1A1F2B",
+  text: "#F2F4F8",
+  sub: "#8B93AD",
+  accent: "#22D3EE",
   ok: "#34D399",
   warn: "#F59E0B",
 };
@@ -58,6 +60,7 @@ const COLORS = {
 export function BuildStatusRow({
   installedBuild,
   installedVersionName,
+  betaVersionName,
   latestBuild,
   latestVersionName,
   reason,
@@ -69,7 +72,17 @@ export function BuildStatusRow({
   onDownload,
   onApply,
 }: Props) {
-  const installedLabel = installedVersionName ?? (installedBuild != null ? String(installedBuild) : "—");
+  // Two distinct version identities surfaced to the user:
+  //  - Beta: the version this app build ships with (from app.config.ts).
+  //  - Installed: what is actually running on this device (native versionName
+  //    + build), which differs once an OTA APK update has been applied.
+  const betaLabel = betaVersionName ?? installedVersionName ?? null;
+  const installedNameLabel =
+    installedVersionName ?? (installedBuild != null ? String(installedBuild) : "—");
+  const installedLabel =
+    installedBuild != null
+      ? `${installedNameLabel} · build ${installedBuild}`
+      : installedNameLabel;
   const latestLabel = latestVersionName ?? (latestBuild != null ? String(latestBuild) : null);
   const upToDate =
     latestBuild != null && installedBuild != null
@@ -124,9 +137,17 @@ export function BuildStatusRow({
     <View style={styles.container}>
       <View style={styles.row}>
         <View style={styles.left}>
-          <Text style={styles.build} numberOfLines={1}>
-            Version {installedLabel}
-            {latestLabel != null ? ` · latest ${latestLabel}` : ""}
+          <View style={styles.versionRow}>
+            <View style={styles.betaBadge}>
+              <Text style={styles.betaBadgeText}>BETA</Text>
+            </View>
+            <Text style={styles.build} numberOfLines={1}>
+              {betaLabel ?? "—"}
+            </Text>
+          </View>
+          <Text style={styles.installed} numberOfLines={1}>
+            Installed: {installedLabel}
+            {latestLabel != null ? `  ·  latest ${latestLabel}` : ""}
           </Text>
           <Text
             style={[
@@ -187,10 +208,35 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     paddingRight: 12,
   },
+  versionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  betaBadge: {
+    backgroundColor: "rgba(6, 182, 212, 0.16)",
+    borderColor: COLORS.accent,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  betaBadgeText: {
+    color: COLORS.accent,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+  },
   build: {
     color: COLORS.text,
-    fontSize: 13,
-    fontWeight: "700",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  installed: {
+    color: COLORS.sub,
+    fontSize: 11.5,
+    fontWeight: "600",
+    marginTop: 3,
   },
   status: {
     color: COLORS.sub,

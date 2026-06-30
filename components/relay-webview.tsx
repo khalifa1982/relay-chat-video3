@@ -25,14 +25,17 @@ import { useCallSession } from "@/hooks/use-call-session";
 import { useCallNotifications } from "@/hooks/use-call-notifications";
 import { useBackgroundPresence } from "@/hooks/use-background-presence";
 
+// Palette aligned to the live RELAY web app (oklch(0.12 0.008 245) background
+// ~ #050608) so the native shell's splash/error chrome blends seamlessly with
+// the web content instead of flashing a lighter navy.
 const COLORS = {
-  navy: "#0B1020",
-  surface: "#11182B",
+  navy: "#050608",
+  surface: "#0E1117",
   indigo: "#4F46E5",
-  cyan: "#06B6D4",
-  foreground: "#E5E9F5",
+  cyan: "#22D3EE",
+  foreground: "#F2F4F8",
   muted: "#8B93AD",
-  border: "#1E2742",
+  border: "#1A1F2B",
 };
 
 const RELAY_LOGO = require("@/assets/images/relay-logo.png");
@@ -283,6 +286,7 @@ export function RelayWebView() {
         <View style={styles.overlay} pointerEvents="none">
           <Image source={RELAY_LOGO} style={styles.logo} resizeMode="contain" />
           <Text style={styles.brand}>RELAY</Text>
+          <Text style={styles.tagline}>Voice · Video · Chat</Text>
           <ActivityIndicator
             size="large"
             color={COLORS.cyan}
@@ -349,6 +353,13 @@ const styles = StyleSheet.create({
     fontSize: 26,
     fontWeight: "800",
     letterSpacing: 4,
+  },
+  tagline: {
+    marginTop: 6,
+    color: COLORS.muted,
+    fontSize: 13,
+    fontWeight: "600",
+    letterSpacing: 1,
   },
   spinner: {
     marginTop: 28,

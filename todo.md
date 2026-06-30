@@ -98,3 +98,20 @@
 - [x] Added pure countdown helper + unit tests; made live APK test version-agnostic
 - [x] Visually verified all phases; tsc clean + 52 tests pass
 - [ ] Bump app.config.ts to 1.0.8 / build 8 for the next APK build (pending user request)
+
+## Round 10 — UI/UX match-to-web + footer Beta/Installed wording
+- [ ] Footer: show "Beta {bundled appVersion}" line (the app build shipped)
+- [ ] Footer: show "Installed {device versionName} (build N)" line clearly
+- [ ] Keep adaptive update states (checking/available/downloading/ready) intact
+- [ ] UI/UX: richer themed loading screen + smoother web-update toast to match web
+- [ ] UI/UX: consistent dark surfaces / status bar so the shell blends with RELAY
+- [ ] Bump app.config.ts to 1.0.8 / build 8
+- [ ] tsc clean + tests pass
+- [ ] Checkpoint and deliver
+
+## Round 10 — results
+- [x] Footer: "BETA {bundled}" badge line + "Installed: {version} · build N · latest {x}" line
+- [x] UI/UX: shell palette matched to live RELAY (#050608 bg), splash/footer aligned, splash backgroundColor synced, tagline added
+- [x] Bumped app.config.ts to 1.0.8 / build 8
+- [x] tsc clean + 52 tests pass; temp footer lab route removed
+- [x] Checkpoint and deliver

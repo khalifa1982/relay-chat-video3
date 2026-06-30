@@ -1,6 +1,7 @@
 import { Platform, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
+import Constants from "expo-constants";
 
 import { RelayWebView } from "@/components/relay-webview";
 import { ApkUpdateBanner } from "@/components/apk-update-banner";
@@ -61,6 +62,9 @@ export default function HomeScreen() {
       <BuildStatusRow
         installedBuild={installedBuild}
         installedVersionName={installedVersionName}
+        betaVersionName={
+          (Constants.expoConfig?.version ?? installedVersionName) || null
+        }
         latestBuild={manifest?.buildNumber}
         latestVersionName={manifest?.versionName}
         reason={lastReason}
@@ -89,14 +93,14 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: "#0B1020",
+    backgroundColor: "#050608",
   },
   webviewWrap: {
     flex: 1,
   },
   webFallback: {
     flex: 1,
-    backgroundColor: "#0B1020",
+    backgroundColor: "#050608",
     alignItems: "center",
     justifyContent: "center",
     padding: 32,

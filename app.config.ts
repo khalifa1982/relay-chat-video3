@@ -30,7 +30,7 @@ const schemeFromBundleId = `manus${timestamp}`;
 // compares the server manifest's buildNumber against THIS value to decide
 // whether a newer APK is available. Bump this every time you publish a new APK
 // (and set the manifest's buildNumber to match the new release).
-const ANDROID_BUILD_NUMBER = 6;
+const ANDROID_BUILD_NUMBER = 8;
 
 const env = {
   // App branding - update these values directly (do not use env vars)
@@ -47,7 +47,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.6",
+  version: "1.0.8",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -143,9 +143,9 @@ const config: ExpoConfig = {
         image: "./assets/images/splash-icon.png",
         imageWidth: 180,
         resizeMode: "contain",
-        backgroundColor: "#0B1020",
+        backgroundColor: "#050608",
         dark: {
-          backgroundColor: "#0B1020",
+          backgroundColor: "#050608",
         },
       },
     ],
