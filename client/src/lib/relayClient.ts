@@ -123,6 +123,13 @@ export interface RelayHandle {
   getPin: () => string | null;
   /** Subscribe to authoritative pin changes (fires on every `registered`). */
   setOnPinChange: (cb: ((pin: string | null) => void) | null) => void;
+  /** Subscribe to auto-rejoin status: true while the engine is honoring a
+   *  reload/crash snapshot to rejoin an active call, false once it has rejoined
+   *  or given up. Lets the app show a "Reconnecting… / Exit call" prompt. */
+  setOnRejoinChange: (cb: ((rejoining: boolean) => void) | null) => void;
+  /** User chose NOT to reconnect — drop the rejoin snapshot and leave the call.
+   *  Safe to call whether or not a rejoin is pending. */
+  cancelRejoin: () => void;
   /** Ask the engine to register under this stable number (the identity
    *  number). Must be called before the engine registers. The server may
    *  still override if the number is taken by another device. */
@@ -176,10 +183,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // real hang-up.
   let pendingRejoin: RejoinSnapshot | null = null;
   let rejoinWatchT: ReturnType<typeof setTimeout> | null = null;
+  // Subscriber (the React provider) for auto-rejoin status, so the app can show a
+  // prominent "Reconnecting… / Exit call" prompt while a snapshot is being honored.
+  let onRejoinChange: ((rejoining: boolean) => void) | null = null;
+  function emitRejoin() {
+    try { onRejoinChange?.(!!pendingRejoin); } catch { /* */ }
+  }
   function clearPendingRejoin() {
+    const was = !!pendingRejoin;
     pendingRejoin = null;
     if (rejoinWatchT) { clearTimeout(rejoinWatchT); rejoinWatchT = null; }
     clearSnapshot();
+    if (was) emitRejoin();
   }
   let screenStream: MediaStream | null = null;       // active getDisplayMedia stream, or null
   let screenSharing = false;
@@ -918,46 +933,78 @@ export function startRelay(root: HTMLElement): RelayHandle {
    *  VIDEO-ONLY and keep the EXISTING audio track, so the transmitted/muteable
    *  audio identity never changes (otherwise mute would silently toggle the
    *  wrong track and a duplicate mic capture would leak). */
+  // Re-entrancy guard: two rapid taps must not interleave getUserMedia +
+  // replaceTrack (which leaves the published track disagreeing with facingMode).
+  let flipBusy = false;
+  /** Acquire the OTHER camera as reliably as the platform allows. A soft
+   *  `facingMode` is NOT reliable — many devices return the SAME camera for an
+   *  "ideal" constraint — so we try an EXACT facingMode first, then fall back to
+   *  enumerating video inputs and explicitly grabbing a DIFFERENT deviceId, then
+   *  a soft facingMode as a last resort. Returns the new VIDEO stream or null. */
+  async function acquireFlippedCamera(next: "user" | "environment"): Promise<MediaStream | null> {
+    const q = qualityVideo(videoQuality);
+    // 1) EXACT facingMode — the only constraint that reliably switches cameras.
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...q, facingMode: { exact: next } } });
+    } catch { /* no exact match / only one camera / unsupported — fall through */ }
+    // 2) Enumerate inputs and pick a DIFFERENT device than the current one.
+    try {
+      const curId = localStream?.getVideoTracks()[0]?.getSettings?.().deviceId;
+      const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+      const other = cams.find(d => d.deviceId && d.deviceId !== curId);
+      if (other) {
+        return await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...q, deviceId: { exact: other.deviceId } } });
+      }
+    } catch { /* fall through */ }
+    // 3) Last resort: soft facingMode (some quirky devices honor only this).
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...q, facingMode: next } });
+    } catch { return null; }
+  }
   async function flipCamera() {
+    if (flipBusy) return;
     if (!localStream) { toast("Camera isn't active yet.", true); return; }
     if (screenSharing) { toast("Stop screen sharing to flip the camera.", true); return; }
-    const next: "user" | "environment" = facingMode === "user" ? "environment" : "user";
-    let nuVideo: MediaStream;
+    flipBusy = true;
     try {
-      nuVideo = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: { ...qualityVideo(videoQuality), facingMode: next },
-      });
-    } catch {
-      toast("Couldn't switch camera — this device may only have one.", true);
-      return;
+      const next: "user" | "environment" = facingMode === "user" ? "environment" : "user";
+      const nuVideo = await acquireFlippedCamera(next);
+      if (!nuVideo || nuVideo.getVideoTracks().length === 0) {
+        toast("Couldn't switch camera — this device may only have one.", true);
+        return;
+      }
+      facingMode = next;
+      // Carry the SAME audio track across the flip; stop only the old VIDEO.
+      const audioTracks = localStream.getAudioTracks();
+      localStream.getVideoTracks().forEach(t => t.stop());
+      // New combined stream = existing audio + the fresh camera video. The audio
+      // track object is unchanged, so toggleMic and every peer/SFU audio sender
+      // keep pointing at the right track.
+      const nu = new MediaStream([...audioTracks, ...nuVideo.getVideoTracks()]);
+      localStream = nu;
+      if (pipeline) {
+        // Filtered path: the canvas output track is unchanged — just point the
+        // pipeline at the new camera. Peers keep the same sender track.
+        pipeline.setFacingMode(facingMode);
+        await pipeline.setInputStream(nu);
+      } else {
+        // Raw path: we publish the camera track directly, so hot-swap the VIDEO
+        // on every peer / the SFU (audio is untouched — it's the same track).
+        await replaceVideoEverywhere(nu.getVideoTracks()[0] || null);
+      }
+      // Preserve the camera-OFF (mute) state across the flip — a fresh track
+      // defaults to enabled, which would otherwise turn the camera back ON.
+      syncCamEnabled();
+      // Update the local self-tile's video (if shown)
+      const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
+      if (selfV) selfV.srcObject = processedStream || nu;
+      // back camera shouldn't be mirrored on self preview
+      const selfTile = $("tile-self");
+      if (selfTile) selfTile.classList.toggle("back-cam", facingMode === "environment");
+      toast(facingMode === "environment" ? "Switched to back camera" : "Switched to front camera");
+    } finally {
+      flipBusy = false;
     }
-    facingMode = next;
-    // Carry the SAME audio track across the flip; stop only the old VIDEO.
-    const audioTracks = localStream.getAudioTracks();
-    localStream.getVideoTracks().forEach(t => t.stop());
-    // New combined stream = existing audio + the fresh camera video. The audio
-    // track object is unchanged, so toggleMic and every peer/SFU audio sender
-    // keep pointing at the right track.
-    const nu = new MediaStream([...audioTracks, ...nuVideo.getVideoTracks()]);
-    localStream = nu;
-    if (pipeline) {
-      // Filtered path: the canvas output track is unchanged — just point the
-      // pipeline at the new camera. Peers keep the same sender track.
-      pipeline.setFacingMode(facingMode);
-      await pipeline.setInputStream(nu);
-    } else {
-      // Raw path: we publish the camera track directly, so hot-swap the VIDEO
-      // on every peer / the SFU (audio is untouched — it's the same track).
-      await replaceVideoEverywhere(nu.getVideoTracks()[0] || null);
-    }
-    // Update the local self-tile's video (if shown)
-    const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
-    if (selfV) selfV.srcObject = processedStream || nu;
-    // back camera shouldn't be mirrored on self preview
-    const selfTile = $("tile-self");
-    if (selfTile) selfTile.classList.toggle("back-cam", facingMode === "environment");
-    toast(facingMode === "environment" ? "Switched to back camera" : "Switched to front camera");
   }
 
   // Serialize filter changes: applyFilter awaits getUserMedia/MediaPipe/track
@@ -3468,6 +3515,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
       onPinChange = cb;
       // Fire immediately with the current value so a late subscriber syncs up.
       if (cb) { try { cb(me.pin); } catch { /* */ } }
+    },
+    setOnRejoinChange(cb) {
+      onRejoinChange = cb;
+      // Fire immediately so a subscriber that mounts AFTER boot still learns a
+      // rejoin is already in flight (boot reads the snapshot synchronously).
+      if (cb) { try { cb(!!pendingRejoin); } catch { /* */ } }
+    },
+    cancelRejoin() {
+      // Leave the room if we already managed to rejoin, then drop the snapshot so
+      // the next reload won't auto-rejoin again.
+      try { ($("hangBtn") as HTMLButtonElement | null)?.click(); } catch { /* */ }
+      clearPendingRejoin();
     },
     hangup() {
       try { ($("hangBtn") as HTMLButtonElement | null)?.click(); }

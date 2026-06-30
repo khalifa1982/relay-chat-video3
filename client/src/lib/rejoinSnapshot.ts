@@ -39,9 +39,9 @@ export function isFreshSnapshot(s: unknown, nowMs: number): s is RejoinSnapshot 
   return true;
 }
 
-export function readSnapshot(nowMs: number): RejoinSnapshot | null {
+function parseFrom(store: Storage | undefined, nowMs: number): RejoinSnapshot | null {
   try {
-    const raw = window.sessionStorage.getItem(REJOIN_KEY);
+    const raw = store?.getItem(REJOIN_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     return isFreshSnapshot(parsed, nowMs) ? parsed : null;
@@ -50,18 +50,28 @@ export function readSnapshot(nowMs: number): RejoinSnapshot | null {
   }
 }
 
+/**
+ * Read the freshest valid snapshot. Checked in BOTH stores so we rejoin after:
+ *   - a same-tab RELOAD (sessionStorage), AND
+ *   - a full app/browser CLOSE + reopen or a CRASH (localStorage) — within the
+ *     server's grace window (the freshness check guarantees we never try to
+ *     rejoin a long-dead room).
+ */
+export function readSnapshot(nowMs: number): RejoinSnapshot | null {
+  return (
+    parseFrom(typeof window !== "undefined" ? window.sessionStorage : undefined, nowMs) ??
+    parseFrom(typeof window !== "undefined" ? window.localStorage : undefined, nowMs)
+  );
+}
+
 export function writeSnapshot(s: RejoinSnapshot): void {
-  try {
-    window.sessionStorage.setItem(REJOIN_KEY, JSON.stringify(s));
-  } catch {
-    /* private mode / quota — best effort */
-  }
+  const v = JSON.stringify(s);
+  try { window.sessionStorage.setItem(REJOIN_KEY, v); } catch { /* */ }
+  // localStorage survives a tab/browser close so a crash-and-reopen still rejoins.
+  try { window.localStorage.setItem(REJOIN_KEY, v); } catch { /* */ }
 }
 
 export function clearSnapshot(): void {
-  try {
-    window.sessionStorage.removeItem(REJOIN_KEY);
-  } catch {
-    /* */
-  }
+  try { window.sessionStorage.removeItem(REJOIN_KEY); } catch { /* */ }
+  try { window.localStorage.removeItem(REJOIN_KEY); } catch { /* */ }
 }

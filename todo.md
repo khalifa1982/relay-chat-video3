@@ -1831,3 +1831,27 @@ rest are sequenced below.
       require a native shell.
 - [x] 10 new tests (rejoin-snapshot validation + freshness, rejoin/loudspeaker wiring guards). 453 tests
       green, tsc + build clean. Footer → `v2.57.0`.
+
+## v2.58.0 — Reliable camera flip + crash-proof rejoin with a prominent "Exit call" (delivered 2026-06-30)
+
+- [x] **Camera swap is now reliable under all conditions.** The old flip relied on a SOFT `facingMode`
+      constraint, which many phones ignore (they hand back the SAME camera), so the front/back toggle did
+      nothing on a lot of devices. New `acquireFlippedCamera()` tries the only constraint that reliably
+      switches — **`facingMode: { exact }`** — then falls back to **enumerating video inputs and explicitly
+      grabbing a DIFFERENT `deviceId`**, then a soft `facingMode` as a last resort; if none yields a track
+      it toasts "this device may only have one" instead of silently breaking. A `flipBusy` **re-entrancy
+      guard** stops two fast taps from interleaving `getUserMedia` + `replaceTrack` (which left the
+      published track disagreeing with the active facing mode). The flip now also calls `syncCamEnabled()`
+      so a camera that was muted **stays muted** across the swap (a fresh track defaults to enabled).
+      Works on both the filtered (canvas-pipeline) and raw paths; audio track is carried across untouched.
+- [x] **Connection resilience: rejoin survives a full app/browser CLOSE or crash — or you can opt out.**
+      The rejoin snapshot is now written to **both `sessionStorage` AND `localStorage`** (was session-only),
+      so reopening the app after an accidental close, a swipe-away, or a browser kill — not just a same-tab
+      reload — restores the active call (still gated by the 28s freshness check against the server's 30s
+      room grace, so a long-dead room is never re-dialed). While the engine is honoring a snapshot it now
+      surfaces a **prominent full-screen "Reconnecting to your call…" prompt** with an unmissable **"Exit
+      the call"** button (request: a clear, prominent way out if you don't want to reconnect). The prompt
+      **auto-dismisses** the instant the rejoin resolves (success or the 10s give-up), and "Exit the call"
+      leaves the room and drops the snapshot so the next reload stays idle. Wired via a new
+      `setOnRejoinChange` / `cancelRejoin` on the engine handle.
+- [x] tsc + build clean, 453 tests green. Footer → `v2.58.0`.

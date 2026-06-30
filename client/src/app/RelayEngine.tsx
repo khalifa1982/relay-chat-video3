@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation } from "wouter";
-import { X } from "lucide-react";
+import { X, Loader2, PhoneOff } from "lucide-react";
 import { startRelay, type RelayHandle, type RelayPhase } from "@/lib/relayClient";
 import { RELAY_MARKUP, RELAY_CSS } from "@/lib/relayAssets";
 import { trpc } from "@/lib/trpc";
@@ -67,6 +67,9 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<RelayPhase>("idle");
   const [pin, setPin] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  // True while the engine is auto-rejoining an active call after a reload / crash
+  // / accidental close. Drives the prominent "Reconnecting… / Exit call" prompt.
+  const [rejoining, setRejoining] = useState(false);
 
   // Latest identity values, read by the (mount-once) auto-register loop.
   const nameRef = useRef<string | null>(null);
@@ -102,6 +105,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     const handle = startRelay(el);
     handle.setOnStateChange(setPhase);
     handle.setOnPinChange(setPin);
+    handle.setOnRejoinChange(setRejoining);
     if (flagRef.current) handle.setSelfFlag(flagRef.current);
     handleRef.current = handle;
 
@@ -140,6 +144,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
       setReady(false);
       setPhase("idle");
       setPin(null);
+      setRejoining(false);
     };
     // Re-mount only when entering/leaving /app or when the identity id changes;
     // navigating between tabs keeps inApp + me.id stable, so the engine persists.
@@ -195,6 +200,37 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
           <X className="size-3.5" />
           End
         </button>
+      ) : null}
+      {/* Prominent auto-rejoin prompt: shown while the engine is restoring an
+          active call after a reload / accidental close / crash. The call rejoins
+          automatically; this gives the user an explicit, unmissable way OUT if
+          they don't want to reconnect (request: "a clear and prominent Exit the
+          call option"). It auto-dismisses the instant the rejoin resolves. */}
+      {rejoining ? (
+        <div
+          className="fixed inset-0 z-[80] flex flex-col items-center justify-center gap-6 bg-black/80 px-6 text-center backdrop-blur-md"
+          role="alertdialog"
+          aria-label="Reconnecting to your call"
+        >
+          <div className="flex flex-col items-center gap-3">
+            <Loader2 className="size-10 animate-spin text-[color:var(--relay-online,#06d6a0)]" />
+            <div className="text-lg font-semibold text-white">Reconnecting to your call…</div>
+            <div className="max-w-xs text-sm text-white/70">
+              You were in an active call. We&apos;re rejoining you automatically.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              handleRef.current?.cancelRejoin();
+              setRejoining(false);
+            }}
+            className="inline-flex items-center gap-2 rounded-full bg-destructive px-5 py-2.5 text-sm font-semibold text-destructive-foreground shadow-lg hover:bg-destructive/90"
+          >
+            <PhoneOff className="size-4" />
+            Exit the call
+          </button>
+        </div>
       ) : null}
     </RelayEngineContext.Provider>
   );
