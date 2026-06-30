@@ -142,14 +142,21 @@ function Inner({ children }: { children: React.ReactNode }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onHistory, missedCount]);
-  // The landing popup shows once per browser session until dismissed or acted on
-  // (it re-appears on a fresh launch while calls remain unreviewed).
-  const [popupDismissed, setPopupDismissed] = useState(() => {
-    try { return sessionStorage.getItem("relay_missed_popup") === "1"; } catch { return false; }
+  // The landing popup is dismissible WITHOUT clearing the History/bell badges
+  // (those stay until the user actually reviews History — dismissing the toast
+  // just says "stop showing me this banner", not "I've seen these calls").
+  // Persisted to localStorage (not just sessionStorage, which only survives a
+  // refresh — not a full close + reopen) and keyed to the dismissed COUNT, so a
+  // brand-new missed call after dismissal still re-surfaces the popup instead
+  // of staying silently suppressed forever.
+  const DISMISS_KEY = "relay_missed_popup_dismissed_count";
+  const [dismissedAtCount, setDismissedAtCount] = useState(() => {
+    try { return Number(localStorage.getItem(DISMISS_KEY) ?? 0); } catch { return 0; }
   });
+  const popupDismissed = missedCount > 0 && missedCount <= dismissedAtCount;
   const dismissPopup = () => {
-    setPopupDismissed(true);
-    try { sessionStorage.setItem("relay_missed_popup", "1"); } catch { /* */ }
+    setDismissedAtCount(missedCount);
+    try { localStorage.setItem(DISMISS_KEY, String(missedCount)); } catch { /* */ }
   };
   const viewMissed = () => {
     dismissPopup();

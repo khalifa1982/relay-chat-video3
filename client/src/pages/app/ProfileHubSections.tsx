@@ -22,8 +22,19 @@ export interface HubMe {
   isGuest: boolean;
 }
 
-function useProfileSave(onSaved: () => void) {
-  return trpc.identity.updateProfile.useMutation({ onSuccess: onSaved });
+function useProfileSave(onSaved: () => void, onError?: (msg: string) => void) {
+  return trpc.identity.updateProfile.useMutation({
+    onSuccess: onSaved,
+    // Without this, a failed save (network blip, validation rejection) left the
+    // form looking exactly like a successful one — no error ever reached the
+    // user, and the local state had already been optimistically updated.
+    onError: (err) => onError?.(err.message || "Couldn't save — try again."),
+  });
+}
+
+function SaveError({ message }: { message: string | null }) {
+  if (!message) return null;
+  return <p className="text-xs text-destructive">{message}</p>;
 }
 
 function SavedTick({ show }: { show: boolean }) {
@@ -37,7 +48,8 @@ function SavedTick({ show }: { show: boolean }) {
 
 /* ── Email + mobile numbers ─────────────────────────────────────────────── */
 export function ContactInfoSection({ me, onSaved }: { me: HubMe; onSaved: () => void }) {
-  const save = useProfileSave(onSaved);
+  const [error, setError] = useState<string | null>(null);
+  const save = useProfileSave(onSaved, setError);
   const [mobiles, setMobiles] = useState<string[]>(() => me.mobiles ?? []);
   const [draft, setDraft] = useState("");
   const [saved, setSaved] = useState(false);
@@ -46,6 +58,7 @@ export function ContactInfoSection({ me, onSaved }: { me: HubMe; onSaved: () => 
 
   const persist = (next: string[]) => {
     setMobiles(next);
+    setError(null);
     save.mutate({ mobiles: next }, { onSuccess: () => { setSaved(true); window.setTimeout(() => setSaved(false), 1500); } });
   };
   const add = () => {
@@ -79,7 +92,7 @@ export function ContactInfoSection({ me, onSaved }: { me: HubMe; onSaved: () => 
         {mobiles.length > 0 && (
           <ul className="space-y-2">
             {mobiles.map((m, i) => (
-              <li key={`${m}-${i}`} className="flex items-center gap-2">
+              <li key={m} className="flex items-center gap-2">
                 <span className="flex-1 font-mono text-sm">{m}</span>
                 <button
                   type="button"
@@ -99,6 +112,7 @@ export function ContactInfoSection({ me, onSaved }: { me: HubMe; onSaved: () => 
               value={draft}
               inputMode="tel"
               placeholder="+1 555 123 4567"
+              maxLength={32}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), add())}
             />
@@ -107,6 +121,7 @@ export function ContactInfoSection({ me, onSaved }: { me: HubMe; onSaved: () => 
             </Button>
           </div>
         )}
+        <SaveError message={error} />
       </div>
     </section>
   );
@@ -114,7 +129,8 @@ export function ContactInfoSection({ me, onSaved }: { me: HubMe; onSaved: () => 
 
 /* ── Social / external links ────────────────────────────────────────────── */
 export function SocialLinksSection({ me, onSaved }: { me: HubMe; onSaved: () => void }) {
-  const save = useProfileSave(onSaved);
+  const [error, setError] = useState<string | null>(null);
+  const save = useProfileSave(onSaved, setError);
   const [links, setLinks] = useState<SocialLink[]>(() => me.socials ?? []);
   const [platform, setPlatform] = useState<SocialPlatform>("x");
   const [value, setValue] = useState("");
@@ -124,6 +140,7 @@ export function SocialLinksSection({ me, onSaved }: { me: HubMe; onSaved: () => 
 
   const persist = (next: SocialLink[]) => {
     setLinks(next);
+    setError(null);
     save.mutate({ socials: next }, { onSuccess: () => { setSaved(true); window.setTimeout(() => setSaved(false), 1500); } });
   };
   const add = () => {
@@ -147,7 +164,7 @@ export function SocialLinksSection({ me, onSaved }: { me: HubMe; onSaved: () => 
               const d = def(l.platform);
               const href = d?.href(l.value) ?? null;
               return (
-                <li key={`${l.platform}-${i}`} className="flex items-center gap-2">
+                <li key={`${l.platform}-${l.value}`} className="flex items-center gap-2">
                   <span className="w-24 shrink-0 text-xs font-medium text-muted-foreground">
                     {d?.label ?? l.platform}
                   </span>
@@ -190,6 +207,7 @@ export function SocialLinksSection({ me, onSaved }: { me: HubMe; onSaved: () => 
             <Input
               value={value}
               placeholder={def(platform)?.placeholder}
+              maxLength={200}
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), add())}
               className="flex-1"
@@ -199,6 +217,7 @@ export function SocialLinksSection({ me, onSaved }: { me: HubMe; onSaved: () => 
             </Button>
           </div>
         )}
+        <SaveError message={error} />
         <p className="text-xs text-muted-foreground">
           Add your X, website, Snapchat, or WhatsApp so contacts can reach you elsewhere.
         </p>
@@ -209,7 +228,8 @@ export function SocialLinksSection({ me, onSaved }: { me: HubMe; onSaved: () => 
 
 /* ── Bio ────────────────────────────────────────────────────────────────── */
 export function BioSection({ me, onSaved }: { me: HubMe; onSaved: () => void }) {
-  const save = useProfileSave(onSaved);
+  const [error, setError] = useState<string | null>(null);
+  const save = useProfileSave(onSaved, setError);
   const [bio, setBio] = useState(() => me.bio ?? "");
   const [saved, setSaved] = useState(false);
   useEffect(() => { setBio(me.bio ?? ""); }, [me.bio]);
@@ -234,11 +254,15 @@ export function BioSection({ me, onSaved }: { me: HubMe; onSaved: () => void }) 
           type="button"
           size="sm"
           disabled={!dirty || save.isPending}
-          onClick={() => save.mutate({ bio: bio.trim() }, { onSuccess: () => { setSaved(true); window.setTimeout(() => setSaved(false), 1500); } })}
+          onClick={() => {
+            setError(null);
+            save.mutate({ bio: bio.trim() }, { onSuccess: () => { setSaved(true); window.setTimeout(() => setSaved(false), 1500); } });
+          }}
         >
           Save
         </Button>
       </div>
+      <SaveError message={error} />
     </section>
   );
 }
@@ -251,10 +275,12 @@ const STATUS_CHOICES: { key: "" | "away" | "travel"; label: string; Icon: typeof
 ];
 
 export function StatusSection({ me, onSaved }: { me: HubMe; onSaved: () => void }) {
-  const save = useProfileSave(onSaved);
+  const [error, setError] = useState<string | null>(null);
+  const save = useProfileSave(onSaved, setError);
   const current = (me.statusOverride ?? "") as "" | "away" | "travel";
   const pick = (k: "" | "away" | "travel") => {
     if (k === current) return;
+    setError(null);
     save.mutate({ statusOverride: k });
   };
   return (
@@ -266,8 +292,9 @@ export function StatusSection({ me, onSaved }: { me: HubMe; onSaved: () => void 
             key={key || "auto"}
             type="button"
             onClick={() => pick(key)}
+            disabled={save.isPending}
             className={
-              "flex flex-col items-center gap-1.5 rounded-xl border p-3 transition " +
+              "flex flex-col items-center gap-1.5 rounded-xl border p-3 transition disabled:opacity-50 disabled:pointer-events-none " +
               (current === key
                 ? "border-primary bg-primary/10 text-foreground"
                 : "border-border bg-card/40 text-muted-foreground hover:bg-card/70")
@@ -281,6 +308,7 @@ export function StatusSection({ me, onSaved }: { me: HubMe; onSaved: () => void 
       <p className="text-xs text-muted-foreground">
         {STATUS_CHOICES.find((c) => c.key === current)?.hint}
       </p>
+      <SaveError message={error} />
     </section>
   );
 }

@@ -12,11 +12,35 @@ import {
   Search,
   CheckCircle2,
   AlertCircle,
+  MoreVertical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle, EmptyDescription, EmptyContent } from "@/components/ui/empty";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import { trpc } from "@/lib/trpc";
 
 function initialsFrom(name: string): string {
@@ -52,6 +76,9 @@ export default function ContactsPage() {
   });
 
   const [search, setSearch] = useState("");
+  // Contact pending delete confirmation (AlertDialog, replacing window.confirm()).
+  const [deleteId, setDeleteId] = useState<number | null>(null);
+  const deletingContact = (contacts.data ?? []).find((c) => c.id === deleteId) ?? null;
   const [editing, setEditing] = useState<{
     id?: number;
     number: string;
@@ -64,6 +91,23 @@ export default function ContactsPage() {
     website?: string;
     birthday?: string;
   } | null>(null);
+
+  // Shared by the desktop icon button AND the mobile dropdown menu item, so the
+  // edit-state object isn't constructed twice.
+  function openEdit(c: NonNullable<typeof contacts.data>[number]) {
+    setEditing({
+      id: c.id,
+      number: c.number,
+      displayName: c.displayName ?? "",
+      notes: c.notes ?? "",
+      email: c.email ?? "",
+      phone: c.phone ?? "",
+      company: c.company ?? "",
+      jobTitle: c.jobTitle ?? "",
+      website: c.website ?? "",
+      birthday: c.birthday ?? "",
+    });
+  }
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -108,7 +152,20 @@ export default function ContactsPage() {
       </div>
       <div className="flex-1 overflow-y-auto pb-24 md:pb-0 md:rounded-2xl md:border md:border-border md:bg-card">
         {contacts.isLoading ? (
-          <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+          <ul>
+            {Array.from({ length: 5 }).map((_, i) => (
+              <li
+                key={i}
+                className="flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border last:border-b-0"
+              >
+                <Skeleton className="size-11 rounded-2xl shrink-0" />
+                <div className="flex-1 min-w-0 space-y-1.5">
+                  <Skeleton className="h-3.5 w-32 rounded" />
+                  <Skeleton className="h-3 w-20 rounded" />
+                </div>
+              </li>
+            ))}
+          </ul>
         ) : filtered.length === 0 ? (
           <Empty className="border-none p-10">
             <EmptyHeader>
@@ -200,20 +257,7 @@ export default function ContactsPage() {
                     size="icon"
                     variant="ghost"
                     aria-label="Edit"
-                    onClick={() =>
-                      setEditing({
-                        id: c.id,
-                        number: c.number,
-                        displayName: c.displayName ?? "",
-                        notes: c.notes ?? "",
-                        email: c.email ?? "",
-                        phone: c.phone ?? "",
-                        company: c.company ?? "",
-                        jobTitle: c.jobTitle ?? "",
-                        website: c.website ?? "",
-                        birthday: c.birthday ?? "",
-                      })
-                    }
+                    onClick={() => openEdit(c)}
                   >
                     <Pencil className="size-4" />
                   </Button>
@@ -221,15 +265,43 @@ export default function ContactsPage() {
                     size="icon"
                     variant="ghost"
                     aria-label="Delete"
-                    onClick={() => {
-                      if (confirm(`Remove ${c.displayName || c.number}?`)) {
-                        remove.mutate({ id: c.id });
-                      }
-                    }}
+                    onClick={() => setDeleteId(c.id)}
                   >
                     <Trash2 className="size-4" />
                   </Button>
                 </div>
+                {/* Mobile: the desktop's 3 icon buttons don't fit on a touch
+                    screen, so Favorite/Edit/Delete collapse into one menu. */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="icon" variant="ghost" aria-label="More options" className="sm:hidden">
+                      <MoreVertical className="size-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="sm:hidden">
+                    <DropdownMenuItem
+                      onClick={() =>
+                        upsert.mutate({
+                          number: c.number,
+                          displayName: c.displayName,
+                          favourite: !c.favourite,
+                        })
+                      }
+                    >
+                      {c.favourite ? (
+                        <><StarOff className="size-4" /> Unfavorite</>
+                      ) : (
+                        <><Star className="size-4" /> Favorite</>
+                      )}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => openEdit(c)}>
+                      <Pencil className="size-4" /> Edit
+                    </DropdownMenuItem>
+                    <DropdownMenuItem variant="destructive" onClick={() => setDeleteId(c.id)}>
+                      <Trash2 className="size-4" /> Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <Button
                   size="icon"
                   variant="ghost"
@@ -264,6 +336,30 @@ export default function ContactsPage() {
           error={upsert.error?.message ?? null}
         />
       )}
+
+      <AlertDialog open={deleteId !== null} onOpenChange={(open) => !open && setDeleteId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove contact?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deletingContact
+                ? `${deletingContact.displayName || deletingContact.number} will be removed from your contacts. This can't be undone.`
+                : "This contact will be removed. This can't be undone."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (deleteId !== null) remove.mutate({ id: deleteId });
+                setDeleteId(null);
+              }}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -352,18 +448,21 @@ function AddContactDialog({
     isComplete && !lookup.isFetching && lookup.data === null;
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md flex flex-col max-h-[90dvh] rounded-2xl bg-card border border-border shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+    // Migrated onto the shared Dialog primitive (Radix): this gives the form a
+    // real focus trap (the hand-rolled overlay div had none) and Escape-to-close
+    // for free, on top of the existing backdrop-click-to-close behavior.
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        showCloseButton={false}
+        className="w-full max-w-md flex flex-col max-h-[90dvh] p-0 gap-0 rounded-2xl"
       >
         <div className="flex items-center justify-between p-5 pb-3 shrink-0 border-b border-border/60">
-          <h3 className="font-semibold">
+          <DialogTitle className="font-semibold text-base">
             {editing.id ? "Edit contact" : "Add by PIN"}
-          </h3>
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            {editing.id ? "Edit this contact's details." : "Add a contact by their 6-digit RELAY number."}
+          </DialogDescription>
           <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close">
             <X className="size-4" />
           </Button>
@@ -602,7 +701,7 @@ function AddContactDialog({
             {editing.id ? "Save" : "Add to contacts"}
           </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

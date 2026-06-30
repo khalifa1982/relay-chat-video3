@@ -405,24 +405,28 @@ export async function regenerateIdentityNumber(
   if (!id) return null;
   const oldNumber = id.number;
   const newNumber = await allocateNumber();
-  // Point the identity at the new number first (unique index guarantees it's free).
-  await db.update(identities).set({ number: newNumber }).where(eq(identities.id, identityId));
-  // Propagate to contacts. Fetch the rows touching either number, plan, apply.
-  try {
-    const affected = await db
+  // The identity update and contact propagation must succeed or fail TOGETHER.
+  // The old code swallowed a propagation failure (try/catch around it only),
+  // which could leave the identity pointed at newNumber while every contact
+  // who'd saved the OLD number silently kept dialing a number that's no longer
+  // this person — a split-brain the caller never finds out about (the function
+  // still returned success). A transaction makes it all-or-nothing.
+  await db.transaction(async (tx) => {
+    // Point the identity at the new number first (unique index guarantees it's free).
+    await tx.update(identities).set({ number: newNumber }).where(eq(identities.id, identityId));
+    // Propagate to contacts. Fetch the rows touching either number, plan, apply.
+    const affected = await tx
       .select({ id: contacts.id, ownerId: contacts.ownerId, number: contacts.number })
       .from(contacts)
       .where(or(eq(contacts.number, oldNumber), eq(contacts.number, newNumber)));
     const plan = planRenumber(affected, oldNumber, newNumber);
     if (plan.deleteIds.length > 0) {
-      await db.delete(contacts).where(inArray(contacts.id, plan.deleteIds));
+      await tx.delete(contacts).where(inArray(contacts.id, plan.deleteIds));
     }
     if (plan.updateIds.length > 0) {
-      await db.update(contacts).set({ number: newNumber }).where(inArray(contacts.id, plan.updateIds));
+      await tx.update(contacts).set({ number: newNumber }).where(inArray(contacts.id, plan.updateIds));
     }
-  } catch (e) {
-    console.warn("[regen] contact propagation failed:", e);
-  }
+  });
   return { oldNumber, newNumber };
 }
 
@@ -1211,6 +1215,18 @@ export async function sendMessage(input: {
   // the row WE inserted (by insertId). Selecting max(id) could return another
   // sender's message under concurrent sends in the same conversation.
   return db.transaction(async (tx) => {
+    // A replyToId must reference a REAL message in THIS SAME conversation —
+    // without this check, a client could set replyToId to any message id in
+    // the whole database (including ones in conversations it isn't even a
+    // member of), spoofing a fake "quoted reply" to a stranger's message.
+    if (input.replyToId != null) {
+      const [target] = await tx
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(eq(messages.id, input.replyToId), eq(messages.conversationId, input.conversationId)))
+        .limit(1);
+      if (!target) throw new Error("reply target not found in this conversation");
+    }
     const ins = await tx.insert(messages).values({
       conversationId: input.conversationId,
       senderIdentityId: input.senderIdentityId,
@@ -1264,6 +1280,7 @@ export async function recentAutoReplyExists(
         eq(messages.conversationId, conversationId),
         eq(messages.senderIdentityId, senderIdentityId),
         gte(messages.createdAt, cutoff),
+        isNull(messages.deletedAt),
         sql`JSON_EXTRACT(${messages.meta}, '$.autoReply') IS NOT NULL`
       )
     )
@@ -1312,11 +1329,13 @@ export async function deleteMessage(input: {
 export async function markThreadRead(input: { conversationId: number; identityId: number }) {
   const db = await getDb();
   if (!db) return;
-  // last visible message id
+  // last visible message id — must match listMessages/listThreads' deletedAt
+  // filter, or a soft-deleted message could become lastReadMessageId and get
+  // skipped over forever (its content is gone, but its id still "counts").
   const rows = await db
     .select({ id: messages.id })
     .from(messages)
-    .where(eq(messages.conversationId, input.conversationId))
+    .where(and(eq(messages.conversationId, input.conversationId), isNull(messages.deletedAt)))
     .orderBy(desc(messages.id))
     .limit(1);
   const lastId = rows[0]?.id ?? null;
@@ -1342,6 +1361,7 @@ export async function markThreadRead(input: { conversationId: number; identityId
           eq(messages.conversationId, input.conversationId),
           lte(messages.id, lastId),
           sql`${messages.senderIdentityId} <> ${input.identityId}`,
+          isNull(messages.deletedAt),
           or(eq(messages.status, "sent"), eq(messages.status, "delivered"))
         )
       );
@@ -1363,7 +1383,11 @@ export async function recordAttachment(input: {
 }) {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
-  await db.insert(attachments).values({
+  // Select back by the INSERTED id, not a fresh query keyed on (storageKey,
+  // uploadedByIdentityId) — the same identity uploading two attachments with
+  // an identical storageKey (or in quick succession) could race and return
+  // the WRONG row under the old "ORDER BY id DESC LIMIT 1" re-select.
+  const ins = await db.insert(attachments).values({
     storageKey: input.storageKey,
     url: input.url,
     mimeType: input.mimeType,
@@ -1374,17 +1398,8 @@ export async function recordAttachment(input: {
     filename: input.filename ?? null,
     uploadedByIdentityId: input.uploadedByIdentityId,
   });
-  const rows = await db
-    .select()
-    .from(attachments)
-    .where(
-      and(
-        eq(attachments.storageKey, input.storageKey),
-        eq(attachments.uploadedByIdentityId, input.uploadedByIdentityId)
-      )
-    )
-    .orderBy(desc(attachments.id))
-    .limit(1);
+  const insertId = Number(ins[0].insertId);
+  const rows = await db.select().from(attachments).where(eq(attachments.id, insertId)).limit(1);
   return rows[0];
 }
 

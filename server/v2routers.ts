@@ -560,11 +560,30 @@ export const v2ContactsRouter = router({
         avatarUrl: AvatarUrlSchema.nullable().optional(),
         favourite: z.boolean().optional(),
         notes: z.string().max(2000).nullable().optional(),
-        email: z.string().trim().max(320).nullable().optional(),
-        phone: z.string().trim().max(40).nullable().optional(),
+        email: z.string().trim().max(320).email("Invalid email address").nullable().optional(),
+        phone: z
+          .string()
+          .trim()
+          .max(40)
+          .nullable()
+          .optional()
+          .refine(
+            v => !v || (/^[+\d\s().-]+$/.test(v) && (v.match(/\d/g) || []).length >= 4),
+            { message: "Phone must contain at least 4 digits and only phone characters" }
+          ),
         company: z.string().trim().max(128).nullable().optional(),
         jobTitle: z.string().trim().max(128).nullable().optional(),
-        website: z.string().trim().max(256).nullable().optional(),
+        // Restricted to http(s) — without this, a contact's "website" could be
+        // set to a javascript:/data: URI. It's never rendered as a clickable
+        // link anywhere today, but validating at the boundary means that stays
+        // true even if a future UI change adds one without re-auditing this field.
+        website: z
+          .string()
+          .trim()
+          .max(256)
+          .nullable()
+          .optional()
+          .refine(v => !v || /^https?:\/\//i.test(v), { message: "Must start with http:// or https://" }),
         birthday: z.string().trim().max(32).nullable().optional(),
       })
     )
@@ -817,20 +836,32 @@ export const v2MessagesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
-      if (
-        (!input.body || input.body.trim().length === 0) &&
-        !input.attachmentId
-      ) {
+      // Trim BEFORE checking/storing — without this, a whitespace-only body
+      // alongside an attachment skipped the empty check (the OR condition only
+      // fires when there's no attachment) and got stored as meaningless
+      // whitespace instead of being treated as "no body".
+      const trimmedBody = input.body?.trim() || null;
+      if (!trimmedBody && !input.attachmentId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Message must have body or attachment",
         });
       }
+      // An attachmentId must actually belong to (or be visible to) the sender —
+      // without this, anyone could attach ANY attachment id in the database
+      // (including private uploads from other conversations) to a message they
+      // send, exposing media they were never granted access to.
+      if (input.attachmentId != null) {
+        const owned = await getAttachmentForIdentity(input.attachmentId, me.id);
+        if (!owned) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Attachment not found or not yours" });
+        }
+      }
       const row = await sendMessage({
         conversationId: input.conversationId,
         senderIdentityId: me.id,
         kind: input.kind,
-        body: input.body ?? null,
+        body: trimmedBody,
         attachmentId: input.attachmentId ?? null,
         replyToId: input.replyToId ?? null,
       });

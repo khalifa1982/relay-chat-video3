@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent } from "react";
 import { useLocation, useSearch } from "wouter";
+import { toast } from "sonner";
 import {
   ArrowLeft,
   Send,
@@ -304,6 +305,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     updateDraft({ text: typeof updater === "function" ? updater(draft.text) : updater });
   }
   const [emojiOpen, setEmojiOpen] = useState(false);
+  // Escape closes the emoji picker, matching MediaLightbox's pattern.
+  useEffect(() => {
+    if (!emojiOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setEmojiOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [emojiOpen]);
   // Fullscreen media preview (image/video lightbox).
   const [lightbox, setLightbox] = useState<{ url: string; type: "image" | "video"; name?: string } | null>(null);
   const [replyingTo, setReplyingToState] = useState<{
@@ -348,6 +356,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const imageRef = useRef<HTMLInputElement>(null);
   const [pendingUpload, setPendingUpload] = useState<{ id: number; url: string; mimeType: string; filename?: string } | null>(null);
   const [uploading, setUploading] = useState(false);
+  // A picked-but-unsent attachment must not follow the user into a DIFFERENT
+  // conversation when they switch threads — it would otherwise sit silently
+  // staged and get attached to whatever they next send there.
+  useEffect(() => {
+    setPendingUpload(null);
+  }, [conversationId]);
 
   // ── in-conversation search ──
   const [searchOpen, setSearchOpen] = useState(false);
@@ -528,11 +542,20 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       rec.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
         recordStreamRef.current = null;
-        // Use the recorder's actual mimeType (browsers sometimes substitute one).
-        const finalMime = rec.mimeType || pick.mimeType || "application/octet-stream";
-        const blob = new Blob(chunks, { type: finalMime });
-        await uploadBlob(blob, `voice-note.${pick.ext}`);
-        setRecording(false);
+        // uploadBlob() re-throws on failure (it only resets `uploading` in its
+        // own finally) — without this try/catch/finally, a failed upload left
+        // `recording` stuck true forever (the mic button looked like it was
+        // still recording even though the stream had already been stopped).
+        try {
+          // Use the recorder's actual mimeType (browsers sometimes substitute one).
+          const finalMime = rec.mimeType || pick.mimeType || "application/octet-stream";
+          const blob = new Blob(chunks, { type: finalMime });
+          await uploadBlob(blob, `voice-note.${pick.ext}`);
+        } catch {
+          toast.error("Failed to save voice note");
+        } finally {
+          setRecording(false);
+        }
       };
       mediaRecorderRef.current = rec;
       rec.start();
@@ -769,7 +792,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   <MessageMenu
                     mine
                     onReply={() => setReplyingTo(m)}
-                    onCopy={m.body ? () => navigator.clipboard?.writeText(m.body!) : undefined}
+                    onCopy={m.body ? () => {
+                      navigator.clipboard?.writeText(m.body!)
+                        .then(() => toast.success("Copied"))
+                        .catch(() => toast.error("Failed to copy"));
+                    } : undefined}
                     onDelete={() => deleteMessage(m.id)}
                   />
                 )}
@@ -820,7 +847,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     {formatTime(m.createdAt)}
                     {mine && m.status && (
                       <span className="ml-1.5">
-                        {m.status === "read" ? "✓✓" : m.status === "delivered" ? "✓✓" : "✓"}
+                        {/* "delivered" and "read" used to render an identical "✓✓"
+                            with no visual distinction between them — collapse to a
+                            simple sent (✓) vs read (✓✓) signal instead. */}
+                        {m.status === "read" ? "✓✓" : "✓"}
                       </span>
                     )}
                   </div>
@@ -828,7 +858,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 {!mine && (
                   <MessageMenu
                     onReply={() => setReplyingTo(m)}
-                    onCopy={m.body ? () => navigator.clipboard?.writeText(m.body!) : undefined}
+                    onCopy={m.body ? () => {
+                      navigator.clipboard?.writeText(m.body!)
+                        .then(() => toast.success("Copied"))
+                        .catch(() => toast.error("Failed to copy"));
+                    } : undefined}
                   />
                 )}
                 </div>

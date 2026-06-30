@@ -45,7 +45,9 @@ export function MissedCallToast({
     <div
       role="alertdialog"
       aria-label="Missed calls"
-      className="fixed inset-x-0 top-0 z-[90] flex justify-center px-3 pt-3 pointer-events-none"
+      // z-75: below RelayEngine's reconnect modal (z-80) — if you're mid-call
+      // recovery, that takes priority over a missed-call banner.
+      className="fixed inset-x-0 top-0 z-[75] flex justify-center px-3 pt-3 pointer-events-none"
     >
       <div
         className="pointer-events-auto w-full max-w-md rounded-2xl border border-destructive/30 bg-card/95 shadow-2xl backdrop-blur-xl

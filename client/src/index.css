@@ -131,7 +131,10 @@
    cool slate, with the same cyan accent as dark so brand identity
    stays consistent across themes. */
 .relay-v2:not(.dark) {
-  --background: oklch(0.985 0.005 220);
+  /* Cooler off-white companion to the dark aluminum palette — same refined
+     cyan accent strategy as .dark.relay-v2 so brand identity is consistent
+     across themes. */
+  --background: oklch(0.98 0.003 245);
   --foreground: oklch(0.18 0.012 220);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.18 0.012 220);
@@ -141,56 +144,60 @@
   --secondary-foreground: oklch(0.3 0.012 220);
   --muted: oklch(0.95 0.005 220);
   --muted-foreground: oklch(0.5 0.015 220);
-  --accent: oklch(0.6 0.18 195);
+  --accent: oklch(0.58 0.16 192);
   --accent-foreground: oklch(0.99 0 0);
-  --primary: oklch(0.55 0.2 195);
+  --primary: oklch(0.54 0.18 192);
   --primary-foreground: oklch(0.99 0 0);
   --destructive: oklch(0.6 0.22 27);
   --destructive-foreground: oklch(0.99 0 0);
   --border: oklch(0.18 0.012 220 / 12%);
   --input: oklch(0.18 0.012 220 / 16%);
-  --ring: oklch(0.55 0.2 195);
+  --ring: oklch(0.54 0.18 192);
   --sidebar: oklch(0.99 0.005 220);
   --sidebar-foreground: oklch(0.18 0.012 220);
-  --sidebar-accent: oklch(0.6 0.18 195);
+  --sidebar-accent: oklch(0.58 0.16 192);
   --sidebar-accent-foreground: oklch(0.99 0 0);
   --sidebar-border: oklch(0.18 0.012 220 / 10%);
-  --sidebar-ring: oklch(0.55 0.2 195);
+  --sidebar-ring: oklch(0.54 0.18 192);
   --relay-online: oklch(0.55 0.18 145);
   --relay-offline: oklch(0.6 0.015 220);
 }
 
 .dark.relay-v2 {
-  /* deep space-slate base */
-  --background: oklch(0.13 0.012 220);
-  --foreground: oklch(0.96 0.005 220);
-  --card: oklch(0.17 0.015 222);
-  --card-foreground: oklch(0.96 0.005 220);
-  --popover: oklch(0.17 0.015 222);
-  --popover-foreground: oklch(0.96 0.005 220);
-  --secondary: oklch(0.21 0.015 222);
-  --secondary-foreground: oklch(0.85 0.01 220);
-  --muted: oklch(0.21 0.012 222);
-  --muted-foreground: oklch(0.7 0.02 220);
-  --accent: oklch(0.78 0.16 195); /* cyan glow */
-  --accent-foreground: oklch(0.13 0.012 220);
-  --primary: oklch(0.85 0.18 195); /* call-button cyan */
-  --primary-foreground: oklch(0.13 0.012 220);
-  --destructive: oklch(0.65 0.24 27);
+  /* Aluminum brushed-metal base: cooler, desaturated gray-blues instead of
+     the prior warmer slate, with a slightly refined (less neon) cyan accent
+     hierarchy. Token NAMES are unchanged, so every component already built
+     on these tokens (bg-card, bg-sidebar, border-border, --ring, …) picks
+     this up automatically — no component-level changes needed. */
+  --background: oklch(0.12 0.008 245);
+  --foreground: oklch(0.95 0.003 260);
+  --card: oklch(0.18 0.007 248);
+  --card-foreground: oklch(0.95 0.003 260);
+  --popover: oklch(0.18 0.007 248);
+  --popover-foreground: oklch(0.95 0.003 260);
+  --secondary: oklch(0.24 0.006 250);
+  --secondary-foreground: oklch(0.82 0.008 245);
+  --muted: oklch(0.24 0.006 250);
+  --muted-foreground: oklch(0.68 0.008 250);
+  --accent: oklch(0.76 0.14 192); /* refined cyan glow */
+  --accent-foreground: oklch(0.12 0.008 245);
+  --primary: oklch(0.82 0.16 192); /* call-button cyan */
+  --primary-foreground: oklch(0.12 0.008 245);
+  --destructive: oklch(0.62 0.22 28);
   --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 9%);
-  --input: oklch(1 0 0 / 12%);
-  --ring: oklch(0.78 0.16 195);
-  --sidebar: oklch(0.15 0.012 220);
-  --sidebar-foreground: oklch(0.96 0.005 220);
-  --sidebar-accent: oklch(0.78 0.16 195);
-  --sidebar-accent-foreground: oklch(0.13 0.012 220);
-  --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: oklch(0.78 0.16 195);
-  --relay-online: oklch(0.78 0.18 145);
-  --relay-offline: oklch(0.55 0.02 220);
-  --relay-danger: oklch(0.65 0.24 27);
-  --relay-success: oklch(0.78 0.18 145);
+  --border: oklch(1 0 0 / 7%);
+  --input: oklch(1 0 0 / 10%);
+  --ring: oklch(0.76 0.14 192);
+  --sidebar: oklch(0.16 0.007 246);
+  --sidebar-foreground: oklch(0.95 0.003 260);
+  --sidebar-accent: oklch(0.76 0.14 192);
+  --sidebar-accent-foreground: oklch(0.12 0.008 245);
+  --sidebar-border: oklch(1 0 0 / 6%);
+  --sidebar-ring: oklch(0.76 0.14 192);
+  --relay-online: oklch(0.76 0.16 145);
+  --relay-offline: oklch(0.54 0.008 250);
+  --relay-danger: oklch(0.62 0.22 28);
+  --relay-success: oklch(0.76 0.16 145);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
 }

@@ -51,12 +51,14 @@ export default function HistoryPage() {
   const conferences = trpc.calls.conferenceHistory.useQuery(undefined, {
     enabled: !!me,
     refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   });
   // 1:1 history — we only surface the MISSED/DECLINED rows here (answered calls
   // already come through `conferenceHistory`, so this avoids double-listing).
   const oneToOne = trpc.calls.history.useQuery(undefined, {
     enabled: !!me,
     refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   });
 
   const items = useMemo<Item[]>(() => {
@@ -103,7 +105,7 @@ export default function HistoryPage() {
         <h1 className="text-lg font-semibold tracking-tight">Call history</h1>
       </header>
 
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card/60 shadow-xl shadow-black/10 backdrop-blur-xl backdrop-saturate-150">
+      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-xl shadow-black/10">
         <div className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
             <div className="p-6 text-sm text-muted-foreground">Loading…</div>
@@ -162,7 +164,10 @@ function ConferenceItem({
   const canCall = isGroup ? otherNumbers.length > 0 : !!callBack;
 
   return (
-    <li className="border-b border-border/60 px-4 py-3 last:border-b-0 hover:bg-muted/30">
+    <li
+      className="border-b border-border/60 px-4 py-3 last:border-b-0 hover:bg-muted/30 transition-colors"
+      aria-label={`Call with ${title}, ${formatDuration(conf.durationSec)} duration`}
+    >
       <div className="flex items-center gap-3">
         <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
           <Icon className="size-[18px]" />
@@ -205,9 +210,9 @@ function ConferenceItem({
 
       {/* Roster: every participant's name + PIN. */}
       <div className="mt-2 flex flex-wrap gap-1.5 pl-12">
-        {conf.participants.map((p, i) => (
+        {conf.participants.map((p) => (
           <span
-            key={p.number + "-" + i}
+            key={p.number}
             className={
               "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] " +
               (p.isSelf
@@ -215,6 +220,7 @@ function ConferenceItem({
                 : "bg-muted/60 text-muted-foreground")
             }
             title={p.number}
+            aria-label={p.isSelf ? "You" : `${p.name} (${p.number})`}
           >
             <span className="max-w-[10rem] truncate font-medium">
               {p.isSelf ? "You" : p.name}
@@ -249,7 +255,10 @@ function MissedItem({
   const label = call.status === "declined" ? "Declined" : "Missed";
 
   return (
-    <li className="border-b border-border/60 px-4 py-3 last:border-b-0 hover:bg-muted/30">
+    <li
+      className="border-b border-border/60 px-4 py-3 last:border-b-0 hover:bg-muted/30 transition-colors"
+      aria-label={`${label} call from ${peerName}`}
+    >
       <div className="flex items-center gap-3">
         <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-destructive/10 text-destructive">
           <Icon className="size-[18px]" />

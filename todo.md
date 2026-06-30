@@ -2082,3 +2082,70 @@ bar). **Reverted the `-mb-28 md:mb-0` cancellation**; the message-list flex-colu
 cause from v2.64.0, confirmed correct) is what was doing the real work and needed no change. 2 tests
 updated to assert the padding is preserved (and to stop a prior test from pinning the regression as if it
 were correct). 517 tests green, tsc + build clean. Footer → `v2.64.1`.
+
+## v2.65.0 — Full-app audit: design refresh, UX polish, notification reliability, backend data integrity (delivered 2026-06-30)
+
+User asked for a comprehensive, page-by-page audit of the whole mobile app — code, UI, UX, and every
+functional/aesthetic element — with a "sleek aluminum + nice colors" visual refresh and a hardened
+notification system. Run as a multi-stage Workflow (parallel per-area diagnostic agents → adversarial
+verification pass on every proposed fix → synthesis into a prioritized, file-exact plan), since Ultracode
+was explicitly invoked. The plan's literal proposals were not applied blindly — two were corrected after
+manual review (the SSE reconnect-detection flag and the missed-call popup dismissal semantics; see below).
+.NET was **not** introduced — the stack is unchanged React/Express/tRPC; "Ultra code" was read as the
+in-house Workflow multi-agent tooling, not a literal framework swap.
+
+- [x] **Design tokens — "Aluminum Brushed-Metal" palette.** Replaced both OKLCH token blocks in
+      `client/src/index.css` (`.dark.relay-v2` and `.relay-v2:not(.dark)`) with cooler, desaturated grays and
+      a refined cyan accent hierarchy. Token *names* are unchanged, so every existing component picks up the
+      new palette with zero component-level edits.
+- [x] **Dialer.tsx** — faster recent-calls refresh (20s → 10s poll), Enter-key dial no longer double-fires
+      a page scroll/submit (`preventDefault()` before `startCallNow()`).
+- [x] **History.tsx** — both history queries stop polling while the tab is backgrounded
+      (`refetchIntervalInBackground: false`); card surfaces unified with Contacts/Messages
+      (`border-border bg-card`, dropped redundant blur/saturate); list rows get `transition-colors` +
+      `aria-label`; roster list keys switched from an index-based composite to the stable participant number.
+- [x] **Messages.tsx** — read receipts now show a real double-tick (`✓✓`) vs single-tick distinction;
+      clipboard copy gives toast feedback instead of failing silently; a pending attachment no longer leaks
+      into the next conversation you open; voice-note recording's `onstop` is wrapped in try/catch/finally so
+      a recorder error can't leave the UI stuck; Escape now closes the emoji picker.
+- [x] **Contacts.tsx** — migrated off `window.confirm()` to a shadcn `AlertDialog` for delete confirmation;
+      added a mobile per-row `DropdownMenu` (Favorite / Edit / Delete) since the desktop inline buttons don't
+      fit small screens; added a 5-row loading `Skeleton` instead of bare "Loading…" text; `AddContactDialog`
+      migrated to a real shadcn `Dialog` (focus trap + Escape-to-close, previously hand-rolled).
+- [x] **ProfileHubSections.tsx** — every save section (contact info, social links, bio, status) now surfaces
+      a visible error state on failed save instead of failing silently; mobile-number and social-value inputs
+      gained sane `maxLength` caps; status buttons disable + dim while a save is in flight (prevents
+      double-submit); list keys switched from array index to stable values.
+- [x] **AppShell / PasscodeGate** — added visible focus rings (`focus-visible:ring-*`) to the passcode input
+      and its unlock/submit buttons for keyboard and a11y parity with the rest of the app.
+      (OnboardingGate was audited and found already correct — no change needed there.)
+- [x] **Notification system.** `NotificationBell` (`MissedCalls.tsx`) is now the single source of truth for
+      both the missed-call/unread badge AND Do Not Disturb (Switch in the dropdown panel). The missed-call
+      toast banner sits at `z-[75]`, below the in-call reconnect modal (`z-[80]`), so call recovery is never
+      hidden behind a notification banner. `useRealtime`'s SSE client now detects a *reconnect* (not just the
+      first connect) and refreshes missed-call/history state on recovery, since a missed call during an SSE
+      outage has no event to react to otherwise — the chime gate also switched from `document.hidden` to
+      `document.visibilityState !== "visible"` for correctness in more browser states. Missed-call popup
+      dismissal is now tracked by a count-keyed `localStorage` flag scoped to the toast banner only — it does
+      **not** touch the bell/History badge state, so dismissing the toast doesn't make missed calls look
+      "reviewed" when they haven't been (a literal read of the synthesized plan would have done exactly that;
+      corrected before shipping).
+- [x] **Messaging backend data integrity (`server/v2routers.ts`, `server/v2db.ts`).** `messages.send` now
+      trims the body before the empty-check and verifies a supplied `attachmentId` actually belongs to the
+      caller (`getAttachmentForIdentity`, throws `FORBIDDEN` otherwise) — previously any authenticated
+      identity could attach *any* attachment ID, including someone else's private media. `sendMessage`
+      validates a `replyToId` belongs to the same conversation before inserting (closes a cross-conversation
+      reply-spoofing path) and runs inside a `db.transaction`. `markThreadRead` and `recentAutoReplyExists`
+      now filter out soft-deleted messages (`isNull(messages.deletedAt)`) so an unsent message can no longer
+      affect read receipts or trigger/suppress auto-replies. `recordAttachment` selects by `insertId` instead
+      of re-querying by criteria, closing a race window under concurrent uploads.
+- [x] **Contacts backend data integrity.** `contacts.upsert` now validates `email` (RFC-shaped), `phone`
+      (≥4 digits, phone-characters only), and `website` (must be `http(s)://` — blocks `javascript:`/`data:`
+      URI injection via a contact's website field). `regenerateIdentityNumber` wraps the identity-number
+      update and its contact-record propagation in a single `db.transaction`, replacing a try/catch-swallow
+      pattern that could previously leave the identity and its contacts' cached numbers split-brained on a
+      partial failure.
+- [x] 10 new backend tests (`server/dataIntegrityFixes.test.ts`) covering attachment-ownership rejection,
+      whitespace-only-body rejection, no-identity rejection, and the email/phone/website validators (both
+      reject and accept paths, including the `javascript:` URI block). 527 tests green (1 pre-existing skip),
+      tsc + build clean. Footer → `v2.65.0`.

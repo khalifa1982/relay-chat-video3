@@ -126,7 +126,7 @@ export default function DialerPage() {
   }, [engineReady, enginePin]);
 
   const history = trpc.calls.history.useQuery(undefined, {
-    refetchInterval: 20_000,
+    refetchInterval: 10_000,
     enabled: !!me,
   });
   // "Missed Call" alert: shown when the user arrives here from the landing
@@ -157,7 +157,10 @@ export default function DialerPage() {
       } else if (e.key === "Backspace") {
         setDialed((s) => s.slice(0, -1));
       } else if (e.key === "Enter") {
-        if (dialed.length === 6) startCallNow();
+        if (dialed.length === 6) {
+          e.preventDefault();
+          startCallNow();
+        }
       }
     };
     window.addEventListener("keydown", onKey);

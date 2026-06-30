@@ -61,7 +61,7 @@ function LockScreen() {
             type="button"
             onClick={tryBiometric}
             disabled={bioBusy}
-            className="mt-5 inline-flex items-center gap-2 rounded-xl border border-[color:var(--relay-online)]/40 bg-[color:var(--relay-online)]/10 px-4 py-2.5 text-sm font-medium text-[color:var(--relay-online)] transition active:scale-[0.98] disabled:opacity-50"
+            className="mt-5 inline-flex items-center gap-2 rounded-xl border border-[color:var(--relay-online)]/40 bg-[color:var(--relay-online)]/10 px-4 py-2.5 text-sm font-medium text-[color:var(--relay-online)] transition active:scale-[0.98] disabled:opacity-50 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
           >
             <ScanFace className="size-4" />
             {bioBusy ? "Waiting…" : "Unlock with Face ID / fingerprint"}
@@ -79,6 +79,7 @@ function LockScreen() {
           }}
           className={
             "mt-6 h-14 w-full rounded-2xl border bg-card/60 text-center text-3xl tracking-[0.4em] font-mono outline-none transition " +
+            "focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
             (error
               ? "border-destructive"
               : "border-border/60 focus:border-[color:var(--relay-online)]")
@@ -89,7 +90,7 @@ function LockScreen() {
         <button
           type="submit"
           disabled={code.length < 4 || busy}
-          className="mt-5 h-12 w-full rounded-xl bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] text-primary-foreground font-semibold disabled:opacity-40 active:scale-[0.99] transition"
+          className="mt-5 h-12 w-full rounded-xl bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] text-primary-foreground font-semibold disabled:opacity-40 active:scale-[0.99] transition outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
         >
           {busy ? "Checking…" : "Unlock"}
         </button>

@@ -52,6 +52,11 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
     let es: EventSource | null = null;
     let backoff = 1000;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    // Tracks whether this is a RECONNECT (vs the initial connect): while the SSE
+    // channel was down, a missed call could have happened and arrived with no
+    // event to react to (there's no SSE channel to deliver it on). Refresh the
+    // missed-call/history state on reconnect so it doesn't go stale.
+    let wasConnected = false;
 
     const connect = () => {
       if (closed) return;
@@ -63,6 +68,11 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
 
       es.onopen = () => {
         backoff = 1000; // reset
+        if (wasConnected) {
+          utils.calls.missedSummary.invalidate().catch(() => {});
+          utils.calls.history.invalidate().catch(() => {});
+        }
+        wasConnected = true;
       };
 
       es.onmessage = (ev) => {
@@ -94,7 +104,7 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
               shouldAlertForMessage(payload.from, selfId) &&
               !isThreadMuted(payload.conversationId)
             ) {
-              if (typeof document === "undefined" || document.hidden) {
+              if (typeof document === "undefined" || document.visibilityState !== "visible") {
                 playMessageChime();
               }
               // In-app popup with the message content + inline reply — unless the
@@ -130,8 +140,10 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
                 }
               },
             });
-            // Also poke the call history list so it appears.
+            // Also poke the call history list + missed-call badge so they stay
+            // fresh (the badge otherwise only refreshes on its own 20s poll).
             utils.calls.history.invalidate().catch(() => {});
+            utils.calls.missedSummary.invalidate().catch(() => {});
             break;
           case "read":
             utils.messages.list
@@ -157,6 +169,11 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
       es.onerror = () => {
         es?.close();
         es = null;
+        // NOTE: `wasConnected` is intentionally NOT reset here. It tracks "has
+        // this hook EVER connected before" — staying true once set lets the
+        // NEXT onopen (the actual reconnect) recognize itself as a recovery
+        // and invalidate. Resetting it here would clear it right before every
+        // reconnect's onopen checks it, making the invalidation never fire.
         if (closed) return;
         // capped exponential backoff
         const wait = Math.min(backoff, 15_000);
