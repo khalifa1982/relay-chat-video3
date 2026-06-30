@@ -1905,3 +1905,21 @@ rest are sequenced below.
       v2.56 pass.
 - [x] 2 new source-guard tests (date dividers + grouping). 466 tests green, tsc + build clean. Footer →
       `v2.60.0`.
+
+## v2.61.0 — Persistent missed-call notifications (landing popup + badges) (delivered 2026-06-30)
+
+- [x] **Landing missed-call popup.** On app launch while authenticated (guest OR registered), a prominent
+      but non-intrusive banner drops in at the top identifying the most recent missed caller ("Missed call
+      from <name> · <number>" + "and N others") with **View** / dismiss. Shown once per browser session
+      until dismissed or acted on; re-appears on a fresh launch while calls remain unreviewed
+      (`MissedCallToast` in `client/src/app/MissedCalls.tsx`).
+- [x] **Click → dialer "Missed Call" alert.** Tapping the popup routes to `/app/dialer?missed=1`, where the
+      dialer shows a clear **Missed Call** alert identifying the caller with a one-tap **Call back**.
+- [x] **Badges.** The **History** tab icon (sidebar + bottom-nav) badges with the cumulative missed-call
+      count, and a new **global notification bell** badges with **missed + unread** and opens a panel that
+      routes to History (missed calls) or Messages (unread) — "a visible prompt to review the detailed
+      list." Reviewing the History tab acknowledges the misses (clears the badges).
+- [x] **Server.** New `calls.missedSummary` query + `calls.markMissedSeen` mutation, backed by a per-identity
+      `missedCallsSeenAt` high-water mark (additive nullable column, applied by the boot-migrator). Unseen =
+      incoming `missed`/`declined` calls newer than the mark. Works for guests and registered users alike.
+- [x] 7 new source-guard tests. 473 tests green, tsc + build clean. Footer → `v2.61.0`.

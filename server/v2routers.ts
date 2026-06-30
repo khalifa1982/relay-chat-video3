@@ -36,6 +36,8 @@ import {
   listContacts,
   listMessages,
   listThreads,
+  listUnseenMissedCalls,
+  markMissedCallsSeen,
   markOnline,
   markOffline,
   markThreadRead,
@@ -1056,6 +1058,38 @@ export const v2CallsRouter = router({
       });
       return row;
     }),
+
+  /**
+   * Unacknowledged missed/declined incoming calls — newest first. Drives the
+   * landing missed-call popup and the History / notification-bell badges. Works
+   * for guests and registered users alike (both have an identity row).
+   */
+  missedSummary: publicProcedure.query(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    const rows = await listUnseenMissedCalls(me.id, 30);
+    return {
+      count: rows.length,
+      items: rows.map((r) => ({
+        id: r.id,
+        callerName: r.callerName,
+        callerNumber: r.callerNumber,
+        status: r.status,
+        channel: r.channel,
+        at: r.startedAt,
+      })),
+      // The single most recent caller, for a one-line popup headline.
+      latest: rows[0]
+        ? { name: rows[0].callerName, number: rows[0].callerNumber, at: rows[0].startedAt }
+        : null,
+    };
+  }),
+
+  /** Acknowledge all missed calls (clears the popup + badges). */
+  markMissedSeen: publicProcedure.mutation(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    await markMissedCallsSeen(me.id);
+    return { ok: true };
+  }),
 });
 
 

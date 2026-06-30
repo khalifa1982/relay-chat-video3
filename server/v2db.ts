@@ -18,6 +18,7 @@ import {
   and,
   desc,
   eq,
+  gt,
   gte,
   inArray,
   isNull,
@@ -599,6 +600,8 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "identities", column: "statusOverride", ddl: "ADD COLUMN `statusOverride` varchar(16)" },
     { table: "identities", column: "mobiles", ddl: "ADD COLUMN `mobiles` text" },
     { table: "identities", column: "socials", ddl: "ADD COLUMN `socials` text" },
+    // Missed-call acknowledgement high-water mark (v2.61).
+    { table: "identities", column: "missedCallsSeenAt", ddl: "ADD COLUMN `missedCallsSeenAt` timestamp NULL" },
     // Self-hosted email/password auth (v2.54).
     { table: "users", column: "passwordHash", ddl: "ADD COLUMN `passwordHash` text" },
     { table: "users", column: "emailVerified", ddl: "ADD COLUMN `emailVerified` boolean" },
@@ -1468,6 +1471,56 @@ export async function listCallHistory(identityId: number, limit = 100) {
     .orderBy(desc(callHistory.id))
     .limit(limit);
   return rows;
+}
+
+/**
+ * Missed/declined INCOMING calls this identity hasn't acknowledged yet — i.e.
+ * newer than its `missedCallsSeenAt` high-water mark (all of them if it's null).
+ * Drives the landing missed-call popup + the History / bell badges. Returns the
+ * rows newest-first (capped) plus the resolved caller name/number for each.
+ */
+export async function listUnseenMissedCalls(identityId: number, limit = 30) {
+  const db = await getDb();
+  if (!db) return [] as Array<{ id: number; callerIdentityId: number; callerName: string; callerNumber: string; status: string; channel: string; startedAt: Date }>;
+  const meRows = await db.select().from(identities).where(eq(identities.id, identityId)).limit(1);
+  const seenAt = (meRows[0] as { missedCallsSeenAt?: Date | null } | undefined)?.missedCallsSeenAt ?? null;
+  const conds = [
+    eq(callHistory.calleeIdentityId, identityId),
+    inArray(callHistory.status, ["missed", "declined"]),
+  ];
+  if (seenAt) conds.push(gt(callHistory.startedAt, seenAt));
+  const rows = await db
+    .select()
+    .from(callHistory)
+    .where(and(...conds))
+    .orderBy(desc(callHistory.id))
+    .limit(limit);
+  if (rows.length === 0) return [];
+  const callerIds = Array.from(new Set(rows.map((r) => r.callerIdentityId)));
+  const callerRows = await db.select().from(identities).where(inArray(identities.id, callerIds));
+  const byId = new Map(callerRows.map((c) => [c.id, c]));
+  return rows.map((r) => {
+    const c = byId.get(r.callerIdentityId);
+    return {
+      id: r.id,
+      callerIdentityId: r.callerIdentityId,
+      callerName: c?.displayName || "Unknown",
+      callerNumber: c?.number || "",
+      status: r.status,
+      channel: r.channel,
+      startedAt: r.startedAt,
+    };
+  });
+}
+
+/** Acknowledge all missed calls up to now (clears the badge / popup). */
+export async function markMissedCallsSeen(identityId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(identities)
+    .set({ missedCallsSeenAt: new Date() })
+    .where(eq(identities.id, identityId));
 }
 
 /* ── conference history (multi-party calls) ───────────────────── */

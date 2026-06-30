@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Phone, MessageSquare, UserRound, Clock, LogOut, Sparkles, Sun, Moon, Bell, BellOff, Smartphone, Monitor, ArrowLeft } from "lucide-react";
 import { detectDeviceType } from "@/lib/deviceType";
@@ -11,6 +11,7 @@ import { PasscodeGate } from "./PasscodeGate";
 import { useRealtime } from "./useRealtime";
 import { useDnd } from "./dnd";
 import { useTheme } from "@/contexts/ThemeContext";
+import { MissedCallToast, NotificationBell } from "./MissedCalls";
 
 /** One-tap Do Not Disturb toggle for the app header. */
 function DndToggle() {
@@ -143,10 +144,50 @@ function Inner({ children }: { children: React.ReactNode }) {
     [threads.data]
   );
 
+  // Missed calls that arrived while away (guest or registered). Drives the
+  // landing popup + the History / bell badges.
+  const missed = trpc.calls.missedSummary.useQuery(undefined, {
+    enabled: !!me,
+    refetchInterval: 20_000,
+  });
+  const missedCount = missed.data?.count ?? 0;
+  const markSeen = trpc.calls.markMissedSeen.useMutation({
+    onSuccess: () => utils.calls.missedSummary.invalidate(),
+  });
+  // Reviewing the History tab acknowledges all missed calls (clears the badges).
+  const onHistory = location.startsWith("/app/history");
+  useEffect(() => {
+    if (onHistory && missedCount > 0 && !markSeen.isPending) {
+      markSeen.mutate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onHistory, missedCount]);
+  // The landing popup shows once per browser session until dismissed or acted on
+  // (it re-appears on a fresh launch while calls remain unreviewed).
+  const [popupDismissed, setPopupDismissed] = useState(() => {
+    try { return sessionStorage.getItem("relay_missed_popup") === "1"; } catch { return false; }
+  });
+  const dismissPopup = () => {
+    setPopupDismissed(true);
+    try { sessionStorage.setItem("relay_missed_popup", "1"); } catch { /* */ }
+  };
+  const viewMissed = () => {
+    dismissPopup();
+    navigate("/app/dialer?missed=1");
+  };
+
   if (!me) return null;
 
   return (
     <div className="min-h-svh bg-background text-foreground flex flex-col md:flex-row">
+      {/* Landing missed-call popup: prominent but non-intrusive, on app launch. */}
+      {!popupDismissed && missed.data && (
+        <MissedCallToast
+          summary={{ count: missed.data.count, latest: missed.data.latest }}
+          onView={viewMissed}
+          onDismiss={dismissPopup}
+        />
+      )}
       {/* ── desktop / tablet sidebar ───────────────────────────── */}
       <aside
         className={
@@ -156,6 +197,15 @@ function Inner({ children }: { children: React.ReactNode }) {
         }
       >
         <div className="px-5 pt-6 pb-4">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">RELAY</span>
+            <NotificationBell
+              missedCount={missedCount}
+              unreadCount={unreadTotal}
+              onOpenHistory={() => navigate("/app/history")}
+              onOpenMessages={() => navigate("/app/messages")}
+            />
+          </div>
           <Link
             href="/app/profile"
             className="flex items-center gap-3 group rounded-xl -mx-1 px-1 py-1 hover:bg-muted/40 transition-colors"
@@ -224,6 +274,11 @@ function Inner({ children }: { children: React.ReactNode }) {
                 {tab.key === "messages" && unreadTotal > 0 && (
                   <span className="inline-flex min-w-5 h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-xs items-center justify-center font-bold">
                     {unreadTotal > 99 ? "99+" : unreadTotal}
+                  </span>
+                )}
+                {tab.key === "history" && missedCount > 0 && (
+                  <span className="inline-flex min-w-5 h-5 px-1.5 rounded-full bg-destructive text-white text-xs items-center justify-center font-bold">
+                    {missedCount > 99 ? "99+" : missedCount}
                   </span>
                 )}
               </Link>
@@ -328,6 +383,12 @@ function Inner({ children }: { children: React.ReactNode }) {
             </div>
           </Link>
           <div className="flex items-center gap-1">
+            <NotificationBell
+              missedCount={missedCount}
+              unreadCount={unreadTotal}
+              onOpenHistory={() => navigate("/app/history")}
+              onOpenMessages={() => navigate("/app/messages")}
+            />
             <DndToggle />
             {me.isGuest ? (
               <a
@@ -395,6 +456,11 @@ function Inner({ children }: { children: React.ReactNode }) {
                     {tab.key === "messages" && unreadTotal > 0 && (
                       <span className="absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] items-center justify-center font-bold ring-2 ring-card">
                         {unreadTotal > 99 ? "99+" : unreadTotal}
+                      </span>
+                    )}
+                    {tab.key === "history" && missedCount > 0 && (
+                      <span className="absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-destructive text-white text-[10px] items-center justify-center font-bold ring-2 ring-card">
+                        {missedCount > 99 ? "99+" : missedCount}
                       </span>
                     )}
                   </span>

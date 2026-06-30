@@ -108,6 +108,10 @@ export const identities = mysqlTable(
     mobiles: text("mobiles"),
     /** JSON array of { platform, value } social/link entries. */
     socials: text("socials"),
+    /** High-water mark for missed-call acknowledgement: missed/declined calls
+     *  newer than this are "unseen" and drive the landing popup + badges. Bumped
+     *  to now() when the user reviews their missed calls. Additive + nullable. */
+    missedCallsSeenAt: timestamp("missedCallsSeenAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

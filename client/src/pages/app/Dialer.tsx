@@ -9,6 +9,7 @@ import {
   UserPlus,
   Users,
   Share2,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -128,6 +129,16 @@ export default function DialerPage() {
     refetchInterval: 20_000,
     enabled: !!me,
   });
+  // "Missed Call" alert: shown when the user arrives here from the landing
+  // missed-call popup (?missed=1). Identifies the most recent missed caller.
+  const [showMissed, setShowMissed] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("missed") === "1"; } catch { return false; }
+  });
+  const missedSummary = trpc.calls.missedSummary.useQuery(undefined, {
+    enabled: !!me && showMissed,
+  });
+  const missedLatest = missedSummary.data?.latest ?? null;
+  const missedCount = missedSummary.data?.count ?? 0;
   const previewQuery = trpc.directory.lookup.useQuery(
     { number: dialed },
     {
@@ -216,6 +227,43 @@ export default function DialerPage() {
 
   return (
     <div className="dialer-shell relative h-full">
+      {/* Missed Call alert — shown when arriving from the landing popup. */}
+      {showMissed && missedCount > 0 && missedLatest && phase === "idle" && (
+        <div className="absolute inset-x-0 top-0 z-20 px-3 pt-3 md:px-6 md:pt-6">
+          <div className="mx-auto max-w-md flex items-center gap-3 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 shadow-lg backdrop-blur-md">
+            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-destructive/20 text-destructive">
+              <PhoneMissed className="size-5" />
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-foreground">
+                {missedCount === 1 ? "Missed Call" : `${missedCount} Missed Calls`}
+              </div>
+              <div className="text-xs text-muted-foreground truncate">
+                from <span className="font-medium text-foreground/90">{missedLatest.name}</span>
+                {missedLatest.number ? ` · ${formatDialed(missedLatest.number)}` : ""}
+              </div>
+            </div>
+            {missedLatest.number && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="shrink-0 text-destructive hover:text-destructive"
+                onClick={() => { engine.dial(missedLatest.number); setShowMissed(false); }}
+              >
+                <Phone className="size-4 mr-1" /> Call back
+              </Button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowMissed(false)}
+              aria-label="Dismiss"
+              className="shrink-0 grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        </div>
+      )}
       {/* ── idle dialer surface (always rendered; hidden visually when phase != idle) */}
       <div
         className="grid md:grid-cols-[1fr_minmax(0,420px)] gap-0 md:gap-6 md:p-6 h-full"
