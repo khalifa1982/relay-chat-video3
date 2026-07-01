@@ -1,185 +1,307 @@
 {
   "en": {
-    "hero_kicker": "MEET RELAY",
-    "hero_title_1": "Share your number.",
-    "hero_title_2": "Hide your self.",
-    "hero_sub": "Instant voice, video, and chat right in your browser. No sign-ups, no installs, and absolutely no personal data shared. Just a disposable 6-digit code.",
-    "hero_note": "Zero setup. 100% free.",
+    "hero_kicker": "Instant Connect.",
+    "hero_title_1": "Your Private",
+    "hero_title_2": "Link.",
+    "hero_sub": "Talk, meet, and chat without sharing your world. Instantly connect with just a 6-digit number.",
+    "hero_note": "No downloads. No accounts. Just open your browser.",
     "hero_cta": "Get Your Number",
     "sticky_cta": "Open RELAY",
-    "stats_title": "Relay by the numbers",
-    "stats_sub": "Fast, private connections happening everywhere, every second.",
-    "stat_registered": "Active Numbers",
-    "stat_guests": "Quick Guests",
-    "stat_total": "Total Calls",
-    "stat_online": "Online Now",
-    "privacy_kicker": "TOTAL PRIVACY",
-    "privacy_title": "Keep your real life real private.",
-    "privacy_sub": "With RELAY, your real contacts, phone number, and email stay locked away. You get a unique 6-digit code to share. Anyone can call you on the web, but nobody can trace who you are.",
-    "feat_kicker": "POWERFUL COMMUNICATOR",
-    "feat_title": "Everything you need, built for the web.",
-    "feat_sub": "Ditch the heavy apps. Experience high-quality calls, rich chats, and complete meeting control directly from any browser.",
-    "shots_kicker": "INSIDE RELAY",
-    "shots_title": "Clean. Fast. Frictionless.",
-    "shots_sub": "Take a look at how simple talking online should actually be.",
-    "shot_dialer_t": "The Smart Dialer",
-    "shot_dialer_d": "Just type a 6-digit code and hit call. It's that easy.",
-    "shot_chat_t": "Rich Chat Rooms",
-    "shot_chat_d": "Send files, images, and voice notes instantly in-call.",
-    "shot_group_t": "One-Link Gathering",
-    "shot_group_d": "Host entire group video rooms with a single invite link.",
-    "shot_mobile_t": "Mobile-First Design",
-    "shot_mobile_d": "Works flawlessly on any phone browser, no apps required.",
-    "cta_title": "Ready to claim your code?",
-    "cta_sub": "Start calling instantly. No emails. No passwords. No strings.",
-    "cta_button": "Launch RELAY Now",
-    "footer_tag": "Talk freely, stay hidden.",
+    "stats_title": "Millions of Moments Shared.",
+    "stats_sub": "Join a growing community that values privacy and seamless connection.",
+    "stat_registered": "1.2M Private IDs",
+    "stat_guests": "7.8M Guest Joins",
+    "stat_total": "25M+ Connections",
+    "stat_online": "85K+ Live Now",
+    "privacy_kicker": "Your World, Your Rules.",
+    "privacy_title": "Stay Hidden. Stay Connected.",
+    "privacy_sub": "RELAY puts your privacy first. Never share your real identity, phone number, or contact list.",
+    "feat_kicker": "Powerful. Simple.",
+    "feat_title": "All You Need to Connect.",
+    "feat_sub": "From private calls to group gatherings, RELAY keeps you in control.",
+    "shots_kicker": "See It In Action.",
+    "shots_title": "Intuitive & Effortless.",
+    "shots_sub": "Designed for speed and simplicity across all your devices.",
+    "shot_dialer_t": "Instant Dialer",
+    "shot_dialer_d": "Call any 6-digit ID with a tap.",
+    "shot_chat_t": "Rich Messaging",
+    "shot_chat_d": "Share files, images, and voice notes securely.",
+    "shot_group_t": "Group Rooms",
+    "shot_group_d": "Host up to 50 people with powerful controls.",
+    "shot_contacts_t": "Your History",
+    "shot_contacts_d": "Re-dial recent contacts instantly.",
+    "mobile_t": "Seamlessly Mobile.",
+    "mobile_d": "RELAY works beautifully on any mobile browser. Take your conversations anywhere.",
+    "cta_title": "Ready to Connect?",
+    "cta_sub": "Get your private 6-digit number now. No strings attached.",
+    "cta_btn": "Start Calling",
+    "footer_tag": "Connect Freely. Live Privately.",
+    "footer_rights": "© 2024 RELAY. All rights reserved.",
+    "privacy_points": [
+      "Your real number is never exposed.",
+      "No personal data stored or sold.",
+      "Connect only by your unique 6-digit ID."
+    ],
     "pillars": [
       {
-        "t": "Hide Your Identity",
-        "d": "Share your temporary 6-digit number, never your personal contacts or email."
+        "t": "Hide Your ID",
+        "d": "Share a unique 6-digit number, not your phone or contacts."
       },
       {
-        "t": "One-To-Many Rooms",
-        "d": "Launch full group video spaces with just one simple invite link."
+        "t": "One Link, Many Faces",
+        "d": "Host group rooms for everyone with a single, shareable link."
       },
       {
-        "t": "Fast & Easy",
-        "d": "No downloads, no logins, and zero installs. It works instantly in your browser."
+        "t": "Instant & Easy",
+        "d": "Nothing to install, no sign-up needed. Just open and go."
       },
       {
         "t": "Free & Unique",
-        "d": "A completely peer-to-peer connection that costs you absolutely nothing."
+        "d": "Enjoy premium voice, video, and chat without any cost."
+      }
+    ],
+    "blocks": [
+      {
+        "tag": "TALK",
+        "title": "Voice & Video, One-to-One.",
+        "desc": "Connect directly with crystal-clear voice and video. Your private 6-digit number is all you need.",
+        "items": [
+          "Private Voice Call",
+          "HD Video Chat",
+          "Multi-Device Ring",
+          "Full Call History"
+        ]
+      },
+      {
+        "tag": "MEET",
+        "title": "Group Rooms, Your Way.",
+        "desc": "Host dynamic group video sessions with a simple link. Powerful controls put you in charge.",
+        "items": [
+          "Invite by Link",
+          "Host Controls",
+          "Mute All",
+          "Active Speaker"
+        ]
+      },
+      {
+        "tag": "CHAT",
+        "title": "Rich Messaging, Private.",
+        "desc": "Send messages, share files, and record voice notes. All tied to your private 6-digit ID.",
+        "items": [
+          "Text Messaging",
+          "File Sharing",
+          "Voice Notes",
+          "Image Sharing"
+        ]
       }
     ],
     "features": [
       {
-        "t": "6-Digit Numbers",
-        "d": "Get a unique, instant code that keeps your real phone number hidden."
+        "t": "Instant 6-Digit ID",
+        "d": "Get a unique, private number in seconds."
       },
       {
-        "t": "HD Voice & Video",
-        "d": "Crystal clear one-on-one calling directly through your web browser."
+        "t": "Voice & Video Calls",
+        "d": "Enjoy crystal-clear one-to-one communication."
       },
       {
-        "t": "Group Rooms",
-        "d": "Host large video gatherings effortlessly with a single shareable link."
+        "t": "Group Conferences",
+        "d": "Host multi-person video rooms with ease."
       },
       {
         "t": "Host Controls",
-        "d": "Mute everyone, spotlight speakers, transfer host duties, or pin users easily."
+        "d": "Manage your group meetings effectively."
       },
       {
         "t": "Rich Messaging",
-        "d": "Share files, photos, and voice notes inside an active, private chat."
+        "d": "Send texts, files, and voice notes securely."
       },
       {
         "t": "Screen Share & PiP",
-        "d": "Present your screen or watch calls in Picture-in-Picture mode."
+        "d": "Share your screen or multitask with Picture-in-Picture."
       },
       {
-        "t": "Smart Audio Routing",
-        "d": "Switch audio outputs seamlessly to Bluetooth or external speakers."
+        "t": "Audio Output Control",
+        "d": "Route audio to any device, including Bluetooth."
       },
       {
-        "t": "Call History",
-        "d": "Track past sessions and redial your contacts with a single tap."
+        "t": "Call History & Redial",
+        "d": "Access past conversations and redial with one tap."
       },
       {
-        "t": "100% Peer-to-Peer",
-        "d": "Your calls are direct, fast, highly private, and completely anonymous."
+        "t": "Anonymous Privacy",
+        "d": "Your real identity always stays hidden."
+      }
+    ],
+    "faqs": [
+      {
+        "q": "Do I need to install anything or sign up?",
+        "a": "No, absolutely not! RELAY runs entirely in your web browser. Just open the page, get your number, and start connecting."
+      },
+      {
+        "q": "How does the 6-digit number keep me private?",
+        "a": "Your 6-digit number is your unique identifier on RELAY. You share only this number, never your real phone number, email, or personal contacts, keeping your identity hidden."
+      },
+      {
+        "q": "Can I host a group call?",
+        "a": "Yes, easily! Just create a group room and share the unique invite link. As the host, you get powerful controls like mute-all and active speaker spotlight."
+      },
+      {
+        "q": "Is RELAY really free?",
+        "a": "Yes, RELAY is completely free to use. Enjoy all features, including one-to-one calls, group rooms, and rich messaging, at no cost."
       }
     ]
   },
   "ar": {
-    "hero_kicker": "تعرّف على ريليه",
-    "hero_title_1": "شارك رقمك فقط.",
-    "hero_title_2": "واحمِ هويتك.",
-    "hero_sub": "اتصالات صوتية وفيديو ومحادثات فورية من متصفحك مباشرة. بدون تسجيل، بدون تحميل، وبدون مشاركة أي بيانات شخصية. رمز من 6 أرقام فقط.",
-    "hero_note": "بدون إعدادات. مجاني بالكامل.",
-    "hero_cta": "احصل على رقمك الآن",
-    "sticky_cta": "افتح ريليه",
-    "stats_title": "ريليه بالأرقام",
-    "stats_sub": "اتصالات سريعة وآمنة تحدث في كل مكان، وفي كل ثانية.",
-    "stat_registered": "الأرقام النشطة",
-    "stat_guests": "الضيوف السريعين",
-    "stat_total": "إجمالي المكالمات",
-    "stat_online": "المتصلون الآن",
-    "privacy_kicker": "خصوصية مطلقة",
-    "privacy_title": "أبقِ حياتك الحقيقية سرية للغاية.",
-    "privacy_sub": "مع ريليه، تظل جهات اتصالك الحقيقية ورقم هاتفك وبريدك الإلكتروني مخفية تماماً. تحصل على رمز فريد من 6 أرقام لمشاركته. يمكن لأي شخص الاتصال بك عبر الويب، لكن لا أحد يمكنه تتبع هويتك.",
-    "feat_kicker": "أداة تواصل قوية",
-    "feat_title": "كل ما تحتاجه، مصمم للويب.",
-    "feat_sub": "تخلّص من التطبيقات الثقيلة. جرب مكالمات عالية الجودة، ومحادثات غنية، وتحكماً كاملاً بالاجتماعات مباشرة من أي متصفح.",
-    "shots_kicker": "داخل ريليه",
-    "shots_title": "بساطة. سرعة. سلاسة.",
-    "shots_sub": "ألقِ نظرة على مدى السهولة التي يجب أن تكون عليها المحادثات عبر الإنترنت.",
-    "shot_dialer_t": "الطلب الذكي",
-    "shot_dialer_d": "اكتب الرمز المكون من 6 أرقام واضغط اتصال. بهذه البساطة.",
-    "shot_chat_t": "غرف دردشة غنية",
-    "shot_chat_d": "أرسل الملفات والصور والملاحظات الصوتية فوراً أثناء المكالمة.",
-    "shot_group_t": "تجمّع برابط واحد",
-    "shot_group_d": "استضف غرف فيديو جماعية كاملة برابط دعوة واحد وبسيط.",
-    "shot_mobile_t": "تصميم للهواتف",
-    "shot_mobile_d": "يعمل بسلاسة على متصفح أي هاتف، دون الحاجة لتطبيقات.",
-    "cta_title": "هل أنت جاهز لطلب رمزك؟",
-    "cta_sub": "ابدأ الاتصال فوراً. لا بريد إلكتروني، لا كلمات مرور، لا شروط مسبقة.",
-    "cta_button": "شغّل ريليه الآن",
-    "footer_tag": "تحدّث بحرية، وابقَ مخفياً.",
+    "hero_kicker": "تواصل فوري.",
+    "hero_title_1": "رابطك",
+    "hero_title_2": "الخاص.",
+    "hero_sub": "تحدث، اجتمع، ودردش دون مشاركة عالمك. تواصل فورًا برقم سري مكون من 6 أرقام فقط.",
+    "hero_note": "لا تنزيلات. لا حسابات. فقط افتح متصفحك.",
+    "hero_cta": "احصل على رقمك",
+    "sticky_cta": "افتح RELAY",
+    "stats_title": "ملايين اللحظات المشتركة.",
+    "stats_sub": "انضم إلى مجتمع متنامٍ يقدّر الخصوصية والتواصل السلس.",
+    "stat_registered": "1.2 مليون هوية خاصة",
+    "stat_guests": "7.8 مليون انضمام ضيف",
+    "stat_total": "25 مليون+ اتصال",
+    "stat_online": "85 ألف+ متصل الآن",
+    "privacy_kicker": "عالمك، قواعدك.",
+    "privacy_title": "ابقَ مخفيًا. ابقَ متصلاً.",
+    "privacy_sub": "RELAY يضع خصوصيتك أولاً. لا تشارك هويتك الحقيقية أو رقم هاتفك أو قائمة جهات اتصالك أبدًا.",
+    "feat_kicker": "قوي. بسيط.",
+    "feat_title": "كل ما تحتاجه للتواصل.",
+    "feat_sub": "من المكالمات الخاصة إلى التجمعات الجماعية، RELAY يجعلك المتحكم.",
+    "shots_kicker": "شاهدها عمليًا.",
+    "shots_title": "بديهي وسهل الاستخدام.",
+    "shots_sub": "مصمم للسرعة والبساطة عبر جميع أجهزتك.",
+    "shot_dialer_t": "الاتصال الفوري",
+    "shot_dialer_d": "اتصل بأي رقم من 6 أرقام بنقرة واحدة.",
+    "shot_chat_t": "رسائل غنية",
+    "shot_chat_d": "شارك الملفات والصور والملاحظات الصوتية بأمان.",
+    "shot_group_t": "غرف جماعية",
+    "shot_group_d": "استضف ما يصل إلى 50 شخصًا بضوابط قوية.",
+    "shot_contacts_t": "سجلاتك",
+    "shot_contacts_d": "أعد الاتصال بجهات الاتصال الأخيرة على الفور.",
+    "mobile_t": "سلس على الجوال.",
+    "mobile_d": "يعمل RELAY بشكل جميل على أي متصفح جوال. اصطحب محادثاتك إلى أي مكان.",
+    "cta_title": "هل أنت مستعد للتواصل؟",
+    "cta_sub": "احصل على رقمك الخاص المكون من 6 أرقام الآن. لا قيود.",
+    "cta_btn": "ابدأ الاتصال",
+    "footer_tag": "تواصل بحرية. عش بخصوصية.",
+    "footer_rights": "© 2024 RELAY. جميع الحقوق محفوظة.",
+    "privacy_points": [
+      "رقمك الحقيقي لا يُكشف أبدًا.",
+      "لا يتم تخزين أو بيع أي بيانات شخصية.",
+      "تواصل فقط عبر معرفك الفريد المكون من 6 أرقام."
+    ],
     "pillars": [
       {
-        "t": "اخفِ هويتك",
-        "d": "شارك رقمك المؤقت المكون من 6 أرقام، ولا تشارك جهات اتصالك أو بريدك."
+        "t": "إخفاء هويتك",
+        "d": "شارك رقمًا فريدًا من 6 أرقام، وليس هاتفك أو جهات اتصالك."
       },
       {
-        "t": "غرف جماعية",
-        "d": "أنشئ مساحات فيديو جماعية كاملة برابط دعوة واحد وبسيط."
+        "t": "رابط واحد، وجوه متعددة",
+        "d": "استضف غرفًا جماعية للجميع برابط واحد قابل للمشاركة."
       },
       {
-        "t": "سريع وسهل",
-        "d": "بدون تنزيل أو تسجيل دخول. يعمل فوراً على متصفحك مباشرة."
+        "t": "فوري وسهل",
+        "d": "لا شيء للتثبيت، لا حاجة للتسجيل. فقط افتح وانطلق."
       },
       {
         "t": "مجاني وفريد",
-        "d": "اتصال مباشر بالكامل من جهاز لجهاز لا يكلفك أي شيء مطلقاً."
+        "d": "استمتع بمكالمات صوت وفيديو ودردشة مميزة دون أي تكلفة."
+      }
+    ],
+    "blocks": [
+      {
+        "tag": "تحدث (TALK)",
+        "title": "صوت وفيديو، فرد لفرد.",
+        "desc": "تواصل مباشرة بصوت وفيديو فائق الوضوح. رقمك الخاص المكون من 6 أرقام هو كل ما تحتاجه.",
+        "items": [
+          "مكالمة صوت خاصة",
+          "دردشة فيديو عالية الدقة",
+          "رنين متعدد الأجهزة",
+          "سجل مكالمات كامل"
+        ]
+      },
+      {
+        "tag": "اجتمع (MEET)",
+        "title": "غرف جماعية، بطريقتك.",
+        "desc": "استضف جلسات فيديو جماعية ديناميكية برابط بسيط. ضوابط قوية تضعك في القيادة.",
+        "items": [
+          "دعوة بالرابط",
+          "ضوابط المضيف",
+          "كتم الكل",
+          "تحديد المتحدث النشط"
+        ]
+      },
+      {
+        "tag": "دردش (CHAT)",
+        "title": "رسائل غنية، خاصة.",
+        "desc": "أرسل رسائل، شارك ملفات، وسجل ملاحظات صوتية. كلها مرتبطة بمعرفك الخاص المكون من 6 أرقام.",
+        "items": [
+          "رسائل نصية",
+          "مشاركة الملفات",
+          "ملاحظات صوتية",
+          "مشاركة الصور"
+        ]
       }
     ],
     "features": [
       {
-        "t": "رقم من 6 أرقام",
-        "d": "احصل على رمز فوري وفريد يحافظ على سرية رقم هاتفك الحقيقي."
+        "t": "معرف فوري 6 أرقام",
+        "d": "احصل على رقم فريد خاص بك في ثوانٍ."
       },
       {
-        "t": "صوت وفيديو HD",
-        "d": "مكالمات ثنائية فائقة الوضوح مباشرة من خلال متصفح الويب الخاص بك."
+        "t": "مكالمات صوت وفيديو",
+        "d": "استمتع بتواصل فردي فائق الوضوح."
       },
       {
-        "t": "غرف جماعية",
-        "d": "استضف اجتماعات فيديو جماعية كبيرة بسهولة تامة عبر رابط واحد قابل للمشاركة."
+        "t": "مؤتمرات جماعية",
+        "d": "استضف غرف فيديو متعددة الأشخاص بسهولة."
       },
       {
-        "t": "تحكم المضيف",
-        "d": "اكتم صوت الجميع، سلّط الضوء على المتحدثين، أو انقل صلاحية المضيف بسهولة."
+        "t": "ضوابط المضيف",
+        "d": "أدر اجتماعات مجموعتك بفعالية."
       },
       {
-        "t": "مراسلة غنية",
-        "d": "شارك الملفات والصور والرسائل الصوتية داخل دردشة نشطة وآمنة."
+        "t": "رسائل غنية",
+        "d": "أرسل نصوصًا وملفات وملاحظات صوتية بأمان."
       },
       {
-        "t": "مشاركة الشاشة و PiP",
-        "d": "اعرض شاشتك أو تابع مكالماتك في وضع صورة داخل صورة بسلاسة."
+        "t": "مشاركة الشاشة وPiP",
+        "d": "شارك شاشتك أو قم بمهام متعددة مع Picture-in-Picture."
       },
       {
-        "t": "توجيه الصوت الذكي",
-        "d": "بدّل مخرجات الصوت بسهولة إلى البلوتوث أو مكبرات الصوت الخارجية."
+        "t": "التحكم في إخراج الصوت",
+        "d": "وجه الصوت إلى أي جهاز، بما في ذلك البلوتوث."
       },
       {
-        "t": "سجل المكالمات",
-        "d": "تتبع جلساتك السابقة وأعد الاتصال بجهات اتصالك بضغطة واحدة."
+        "t": "سجل المكالمات وإعادة الاتصال",
+        "d": "الوصول إلى المحادثات السابقة وإعادة الاتصال بنقرة واحدة."
       },
       {
-        "t": "اتصال مباشر آمن",
-        "d": "مكالماتك مباشرة وسريعة وذات خصوصية تامة دون أي تتبع لهويتك."
+        "t": "خصوصية مجهولة",
+        "d": "هويتك الحقيقية تبقى مخفية دائمًا."
+      }
+    ],
+    "faqs": [
+      {
+        "q": "هل أحتاج إلى تثبيت أي شيء أو التسجيل؟",
+        "a": "لا، إطلاقًا! يعمل RELAY بالكامل في متصفح الويب الخاص بك. فقط افتح الصفحة، احصل على رقمك، وابدأ التواصل."
+      },
+      {
+        "q": "كيف يحافظ الرقم المكون من 6 أرقام على خصوصيتي؟",
+        "a": "رقمك المكون من 6 أرقام هو معرفك الفريد على RELAY. أنت تشارك هذا الرقم فقط، وليس رقم هاتفك الحقيقي، بريدك الإلكتروني، أو جهات اتصالك الشخصية، مما يحافظ على سرية هويتك."
+      },
+      {
+        "q": "هل يمكنني استضافة مكالمة جماعية؟",
+        "a": "نعم، بسهولة! ما عليك سوى إنشاء غرفة جماعية ومشاركة رابط الدعوة الفريد. بصفتك المضيف، ستحصل على ضوابط قوية مثل كتم الكل وتحديد المتحدث النشط."
+      },
+      {
+        "q": "هل RELAY مجاني حقًا؟",
+        "a": "نعم، RELAY مجاني تمامًا للاستخدام. استمتع بجميع الميزات، بما في ذلك المكالمات الفردية، والغرف الجماعية، والرسائل الغنية، دون أي تكلفة."
       }
     ]
   }

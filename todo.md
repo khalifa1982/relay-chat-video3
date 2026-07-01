@@ -2180,3 +2180,12 @@ broad "anything else Android-specific" sweep) were refuted on independent re-rea
       pattern for this huge imperative, not-booted-in-tests engine file) confirming `stopRingtone()` drains
       `ringtoneNodes` and that `fire()` registers + self-prunes them. 529 tests green (1 pre-existing skip),
       tsc + build clean. Footer → `v2.65.1`.
+
+## Katon-inspired landing redesign (Home.tsx only)
+- [x] Regenerate bilingual copy via Gemini Flash (TALK/MEET/CHAT blocks, FAQ, pillars, features)
+- [x] Add product-style capability blocks section (TALK / MEET / CHAT) with icon lists
+- [x] Add FAQ section (bilingual)
+- [x] Keep all existing animations, real screenshots, live stats, EN/AR + RTL
+- [x] Do NOT claim classroom / streaming / hardware / translation / AI
+- [x] Update Home.test.ts if needed and run pnpm test (530 tests green)
+- [ ] Checkpoint + push, guide user to Publish

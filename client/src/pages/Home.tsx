@@ -53,6 +53,30 @@ const T = {
       "No address book, no email, no tracking.",
       "Calls go directly, peer-to-peer, between devices.",
     ],
+    blocks_kicker: "ONE APP, THREE WAYS",
+    blocks_title: "Talk. Meet. Chat.",
+    blocks_sub:
+      "Everything RELAY does, grouped into three simple ways to connect — all from the same 6-digit number.",
+    blocks: [
+      {
+        tag: "TALK",
+        t: "Voice & video, one-to-one",
+        d: "Connect directly with crystal-clear voice and video. Your private 6-digit number is all you need.",
+        items: ["Private voice calls", "HD video chat", "Multi-device ring", "Full call history"],
+      },
+      {
+        tag: "MEET",
+        t: "Group rooms, your way",
+        d: "Host group video sessions with a single link. Powerful host controls put you in charge of the room.",
+        items: ["Invite by one link", "Host controls", "Mute everyone", "Active-speaker spotlight"],
+      },
+      {
+        tag: "CHAT",
+        t: "Rich messaging, private",
+        d: "Send messages, share files, and record voice notes — all tied to your private 6-digit identity.",
+        items: ["Text messaging", "File sharing", "Voice notes", "Image sharing"],
+      },
+    ],
     feat_kicker: "POWERFUL COMMUNICATOR",
     feat_title: "Everything you need, built for the web.",
     feat_sub:
@@ -104,6 +128,26 @@ const T = {
     mobile_t: "Mobile-first design",
     mobile_d:
       "Open the website on any phone browser and it rings just like a normal call — no app required, even on the go.",
+    faq_kicker: "GOOD TO KNOW",
+    faq_title: "Questions, answered.",
+    faqs: [
+      {
+        q: "Do I need to install anything or sign up?",
+        a: "No. RELAY runs entirely in your web browser. Just open the page, get your number, and start connecting — no download, no account.",
+      },
+      {
+        q: "How does the 6-digit number keep me private?",
+        a: "You only ever share that 6-digit code. Your real phone number, email, and contacts stay hidden, so people reach you without ever knowing who you really are.",
+      },
+      {
+        q: "Can I host a group call?",
+        a: "Yes. Create a room and share one invite link. As host you get mute-all, active-speaker spotlight, and full control of the room.",
+      },
+      {
+        q: "Is RELAY really free?",
+        a: "Yes. One-to-one calls, group rooms, and messaging are all free — calls are peer-to-peer, straight between devices.",
+      },
+    ],
     cta_title: "Ready to claim your code?",
     cta_sub: "Start calling instantly. No emails. No passwords. No strings.",
     cta_btn: "Launch RELAY now",
@@ -135,6 +179,30 @@ const T = {
       "رقم هاتفك الحقيقي لا يظهر إطلاقاً.",
       "لا دفتر عناوين، لا بريد إلكتروني، لا تتبّع.",
       "المكالمات تتم مباشرة من جهاز إلى جهاز.",
+    ],
+    blocks_kicker: "تطبيق واحد، ثلاث طرق",
+    blocks_title: "تحدّث. اجتمع. دردش.",
+    blocks_sub:
+      "كل ما يفعله ريليه، مُجمّعاً في ثلاث طرق بسيطة للتواصل — كلها من نفس الرقم المكوّن من ٦ أرقام.",
+    blocks: [
+      {
+        tag: "تحدّث",
+        t: "صوت وفيديو، فرداً لفرد",
+        d: "تواصل مباشرة بصوت وفيديو فائقي الوضوح. رقمك الخاص المكوّن من ٦ أرقام هو كل ما تحتاجه.",
+        items: ["مكالمات صوتية خاصة", "فيديو عالي الدقة", "رنين متعدد الأجهزة", "سجل مكالمات كامل"],
+      },
+      {
+        tag: "اجتمع",
+        t: "غرف جماعية بطريقتك",
+        d: "استضف جلسات فيديو جماعية برابط واحد. أدوات تحكّم قوية تضعك في قيادة الغرفة.",
+        items: ["دعوة برابط واحد", "تحكّم المضيف", "كتم الجميع", "إبراز المتحدّث النشط"],
+      },
+      {
+        tag: "دردش",
+        t: "مراسلة غنية وخاصة",
+        d: "أرسل الرسائل، شارك الملفات، وسجّل ملاحظات صوتية — كلها مرتبطة بهويتك الخاصة المكوّنة من ٦ أرقام.",
+        items: ["رسائل نصية", "مشاركة الملفات", "ملاحظات صوتية", "مشاركة الصور"],
+      },
     ],
     feat_kicker: "أداة تواصل قوية",
     feat_title: "كل ما تحتاجه، مصمّم للويب.",
@@ -175,6 +243,26 @@ const T = {
     mobile_t: "تصميم للهواتف أولاً",
     mobile_d:
       "افتح الموقع من متصفح أي هاتف وسيرنّ تماماً كأي مكالمة عادية — دون أي تطبيق، حتى أثناء تنقّلك.",
+    faq_kicker: "معلومات مفيدة",
+    faq_title: "أسئلة، وإجاباتها.",
+    faqs: [
+      {
+        q: "هل أحتاج إلى تثبيت أي شيء أو التسجيل؟",
+        a: "لا. يعمل ريليه بالكامل في متصفحك. فقط افتح الصفحة، احصل على رقمك، وابدأ التواصل — بلا تحميل ولا حساب.",
+      },
+      {
+        q: "كيف يحافظ الرقم المكوّن من ٦ أرقام على خصوصيتي؟",
+        a: "أنت تشارك هذا الرمز المكوّن من ٦ أرقام فقط. يبقى رقم هاتفك الحقيقي وبريدك وجهات اتصالك مخفية، فيصل إليك الناس دون أن يعرفوا من أنت حقاً.",
+      },
+      {
+        q: "هل يمكنني استضافة مكالمة جماعية؟",
+        a: "نعم. أنشئ غرفة وشارك رابط دعوة واحداً. وبصفتك المضيف تحصل على كتم الجميع وإبراز المتحدّث والتحكّم الكامل بالغرفة.",
+      },
+      {
+        q: "هل ريليه مجاني حقاً؟",
+        a: "نعم. المكالمات الفردية والغرف الجماعية والمراسلة كلها مجانية — والمكالمات مباشرة من جهاز لجهاز.",
+      },
+    ],
     cta_title: "هل أنت جاهز لطلب رمزك؟",
     cta_sub: "ابدأ الاتصال فوراً. لا بريد إلكتروني، لا كلمات مرور، لا شروط.",
     cta_btn: "شغّل ريليه الآن",
@@ -749,6 +837,70 @@ export default function Home() {
       </section>
 
       {/* ---------------------------------------------------------------- */}
+      {/* Product-style capability blocks — TALK / MEET / CHAT */}
+      {/* Inspired by a modern multi-product layout; every claim is a real   */}
+      {/* RELAY capability (no classroom / streaming / hardware / AI).       */}
+      {/* ---------------------------------------------------------------- */}
+      <section className="relative z-10 px-6 py-16 md:py-24">
+        <div className="max-w-3xl mx-auto text-center mb-14">
+          <span className="text-xs font-bold tracking-[0.2em] uppercase block mb-3 accent-shift" style={{ color: ACCENT }} data-reveal>
+            {t.blocks_kicker}
+          </span>
+          <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight mb-4" style={{ color: "oklch(0.22 0.03 265)" }} data-reveal="words">
+            {t.blocks_title.split(" ").map((w, i, arr) => (
+              <span key={i} className="word" style={{ "--wd": `${i * 55}ms` } as React.CSSProperties}>
+                {w}
+                {i < arr.length - 1 ? "\u00A0" : ""}
+              </span>
+            ))}
+          </h2>
+          <p className="text-slate-500 text-lg leading-relaxed" data-reveal style={{ "--d": "120ms" } as React.CSSProperties}>
+            {t.blocks_sub}
+          </p>
+        </div>
+        <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6">
+          {t.blocks.map((b, i) => (
+            <div
+              key={i}
+              data-reveal
+              style={{ "--d": `${i * 110}ms` } as React.CSSProperties}
+              className="relative rounded-3xl border border-black/5 bg-white shadow-sm card-hover p-7 overflow-hidden flex flex-col"
+            >
+              <div
+                className="absolute -top-10 -right-10 w-32 h-32 rounded-full blur-3xl opacity-20 accent-shift"
+                style={{ backgroundColor: ACCENT }}
+                aria-hidden="true"
+              />
+              <span
+                className="relative inline-flex self-start items-center px-3 py-1 rounded-full text-[11px] font-extrabold tracking-[0.2em] mb-5 accent-shift"
+                style={{ color: ACCENT, backgroundColor: "oklch(0.55 0.22 268 / 0.10)" }}
+              >
+                {b.tag}
+              </span>
+              <h3 className="relative text-xl font-extrabold mb-3" style={{ color: "oklch(0.22 0.03 265)" }}>
+                {b.t}
+              </h3>
+              <p className="relative text-sm text-slate-500 leading-relaxed mb-6">{b.d}</p>
+              <ul className="relative mt-auto space-y-2.5">
+                {b.items.map((it, j) => (
+                  <li key={j} className="flex items-center gap-2.5 text-sm text-slate-700">
+                    <span
+                      className="w-4 h-4 rounded-full flex items-center justify-center text-white text-[9px] font-bold accent-shift flex-shrink-0"
+                      style={{ backgroundColor: ACCENT }}
+                      aria-hidden="true"
+                    >
+                      ✓
+                    </span>
+                    {it}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ---------------------------------------------------------------- */}
       {/* Features grid */}
       {/* ---------------------------------------------------------------- */}
       <section className="relative z-10 px-6 py-16 md:py-24">
@@ -865,6 +1017,47 @@ export default function Home() {
               />
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* FAQ */}
+      {/* ---------------------------------------------------------------- */}
+      <section className="relative z-10 px-6 py-12 md:py-20">
+        <div className="max-w-3xl mx-auto text-center mb-12">
+          <span className="text-xs font-bold tracking-[0.2em] uppercase block mb-3 accent-shift" style={{ color: ACCENT }} data-reveal>
+            {t.faq_kicker}
+          </span>
+          <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight" style={{ color: "oklch(0.22 0.03 265)" }} data-reveal="words">
+            {t.faq_title.split(" ").map((w, i, arr) => (
+              <span key={i} className="word" style={{ "--wd": `${i * 55}ms` } as React.CSSProperties}>
+                {w}
+                {i < arr.length - 1 ? "\u00A0" : ""}
+              </span>
+            ))}
+          </h2>
+        </div>
+        <div className="max-w-3xl mx-auto grid grid-cols-1 gap-4">
+          {t.faqs.map((f, i) => (
+            <details
+              key={i}
+              data-reveal
+              style={{ "--d": `${i * 80}ms` } as React.CSSProperties}
+              className="group rounded-2xl border border-black/5 bg-white shadow-sm card-hover px-6 py-1 open:shadow-md"
+            >
+              <summary className="flex items-center justify-between gap-4 cursor-pointer list-none py-5 font-bold select-none" style={{ color: "oklch(0.24 0.04 265)" }}>
+                <span>{f.q}</span>
+                <span
+                  className="w-7 h-7 flex-shrink-0 rounded-full flex items-center justify-center text-white text-lg leading-none accent-shift transition-transform duration-200 group-open:rotate-45"
+                  style={{ backgroundColor: ACCENT }}
+                  aria-hidden="true"
+                >
+                  +
+                </span>
+              </summary>
+              <p className="text-slate-600 leading-relaxed pb-5 -mt-1">{f.a}</p>
+            </details>
+          ))}
         </div>
       </section>
 
