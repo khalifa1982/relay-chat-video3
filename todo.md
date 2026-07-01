@@ -2188,4 +2188,14 @@ broad "anything else Android-specific" sweep) were refuted on independent re-rea
 - [x] Keep all existing animations, real screenshots, live stats, EN/AR + RTL
 - [x] Do NOT claim classroom / streaming / hardware / translation / AI
 - [x] Update Home.test.ts if needed and run pnpm test (530 tests green)
-- [ ] Checkpoint + push, guide user to Publish
+- [x] Checkpoint + push (version ef408212), guide user to Publish
+
+## Interactive/dynamic landing reshape (Home.tsx only) — gemini-3.5-flash
+- [x] Verify true group-call capacity (confirmed: up to 10 people)
+- [x] Generate expanded multilingual copy via gemini-3.5-flash (EN, AR, ES, FR, DE, HI)
+- [x] Add scroll-reactive animated 3D background (color + motion shifts on scroll)
+- [x] Fix duplicate "Open RELAY" button — header CTA hides on scroll, single floating CTA appears
+- [x] Language switcher supporting 6 languages (RTL-aware for AR)
+- [x] Add group video conference showcase (up to 10 people, 10-screen grid + active-speaker spotlight)
+- [x] Keep truthful features only (no classroom/streaming/hardware/AI claims)
+- [x] Run pnpm test (530 green) + tsc clean, visual check EN + AR RTL done; checkpoint + push
