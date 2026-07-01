@@ -40,7 +40,7 @@ export const LANDING_COPY = {
     "mobile_t": "Goes wherever you go.",
     "mobile_d": "Fully responsive on mobile and desktop browsers. No app store downloads required.",
     "cta_title": "Ready to go off-grid?",
-    "cta_sub": "Claim your 6-digit number in 3 seconds and start talking.",
+    "cta_sub": "Claim your 6-digit number in 3 seconds and start your first call.",
     "cta_btn": "Start Now - It's Free",
     "footer_tag": "RELAY - Private Browser Calls",
     "footer_rights": "© 2025 RELAY. All rights reserved. Peer-to-peer, secure, and instant.",
@@ -162,6 +162,10 @@ export const LANDING_COPY = {
       {
         "q": "Is RELAY really free?",
         "a": "Yes, RELAY is completely free. There are no premium paywalls or hidden costs for any of our features."
+      },
+      {
+        "q": "Do I need an email address or an account?",
+        "a": "Not at all! You can instantly get a 6-digit number with no download or account required. If you choose to save your account across devices, you can optionally do so using only your email — a fully internal sign-up, with no Google, Apple, Facebook, or any third-party sign-in providers."
       }
     ]
   },
@@ -204,7 +208,7 @@ export const LANDING_COPY = {
     "mobile_t": "يعمل أينما كنت.",
     "mobile_d": "متوافق بالكامل مع متصفحات الهاتف والكمبيوتر. لا يتطلب أي تنزيل من متاجر التطبيقات.",
     "cta_title": "هل أنت مستعد لتأمين خصوصيتك؟",
-    "cta_sub": "احصل على رقمك المكون من 6 أرقام في 3 ثوانٍ وابدأ التحدث الآن.",
+    "cta_sub": "احصل على رقمك المكون من 6 أرقام في 3 ثوانٍ وابدأ أول مكالمة لك.",
     "cta_btn": "ابدأ الآن - مجاناً",
     "footer_tag": "RELAY - مكالمات متصفح آمنة",
     "footer_rights": "© 2025 RELAY. جميع الحقوق محفوظة. اتصال مباشر، آمن، وفوري.",
@@ -326,6 +330,10 @@ export const LANDING_COPY = {
       {
         "q": "هل RELAY مجاني حقاً؟",
         "a": "نعم، RELAY مجاني تماماً. لا توجد اشتراكات مدفوعة أو تكاليف مخفية لأي من ميزاتنا."
+      },
+      {
+        "q": "هل أحتاج إلى عنوان بريد إلكتروني أو حساب؟",
+        "a": "لا يتطلب RELAY أي تنزيل أو حساب للبدء؛ تحصل على رقم سداسي فوري. حفظ حسابك عبر الأجهزة اختياري تمامًا ويتم باستخدام بريدك الإلكتروني فقط — تسجيل داخلي بالكامل، دون Google أو Apple أو Facebook أو أي مزوّد تسجيل دخول خارجي."
       }
     ]
   },
@@ -368,7 +376,7 @@ export const LANDING_COPY = {
     "mobile_t": "Va contigo a donde sea.",
     "mobile_d": "Totalmente optimizado para navegadores móviles y de escritorio. Sin descargas de tiendas de apps.",
     "cta_title": "¿Listo para salir del radar?",
-    "cta_sub": "Consigue tu número de 6 dígitos en 3 segundos y empieza a hablar.",
+    "cta_sub": "Consigue tu número de 6 dígitos en 3 segundos e inicia tu primera llamada.",
     "cta_btn": "Empezar ahora - Gratis",
     "footer_tag": "RELAY - Llamadas privadas en navegador",
     "footer_rights": "© 2025 RELAY. Todos los derechos reservados. Conexión directa, segura e instantánea.",
@@ -490,6 +498,10 @@ export const LANDING_COPY = {
       {
         "q": "¿Es RELAY realmente gratis?",
         "a": "Sí, RELAY es completamente gratis. No hay opciones de pago ni costes ocultos para ninguna función."
+      },
+      {
+        "q": "¿Necesito una dirección de correo electrónico o una cuenta?",
+        "a": "¡Para nada! Obtienes un número de 6 dígitos al instante, sin descargas ni cuenta. Si decides guardar tu cuenta en varios dispositivos, es opcional y solo requiere tu correo electrónico — un registro totalmente interno, sin Google, Apple, Facebook ni ningún proveedor externo de inicio de sesión."
       }
     ]
   },
@@ -532,7 +544,7 @@ export const LANDING_COPY = {
     "mobile_t": "S'adapte à tous vos déplacements.",
     "mobile_d": "Entièrement réactif sur mobiles et ordinateurs. Aucun téléchargement d'application requis.",
     "cta_title": "Prêt à protéger vos données ?",
-    "cta_sub": "Obtenez votre numéro à 6 chiffres en 3 secondes et commencez à discuter.",
+    "cta_sub": "Obtenez votre numéro à 6 chiffres en 3 secondes et lancez votre premier appel.",
     "cta_btn": "Démarrer - C'est Gratuit",
     "footer_tag": "RELAY - Appels privés sur navigateur",
     "footer_rights": "© 2025 RELAY. Tous droits réservés. Connexions peer-to-peer privées et instantanées.",
@@ -654,6 +666,10 @@ export const LANDING_COPY = {
       {
         "q": "Est-ce que RELAY est vraiment gratuit ?",
         "a": "Oui, RELAY est entièrement gratuit. Il n'y a pas d'options payantes ni de frais cachés pour nos fonctionnalités."
+      },
+      {
+        "q": "Ai-je besoin d'une adresse e-mail ou d'un compte ?",
+        "a": "Pas du tout ! Vous obtenez instantanément un numéro à 6 chiffres, sans téléchargement ni compte. Sauvegarder votre compte sur plusieurs appareils est facultatif et se fait uniquement via votre e-mail — une inscription entièrement interne, sans Google, Apple, Facebook ni aucun fournisseur d'authentification tiers."
       }
     ]
   },
@@ -696,7 +712,7 @@ export const LANDING_COPY = {
     "mobile_t": "Immer an deiner Seite.",
     "mobile_d": "Komplett optimiert für mobile und Desktop-Browser. Kein Download aus App-Stores nötig.",
     "cta_title": "Bereit für echte Privatsphäre?",
-    "cta_sub": "Sichere dir in 3 Sekunden deine 6-stellige Nummer und sprich los.",
+    "cta_sub": "Sichere dir in 3 Sekunden deine 6-stellige Nummer und starte deinen ersten Anruf.",
     "cta_btn": "Jetzt starten - Kostenlos",
     "footer_tag": "RELAY - Private Browser-Anrufe",
     "footer_rights": "© 2025 RELAY. Alle Rechte vorbehalten. Peer-to-peer, sicher und sofort.",
@@ -818,6 +834,10 @@ export const LANDING_COPY = {
       {
         "q": "Ist RELAY wirklich kostenlos?",
         "a": "Ja, RELAY ist vollkommen kostenlos. Es gibt keine Premium-Schranken oder versteckten Kosten für unsere Funktionen."
+      },
+      {
+        "q": "Benötige ich eine E-Mail-Adresse oder ein Konto?",
+        "a": "Überhaupt nicht! Sie erhalten sofort eine 6-stellige Nummer — ohne Download, ohne Konto. Ihr Konto geräteübergreifend zu speichern ist optional und erfordert lediglich Ihre E-Mail-Adresse — eine vollständig interne Registrierung, ganz ohne Google, Apple, Facebook oder externe Anmeldedienste."
       }
     ]
   },
@@ -860,7 +880,7 @@ export const LANDING_COPY = {
     "mobile_t": "जहां भी आप जाएं, साथ चले।",
     "mobile_d": "मोबाइल और डेस्कटॉप ब्राउज़र पर पूरी तरह से उत्तरदायी। किसी ऐप स्टोर डाउनलोड की आवश्यकता नहीं है।",
     "cta_title": "गोपनीयता के लिए तैयार हैं?",
-    "cta_sub": "3 सेकंड में अपना 6-अंकीय नंबर पाएं और बात करना शुरू करें।",
+    "cta_sub": "3 सेकंड में अपना 6-अंकीय नंबर पाएं और अपनी पहली कॉल शुरू करें।",
     "cta_btn": "अभी शुरू करें - यह मुफ़्त है",
     "footer_tag": "RELAY - निजी ब्राउज़र कॉल्स",
     "footer_rights": "© 2025 RELAY. सर्वाधिकार सुरक्षित। पीयर-टू-पीयर, सुरक्षित और त्वरित।",
@@ -982,6 +1002,10 @@ export const LANDING_COPY = {
       {
         "q": "क्या RELAY वास्तव में मुफ्त है?",
         "a": "हाँ, RELAY पूरी तरह से मुफ्त है। हमारी किसी भी सुविधा के लिए कोई प्रीमियम शुल्क या छिपी हुई लागत नहीं है।"
+      },
+      {
+        "q": "क्या मुझे ईमेल पते या खाते की आवश्यकता है?",
+        "a": "बिल्कुल नहीं! आपको तुरंत एक 6-अंकीय नंबर मिलता है — बिना किसी डाउनलोड या खाते के। डिवाइसों में अपना खाता सहेजना वैकल्पिक है और इसके लिए केवल आपके ईमेल का उपयोग होता है — यह पूरी तरह आंतरिक साइन-अप है, बिना Google, Apple, Facebook या किसी बाहरी साइन-इन प्रदाता के।"
       }
     ]
   }

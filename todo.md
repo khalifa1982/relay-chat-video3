@@ -2199,3 +2199,27 @@ broad "anything else Android-specific" sweep) were refuted on independent re-rea
 - [x] Add group video conference showcase (up to 10 people, 10-screen grid + active-speaker spotlight)
 - [x] Keep truthful features only (no classroom/streaming/hardware/AI claims)
 - [x] Run pnpm test (530 green) + tsc clean, visual check EN + AR RTL done; checkpoint + push
+
+
+## Editorial + standalone-registration pass (Home.tsx / landing copy only)
+- [ ] Audit all "talk"/"talks" usage in landing copy (6 langs) and pick one unambiguous meaning
+- [ ] Standardize "the talks" to a single consistent term/usage throughout
+- [ ] Remove any external-individual reference in registration (e.g. "Manus/Manos registered ...")
+- [ ] Ensure registration copy states a purely internal, standalone 6-digit flow
+- [ ] Remove any mention/implication of third-party login (Google/Gmail, Apple ID, Facebook, external IdP)
+- [ ] Verify app code has no third-party auth exposed to end users on the standalone path
+- [ ] Run pnpm test + tsc, visual check EN + AR, checkpoint + push, guide user to Publish
+
+## Email-only standalone registration (updated scope)
+- [ ] Registration/login is EMAIL ONLY (internal), no Gmail/Google, Apple, Facebook, Manus, or any external IdP
+- [ ] Remove third-party auth from user-facing flow; keep 6-digit number as the RELAY identity
+- [ ] Landing copy reflects email-only, self-contained account creation (all 6 langs)
+- [ ] Standardize the "talks" terminology to one unambiguous usage
+- [ ] pnpm test + tsc, visual check, checkpoint + push, guide user to Publish
+
+## Editorial + email-only landing copy (DONE)
+- [x] Add optional email-only account FAQ in all 6 languages (no Google/Apple/Facebook/Manus/3rd-party)
+- [x] Standardize ambiguous "start talking" CTA to single "first call" usage (TALK kept as sole product label) in 6 languages
+- [x] Kept quick no-account use messaging (option B)
+- [x] Landing page only; backend/OAuth untouched
+- [x] tsc clean + 530 vitest pass + visual check EN
