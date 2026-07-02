@@ -778,6 +778,21 @@ export default function Home() {
               </a>
               <span className="text-sm font-semibold text-slate-500 px-2">{c.hero_note}</span>
             </div>
+            <div className="mt-5 flex justify-center lg:justify-start">
+              <a
+                href="/technology"
+                className="group inline-flex items-center gap-2 text-sm font-semibold transition-colors"
+                style={{ color: ACCENT }}
+              >
+                <span
+                  className="w-1.5 h-1.5 rounded-full accent-shift"
+                  style={{ backgroundColor: ACCENT, boxShadow: `0 0 8px ${ACCENT}` }}
+                  aria-hidden="true"
+                />
+                <span className="underline-offset-4 group-hover:underline">{c.tech_link}</span>
+                <span className="transition-transform group-hover:translate-x-0.5" aria-hidden="true">{arrow}</span>
+              </a>
+            </div>
           </div>
 
           {/* Hero visual: the real in-call screen */}
@@ -1252,6 +1267,9 @@ export default function Home() {
             </div>
           </div>
           <div className="text-xs text-slate-400 flex flex-col md:items-end gap-1">
+            <a href="/technology" className="font-semibold transition-colors hover:text-slate-700" style={{ color: ACCENT }}>
+              {c.tech_link} {arrow}
+            </a>
             <span>{c.footer_rights}</span>
             <span>v{APP_VERSION}</span>
           </div>
