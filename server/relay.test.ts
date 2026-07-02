@@ -1310,3 +1310,12 @@ describe("relay — room-join authorization", () => {
     }
   });
 });
+
+describe("v2.70 — in-call disconnect grace broadcasts peer-left to survivors", () => {
+  it("the grace-expiry path emits peer-left so survivors reflow + get notified", () => {
+    // Behavioral coverage needs the 30s grace timer + a full room; pin the
+    // source so the authoritative-exit broadcast can't silently regress.
+    const src = require("node:fs").readFileSync(require("node:path").resolve(__dirname, "relay.ts"), "utf8");
+    expect(src).toMatch(/broadcastToRoom\(reg, rid, \{ type: "peer-left", pin \}, pin\)/);
+  });
+});

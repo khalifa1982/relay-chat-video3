@@ -612,10 +612,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
     autoGainControl: true,
   };
   async function acquireRawStream(useFacingMode: "user" | "environment"): Promise<MediaStream> {
-    return navigator.mediaDevices.getUserMedia({
+    const s = await navigator.mediaDevices.getUserMedia({
       audio: AUDIO_CONSTRAINTS,
       video: { ...qualityVideo(videoQuality), facingMode: useFacingMode },
     });
+    // Hint the encoder that camera content is motion (prioritize frame rate /
+    // smoothness over per-frame detail on a constrained link). Plain property
+    // write — no renegotiation, no-op where unsupported.
+    try { s.getVideoTracks().forEach(t => { (t as MediaStreamTrack & { contentHint?: string }).contentHint = "motion"; }); } catch { /* */ }
+    return s;
   }
   function updateQualityBtn() {
     const b = $("qualityBtn");
@@ -1563,6 +1568,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     captureSelfRole(m);
     if (livekitEnabled) {
       if (m.iceServers && m.iceServers.length) iceConfig = buildIceConfig(m.iceServers);
+      // Pre-create roster tiles (see onJoined) so a resumed SFU call shows all parties.
+      (m.members || []).forEach(mem => addLkTile(mem.pin, mem.name || "Guest"));
       // The server pushed a fresh token; reconnect to the resumed SFU room.
       if (lkPendingToken && lkPendingToken.roomId === rid && !lkRoom) void joinLivekit(rid);
     } else {
@@ -1586,6 +1593,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (m.roomId) roomId = m.roomId;
     if (!livekitEnabled) {
       (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
+    } else {
+      // SFU: pre-create tiles for the merged-in members (see onJoined).
+      (m.members || []).forEach(mem => addLkTile(mem.pin, mem.name || "Guest"));
     }
     heldRoomId = null; heldLabel = null;
     updateHeldBar();
@@ -1670,6 +1680,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // connect to the room (if the token already arrived — otherwise the
       // `livekit-token` push will trigger joinLivekit).
       diag("livekit: joined room " + roomId + " (SFU path)");
+      // Pre-create a tile for every member on the authoritative roster NOW, so all
+      // N participants show a proportioned tile immediately — LiveKit's
+      // ParticipantConnected does NOT fire for members already in the room when we
+      // connect, so without this the 5th/6th feed only appears on TrackSubscribed
+      // (late, or black under the audio-before-video race) → looked like "only 4".
+      // addLkTile dedups on lkParticipantTiles; m.members excludes self.
+      (m.members || []).forEach(mem => addLkTile(mem.pin, mem.name || "Guest"));
       if (lkPendingToken && lkPendingToken.roomId === roomId) void joinLivekit(roomId);
       return;
     }
@@ -1722,6 +1739,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     toast("Rejoined the call");
     if (livekitEnabled) {
       diag("rejoin: livekit room " + rid);
+      // Pre-create roster tiles (see onJoined) so every party shows on rejoin too.
+      (m.members || []).forEach(mem => addLkTile(mem.pin, mem.name || "Guest"));
       // The server pushed a fresh token right after this message; onLivekitToken
       // will joinLivekit. If it already arrived (race), join now.
       if (lkPendingToken && lkPendingToken.roomId === rid && !lkRoom) void joinLivekit(rid);
@@ -1759,16 +1778,23 @@ export function startRelay(root: HTMLElement): RelayHandle {
       diag("livekit: waiting for token");
       return;
     }
-    let RoomCtor, RoomEventEnum, TrackEnum;
+    let RoomCtor, RoomEventEnum, TrackEnum, AudioPresetsEnum;
     try {
       const lk = await import("livekit-client");
       RoomCtor = lk.Room; RoomEventEnum = lk.RoomEvent; TrackEnum = lk.Track;
+      AudioPresetsEnum = (lk as unknown as { AudioPresets?: { speech?: unknown } }).AudioPresets;
     } catch (e) {
       diag("livekit: failed to load client");
       console.warn("livekit-client load failed", e);
       return;
     }
-    const room = new RoomCtor({ adaptiveStream: true, dynacast: true });
+    // Default publish audio preset = "speech" (Opus tuned for voice) instead of
+    // the library default "music" (48 kbps) — clearer voice at lower bitrate for
+    // weak/mobile connections. DTX + RED are already on by default. On the ctor
+    // (not the publish call) so it doesn't disturb the pinned publishTrack test.
+    const roomOpts: Record<string, unknown> = { adaptiveStream: true, dynacast: true };
+    if (AudioPresetsEnum?.speech) roomOpts.publishDefaults = { audioPreset: AudioPresetsEnum.speech };
+    const room = new RoomCtor(roomOpts);
     lkRoom = room;
 
     const isScreenPub = (pub: unknown): boolean => {
@@ -1883,6 +1909,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
     try {
       await room.connect(tok.url, tok.token);
+      // Render everyone ALREADY in the room right now — ParticipantConnected only
+      // fires for people who join AFTER us, so without this the parties present at
+      // connect time only appear once their tracks subscribe (late/black). This is
+      // LiveKit's recommended pattern; addLkTile dedups. (Some client versions
+      // expose `participants` instead of `remoteParticipants`.)
+      try {
+        const remotes = (room as unknown as {
+          remoteParticipants?: Map<string, { identity: string; name?: string }>;
+          participants?: Map<string, { identity: string; name?: string }>;
+        });
+        const map = remotes.remoteParticipants || remotes.participants;
+        map?.forEach((p) => addLkTile(p.identity, p.name || p.identity));
+      } catch { /* enumeration best-effort */ }
       // Publish the SAME processed stream the mesh sends, so filters/blur survive.
       const send = processedStream || localStream;
       if (send) {
@@ -2328,8 +2367,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenShareIds.delete(goneId);
     speakerOrder = speakerOrder.filter(s => s !== goneId);
     layoutGrid();
-    // Parity with the mesh path's removePeer, which posts a "left" notice.
-    if (inCall) addSysMsg(nm + " left the call.");
+    // Parity with the mesh path's removePeer, which posts a "left" notice — plus
+    // a visible toast (the chat drawer is closed by default during a call).
+    if (inCall) { addSysMsg(nm + " left the call."); toast(nm + " left the call."); }
   }
   // Tear down the LiveKit room + its tiles. Safe to call when not on the SFU path.
   function teardownLivekit() {
@@ -2378,7 +2418,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const vtrack = sharing
         ? (screenStream!.getVideoTracks()[0] || null)
         : (sendStream.getVideoTracks()[0] || null);
-      if (vtrack) pc.addTrack(vtrack, sharing ? screenStream! : sendStream);
+      // Group the video under sendStream's msid (same stream id as the audio),
+      // even while screen-sharing — the transmitted track is still `vtrack` (the
+      // screen). Grouping it under a SEPARATE stream (screenStream) gave audio and
+      // video two different msids, so a mid-share joiner's ontrack fired twice with
+      // two `e.streams[0]` and attachRemote's `v.srcObject = stream` kept only the
+      // last → silent audio OR a black tile for whoever joined during a share.
+      if (vtrack) pc.addTrack(vtrack, sendStream);
     }
     pc.onicecandidate = e => {
       if (e.candidate) {
@@ -2531,10 +2577,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenShareIds.delete(goneId);
     speakerOrder = speakerOrder.filter(s => s !== goneId);
     layoutGrid();
-    // `quiet` skips the "X left the call" system message — used when we're
-    // immediately rebuilding the peer (a refresh/reconnect re-offer), not when
-    // they're genuinely leaving.
-    if (inCall && !quiet) addSysMsg((nm || "Someone") + " left the call.");
+    // `quiet` skips the "X left the call" notice — used when we're immediately
+    // rebuilding the peer (a refresh/reconnect re-offer), not a genuine leave.
+    // Surface it as a visible toast too (the chat drawer is closed by default,
+    // so the system message alone is invisible during a call).
+    if (inCall && !quiet) {
+      addSysMsg((nm || "Someone") + " left the call.");
+      toast((nm || "Someone") + " left the call.");
+    }
   }
 
   // ---------- diagnostics ----------
@@ -2555,7 +2605,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!peer || !peer.el) return;
     const c = peer.el.querySelector(".connecting") as HTMLElement | null;
     if (c) {
-      if (st === "connected" || peer.gotStream) {
+      // An ESTABLISHED peer that goes disconnected/failed must SHOW a status (not
+      // freeze silently on its last frame) — so the survivor sees "reconnecting…"
+      // during the grace window before a genuine drop is torn down. Only suppress
+      // the overlay for healthy/pending states.
+      const broken = st === "failed" || st === "disconnected";
+      if (!broken && (st === "connected" || peer.gotStream)) {
         c.style.display = "none";
       } else {
         c.style.display = "block";
@@ -3709,6 +3764,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
       screenBusy = false;
       return;
     }
+    // A shared screen is mostly static, text-heavy content — hint "detail" so the
+    // encoder favors sharpness over frame rate (readable text, not smeared).
+    try { (track as MediaStreamTrack & { contentHint?: string }).contentHint = "detail"; } catch { /* */ }
     screenStream = disp;
     screenSharing = true;
     // Browser "Stop sharing" UI (or the source ending) ⇒ restore the camera.

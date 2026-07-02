@@ -146,3 +146,33 @@ describe("camera QA fixes (verified)", () => {
     expect(PIPE).toMatch(/aren't supported on this browser/);
   });
 });
+
+describe("v2.70 multi-party grid + exit + quality (verified)", () => {
+  it("SFU pre-creates a tile for every roster member (fixes 'only 4 tiles for 5-6')", () => {
+    // onJoined / onRejoin / onResumed / onMerged all seed tiles from m.members,
+    // and joinLivekit enumerates already-present remotes after connect.
+    const matches = CLIENT.match(/\(m\.members \|\| \[\]\)\.forEach\(mem => addLkTile\(mem\.pin, mem\.name \|\| "Guest"\)\)/g) || [];
+    expect(matches.length).toBeGreaterThanOrEqual(4);
+    expect(CLIENT).toMatch(/remoteParticipants \|\| [\s\S]*?\.participants[\s\S]*?addLkTile\(p\.identity/);
+  });
+
+  it("a participant exit surfaces a visible toast (not just a chat system message)", () => {
+    expect(CLIENT).toMatch(/toast\(\(nm \|\| "Someone"\) \+ " left the call\."\)/); // mesh removePeer
+    expect(CLIENT).toMatch(/toast\(nm \+ " left the call\."\)/); // SFU removeLkTile
+  });
+
+  it("an established peer that drops shows 'reconnecting…' instead of freezing silently", () => {
+    expect(CLIENT).toMatch(/const broken = st === "failed" \|\| st === "disconnected";/);
+    expect(CLIENT).toMatch(/if \(!broken && \(st === "connected" \|\| peer\.gotStream\)\)/);
+  });
+
+  it("mesh screen-share groups video under sendStream's msid (mid-share joiner fix)", () => {
+    expect(CLIENT).toMatch(/if \(vtrack\) pc\.addTrack\(vtrack, sendStream\);/);
+  });
+
+  it("published camera/screen tracks carry a contentHint; SFU uses the speech Opus preset", () => {
+    expect(CLIENT).toMatch(/contentHint = "motion"/);
+    expect(CLIENT).toMatch(/contentHint = "detail"/);
+    expect(CLIENT).toMatch(/publishDefaults = \{ audioPreset: AudioPresetsEnum\.speech \}/);
+  });
+});

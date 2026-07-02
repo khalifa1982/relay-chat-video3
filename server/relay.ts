@@ -1587,6 +1587,15 @@ export function attachRelay(
                 // This member was connected until now; stamp the room so an
                 // eventual abandonment reap logs the real end, not reap time.
                 roomActivityTouch(reg, rid);
+                // Tell the SURVIVORS this member has gone (their 30s grace elapsed
+                // with no reconnect) so their grids reflow immediately and they see
+                // a "left the call" notice — the authoritative exit signal for a
+                // silent drop (tab-close / network-loss / crash), where the client
+                // can't otherwise tell a vanished remote peer from a local blip.
+                // Membership (reg.pinRoom + the pin in reg.rooms) is intentionally
+                // KEPT, so if this device reconnects it still auto-rejoins and the
+                // survivors rebuild the tile from the fresh offer.
+                broadcastToRoom(reg, rid, { type: "peer-left", pin }, pin);
                 reg.clients.delete(pin);
                 reg.devices.delete(pin);
                 maybeScheduleRoomReap(reg, rid);

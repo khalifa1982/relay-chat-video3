@@ -2461,3 +2461,53 @@ genuinely device-dependent ones are documented as needing on-device validation (
 - [x] Add third icon: APK download under Android (placeholder link until user provides it)
 - [x] Keep bilingual/RTL support + existing design language
 - [x] Run pnpm test + tsc, visual check, checkpoint + push, guide user to Publish
+
+## v2.70.0 — Multi-party grid (5-6 participants), participant-exit handling, media quality (delivered 2026-07-02)
+
+Multi-agent investigation (3 parallel deep-dives → adversarial verify → synthesis) of the "only 4 tiles for
+5-6 users" report + quality + exit handling. KEY FINDING: there is NO hard "4" cap — the layout math
+(callLayout.ts) and grid CSS both correctly produce a 3x2 grid for 5-6 tiles. The symptom is path-specific:
+SFU tiles weren't pre-created from the roster, and a silently-dropped mesh peer was never removed.
+
+### Grid: N participants show N tiles (the primary bug)
+- [x] **SFU roster pre-create.** LiveKit's ParticipantConnected does NOT fire for members already in the room
+      when you connect, so the 5th/6th feed only appeared on TrackSubscribed (late, or black under the
+      audio-before-video race) → looked like "only 4". Now onJoined / onRejoin / onResumed / onMerged all seed
+      a tile for every `m.members` roster entry via addLkTile (dedup-safe; excludes self), and joinLivekit
+      enumerates `room.remoteParticipants` right after connect (LiveKit's recommended pattern). The mesh path
+      already created every roster tile synchronously (callPeer), so no change needed there.
+
+### Participant-exit: detect / reflow / notify / grace-rejoin
+- [x] **Authoritative exit signal (server).** When an in-call peer's 30s disconnect grace expires with no
+      reconnect (silent tab-close / network-loss / crash), the server now broadcasts `peer-left` to the
+      surviving room members (`server/relay.ts`). The client already reflows the grid + posts the notice on
+      `peer-left`; room membership is intentionally KEPT so a returning device still auto-rejoins and the
+      survivors rebuild the tile from its fresh offer. This is the reliable exit signal a client can't derive
+      itself (it can't tell a vanished remote peer from its own local blip). Rides SSE+POST (no WebSocket).
+- [x] **Visible "reconnecting…" grace state.** An ESTABLISHED peer that dropped used to freeze silently on its
+      last frame (the connecting overlay was suppressed whenever gotStream was true). Now updateTileState shows
+      "reconnecting…"/"connection failed" for a broken (failed/disconnected) established peer during the grace
+      window — so the survivor sees the drop immediately, before the authoritative removal at 30s.
+- [x] **Visible exit toast.** removePeer + removeLkTile now raise a `toast()` ("X left the call.") in addition
+      to the chat system message (the chat drawer is closed by default during a call, so the sysmsg alone was
+      invisible). Guarded so a reconnect re-offer (quiet removal) and self-teardown don't spam it. The grid
+      already reflowed via layoutGrid() on every removal — verified, unchanged.
+
+### Media quality
+- [x] **Mesh screen-share msid fix.** createPeer grouped the screen video under `screenStream`'s msid while
+      audio used `sendStream` — two msids, so a mid-share joiner's `ontrack` fired twice and attachRemote kept
+      only the last stream → silent audio OR a black tile for whoever joined during a share. Now the video is
+      grouped under `sendStream` (the transmitted track is still the screen); one msid, both tracks arrive.
+- [x] **contentHint** on published tracks: "motion" on the camera (smoothness on a constrained link), "detail"
+      on the screen share (readable text over frame rate). Plain property write, no renegotiation.
+- [x] **SFU Opus "speech" preset** on the Room ctor `publishDefaults` (clearer voice at lower bitrate than the
+      library-default "music" 48 kbps; DTX + RED are already default-on).
+- [x] 6 new source-pinning tests (engine + server). 581 passing (1 pre-existing skip), tsc + build clean.
+      Footer → `v2.70.0`.
+
+> DEFERRED (needs on-device validation / timing tuning, not shippable blind): the client-side exit-latency
+> accelerators (a `failed`-state watchdog and `dc.onclose` timer) — they shorten the 30s grace for a clean
+> tab-close but risk a reload "left → joined" flap whose timing needs a real multi-client run; and the mesh
+> per-sender bitrate caps + party-count capture downscale (C4) — over-aggressive caps degrade quality on
+> capable devices, so the thresholds need on-device tuning. Above all, CONFIRM the actual "5-6 users → tiles"
+> behaviour on a live multi-client session on whichever media path the deployment runs (SFU vs mesh fallback).
