@@ -2454,3 +2454,10 @@ genuinely device-dependent ones are documented as needing on-device validation (
 > getUserMedia/media alive on Android (auto-enter has no background user-activation); and the larger
 > Messages/History/Contacts rebuilds (load-earlier pagination past 100, History date-headers/search/avatars,
 > Contacts A–Z index) that want a live preview. Tracked for a device-testing pass.
+
+## "Coming soon" download section (landing page)
+- [x] Generate multilingual "Coming soon" copy via Gemini Flash (6 languages)
+- [x] Add download section: App Store (soon) + Google Play (soon) icons
+- [x] Add third icon: APK download under Android (placeholder link until user provides it)
+- [x] Keep bilingual/RTL support + existing design language
+- [x] Run pnpm test + tsc, visual check, checkpoint + push, guide user to Publish
