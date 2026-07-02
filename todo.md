@@ -2364,3 +2364,33 @@ existing self-hosted auth so it builds on `authLocal`/`authCrypto`/`email`/`ensu
 - [ ] Match RELAY system screen look (labels, corner mic icon, live badge)
 - [ ] Landing-page only; do not touch backend
 - [ ] tsc clean + vitest pass + visual check EN/AR, checkpoint, guide Publish
+
+## v2.68.1 — Fix: iOS phantom ring after connect + loudspeaker→headset auto-switch (delivered 2026-07-02)
+
+Two confirmed call-reliability bugs from a cross-platform report.
+
+- [x] **iOS "ringing continues after the call connects" (state-management bug).** The ringtone + call
+      "phase" were dismissed in scattered spots (`onJoined`, `acceptInvite`) but NOT at `markEstablished()`
+      — the authoritative "media is actually live" signal (fires from the mesh peer-connection state
+      machine and the LiveKit connect/reconnect events, not a timer). Result: the OUTGOING caller stayed in
+      phase `"dialing"` for the entire call, and on iOS — where Safari throttles the `setInterval`-driven
+      `stopRingtone` once backgrounded — the ring animation + sound persisted into the live conversation and
+      while minimized. Fixed by routing the definitive `stopRingtone()` + `emitPhase("in-call")` through
+      `markEstablished()`, so the ring is silenced and the phase flips the instant media truly connects, on
+      every platform and both mesh + SFU paths. Both calls are idempotent (stopRingtone is safe to repeat;
+      emitPhase dedups via lastPhase).
+- [x] **Loudspeaker → headset auto-switch (audio routing).** The device-change handler already auto-routed
+      to a headset when on "Automatic", but not when Android's forced-loudspeaker mode was on — the exact
+      reported case ("on loudspeaker, connect a headset, it doesn't move"). Now a headset appearing while
+      forced-loudspeaker is active drops the loudspeaker force so the OS hands audio to the headset. Detected
+      across BOTH input + output devices (`headsetWasPresent`), since Android Chrome often doesn't enumerate
+      audio OUTPUTS but the headset's MIC (an audioinput) still appears on connect.
+- [x] 2 new source-pinning tests (`androidAudioCamera.test.ts`). 564 passing (1 pre-existing skip), tsc +
+      build clean. Footer → `v2.68.1`.
+
+> Still open (need real-device validation or a larger dedicated effort, not shippable blind from here):
+> (a) **Android background media drop** — the native PiP path to keep audio+video alive when minimized is
+> already built but is opt-in (`relay_auto_pip`) and needs on-device tuning (Chrome suspends a backgrounded
+> tab's media unless PiP is actually engaged); (b) the **cross-browser call-bar audit** and the
+> **WhatsApp-grade redesign of Messages / History / Contacts** — substantial UX work best done against a
+> live preview. Tracked as tasks #38/#39 and a future design pass.

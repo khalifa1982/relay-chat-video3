@@ -73,6 +73,26 @@ describe("v2.66 communication reliability (verified)", () => {
   });
 });
 
+describe("v2.68 call-state + audio routing (verified)", () => {
+  it("markEstablished() silences the ring AND flips to in-call at the real connect", () => {
+    // The authoritative connect signal (mesh pc 'connected' / SFU connect) must
+    // stop the ringtone and leave phase 'dialing' — this is what kills the iOS
+    // phantom-ring-after-connect (Safari throttles the timer-based stop in the bg).
+    expect(CLIENT).toMatch(
+      /function markEstablished\(\) \{[\s\S]*?stopRingtone\(\);[\s\S]*?emitPhase\("in-call"\);[\s\S]*?setCallStatus\("live"\)/,
+    );
+  });
+
+  it("connecting a headset while forced-loudspeaker is on hands audio back to it", () => {
+    // Detected across input+output (Android often doesn't enumerate outputs, but
+    // the headset MIC appears), so a headset connect drops the loudspeaker force.
+    expect(CLIENT).toMatch(/let headsetWasPresent = false;/);
+    expect(CLIENT).toMatch(
+      /if \(headsetNow && !headsetWasPresent && loudspeakerOn\) \{[\s\S]*?loudspeakerDisable\(\)/,
+    );
+  });
+});
+
 describe("camera QA fixes (verified)", () => {
   it("flip device selection normalizes an empty deviceId (iOS) and requires both ids", () => {
     expect(CLIENT).toMatch(/getSettings\?\.\(\)\.deviceId \|\| ""/);

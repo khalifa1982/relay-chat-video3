@@ -828,6 +828,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   // Snapshot of known output device ids, to detect a NEW one (BT/headset) appearing.
   let prevOutputIds = new Set<string>();
+  // Was a headset-looking device present on the last devicechange? Tracked across
+  // BOTH input + output kinds so we detect a connect even on Android Chrome, where
+  // audio OUTPUTS often aren't enumerable but the headset's MIC (an audioinput)
+  // still appears. Used to auto-leave forced-loudspeaker when a headset arrives.
+  let headsetWasPresent = false;
   function looksLikeHeadset(label: string): boolean {
     return /bluetooth|headset|airpod|buds|headphone|hands?-?free|wireless|earbud/i.test(label || "");
   }
@@ -843,6 +848,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const ids = new Set(outs.map(d => d.deviceId));
       const added = outs.filter(d => !prevOutputIds.has(d.deviceId));
       prevOutputIds = ids;
+      // A headset/BT device connecting while FORCED LOUDSPEAKER is on (Android,
+      // where there's no setSinkId) must hand audio back to the headset — the OS
+      // routes the default output there, so we just drop the loudspeaker force.
+      // Detected across input+output so it works even when outputs aren't listed.
+      const headsetNow = devs.some(
+        d => (d.kind === "audiooutput" || d.kind === "audioinput") && looksLikeHeadset(d.label),
+      );
+      if (headsetNow && !headsetWasPresent && loudspeakerOn) {
+        loudspeakerDisable();
+        updateAudioBtn();
+        toast("Headset connected — routing audio to it");
+      }
+      headsetWasPresent = headsetNow;
       if (audioSinkId === "" && added.length) {
         const bt = added.find(d => looksLikeHeadset(d.label)) || null;
         if (bt) {
@@ -2705,10 +2723,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }, 600));
   }
   // We reached a live media connection. Cancel any reconnect window and show it.
+  // This is the AUTHORITATIVE "the call is actually connected" signal — it fires
+  // from the peer-connection state machine (mesh) and LiveKit connect/reconnect
+  // (SFU), not a timer. So it's the one reliable place to (a) silence the ring
+  // and (b) flip the phase to "in-call". Without this the OUTGOING caller stayed
+  // in phase "dialing" for the whole call, and on iOS (Safari throttles the
+  // timer-driven stopRingtone in the background) the ring/animation persisted
+  // even after the conversation was live. Both calls are idempotent.
   function markEstablished() {
     establishedOnce = true;
     exitReconnecting();
     clearConnSeq();
+    stopRingtone();          // definitively kill any outgoing dial tone
+    emitPhase("in-call");    // caller: leave "dialing" so the ring UI clears
     if (callStatus !== "live") setCallStatus("live");
   }
   // MESH reconnect: WE own recovery (ICE restarts + signaling), so we run a
