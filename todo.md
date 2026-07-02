@@ -2521,10 +2521,10 @@ SFU tiles weren't pre-created from the roster, and a silently-dropped mesh peer 
 
 
 ## Feature: "The Technology Behind RELAY" page (from user's uploaded design)
-- [ ] Create client/src/pages/Technology.tsx as a self-contained React page mirroring the uploaded relay-landing.html (hero P2P live demo, ticker, Why-RELAY 6 cards, latency strip, How-it-works 3 steps + mesh, Security accordion, stats, final CTA + footer)
-- [ ] Preserve all copy, structure, layout, four-act scroll journey, and SVG visuals from the upload; improve polish (typography rhythm, spacing, motion) without changing content
-- [ ] Port the scroll/background cross-fade, reveals, counters, ticker, hero exchange loop, mesh packet as a React-safe effect (with proper cleanup)
-- [ ] Point "Get RELAY"/"Download" CTAs to /app and back-to-home nav to /; keep it landing-page-only, no backend changes
-- [ ] Register /technology route in App.tsx
-- [ ] Add a visible link from the landing page (header nav + footer) to /technology
-- [ ] tsc clean + vitest pass + browser visual check; checkpoint; guide Publish
+- [x] Create client/src/pages/Technology.tsx as a self-contained React page mirroring the uploaded relay-landing.html (hero P2P live demo, ticker, Why-RELAY 6 cards, latency strip, How-it-works 3 steps + mesh, Security accordion, stats, final CTA + footer)
+- [x] Preserve all copy, structure, layout, four-act scroll journey, and SVG visuals from the upload; improve polish (typography rhythm, spacing, motion) without changing content
+- [x] Port the scroll/background cross-fade, reveals, counters, ticker, hero exchange loop, mesh packet as a React-safe effect (with proper cleanup)
+- [x] Point "Get RELAY"/"Download" CTAs to /app and back-to-home nav to /; keep it landing-page-only, no backend changes
+- [x] Register /technology route in App.tsx
+- [x] Add a visible link from the landing page (hero + footer, all 6 locales) to /technology
+- [x] tsc clean + 583 vitest pass + browser visual check (all 4 acts, live hero demo, counters, accordion, no console errors); checkpoint a9ae4b73; guide Publish
