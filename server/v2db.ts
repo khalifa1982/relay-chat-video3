@@ -99,6 +99,10 @@ export interface ResolvedIdentity {
   statusOverride: string | null;
   mobiles: string[];
   socials: SocialLink[];
+  /** Email-verified → shows the blue badge. NULL column is treated as false. */
+  verified: boolean;
+  firstName: string | null;
+  lastName: string | null;
 }
 
 function parseJsonSafe(text: string | null | undefined): unknown {
@@ -119,6 +123,12 @@ function rowToResolved(row: typeof identities.$inferSelect): ResolvedIdentity {
     statusOverride: row.statusOverride ?? null,
     mobiles: sanitizeMobiles(parseJsonSafe(row.mobiles)),
     socials: sanitizeSocials(parseJsonSafe(row.socials)),
+    // Strict: only an explicit `true` badges. NULL (legacy/never-verified) and
+    // guests are unverified. Existing verified accounts are handled by the
+    // one-time backfill in ensureSchemaExtensions.
+    verified: row.verified === true,
+    firstName: row.firstName ?? null,
+    lastName: row.lastName ?? null,
   };
 }
 
@@ -330,6 +340,20 @@ export async function ensureUserIdentity(input: {
   const created = await getIdentityByNumber(number);
   if (!created) throw new Error("user identity insert failed");
   return created;
+}
+
+/** Flip an identity to verified (blue badge) and record the registration name.
+ *  Called after a successful email-OTP verification. */
+export async function markIdentityVerified(
+  id: number,
+  name?: { firstName?: string | null; lastName?: string | null },
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const patch: Record<string, unknown> = { verified: true };
+  if (name?.firstName != null) patch.firstName = name.firstName.trim().slice(0, 64) || null;
+  if (name?.lastName != null) patch.lastName = name.lastName.trim().slice(0, 64) || null;
+  await db.update(identities).set(patch).where(eq(identities.id, id));
 }
 
 export async function updateIdentityProfile(
@@ -610,6 +634,10 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // Self-hosted email/password auth (v2.54).
     { table: "users", column: "passwordHash", ddl: "ADD COLUMN `passwordHash` text" },
     { table: "users", column: "emailVerified", ddl: "ADD COLUMN `emailVerified` boolean" },
+    // Passwordless email-OTP + verified blue badge (v2.68).
+    { table: "identities", column: "verified", ddl: "ADD COLUMN `verified` boolean" },
+    { table: "identities", column: "firstName", ddl: "ADD COLUMN `firstName` varchar(64)" },
+    { table: "identities", column: "lastName", ddl: "ADD COLUMN `lastName` varchar(64)" },
   ];
   for (const a of adds) {
     try {
@@ -667,6 +695,23 @@ export async function ensureSchemaExtensions(): Promise<void> {
         KEY \`email_verif_user_idx\` (\`userId\`)
       )`,
     },
+    {
+      name: "email_otps",
+      ddl: `CREATE TABLE IF NOT EXISTS \`email_otps\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`email\` varchar(320) NOT NULL,
+        \`codeHash\` varchar(255) NOT NULL,
+        \`purpose\` varchar(16) NOT NULL DEFAULT 'login',
+        \`firstName\` varchar(64),
+        \`lastName\` varchar(64),
+        \`expiresAt\` timestamp NOT NULL,
+        \`attempts\` int NOT NULL DEFAULT 0,
+        \`consumedAt\` timestamp NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY \`email_otps_email_idx\` (\`email\`),
+        KEY \`email_otps_expires_idx\` (\`expiresAt\`)
+      )`,
+    },
   ];
   for (const t of tableCreates) {
     try {
@@ -675,6 +720,21 @@ export async function ensureSchemaExtensions(): Promise<void> {
       const msg = (e as Error)?.message || "";
       if (!/exists/i.test(msg)) console.warn(`[schema] ensure table ${t.name} skipped:`, msg);
     }
+  }
+  // One-time backfill: any identity whose owning user has already verified their
+  // email (legacy email+password flow) should show the blue badge immediately.
+  // Idempotent — only touches rows still NULL, so it's a no-op on every boot
+  // after the first and never un-verifies or re-verifies anyone.
+  try {
+    await db.execute(
+      sql.raw(
+        "UPDATE `identities` i JOIN `users` u ON i.`userId` = u.`id` " +
+          "SET i.`verified` = 1 WHERE u.`emailVerified` = 1 AND i.`verified` IS NULL",
+      ),
+    );
+  } catch (e) {
+    const msg = (e as Error)?.message || "";
+    console.warn("[schema] verified backfill skipped:", msg);
   }
 }
 

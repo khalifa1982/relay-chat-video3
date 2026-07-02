@@ -4,8 +4,9 @@ import { Phone, MessageSquare, UserRound, Clock, LogOut, Sparkles, Sun, Moon, Sm
 import { detectDeviceType } from "@/lib/deviceType";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
-import { getLoginUrl } from "@/const";
 import { useIdentity } from "./useIdentity";
+import { AuthPanel } from "./AuthPanel";
+import { VerifiedBadge } from "./VerifiedBadge";
 import { OnboardingGate } from "./OnboardingGate";
 import { PasscodeGate } from "./PasscodeGate";
 import { useRealtime } from "./useRealtime";
@@ -80,6 +81,8 @@ function Inner({ children }: { children: React.ReactNode }) {
   const { me, signOut } = useIdentity();
   const [location, navigate] = useLocation();
   const utils = trpc.useUtils();
+  // Passwordless upgrade panel (guest → verified user). No third-party sign-in.
+  const [authOpen, setAuthOpen] = useState(false);
   // Do Not Disturb now lives inside the NotificationBell panel (it used to be a
   // SECOND, visually-identical bell icon next to the notification bell).
   const [dnd, setDnd] = useDnd();
@@ -211,7 +214,10 @@ function Inner({ children }: { children: React.ReactNode }) {
               </div>
             )}
             <div className="min-w-0">
-              <div className="font-semibold truncate group-hover:text-primary transition-colors">{me.displayName}</div>
+              <div className="font-semibold truncate group-hover:text-primary transition-colors flex items-center gap-1">
+                <span className="truncate">{me.displayName}</span>
+                {me.verified && <VerifiedBadge size={15} />}
+              </div>
               <div className="font-mono text-sm text-muted-foreground flex items-center gap-1.5 flex-wrap">
                 {formatNumber(me.number)}
                 {geo.data?.flagEmoji && (
@@ -234,12 +240,13 @@ function Inner({ children }: { children: React.ReactNode }) {
               <p className="text-muted-foreground">
                 Cookied to this browser for 30 days. Register to keep this number forever.
               </p>
-              <a
-                href={getLoginUrl()}
+              <button
+                type="button"
+                onClick={() => setAuthOpen(true)}
                 className="mt-2 inline-block text-primary underline-offset-4 hover:underline font-medium"
               >
-                Upgrade to keep number →
-              </a>
+                Register with email →
+              </button>
             </div>
           )}
         </div>
@@ -359,7 +366,10 @@ function Inner({ children }: { children: React.ReactNode }) {
               </div>
             )}
             <div className="min-w-0">
-              <div className="text-sm font-semibold truncate">{me.displayName}</div>
+              <div className="text-sm font-semibold truncate flex items-center gap-1">
+                <span className="truncate">{me.displayName}</span>
+                {me.verified && <VerifiedBadge size={14} />}
+              </div>
               <div className="font-mono text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
                 {formatNumber(me.number)}
                 {geo.data?.flagEmoji && (
@@ -384,12 +394,13 @@ function Inner({ children }: { children: React.ReactNode }) {
               onDndChange={setDnd}
             />
             {me.isGuest ? (
-              <a
-                href={getLoginUrl()}
+              <button
+                type="button"
+                onClick={() => setAuthOpen(true)}
                 className="text-xs font-semibold text-primary"
               >
-                Upgrade
-              </a>
+                Register
+              </button>
             ) : (
               <Button
                 variant="ghost"
@@ -471,6 +482,15 @@ function Inner({ children }: { children: React.ReactNode }) {
           </div>
         </nav>
       </main>
+      {authOpen && (
+        <AuthPanel
+          onClose={() => setAuthOpen(false)}
+          onVerified={() => {
+            setAuthOpen(false);
+            utils.identity.whoami.invalidate();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
 import { clearRelayChannel } from "@/lib/deviceId";
-import { getLoginUrl } from "@/const";
+import { VerifiedBadge } from "@/app/VerifiedBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -249,6 +249,11 @@ export default function ProfilePage() {
               Save
             </Button>
           </div>
+          {me.verified && (
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-[#2f7bff]/10 px-2.5 py-1 text-xs font-medium text-[#2f7bff] dark:text-[#4c9bff]">
+              <VerifiedBadge size={14} /> Verified account
+            </div>
+          )}
         </section>
 
         {/* number */}
@@ -291,17 +296,7 @@ export default function ProfilePage() {
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
               <Button type="button" className="flex-1" onClick={() => setShowAuth(true)}>
-                Create account with email
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                className="flex-1"
-                onClick={() => {
-                  window.location.href = getLoginUrl();
-                }}
-              >
-                Use Manus sign-in
+                Register with email
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">

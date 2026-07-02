@@ -2308,3 +2308,50 @@ and the mobile-performance / accessibility safeguards live in one place.
 - [x] Kept quick no-account use messaging (option B)
 - [x] Landing page only; backend/OAuth untouched
 - [x] tsc clean + 530 vitest pass + visual check EN
+
+## v2.68.0 — Passwordless email-OTP login + verified blue badge (delivered 2026-07-02)
+
+Redesigned the login/registration around a single email field with an emailed one-time code — no
+password, no third-party sign-in (Google/Apple/Manus buttons removed). Verified users get a blue
+badge shown next to their name across the app. Planned via a 5-area mapping workflow against the
+existing self-hosted auth so it builds on `authLocal`/`authCrypto`/`email`/`ensureUserIdentity`.
+
+- [x] **Schema + boot-migrator.** New `email_otps` table (hashed 6-digit code, purpose, pending
+      first/last name, expiry, attempt counter, consumed). New `identities.verified/firstName/lastName`
+      columns. Additive `ADD COLUMN`/`CREATE TABLE IF NOT EXISTS` in `ensureSchemaExtensions`, plus a
+      one-time idempotent backfill (`UPDATE identities … SET verified=1 WHERE users.emailVerified=1`) so
+      existing verified accounts badge immediately. Expired OTP rows swept every 5 min.
+- [x] **OTP backend (`server/authOtp.ts` + `otpAuth` tRPC router).** `requestOtp` (known email → email a
+      code; unknown → tells the UI to register), `register` (first/last/email → email a code; the user is
+      created only on verify, so an abandoned registration leaves no ghost account), `verifyOtp` (validates
+      the code, creates/resolves the user, **upgrades the guest identity in place** via `ensureUserIdentity`
+      so the number/contacts/messages carry over, marks it verified, sets the `relay_session` cookie),
+      `resendOtp` (60s cooldown, carries the pending purpose/name), `signOut`. Codes are scrypt-hashed at
+      rest, generated with `crypto.randomInt`, 10-min TTL, burned after 5 wrong attempts, per-IP rate
+      limited + per-email cooldown. Reuses the existing session cookie + `ensureUserIdentity` migration.
+- [x] **Email + honest fallback.** OTP email via the existing `sendEmail`. When email isn't configured (or
+      a send fails), the code is logged in dev/self-host so the flow stays testable; in production the
+      procedures return `{ ok:false }` so the UI shows "couldn't send your code — email delivery isn't set
+      up" instead of a dead-end "code sent". Codes are NEVER logged in a correctly-configured prod.
+- [x] **Frontend (glassy, passwordless).** `AuthPanel` rewritten as an email → (register if new) → 6-digit
+      code stage machine with resend cooldown + inline errors, keeping the `glass-overlay` scrim.
+      `OnboardingGate` now leads with the email field (primary) and keeps "continue as guest" (secondary);
+      the OAuth button + `getLoginUrl` are gone. The AppShell "Upgrade" links and Profile "Manus sign-in"
+      were replaced with an in-app "Register with email" that opens the same passwordless panel.
+- [x] **Verified blue badge.** New `VerifiedBadge` (lucide `BadgeCheck`, blue, aria-labelled). `verified`
+      now flows through `ResolvedIdentity`/`rowToResolved` (strict `row.verified === true`) to `whoami`,
+      `directory.lookup`, `contacts.list`, and `messages.threads` (`peerVerified`), and renders next to the
+      name in the AppShell header/sidebar (self), Profile, Contacts rows, Messages thread list + conversation
+      header, and the Dialer preview.
+- [x] **Deferred (isolated, no correctness impact):** the in-call raw-HTML tile badge (needs
+      server-authoritative PIN→identity resolution in `relay.ts` so a blue check can't be client-spoofed)
+      and the conference-roster / missed-summary badge. React surfaces cover the primary "everywhere".
+- [x] 27 new tests (`authOtp.test.ts`, `otpAuth.test.ts`, `verifiedBadge.test.ts`) — code format, hash
+      round-trip, dev/prod email fallback, OTP router validation + no-DB branches, whoami verified
+      passthrough, badge render-site pins, no-password / no-OAuth-button guards. tsc + build clean.
+      Footer → `v2.68.0`.
+
+> Operational prerequisite: passwordless login **cannot deliver codes to real users in production until a
+> DNS-verified Resend sending domain is configured** (`RESEND_FROM`) — without it, Resend test mode only
+> emails the account owner. The dev fallback (logged code) covers local/self-host testing only.
+> Also ensure a real `JWT_SECRET` is set in prod (it signs `relay_session`, now the only login).

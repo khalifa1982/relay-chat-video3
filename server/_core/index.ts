@@ -15,6 +15,7 @@ import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
 import { registerV2Events, publishToIdentity } from "../v2events";
 import { getIdentityByNumber, reapStalePresence, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation } from "../v2db";
+import { sweepExpiredOtps } from "../authOtp";
 import { inboundConfig, inboundAddress, registerEmailInbound } from "../emailInbound";
 import { getUserById } from "../db";
 import { sendEmail } from "../email";
@@ -246,6 +247,10 @@ async function startServer() {
       console.warn("[v2 presence reaper]", err);
     });
   }, 60_000).unref();
+  // Purge expired email-OTP rows every 5 minutes (10-min TTL codes).
+  setInterval(() => {
+    sweepExpiredOtps().catch((err) => console.warn("[otp sweep]", err));
+  }, 5 * 60_000).unref();
   // tRPC API
   app.use(
     "/api/trpc",

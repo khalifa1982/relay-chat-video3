@@ -54,6 +54,24 @@ import {
   getPublicStats,
 } from "./v2db";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
+import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
+import { setSessionCookie } from "./authLocal";
+import { normalizeEmail, isValidEmail } from "./authCrypto";
+import {
+  mintOtp,
+  latestOtp,
+  lastOtpAt,
+  recordOtpFailure,
+  consumeOtp,
+  verifyOtpHash,
+  dispatchOtp,
+  findUserByEmailAny,
+  createOtpUser,
+  markUserEmailVerified,
+  OTP_MAX_ATTEMPTS,
+  OTP_RESEND_COOLDOWN_MS,
+} from "./authOtp";
+import { createRateLimiter, clientIpOf } from "./rateLimit";
 
 export const NumberSchema = z
   .string()
@@ -147,6 +165,9 @@ export const v2AuthRouter = router({
       statusOverride: (ctx.identity.statusOverride as "" | "away" | "travel" | null) ?? "",
       mobiles: ctx.identity.mobiles,
       socials: ctx.identity.socials,
+      verified: ctx.identity.verified,
+      firstName: ctx.identity.firstName,
+      lastName: ctx.identity.lastName,
     };
   }),
 
@@ -403,6 +424,7 @@ export const v2DirectoryRouter = router({
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
         statusOverride: hidden ? "" : ((id.statusOverride as "" | "away" | "travel" | null) ?? ""),
         presenceHidden: hidden,
+        verified: id.verified,
       };
     }),
 
@@ -519,6 +541,8 @@ export const v2ContactsRouter = router({
     const idByNumber = new Map(idents.map((i) => [i.number, i.id]));
     // Track which identities are guests (userId == null) for presence privacy.
     const isGuestById = new Map(idents.map((i) => [i.id, i.userId == null]));
+    // Verified (blue badge) per identity.
+    const verifiedById = new Map(idents.map((i) => [i.id, i.verified]));
     const ids = idents.map((i) => i.id);
     const presList = await getPresenceForIds(ids);
     const presByIdentity = new Map(presList.map((p) => [p.identityId, p]));
@@ -548,6 +572,7 @@ export const v2ContactsRouter = router({
         isOnline: hidden ? false : (pres?.isOnline ?? false),
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
         presenceHidden: hidden,
+        verified: ident != null ? (verifiedById.get(ident) ?? false) : false,
       };
     });
   }),
@@ -615,8 +640,12 @@ export const v2MessagesRouter = router({
     const me = requireIdentity(ctx);
     const base = await listThreads(me.id);
     if (base.length === 0) return [];
-    const pres = await getPresenceForIds(base.map((b) => b.otherIdentityId));
+    const otherIds = base.map((b) => b.otherIdentityId);
+    const pres = await getPresenceForIds(otherIds);
     const byId = new Map(pres.map((p) => [p.identityId, p]));
+    // Resolve the peer's verified (blue-badge) flag in one batched query.
+    const peerIdents = await getIdentitiesByIds(otherIds);
+    const verifiedById = new Map(peerIdents.map((i) => [i.id, i.verified]));
     return base.map((b) => {
       const p = byId.get(b.otherIdentityId);
       return {
@@ -630,6 +659,7 @@ export const v2MessagesRouter = router({
         peerAvatarUrl: b.otherAvatarUrl,
         peerIsOnline: p?.isOnline ?? false,
         peerLastSeenAt: p?.lastSeenAt ?? null,
+        peerVerified: verifiedById.get(b.otherIdentityId) ?? false,
         lastMessageAt: b.lastMessageAt,
         lastMessageBody: b.lastMessagePreview,
         lastMessageKind: b.lastMessageKind,
@@ -1165,5 +1195,119 @@ export const v2CallsRouter = router({
 export const v2StatsRouter = router({
   public: publicProcedure.query(async () => {
     return await getPublicStats();
+  }),
+});
+
+/* ── passwordless email-OTP auth (v2.68) ──────────────────────────
+   Single email → 6-digit code → code entry authenticates. No password,
+   no third-party IdP. Guest→verified upgrade happens on verify (the
+   guest cookie is still present), preserving number/contacts/messages.
+   Per-IP rate limit + per-email 60s cooldown; codes are hashed at rest
+   and burned after OTP_MAX_ATTEMPTS wrong tries. */
+const EmailSchema = z.string().trim().max(320);
+const CodeSchema = z.string().regex(/^\d{6}$/, { message: "Enter the 6-digit code" });
+const NameSchema = z.string().trim().min(1).max(64);
+
+const otpIpLimiter = createRateLimiter({ capacity: 30, refillPerSec: 30 / 60 });
+setInterval(() => otpIpLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
+function otpGate(ctx: { req: unknown }) {
+  if (process.env.RELAY_RATELIMIT_OFF === "1") return;
+  if (!otpIpLimiter.allow(clientIpOf(ctx.req as Parameters<typeof clientIpOf>[0]), Date.now())) {
+    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many attempts. Try again shortly." });
+  }
+}
+async function cooldownOk(email: string) {
+  const last = await lastOtpAt(email);
+  return !last || Date.now() - last >= OTP_RESEND_COOLDOWN_MS;
+}
+
+export const v2OtpAuthRouter = router({
+  /** Login path: if the email is known, email a code; else tell the UI to register. */
+  requestOtp: publicProcedure
+    .input(z.object({ email: EmailSchema }))
+    .mutation(async ({ ctx, input }) => {
+      otpGate(ctx);
+      const email = normalizeEmail(input.email);
+      if (!isValidEmail(email)) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter a valid email." });
+      const user = await findUserByEmailAny(email);
+      if (!user) return { ok: true, unregistered: true, sent: false };
+      if (!(await cooldownOk(email))) return { ok: true, unregistered: false, sent: true, cooldown: true };
+      const code = await mintOtp({ email, purpose: "login" });
+      const sent = await dispatchOtp(email, code);
+      return { ok: sent, unregistered: false, sent };
+    }),
+
+  /** Registration: capture first/last name + email, email a code (user created on verify). */
+  register: publicProcedure
+    .input(z.object({ firstName: NameSchema, lastName: NameSchema, email: EmailSchema }))
+    .mutation(async ({ ctx, input }) => {
+      otpGate(ctx);
+      const email = normalizeEmail(input.email);
+      if (!isValidEmail(email)) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter a valid email." });
+      if (!(await cooldownOk(email))) return { ok: true, sent: true, cooldown: true };
+      const code = await mintOtp({ email, purpose: "register", firstName: input.firstName, lastName: input.lastName });
+      const sent = await dispatchOtp(email, code);
+      return { ok: sent, sent };
+    }),
+
+  /** Verify a code → resolve/create the user, upgrade the guest identity, sign in. */
+  verifyOtp: publicProcedure
+    .input(z.object({ email: EmailSchema, code: CodeSchema }))
+    .mutation(async ({ ctx, input }) => {
+      otpGate(ctx);
+      const email = normalizeEmail(input.email);
+      const row = await latestOtp(email);
+      if (!row) throw new TRPCError({ code: "CONFLICT", message: "That code has expired — request a new one." });
+      if (!verifyOtpHash(input.code, row.codeHash)) {
+        const attempts = await recordOtpFailure(row.id, row.attempts);
+        const left = Math.max(0, OTP_MAX_ATTEMPTS - attempts);
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: left > 0 ? `Incorrect code. ${left} attempt${left === 1 ? "" : "s"} left.` : "Too many attempts — request a new code.",
+        });
+      }
+      await consumeOtp(row.id);
+      // Resolve or create the user account (register rows carry the name).
+      let userId = (await findUserByEmailAny(email))?.id ?? null;
+      if (!userId) userId = await createOtpUser({ email, firstName: row.firstName, lastName: row.lastName });
+      if (!userId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create your account." });
+      await markUserEmailVerified(userId);
+      // Upgrade the guest identity in place (preserves number/contacts/messages).
+      const guestToken = (ctx.req.cookies?.[GUEST_COOKIE] as string | undefined) ?? null;
+      const displayName =
+        `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || email.split("@")[0];
+      const identity = await ensureUserIdentity({ userId, displayName, guestToken });
+      await markIdentityVerified(identity.id, { firstName: row.firstName, lastName: row.lastName });
+      setSessionCookie(ctx.res, userId);
+      return { ok: true, verified: true };
+    }),
+
+  /** Resend the current code (enforces the 60s cooldown; carries purpose/name forward). */
+  resendOtp: publicProcedure
+    .input(z.object({ email: EmailSchema }))
+    .mutation(async ({ ctx, input }) => {
+      otpGate(ctx);
+      const email = normalizeEmail(input.email);
+      if (!isValidEmail(email)) return { ok: true, cooldown: false };
+      if (!(await cooldownOk(email))) return { ok: true, cooldown: true };
+      // Carry the pending purpose/name from the most recent row (a register in flight).
+      const prev = await latestOtp(email);
+      const user = await findUserByEmailAny(email);
+      if (!prev && !user) return { ok: true, cooldown: false }; // nothing to resend
+      const code = await mintOtp({
+        email,
+        purpose: (prev?.purpose as "login" | "register") ?? "login",
+        firstName: prev?.firstName ?? null,
+        lastName: prev?.lastName ?? null,
+      });
+      const sent = await dispatchOtp(email, code);
+      return { ok: sent, sent };
+    }),
+
+  /** Sign out of a passwordless session (clears the local session cookie). */
+  signOut: publicProcedure.mutation(({ ctx }) => {
+    const opts = getSessionCookieOptions(ctx.req);
+    ctx.res.clearCookie("relay_session", { ...opts, maxAge: -1 });
+    return { ok: true };
   }),
 });

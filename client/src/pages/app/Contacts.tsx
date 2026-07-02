@@ -42,6 +42,7 @@ import {
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import { trpc } from "@/lib/trpc";
+import { VerifiedBadge } from "@/app/VerifiedBadge";
 
 function initialsFrom(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
@@ -218,7 +219,8 @@ export default function ContactsPage() {
                 <div className="flex-1 min-w-0">
                   <div className="font-medium truncate flex items-center gap-1.5">
                     {c.favourite && <Star className="size-3.5 text-primary fill-primary" />}
-                    {c.displayName || c.number}
+                    <span className="truncate">{c.displayName || c.number}</span>
+                    {c.verified && <VerifiedBadge size={14} />}
                   </div>
                   <div className="text-xs text-muted-foreground font-mono">
                     {c.number}

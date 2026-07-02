@@ -10,6 +10,7 @@ import {
   v2AttachmentsRouter,
   v2CallsRouter,
   v2StatsRouter,
+  v2OtpAuthRouter,
 } from "./v2routers";
 
 export const appRouter = router({
@@ -25,6 +26,7 @@ export const appRouter = router({
 
   // v2.0 phone-app namespace
   identity: v2AuthRouter,
+  otpAuth: v2OtpAuthRouter,
   directory: v2DirectoryRouter,
   contacts: v2ContactsRouter,
   messages: v2MessagesRouter,

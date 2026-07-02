@@ -128,7 +128,7 @@ async function consumeToken(token: string, nowMs: number): Promise<number | null
 
 /* ── session cookie ───────────────────────────────────────────────────────── */
 
-function setSessionCookie(res: Response, userId: number): void {
+export function setSessionCookie(res: Response, userId: number): void {
   const token = signSession(userId, sessionSecret(), SESSION_TTL_MS, Date.now());
   res.cookie(LOCAL_SESSION_COOKIE, token, {
     httpOnly: true,

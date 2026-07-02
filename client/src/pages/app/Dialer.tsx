@@ -14,6 +14,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
+import { VerifiedBadge } from "@/app/VerifiedBadge";
 import { useIdentity } from "@/app/useIdentity";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { GroupCallScreen } from "./GroupCallScreen";
@@ -409,6 +410,7 @@ export default function DialerPage() {
                           <span className="font-semibold text-foreground">
                             {previewIdentity.displayName}
                           </span>
+                          {previewIdentity.verified && <VerifiedBadge size={13} className="ml-1" />}
                           {" · "}
                           <span className={st.online ? "text-[color:var(--relay-online)]" : "text-muted-foreground"}>
                             {st.text}

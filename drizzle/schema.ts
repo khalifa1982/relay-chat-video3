@@ -63,6 +63,36 @@ export const emailVerifications = mysqlTable(
 export type EmailVerification = typeof emailVerifications.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
+ * email_otps — short-lived one-time codes for passwordless email login (v2.68).
+ * A row is minted on requestOtp / register / resend BEFORE a user necessarily
+ * exists (hence no userId here, unlike email_verifications). The 6-digit code is
+ * stored HASHED (scrypt), never plaintext; expiry ~10 min, attempts capped, and
+ * the row is burned on consume or too many failures. Created by the boot-migrator.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const emailOtps = mysqlTable(
+  "email_otps",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    email: varchar("email", { length: 320 }).notNull(),
+    /** scrypt hash of the 6-digit code (`scrypt$N$salt$hash`, ~174 chars). */
+    codeHash: varchar("codeHash", { length: 255 }).notNull(),
+    /** "login" (existing account) or "register" (carries the pending name). */
+    purpose: varchar("purpose", { length: 16 }).notNull().default("login"),
+    firstName: varchar("firstName", { length: 64 }),
+    lastName: varchar("lastName", { length: 64 }),
+    expiresAt: timestamp("expiresAt").notNull(),
+    attempts: int("attempts").notNull().default(0),
+    consumedAt: timestamp("consumedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    emailIdx: index("email_otps_email_idx").on(t.email),
+    expiresIdx: index("email_otps_expires_idx").on(t.expiresAt),
+  }),
+);
+export type EmailOtp = typeof emailOtps.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
  * identities — every "party" on RELAY, whether a guest or a registered user.
  *
  * A guest gets an identity row immediately (no `userId`). If they later upgrade
@@ -108,6 +138,14 @@ export const identities = mysqlTable(
     mobiles: text("mobiles"),
     /** JSON array of { platform, value } social/link entries. */
     socials: text("socials"),
+    /** True once the identity's owner has completed email verification (OTP or
+     *  the legacy email+password link flow). Drives the "blue badge". Additive +
+     *  nullable; NULL is treated as unverified. Backfilled at boot for existing
+     *  emailVerified accounts. */
+    verified: boolean("verified"),
+    /** Given/family name captured at passwordless registration (v2.68). */
+    firstName: varchar("firstName", { length: 64 }),
+    lastName: varchar("lastName", { length: 64 }),
     /** High-water mark for missed-call acknowledgement: missed/declined calls
      *  newer than this are "unseen" and drive the landing popup + badges. Bumped
      *  to now() when the user reviews their missed calls. Additive + nullable. */

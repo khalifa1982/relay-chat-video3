@@ -1,23 +1,30 @@
 import { useState, type FormEvent } from "react";
-import { Phone, Video, MessageSquare, ArrowRight } from "lucide-react";
+import { Phone, Video, MessageSquare, ArrowRight, User2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getLoginUrl } from "@/const";
 import { useIdentity } from "./useIdentity";
+import { AuthPanel } from "./AuthPanel";
 
 interface OnboardingGateProps {
   children: React.ReactNode;
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 /**
  * Entry / login screen. Shows the app once an identity exists; otherwise a
- * fast, glassy dual-path screen: continue as a guest (name → instant 6-digit
- * number) or sign in / register. Forced dark for a consistent striking look;
- * the animated backdrop is pure CSS and gated behind prefers-reduced-motion.
+ * fast, glassy screen whose PRIMARY path is passwordless email sign-in: type
+ * your email → get a one-time code → in (registering first if you're new). A
+ * "continue as guest" name path stays as a secondary option. No third-party
+ * sign-in. Forced dark for a consistent striking look; the animated backdrop is
+ * pure CSS, gated behind prefers-reduced-motion.
  */
 export function OnboardingGate({ children }: OnboardingGateProps) {
-  const { me, loading, startGuest, startGuestPending, startGuestError } = useIdentity();
+  const { me, loading, startGuest, startGuestPending, startGuestError, refresh } = useIdentity();
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [guestMode, setGuestMode] = useState(false);
+  const [authEmail, setAuthEmail] = useState<string | null>(null);
 
   if (loading) {
     return (
@@ -29,7 +36,7 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
 
   if (me) return <>{children}</>;
 
-  async function onSubmit(e: FormEvent) {
+  async function onGuestSubmit(e: FormEvent) {
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -38,9 +45,12 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
     });
   }
 
-  // "" when OAuth isn't configured (e.g. local dev) — hide the sign-in path
-  // rather than crashing the whole entry screen.
-  const loginUrl = getLoginUrl();
+  function onEmailSubmit(e: FormEvent) {
+    e.preventDefault();
+    const clean = email.trim().toLowerCase();
+    if (!EMAIL_RE.test(clean)) return;
+    setAuthEmail(clean); // opens the passwordless panel, prefilled + auto-send
+  }
 
   return (
     <div className="dark relay-login relative min-h-svh overflow-hidden grid place-items-center bg-[#08090C] text-foreground p-5">
@@ -56,68 +66,100 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
             <span className="text-[1.6rem] font-bold tracking-tight">RELAY</span>
           </div>
           <p className="mx-auto mt-2.5 max-w-[19rem] text-sm leading-relaxed text-muted-foreground">
-            Pick a name, get a 6-digit number, call anyone — straight in the browser.
+            Sign in with your email — no password. We'll send you a one-time code.
           </p>
         </div>
 
         {/* Card */}
         <div className="rounded-3xl border border-border/60 bg-card/60 p-6 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150">
-          <form onSubmit={onSubmit}>
-            <label
-              htmlFor="relay-name"
-              className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
-            >
-              Your display name
-            </label>
-            <Input
-              id="relay-name"
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Alex"
-              maxLength={64}
-              className="h-12 rounded-xl text-base"
-            />
-            {startGuestError && (
-              <p className="mt-2.5 text-sm text-destructive">{startGuestError.message}</p>
-            )}
-            <Button
-              type="submit"
-              disabled={!name.trim() || startGuestPending}
-              className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
-            >
-              {startGuestPending ? (
-                "Setting up…"
-              ) : (
-                <>
-                  Enter RELAY <ArrowRight className="size-4" />
-                </>
-              )}
-            </Button>
-          </form>
-
-          {loginUrl && (
+          {!guestMode ? (
             <>
+              {/* PRIMARY: passwordless email sign-in */}
+              <form onSubmit={onEmailSubmit}>
+                <label
+                  htmlFor="relay-email"
+                  className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
+                >
+                  Your email
+                </label>
+                <Input
+                  id="relay-email"
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  autoFocus
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="h-12 rounded-xl text-base"
+                />
+                <Button
+                  type="submit"
+                  disabled={!EMAIL_RE.test(email.trim().toLowerCase())}
+                  className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
+                >
+                  Continue with email <ArrowRight className="size-4" />
+                </Button>
+              </form>
+
               <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground/70">
                 <span className="h-px flex-1 bg-border/60" /> or{" "}
                 <span className="h-px flex-1 bg-border/60" />
               </div>
 
-              <a href={loginUrl} className="block">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-12 w-full rounded-xl border-border/60 text-base"
+              {/* SECONDARY: quick guest access */}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setGuestMode(true)}
+                className="h-12 w-full gap-2 rounded-xl border-border/60 text-base"
+              >
+                <User2 className="size-4" /> Continue as guest
+              </Button>
+              <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
+                Registering with email keeps your number forever and earns a verified badge.
+                Guests stay on this device for 30 days.
+              </p>
+            </>
+          ) : (
+            <>
+              {/* Guest name entry (secondary path) */}
+              <form onSubmit={onGuestSubmit}>
+                <label
+                  htmlFor="relay-name"
+                  className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
                 >
-                  Sign in / Register
+                  Your display name
+                </label>
+                <Input
+                  id="relay-name"
+                  autoFocus
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Alex"
+                  maxLength={64}
+                  className="h-12 rounded-xl text-base"
+                />
+                {startGuestError && (
+                  <p className="mt-2.5 text-sm text-destructive">{startGuestError.message}</p>
+                )}
+                <Button
+                  type="submit"
+                  disabled={!name.trim() || startGuestPending}
+                  className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
+                >
+                  {startGuestPending ? "Setting up…" : (<>Enter as guest <ArrowRight className="size-4" /></>)}
                 </Button>
-              </a>
+              </form>
+              <button
+                type="button"
+                onClick={() => setGuestMode(false)}
+                className="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Sign in with email instead
+              </button>
             </>
           )}
-          <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
-            Guests stay on this device for 30 days. Register to keep your number forever
-            and unlock contact sync, recording &amp; more.
-          </p>
         </div>
 
         {/* Feature chips */}
@@ -136,6 +178,18 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
           ))}
         </div>
       </div>
+
+      {authEmail !== null && (
+        <AuthPanel
+          initialEmail={authEmail}
+          onClose={() => setAuthEmail(null)}
+          onVerified={() => {
+            // Session cookie is set; re-resolve whoami so the gate lets us in.
+            setAuthEmail(null);
+            refresh();
+          }}
+        />
+      )}
 
       <style>{`
         .relay-login { --c1: 63,224,197; --c2: 110,231,255; }

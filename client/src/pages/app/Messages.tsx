@@ -28,6 +28,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
+import { VerifiedBadge } from "@/app/VerifiedBadge";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { linkify } from "@/lib/linkify";
 import { useIdentity } from "@/app/useIdentity";
@@ -174,7 +175,8 @@ export default function MessagesPage() {
                             {isThreadMuted(t.conversationId) && (
                               <BellOff className="size-3.5 shrink-0 text-muted-foreground" />
                             )}
-                            {t.peerDisplayName || t.peerNumber}
+                            <span className="truncate">{t.peerDisplayName || t.peerNumber}</span>
+                            {t.peerVerified && <VerifiedBadge size={14} />}
                           </div>
                           {t.lastMessageAt && (
                             <div className="text-xs text-muted-foreground shrink-0">
@@ -634,8 +636,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-semibold truncate">
-            {thread?.peerDisplayName || thread?.peerNumber || "Conversation"}
+          <div className="font-semibold truncate flex items-center gap-1.5">
+            <span className="truncate">{thread?.peerDisplayName || thread?.peerNumber || "Conversation"}</span>
+            {thread?.peerVerified && <VerifiedBadge size={15} />}
           </div>
           <div className="text-xs text-muted-foreground font-mono">
             {isGroup
