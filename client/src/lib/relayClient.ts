@@ -270,6 +270,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let lkConnected = false; // true only AFTER a successful room.connect()+publish
   let lkWatchdog: ReturnType<typeof setTimeout> | null = null;
   let lkJoinTries = 0;
+  // Has ANYONE joined this call yet? False while an outgoing dial is still
+  // RINGING. The SFU join watchdog must never tear down an unanswered call —
+  // it used to hangUp("livekit-join-timeout") ~16.5s after DIAL (the watchdog
+  // is armed by enterCallUI, which runs at "Calling…"), so any caller whose SFU
+  // connect was slow/failing had every outgoing call die after a few seconds
+  // while it was still ringing. Set by acceptInvite/createPeer/addLkTile (any
+  // evidence a second party is in the call); reset by hangUp.
+  let callAnswered = false;
   function clearLkWatchdog() { if (lkWatchdog) { clearTimeout(lkWatchdog); lkWatchdog = null; } lkJoinTries = 0; }
   // Reliability net for the SFU path: if media isn't up a few seconds after the
   // call UI opens (token mint failed, SSE frame dropped, or connect() failed),
@@ -279,6 +287,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
     clearLkWatchdog();
     const tick = () => {
       if (!inCall || !livekitEnabled || lkConnected) { lkWatchdog = null; return; }
+      if (!callAnswered) {
+        // Still ringing — NEVER give up here. Ring-timeout / reject / cancel
+        // govern an unanswered call; we just keep the token fresh so media can
+        // come up instantly when (if) they answer.
+        diag("livekit: ringing — keeping token fresh, not counting down");
+        sendWS({ type: "refresh-livekit" });
+        lkWatchdog = setTimeout(tick, 4000);
+        return;
+      }
       lkJoinTries++;
       if (lkJoinTries > 3) {
         lkWatchdog = null;
@@ -1644,6 +1661,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // thus gated by Android's autoplay policy) plays on the user's next touch
     // instead of staying silent until a play() failure happens to re-arm it.
     armAudioUnlock();
+    callAnswered = true; // WE answered — the watchdog may enforce media now
     inCall = true; roomId = r.roomId; enterCallUI("In call");
     sendWS({ type: "accept", roomId: r.roomId });
   }
@@ -1794,7 +1812,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // (not the publish call) so it doesn't disturb the pinned publishTrack test.
     const roomOpts: Record<string, unknown> = { adaptiveStream: true, dynacast: true };
     if (AudioPresetsEnum?.speech) roomOpts.publishDefaults = { audioPreset: AudioPresetsEnum.speech };
-    const room = new RoomCtor(roomOpts);
+    // A throwing Room constructor must NEVER kill the dial path (joinLivekit is
+    // retried by the watchdog, so a persistent throw = every call dies) — fall
+    // back to the known-good minimal options before giving up.
+    let room: import("livekit-client").Room;
+    try {
+      room = new RoomCtor(roomOpts);
+    } catch (e) {
+      diag("livekit: Room options rejected — retrying with defaults");
+      console.warn("livekit Room ctor failed with options, retrying bare:", e);
+      try { room = new RoomCtor({ adaptiveStream: true, dynacast: true }); }
+      catch (e2) { diag("livekit: Room construction failed"); console.warn(e2); return; }
+    }
     lkRoom = room;
 
     const isScreenPub = (pub: unknown): boolean => {
@@ -2300,6 +2329,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
   function addLkTile(id: string, name: string) {
     if (lkParticipantTiles[id]) return;
+    callAnswered = true; // a second party exists — the join watchdog may enforce media
     const grid = $("videoGrid"); if (!grid) return;
     const t = document.createElement("div");
     t.className = "relay-tile"; t.id = "tile-" + id;
@@ -2392,6 +2422,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function createPeer(pin: string, name: string, initiator: boolean): PeerEntry {
     if (peers[pin]) return peers[pin];
+    callAnswered = true; // a second party exists — the join watchdog may enforce media
     const pc = new RTCPeerConnection(iceConfig);
     const peer: PeerEntry = { pc, name: name || "Guest", dc: null, el: null, candQ: [], remoteSet: false, gotStream: false, initiator, graceT: null, restartT: null, iceRestarts: 0, slowT: null };
     peers[pin] = peer;
@@ -3976,7 +4007,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     resetSpeakerView();
     // Clear leftover tiles so an idle/parked grid doesn't keep dead srcObjects.
     const grid = $("videoGrid"); if (grid) grid.innerHTML = "";
-    inCall = false; roomId = null;
+    inCall = false; roomId = null; callAnswered = false;
     emitPhase("idle");
     if (timerInt) { clearInterval(timerInt); timerInt = null; }
     const log = $("chatLog"); if (log) log.innerHTML = "";

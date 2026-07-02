@@ -2519,6 +2519,36 @@ SFU tiles weren't pre-created from the roster, and a silently-dropped mesh peer 
 > capable devices, so the thresholds need on-device tuning. Above all, CONFIRM the actual "5-6 users → tiles"
 > behaviour on a live multi-client session on whichever media path the deployment runs (SFU vs mesh fallback).
 
+## v2.70.1 — HOTFIX: dialing disconnected after a few seconds (delivered 2026-07-02)
+
+User report: dial a number → "Calling…" for a few seconds → the call disconnects, on every
+device/account. Root cause CONFIRMED in code: the SFU join watchdog (`armLkWatchdog`) is armed by
+`enterCallUI` — which for the CALLER runs at DIAL time ("Calling…") — and after 3 ticks (~16.5s)
+it called `hangUp("livekit-join-timeout")` unless the caller's OWN LiveKit media was fully up
+(`lkConnected`). So whenever the caller-side SFU connect was slow or failing (token race, SFU
+unreachable, transient LiveKit issue), EVERY outgoing call was torn down by the caller's own
+watchdog while it was still RINGING — exactly the reported symptom.
+
+- [x] **The watchdog never tears down an unanswered call anymore.** New `callAnswered` flag — set on
+      any evidence of a second party (`acceptInvite`, mesh `createPeer`, SFU `addLkTile`), reset in
+      `hangUp`. While the call is un-answered, the watchdog keeps the LiveKit token fresh at a gentle
+      cadence but does NOT count toward the give-up; ring-timeout / reject / cancel keep governing an
+      unanswered call as before. Once someone HAS joined and media still can't come up within ~12s,
+      the existing give-up (error toast + hangUp) applies unchanged — that part is correct.
+- [x] **LiveKit Room constructor hardened.** `new Room(opts)` now falls back to the known-good bare
+      options (`{adaptiveStream, dynacast}`) if the options object is ever rejected, and a total
+      construction failure diag-logs and returns instead of crashing `joinLivekit` — a persistent
+      throw there would have made every dial die via the watchdog (insurance against the v2.70.0
+      `publishDefaults` addition, which was verified valid for livekit-client 2.20.0 but is now
+      failure-isolated regardless).
+- [x] 3 new source-pinning tests (one v2.66 pin loosened to span the inserted flag line). 585 passing
+      (1 pre-existing skip), tsc + build clean. Footer → `v2.70.1`.
+
+> If a dial still drops after this ships: the remaining few-second teardown paths each show a toast
+> naming the cause — "X declined." (the callee device may have Do-Not-Disturb ON → instant
+> auto-decline), "They're on another call." (busy), "That number doesn't exist or is offline", or
+> "Couldn't connect call media" (SFU media genuinely failing AFTER answer — check the LiveKit
+> credentials/quota in the Manus env). Note which toast appears — it identifies the path instantly.
 
 ## Feature: "The Technology Behind RELAY" page (from user's uploaded design)
 - [x] Create client/src/pages/Technology.tsx as a self-contained React page mirroring the uploaded relay-landing.html (hero P2P live demo, ticker, Why-RELAY 6 cards, latency strip, How-it-works 3 steps + mesh, Security accordion, stats, final CTA + footer)

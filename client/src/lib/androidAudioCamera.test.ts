@@ -69,7 +69,8 @@ describe("v2.66 communication reliability (verified)", () => {
   });
 
   it("accepting a call arms the audio unlock on the tap gesture", () => {
-    expect(CLIENT).toMatch(/armAudioUnlock\(\);\n    inCall = true; roomId = r\.roomId; enterCallUI\("In call"\);/);
+    // (v2.70.1 inserted the callAnswered flag between the two pinned lines.)
+    expect(CLIENT).toMatch(/armAudioUnlock\(\);[\s\S]{0,120}?inCall = true; roomId = r\.roomId; enterCallUI\("In call"\);/);
   });
 });
 
@@ -174,5 +175,26 @@ describe("v2.70 multi-party grid + exit + quality (verified)", () => {
     expect(CLIENT).toMatch(/contentHint = "motion"/);
     expect(CLIENT).toMatch(/contentHint = "detail"/);
     expect(CLIENT).toMatch(/publishDefaults = \{ audioPreset: AudioPresetsEnum\.speech \}/);
+  });
+});
+
+describe("v2.70.1 — dial disconnect hotfix (verified)", () => {
+  it("the SFU join watchdog NEVER tears down a still-ringing (unanswered) call", () => {
+    // It used to hangUp("livekit-join-timeout") ~16.5s after DIAL — the watchdog
+    // is armed by enterCallUI at "Calling…" — so a slow/failing caller-side SFU
+    // connect killed every outgoing call while it was still ringing.
+    expect(CLIENT).toMatch(/let callAnswered = false;/);
+    expect(CLIENT).toMatch(/if \(!callAnswered\) \{[\s\S]*?refresh-livekit[\s\S]*?return;\s*\}/);
+  });
+
+  it("callAnswered flips on any second-party evidence and resets on hangUp", () => {
+    const matches = CLIENT.match(/callAnswered = true;/g) || [];
+    expect(matches.length).toBeGreaterThanOrEqual(3); // acceptInvite + createPeer + addLkTile
+    expect(CLIENT).toMatch(/inCall = false; roomId = null; callAnswered = false;/);
+  });
+
+  it("a throwing LiveKit Room constructor falls back to bare options (never kills dialing)", () => {
+    expect(CLIENT).toMatch(/room = new RoomCtor\(roomOpts\);\s*\} catch/);
+    expect(CLIENT).toMatch(/room = new RoomCtor\(\{ adaptiveStream: true, dynacast: true \}\); \}/);
   });
 });
