@@ -2558,3 +2558,35 @@ watchdog while it was still RINGING — exactly the reported symptom.
 - [ ] Register /technology route in App.tsx
 - [ ] Add a visible link from the landing page (header nav + footer) to /technology
 - [ ] tsc clean + vitest pass + browser visual check; checkpoint; guide Publish
+
+## v2.71.0 — Messages: iMessage-grade chat UI (delivered 2026-07-03)
+
+From a user report with screenshots (double stacked headers eating a third of the phone screen;
+messages floating at the TOP of the thread with a black void above the composer; oversized bubbles
+with clunky full-width timestamps; loud hard-coded blue received bubbles; gray offline dots; no
+typing awareness on the thread list). Benchmarked against Google Messages / iMessage.
+
+- [x] **ONE compact conversation header on mobile.** While a chat is open (<768px), the app's top bar
+      is hidden (`body.relay-convo-open .relay-appshell-topbar{display:none}` — the chat header has its
+      own back button; the bottom tab bar stays). The chat header itself is tighter (py-2, size-9
+      circular avatar) and carries a live status line: **typing…** (green, pulsing) > **online** (green)
+      > **last seen Xm ago** — name + verified badge on top, presence LED on the avatar.
+- [x] **Presence LEDs: green = online, RED = offline** (was gray) — thread-list rows, the conversation
+      header, and Contacts rows (still fully hidden for >24h-inactive guests, privacy unchanged).
+- [x] **Typing on the thread list.** New `useTypingConversations()` (one store subscription for the
+      whole list) — a thread with an active typer shows a green pulsing "typing…" in place of its
+      last-message preview, before you even open the chat. (The server already excludes the sender
+      from typing fan-out, so your own typing can't self-trigger it.)
+- [x] **Short conversations anchor to the BOTTOM** (iMessage-style): the scroll container gained
+      `flex flex-col` + an `mt-auto` spacer, so 2 messages sit just above the composer instead of
+      floating at the top with a void. The composer remains in-flow/pinned (WebKit flexbug fix intact).
+- [x] **Glassy, elegant bubbles.** Yours: translucent brand green (`/85` + hairline white border).
+      Theirs: neutral translucent surface (`bg-muted/70` + border) replacing the hard-coded `#2563eb`
+      blue — theme-aware in light+dark. Timestamps + ✓/✓✓ ticks are now tiny and tucked bottom-RIGHT
+      (WhatsApp-style) instead of a full-width row. Reply-quotes/group sender names re-tinted for the
+      neutral surface. Search-result bubbles restyled to match.
+- [x] **Emoji-only messages render BIG without a bubble** (`isEmojiOnly`, up to ~8 composed emoji,
+      Unicode-property-safe with a fallback). Thread-list + conversation avatars are circular (size-12).
+- [x] **⋮ message menu decluttered** — subtle (35% opacity) on mobile, hover-revealed on desktop.
+- [x] 7 new pins in Messages.test.ts (typing list state, red LEDs, topbar hide, bottom anchor, neutral
+      bubbles, emoji-only, header status line). tsc + build clean. Footer → `v2.71.0`.

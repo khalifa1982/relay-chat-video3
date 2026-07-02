@@ -109,3 +109,34 @@ describe("Messages.tsx — v2.69 WhatsApp-grade reliability", () => {
     expect(SRC).toMatch(/threads\.refetch\(\)/);
   });
 });
+
+describe("Messages.tsx — v2.71 iMessage-grade chat UI", () => {
+  it("thread list shows a live typing… state (one store subscription for the list)", () => {
+    expect(SRC).toMatch(/useTypingConversations/);
+    expect(SRC).toMatch(/typingConvos\.includes\(t\.conversationId\)/);
+    expect(SRC).toMatch(/typing…/);
+  });
+  it("presence LEDs: green online, RED offline (list + conversation header)", () => {
+    const reds = SRC.match(/bg-red-500/g) || [];
+    expect(reds.length).toBeGreaterThanOrEqual(2);
+  });
+  it("the app top bar is hidden on mobile while a conversation is open", () => {
+    expect(SRC).toMatch(/relay-convo-open/);
+  });
+  it("short conversations anchor to the BOTTOM (no dead void above the composer)", () => {
+    expect(SRC).toMatch(/space-y-0\.5 bg-background md:bg-card flex flex-col"/);
+    expect(SRC).toMatch(/className="mt-auto shrink-0" aria-hidden="true"/);
+  });
+  it("received bubbles use the neutral glassy surface, not the old hard-coded blue", () => {
+    expect(SRC).toMatch(/bg-muted\/70 text-foreground border-white\/10/);
+    expect(SRC).not.toMatch(/bg-\[#2563eb\]/);
+  });
+  it("emoji-only messages render big without a bubble", () => {
+    expect(SRC).toMatch(/function isEmojiOnly/);
+    expect(SRC).toMatch(/emojiOnly/);
+  });
+  it("the conversation header carries the live status line (typing > online > last seen)", () => {
+    expect(SRC).toMatch(/typers\.length > 0 \? \(/);
+    expect(SRC).toMatch(/last seen \{timeAgo\(thread\.peerLastSeenAt\)\}/);
+  });
+});

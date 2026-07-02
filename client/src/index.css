@@ -361,3 +361,11 @@
     backdrop-filter: none;
   }
 }
+/* While a chat conversation is open on MOBILE, hide the app's top bar so the
+   conversation has ONE compact header (contact + status) instead of two stacked
+   headers — the chat header carries its own back button. Tab bar stays. */
+@media (max-width: 767px) {
+  body.relay-convo-open .relay-appshell-topbar {
+    display: none;
+  }
+}

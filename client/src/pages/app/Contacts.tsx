@@ -204,14 +204,14 @@ export default function ContactsPage() {
                   <div className="size-11 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
                     {initialsFrom(c.displayName || c.number)}
                   </div>
-                  {/* Presence dot — fully hidden for a guest inactive >24h (privacy). */}
+                  {/* Presence LED — green = online, red = offline; fully hidden
+                      for a guest inactive >24h (privacy). */}
                   {!c.presenceHidden && (
                     <span
+                      aria-label={c.isOnline ? "Online" : "Offline"}
                       className={
                         "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
-                        (c.isOnline
-                          ? "bg-[color:var(--relay-online)]"
-                          : "bg-[color:var(--relay-offline)]")
+                        (c.isOnline ? "bg-[color:var(--relay-online)]" : "bg-red-500")
                       }
                     />
                   )}

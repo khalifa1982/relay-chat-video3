@@ -34,7 +34,7 @@ import { uploadAttachment } from "@/lib/uploadAttachment";
 import { linkify } from "@/lib/linkify";
 import { useIdentity } from "@/app/useIdentity";
 import { useThreadMuted, isThreadMuted, onMutedChange } from "@/app/mutedThreads";
-import { useTypers } from "@/app/typingStore";
+import { useTypers, useTypingConversations } from "@/app/typingStore";
 import { useDraft } from "@/app/draftStore";
 
 const EMOJI_QUICK = [
@@ -62,6 +62,24 @@ function timeAgo(iso: string | Date): string {
 function formatTime(iso: string | Date): string {
   const d = typeof iso === "string" ? new Date(iso) : iso;
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/** True when a message body is ONLY emoji (1-8 glyphs) — rendered big without a
+ *  bubble, iMessage-style. Conservative: any non-emoji character disqualifies. */
+function isEmojiOnly(body: string | null | undefined): boolean {
+  if (!body) return false;
+  const t = body.trim();
+  if (!t || t.length > 32) return false;
+  try {
+    // Built via the constructor so the `u`-flag property escapes don't trip the
+    // TS downlevel-target check; ‍ = ZWJ, ️ = variation selector.
+    const re = new RegExp("^(?:\\p{Extended_Pictographic}|\\p{Emoji_Component}|\\u200d|\\ufe0f|\\s)+$", "u");
+    if (!re.test(t)) return false;
+    const glyphs = Array.from(t.replace(/\s/g, "")).length;
+    return glyphs > 0 && glyphs <= 16; // up to ~8 composed emoji
+  } catch {
+    return false; // older engines without Unicode property escapes
+  }
 }
 
 /** Local Y-M-D key so messages can be grouped under a date divider. */
@@ -98,6 +116,17 @@ export default function MessagesPage() {
     refetchIntervalInBackground: false,
     enabled: !!me,
   });
+  // Live "typing…" state per thread row (one subscription for the whole list).
+  const typingConvos = useTypingConversations();
+
+  // While a conversation is open on MOBILE, hide the app's top bar so the chat
+  // has ONE compact header (name + status) instead of two stacked headers
+  // eating a third of the screen. The bottom tab bar stays.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.body.classList.toggle("relay-convo-open", activeConvoId != null);
+    return () => document.body.classList.remove("relay-convo-open");
+  }, [activeConvoId]);
 
   return (
     // NOTE: AppShell's mobile pb-28 is NOT wasted space to reclaim — it's the
@@ -158,26 +187,31 @@ export default function MessagesPage() {
                       <div className="relative">
                         {t.kind === "group" ? (
                           <div
-                            className="size-11 rounded-2xl bg-accent/15 grid place-items-center text-accent"
+                            className="size-12 rounded-full bg-accent/15 grid place-items-center text-accent"
                             aria-label="Group conversation"
                           >
                             <Users className="size-5" />
                           </div>
                         ) : me && t.peerIdentityId === me.id ? (
                           <div
-                            className="size-11 rounded-2xl bg-amber-500/15 grid place-items-center text-amber-400"
+                            className="size-12 rounded-full bg-amber-500/15 grid place-items-center text-amber-400"
                             aria-label="Notes to yourself"
                           >
                             <StickyNote className="size-5" />
                           </div>
                         ) : (
                           <>
-                            <div className="size-11 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
+                            <div className="size-12 rounded-full bg-primary/15 grid place-items-center text-primary font-bold text-sm">
                               {initialsFrom(t.peerDisplayName || t.peerNumber)}
                             </div>
-                            {t.peerIsOnline && (
-                              <span className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-[color:var(--relay-online)] border-2 border-card" />
-                            )}
+                            {/* Presence LED: green = online, red = offline. */}
+                            <span
+                              aria-label={t.peerIsOnline ? "Online" : "Offline"}
+                              className={
+                                "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
+                                (t.peerIsOnline ? "bg-[color:var(--relay-online)]" : "bg-red-500")
+                              }
+                            />
                           </>
                         )}
                       </div>
@@ -197,9 +231,15 @@ export default function MessagesPage() {
                           )}
                         </div>
                         <div className="flex items-center justify-between gap-2 mt-0.5">
-                          <div className="text-xs text-muted-foreground truncate">
-                            {t.lastMessageAt ? previewOf(t.lastMessageKind ?? "text", t.lastMessageBody) : "No messages yet"}
-                          </div>
+                          {typingConvos.includes(t.conversationId) ? (
+                            <div className="text-xs font-medium text-[color:var(--relay-online)] truncate animate-pulse">
+                              typing…
+                            </div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground truncate">
+                              {t.lastMessageAt ? previewOf(t.lastMessageKind ?? "text", t.lastMessageBody) : "No messages yet"}
+                            </div>
+                          )}
                           {t.unreadCount > 0 && (
                             <span className="inline-flex min-w-5 h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-xs items-center justify-center font-bold shrink-0">
                               {t.unreadCount > 99 ? "99+" : t.unreadCount}
@@ -663,46 +703,56 @@ function ConversationView({ conversationId }: { conversationId: number }) {
 
   return (
     <>
-      {/* conversation header */}
-      <header className="flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border bg-card md:rounded-t-2xl">
+      {/* conversation header — ONE compact bar (the app's top bar is hidden on
+          mobile while a chat is open): back, avatar + presence LED, name +
+          verified badge, and a live status line (typing… > online > last seen). */}
+      <header className="flex items-center gap-2.5 px-2 md:px-4 py-2 border-b border-border/70 bg-card/90 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur-md md:rounded-t-2xl">
         <Button
           variant="ghost"
           size="icon"
-          className="md:hidden"
+          className="md:hidden size-8"
           onClick={() => setLocation("/app/messages")}
         >
           <ArrowLeft className="size-5" />
         </Button>
-        <div className="relative">
+        <div className="relative shrink-0">
           {isGroup ? (
-            <div className="size-10 rounded-2xl bg-accent/15 grid place-items-center text-accent">
-              <Users className="size-5" />
+            <div className="size-9 rounded-full bg-accent/15 grid place-items-center text-accent">
+              <Users className="size-4.5" />
             </div>
           ) : (
             <>
-              <div className="size-10 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
+              <div className="size-9 rounded-full bg-primary/15 grid place-items-center text-primary font-bold text-[13px]">
                 {initialsFrom(thread?.peerDisplayName || thread?.peerNumber || "??")}
               </div>
-              {thread?.peerIsOnline && (
-                <span className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-[color:var(--relay-online)] border-2 border-card" />
-              )}
+              {/* Presence LED: green = online, red = offline. */}
+              <span
+                aria-label={thread?.peerIsOnline ? "Online" : "Offline"}
+                className={
+                  "absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card " +
+                  (thread?.peerIsOnline ? "bg-[color:var(--relay-online)]" : "bg-red-500")
+                }
+              />
             </>
           )}
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="font-semibold truncate flex items-center gap-1.5">
+        <div className="flex-1 min-w-0 leading-tight">
+          <div className="font-semibold text-[15px] truncate flex items-center gap-1.5">
             <span className="truncate">{thread?.peerDisplayName || thread?.peerNumber || "Conversation"}</span>
             {thread?.peerVerified && <VerifiedBadge size={15} />}
           </div>
-          <div className="text-xs text-muted-foreground font-mono">
-            {isGroup
-              ? `${thread?.memberCount ?? infoQuery.data?.members.length ?? ""} members`
-              : (thread?.peerNumber ?? "") +
-                (thread?.peerIsOnline
-                  ? " · online"
-                  : thread?.peerLastSeenAt
-                    ? ` · last seen ${timeAgo(thread.peerLastSeenAt)}`
-                    : "")}
+          <div className="text-[11px] truncate">
+            {typers.length > 0 ? (
+              <span className="text-[color:var(--relay-online)] font-medium animate-pulse">typing…</span>
+            ) : isGroup ? (
+              <span className="text-muted-foreground">{`${thread?.memberCount ?? infoQuery.data?.members.length ?? ""} members`}</span>
+            ) : thread?.peerIsOnline ? (
+              <span className="text-[color:var(--relay-online)] font-medium">online</span>
+            ) : thread?.peerLastSeenAt ? (
+              <span className="text-muted-foreground">last seen {timeAgo(thread.peerLastSeenAt)}</span>
+            ) : (
+              <span className="text-muted-foreground">offline</span>
+            )}
           </div>
         </div>
         <Button
@@ -783,14 +833,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     <div key={m.id} className={"flex " + (mine ? "justify-end" : "justify-start")}>
                       <div
                         className={
-                          "max-w-[85%] rounded-2xl px-3.5 py-2 text-sm break-words shadow-sm " +
+                          "max-w-[85%] rounded-2xl px-3.5 py-2 text-sm break-words shadow-sm border " +
                           (mine
-                            ? "bg-[color:var(--relay-online,#06d6a0)] text-[#04201b]"
-                            : "bg-[#2563eb] text-white")
+                            ? "bg-[color:var(--relay-online,#06d6a0)]/85 text-[#04201b] border-white/20"
+                            : "bg-muted/70 text-foreground border-white/10")
                         }
                       >
                         {isGroup && !mine && (
-                          <div className="text-[11px] font-semibold text-white/90 mb-0.5">
+                          <div className="text-[11px] font-semibold text-primary mb-0.5">
                             {nameById.get(m.senderIdentityId) || "Member"}
                           </div>
                         )}
@@ -805,7 +855,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         {m.body && (
                           <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body)}</div>
                         )}
-                        <div className={"text-[10px] mt-1 " + (mine ? "text-[#04201b]/70" : "text-white/70")}>
+                        <div className={"text-[10px] mt-1 " + (mine ? "text-[#04201b]/60" : "text-muted-foreground")}>
                           {formatTime(m.createdAt)}
                         </div>
                       </div>
@@ -819,8 +869,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       )}
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto px-3 md:px-5 py-4 space-y-0.5 bg-background md:bg-card"
+        className="flex-1 min-h-0 overflow-y-auto px-3 md:px-5 py-4 space-y-0.5 bg-background md:bg-card flex flex-col"
       >
+        {/* Anchors a short conversation to the BOTTOM (iMessage-style) instead
+            of floating at the top with a void below — flex-col + this auto
+            top-margin spacer push content down when it doesn't fill the view. */}
+        <div className="mt-auto shrink-0" aria-hidden="true" />
         {messagesQuery.isLoading ? (
           <div className="text-sm text-muted-foreground">Loading…</div>
         ) : (messagesQuery.data?.length ?? 0) === 0 ? (
@@ -874,17 +928,34 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     onDelete={() => deleteMessage(m.id)}
                   />
                 )}
+                {(() => {
+                  // Emoji-only messages render BIG without a bubble (iMessage-style).
+                  const emojiOnly = !m.attachment && m.replyToId == null && isEmojiOnly(m.body);
+                  if (emojiOnly) {
+                    return (
+                      <div className="max-w-[75%] px-1 py-0.5">
+                        <div className="text-4xl leading-tight">{m.body}</div>
+                        <div className={"text-[10px] mt-0.5 text-muted-foreground " + (mine ? "text-right" : "")}>
+                          {formatTime(m.createdAt)}
+                          {mine && m.status && <span className="ml-1">{m.status === "read" ? "✓✓" : "✓"}</span>}
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
                 <div
                   className={
-                    "max-w-[75%] rounded-2xl px-3.5 py-2 text-sm break-words shadow-sm " +
-                    // Yours = green (right), theirs = blue (left) — SMS-style.
+                    "max-w-[75%] rounded-2xl px-3 py-1.5 text-sm break-words shadow-sm border " +
+                    // Elegant, slightly glassy frames: yours = translucent brand
+                    // green; theirs = neutral translucent surface (iMessage-style
+                    // gray) instead of the old hard-coded loud blue.
                     (mine
-                      ? "bg-[color:var(--relay-online,#06d6a0)] text-[#04201b] "
-                      : "bg-[#2563eb] text-white ") + tail
+                      ? "bg-[color:var(--relay-online,#06d6a0)]/85 text-[#04201b] border-white/20 "
+                      : "bg-muted/70 text-foreground border-white/10 ") + tail
                   }
                 >
                   {isGroup && !mine && !sameAsPrev && (
-                    <div className="text-[11px] font-semibold text-white/90 mb-0.5">
+                    <div className="text-[11px] font-semibold text-primary mb-0.5">
                       {nameById.get(m.senderIdentityId) || "Member"}
                     </div>
                   )}
@@ -894,7 +965,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         "mb-1 rounded-lg border-l-2 pl-2 py-0.5 text-[11px] leading-tight " +
                         (mine
                           ? "border-[#04201b]/40 bg-[#04201b]/10 text-[#04201b]/80"
-                          : "border-white/50 bg-white/10 text-white/85")
+                          : "border-foreground/30 bg-foreground/10 text-foreground/80")
                       }
                     >
                       <span className="font-semibold">{senderLabel(msgById.get(m.replyToId)?.senderIdentityId ?? -1)}</span>
@@ -912,23 +983,24 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   {m.body && (
                     <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body)}</div>
                   )}
+                  {/* WhatsApp-style meta: tiny time + ticks, tucked bottom-right. */}
                   <div
                     className={
-                      "text-[10px] mt-1 " +
-                      (mine ? "text-[#04201b]/70" : "text-white/70")
+                      "flex justify-end items-center gap-1 text-[10px] leading-none mt-0.5 -mb-0.5 " +
+                      (mine ? "text-[#04201b]/60" : "text-muted-foreground")
                     }
                   >
                     {formatTime(m.createdAt)}
                     {mine && m.status && (
-                      <span className="ml-1.5">
-                        {/* "delivered" and "read" used to render an identical "✓✓"
-                            with no visual distinction between them — collapse to a
-                            simple sent (✓) vs read (✓✓) signal instead. */}
+                      <span>
+                        {/* sent (✓) vs read (✓✓) — kept distinct on purpose. */}
                         {m.status === "read" ? "✓✓" : "✓"}
                       </span>
                     )}
                   </div>
                 </div>
+                  );
+                })()}
                 {!mine && (
                   <MessageMenu
                     onReply={() => setReplyingTo(m)}
@@ -1137,7 +1209,7 @@ function MessageMenu({
         type="button"
         aria-label="Message options"
         onClick={() => setOpen((v) => !v)}
-        className="grid size-7 place-items-center rounded-full text-muted-foreground hover:bg-muted/60 hover:text-foreground md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 transition-opacity"
+        className="grid size-7 place-items-center rounded-full text-muted-foreground hover:bg-muted/60 hover:text-foreground opacity-35 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 active:opacity-100 transition-opacity"
       >
         <MoreVertical className="size-4" />
       </button>

@@ -80,3 +80,20 @@ export function useTypers(conversationId: number): number[] {
   }, [conversationId]);
   return ids;
 }
+
+/** All conversation ids with at least one active typer right now. */
+export function getTypingConversations(): number[] {
+  return Array.from(active.keys());
+}
+
+/** React hook: the conversation ids that currently have someone typing — one
+ *  subscription for the whole thread list, so each row can show a live
+ *  "typing…" state without a hook-per-row. */
+export function useTypingConversations(): number[] {
+  const [ids, setIds] = useState<number[]>(() => getTypingConversations());
+  useEffect(() => {
+    setIds(getTypingConversations());
+    return onTypingChange(() => setIds(getTypingConversations()));
+  }, []);
+  return ids;
+}

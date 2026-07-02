@@ -335,7 +335,7 @@ function Inner({ children }: { children: React.ReactNode }) {
         {/* mobile header */}
         <header
           className={
-            "relay-appshell-chrome md:hidden sticky top-0 z-30 flex items-center justify-between px-4 py-2.5 " +
+            "relay-appshell-chrome relay-appshell-topbar md:hidden sticky top-0 z-30 flex items-center justify-between px-4 py-2.5 " +
             "border-b border-border/70 bg-card/70 " +
             "supports-[backdrop-filter]:bg-card/45 supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150"
           }
