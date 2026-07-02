@@ -1600,6 +1600,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
     stopRingtone();
     if (!r) { emitPhase("idle"); return; }
     try { await ensureMedia(); } catch { sendWS({ type: "reject", to: r.from }); emitPhase("idle"); return; }
+    // Accepting is a user gesture — arm the audio unlock now so the remote
+    // voice stream (which arrives a second or two later, OUTSIDE any gesture and
+    // thus gated by Android's autoplay policy) plays on the user's next touch
+    // instead of staying silent until a play() failure happens to re-arm it.
+    armAudioUnlock();
     inCall = true; roomId = r.roomId; enterCallUI("In call");
     sendWS({ type: "accept", roomId: r.roomId });
   }
@@ -1827,7 +1832,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     room.on(RoomEventEnum.ParticipantConnected, p => addLkTile(p.identity, p.name || p.identity));
     room.on(RoomEventEnum.ParticipantDisconnected, p => removeLkTile(p.identity));
     room.on(RoomEventEnum.DataReceived, (payload: Uint8Array) => {
-      try { const d = JSON.parse(new TextDecoder().decode(payload)); addChatMsg(d.name, d.text, false); } catch { /* */ }
+      try { receiveChatFrame(new TextDecoder().decode(payload)); } catch { /* */ }
     });
     // LiveKit drives its OWN reconnection (Reconnecting → Reconnected), and its
     // retry window is longer than our 10s mesh window. So on the SFU path we
@@ -3370,25 +3375,57 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
 
   // ---------- chat (data channels) ----------
+  // Dedup guard: on a mesh reconnect (data channel re-open) or an SFU
+  // redelivery, the same chat frame can arrive twice. Each frame now carries a
+  // unique id; we drop any id we've already rendered (and pre-seed our OWN sent
+  // ids so a self-echo on the SFU path is ignored). Bounded so it can't grow
+  // without limit across a long call.
+  const seenChatIds = new Set<string>();
+  function markChatSeen(id: string): boolean {
+    if (!id) return true; // legacy frame with no id — always render
+    if (seenChatIds.has(id)) return false;
+    seenChatIds.add(id);
+    if (seenChatIds.size > 500) {
+      // drop the oldest ~100 (insertion order) to cap memory
+      const it = seenChatIds.values();
+      for (let i = 0; i < 100; i++) { const n = it.next(); if (n.done) break; seenChatIds.delete(n.value); }
+    }
+    return true;
+  }
+  function newChatId(): string {
+    return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+  }
+  function receiveChatFrame(raw: string) {
+    try {
+      const d = JSON.parse(raw);
+      if (!markChatSeen(d.id)) return; // duplicate — skip
+      addChatMsg(d.name, d.text, false);
+    } catch { /* */ }
+  }
   function setupDC(pin: string, dc: RTCDataChannel) {
     dc.onopen = () => addToRecents(pin, (peers[pin] || { name: "" }).name);
-    dc.onmessage = e => {
-      try { const d = JSON.parse(e.data); addChatMsg(d.name, d.text, false); } catch { /* */ }
-    };
+    dc.onmessage = e => receiveChatFrame(e.data as string);
   }
-  function broadcastChat(text: string) {
-    const p = JSON.stringify({ name: me.name, text });
+  // Returns the number of peers the message was actually handed to (so the
+  // caller can warn the user when a send reached nobody). On the SFU path we
+  // can't count subscribers, so a successful publish counts as "delivered".
+  function broadcastChat(text: string, id: string): number {
+    const p = JSON.stringify({ name: me.name, text, id });
     if (livekitEnabled && lkRoom) {
       // SFU path: there are no per-peer datachannels — fan out over LiveKit data.
-      try { void lkRoom.localParticipant.publishData(new TextEncoder().encode(p), { reliable: true }); } catch { /* */ }
-      return;
+      try {
+        void lkRoom.localParticipant.publishData(new TextEncoder().encode(p), { reliable: true });
+        return 1;
+      } catch { return 0; }
     }
-    for (const id in peers) {
-      const dc = peers[id].dc;
+    let delivered = 0;
+    for (const id2 in peers) {
+      const dc = peers[id2].dc;
       if (dc && dc.readyState === "open") {
-        try { dc.send(p); } catch { /* */ }
+        try { dc.send(p); delivered++; } catch { /* peer channel wedged — not delivered */ }
       }
     }
+    return delivered;
   }
   // Wrap http(s)/www URLs in safe anchors. Input MUST already be HTML-escaped.
   function linkifyEscaped(escaped: string): string {
@@ -3420,9 +3457,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!f) return;
     const text = f.value.trim();
     if (!text) return;
+    const id = newChatId();
+    markChatSeen(id); // record our own id so an SFU self-echo is ignored
     addChatMsg(me.name!, text, true);
-    broadcastChat(text);
+    const delivered = broadcastChat(text, id);
     f.value = "";
+    // If there ARE other people in the call but the frame reached none of them
+    // (all data channels wedged/closed on a blip), tell the user instead of
+    // silently dropping it — it rendered locally but never left this device.
+    if (delivered === 0 && Object.keys(peers).length > 0) {
+      toast("Message not delivered — check your connection.", true);
+    }
   }
 
   // ---------- recents ----------
@@ -3490,7 +3535,23 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("camBtn")?.classList.toggle("off", !camOn);
     // Don't flip the self-tile to audio-only while a screen share occupies it.
     const s = $("tile-self"); if (s && !screenSharing) s.classList.toggle("audio-only", !camOn);
-    if (livekitEnabled) void syncLivekitVideoPublication(camOn);
+    if (livekitEnabled) {
+      // Upgrading voice→video republishes tracks on the SFU, which can recreate
+      // the remote audio elements and drop a previously-chosen output (a picked
+      // sink, or Android's forced loudspeaker). Re-apply the routing once the
+      // publication settles so the call doesn't silently jump back to the
+      // earpiece mid-call. Both re-appliers are idempotent/guarded.
+      void syncLivekitVideoPublication(camOn).then(() => { if (camOn) reapplyAudioRouting(); });
+    } else if (camOn) {
+      reapplyAudioRouting();
+    }
+  }
+  // Re-assert the active audio output after a media change. applyAudioSink is a
+  // no-op where the browser has no output picker (e.g. Android Chrome);
+  // refreshLoudspeakerRouting is a no-op unless the forced-loudspeaker mode is on.
+  function reapplyAudioRouting() {
+    void applyAudioSink();
+    refreshLoudspeakerRouting();
   }
   function toggleCam() {
     if (!localStream) return;

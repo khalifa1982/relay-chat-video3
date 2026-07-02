@@ -38,6 +38,14 @@ export type V2Event =
 
 function writeEvent(client: SseClient, ev: V2Event) {
   if (client.closed) return;
+  // Guard the window where the underlying socket has already died but our
+  // `close`/`aborted` cleanup hasn't fired yet to flip `client.closed`. These
+  // are fast synchronous checks; writing to a destroyed/ended response would
+  // otherwise throw (caught below) or, worse, buffer against a dead socket.
+  if (client.res.destroyed || client.res.writableEnded) {
+    client.closed = true;
+    return;
+  }
   try {
     client.res.write(`data: ${JSON.stringify(ev)}\n\n`);
   } catch {

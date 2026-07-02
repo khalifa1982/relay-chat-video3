@@ -1332,40 +1332,48 @@ export async function markThreadRead(input: { conversationId: number; identityId
   // last visible message id — must match listMessages/listThreads' deletedAt
   // filter, or a soft-deleted message could become lastReadMessageId and get
   // skipped over forever (its content is gone, but its id still "counts").
-  const rows = await db
-    .select({ id: messages.id })
-    .from(messages)
-    .where(and(eq(messages.conversationId, input.conversationId), isNull(messages.deletedAt)))
-    .orderBy(desc(messages.id))
-    .limit(1);
-  const lastId = rows[0]?.id ?? null;
-  await db
-    .update(conversationParticipants)
-    .set({ unreadCount: 0, lastReadMessageId: lastId })
-    .where(
-      and(
-        eq(conversationParticipants.conversationId, input.conversationId),
-        eq(conversationParticipants.identityId, input.identityId)
-      )
-    );
-  // Mark the peer's messages as read — but only those at or before the message
-  // id we actually observed (lastId). Without the `id <= lastId` bound, a
-  // message inserted between the SELECT above and this UPDATE would be flipped
-  // to "read" before the reader ever saw it, giving the sender a false receipt.
-  if (lastId != null) {
-    await db
-      .update(messages)
-      .set({ status: "read" })
+  // Read the last-visible id and apply BOTH updates atomically, so a partial
+  // failure can't leave the participant's unreadCount reset to 0 without the
+  // matching read-receipt flip (or vice versa). Mirrors the sendMessage txn.
+  await db.transaction(async (tx) => {
+    // last visible message id — must match listMessages/listThreads' deletedAt
+    // filter, or a soft-deleted message could become lastReadMessageId and get
+    // skipped over forever (its content is gone, but its id still "counts").
+    const rows = await tx
+      .select({ id: messages.id })
+      .from(messages)
+      .where(and(eq(messages.conversationId, input.conversationId), isNull(messages.deletedAt)))
+      .orderBy(desc(messages.id))
+      .limit(1);
+    const lastId = rows[0]?.id ?? null;
+    await tx
+      .update(conversationParticipants)
+      .set({ unreadCount: 0, lastReadMessageId: lastId })
       .where(
         and(
-          eq(messages.conversationId, input.conversationId),
-          lte(messages.id, lastId),
-          sql`${messages.senderIdentityId} <> ${input.identityId}`,
-          isNull(messages.deletedAt),
-          or(eq(messages.status, "sent"), eq(messages.status, "delivered"))
+          eq(conversationParticipants.conversationId, input.conversationId),
+          eq(conversationParticipants.identityId, input.identityId)
         )
       );
-  }
+    // Mark the peer's messages as read — but only those at or before the message
+    // id we actually observed (lastId). Without the `id <= lastId` bound, a
+    // message inserted between the SELECT above and this UPDATE would be flipped
+    // to "read" before the reader ever saw it, giving the sender a false receipt.
+    if (lastId != null) {
+      await tx
+        .update(messages)
+        .set({ status: "read" })
+        .where(
+          and(
+            eq(messages.conversationId, input.conversationId),
+            lte(messages.id, lastId),
+            sql`${messages.senderIdentityId} <> ${input.identityId}`,
+            isNull(messages.deletedAt),
+            or(eq(messages.status, "sent"), eq(messages.status, "delivered"))
+          )
+        );
+    }
+  });
 }
 
 /* ── attachments ──────────────────────────────────────────────── */

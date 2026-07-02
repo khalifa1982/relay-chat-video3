@@ -48,6 +48,31 @@ describe("Android incoming-audio fixes", () => {
   });
 });
 
+describe("v2.66 communication reliability (verified)", () => {
+  it("in-call chat frames carry an id and duplicates are dropped on reconnect/redelivery", () => {
+    expect(CLIENT).toMatch(/const seenChatIds = new Set<string>\(\);/);
+    expect(CLIENT).toMatch(/function markChatSeen\(id: string\): boolean/);
+    // both receive paths funnel through the dedup guard
+    expect(CLIENT).toMatch(/dc\.onmessage = e => receiveChatFrame\(e\.data as string\)/);
+    expect(CLIENT).toMatch(/receiveChatFrame\(new TextDecoder\(\)\.decode\(payload\)\)/);
+  });
+
+  it("sendChat warns when a message reached no peers (delivery feedback)", () => {
+    // broadcastChat returns a delivered count; sendChat toasts on 0-with-peers.
+    expect(CLIENT).toMatch(/function broadcastChat\(text: string, id: string\): number/);
+    expect(CLIENT).toMatch(/if \(delivered === 0 && Object\.keys\(peers\)\.length > 0\)/);
+  });
+
+  it("audio routing is re-applied on a voice→video upgrade (survives setCam)", () => {
+    expect(CLIENT).toMatch(/function reapplyAudioRouting\(\)/);
+    expect(CLIENT).toMatch(/syncLivekitVideoPublication\(camOn\)\.then\(\(\) => \{ if \(camOn\) reapplyAudioRouting\(\); \}\)/);
+  });
+
+  it("accepting a call arms the audio unlock on the tap gesture", () => {
+    expect(CLIENT).toMatch(/armAudioUnlock\(\);\n    inCall = true; roomId = r\.roomId; enterCallUI\("In call"\);/);
+  });
+});
+
 describe("camera QA fixes (verified)", () => {
   it("flip device selection normalizes an empty deviceId (iOS) and requires both ids", () => {
     expect(CLIENT).toMatch(/getSettings\?\.\(\)\.deviceId \|\| ""/);

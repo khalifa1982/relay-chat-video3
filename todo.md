@@ -2180,3 +2180,52 @@ broad "anything else Android-specific" sweep) were refuted on independent re-rea
       pattern for this huge imperative, not-booted-in-tests engine file) confirming `stopRingtone()` drains
       `ringtoneNodes` and that `fire()` registers + self-prunes them. 529 tests green (1 pre-existing skip),
       tsc + build clean. Footer → `v2.65.1`.
+
+## v2.66.0 — Communication reliability sweep (voice/video/text/messaging/backend) (delivered 2026-07-02)
+
+User asked to "improve the entire app to the maximum — communication-wise, everything." Ran a 6-area
+audit workflow (voice, video, in-call text, messaging, backend, design) with an adversarial QA-verify
+pass on every finding. This commit ships the verified communication/reliability fixes; the glassy design
+reshape ships separately as v2.67.0.
+
+- [x] **In-call chat dedup + ordering (`relayClient.ts`).** Data-channel/SFU chat frames now carry a unique
+      `id`; both receive paths (mesh `dc.onmessage` and SFU `RoomEvent.DataReceived`) funnel through a single
+      `receiveChatFrame` that drops any id already rendered (`seenChatIds`, bounded to 500). Fixes the same
+      message appearing twice after an ICE restart / data-channel re-open, and ignores an SFU self-echo
+      (our own sent ids are pre-seeded).
+- [x] **In-call chat delivery feedback (`relayClient.ts`).** `broadcastChat` now returns the number of peers
+      it actually handed the frame to (mesh: open data channels; SFU: 1 on successful publish, 0 on throw).
+      `sendChat` toasts "Message not delivered — check your connection." when there ARE peers in the call but
+      the frame reached none of them, instead of silently rendering locally and dropping it on the wire.
+- [x] **Audio routing survives a voice→video upgrade (`relayClient.ts`).** `setCam(true)` re-applies the
+      active output (`reapplyAudioRouting` = `applyAudioSink` + `refreshLoudspeakerRouting`, both idempotent/
+      guarded) after the SFU republishes tracks — previously, upgrading a voice call to video could recreate
+      the remote audio elements and silently drop a chosen sink or Android's forced loudspeaker back to the
+      earpiece mid-call.
+- [x] **Incoming-call audio primed on the accept gesture (`relayClient.ts`).** `acceptInvite` arms the audio
+      unlock during the Accept tap (a real user gesture), so the remote voice stream — which arrives a second
+      or two later, outside any gesture and thus gated by Android's autoplay policy — plays on the user's next
+      touch instead of staying silent until a failed `play()` happens to re-arm it.
+- [x] **Read-receipt update is now atomic (`server/v2db.ts`).** `markThreadRead`'s last-id SELECT + the
+      unread-reset UPDATE + the read-receipt flip run inside one `db.transaction`, so a partial failure can't
+      leave `unreadCount` reset to 0 without the matching receipt (or vice versa). The correctness-critical
+      `id <= lastId` bound (no false receipts for messages that arrive mid-operation) was already present and
+      is preserved.
+- [x] **SSE bus won't write to a dead socket (`server/v2events.ts`).** `writeEvent` now checks
+      `res.destroyed || res.writableEnded` before writing, closing the race window where the underlying socket
+      died but the `close`/`aborted` cleanup hadn't yet flipped `client.closed` — a stale presence/message
+      push could otherwise buffer against a dead response.
+- [x] **Optimistic unsend with rollback (`client/src/pages/app/Messages.tsx`).** `remove` gains an `onMutate`
+      that snapshots and optimistically filters the message out of the `messages.list` cache, an `onError` that
+      restores it (with a toast) if the server rejects, and `onSettled` invalidation — so an unsent message
+      vanishes instantly instead of lingering until the 2s poll, and a failed unsend doesn't hide a message
+      that still exists.
+- [x] **Investigated + intentionally NOT changed:** a CRITICAL-flagged shared-browser identity-hijack claim
+      in `server/relay.ts` was a false positive (the cited mechanism — `setPin` not emitted — is wrong;
+      `setPin` is unconditional at 767, the `identitySwitch` guard is the prior hardening, and the client always
+      registers with its resolved pin). Deferred to live 2-identity testing rather than risk the load-bearing
+      reconnect-keeps-your-number flow. Also deferred: a mediaPipeline "color filters skip downscale" perf idea
+      (a real tradeoff, not a clear win — would change output resolution mid-call on a filter switch and touches
+      the test-pinned render hot path; needs on-device measurement).
+- [x] 5 new static source-pinning tests (`androidAudioCamera.test.ts`) for the chat dedup/delivery + audio
+      re-apply + accept-prime. 533 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.66.0`.

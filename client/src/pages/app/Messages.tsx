@@ -275,7 +275,24 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     },
   });
   const removeMutation = trpc.messages.remove.useMutation({
-    onSuccess: () => {
+    // Optimistically drop the message from the visible list the instant the user
+    // unsends, so it doesn't linger (or reappear on the next 2s poll) while the
+    // server round-trips. Snapshot + restore on failure so a failed unsend
+    // doesn't silently vanish the message from the UI while it still exists.
+    onMutate: async ({ messageId }) => {
+      const input = { conversationId, limit: 100 } as const;
+      await utils.messages.list.cancel(input);
+      const prev = utils.messages.list.getData(input);
+      utils.messages.list.setData(input, (old) =>
+        old ? old.filter((m) => m.id !== messageId) : old
+      );
+      return { prev, input };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.prev) utils.messages.list.setData(context.input, context.prev);
+      toast.error("Couldn't unsend that message — restored it.");
+    },
+    onSettled: () => {
       utils.messages.list.invalidate({ conversationId });
       utils.messages.threads.invalidate();
     },
