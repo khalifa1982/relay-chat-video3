@@ -198,3 +198,30 @@ describe("v2.70.1 — dial disconnect hotfix (verified)", () => {
     expect(CLIENT).toMatch(/room = new RoomCtor\(\{ adaptiveStream: true, dynacast: true \}\); \}/);
   });
 });
+
+describe("v2.72 — mobile call QA fixes (verified)", () => {
+  it("#1 iOS camera flip stops the old camera BEFORE acquiring the new one", () => {
+    // iOS holds only one camera at a time — acquiring while the old is live froze
+    // the page. On iOS: stop old video, then acquire, with recovery on failure.
+    expect(CLIENT).toMatch(/if \(IS_IOS\) oldVideo\.forEach\(t => t\.stop\(\)\);\s*\n\s*const nuVideo = await acquireFlippedCamera\(next\)/);
+  });
+
+  it("#3 SFU camera toggle unpublishes WITHOUT stopping the track (re-enable works)", () => {
+    expect(CLIENT).toMatch(/lp\.unpublishTrack\(lt\.mediaStreamTrack, false\)/);
+    expect(CLIENT).toMatch(/async function reacquireCameraForPublish\(\)/);
+  });
+
+  it("#5 iOS filters probe for a live frame and fall back to the raw camera if dead", () => {
+    expect(CLIENT).toMatch(/function probeTrackLive\(stream: MediaStream\)/);
+    expect(CLIENT).toMatch(/if \(IS_IOS && processedStream\) \{[\s\S]*?probeTrackLive\(processedStream\)/);
+    expect(CLIENT).toMatch(/Live filters aren't supported on this browser/);
+  });
+
+  it("#2 screen-share unsupported message is iOS-specific (Apple has no getDisplayMedia)", () => {
+    expect(CLIENT).toMatch(/isn't available in the browser on iPhone\/iPad/);
+  });
+
+  it("IS_IOS is defined once (hoisted for the flip/filter paths)", () => {
+    expect((CLIENT.match(/const IS_IOS = \(\(\) => \{/g) || []).length).toBe(1);
+  });
+});

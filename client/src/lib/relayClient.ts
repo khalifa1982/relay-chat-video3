@@ -772,6 +772,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // the source elements ONLY after the context is confirmed `running`, so the
   // worst case is "no change" (earpiece) — NEVER silence. Fully reversible.
   const IS_ANDROID = (() => { try { return /Android/i.test(navigator.userAgent || ""); } catch { return false; } })();
+  // iOS/iPadOS detection, hoisted here so the camera-flip + filter paths (defined
+  // above the SFU/PiP code) can special-case iOS media quirks.
+  const IS_IOS = (() => {
+    try {
+      const ua = navigator.userAgent || "";
+      return /iP(hone|od|ad)/.test(ua)
+        || (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1); // iPadOS poses as Mac
+    } catch { return false; }
+  })();
   let loudspeakerCtx: AudioContext | null = null;
   let loudspeakerOn = false;
   let loudspeakerScanT: ReturnType<typeof setInterval> | null = null;
@@ -1088,15 +1097,37 @@ export function startRelay(root: HTMLElement): RelayHandle {
     flipBusy = true;
     try {
       const next: "user" | "environment" = facingMode === "user" ? "environment" : "user";
+      const audioTracks = localStream.getAudioTracks();
+      const oldVideo = localStream.getVideoTracks();
+      // iOS Safari can hold only ONE camera capture at a time — calling
+      // getUserMedia for the new camera while the old one is STILL LIVE hangs /
+      // freezes the whole page (works fine on Android, which allows the brief
+      // overlap). So on iOS we STOP the old video first, then acquire; if that
+      // acquisition then fails we recover by re-grabbing the original camera.
+      if (IS_IOS) oldVideo.forEach(t => t.stop());
       const nuVideo = await acquireFlippedCamera(next);
       if (!nuVideo || nuVideo.getVideoTracks().length === 0) {
         toast("Couldn't switch camera — this device may only have one.", true);
+        if (IS_IOS) {
+          // We already stopped the old camera — bring the original facing back so
+          // the user isn't left with a dead tile.
+          const recover = await acquireFlippedCamera(facingMode);
+          const rv = recover?.getVideoTracks()[0];
+          if (rv) {
+            localStream = new MediaStream([...audioTracks, rv]);
+            if (pipeline) { await pipeline.setInputStream(localStream); }
+            else { await replaceVideoEverywhere(rv); }
+            syncCamEnabled();
+            const sv = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
+            if (sv) { sv.srcObject = null; sv.srcObject = processedStream || localStream; void sv.play().catch(() => {}); }
+          }
+        }
         return;
       }
       facingMode = next;
-      // Carry the SAME audio track across the flip; stop only the old VIDEO.
-      const audioTracks = localStream.getAudioTracks();
-      localStream.getVideoTracks().forEach(t => t.stop());
+      // Carry the SAME audio track across the flip; stop the old VIDEO (already
+      // stopped above on iOS — stop() is idempotent, so this is a no-op there).
+      oldVideo.forEach(t => t.stop());
       // New combined stream = existing audio + the fresh camera video. The audio
       // track object is unchanged, so toggleMic and every peer/SFU audio sender
       // keep pointing at the right track.
@@ -1198,7 +1229,50 @@ export function startRelay(root: HTMLElement): RelayHandle {
       await replaceVideoEverywhere(procTrack);
       const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
       if (selfV) selfV.srcObject = processedStream;
+      // iOS Safari's canvas.captureStream() is unreliable — it frequently yields
+      // a track that produces NO frames (the filter ships a frozen/black tile),
+      // and the MediaPipe WASM can fail to init. Verify the processed track is
+      // actually LIVE on iOS; if not, silently fall back to the raw camera so the
+      // call keeps working instead of freezing. (Android/desktop are fine.)
+      if (IS_IOS && processedStream) {
+        const live = await probeTrackLive(processedStream);
+        if (!live) {
+          activeFilter = "none";
+          const rawTrack = localStream.getVideoTracks()[0] || null;
+          const dying = pipeline;
+          pipeline = null;
+          processedStream = null;
+          await replaceVideoEverywhere(rawTrack);
+          const sv = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
+          if (sv) sv.srcObject = localStream;
+          await new Promise(r => setTimeout(r, 0));
+          try { dying?.dispose(); } catch { /* */ }
+          updateFilterStripUI();
+          toast("Live filters aren't supported on this browser — using your camera.", true);
+        }
+      }
     }
+  }
+  /** Resolves true if the stream's video track actually produces a frame within
+   *  ~1s (its <video> gets non-zero dimensions). Used to detect iOS's dead
+   *  canvas.captureStream so we can fall back instead of shipping a black tile. */
+  function probeTrackLive(stream: MediaStream): Promise<boolean> {
+    return new Promise((resolve) => {
+      const track = stream.getVideoTracks()[0];
+      if (!track || track.readyState === "ended") { resolve(false); return; }
+      const v = document.createElement("video");
+      v.muted = true; v.playsInline = true; v.srcObject = stream;
+      let done = false;
+      const finish = (ok: boolean) => {
+        if (done) return; done = true;
+        clearTimeout(to);
+        try { v.srcObject = null; } catch { /* */ }
+        resolve(ok);
+      };
+      const to = setTimeout(() => finish((v.videoWidth || 0) > 0), 1000);
+      v.onloadeddata = () => { if ((v.videoWidth || 0) > 0) finish(true); };
+      void v.play().catch(() => {});
+    });
   }
   function updateFilterStripUI() {
     const strip = $("filterStrip");
@@ -3254,13 +3328,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // iOS we PiP a REAL remote MediaStream (the single active speaker) instead of
   // the 2-up canvas composite. iPhone also drives PiP through the older WebKit
   // presentation-mode API rather than the standard requestPictureInPicture().
-  const IS_IOS = (() => {
-    try {
-      const ua = navigator.userAgent || "";
-      return /iP(hone|od|ad)/.test(ua)
-        || (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1); // iPadOS poses as Mac
-    } catch { return false; }
-  })();
+  // (IS_IOS is defined once near IS_ANDROID so the camera-flip/filter paths can use it.)
   type WebkitVideo = HTMLVideoElement & {
     webkitSupportsPresentationMode?: (m: string) => boolean;
     webkitSetPresentationMode?: (m: string) => void;
@@ -3702,6 +3770,23 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // subscriber's bandwidth) unless we explicitly unpublish it. No-op on the mesh
   // (which only ever has `enabled` toggling — no separate publish step) and
   // while screen-sharing (that publication is owned by toggleScreenShare).
+  // Defensive: if the local camera track has genuinely died, grab a fresh one and
+  // swap it into localStream (+ the filter pipeline) so we can publish a LIVE
+  // track. Returns the track to publish (processed when a filter is on), or null.
+  async function reacquireCameraForPublish(): Promise<MediaStreamTrack | null> {
+    if (!localStream) return null;
+    try {
+      const fresh = await acquireFlippedCamera(facingMode);
+      const v = fresh?.getVideoTracks()[0];
+      if (!v) return null;
+      const audio = localStream.getAudioTracks();
+      localStream = new MediaStream([...audio, v]);
+      if (pipeline) { await pipeline.setInputStream(localStream); return pipeline.getOutputStream()?.getVideoTracks()[0] || v; }
+      const sv = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
+      if (sv) { sv.srcObject = null; sv.srcObject = localStream; void sv.play().catch(() => {}); }
+      return v;
+    } catch { return null; }
+  }
   async function syncLivekitVideoPublication(enabled: boolean) {
     if (!lkRoom || screenSharing) return;
     try {
@@ -3712,11 +3797,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const videoPubs = pubs.filter((pub: any) => pub?.kind === "video" || pub?.track?.kind === "video");
       if (enabled && videoPubs.length === 0) {
         const track = currentCameraVideoTrack();
-        if (track) await lp.publishTrack(track);
+        // Re-acquire if the camera track died (e.g. an OS/policy stop), so we
+        // never republish a dead track = a permanently black tile.
+        const live = track && track.readyState !== "ended" ? track : await reacquireCameraForPublish();
+        if (live) await lp.publishTrack(live);
       } else if (!enabled && videoPubs.length > 0) {
         for (const pub of videoPubs) {
           const lt = pub?.track;
-          if (lt?.mediaStreamTrack) { try { await lp.unpublishTrack(lt.mediaStreamTrack); } catch { /* */ } }
+          // stopOnUnpublish = FALSE: LiveKit stops the track by default, which
+          // left the camera DEAD so re-enabling republished a black track ("can't
+          // turn the camera back on"). Keep it alive so re-enable just republishes.
+          if (lt?.mediaStreamTrack) { try { await lp.unpublishTrack(lt.mediaStreamTrack, false); } catch { /* */ } }
         }
       }
     } catch { /* best-effort — mute/unmute (track.enabled) below already happened */ }
@@ -3765,7 +3856,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const md = navigator.mediaDevices as MediaDevices & {
       getDisplayMedia?: (c?: MediaStreamConstraints) => Promise<MediaStream>;
     };
-    if (!md.getDisplayMedia) { toast("Screen sharing isn't supported on this device.", true); return; }
+    if (!md.getDisplayMedia) {
+      // iOS Safari does NOT implement getDisplayMedia at all (Apple exposes no
+      // screen-capture API to web pages) — so it's genuinely impossible on iPhone/
+      // iPad, not a bug we can fix. On Android, screen share works in Chrome; a
+      // browser without the API (some Android Firefox/Samsung builds) lands here too.
+      toast(
+        IS_IOS
+          ? "Screen sharing isn't available in the browser on iPhone/iPad (Apple doesn't allow it). Use a desktop or Android Chrome."
+          : "Screen sharing isn't supported in this browser. Try Chrome.",
+        true,
+      );
+      return;
+    }
     // Mesh path can only hot-swap into an EXISTING video sender (no
     // renegotiation). An audio-only call (no camera) has none, so screen share
     // would silently reach no one — block it with a clear message. The SFU path

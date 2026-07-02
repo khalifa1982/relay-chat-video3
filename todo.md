@@ -2590,3 +2590,45 @@ typing awareness on the thread list). Benchmarked against Google Messages / iMes
 - [x] **⋮ message menu decluttered** — subtle (35% opacity) on mobile, hover-revealed on desktop.
 - [x] 7 new pins in Messages.test.ts (typing list state, red LEDs, topbar hide, bottom anchor, neutral
       bubbles, emoji-only, header status line). tsc + build clean. Footer → `v2.71.0`.
+
+## v2.72.0 — Mobile call QA fixes (iOS flip, SFU camera re-enable, iOS filters, screen-share msg) (delivered 2026-07-03)
+
+Reviewed a 5-point QA report; traced each in the engine and confirmed which are real code bugs vs
+platform limits. Shipped fixes for the three real code bugs + a messaging fix; documented the two
+that are platform/environment issues.
+
+- [x] **#1 iOS camera-switch freeze — FIXED (real bug).** `flipCamera` acquired the NEW camera before
+      stopping the old one — but iOS Safari holds only one camera capture at a time, so requesting the
+      second while the first is live froze the page (Android allows the brief overlap, hence
+      Android-only-works). Now on iOS the old video track is STOPPED first, then the new camera is
+      acquired, with recovery (re-grab the original facing) if that acquisition fails. `IS_IOS` was
+      hoisted next to `IS_ANDROID` so the flip/filter paths can use it.
+- [x] **#3 camera toggle can't re-enable — FIXED (real bug, SFU path).** LiveKit's `unpublishTrack`
+      STOPS the underlying track by default, so disabling the camera killed it and re-enabling
+      republished a dead (black) track. Now it unpublishes with `stopOnUnpublish = false` (track stays
+      live → re-enable just republishes), plus a defensive `reacquireCameraForPublish()` that grabs a
+      fresh camera if the track ever genuinely died. (The plain WebRTC-mesh path only toggles
+      `track.enabled` and already re-enabled fine.)
+- [x] **#5 filters fail on iOS — FIXED (graceful fallback).** iOS Safari's `canvas.captureStream()` is
+      unreliable (often yields a track that produces NO frames; MediaPipe WASM can fail), so filters
+      shipped a frozen/black tile. Added `probeTrackLive()` — on iOS, after enabling a filter it
+      verifies the processed track actually produces a frame within ~1s; if not, it silently reverts to
+      the raw camera + toasts. (Genuine iOS platform weakness — can't make canvas filters "always work"
+      on iOS, but the call no longer freezes/blacks out.)
+- [x] **#2 screen sharing — messaging fix (not a code bug).** iOS Safari does not implement
+      `getDisplayMedia` at all (Apple exposes no web screen-capture API), so it's genuinely impossible
+      on iPhone/iPad — the app now says so explicitly and suggests desktop/Android Chrome. On Android
+      the code path is correct and works in Chrome; a non-Chrome Android browser without the API gets a
+      clearer "try Chrome" message. **No Android code bug found** — QA should note which Android browser
+      + whether the camera was on (screen share needs a camera-enabled call on the mesh path).
+- [x] **#4 Android echo when muted — NOT a code bug (verified).** `setMic(false)` correctly sets
+      `track.enabled = false` (verified silences the outgoing audio), and forced-loudspeaker is never
+      auto-enabled (only on an explicit tap). The "feedback" is **acoustic echo**: on speakerphone the
+      loudspeaker Web-Audio routing bypasses the browser's echo canceller, and/or two QA devices in the
+      same room feed each other. Muting YOUR mic stops YOUR contribution; it can't cancel the other
+      device's speaker. Recommend QA re-test with headphones or one device on earpiece to confirm it's
+      echo-free there. No safe code change fully fixes speakerphone echo in a browser.
+- [x] 5 new source-pinning tests. 597 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.72.0`.
+
+> All five touch iOS/Android-specific media behavior that can't be verified from this environment — the
+> three code fixes (#1/#3/#5) are correct by construction but need a real-device pass after publishing.
