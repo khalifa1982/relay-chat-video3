@@ -2394,3 +2394,63 @@ Two confirmed call-reliability bugs from a cross-platform report.
 > tab's media unless PiP is actually engaged); (b) the **cross-browser call-bar audit** and the
 > **WhatsApp-grade redesign of Messages / History / Contacts** — substantial UX work best done against a
 > live preview. Tracked as tasks #38/#39 and a future design pass.
+
+## v2.69.0 — Background call-media keep-alive + cross-browser call bar + Messages reliability (delivered 2026-07-02)
+
+Second-pass multi-agent investigation (3 parallel deep-dives → adversarial verification → synthesis)
+of the two open items from v2.68.1: Android background media drop, and the cross-browser call bar +
+Messages/History/Contacts UX. Ships the findings that are correct + safe from static reasoning; the
+genuinely device-dependent ones are documented as needing on-device validation (see end).
+
+### Background call-media keep-alive (relayClient.ts, index.html) — static-safe
+- [x] **Forced-loudspeaker AudioContext auto-resumes.** The Android forced-loudspeaker path mutes the
+      source elements and carries audio through a Web Audio context — which the OS can suspend when the
+      tab is backgrounded, silencing ALL incoming audio with no recovery. Added `loudspeakerCtx.onstatechange`
+      that resumes it whenever it flips to `suspended` while loudspeaker is on, plus a resume on the
+      foreground-return branch of `onVisibilityChange`. This is the most impactful background-audio fix.
+- [x] **OS media session** (`navigator.mediaSession`). `markEstablished()` now registers the call with the
+      OS media session (metadata + `playbackState:"playing"` + action handlers for hangup / toggle mic /
+      toggle camera, and no-op play/pause so an OS control can't pause our audio); `hangUp()` releases it.
+      This is one of the signals Android uses to keep a backgrounded tab's audio alive, and it surfaces
+      lock-screen / notification-shade controls. Feature-detected + fully additive.
+- [x] **Filtered outgoing video no longer freezes when backgrounded.** With a filter on, the published
+      track is a `canvas.captureStream` driven by `requestAnimationFrame`, which the browser pauses in the
+      background — so peers saw a frozen frame. `bgSwapVideo()` swaps the published track to the RAW camera
+      (not rAF-gated) on background and back to the filtered track on foreground, via the existing
+      `replaceVideoEverywhere` (replaceTrack, never a full-stream replace), skipped while screen-sharing and
+      re-entrancy-guarded.
+- [x] **`pagehide` rejoin snapshot.** Added a `pagehide` listener (removed in teardown) mirroring the
+      `beforeunload` snapshot — `pagehide` is the mobile-reliable transition Safari/Chrome fire when a tab is
+      backgrounded into the page cache, so the auto-rejoin snapshot is written on mobile too.
+- [x] **`viewport-fit=cover`** added to the viewport meta so `env(safe-area-inset-*)` actually resolves —
+      the control bar's and AppShell nav's safe-area padding were previously dead code.
+
+### Cross-browser in-call control bar (relayAssets.ts) — static-safe
+- [x] `flex-wrap` moved onto the BASE `.ctrl-bar` rule so the bar can never clip end buttons at any width
+      (it only wrapped below 680px, clipping between 681px and desktop).
+- [x] `@supports not (backdrop-filter)` opaque fallback + a `prefers-reduced-transparency` path for the
+      control bar and filter dock (legibility on older Firefox / reduced-transparency), mirroring index.css.
+- [x] Mobile blur cap (`@media (max-width:768px)` → 10px) for both surfaces, matching the design system's
+      Android-GPU tier.
+- [x] Safe-area bottom padding moved onto the base `.controls` rule (applies at all widths now that
+      viewport-fit is set); 44px touch targets bumped to a comfortable 48px on the narrowest phones.
+
+### Messages reliability (Messages.tsx, History.tsx, useRealtime.ts) — static-safe
+- [x] **A failed send is never silently lost.** `send()` clears the composer immediately (snappy) but on
+      failure restores the text + reply + pending attachment and toasts, so the user can just tap send again.
+- [x] **Dead message-notification fixed.** Clicking a new-message notification routed to `/app/messages/<id>`
+      (a 404); now `/app/messages?c=<id>`, the query form the app actually reads.
+- [x] **Read receipts gated** on the tab being visible AND the reader near the bottom (not backgrounded or
+      scrolled up in history), with a re-fire on foreground return — no more false "read".
+- [x] **Auto-scroll no longer yanks** the reader to the bottom while they read history — it only jumps when
+      already near the bottom or when the thread changes.
+- [x] **Attachment-only thread previews** show a kind label (📷 Photo / 🎬 Video / 🎤 Voice message / 📎 File)
+      instead of a bare dash (shared `previewOf` helper, de-duplicated from MessagePopups).
+- [x] **Error + retry states** for the Messages thread list and History (were blank-forever on query failure).
+- [x] 13 new source-pinning tests. 576 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.69.0`.
+
+> NEEDS ON-DEVICE VALIDATION (not shippable blind — deliberately deferred): whether LiveKit
+> `adaptiveStream:true` pauses a backgrounded subscriber's inbound video; whether PiP-open actually keeps
+> getUserMedia/media alive on Android (auto-enter has no background user-activation); and the larger
+> Messages/History/Contacts rebuilds (load-earlier pagination past 100, History date-headers/search/avatars,
+> Contacts A–Z index) that want a live preview. Tracked for a device-testing pass.

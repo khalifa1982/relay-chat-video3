@@ -85,6 +85,7 @@ export default function HistoryPage() {
   }, [conferences.data, oneToOne.data]);
 
   const loading = conferences.isLoading || oneToOne.isLoading;
+  const errored = conferences.isError && oneToOne.isError;
   const redial = (num: string) => {
     if (num) engine.dial(num);
   };
@@ -107,7 +108,18 @@ export default function HistoryPage() {
 
       <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl glass-surface-md shadow-xl shadow-black/10">
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {loading ? (
+          {errored ? (
+            <div className="p-10 text-center text-sm text-muted-foreground">
+              <p>Couldn't load your call history.</p>
+              <button
+                type="button"
+                onClick={() => { void conferences.refetch(); void oneToOne.refetch(); }}
+                className="mt-3 inline-flex items-center rounded-lg border border-border px-3 py-1.5 text-foreground hover:bg-muted/50"
+              >
+                Retry
+              </button>
+            </div>
+          ) : loading ? (
             <div className="p-6 text-sm text-muted-foreground">Loading…</div>
           ) : items.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">

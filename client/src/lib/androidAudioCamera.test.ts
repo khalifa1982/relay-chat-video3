@@ -93,6 +93,33 @@ describe("v2.68 call-state + audio routing (verified)", () => {
   });
 });
 
+describe("v2.69 background call-media keep-alive (verified, static-safe)", () => {
+  it("registers an OS media session on connect and releases it on hang-up", () => {
+    expect(CLIENT).toMatch(/function updateMediaSession\(active: boolean\)/);
+    expect(CLIENT).toMatch(/updateMediaSession\(true\);/); // in markEstablished
+    expect(CLIENT).toMatch(/updateMediaSession\(false\);/); // in hangUp
+  });
+
+  it("auto-resumes the forced-loudspeaker AudioContext if the OS suspends it", () => {
+    // onstatechange resume (background) + resume on foreground return.
+    expect(CLIENT).toMatch(/loudspeakerCtx\.onstatechange = \(\) => \{[\s\S]*?loudspeakerCtx\.resume\(\)/);
+    expect(CLIENT).toMatch(/if \(loudspeakerOn\) \{ try \{ void loudspeakerCtx\?\.resume\(\); \}/);
+  });
+
+  it("swaps the published video from the rAF canvas to the raw camera when backgrounded", () => {
+    // The filtered canvas.captureStream track freezes in the background; publish
+    // the raw camera track while hidden, restore the filtered one on foreground.
+    expect(CLIENT).toMatch(/async function bgSwapVideo\(hidden: boolean\)/);
+    expect(CLIENT).toMatch(/void bgSwapVideo\(true\);/);
+    expect(CLIENT).toMatch(/void bgSwapVideo\(false\);/);
+  });
+
+  it("writes the rejoin snapshot on pagehide (mobile-reliable), not just beforeunload", () => {
+    expect(CLIENT).toMatch(/window\.addEventListener\("pagehide", onUnload\)/);
+    expect(CLIENT).toMatch(/window\.removeEventListener\("pagehide", onUnload\)/);
+  });
+});
+
 describe("camera QA fixes (verified)", () => {
   it("flip device selection normalizes an empty deviceId (iOS) and requires both ids", () => {
     expect(CLIENT).toMatch(/getSettings\?\.\(\)\.deviceId \|\| ""/);

@@ -36,6 +36,18 @@ describe("relay call UI regression guards", () => {
     expect(RELAY_CSS).toMatch(/\.ctrl-bar\{[^}]*flex-wrap:wrap/);
   });
 
+  // ── cross-browser call bar hardening (v2.69) ───────────────────────────────
+  it("control bar has a no-backdrop-filter fallback + reduced-transparency path", () => {
+    expect(RELAY_CSS).toMatch(/@supports not \(\(backdrop-filter:blur\(1px\)\)[\s\S]*?\.ctrl-bar\{background:/);
+    expect(RELAY_CSS).toMatch(/@media \(prefers-reduced-transparency:reduce\)[\s\S]*?\.ctrl-bar/);
+  });
+  it("control-bar blur is capped on mobile (Android GPU cost)", () => {
+    expect(RELAY_CSS).toMatch(/@media \(max-width:768px\)\{[\s\S]*?\.ctrl-bar[\s\S]*?backdrop-filter:blur\(10px\)/);
+  });
+  it("safe-area padding lives on the base .controls rule (so viewport-fit engages it everywhere)", () => {
+    expect(RELAY_CSS).toMatch(/\.controls\{[^}]*padding:18px 16px max\(22px,env\(safe-area-inset-bottom\)\)/);
+  });
+
   // ── active-speaker / spotlight view (v2.35) ────────────────────────────────
   it("video tiles are clickable (cursor:pointer) so users can spotlight them", () => {
     expect(RELAY_CSS).toMatch(/\.relay-tile\{[^}]*cursor:pointer/);
