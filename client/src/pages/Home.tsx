@@ -31,6 +31,22 @@ const IMG = {
   mobile: "/manus-storage/relay-v2-mobile_b0ee18b9.jpg",
 };
 
+/* Realistic webcam-style participant tiles for the "up to 10 people" group-call
+   showcase. AI-generated and cropped to clean 4:5 feeds. Purely illustrative of
+   RELAY's real 10-person room. */
+const PEOPLE = [
+  { src: "/manus-storage/p01_48b37f0c.jpg", name: "Maya", muted: false },
+  { src: "/manus-storage/p04_fc1bd253.jpg", name: "Arjun", muted: false },
+  { src: "/manus-storage/p09_fb2b3bc4.jpg", name: "Layla", muted: false },
+  { src: "/manus-storage/p02_25ef8366.jpg", name: "Tom", muted: true },
+  { src: "/manus-storage/p03_20c4e74c.jpg", name: "Hana", muted: true },
+  { src: "/manus-storage/p06_b6c856de.jpg", name: "Ruth", muted: false },
+  { src: "/manus-storage/p07_0bb4a935.jpg", name: "Leo", muted: true },
+  { src: "/manus-storage/p08_d54aaacd.jpg", name: "Marcus", muted: true },
+  { src: "/manus-storage/p05_a63e3fa7.jpg", name: "Sofia", muted: false },
+  { src: "/manus-storage/p10_6d299c17.jpg", name: "Ben", muted: true },
+];
+
 /* Languages that render right-to-left. */
 const RTL_LANGS: Lang[] = ["ar"];
 
@@ -329,62 +345,89 @@ function BgCanvas() {
 /*  spotlight ring. Purely decorative, but it truthfully depicts RELAY's real  */
 /*  10-person room capacity.                                                   */
 /* -------------------------------------------------------------------------- */
-const GRID_NAMES = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
-const GRID_HUES = [265, 210, 330, 150, 40, 290, 190, 20, 120, 250];
+/* A live "up to 10 people" video-conference scene using realistic participant
+   feeds. Only ONE person is the active speaker at any moment (rotating
+   spotlight ring + live badge + animated audio bars); everyone else sits idle
+   with a subtle drift so the room feels alive rather than frozen. Mic status
+   and name label overlay each tile, matching RELAY's real in-call screen. */
+function MicIcon({ muted }: { muted: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" aria-hidden="true">
+      <rect x="9" y="3" width="6" height="11" rx="3" fill="white" />
+      <path d="M6 11a6 6 0 0 0 12 0M12 17v3" stroke="white" strokeWidth="1.6" strokeLinecap="round" />
+      {muted && <path d="M4 3l16 18" stroke="white" strokeWidth="1.8" strokeLinecap="round" />}
+    </svg>
+  );
+}
 
 function ConferenceGrid({ label }: { label: string }) {
   const [speaker, setSpeaker] = useState(0);
   useEffect(() => {
     if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const id = setInterval(() => setSpeaker((s) => (s + 1) % 10), 1600);
+    const id = setInterval(() => setSpeaker((s) => (s + 1) % PEOPLE.length), 2200);
     return () => clearInterval(id);
   }, []);
   return (
-    <div className="relative rounded-3xl border border-black/5 bg-white shot-shadow p-3 sm:p-4 overflow-hidden">
-      <div
-        className="absolute -top-16 -right-16 w-52 h-52 rounded-full blur-3xl opacity-25 accent-shift"
-        style={{ backgroundColor: ACCENT }}
-        aria-hidden="true"
-      />
-      <div className="relative grid grid-cols-3 sm:grid-cols-5 gap-2 sm:gap-3">
-        {GRID_NAMES.map((n, i) => {
+    <div className="relative rounded-3xl border border-black/5 shot-shadow p-2.5 sm:p-3 overflow-hidden" style={{ background: "oklch(0.22 0.03 265)" }}>
+      {/* Call header strip — mimics the real in-call top bar */}
+      <div className="relative flex items-center justify-between px-2 pb-2.5 pt-1">
+        <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-white/90">
+          <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: "oklch(0.72 0.17 150)" }} />
+          {label}
+        </span>
+        <span className="text-[11px] font-semibold text-white/55 tabular-nums">{PEOPLE.length} / 10</span>
+      </div>
+      <div className="relative grid grid-cols-3 sm:grid-cols-5 gap-1.5 sm:gap-2">
+        {PEOPLE.map((p, i) => {
           const active = i === speaker;
-          const hue = GRID_HUES[i];
           return (
             <div
               key={i}
-              className="relative aspect-[4/5] rounded-xl overflow-hidden flex items-center justify-center conf-tile"
+              className={`relative aspect-[4/5] rounded-lg overflow-hidden conf-tile ${active ? "" : "conf-idle"}`}
               style={{
-                background: `linear-gradient(150deg, oklch(0.7 0.14 ${hue} / 0.22), oklch(0.6 0.2 ${hue} / 0.30))`,
-                outline: active ? `2.5px solid ${ACCENT}` : "1px solid oklch(0.55 0.1 265 / 0.12)",
+                outline: active ? `2.5px solid ${ACCENT}` : "1px solid oklch(1 0 0 / 0.08)",
                 outlineOffset: active ? "-2.5px" : "-1px",
-                transition: "outline-color .3s ease, transform .3s cubic-bezier(0.23,1,0.32,1)",
-                transform: active ? "scale(1.02)" : "scale(1)",
+                transform: active ? "scale(1.03)" : "scale(1)",
+                filter: active ? "none" : "saturate(0.9) brightness(0.86)",
+                zIndex: active ? 2 : 1,
                 animationDelay: `${i * 60}ms`,
               }}
             >
-              <div
-                className="w-9 h-9 sm:w-11 sm:h-11 rounded-full flex items-center justify-center text-white font-bold text-sm sm:text-base"
-                style={{ backgroundColor: `oklch(0.55 0.2 ${hue})` }}
-              >
-                {n}
-              </div>
-              {active && (
+              <img src={p.src} alt={p.name} loading="lazy" className="absolute inset-0 w-full h-full object-cover" />
+              {/* bottom gradient so labels stay legible + hides any source chrome */}
+              <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/75 via-black/25 to-transparent" />
+              {/* name + mic label */}
+              <div className="absolute bottom-1 left-1 right-1 flex items-center gap-1">
                 <span
-                  className="absolute bottom-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold text-white"
-                  style={{ backgroundColor: ACCENT }}
+                  className="flex items-center justify-center rounded-full flex-shrink-0 w-[15px] h-[15px]"
+                  style={{
+                    backgroundColor: p.muted ? "oklch(0.55 0.02 265 / 0.9)" : "oklch(0.6 0.2 150 / 0.95)",
+                  }}
                 >
-                  <span className="w-1 h-1 rounded-full bg-white animate-pulse" />
-                  live
+                  <MicIcon muted={p.muted} />
                 </span>
+                <span className="text-[9px] sm:text-[10px] font-bold text-white truncate drop-shadow">{p.name}</span>
+              </div>
+              {/* active-speaker: live badge + animated audio bars */}
+              {active && (
+                <>
+                  <span
+                    className="absolute top-1 left-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-bold text-white"
+                    style={{ backgroundColor: ACCENT }}
+                  >
+                    <span className="w-1 h-1 rounded-full bg-white animate-pulse" />
+                    live
+                  </span>
+                  <span className="absolute top-1.5 right-1.5 flex items-end gap-[2px] h-3" aria-hidden="true">
+                    <span className="conf-bar" style={{ animationDelay: "0ms" }} />
+                    <span className="conf-bar" style={{ animationDelay: "140ms" }} />
+                    <span className="conf-bar" style={{ animationDelay: "280ms" }} />
+                  </span>
+                </>
               )}
             </div>
           );
         })}
-      </div>
-      <div className="relative mt-3 flex items-center justify-center gap-2 text-xs font-bold" style={{ color: ACCENT }}>
-        <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: ACCENT }} />
-        {label}
       </div>
     </div>
   );
@@ -540,9 +583,14 @@ export default function Home() {
           .hero-fade{ opacity: clamp(0, calc(1 - var(--sy, 0) * 0.0016), 1); }
           .float-soft{ animation: float-soft 7s ease-in-out infinite; }
           @keyframes float-soft { 0%,100%{ transform: translateY(0) } 50%{ transform: translateY(-12px) } }
-          .conf-tile{ animation: tile-in .5s cubic-bezier(0.23,1,0.32,1) both; }
+          .conf-tile{ animation: tile-in .5s cubic-bezier(0.23,1,0.32,1) both; transition: outline-color .3s ease, transform .35s cubic-bezier(0.23,1,0.32,1), filter .35s ease; }
           @keyframes tile-in { from{ opacity:0; transform: translateY(10px) scale(0.95); } to{ opacity:1; transform:none; } }
+          .conf-idle{ animation: tile-in .5s cubic-bezier(0.23,1,0.32,1) both, conf-drift 6s ease-in-out infinite; }
+          @keyframes conf-drift { 0%,100%{ transform: translateY(0) scale(1) } 50%{ transform: translateY(-2px) scale(1) } }
         }
+        .conf-bar{ display:block; width:2px; height:40%; background:#fff; border-radius:2px; animation: conf-bar 0.7s ease-in-out infinite; }
+        @keyframes conf-bar { 0%,100%{ height:25% } 50%{ height:100% } }
+        @media (prefers-reduced-motion: reduce){ .conf-bar{ animation:none; height:60% } .conf-idle{ animation: tile-in .5s cubic-bezier(0.23,1,0.32,1) both } }
 
         @keyframes pulse-glow { 0%,100%{opacity:.2;transform:scale(1)} 50%{opacity:.4;transform:scale(1.06)} }
         .animate-pulse-glow{animation:pulse-glow 7s infinite ease-in-out}

@@ -2355,3 +2355,12 @@ existing self-hosted auth so it builds on `authLocal`/`authCrypto`/`email`/`ensu
 > DNS-verified Resend sending domain is configured** (`RESEND_FROM`) — without it, Resend test mode only
 > emails the account owner. The dev fallback (logged code) covers local/self-host testing only.
 > Also ensure a real `JWT_SECRET` is set in prod (it signs `relay_session`, now the only login).
+
+## Realistic 10-person conference grid (landing)
+- [ ] Inspect current conference-grid JSX/CSS in Home.tsx
+- [ ] Generate ~10 realistic diverse people images in video-call poses (talking / drinking water / listening / looking away) via Gemini image gen
+- [ ] Upload generated images via manus-upload-file --webdev
+- [ ] Rebuild grid: real photo tiles, name + mic-status labels, one rotating active-speaker spotlight (only one 'live' at a time, others idle/moving)
+- [ ] Match RELAY system screen look (labels, corner mic icon, live badge)
+- [ ] Landing-page only; do not touch backend
+- [ ] tsc clean + vitest pass + visual check EN/AR, checkpoint, guide Publish
