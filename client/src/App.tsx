@@ -6,6 +6,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import Docs from "./pages/Docs";
+import Technology from "./pages/Technology";
 import TurnTest from "./pages/TurnTest";
 import { AppShell } from "./app/AppShell";
 import { RelayEngineProvider } from "./app/RelayEngine";
@@ -65,6 +66,7 @@ function Router() {
         }}
       </Route>
       <Route path={"/docs"} component={Docs} />
+      <Route path={"/technology"} component={Technology} />
       <Route path={"/turn-test"} component={TurnTest} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
