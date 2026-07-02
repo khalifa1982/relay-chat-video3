@@ -30,7 +30,7 @@ const schemeFromBundleId = `manus${timestamp}`;
 // compares the server manifest's buildNumber against THIS value to decide
 // whether a newer APK is available. Bump this every time you publish a new APK
 // (and set the manifest's buildNumber to match the new release).
-const ANDROID_BUILD_NUMBER = 9;
+const ANDROID_BUILD_NUMBER = 12;
 
 const env = {
   // App branding - update these values directly (do not use env vars)
@@ -47,7 +47,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.9",
+  version: "1.0.12",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -91,6 +91,9 @@ const config: ExpoConfig = {
       "FOREGROUND_SERVICE_CAMERA",
       "FOREGROUND_SERVICE_MEDIA_PROJECTION",
       "WAKE_LOCK",
+      // Let a ringing incoming-call notification pop full-screen even when the
+      // app is minimized or the device is locked, so the caller is identified.
+      "USE_FULL_SCREEN_INTENT",
       // Audio output routing to Bluetooth headsets (earpiece/speaker/Bluetooth switch).
       "BLUETOOTH",
       "BLUETOOTH_CONNECT",

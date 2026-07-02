@@ -136,6 +136,12 @@ export function BuildStatusRow({
     outputRange: ["0%", "100%"],
   });
 
+  // A single, slim line. When idle/up-to-date we show only the compact version
+  // identity so the footer is as small as possible and the WebView gets the
+  // maximum area. During an update we surface the phase text instead.
+  const showPhaseText =
+    status !== "idle" || (status === "idle" && !upToDate);
+
   return (
     <View style={styles.container}>
       <View style={styles.row}>
@@ -147,24 +153,22 @@ export function BuildStatusRow({
             <Text style={styles.build} numberOfLines={1}>
               {betaLabel ?? "—"}
             </Text>
+            {installedBuild != null ? (
+              <Text style={styles.buildMeta} numberOfLines={1}>
+                {"·"} build {installedBuild}
+                {latestLabel != null && !upToDate ? `  ·  latest ${latestLabel}` : ""}
+              </Text>
+            ) : null}
           </View>
-          <Text style={styles.installed} numberOfLines={1}>
-            Installed: {installedLabel}
-            {latestLabel != null ? `  ·  latest ${latestLabel}` : ""}
-          </Text>
-          <Text
-            style={[
-              styles.status,
-              status === "idle" && upToDate ? styles.statusOk : null,
-              status === "error" ? styles.statusWarn : null,
-            ]}
-            numberOfLines={1}
-          >
-            {statusLabel}
-          </Text>
-          {reason && status === "idle" ? (
-            <Text style={styles.reason} numberOfLines={2}>
-              {reason}
+          {showPhaseText ? (
+            <Text
+              style={[
+                styles.status,
+                status === "error" ? styles.statusWarn : null,
+              ]}
+              numberOfLines={1}
+            >
+              {statusLabel}
             </Text>
           ) : null}
         </View>
@@ -204,8 +208,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 5,
   },
   left: {
     flexShrink: 1,
@@ -232,31 +236,21 @@ const styles = StyleSheet.create({
   },
   build: {
     color: COLORS.text,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "800",
   },
-  installed: {
+  buildMeta: {
     color: COLORS.sub,
-    fontSize: 11.5,
+    fontSize: 11,
     fontWeight: "600",
-    marginTop: 3,
   },
   status: {
     color: COLORS.sub,
-    fontSize: 12,
+    fontSize: 11.5,
     marginTop: 2,
-  },
-  statusOk: {
-    color: COLORS.ok,
   },
   statusWarn: {
     color: COLORS.warn,
-  },
-  reason: {
-    color: COLORS.sub,
-    fontSize: 11,
-    marginTop: 2,
-    opacity: 0.8,
   },
   track: {
     height: 4,

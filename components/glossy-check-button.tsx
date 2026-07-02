@@ -20,8 +20,8 @@ const AnimatedCircle = Animated.createAnimatedComponent(Circle);
  * percentage, and the glyph adapts to the current phase.
  */
 
-const SIZE = 52;
-const STROKE = 4;
+const SIZE = 44;
+const STROKE = 3.5;
 const RADIUS = (SIZE - STROKE) / 2;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 

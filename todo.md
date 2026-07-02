@@ -132,3 +132,12 @@
 ## Round 12 — Footer cleanup
 - [x] Remove the verbose "You're on the latest version (…; server …)." line; keep concise "Up to date" status
 - [x] tsc clean + 65 tests pass
+
+## Round 13 — Reshape: bigger browsing, compact footer, persistent cache, robust background
+- [x] Compact the bottom update/version footer into a slim bar; maximize WebView area
+- [x] Persist WebView cache/cookies/DOM storage/session across app restarts (sessionStorage→localStorage bridge)
+- [x] Ensure notifications stay enabled (calls + messages)
+- [x] Picture-in-picture keeps working when minimized during a call (expo-video PiP)
+- [x] Keep web session/call alive in background (foreground service + UIBackgroundModes audio/voip)
+- [x] Incoming-call notification identifies the caller while minimized (USE_FULL_SCREEN_INTENT + widened caller detection)
+- [x] tsc clean + 65 tests pass; bumped to 1.0.12 / build 12; checkpoint and deliver

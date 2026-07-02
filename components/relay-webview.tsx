@@ -236,9 +236,16 @@ export function RelayWebView() {
         allowsPictureInPictureMediaPlayback
         mediaPlaybackRequiresUserAction={false}
         allowsProtectedMedia
-        // --- Storage / cookies so the guest identity persists ---
+        // --- Storage / cookies / cache so the session survives app restarts ---
+        // domStorageEnabled: keep localStorage/IndexedDB (login token, drafts).
+        // cacheEnabled + LOAD_DEFAULT: use the on-disk HTTP cache across launches
+        // instead of re-fetching everything, so cold starts are faster and the
+        // web app doesn't lose cached assets when the app is closed.
         domStorageEnabled
         javaScriptEnabled
+        cacheEnabled
+        cacheMode="LOAD_DEFAULT"
+        incognito={false}
         sharedCookiesEnabled
         thirdPartyCookiesEnabled
         // --- UX ---

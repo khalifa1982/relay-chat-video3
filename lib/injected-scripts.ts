@@ -94,8 +94,28 @@ export const CALL_WATCH_JS = `(() => {
         // Don't treat an already-connected call as ringing.
         if (state.active) ringing = false;
         var caller = null;
-        var m = (document.body && document.body.innerText || '').match(/([\w .+-]{1,40})\s+is calling/i);
-        if (m) caller = m[1].trim();
+        // Prefer an explicit hook the web app can expose.
+        var nameEl = document.querySelector(
+          '[data-caller-name], [data-incoming-call] .caller-name, .incoming-call .caller-name, .call-incoming .caller'
+        );
+        if (nameEl) {
+          caller = (nameEl.getAttribute('data-caller-name') || nameEl.textContent || '').trim() || null;
+        }
+        if (!caller) {
+          var body = (document.body && document.body.innerText || '');
+          // Match several common phrasings: "X is calling", "Incoming call from X",
+          // "X wants to talk", "Call from X".
+          var patterns = [
+            /([\w .'+-]{1,40})\s+is calling/i,
+            /incoming (?:voice |video )?call from\s+([\w .'+-]{1,40})/i,
+            /call from\s+([\w .'+-]{1,40})/i,
+            /([\w .'+-]{1,40})\s+wants to (?:talk|call)/i,
+          ];
+          for (var pi = 0; pi < patterns.length; pi++) {
+            var mm = body.match(patterns[pi]);
+            if (mm && mm[1]) { caller = mm[1].trim(); break; }
+          }
+        }
         setRinging(ringing, caller);
       } catch (e) {}
     };
@@ -305,5 +325,64 @@ export const CALL_WATCH_JS = `(() => {
 })();
 true;`;
 
+/**
+ * SESSION_PERSIST_JS — keep the user signed in across full app restarts.
+ *
+ * Many web apps keep their auth token in `sessionStorage`, which the Android
+ * WebView clears when the app process is killed (so the user appears logged out
+ * every cold start even though cookies/localStorage persist). This bridge
+ * mirrors any sessionStorage entries into localStorage under a namespaced key
+ * and rehydrates sessionStorage from that mirror on the next launch — WITHOUT
+ * overwriting values the page has already set this session. It is a no-op for
+ * apps that already persist to localStorage.
+ */
+export const SESSION_PERSIST_JS = `(() => {
+  try {
+    if (window.__relaySessionPersist) return;
+    window.__relaySessionPersist = true;
+    var NS = '__relay_ss__';
+
+    var rehydrate = function () {
+      try {
+        var raw = localStorage.getItem(NS);
+        if (!raw) return;
+        var saved = JSON.parse(raw);
+        Object.keys(saved).forEach(function (k) {
+          // Do not clobber anything the page already put in this session.
+          if (sessionStorage.getItem(k) === null) {
+            try { sessionStorage.setItem(k, saved[k]); } catch (e) {}
+          }
+        });
+      } catch (e) {}
+    };
+
+    var snapshot = function () {
+      try {
+        var out = {};
+        for (var i = 0; i < sessionStorage.length; i++) {
+          var k = sessionStorage.key(i);
+          if (k === null) continue;
+          out[k] = sessionStorage.getItem(k);
+        }
+        localStorage.setItem(NS, JSON.stringify(out));
+      } catch (e) {}
+    };
+
+    // Restore first, then keep the mirror fresh.
+    rehydrate();
+    snapshot();
+    setInterval(snapshot, 5000);
+    document.addEventListener('visibilitychange', function () {
+      // Persist right before the app is likely backgrounded/killed.
+      if (document.visibilityState === 'hidden') snapshot();
+      else rehydrate();
+    });
+    window.addEventListener('pagehide', snapshot);
+    window.addEventListener('beforeunload', snapshot);
+  } catch (e) {}
+})();
+true;`;
+
 /** Combined script injected once on load. */
-export const INJECTED_JS = VERSION_WATCH_JS + "\n" + CALL_WATCH_JS;
+export const INJECTED_JS =
+  SESSION_PERSIST_JS + "\n" + VERSION_WATCH_JS + "\n" + CALL_WATCH_JS;
