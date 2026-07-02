@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
+import { previewOf } from "@/app/messagePreview";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { linkify } from "@/lib/linkify";
 import { useIdentity } from "@/app/useIdentity";
@@ -121,7 +122,18 @@ export default function MessagesPage() {
           <NewMessageDialog />
         </header>
         <div className="flex-1 overflow-y-auto">
-          {threads.isLoading ? (
+          {threads.isError ? (
+            <div className="p-10 text-center text-sm text-muted-foreground">
+              <p>Couldn't load your conversations.</p>
+              <button
+                type="button"
+                onClick={() => threads.refetch()}
+                className="mt-3 inline-flex items-center rounded-lg border border-border px-3 py-1.5 text-foreground hover:bg-muted/50"
+              >
+                Retry
+              </button>
+            </div>
+          ) : threads.isLoading ? (
             <div className="p-6 text-sm text-muted-foreground">Loading…</div>
           ) : (threads.data?.length ?? 0) === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
@@ -186,7 +198,7 @@ export default function MessagesPage() {
                         </div>
                         <div className="flex items-center justify-between gap-2 mt-0.5">
                           <div className="text-xs text-muted-foreground truncate">
-                            {t.lastMessageBody || "—"}
+                            {t.lastMessageAt ? previewOf(t.lastMessageKind ?? "text", t.lastMessageBody) : "No messages yet"}
                           </div>
                           {t.unreadCount > 0 && (
                             <span className="inline-flex min-w-5 h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-xs items-center justify-center font-bold shrink-0">
@@ -266,9 +278,30 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   });
   useEffect(() => {
     if (!conversationId) return;
+    // Only send a read receipt when the user is actually LOOKING at the thread:
+    // the tab is visible AND they're near the bottom (not scrolled up in history).
+    // Otherwise a backgrounded/scrolled-up tab gives the sender a false "read".
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+    const el = scrollRef.current;
+    const nearBottom = !el || el.scrollHeight - el.scrollTop - el.clientHeight <= 150;
+    if (!nearBottom) return;
     markReadMutation.mutate({ conversationId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, messagesQuery.data?.length]);
+  // Re-fire the read receipt when the thread is brought back to the foreground
+  // (was hidden while messages arrived), so it doesn't stay stuck "unread".
+  useEffect(() => {
+    if (!conversationId) return;
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      const el = scrollRef.current;
+      const nearBottom = !el || el.scrollHeight - el.scrollTop - el.clientHeight <= 150;
+      if (nearBottom) markReadMutation.mutate({ conversationId });
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
 
   const sendMutation = trpc.messages.send.useMutation({
     onSuccess: () => {
@@ -400,11 +433,20 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     setDebouncedSearch("");
   }
 
-  // scroll-to-bottom on new message
+  // scroll-to-bottom on new message — but DON'T yank the user down while they're
+  // reading history. Only auto-scroll when already near the bottom; always jump
+  // when the thread itself changes (opening a thread should land at the bottom).
   const scrollRef = useRef<HTMLDivElement>(null);
+  const prevConvoRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!scrollRef.current) return;
-    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const el = scrollRef.current;
+    if (!el) return;
+    const threadChanged = prevConvoRef.current !== conversationId;
+    prevConvoRef.current = conversationId;
+    const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (threadChanged || fromBottom <= 150) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [messagesQuery.data?.length, conversationId]);
 
   // "Scroll to bottom" floating button — shown once the user has scrolled UP
@@ -462,29 +504,41 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     void uploadFile(file);
   }
 
-  function send() {
+  async function send() {
     const body = text.trim();
     if (!body && !pendingUpload) return;
-    const kind = pendingUpload
-      ? pendingUpload.mimeType.startsWith("image/")
+    const upload = pendingUpload;
+    const reply = replyingTo;
+    const kind = upload
+      ? upload.mimeType.startsWith("image/")
         ? "image"
-        : pendingUpload.mimeType.startsWith("video/")
+        : upload.mimeType.startsWith("video/")
           ? "video"
-          : pendingUpload.mimeType.startsWith("audio/")
+          : upload.mimeType.startsWith("audio/")
             ? "audio"
             : "file"
       : "text";
-    sendMutation.mutate({
-      conversationId,
-      kind,
-      body: body || null,
-      attachmentId: pendingUpload?.id ?? null,
-      replyToId: replyingTo?.id ?? null,
-    });
+    // Clear the composer immediately (snappy), but if the send FAILS restore the
+    // text/reply/attachment so the message is never silently lost — the user can
+    // just tap send again. (Prevents the "I typed a message and it vanished" bug.)
     clearDraft();
     setReplyingToState(null);
     setPendingUpload(null);
     setEmojiOpen(false);
+    try {
+      await sendMutation.mutateAsync({
+        conversationId,
+        kind,
+        body: body || null,
+        attachmentId: upload?.id ?? null,
+        replyToId: reply?.id ?? null,
+      });
+    } catch {
+      setText(body);
+      if (reply) setReplyingToState(reply);
+      if (upload) setPendingUpload(upload);
+      toast.error("Message not sent — check your connection and tap send again.");
+    }
   }
 
   function insertEmoji(e: string) {

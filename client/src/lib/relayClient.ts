@@ -782,7 +782,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try {
       const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!Ctx) return false;
-      if (!loudspeakerCtx) loudspeakerCtx = new Ctx();
+      if (!loudspeakerCtx) {
+        loudspeakerCtx = new Ctx();
+        // The OS can suspend this context when the tab is backgrounded (Android),
+        // which — because the source <audio>/<video> elements are muted while the
+        // Web-Audio route carries the sound — would silence ALL incoming audio.
+        // Auto-resume the moment it flips to suspended while loudspeaker is on.
+        loudspeakerCtx.onstatechange = () => {
+          if (loudspeakerOn && loudspeakerCtx && loudspeakerCtx.state === "suspended") {
+            void loudspeakerCtx.resume().catch(() => {});
+          }
+        };
+      }
       await loudspeakerCtx.resume();
       if (loudspeakerCtx.state !== "running") return false; // never mute → never silent
       loudspeakerOn = true;
@@ -2722,6 +2733,41 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (callStatus === "connecting") setCallStatus("encrypting");
     }, 600));
   }
+  // Register the call with the OS media session. This (a) tells Android the tab
+  // is actively playing media — one of the signals that helps a backgrounded tab
+  // keep its audio alive — and (b) surfaces lock-screen / notification-shade
+  // controls that map to our in-call actions. Purely additive + feature-detected.
+  function updateMediaSession(active: boolean) {
+    try {
+      const ms = (navigator as unknown as { mediaSession?: MediaSession }).mediaSession;
+      if (!ms) return;
+      // The DOM lib doesn't yet type the newer call actions (hangup/toggle*), so
+      // route setActionHandler through a string-typed shim.
+      const ms2 = ms as unknown as {
+        setActionHandler: (a: string, h: (() => void) | null) => void;
+      };
+      if (!active) {
+        try { ms.metadata = null; } catch { /* */ }
+        try { ms.playbackState = "none"; } catch { /* */ }
+        for (const a of ["hangup", "togglemicrophone", "togglecamera", "play", "pause"]) {
+          try { ms2.setActionHandler(a, null); } catch { /* unsupported action — ignore */ }
+        }
+        return;
+      }
+      try {
+        const MM = (window as unknown as { MediaMetadata?: typeof MediaMetadata }).MediaMetadata;
+        if (MM) ms.metadata = new MM({ title: "In call", artist: "RELAY" });
+      } catch { /* */ }
+      try { ms.playbackState = "playing"; } catch { /* */ }
+      const set = (a: string, h: () => void) => { try { ms2.setActionHandler(a, h); } catch { /* unsupported — ignore */ } };
+      set("hangup", () => hangUp("media-session"));
+      set("togglemicrophone", () => toggleMic());
+      set("togglecamera", () => toggleCam());
+      // No-op play/pause so the OS control can't pause our audio element.
+      set("play", () => { try { void loudspeakerCtx?.resume(); } catch { /* */ } });
+      set("pause", () => { /* keep the call audible — ignore an OS pause */ });
+    } catch { /* mediaSession fully unsupported — no-op */ }
+  }
   // We reached a live media connection. Cancel any reconnect window and show it.
   // This is the AUTHORITATIVE "the call is actually connected" signal — it fires
   // from the peer-connection state machine (mesh) and LiveKit connect/reconnect
@@ -2736,6 +2782,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     clearConnSeq();
     stopRingtone();          // definitively kill any outgoing dial tone
     emitPhase("in-call");    // caller: leave "dialing" so the ring UI clears
+    updateMediaSession(true); // OS "active media" signal + lock-screen controls
     if (callStatus !== "live") setCallStatus("live");
   }
   // MESH reconnect: WE own recovery (ICE restarts + signaling), so we run a
@@ -3361,19 +3408,54 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     updatePipBtn();
   }
+  // While a filter is active, our published video is a canvas.captureStream track
+  // driven by requestAnimationFrame — which the browser throttles/pauses when the
+  // tab is backgrounded, so peers would see us FROZEN on the last frame. Swap the
+  // published track to the RAW camera (not rAF-gated) while hidden, and back to the
+  // filtered track on return. Uses the existing replaceTrack helper (never a
+  // full-stream replace), skipped while screen-sharing. Re-entrancy-guarded.
+  let bgVideoSwapped = false;
+  let bgSwapBusy = false;
+  async function bgSwapVideo(hidden: boolean) {
+    if (bgSwapBusy) return;
+    if (hidden) {
+      if (bgVideoSwapped || screenSharing || !processedStream || !localStream) return;
+      const raw = localStream.getVideoTracks()[0] || null;
+      if (!raw) return;
+      bgSwapBusy = true;
+      try { await replaceVideoEverywhere(raw); bgVideoSwapped = true; }
+      catch { /* leave filtered — worst case a frozen frame, not a drop */ }
+      finally { bgSwapBusy = false; }
+    } else {
+      if (!bgVideoSwapped) return;
+      const proc = processedStream?.getVideoTracks()[0] || null;
+      bgSwapBusy = true;
+      try { if (proc) await replaceVideoEverywhere(proc); }
+      catch { /* */ }
+      finally { bgVideoSwapped = false; bgSwapBusy = false; syncCamEnabled(); }
+    }
+  }
   // App backgrounded / foregrounded. When auto-PiP is enabled and we're in a
   // call, open a PiP window on hide and close it (if WE opened it) on return.
   function onVisibilityChange() {
     if (typeof document === "undefined") return;
     if (document.hidden) {
-      if (!inCall || !autoPipPref() || !pipSupported()) return;
+      if (!inCall) return;
+      // Keep OUTGOING video live even with a filter on (independent of PiP).
+      void bgSwapVideo(true);
+      if (!autoPipPref() || !pipSupported()) return;
       const wasInPip = isInPip();
       primeAutoPip();
       startPipLoop(PIP_ACTIVE_MS);
       if (!wasInPip) { pipAutoEntered = true; void autoEnterPip(); }
     } else {
-      // Foreground again: drop an auto-opened PiP (the full grid is back), but
-      // leave a window the user opened by hand. Throttle the primed composite.
+      // Foreground again: returning restores transient activation, so resume the
+      // loudspeaker context if the OS suspended it in the background (else audio
+      // stays silent on return), and restore the filtered video track. Drop an
+      // auto-opened PiP (the full grid is back), but leave a window the user
+      // opened by hand. Throttle the primed composite.
+      if (loudspeakerOn) { try { void loudspeakerCtx?.resume(); } catch { /* */ } }
+      if (inCall) void bgSwapVideo(false);
       if (pipAutoEntered) { pipAutoEntered = false; void exitPip(); }
       else if (pipPrimed && !pipActive) startPipLoop(PIP_PRIME_MS);
     }
@@ -3809,6 +3891,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     clearConnSeq();
     exitReconnecting();
     establishedOnce = false;
+    updateMediaSession(false);         // release the OS media session
     if (waitingRing) declineWaiting(); // reject any pending second caller
     dropHeld();                        // a full hang-up drops any held call too
     // Disconnect the SFU BEFORE stopping localStream/pipeline below, or LiveKit
@@ -4026,6 +4109,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try { callResizeObs.observe(root); } catch { /* */ }
   }
   window.addEventListener("beforeunload", onUnload);
+  // `pagehide` is the mobile-reliable companion to beforeunload — Safari/Chrome on
+  // iOS/Android fire it (but often NOT beforeunload) when the tab is backgrounded
+  // into the page cache, so the auto-rejoin snapshot is written on mobile too.
+  window.addEventListener("pagehide", onUnload);
   // Local network loss (Wi-Fi drop, tunnel, airplane toggle) is the clearest
   // "you're disconnected" signal. On the MESH path we own recovery, so show the
   // reconnect window and, when the radio returns, re-open signaling + kick ICE
@@ -4183,6 +4270,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       document.removeEventListener("keydown", onDocKey);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("pagehide", onUnload);
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("online", onOnline);
       // best-effort: tell server we're leaving

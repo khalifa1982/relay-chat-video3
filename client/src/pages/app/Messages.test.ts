@@ -87,3 +87,25 @@ describe("Messages.tsx — messaging overhaul", () => {
     expect(SRC).toMatch(/function scrollToBottom/);
   });
 });
+
+describe("Messages.tsx — v2.69 WhatsApp-grade reliability", () => {
+  it("a failed send restores the text/reply/attachment (never silently lost)", () => {
+    expect(SRC).toMatch(/await sendMutation\.mutateAsync/);
+    expect(SRC).toMatch(/setText\(body\);[\s\S]*?toast\.error\(/);
+  });
+  it("auto-scroll only fires when near the bottom or the thread changed", () => {
+    expect(SRC).toMatch(/threadChanged \|\| fromBottom <= 150/);
+  });
+  it("read receipts are gated on visible + near-bottom", () => {
+    expect(SRC).toMatch(/document\.visibilityState !== "visible"\) return;[\s\S]*?markReadMutation\.mutate/);
+    expect(SRC).toMatch(/nearBottom/);
+  });
+  it("thread-list preview labels attachment-only messages instead of a bare dash", () => {
+    expect(SRC).toMatch(/previewOf\(t\.lastMessageKind/);
+    expect(SRC).not.toMatch(/\{t\.lastMessageBody \|\| "—"\}/);
+  });
+  it("thread list surfaces an error+retry state (not blank-forever)", () => {
+    expect(SRC).toMatch(/threads\.isError \?/);
+    expect(SRC).toMatch(/threads\.refetch\(\)/);
+  });
+});

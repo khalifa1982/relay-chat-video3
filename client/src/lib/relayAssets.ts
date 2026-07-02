@@ -484,8 +484,9 @@ export const RELAY_CSS = `
 .relay-root .chat-input button{background:var(--grad);border:none;border-radius:11px;width:44px;color:#04201B;font-size:17px;cursor:pointer}
 
 /* Glassmorphic frosted control bar */
-.relay-root .controls{display:flex;align-items:center;justify-content:center;gap:14px;padding:18px 16px 22px;position:relative;background:none;border-top:none}
+.relay-root .controls{display:flex;align-items:center;justify-content:center;gap:14px;padding:18px 16px max(22px,env(safe-area-inset-bottom));position:relative;background:none;border-top:none}
 .relay-root .ctrl-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;
+  flex-wrap:wrap;justify-content:center;max-width:min(96vw,720px);
   background:rgba(20,23,29,.72);border:1px solid rgba(255,255,255,.10);border-radius:24px;
   box-shadow:0 16px 50px -18px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.06);
   backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4)}
@@ -537,6 +538,18 @@ export const RELAY_CSS = `
   box-shadow:0 24px 60px -22px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.05);
   backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);
   display:none;z-index:35}
+/* Cross-browser hardening for the two blurred call surfaces (control bar +
+   filter dock) — placed AFTER their base rules. Legibility fallback where
+   backdrop-filter is unsupported (older Firefox) or the user asked for reduced
+   transparency, and a 10px mobile blur cap (backdrop-filter is the top GPU cost
+   on Android) — same tiers as the index.css glass system. */
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  .relay-root .ctrl-bar{background:rgba(20,23,29,.94)}
+  .relay-root .filter-dock{background:rgba(20,23,29,.96)}}
+@media (prefers-reduced-transparency:reduce){
+  .relay-root .ctrl-bar,.relay-root .filter-dock{background:rgba(20,23,29,.96);backdrop-filter:none;-webkit-backdrop-filter:none}}
+@media (max-width:768px){
+  .relay-root .ctrl-bar,.relay-root .filter-dock{backdrop-filter:blur(10px) saturate(1.3);-webkit-backdrop-filter:blur(10px) saturate(1.3)}}
 .relay-root .filter-dock.open{display:block;animation:relayFade .22s cubic-bezier(0.23,1,0.32,1) both}
 .relay-root .filter-dock-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:0 4px}
 .relay-root .filter-dock-head .t{font-family:"Bricolage Grotesque";font-weight:600;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px}
@@ -562,8 +575,10 @@ export const RELAY_CSS = `
   /* Allow the control bar to wrap to a 2nd row on narrow phones so every button
      (screen-share / record / pip / …) is reachable and never clipped. */
   .relay-root .ctrl-bar{gap:8px;padding:8px 10px;flex-wrap:wrap;justify-content:center;max-width:96vw;max-height:40vh;overflow-y:auto}
-  .relay-root .ctrl{width:44px;height:44px}
-  .relay-root .ctrl.hangup{width:58px}
+  /* Keep a comfortable 48px touch target even on the narrowest phones (the wrap
+     absorbs the extra width) — 44px was below the Material minimum. */
+  .relay-root .ctrl{width:48px;height:48px}
+  .relay-root .ctrl.hangup{width:60px}
   /* Clear the phone's home indicator so the wrapped 2nd row is never hidden
      behind it (this is why the screen-share button "couldn't be seen"). */
   .relay-root .controls{padding-bottom:max(22px,env(safe-area-inset-bottom))}

@@ -118,7 +118,9 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
                 tag: `relay-msg-${payload.conversationId}`,
                 onClick: () => {
                   if (typeof window !== "undefined") {
-                    window.location.href = `/app/messages/${payload.conversationId}`;
+                    // Route via the ?c= query the app actually reads — the old
+                    // /app/messages/<id> path 404'd, making the notification dead.
+                    window.location.href = `/app/messages?c=${payload.conversationId}`;
                   }
                 },
               });

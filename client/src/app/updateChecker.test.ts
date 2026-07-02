@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.68.1)", () => {
-    expect(APP_VERSION).toBe("2.68.1");
+  it("is the current release (2.69.0)", () => {
+    expect(APP_VERSION).toBe("2.69.0");
   });
 });
 
@@ -216,6 +216,8 @@ describe("Android loudspeaker force (Web Audio routing, v2.57)", () => {
   });
   it("only mutes source elements AFTER the context is confirmed running (never silence)", () => {
     const en = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf("async function loudspeakerEnable"));
-    expect(en.slice(0, 600)).toMatch(/if \(loudspeakerCtx\.state !== "running"\) return false/);
+    // Window widened (v2.69) — the onstatechange auto-resume block was added
+    // above this guard, which still runs before any element is muted.
+    expect(en.slice(0, 1000)).toMatch(/if \(loudspeakerCtx\.state !== "running"\) return false/);
   });
 });

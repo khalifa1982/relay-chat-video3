@@ -7,6 +7,7 @@ import {
   dismissMessagePopup,
   type MessagePopup,
 } from "./messagePopups";
+import { previewOf } from "./messagePreview";
 
 /**
  * Non-intrusive incoming-message popups. When a message arrives while the user
@@ -26,17 +27,6 @@ export function MessagePopups() {
       ))}
     </div>
   );
-}
-
-function previewOf(kind: string, body: string | null): string {
-  if (body && body.trim()) return body;
-  switch (kind) {
-    case "image": return "📷 Photo";
-    case "video": return "🎬 Video";
-    case "audio": return "🎤 Voice message";
-    case "file": return "📎 File";
-    default: return "New message";
-  }
 }
 
 function PopupCard({ popup }: { popup: MessagePopup }) {
