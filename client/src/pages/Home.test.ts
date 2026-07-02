@@ -63,7 +63,11 @@ describe("Home.tsx — bilingual landing page", () => {
   it("renders the version footer from the shared single source of truth", () => {
     expect(HOME_TSX).toMatch(/APP_VERSION/);
     expect(HOME_TSX).toMatch(/@shared\/version/);
-    expect(HOME_TSX).toMatch(/©\s*{?\s*new Date\(\)\.getFullYear\(\)/);
+    // The version renders as `v{APP_VERSION}`; the copyright now lives in the
+    // localized `footer_rights` string (the dynamic getFullYear() prefix was
+    // removed to fix a double-year footer).
+    expect(HOME_TSX).toMatch(/v\{APP_VERSION\}/);
+    expect(HOME_TSX).toMatch(/footer_rights/);
   });
 
   it("does not credit or mention Gemini anywhere on the page", () => {
