@@ -2308,3 +2308,12 @@ and the mobile-performance / accessibility safeguards live in one place.
 - [x] Kept quick no-account use messaging (option B)
 - [x] Landing page only; backend/OAuth untouched
 - [x] tsc clean + 530 vitest pass + visual check EN
+
+## Realistic 10-person conference grid (landing)
+- [ ] Inspect current conference-grid JSX/CSS in Home.tsx
+- [ ] Generate ~10 realistic diverse people images in video-call poses (talking / drinking water / listening / looking away) via Gemini image gen
+- [ ] Upload generated images via manus-upload-file --webdev
+- [ ] Rebuild grid: real photo tiles, name + mic-status labels, one rotating active-speaker spotlight (only one 'live' at a time, others idle/moving)
+- [ ] Match RELAY system screen look (labels, corner mic icon, live badge)
+- [ ] Landing-page only; do not touch backend
+- [ ] tsc clean + vitest pass + visual check EN/AR, checkpoint, guide Publish
