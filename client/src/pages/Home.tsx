@@ -1252,7 +1252,7 @@ export default function Home() {
             </div>
           </div>
           <div className="text-xs text-slate-400 flex flex-col md:items-end gap-1">
-            <span>© {new Date().getFullYear()} RELAY · {c.footer_rights}</span>
+            <span>{c.footer_rights}</span>
             <span>v{APP_VERSION}</span>
           </div>
         </div>

@@ -2357,13 +2357,20 @@ existing self-hosted auth so it builds on `authLocal`/`authCrypto`/`email`/`ensu
 > Also ensure a real `JWT_SECRET` is set in prod (it signs `relay_session`, now the only login).
 
 ## Realistic 10-person conference grid (landing)
-- [ ] Inspect current conference-grid JSX/CSS in Home.tsx
-- [ ] Generate ~10 realistic diverse people images in video-call poses (talking / drinking water / listening / looking away) via Gemini image gen
-- [ ] Upload generated images via manus-upload-file --webdev
-- [ ] Rebuild grid: real photo tiles, name + mic-status labels, one rotating active-speaker spotlight (only one 'live' at a time, others idle/moving)
-- [ ] Match RELAY system screen look (labels, corner mic icon, live badge)
-- [ ] Landing-page only; do not touch backend
-- [ ] tsc clean + vitest pass + visual check EN/AR, checkpoint, guide Publish
+- [x] Inspect current conference-grid JSX/CSS in Home.tsx
+- [x] Generate ~10 realistic diverse people images in video-call poses (talking / drinking water / listening / looking away) via Gemini image gen
+- [x] Upload generated images via manus-upload-file --webdev
+- [x] Rebuild grid: real photo tiles, name + mic-status labels, one rotating active-speaker spotlight (only one 'live' at a time, others idle/moving)
+- [x] Match RELAY system screen look (labels, corner mic icon, live badge)
+- [x] Landing-page only; do not touch backend
+- [x] tsc clean + vitest pass + visual check EN/AR, checkpoint, guide Publish
+
+## Fix: Canvas 3D background IndexSizeError (negative radius) — landing page
+- [x] Diagnose root cause: perspective projection FOV/(FOV + z*scale) yields near-zero/negative depth when a node is behind the camera plane → huge negative radius passed to arc()
+- [x] Guard projection: skip points where denominator <= 1, clamp scale with Math.max(0, depth)
+- [x] Clamp node radius with Math.max(0, ...) and skip drawing when radius <= 0
+- [x] Verify: tsc clean, 565 vitest tests pass, browser reloaded + full-range scroll with no new IndexSizeError (all 34 prior errors predate the fix at 09:07)
+- [x] Checkpoint (version 6a9e820e); guide user to Publish
 
 ## v2.68.1 — Fix: iOS phantom ring after connect + loudspeaker→headset auto-switch (delivered 2026-07-02)
 
