@@ -99,7 +99,7 @@ export function AuthPanel({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-[110] grid place-items-center bg-black/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-[110] grid place-items-center glass-overlay p-4" role="dialog" aria-modal="true">
       <div className="w-[min(94vw,420px)] rounded-3xl border border-border bg-card p-6 shadow-2xl">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-bold">

@@ -111,7 +111,7 @@ export default function MessagesPage() {
       {/* ── thread list (always visible on desktop; hidden when a thread is open on mobile) ── */}
       <aside
         className={
-          "md:w-[340px] md:shrink-0 md:border md:border-border md:rounded-2xl md:bg-card flex-col min-h-0 " +
+          "md:w-[340px] md:shrink-0 md:rounded-2xl md:glass-surface-md flex-col min-h-0 " +
           (activeConvoId == null ? "flex flex-1 md:flex-initial" : "hidden md:flex")
         }
       >

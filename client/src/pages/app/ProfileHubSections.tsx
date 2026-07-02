@@ -75,7 +75,7 @@ export function ContactInfoSection({ me, onSaved }: { me: HubMe; onSaved: () => 
       </Label>
 
       {/* Email (read-only; validated at registration) */}
-      <div className="rounded-2xl border border-border bg-card/40 p-4 space-y-1">
+      <div className="rounded-2xl glass-surface-sm p-4 space-y-1">
         <div className="text-xs text-muted-foreground">Email</div>
         {me.email ? (
           <div className="font-medium break-all">{me.email}</div>
@@ -87,7 +87,7 @@ export function ContactInfoSection({ me, onSaved }: { me: HubMe; onSaved: () => 
       </div>
 
       {/* Mobile numbers */}
-      <div className="rounded-2xl border border-border bg-card/40 p-4 space-y-3">
+      <div className="rounded-2xl glass-surface-sm p-4 space-y-3">
         <div className="text-xs text-muted-foreground">Mobile numbers (optional)</div>
         {mobiles.length > 0 && (
           <ul className="space-y-2">
@@ -157,7 +157,7 @@ export function SocialLinksSection({ me, onSaved }: { me: HubMe; onSaved: () => 
       <Label className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-2">
         Links &amp; social <SavedTick show={saved} />
       </Label>
-      <div className="rounded-2xl border border-border bg-card/40 p-4 space-y-3">
+      <div className="rounded-2xl glass-surface-sm p-4 space-y-3">
         {links.length > 0 && (
           <ul className="space-y-2">
             {links.map((l, i) => {

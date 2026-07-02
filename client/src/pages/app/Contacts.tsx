@@ -150,7 +150,7 @@ export default function ContactsPage() {
           />
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto pb-24 md:pb-0 md:rounded-2xl md:border md:border-border md:bg-card">
+      <div className="flex-1 overflow-y-auto pb-24 md:pb-0 md:rounded-2xl md:glass-surface-md">
         {contacts.isLoading ? (
           <ul>
             {Array.from({ length: 5 }).map((_, i) => (

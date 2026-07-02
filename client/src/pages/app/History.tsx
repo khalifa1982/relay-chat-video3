@@ -105,7 +105,7 @@ export default function HistoryPage() {
         <h1 className="text-lg font-semibold tracking-tight">Call history</h1>
       </header>
 
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-xl shadow-black/10">
+      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl glass-surface-md shadow-xl shadow-black/10">
         <div className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
             <div className="p-6 text-sm text-muted-foreground">Loading…</div>

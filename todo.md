@@ -2229,3 +2229,39 @@ reshape ships separately as v2.67.0.
       the test-pinned render hot path; needs on-device measurement).
 - [x] 5 new static source-pinning tests (`androidAudioCamera.test.ts`) for the chat dedup/delivery + audio
       re-apply + accept-prime. 533 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.66.0`.
+
+## v2.67.0 — Glassy / transparent design system (delivered 2026-07-02)
+
+Second half of the "improve everything + make it glassy" batch: a cohesive frosted-glass surface system
+applied across the previously-solid screens. Built as reusable design tokens so the look is consistent
+and the mobile-performance / accessibility safeguards live in one place.
+
+- [x] **Glass surface system (`client/src/index.css`).** Five Tailwind v4 `@utility` classes —
+      `glass-surface` / `-sm` / `-md` / `-lg` (translucent card fill + `backdrop-filter: blur/saturate` +
+      hairline top-light + depth shadow, three prominence tiers) and `glass-overlay` (modal scrim). Defined
+      as `@utility` (not plain classes) specifically so they compose with variants like `md:glass-surface-md`
+      for desktop-only glass. Colours are `color-mix` over the existing OKLCH tokens, so light + dark adapt
+      automatically. Three safeguards ship with it: a `@media (max-width: 768px)` **blur cap** (backdrop-filter
+      is the top GPU cost on Android — mobile blur is held to 6–14px vs 8–24px on desktop); a
+      `@supports not (backdrop-filter)` **fallback** to a near-opaque fill so content is never stranded on an
+      unreadable panel; and a `@media (prefers-reduced-transparency: reduce)` path that drops blur entirely.
+- [x] **Applied to the solid surfaces:** Contacts list card (`md:glass-surface-md`), History card
+      (`glass-surface-md`), Messages desktop thread-list column (`md:glass-surface-md`), Profile sub-cards
+      (`glass-surface-sm`). Modal scrims unified on `glass-overlay`: shadcn `Dialog` + `AlertDialog` overlays,
+      `AuthPanel`, and `UpdateChecker` (replacing four ad-hoc `bg-black/40–50 backdrop-blur-sm` treatments
+      with one mobile-capped, fallback-safe token).
+- [x] **Deliberately left as-is:** AppShell chrome (sidebar/header/bottom-nav) and the Dialer keypad were
+      ALREADY glassy (`supports-[backdrop-filter]:backdrop-blur-xl/2xl` with fallbacks) from earlier work —
+      not re-touched, to avoid unseen visual regressions without a live preview. The in-call surfaces
+      (control bar/tiles) were also left for a visual-QA pass on the running app.
+- [x] **Constraints honored:** the pinned Messages layout classNames (WebKit flex-column fix, scroll
+      container, `pb-28` clearance) and the AppShell bell/DND structure were untouched — only the desktop
+      card *surface* classes changed, so `headerFixes.test.ts` and `Messages.test.ts` still pass unchanged.
+- [x] 8 new static-source-pinning tests (`glassDesign.test.ts`) covering the `@utility` definitions, the
+      mobile cap, the unsupported-backdrop fallback, the reduced-transparency path, and per-screen
+      application. 541 passing (1 pre-existing skip), tsc + build clean (verified `md:glass-surface-md`
+      actually emits into the bundle). Footer → `v2.67.0`.
+
+> Note: the glassy look was verified to COMPILE and emit correctly, but not visually previewed (the app
+> needs a live backend/DB this environment lacks). A visual-QA pass on the Manus preview after Publish is
+> the right place to fine-tune translucency levels and extend glass to the in-call surfaces.
