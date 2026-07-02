@@ -2394,3 +2394,10 @@ Two confirmed call-reliability bugs from a cross-platform report.
 > tab's media unless PiP is actually engaged); (b) the **cross-browser call-bar audit** and the
 > **WhatsApp-grade redesign of Messages / History / Contacts** — substantial UX work best done against a
 > live preview. Tracked as tasks #38/#39 and a future design pass.
+
+## "Coming soon" download section (landing page)
+- [x] Generate multilingual "Coming soon" copy via Gemini Flash (6 languages)
+- [x] Add download section: App Store (soon) + Google Play (soon) icons
+- [x] Add third icon: APK download under Android (placeholder link until user provides it)
+- [x] Keep bilingual/RTL support + existing design language
+- [x] Run pnpm test + tsc, visual check, checkpoint + push, guide user to Publish

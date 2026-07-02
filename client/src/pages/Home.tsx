@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { APP_VERSION } from "@shared/version";
 import { LANDING_COPY, type LangCode } from "@/data/landingCopy";
+import { toast } from "sonner";
 
 /* -------------------------------------------------------------------------- */
 /*  RELAY landing page — interactive, dynamic, multilingual.                   */
@@ -1109,6 +1110,57 @@ export default function Home() {
               <div className="absolute -inset-10 blur-3xl opacity-25 -z-10 rounded-full accent-shift" style={{ backgroundColor: ACCENT }} />
               <img src={IMG.mobile} alt={c.mobile_t} loading="lazy" className="w-full h-auto block rounded-2xl border border-black/5 shot-shadow" />
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Download / Coming soon */}
+      {/* ---------------------------------------------------------------- */}
+      <section className="relative z-10 px-6 py-16 md:py-24">
+        <div className="max-w-4xl mx-auto text-center">
+          <p className="text-xs font-bold tracking-[0.2em] mb-3" style={{ color: ACCENT }}>
+            {c.dl_kicker}
+          </p>
+          <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight mb-4" style={{ color: "oklch(0.22 0.03 265)" }}>
+            {c.dl_title}
+          </h2>
+          <p className="text-slate-600 text-lg leading-relaxed max-w-2xl mx-auto mb-10">{c.dl_sub}</p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 max-w-3xl mx-auto">
+            {/* App Store — coming soon */}
+            <div className="relative flex flex-col items-center gap-3 rounded-2xl border border-black/5 bg-white/70 backdrop-blur px-5 py-7 shot-shadow opacity-90">
+              <span className="absolute top-3 right-3 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full" style={{ backgroundColor: "oklch(0.93 0.02 265)", color: "oklch(0.45 0.03 265)" }}>
+                {c.dl_soon}
+              </span>
+              <svg viewBox="0 0 24 24" className="w-9 h-9" fill="oklch(0.30 0.02 265)" aria-hidden="true"><path d="M16.365 1.43c0 1.14-.417 2.2-1.11 2.98-.75.85-1.98 1.5-3.16 1.41-.14-1.11.43-2.28 1.09-3.02.74-.84 2.03-1.46 3.18-1.37zM20.94 17.02c-.57 1.31-.84 1.9-1.57 3.06-1.02 1.62-2.46 3.64-4.24 3.65-1.58.02-1.99-1.03-4.14-1.02-2.15.01-2.6 1.04-4.18 1.02-1.78-.02-3.14-1.84-4.16-3.46-2.86-4.53-3.16-9.85-1.4-12.68 1.25-2.02 3.23-3.2 5.09-3.2 1.9 0 3.09 1.04 4.66 1.04 1.52 0 2.45-1.04 4.65-1.04 1.66 0 3.42.9 4.68 2.46-4.11 2.25-3.44 8.12.01 10.19z"/></svg>
+              <div className="text-sm font-bold" style={{ color: "oklch(0.25 0.02 265)" }}>{c.dl_ios}</div>
+            </div>
+
+            {/* Google Play — coming soon */}
+            <div className="relative flex flex-col items-center gap-3 rounded-2xl border border-black/5 bg-white/70 backdrop-blur px-5 py-7 shot-shadow opacity-90">
+              <span className="absolute top-3 right-3 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full" style={{ backgroundColor: "oklch(0.93 0.02 265)", color: "oklch(0.45 0.03 265)" }}>
+                {c.dl_soon}
+              </span>
+              <svg viewBox="0 0 24 24" className="w-9 h-9" aria-hidden="true"><path d="M3.6 2.3c-.3.2-.5.6-.5 1.1v17.2c0 .5.2.9.5 1.1l.1.1L13 12.6v-.2L3.7 2.2z" fill="#00d2ff"/><path d="M16.5 15.9L13 12.5v-.2l3.5-3.4.1.1 4.2 2.4c1.2.7 1.2 1.8 0 2.5z" fill="#ffce00"/><path d="M16.6 15.8L13 12.4 3.6 21.7c.4.4 1 .5 1.7.1z" fill="#ff3a44"/><path d="M16.6 9L5.3 2.1c-.7-.4-1.3-.3-1.7.1L13 12.4z" fill="#00e676"/></svg>
+              <div className="text-sm font-bold" style={{ color: "oklch(0.25 0.02 265)" }}>{c.dl_android}</div>
+            </div>
+
+            {/* Direct APK — placeholder link until user provides it */}
+            <a
+              href="#"
+              aria-disabled="true"
+              onClick={(e) => { e.preventDefault(); toast.info(c.dl_apk_note); }}
+              className="relative flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed px-5 py-7 shot-shadow transition-all active:scale-[0.98] cursor-pointer"
+              style={{ borderColor: "oklch(0.75 0.05 145)", backgroundColor: "oklch(0.97 0.02 145)" }}
+            >
+              <span className="absolute top-3 right-3 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full" style={{ backgroundColor: "oklch(0.90 0.06 145)", color: "oklch(0.40 0.08 145)" }}>
+                {c.dl_soon}
+              </span>
+              <svg viewBox="0 0 24 24" className="w-9 h-9" fill="#3ddc84" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18a.38.38 0 00-.66-.38l-1.87 3.23a11.4 11.4 0 00-9.82 0L5.22 5.92a.38.38 0 10-.66.38L6.4 9.48A10.8 10.8 0 001 18h22a10.8 10.8 0 00-5.4-8.52zM7 15.25a1 1 0 110-2 1 1 0 010 2zm10 0a1 1 0 110-2 1 1 0 010 2z"/></svg>
+              <div className="text-sm font-bold" style={{ color: "oklch(0.30 0.06 145)" }}>{c.dl_apk}</div>
+              <div className="text-[11px] font-medium leading-tight" style={{ color: "oklch(0.45 0.05 145)" }}>{c.dl_apk_note}</div>
+            </a>
           </div>
         </div>
       </section>

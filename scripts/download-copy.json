@@ -1,0 +1,62 @@
+{
+  "en": {
+    "dl_kicker": "MOBILE APPS",
+    "dl_title": "Take RELAY on the go",
+    "dl_sub": "Our native mobile apps are on the way; you can use our web app in your browser meanwhile.",
+    "dl_soon": "Coming soon",
+    "dl_ios": "Download on the App Store",
+    "dl_android": "Get it on Google Play",
+    "dl_apk": "Direct APK Download",
+    "dl_apk_note": "Android .apk — link coming soon"
+  },
+  "ar": {
+    "dl_kicker": "تطبيقات الهاتف",
+    "dl_title": "حمّل RELAY على الهاتف",
+    "dl_sub": "التطبيقات الرسمية قادمة قريباً، يمكنك استخدام تطبيق الويب حالياً.",
+    "dl_soon": "قريباً",
+    "dl_ios": "تنزيل من App Store",
+    "dl_android": "الحصول عليه من Google Play",
+    "dl_apk": "تنزيل ملف APK المباشر",
+    "dl_apk_note": "ملف APK للأندرويد — الرابط قريباً"
+  },
+  "es": {
+    "dl_kicker": "APLICACIONES MÓVILES",
+    "dl_title": "Descarga RELAY en tu móvil",
+    "dl_sub": "Las aplicaciones nativas están en camino; mientras tanto, utiliza la app web.",
+    "dl_soon": "Próximamente",
+    "dl_ios": "Consíguelo en el App Store",
+    "dl_android": "Disponible en Google Play",
+    "dl_apk": "Descarga directa de APK",
+    "dl_apk_note": "Android .apk — enlace disponible próximamente"
+  },
+  "fr": {
+    "dl_kicker": "APPLICATIONS MOBILES",
+    "dl_title": "Emportez RELAY sur mobile",
+    "dl_sub": "Nos applications natives arrivent bientôt. En attendant, utilisez l'application web.",
+    "dl_soon": "Bientôt disponible",
+    "dl_ios": "Télécharger dans l'App Store",
+    "dl_android": "Disponible sur Google Play",
+    "dl_apk": "Télécharger l'APK directement",
+    "dl_apk_note": "Fichier .apk pour Android — lien bientôt disponible"
+  },
+  "de": {
+    "dl_kicker": "MOBILE APPS",
+    "dl_title": "Hol dir RELAY aufs Smartphone",
+    "dl_sub": "Unsere nativen Apps sind in Arbeit – nutze solange einfach die Web-App.",
+    "dl_soon": "Demnächst",
+    "dl_ios": "Laden im App Store",
+    "dl_android": "Jetzt bei Google Play",
+    "dl_apk": "Direkter APK-Download",
+    "dl_apk_note": "Android-.apk – Link folgt in Kürze"
+  },
+  "hi": {
+    "dl_kicker": "मोबाइल ऐप्स",
+    "dl_title": "RELAY मोबाइल पर पाएं",
+    "dl_sub": "हमारे ऐप्स जल्द आ रहे हैं; तब तक ब्राउज़र पर वेब ऐप का इस्तेमाल करें।",
+    "dl_soon": "जल्द आ रहा है",
+    "dl_ios": "App Store से डाउनलोड करें",
+    "dl_android": "Google Play पर पाएं",
+    "dl_apk": "सीधा APK डाउनलोड",
+    "dl_apk_note": "Android .apk — लिंक जल्द ही उपलब्ध होगा"
+  }
+}
