@@ -2265,3 +2265,46 @@ and the mobile-performance / accessibility safeguards live in one place.
 > Note: the glassy look was verified to COMPILE and emit correctly, but not visually previewed (the app
 > needs a live backend/DB this environment lacks). A visual-QA pass on the Manus preview after Publish is
 > the right place to fine-tune translucency levels and extend glass to the in-call surfaces.
+
+## Katon-inspired landing redesign (Home.tsx only)
+- [x] Regenerate bilingual copy via Gemini Flash (TALK/MEET/CHAT blocks, FAQ, pillars, features)
+- [x] Add product-style capability blocks section (TALK / MEET / CHAT) with icon lists
+- [x] Add FAQ section (bilingual)
+- [x] Keep all existing animations, real screenshots, live stats, EN/AR + RTL
+- [x] Do NOT claim classroom / streaming / hardware / translation / AI
+- [x] Update Home.test.ts if needed and run pnpm test (530 tests green)
+- [x] Checkpoint + push (version ef408212), guide user to Publish
+
+## Interactive/dynamic landing reshape (Home.tsx only) — gemini-3.5-flash
+- [x] Verify true group-call capacity (confirmed: up to 10 people)
+- [x] Generate expanded multilingual copy via gemini-3.5-flash (EN, AR, ES, FR, DE, HI)
+- [x] Add scroll-reactive animated 3D background (color + motion shifts on scroll)
+- [x] Fix duplicate "Open RELAY" button — header CTA hides on scroll, single floating CTA appears
+- [x] Language switcher supporting 6 languages (RTL-aware for AR)
+- [x] Add group video conference showcase (up to 10 people, 10-screen grid + active-speaker spotlight)
+- [x] Keep truthful features only (no classroom/streaming/hardware/AI claims)
+- [x] Run pnpm test (530 green) + tsc clean, visual check EN + AR RTL done; checkpoint + push
+
+
+## Editorial + standalone-registration pass (Home.tsx / landing copy only)
+- [ ] Audit all "talk"/"talks" usage in landing copy (6 langs) and pick one unambiguous meaning
+- [ ] Standardize "the talks" to a single consistent term/usage throughout
+- [ ] Remove any external-individual reference in registration (e.g. "Manus/Manos registered ...")
+- [ ] Ensure registration copy states a purely internal, standalone 6-digit flow
+- [ ] Remove any mention/implication of third-party login (Google/Gmail, Apple ID, Facebook, external IdP)
+- [ ] Verify app code has no third-party auth exposed to end users on the standalone path
+- [ ] Run pnpm test + tsc, visual check EN + AR, checkpoint + push, guide user to Publish
+
+## Email-only standalone registration (updated scope)
+- [ ] Registration/login is EMAIL ONLY (internal), no Gmail/Google, Apple, Facebook, Manus, or any external IdP
+- [ ] Remove third-party auth from user-facing flow; keep 6-digit number as the RELAY identity
+- [ ] Landing copy reflects email-only, self-contained account creation (all 6 langs)
+- [ ] Standardize the "talks" terminology to one unambiguous usage
+- [ ] pnpm test + tsc, visual check, checkpoint + push, guide user to Publish
+
+## Editorial + email-only landing copy (DONE)
+- [x] Add optional email-only account FAQ in all 6 languages (no Google/Apple/Facebook/Manus/3rd-party)
+- [x] Standardize ambiguous "start talking" CTA to single "first call" usage (TALK kept as sole product label) in 6 languages
+- [x] Kept quick no-account use messaging (option B)
+- [x] Landing page only; backend/OAuth untouched
+- [x] tsc clean + 530 vitest pass + visual check EN

@@ -1,0 +1,26 @@
+{
+  "en": {
+    "q": "Do I need an email address or an account?",
+    "a": "Not at all! You can instantly get a 6-digit number with no download or account required. If you choose to save your account across devices, you can optionally do so using only your email, without any third-party sign-in providers like Google or Apple."
+  },
+  "ar": {
+    "q": "هل أحتاج إلى عنوان بريد إلكتروني أو حساب؟",
+    "a": "لا يتطلب RELAY أي تنزيل أو حساب للبدء؛ تحصل على رقم سداسي فوري. حفظ حسابك عبر الأجهزة اختياري تمامًا ويتم باستخدام بريدك الإلكتروني فقط. لا نستخدم أي مزودي تسجيل دخول خارجيين مثل Google أو Apple أو Facebook."
+  },
+  "es": {
+    "q": "¿Necesito una dirección de correo electrónico o una cuenta?",
+    "a": "¡Absolutamente no! Para usar RELAY, no necesitas descargas ni crear una cuenta; obtienes un número de 6 dígitos al instante. Si decides guardar tu cuenta y acceder a ella desde otros dispositivos, es opcional y solo requiere tu correo electrónico, sin depender de servicios externos como Google o Apple."
+  },
+  "fr": {
+    "q": "Ai-je besoin d'une adresse e-mail ou d'un compte ?",
+    "a": "Non, pas besoin de téléchargement ni de compte pour utiliser RELAY ; vous obtenez instantanément un numéro à 6 chiffres. Sauvegarder votre compte ou le conserver sur plusieurs appareils est facultatif et se fait uniquement via votre email, sans aucun fournisseur d'authentification tiers."
+  },
+  "de": {
+    "q": "Benötige ich eine E-Mail-Adresse oder ein Konto?",
+    "a": "Um RELAY zu nutzen, benötigen Sie weder einen Download noch ein Konto; Sie erhalten sofort eine 6-stellige Nummer. Das Speichern Ihres Kontos über mehrere Geräte hinweg ist optional und erfordert, falls gewünscht, lediglich Ihre E-Mail-Adresse, ganz ohne externe Anmeldedienste wie Google oder Apple."
+  },
+  "hi": {
+    "q": "क्या मुझे ईमेल पते या खाते की आवश्यकता है?",
+    "a": "RELAY का उपयोग करने के लिए आपको किसी डाउनलोड या खाते की आवश्यकता नहीं है; आपको तुरंत एक 6-अंकीय नंबर मिलता है। डिवाइसों में अपना खाता सहेजना या बनाए रखना वैकल्पिक है, और ऐसा करने पर केवल आपके ईमेल का उपयोग होता है। हमारा खाता निर्माण पूरी तरह से आंतरिक है और Google, Apple, Facebook या किसी अन्य बाहरी साइन-इन प्रदाता का उपयोग नहीं करता है।"
+  }
+}
