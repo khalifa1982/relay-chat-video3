@@ -280,11 +280,14 @@ function BgCanvas() {
         let z = p.x * sinY + p.z * cosY;
         let y = p.y * cosX - z * sinX;
         z = p.y * sinX + z * cosX;
-        const depth = FOV / (FOV + z * scale);
+        const denom = FOV + z * scale;
+        // Skip points at/behind the camera plane (denom <= 0 would flip depth negative).
+        if (denom <= 1) continue;
+        const depth = FOV / denom;
         proj.push({
           x: cx + x * scale * depth,
           y: cy + y * scale * depth,
-          s: depth,
+          s: Math.max(0, depth),
           z,
         });
       }
@@ -310,8 +313,9 @@ function BgCanvas() {
 
       // Glowing nodes.
       for (const p of proj) {
-        const r = 1.4 + p.s * 2.4;
-        const a = 0.25 + p.s * 0.35;
+        const r = Math.max(0, 1.4 + p.s * 2.4);
+        if (r <= 0) continue;
+        const a = Math.max(0, Math.min(1, 0.25 + p.s * 0.35));
         ctx.beginPath();
         ctx.fillStyle = `oklch(0.62 0.22 ${hue} / ${a.toFixed(3)})`;
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
