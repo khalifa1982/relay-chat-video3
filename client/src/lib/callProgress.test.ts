@@ -105,3 +105,28 @@ describe("voice-first video defaults", () => {
     expect(DIALER).toMatch(/engine\.dial\(dialed, \{ \.\.\.opts, displayName \}\)/);
   });
 });
+
+describe("v2.78.1 — answered-call reliability (zombie-call fixes)", () => {
+  it("the caller reacts to the ANSWER via signaling (peer-joined) on BOTH media paths — not LiveKit events alone", () => {
+    expect(CLIENT).toMatch(/refreshHostPanel\(\);[\s\S]{0,900}callAnswered = true;\s*\n\s*onCalleeAnswered\(\);[\s\S]{0,300}if \(livekitEnabled\) return;/);
+  });
+
+  it("outgoing dials carry a no-answer backstop: armed at dial, cleared on answer and on teardown", () => {
+    expect(CLIENT).toMatch(/function armDialTimeout\(\)/);
+    expect(CLIENT).toMatch(/hangUp\("no-answer"\)/);
+    expect(CLIENT).toMatch(/showDialCard\(\);\s*\n\s*armDialTimeout\(\);/);
+    expect(CLIENT).toMatch(/function onCalleeAnswered\(\) \{\s*\n\s*clearDialTimeout\(\);/);
+    expect(CLIENT).toMatch(/clearDialTimeout\(\); \/\/ an ended call must never fire a stale "No answer\."/);
+  });
+
+  it("a dying call PROMOTES a waiting second caller to a real incoming ring — never auto-declines them", () => {
+    expect(CLIENT).toMatch(/const promotedRing = waitingRing;/);
+    expect(CLIENT).toMatch(/if \(promotedRing && !destroyed\) \{/);
+    expect(CLIENT).not.toMatch(/if \(waitingRing\) declineWaiting\(\); \/\/ reject any pending second caller/);
+  });
+
+  it("the server refuses to rejoin a room of GHOSTS (every other member's client record gone)", () => {
+    expect(SERVER).toMatch(/const connectedOthers = members\.filter\(m => reg\.clients\.has\(m\.pin\)\)\.length;/);
+    expect(SERVER).toMatch(/members\.length === 0 \|\| connectedOthers === 0/);
+  });
+});

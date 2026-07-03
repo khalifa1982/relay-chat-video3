@@ -639,6 +639,23 @@ describe("relay signaling", () => {
     void b;
   });
 
+  it("does NOT rejoin into a room of GHOSTS — all other members' clients gone → membership released (zombie-call fix)", () => {
+    // The immortal-zombie loop this kills: media fails mid-setup, both tabs
+    // close without an explicit leave, membership persists; every later app
+    // open auto-rejoined the dead room (cancelling its abandonment reaper!),
+    // the device sat silently "in a call", real incoming rings degraded to
+    // call-waiting, and the zombie's death auto-declined them.
+    const { rid, aPin, bPin } = setupCall();
+    reg.clients.delete(aPin);
+    reg.clients.delete(bPin); // BOTH sides long gone; membership persisted
+    expect(reg.rooms.get(rid)?.has(aPin)).toBe(true);
+    const a2 = new FakeConn("dev-a");
+    handleMessage(reg, a2.asConn(), { type: "register", name: "A" });
+    expect(a2.pin).toBe(aPin);
+    expect(a2.outbox.some((m) => rtype(m) === "rejoin")).toBe(false);
+    expect(reg.pinRoom.has(aPin)).toBe(false); // membership released, no zombie
+  });
+
   it("an EXPLICIT hang-up removes membership — re-registering does NOT auto-rejoin (locked out)", () => {
     const { a, rid, aPin } = setupCall();
     handleMessage(reg, a.asConn(), { type: "leave" });

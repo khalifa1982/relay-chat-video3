@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.78.0)", () => {
-    expect(APP_VERSION).toBe("2.78.0");
+  it("is the current release (2.78.1)", () => {
+    expect(APP_VERSION).toBe("2.78.1");
   });
 });
 
@@ -147,7 +147,9 @@ describe("auto Picture-in-Picture (enable once)", () => {
   it("stops priming when the call ends (no idle compositor leak)", () => {
     expect(RELAY_CLIENT).toMatch(/function unprimeAutoPip\(\)/);
     const hang = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf("function hangUp"));
-    expect(hang.slice(0, 2000)).toMatch(/unprimeAutoPip\(\)/);
+    // Window widened (2000 → 2800) for the v2.78.1 waiting-ring promotion
+    // block inserted earlier in hangUp; the unprime call itself is unchanged.
+    expect(hang.slice(0, 2800)).toMatch(/unprimeAutoPip\(\)/);
   });
 });
 

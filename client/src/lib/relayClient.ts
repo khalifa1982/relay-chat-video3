@@ -292,6 +292,25 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // number, voice/video chip, live status) replaces the grid, and every
   // control except End Call is hidden.
   let outgoingDial: { pin: string; name?: string; video: boolean; group?: boolean } | null = null;
+  // No-answer backstop for OUTGOING dials. The callee's client auto-declines
+  // at 60s, which normally ends the dial via `rejected` — but if their device
+  // died mid-ring (tab killed, network gone) that reply never comes, and the
+  // caller used to ring forever in a solo room that the server kept alive
+  // (and auto-rejoin could resurrect). Armed at dial, cleared on answer /
+  // teardown.
+  let dialTimeoutT: ReturnType<typeof setTimeout> | null = null;
+  function clearDialTimeout() {
+    if (dialTimeoutT) { clearTimeout(dialTimeoutT); dialTimeoutT = null; }
+  }
+  function armDialTimeout() {
+    clearDialTimeout();
+    dialTimeoutT = setTimeout(() => {
+      dialTimeoutT = null;
+      if (!inCall || callAnswered) return;
+      toast("No answer.", true);
+      hangUp("no-answer");
+    }, 65_000);
+  }
   function showDialCard() {
     $("call")?.classList.add("pre-connect");
     const d = outgoingDial; if (!d) return;
@@ -316,6 +335,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // until the media session is actually ESTABLISHED — only then does the full
   // in-call interface appear (markEstablished → exitPreConnect).
   function onCalleeAnswered() {
+    clearDialTimeout();
     if (!outgoingDial) return;
     if (!establishedOnce) runConnSequence();
   }
@@ -340,7 +360,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       lkJoinTries++;
       if (lkJoinTries > 3) {
         lkWatchdog = null;
-        toast("Couldn't connect call media. Please try again.", true);
+        toast("Call media couldn't connect — the media server is unreachable from this network. Please try again.", true);
         hangUp("livekit-join-timeout");
         return;
       }
@@ -1943,6 +1963,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (m.pin && m.flag) { peerFlags[m.pin] = m.flag; setTileFlag("tile-" + m.pin, m.flag); }
     if (m.pin && m.role) { peerRoles[m.pin] = m.role as string; setTileRole("tile-" + m.pin, m.role as string); }
     refreshHostPanel();
+    // The server's peer-joined is the AUTHORITATIVE "they answered" signal on
+    // BOTH media paths. It must drive the answer transition here — NOT the
+    // LiveKit events (addLkTile) alone: when the SFU is slow or unreachable,
+    // no LiveKit event ever fires, and the caller previously sat at "Ringing…"
+    // forever (its watchdog stuck in the gentle keep-token-fresh loop) while
+    // the callee's side died with "couldn't connect media" — a zombie solo
+    // room that auto-rejoin then resurrected. With callAnswered set here, the
+    // caller's watchdog escalates properly and both sides fail (or recover)
+    // together.
+    callAnswered = true;
+    onCalleeAnswered();
     // On the SFU path, LiveKit's own ParticipantConnected/TrackSubscribed events
     // drive remote tiles — the mesh offer/answer dance is skipped entirely.
     if (livekitEnabled) return;
@@ -3139,6 +3170,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // callee answers (onCalleeAnswered). Show the dedicated dial card.
       setCallStatus("calling");
       showDialCard();
+      armDialTimeout();
     } else {
       // Callee accept / rejoin / resume: the session starts establishing now.
       exitPreConnect(); // never carry a stale dial card into a non-dial entry
@@ -4215,11 +4247,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     pendingRing = null;
     $("ringOverlay")?.classList.remove("active");
     exitPreConnect(); // clear any in-flight dial card / pre-connect gating
+    clearDialTimeout(); // an ended call must never fire a stale "No answer."
     clearConnSeq();
     exitReconnecting();
     establishedOnce = false;
     updateMediaSession(false);         // release the OS media session
-    if (waitingRing) declineWaiting(); // reject any pending second caller
+    // A second caller WAITING while this call ends is PROMOTED to a normal
+    // incoming ring after teardown (bottom of this function) — never auto-
+    // declined. A dying call (especially a dead-room auto-rejoin) must not
+    // swallow a live incoming call.
+    const promotedRing = waitingRing;
+    waitingRing = null;
+    hideCallWaiting();
     dropHeld();                        // a full hang-up drops any held call too
     // Disconnect the SFU BEFORE stopping localStream/pipeline below, or LiveKit
     // errors republishing a dead track during teardown. No-op on the mesh path.
@@ -4273,6 +4312,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     processedStream = null;
     show("lobby"); renderRecents();
+    // Let a promoted call-waiting caller ring through now that the old call
+    // is fully torn down (mirror of onRing's incoming-ring presentation).
+    if (promotedRing && !destroyed) {
+      pendingRing = promotedRing;
+      const ringAv = $("ringAv"); if (ringAv) ringAv.textContent = initials(promotedRing.fromName || "?");
+      const ringWho = $("ringWho"); if (ringWho) ringWho.textContent = promotedRing.fromName || "Someone";
+      const ringSub = $("ringSub"); if (ringSub) ringSub.textContent = "is calling you…";
+      $("ringOverlay")?.classList.add("active");
+      playRingtone("incoming");
+      emitPhase("ringing");
+      if (ringTimeoutT) clearTimeout(ringTimeoutT);
+      ringTimeoutT = setTimeout(() => {
+        if (pendingRing && pendingRing.from === promotedRing.from) declineInvite();
+      }, 60000);
+    }
   }
 
   // ---------- wire up ----------

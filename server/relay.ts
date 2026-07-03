@@ -273,11 +273,18 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
   const members = Array.from(reg.rooms.get(rid) || [])
     .filter(p => p !== pin)
     .map(p => ({ pin: p, name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest", device: reg.clients.get(p)?.device, flag: reg.clients.get(p)?.flag, role: roleOf(rmeta, p) }));
-  if (members.length === 0) {
-    // The user is ALONE in this room — a stale solo dialing room (they refreshed
-    // mid-ring before anyone answered) or everyone else already left. Don't drop
-    // them into an empty "call" screen; release the membership so they land back
-    // in the lobby, and reap the orphaned solo room.
+  // A rejoin is only meaningful if someone is actually THERE. Members whose
+  // client record is gone (disconnect grace long expired — tab closed, network
+  // died) are GHOSTS: rejoining a room of ghosts resurrected zombie calls
+  // forever — each rejoin also CANCELS the abandonment reaper below, so every
+  // app-open re-immortalized the dead room, the device sat silently "in a
+  // call", real incoming rings degraded to call-waiting, and the zombie's
+  // eventual death auto-declined them ("calls disconnect within seconds").
+  const connectedOthers = members.filter(m => reg.clients.has(m.pin)).length;
+  if (members.length === 0 || connectedOthers === 0) {
+    // ALONE (stale solo dial room) or only ghosts left. Don't drop the user
+    // into a dead "call" screen; release the membership so they land in the
+    // lobby, and let the orphaned room reap.
     leaveRoom(reg, pin);
     return;
   }

@@ -2806,3 +2806,35 @@ was no longer any way to reach them.
       700 and everything stays reachable; 25-row history → final row reachable. 646 passing, tsc +
       build clean. Footer → `v2.78.0`. NEEDS real-iPhone confirm (publish first — the phone was still
       running v2.76 when this was reported).
+
+## v2.78.1 — Calls no longer die seconds after dialing: zombie-room + answer-signal fixes (delivered 2026-07-03)
+
+User report: every call drops within seconds, before establishing; asked to "kill all active calls".
+Reproduced END-TO-END in two headless browsers against a server whose SFU was unreachable — which
+surfaced a self-perpetuating failure loop, not one bug:
+
+- [x] **Immortal zombie rooms (server)**: when call media failed and tabs closed without an explicit
+      leave, room membership persisted (the step-away feature); every later app-open AUTO-REJOINED the
+      dead room — and each rejoin CANCELLED the room's abandonment reaper, re-immortalizing it. The
+      device then sat silently "in a call": real incoming rings degraded to a call-waiting popup, and
+      when the zombie died (~16.5s media watchdog) its teardown AUTO-DECLINED the real call. Fix:
+      `sendRejoinIfInRoom` now refuses to rejoin a room of GHOSTS — if every other member's client
+      record is gone, the membership is released and the room reaps (unit-tested).
+- [x] **Caller deaf to the answer (v2.74 regression, client)**: on the SFU path the caller's
+      answer transition was keyed off LiveKit events only — with the SFU slow/unreachable no event ever
+      fired, so the caller sat at "Ringing…" FOREVER (its watchdog stuck in the gentle keep-token-fresh
+      loop) while the callee's side died alone. Fix: the server's `peer-joined` (authoritative on both
+      media paths) now sets `callAnswered` + advances the staged flow; both sides now fail (or recover)
+      together, and the caller's watchdog escalates properly after an answer.
+- [x] **No-answer backstop (client)**: an outgoing dial now gives up cleanly after 65s ("No answer.")
+      if the callee's device vanished mid-ring — no more eternal solo dial rooms feeding the zombie loop.
+- [x] **Waiting call promoted, never swallowed (client)**: when the active call ends while a second
+      caller is WAITING, they now ring through as a normal incoming call instead of being auto-declined.
+- [x] Clearer media-failure toast ("the media server is unreachable from this network").
+- [x] **"Kill all active calls now"**: rooms live in the server process's memory — PUBLISHING restarts
+      the process and clears every active call/room instantly; with the ghost-rejoin fix they can no
+      longer resurrect. Verified: mesh happy path still connects end-to-end (Calling→Ringing→
+      Connecting→Connected); SFU-unreachable path fails symmetrically in ~16.5s with an honest error and
+      no zombies. 651 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.78.1`.
+      If calls STILL fail after publishing, the LiveKit Cloud project itself (creds/quota/status)
+      should be checked — the app now reports that failure honestly instead of looping.
