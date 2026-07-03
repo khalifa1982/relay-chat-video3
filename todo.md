@@ -2736,3 +2736,29 @@ Per the user's spec + reference screenshot: comprehensive restructure of the His
 - [x] Verified with headless-Chromium screenshots (mocked tRPC): All/Dialed/Missed states, colors,
       badges, timestamps. 12 new pins in `client/src/pages/app/History.test.ts` + 2 `formatFullWhen`
       unit tests. 640 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.75.0`.
+
+## v2.76.0 — iOS permission-prompt guidance + document overscroll lock (delivered 2026-07-03)
+
+Two screenshot reports: the recurring "Allow your-chat.org to use your camera and microphone?" popup on
+iOS, and the app scrolling past its own end into a dead black band below the docked tab bar.
+
+- [x] **Camera/mic prompt (honest scope):** the popup is BROWSER security policy — no web API can
+      persist a grant for the user, extend it to other sites, or survive cleared site data. What the
+      app CAN do and now does: (a) it already never re-prompts within a session (`ensureMedia` reuses
+      the live stream — pinned); (b) a **one-time iOS tip** right after the first successful grant
+      points to Safari's PERMANENT per-site fix (aA → Website Settings → set Camera and Microphone to
+      Allow — Safari then never asks again for this site). Skipped inside an installed (standalone)
+      PWA, where iOS persists grants per app; Chrome/Android + desktop persist after the first Allow
+      on their own. Once-ever via `relay_ios_perm_tip` localStorage flag.
+- [x] **Overscroll fix (root-caused):** iOS keyboard scroll-into-view (e.g. focusing Contacts search)
+      scrolled the DOCUMENT even though the app is an internal-scroll shell, shoving the whole layout
+      up past the tab bar. Now: `html/body.relay-app-lock { height:100%; overflow:hidden;
+      overscroll-behavior:none }` while AppShell's Inner is mounted (onboarding/lock screens outside
+      it keep normal page scroll), the shell's scroll container gets `overscroll-contain` (no chain to
+      the document), and `<main>` switched `max-md:h-svh` → **`max-md:h-dvh`** so the shell tracks the
+      real viewport as the browser bar expands/collapses (svh left a strip below the bar when the URL
+      bar collapsed). The tab bar is now the absolute scroll + visual end of the app.
+- [x] Verified in-browser: on /app pages a forced `scrollTo(0,500)` leaves `scrollY` at 0, the
+      document has zero scrollable excess, and the nav sits flush at the viewport bottom; the
+      marketing page (outside the shell) still scrolls normally. 4 new iOS-tip pins + 2 new/updated
+      shell pins. 645 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.76.0`.

@@ -29,8 +29,18 @@ describe("AppShell — docked in-flow bottom nav (no gap above, nothing hidden u
 
   it("the scroll container carries NO clearance padding and is a flex column so pages fill it with flex-1 (height:100% does not resolve against flex-derived heights)", () => {
     expect(SHELL).not.toMatch(/pb-28/);
-    expect(SHELL).toMatch(/className="flex-1 min-h-0 overflow-y-auto flex flex-col">\{children\}<\/div>/);
-    expect(SHELL).toMatch(/max-md:h-svh/);
+    expect(SHELL).toMatch(/className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">\{children\}<\/div>/);
+    // dvh (not svh): the shell tracks the REAL viewport as the browser bar
+    // expands/collapses, so the tab bar is always flush with the true bottom.
+    expect(SHELL).toMatch(/max-md:h-dvh/);
+    expect(SHELL).not.toMatch(/max-md:h-svh/);
+  });
+
+  it("the DOCUMENT is locked while the shell is mounted — all scrolling is internal, so the app can never be shoved past its own end (v2.76 overscroll fix)", () => {
+    expect(SHELL).toMatch(/documentElement\.classList\.add\("relay-app-lock"\)/);
+    expect(SHELL).toMatch(/body\.classList\.add\("relay-app-lock"\)/);
+    const CSS = read("client/src/index.css");
+    expect(CSS).toMatch(/html\.relay-app-lock,\s*\nbody\.relay-app-lock \{\s*\n\s*height: 100%;\s*\n\s*overflow: hidden;\s*\n\s*overscroll-behavior: none;/);
   });
 
   it("the bar is docked full-width at the very bottom: border-t (not a floating rounded pill)", () => {

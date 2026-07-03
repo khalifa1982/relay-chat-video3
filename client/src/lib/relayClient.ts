@@ -836,6 +836,31 @@ export function startRelay(root: HTMLElement): RelayHandle {
         || (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1); // iPadOS poses as Mac
     } catch { return false; }
   })();
+  // iOS Safari does NOT remember camera/mic grants by default — it re-prompts
+  // on later visits, and NO web API can persist the grant for the user (that's
+  // a platform security boundary; Chrome/Android and desktop browsers persist
+  // after the first Allow on their own). The one real, permanent fix lives in
+  // Safari itself: aA → Website Settings → Camera/Microphone → Allow. Surface
+  // that ONCE, right after the first successful grant (while the popup is
+  // fresh in mind), then never again. Skipped inside an installed (standalone)
+  // PWA, where iOS already persists grants per app.
+  function maybeShowIosPermTip() {
+    try {
+      if (!IS_IOS) return;
+      const standalone =
+        (navigator as unknown as { standalone?: boolean }).standalone === true ||
+        (typeof window.matchMedia === "function" && window.matchMedia("(display-mode: standalone)").matches);
+      if (standalone) return;
+      if (window.localStorage.getItem("relay_ios_perm_tip") === "1") return;
+      window.localStorage.setItem("relay_ios_perm_tip", "1");
+      // Delayed so it doesn't collide with the "call starting" toasts.
+      setTimeout(() => {
+        toast(
+          "Tip: stop the camera/mic popup — tap aA in Safari's address bar → Website Settings → set Camera and Microphone to Allow. Safari then remembers it for this site."
+        );
+      }, 1500);
+    } catch { /* best-effort — never block media on a tip */ }
+  }
   let loudspeakerCtx: AudioContext | null = null;
   let loudspeakerOn = false;
   let loudspeakerScanT: ReturnType<typeof setInterval> | null = null;
@@ -1023,6 +1048,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
         throw e2;
       }
     }
+    // First grant of the session: on iOS Safari, show the one-time pointer to
+    // the PERMANENT per-site Allow (the popup itself is browser policy we
+    // cannot suppress from a web page).
+    maybeShowIosPermTip();
     // Only spin up the heavy canvas pipeline if a filter was already chosen.
     if (activeFilter !== "none" && localStream.getVideoTracks().length > 0) {
       await ensurePipeline();

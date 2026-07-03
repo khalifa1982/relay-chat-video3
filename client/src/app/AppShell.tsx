@@ -98,6 +98,21 @@ function Inner({ children }: { children: React.ReactNode }) {
   // right tRPC queries so the UI feels near-instant without WebSockets.
   useRealtime(Boolean(me), me?.id ?? null);
 
+  // Lock the DOCUMENT while the shell is mounted: every scrollable area lives
+  // INSIDE the shell, so the page itself must never scroll or rubber-band.
+  // Without this, iOS Safari's keyboard scroll-into-view (e.g. focusing the
+  // Contacts search) shoved the whole shell upward and left the app scrolled
+  // past its own end — a dead black band below the tab bar. Scoped to Inner so
+  // the onboarding/lock screens (outside the shell) keep normal page scroll.
+  useEffect(() => {
+    document.documentElement.classList.add("relay-app-lock");
+    document.body.classList.add("relay-app-lock");
+    return () => {
+      document.documentElement.classList.remove("relay-app-lock");
+      document.body.classList.remove("relay-app-lock");
+    };
+  }, []);
+
   // Pre-fetch the threads & calls list once we have an identity so the
   // tab badges are warm by the time the user taps them.
   useEffect(() => {
@@ -343,13 +358,14 @@ function Inner({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* ── main column ────────────────────────────────────────── */}
-      {/* max-md:h-svh makes the mobile shell's height DEFINITE (not just a
-          min-height floor), so the percentage chain below it resolves: pages
-          using h-full (Messages, Dialer) genuinely fill the scroll area and
-          their bottom-anchored bars (composer) land exactly on the tab bar.
+      {/* max-md:h-dvh makes the mobile shell's height DEFINITE (not just a
+          min-height floor) so the flex chain below it resolves, AND dynamic
+          (dvh tracks the real viewport as the browser's URL bar expands or
+          collapses) so the tab bar is always flush with the true bottom —
+          svh left a dead strip below the bar whenever the URL bar collapsed.
           With only min-h-svh, `height:100%` inside the flex chain falls back
           to content height and short pages collapse upward. */}
-      <main className="flex-1 flex flex-col min-w-0 min-h-svh max-md:h-svh">
+      <main className="flex-1 flex flex-col min-w-0 min-h-svh max-md:h-dvh">
         {/* mobile header */}
         <header
           className={
@@ -440,7 +456,7 @@ function Inner({ children }: { children: React.ReactNode }) {
             whereas height:100% against a flex-derived (non-explicit) height
             silently falls back to content height in Chrome and collapses
             short pages upward. */}
-        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">{children}</div>
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">{children}</div>
 
         {/* Docked glass tab bar. IN-FLOW (not position:fixed): as the last
             flex child of the viewport-bounded column it is permanently pinned

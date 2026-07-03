@@ -369,3 +369,16 @@
     display: none;
   }
 }
+
+/* While the phone-app shell is mounted (AppShell Inner), the DOCUMENT itself
+   never scrolls — every scrollable region lives inside the shell. This stops
+   iOS Safari's keyboard scroll-into-view and rubber-band overscroll from
+   shoving the whole app upward and exposing a dead band below the docked tab
+   bar, and it kills stray body scrollbars on desktop. The onboarding / lock
+   screens mount outside Inner and keep normal page scrolling. */
+html.relay-app-lock,
+body.relay-app-lock {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
