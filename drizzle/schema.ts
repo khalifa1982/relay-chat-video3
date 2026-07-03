@@ -150,6 +150,10 @@ export const identities = mysqlTable(
      *  newer than this are "unseen" and drive the landing popup + badges. Bumped
      *  to now() when the user reviews their missed calls. Additive + nullable. */
     missedCallsSeenAt: timestamp("missedCallsSeenAt"),
+    /** "Clear history" high-water mark: call/conference rows started at or
+     *  before this are hidden from THIS identity's History tab (per-user soft
+     *  clear — the other party keeps their own log). Additive + nullable. */
+    historyClearedAt: timestamp("historyClearedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

@@ -33,6 +33,8 @@ import {
   isGuestPresenceHidden,
   listCallHistory,
   listConferenceHistory,
+  getHistoryClearedAt,
+  clearCallHistory,
   listContacts,
   listMessages,
   searchMessages,
@@ -1070,7 +1072,8 @@ export const v2AttachmentsRouter = router({
 export const v2CallsRouter = router({
   history: publicProcedure.query(async ({ ctx }) => {
     const me = requireIdentity(ctx);
-    const rows = await listCallHistory(me.id, 100);
+    const clearedAt = await getHistoryClearedAt(me.id);
+    const rows = await listCallHistory(me.id, 100, clearedAt);
     // join the "other" identity for each row for friendly display
     const otherIds = Array.from(
       new Set(
@@ -1108,7 +1111,8 @@ export const v2CallsRouter = router({
    *  identity took part in, with the full roster (name + PIN) and duration. */
   conferenceHistory: publicProcedure.query(async ({ ctx }) => {
     const me = requireIdentity(ctx);
-    const rows = await listConferenceHistory(me.id, 100);
+    const clearedAt = await getHistoryClearedAt(me.id);
+    const rows = await listConferenceHistory(me.id, 100, clearedAt);
     return rows.map((r) => {
       const roster = Array.isArray(r.participants)
         ? (r.participants as Array<{ number?: string; name?: string; identityId?: number | null }>)
@@ -1182,6 +1186,15 @@ export const v2CallsRouter = router({
   markMissedSeen: publicProcedure.mutation(async ({ ctx }) => {
     const me = requireIdentity(ctx);
     await markMissedCallsSeen(me.id);
+    return { ok: true };
+  }),
+
+  /** "Clear history" (per-user soft clear): hides every existing call +
+   *  conference row from THIS identity's History tab and acks missed-call
+   *  badges. The other parties' logs are untouched. */
+  clearHistory: publicProcedure.mutation(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    await clearCallHistory(me.id);
     return { ok: true };
   }),
 });

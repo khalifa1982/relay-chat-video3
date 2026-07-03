@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration, formatWhen } from "./formatCall";
+import { formatDuration, formatWhen, formatFullWhen } from "./formatCall";
 
 describe("formatDuration", () => {
   it("formats sub-minute durations as m:ss", () => {
@@ -40,5 +40,19 @@ describe("formatWhen", () => {
 
   it("returns empty string for an invalid date instead of 'Invalid Date'", () => {
     expect(formatWhen("not-a-date")).toBe("");
+  });
+});
+
+describe("formatFullWhen (call-log full date + precise time)", () => {
+  it("always includes the YEAR and SECONDS (en-US pinned for determinism)", () => {
+    const s = formatFullWhen("2026-07-03T16:12:09Z", "en-US");
+    expect(s).toMatch(/2026/);
+    // Seconds survive any whole-minute timezone offset.
+    expect(s).toMatch(/:09/);
+    expect(s.length).toBeGreaterThan(10);
+  });
+
+  it("returns empty string for an invalid date instead of 'Invalid Date'", () => {
+    expect(formatFullWhen("nope")).toBe("");
   });
 });

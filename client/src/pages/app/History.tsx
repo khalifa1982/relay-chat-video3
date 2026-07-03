@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import {
   Clock,
@@ -8,10 +8,11 @@ import {
   PhoneMissed,
   PhoneOutgoing,
   PhoneIncoming,
+  Trash2,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
-import { formatDuration, formatWhen } from "@/lib/formatCall";
+import { formatDuration, formatFullWhen } from "@/lib/formatCall";
 import { useIdentity } from "@/app/useIdentity";
 import { useRelayEngine } from "@/app/RelayEngine";
 
@@ -30,18 +31,64 @@ type CallRow = {
   id: number;
   direction: "in" | "out";
   status: string;
+  channel?: string;
+  durationSec?: number | null;
   startedAt: string | Date;
   other: { number: string; displayName: string } | null;
 };
 
 type Item =
-  | { kind: "conf"; key: string; at: number; conf: ConfRow }
-  | { kind: "missed"; key: string; at: number; call: CallRow };
+  | { kind: "conf"; key: string; at: number; direction: "in" | "out"; conf: ConfRow }
+  | { kind: "solo"; key: string; at: number; direction: "in" | "out"; call: CallRow };
+
+type Filter = "all" | "dialed" | "missed";
+
+/* Per-direction accent recipe. FULL literal class strings — Tailwind's JIT
+ * can't see classes assembled at runtime. The user spec: missed calls bright
+ * RED, dialed (outgoing) vibrant GREEN, received (incoming) clear BLUE. */
+const TONE = {
+  missed: {
+    bubble: "bg-red-500/12 text-red-500",
+    name: "text-red-500",
+    label: "text-red-500",
+  },
+  out: {
+    bubble: "bg-green-500/12 text-green-500",
+    name: "text-green-500",
+    label: "text-green-500",
+  },
+  in: {
+    bubble: "bg-blue-500/12 text-blue-500",
+    name: "text-blue-500",
+    label: "text-blue-500",
+  },
+} as const;
+
+const FILTERS: Array<{ key: Filter; label: string; icon: typeof Phone }> = [
+  { key: "all", label: "All", icon: Phone },
+  { key: "dialed", label: "Dialed", icon: PhoneOutgoing },
+  { key: "missed", label: "Missed", icon: PhoneMissed },
+];
+
+/** True for the 1:1 rows we surface as standalone entries (never-connected
+ *  calls). Answered calls come through conferenceHistory — skipping them here
+ *  avoids double-listing. */
+function isSoloRow(c: CallRow): boolean {
+  if (c.direction === "in") return c.status === "missed" || c.status === "declined";
+  // Outgoing: anything that never became a live call (they're "Dialed" rows).
+  return ["missed", "declined", "initiated", "ringing", "failed"].includes(c.status);
+}
+
+function isMissedItem(it: Item): boolean {
+  return it.kind === "solo" && it.direction === "in";
+}
 
 export default function HistoryPage() {
   const { me } = useIdentity();
   const engine = useRelayEngine();
   const [, setLocation] = useLocation();
+  const utils = trpc.useUtils();
+  const [filter, setFilter] = useState<Filter>("all");
   // Open (or create) a 1:1 thread with a number and jump straight into it.
   const openThread = trpc.messages.openThread.useMutation({
     onSuccess: (res) => setLocation(`/app/messages?c=${res.conversationId}`),
@@ -53,13 +100,27 @@ export default function HistoryPage() {
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   });
-  // 1:1 history — we only surface the MISSED/DECLINED rows here (answered calls
-  // already come through `conferenceHistory`, so this avoids double-listing).
+  // 1:1 history — surfaces the rows that never became a live call (missed /
+  // declined / unanswered dials); answered calls come via conferenceHistory.
   const oneToOne = trpc.calls.history.useQuery(undefined, {
     enabled: !!me,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   });
+
+  // "Clear History": per-user soft clear on the server (the other parties keep
+  // their own logs), then refresh everything the log feeds.
+  const clearHistory = trpc.calls.clearHistory.useMutation({
+    onSuccess: () => {
+      utils.calls.history.invalidate();
+      utils.calls.conferenceHistory.invalidate();
+      utils.calls.missedSummary.invalidate();
+    },
+  });
+  function onClearHistory() {
+    if (!window.confirm("Clear your entire call history? This can't be undone.")) return;
+    clearHistory.mutate();
+  }
 
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
@@ -68,21 +129,40 @@ export default function HistoryPage() {
         kind: "conf",
         key: "conf-" + c.id,
         at: new Date(c.startedAt).getTime(),
+        // The roster is seeded by the CALLER (first entry) — so "first entry is
+        // me" means I dialed this call; otherwise I received/joined it.
+        direction: c.participants[0]?.isSelf ? "out" : "in",
         conf: c,
       });
     }
     for (const c of (oneToOne.data ?? []) as CallRow[]) {
-      if (c.status !== "missed" && c.status !== "declined") continue;
+      if (!isSoloRow(c)) continue;
       out.push({
-        kind: "missed",
-        key: "miss-" + c.id,
+        kind: "solo",
+        key: "solo-" + c.id,
         at: new Date(c.startedAt).getTime(),
+        direction: c.direction,
         call: c,
       });
     }
     out.sort((a, b) => b.at - a.at);
     return out;
   }, [conferences.data, oneToOne.data]);
+
+  const counts = useMemo(
+    () => ({
+      all: items.length,
+      dialed: items.filter((it) => it.direction === "out").length,
+      missed: items.filter(isMissedItem).length,
+    }),
+    [items]
+  );
+
+  const visible = useMemo(() => {
+    if (filter === "dialed") return items.filter((it) => it.direction === "out");
+    if (filter === "missed") return items.filter(isMissedItem);
+    return items;
+  }, [items, filter]);
 
   const loading = conferences.isLoading || oneToOne.isLoading;
   const errored = conferences.isError && oneToOne.isError;
@@ -100,11 +180,79 @@ export default function HistoryPage() {
   };
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-2xl flex-col px-4 pb-24 pt-4 md:pb-6">
-      <header className="mb-4 flex items-center gap-2">
+    <div className="mx-auto flex w-full max-w-2xl flex-1 min-h-0 flex-col px-4 pb-3 pt-4 md:pb-6">
+      <header className="mb-3 flex items-center gap-2">
         <Clock className="size-5 text-primary" />
         <h1 className="text-lg font-semibold tracking-tight">Call history</h1>
       </header>
+
+      {/* Filter bar: All / Dialed / Missed segmented control + Clear History
+          on the right. Sits ABOVE the scrolling list, so it (and the bottom
+          tab bar below the page) stay put while the log scrolls. */}
+      <div className="mb-3 flex items-center gap-2">
+        <div
+          role="tablist"
+          aria-label="Filter calls"
+          className="flex flex-1 gap-1 rounded-xl bg-muted/50 p-1"
+        >
+          {FILTERS.map((f) => {
+            const active = filter === f.key;
+            const Icon = f.icon;
+            const n = counts[f.key];
+            return (
+              <button
+                key={f.key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setFilter(f.key)}
+                className={
+                  "flex flex-1 items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold transition-colors " +
+                  "outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
+                  (active
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground")
+                }
+              >
+                <Icon
+                  className={
+                    "size-3.5 " +
+                    (f.key === "missed"
+                      ? active ? "text-red-500" : ""
+                      : f.key === "dialed"
+                        ? active ? "text-green-500" : ""
+                        : "")
+                  }
+                />
+                {f.label}
+                {n > 0 && (
+                  <span
+                    className={
+                      "min-w-4 rounded-full px-1 text-[10px] leading-4 " +
+                      (f.key === "missed"
+                        ? "bg-red-500/15 text-red-500"
+                        : "bg-muted text-muted-foreground")
+                    }
+                  >
+                    {n > 99 ? "99+" : n}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label="Clear history"
+          title="Clear your call history"
+          disabled={clearHistory.isPending || items.length === 0}
+          onClick={onClearHistory}
+          className="size-9 shrink-0 text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+        >
+          <Trash2 className="size-[18px]" />
+        </Button>
+      </div>
 
       <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl glass-surface-md shadow-xl shadow-black/10">
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -121,19 +269,28 @@ export default function HistoryPage() {
             </div>
           ) : loading ? (
             <div className="p-6 text-sm text-muted-foreground">Loading…</div>
-          ) : items.length === 0 ? (
+          ) : visible.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
-              No calls yet. Your conference and call history will appear here —
-              who you dialed, how many people joined, their names and numbers,
-              and how long the call lasted.
+              {filter === "missed"
+                ? "No missed calls. 🎉"
+                : filter === "dialed"
+                  ? "No dialed calls yet — call someone from the keypad."
+                  : "No calls yet. Your conference and call history will appear here — who you dialed, how many people joined, their names and numbers, and how long the call lasted."}
             </div>
           ) : (
             <ul>
-              {items.map((it) =>
+              {visible.map((it) =>
                 it.kind === "conf" ? (
-                  <ConferenceItem key={it.key} conf={it.conf} onRedial={redial} onRedialGroup={redialGroup} onMessage={message} />
+                  <ConferenceItem
+                    key={it.key}
+                    conf={it.conf}
+                    direction={it.direction}
+                    onRedial={redial}
+                    onRedialGroup={redialGroup}
+                    onMessage={message}
+                  />
                 ) : (
-                  <MissedItem key={it.key} call={it.call} onRedial={redial} onMessage={message} />
+                  <SoloItem key={it.key} call={it.call} onRedial={redial} onMessage={message} />
                 )
               )}
             </ul>
@@ -146,11 +303,13 @@ export default function HistoryPage() {
 
 function ConferenceItem({
   conf,
+  direction,
   onRedial,
   onRedialGroup,
   onMessage,
 }: {
   conf: ConfRow;
+  direction: "in" | "out";
   onRedial: (num: string) => void;
   onRedialGroup: (numbers: string[]) => void;
   onMessage: (num: string) => void;
@@ -158,7 +317,8 @@ function ConferenceItem({
   const others = conf.participants.filter((p) => !p.isSelf);
   const otherNumbers = others.map((p) => p.number).filter(Boolean);
   const isGroup = conf.partyCount > 2 || otherNumbers.length > 1;
-  const Icon = isGroup ? Users : Phone;
+  const tone = direction === "out" ? TONE.out : TONE.in;
+  const Icon = isGroup ? Users : direction === "out" ? PhoneOutgoing : PhoneIncoming;
   // Title = the other people on the call (or the dialed number as a fallback).
   const title =
     others.length > 0
@@ -178,22 +338,31 @@ function ConferenceItem({
   return (
     <li
       className="border-b border-border/60 px-4 py-3 last:border-b-0 hover:bg-muted/30 transition-colors"
-      aria-label={`Call with ${title}, ${formatDuration(conf.durationSec)} duration`}
+      aria-label={`${direction === "out" ? "Outgoing" : "Incoming"} call with ${title}, ${formatDuration(conf.durationSec)} duration`}
     >
       <div className="flex items-center gap-3">
-        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+        <span className={"grid size-9 shrink-0 place-items-center rounded-xl " + tone.bubble}>
           <Icon className="size-[18px]" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate font-medium">{title}</div>
+          <div className={"truncate font-medium " + tone.name}>{title}</div>
           <div className="text-xs text-muted-foreground">
+            <span className={"font-semibold " + tone.label}>
+              {direction === "out" ? "Outgoing" : "Incoming"}
+            </span>
             {isGroup ? (
               <>
-                <Users className="mr-1 inline size-3 align-[-1px]" />
-                {conf.partyCount} people ·{" "}
+                {" "}· <Users className="mr-0.5 inline size-3 align-[-1px]" />
+                {conf.partyCount} people
               </>
             ) : null}
-            {formatDuration(conf.durationSec)} · {formatWhen(conf.startedAt)}
+            {" "}· {formatDuration(conf.durationSec)}
+            {conf.dialedNumber ? (
+              <span className="font-mono"> · PIN {conf.dialedNumber}</span>
+            ) : null}
+          </div>
+          <div className="mt-0.5 text-[11px] text-muted-foreground/80">
+            {formatFullWhen(conf.startedAt)}
           </div>
         </div>
         <Button
@@ -245,7 +414,10 @@ function ConferenceItem({
   );
 }
 
-function MissedItem({
+/** A 1:1 row that never became a live call: an incoming missed/declined call
+ *  (bright red) or an outgoing dial nobody answered (vibrant green, since it
+ *  belongs to "Dialed"). */
+function SoloItem({
   call,
   onRedial,
   onMessage,
@@ -254,33 +426,37 @@ function MissedItem({
   onRedial: (num: string) => void;
   onMessage: (num: string) => void;
 }) {
-  const Icon =
-    call.status === "missed"
-      ? call.direction === "in"
-        ? PhoneMissed
-        : PhoneOutgoing
-      : call.direction === "in"
-        ? PhoneIncoming
-        : PhoneOutgoing;
+  const missedIn = call.direction === "in";
+  const tone = missedIn ? TONE.missed : TONE.out;
+  const Icon = missedIn ? PhoneMissed : PhoneOutgoing;
   const peerNum = call.other?.number ?? "";
   const peerName = call.other?.displayName ?? peerNum ?? "Unknown";
-  const label = call.status === "declined" ? "Declined" : "Missed";
+  const label = missedIn
+    ? call.status === "declined" ? "Declined" : "Missed call"
+    : call.status === "declined"
+      ? "Declined by them"
+      : call.status === "failed"
+        ? "Failed"
+        : "No answer";
 
   return (
     <li
       className="border-b border-border/60 px-4 py-3 last:border-b-0 hover:bg-muted/30 transition-colors"
-      aria-label={`${label} call from ${peerName}`}
+      aria-label={`${label} — ${peerName}`}
     >
       <div className="flex items-center gap-3">
-        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-destructive/10 text-destructive">
+        <span className={"grid size-9 shrink-0 place-items-center rounded-xl " + tone.bubble}>
           <Icon className="size-[18px]" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate font-medium">{peerName}</div>
+          <div className={"truncate font-medium " + tone.name}>{peerName}</div>
           <div className="text-xs text-muted-foreground">
-            <span className="text-destructive">{label}</span>
-            {peerNum ? <span className="font-mono"> · {peerNum}</span> : null} ·{" "}
-            {formatWhen(call.startedAt)}
+            <span className={"font-semibold " + tone.label}>{label}</span>
+            {call.channel === "voice" ? " · Voice" : call.channel === "video" ? " · Video" : ""}
+            {peerNum ? <span className="font-mono"> · PIN {peerNum}</span> : null}
+          </div>
+          <div className="mt-0.5 text-[11px] text-muted-foreground/80">
+            {formatFullWhen(call.startedAt)}
           </div>
         </div>
         <Button

@@ -2707,3 +2707,32 @@ staged states, and the full in-call interface only once the call is actually est
 - [x] 2 new server tests (ringing ack delivered / absent when offline) + 16 static pins in
       `client/src/lib/callProgress.test.ts`. 626 passing (1 pre-existing skip), tsc + build clean.
       Footer → `v2.74.0`.
+
+## v2.75.0 — History overhaul: All/Dialed/Missed filter tabs, Clear History, color-coded rich rows (delivered 2026-07-03)
+
+Per the user's spec + reference screenshot: comprehensive restructure of the History tab.
+
+- [x] **Three filter tabs** at the top — **All / Dialed / Missed** — each with an intuitive icon
+      (Phone / PhoneOutgoing / PhoneMissed) and a live count badge (Missed's is red). Segmented-control
+      styling; selection actually narrows the list (Dialed = outgoing, Missed = incoming missed/declined).
+- [x] **Clear History** trash icon on the right of the filter bar. Confirm-guarded; new
+      `calls.clearHistory` mutation performs a PER-USER soft clear: a `historyClearedAt` high-water mark
+      on the identity (additive schema column + boot-migrator entry) hides all existing call/conference
+      rows from this user only — the other parties keep their logs — and also acks missed-call badges.
+      Both `calls.history` and `calls.conferenceHistory` filter `startedAt > clearedAt`.
+- [x] **Color coding** exactly as specified: missed/declined incoming = **bright red**, dialed/outgoing =
+      **vibrant green**, received/incoming = **clear blue** — applied to the leading icon bubble, the
+      name, and the type label (literal Tailwind classes; runtime-composed names don't JIT).
+- [x] **Full metadata on every row**: contact name (or number), FULL date + precise time with seconds
+      (new `formatFullWhen`, e.g. "Jul 3, 2026, 4:13:13 PM"), call duration, the dialed **PIN** (mono),
+      voice/video channel on 1:1 rows, and the complete per-party name+PIN roster chips on conferences.
+- [x] **Unanswered OUTGOING dials now appear** (status missed/declined/initiated/ringing/failed,
+      direction out → "No answer"/"Declined by them"/"Failed" in green) — previously only incoming
+      missed calls were listed, so the Dialed view would have been incomplete. A conference's direction
+      is derived from roster order (the caller seeds the roster → first entry isSelf = outgoing).
+- [x] **Sticky bottom nav**: History page root switched from `h-full` (collapses — see v2.73) to
+      `flex-1 min-h-0`, stale `pb-24` clearance dropped; the log scrolls inside its card while the
+      filter bar above and the docked tab bar below stay put. (Messages already correct since v2.73.)
+- [x] Verified with headless-Chromium screenshots (mocked tRPC): All/Dialed/Missed states, colors,
+      badges, timestamps. 12 new pins in `client/src/pages/app/History.test.ts` + 2 `formatFullWhen`
+      unit tests. 640 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.75.0`.

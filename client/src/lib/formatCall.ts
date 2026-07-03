@@ -24,3 +24,20 @@ export function formatWhen(iso: string | Date): string {
     minute: "2-digit",
   });
 }
+
+/** FULL date + precise time for the call log, e.g.
+ *  "Jul 3, 2026, 4:12:09 PM" — year always shown, seconds included.
+ *  `locale` is only passed by tests (deterministic output); the UI uses the
+ *  browser default. */
+export function formatFullWhen(iso: string | Date, locale?: string): string {
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(locale, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}

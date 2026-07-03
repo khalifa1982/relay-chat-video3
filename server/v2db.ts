@@ -631,6 +631,8 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "identities", column: "socials", ddl: "ADD COLUMN `socials` text" },
     // Missed-call acknowledgement high-water mark (v2.61).
     { table: "identities", column: "missedCallsSeenAt", ddl: "ADD COLUMN `missedCallsSeenAt` timestamp NULL" },
+    // Per-user "Clear history" high-water mark (v2.75).
+    { table: "identities", column: "historyClearedAt", ddl: "ADD COLUMN `historyClearedAt` timestamp NULL" },
     // Self-hosted email/password auth (v2.54).
     { table: "users", column: "passwordHash", ddl: "ADD COLUMN `passwordHash` text" },
     { table: "users", column: "emailVerified", ddl: "ADD COLUMN `emailVerified` boolean" },
@@ -1586,21 +1588,52 @@ export async function recordCallStart(input: {
   return rows[0];
 }
 
-export async function listCallHistory(identityId: number, limit = 100) {
+export async function listCallHistory(identityId: number, limit = 100, since?: Date | null) {
   const db = await getDb();
   if (!db) return [];
   const rows = await db
     .select()
     .from(callHistory)
     .where(
-      or(
-        eq(callHistory.callerIdentityId, identityId),
-        eq(callHistory.calleeIdentityId, identityId)
+      and(
+        or(
+          eq(callHistory.callerIdentityId, identityId),
+          eq(callHistory.calleeIdentityId, identityId)
+        ),
+        // "Clear history": rows at/before the identity's cleared mark stay in
+        // the DB (the OTHER party keeps their log) but are hidden from us.
+        since ? gt(callHistory.startedAt, since) : undefined
       )
     )
     .orderBy(desc(callHistory.id))
     .limit(limit);
   return rows;
+}
+
+/** This identity's "Clear history" high-water mark (null = never cleared). */
+export async function getHistoryClearedAt(identityId: number): Promise<Date | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select({ historyClearedAt: identities.historyClearedAt })
+    .from(identities)
+    .where(eq(identities.id, identityId))
+    .limit(1);
+  return rows[0]?.historyClearedAt ?? null;
+}
+
+/** "Clear history": per-user soft clear. Hides every call/conference row that
+ *  started at or before NOW from this identity's History tab, and acks any
+ *  outstanding missed-call badges (a cleared log shouldn't keep nagging). The
+ *  rows themselves are untouched — the other parties keep their own history. */
+export async function clearCallHistory(identityId: number) {
+  const db = await getDb();
+  if (!db) return;
+  const now = new Date();
+  await db
+    .update(identities)
+    .set({ historyClearedAt: now, missedCallsSeenAt: now })
+    .where(eq(identities.id, identityId));
 }
 
 /**
@@ -1713,7 +1746,7 @@ export async function recordConferenceEnd(input: {
 }
 
 /** Conferences `identityId` participated in, most recent first. */
-export async function listConferenceHistory(identityId: number, limit = 100) {
+export async function listConferenceHistory(identityId: number, limit = 100, since?: Date | null) {
   const db = await getDb();
   if (!db) return [];
   const parts = await db
@@ -1729,7 +1762,13 @@ export async function listConferenceHistory(identityId: number, limit = 100) {
     .from(conferenceHistory)
     // Order by id (monotonic) — startedAt has 1-second granularity, so it ties
     // unstably for conferences started in the same second.
-    .where(inArray(conferenceHistory.id, confIds))
+    .where(
+      and(
+        inArray(conferenceHistory.id, confIds),
+        // Same per-user "Clear history" mark as listCallHistory.
+        since ? gt(conferenceHistory.startedAt, since) : undefined
+      )
+    )
     .orderBy(desc(conferenceHistory.id));
   return confs;
 }
