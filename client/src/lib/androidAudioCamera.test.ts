@@ -217,8 +217,11 @@ describe("v2.72 — mobile call QA fixes (verified)", () => {
     expect(CLIENT).toMatch(/Live filters aren't supported on this browser/);
   });
 
-  it("#2 screen-share unsupported message is iOS-specific (Apple has no getDisplayMedia)", () => {
-    expect(CLIENT).toMatch(/isn't available in the browser on iPhone\/iPad/);
+  it("#2 screen-share tells MOBILE users it's desktop-only (no mobile browser has getDisplayMedia)", () => {
+    // Android Chrome ALSO lacks getDisplayMedia (not just iOS) — so the message
+    // must not say 'Try Chrome' to a phone user; it must point them to a desktop.
+    expect(CLIENT).toMatch(/Screen sharing only works on a computer/);
+    expect(CLIENT).not.toMatch(/Use a desktop or Android Chrome/);
   });
 
   it("IS_IOS is defined once (hoisted for the flip/filter paths)", () => {

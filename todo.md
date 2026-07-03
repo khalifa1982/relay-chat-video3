@@ -2632,3 +2632,19 @@ that are platform/environment issues.
 
 > All five touch iOS/Android-specific media behavior that can't be verified from this environment — the
 > three code fixes (#1/#3/#5) are correct by construction but need a real-device pass after publishing.
+
+## v2.72.1 — Correction: screen sharing is desktop-only (Android Chrome ALSO lacks getDisplayMedia) (delivered 2026-07-03)
+
+QA confirmed the Android screen-share test was on **Chrome with the camera on** — ruling out the two
+gating conditions I'd guessed. Re-checked the platform reality: `navigator.mediaDevices.getDisplayMedia`
+is **not implemented on any mobile browser** — not iOS Safari AND not Android Chrome (web screen-capture
+needs the OS screen-record API, which phones don't expose to web pages). So the tester's Android Chrome
+hit the `!md.getDisplayMedia` branch and saw a toast that said "Try Chrome" — misleading, since they
+were already on Chrome. This is a **platform limitation on both mobile OSes, not an app bug** (I was
+wrong earlier to say it works in Android Chrome).
+
+- [x] Corrected the "not supported" message: mobile users (iOS or Android) now see "Screen sharing only
+      works on a computer — phone browsers don't allow it. Open RELAY on a desktop/laptop to share your
+      screen." Desktop-without-support falls back to "Try Chrome, Edge, or Firefox on desktop." No
+      functional change (screen share was never reachable on mobile); just an honest, correct message.
+- [x] Updated the pinned #2 test. 597 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.72.1`.

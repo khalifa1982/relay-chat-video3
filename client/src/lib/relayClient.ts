@@ -3857,14 +3857,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
       getDisplayMedia?: (c?: MediaStreamConstraints) => Promise<MediaStream>;
     };
     if (!md.getDisplayMedia) {
-      // iOS Safari does NOT implement getDisplayMedia at all (Apple exposes no
-      // screen-capture API to web pages) — so it's genuinely impossible on iPhone/
-      // iPad, not a bug we can fix. On Android, screen share works in Chrome; a
-      // browser without the API (some Android Firefox/Samsung builds) lands here too.
+      // NO mobile browser implements getDisplayMedia — not iOS Safari AND not
+      // Android Chrome. Web screen-capture needs the OS screen-record API, which
+      // phones don't expose to web pages, so it's a DESKTOP-ONLY capability
+      // (not an app bug). Only desktop browsers ever reach the sharing logic below.
+      const isMobile = IS_IOS || IS_ANDROID || (typeof navigator !== "undefined" && (navigator.maxTouchPoints || 0) > 0 && /Mobi|Android|iP(hone|ad|od)/i.test(navigator.userAgent || ""));
       toast(
-        IS_IOS
-          ? "Screen sharing isn't available in the browser on iPhone/iPad (Apple doesn't allow it). Use a desktop or Android Chrome."
-          : "Screen sharing isn't supported in this browser. Try Chrome.",
+        isMobile
+          ? "Screen sharing only works on a computer — phone browsers don't allow it. Open RELAY on a desktop/laptop to share your screen."
+          : "Screen sharing isn't supported in this browser. Try Chrome, Edge, or Firefox on desktop.",
         true,
       );
       return;
