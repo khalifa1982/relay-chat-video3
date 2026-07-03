@@ -2762,3 +2762,23 @@ iOS, and the app scrolling past its own end into a dead black band below the doc
       document has zero scrollable excess, and the nav sits flush at the viewport bottom; the
       marketing page (outside the shell) still scrolls normally. 4 new iOS-tip pins + 2 new/updated
       shell pins. 645 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.76.0`.
+
+## v2.77.0 — Dialer action trio (Voice/Video/Group icons) + tab bar fits the real iPhone viewport (delivered 2026-07-03)
+
+Real-device screenshot feedback on v2.76:
+
+- [x] **Dial buttons redesigned as a trio of round icon buttons** in one row, each labelled underneath:
+      **Voice Call** (blue, `PhoneCall` — handset + sound waves, reads as "voice"), **Video Call**
+      (green, `Video` camera, now white + larger for contrast), and **Group Call** (purple, `Users`) —
+      the wide "Create Group Call" TEXT bar is gone; the third icon button opens the same up-to-10
+      participant picker and is always enabled (Voice/Video still require a 6-digit number).
+- [x] **Tab bar was cut off on a real iPhone (v2.76 regression) — fixed.** `max-md:h-dvh` made iOS
+      Safari report the LARGE (toolbar-collapsed) viewport while our scroll lock prevents the toolbar
+      from ever collapsing — so the shell was taller than the visible area and, with document scroll
+      disabled, the bar was unreachable. Reverted the mobile shell to **`max-md:h-svh`** (small
+      viewport = always fits above the browser toolbars; the scroll lock means the toolbar stays put,
+      so svh matches the visible viewport in practice) and bumped the bar's minimum bottom padding
+      (0.35rem → 0.55rem) for clearance. Pinned with a do-not-switch-without-real-device-retest note.
+- [x] Verified: headless-Chromium geometry (nav flush at viewport bottom, shell == viewport height) +
+      dialer screenshot of the new trio. 645 passing (1 pre-existing skip), tsc + build clean.
+      Footer → `v2.77.0`. NEEDS a quick real-iPhone confirm that the bar is now fully visible.

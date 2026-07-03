@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Phone,
+  PhoneCall,
   Video,
   Delete,
   PhoneIncoming,
@@ -484,13 +485,15 @@ export default function DialerPage() {
               ))}
             </div>
 
-            {/* Call actions — two equally-prominent circular buttons, each
-                labelled underneath. Voice = blue, Video = green. */}
+            {/* Call actions — THREE equally-prominent circular icon buttons in
+                one row, each labelled underneath: Voice (blue, handset+waves),
+                Video (green, camera), Group Call (purple, people — opens the
+                up-to-10 participant picker; no separate text bar). */}
             <div
               className="relative mx-auto w-full"
-              style={{ maxWidth: "min(100%, 360px)" }}
+              style={{ maxWidth: "min(100%, 380px)" }}
             >
-              <div className="flex items-start justify-center gap-10">
+              <div className="flex items-start justify-center gap-7">
                 {/* Voice call (blue) — starts with the camera off (audio-only). */}
                 <div className="flex flex-col items-center gap-1.5">
                   <button
@@ -512,7 +515,7 @@ export default function DialerPage() {
                     aria-label="Voice call"
                     title="Voice call (camera off)"
                   >
-                    <Phone className="size-5" />
+                    <PhoneCall className="size-6" strokeWidth={2.2} />
                   </button>
                   <span className="text-xs font-medium text-muted-foreground">Voice Call</span>
                 </div>
@@ -523,7 +526,7 @@ export default function DialerPage() {
                     disabled={!callable}
                     onClick={() => startCallNow()}
                     className="
-                      rounded-full text-primary-foreground grid place-items-center
+                      rounded-full text-white grid place-items-center
                       disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none
                       active:scale-[0.94] transition-transform duration-150
                     "
@@ -537,12 +540,35 @@ export default function DialerPage() {
                     aria-label="Video call"
                     title="Video call"
                   >
-                    <Video className="size-5" />
+                    <Video className="size-6" strokeWidth={2.2} />
                   </button>
                   <span className="text-xs font-medium text-muted-foreground">Video Call</span>
                 </div>
+                {/* Group call (purple) — opens the participant picker. */}
+                <div className="flex flex-col items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowGroup(true)}
+                    className="
+                      rounded-full text-white grid place-items-center
+                      active:scale-[0.94] transition-transform duration-150
+                    "
+                    style={{
+                      width: "clamp(54px, 13vw, 64px)",
+                      height: "clamp(54px, 13vw, 64px)",
+                      background: "#8b5cf6",
+                      boxShadow: "0 10px 28px -8px color-mix(in oklab, #8b5cf6 70%, transparent)",
+                      transitionTimingFunction: "var(--ease-out)",
+                    }}
+                    aria-label="Group call"
+                    title="Group call — ring up to 10 people into one room"
+                  >
+                    <Users className="size-6" strokeWidth={2.2} />
+                  </button>
+                  <span className="text-xs font-medium text-muted-foreground">Group Call</span>
+                </div>
               </div>
-              {/* Backspace — kept out of the way of the centred pair. */}
+              {/* Backspace — kept out of the way of the centred trio. */}
               {dialed.length > 0 ? (
                 <button
                   type="button"
@@ -553,17 +579,6 @@ export default function DialerPage() {
                   <Delete className="size-[18px]" />
                 </button>
               ) : null}
-            </div>
-
-            {/* Create Group Call — opens a picker for up to 10 participants. */}
-            <div className="mt-4 flex justify-center">
-              <button
-                type="button"
-                onClick={() => setShowGroup(true)}
-                className="inline-flex items-center gap-2 rounded-full border border-border bg-card/70 px-4 py-2 text-sm font-medium text-foreground hover:bg-card active:scale-[0.97] transition"
-              >
-                <Users className="size-4" /> Create Group Call
-              </button>
             </div>
 
             {/* Quick-add */}

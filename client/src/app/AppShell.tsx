@@ -358,14 +358,17 @@ function Inner({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* ── main column ────────────────────────────────────────── */}
-      {/* max-md:h-dvh makes the mobile shell's height DEFINITE (not just a
-          min-height floor) so the flex chain below it resolves, AND dynamic
-          (dvh tracks the real viewport as the browser's URL bar expands or
-          collapses) so the tab bar is always flush with the true bottom —
-          svh left a dead strip below the bar whenever the URL bar collapsed.
-          With only min-h-svh, `height:100%` inside the flex chain falls back
-          to content height and short pages collapse upward. */}
-      <main className="flex-1 flex flex-col min-w-0 min-h-svh max-md:h-dvh">
+      {/* max-md:h-svh makes the mobile shell's height DEFINITE (not just a
+          min-height floor) so the flex chain below it resolves — and SMALL
+          (svh = the viewport with the browser's toolbars VISIBLE), so the tab
+          bar always fits on screen. dvh was tried (v2.76) and CUT THE TAB BAR
+          OFF on a real iPhone: with the document scroll-locked, iOS Safari
+          reported the large (toolbar-collapsed) height, making the shell
+          taller than the visible area with no way to scroll to the bar. The
+          scroll lock also means the toolbar never collapses on our page, so
+          svh matches the visible viewport in practice. Do not switch back to
+          dvh without re-testing on a physical iPhone. */}
+      <main className="flex-1 flex flex-col min-w-0 min-h-svh max-md:h-svh">
         {/* mobile header */}
         <header
           className={
@@ -475,7 +478,10 @@ function Inner({ children }: { children: React.ReactNode }) {
             "supports-[backdrop-filter]:bg-card/60 supports-[backdrop-filter]:backdrop-blur-2xl supports-[backdrop-filter]:backdrop-saturate-150"
           }
           style={{
-            paddingBottom: "max(0.35rem, env(safe-area-inset-bottom))",
+            // A touch more breathing room than the bare safe-area minimum so
+            // the tab row sits comfortably clear of the browser's own bottom
+            // toolbar on mobile.
+            paddingBottom: "max(0.55rem, env(safe-area-inset-bottom))",
           }}
         >
           <div className="grid grid-cols-4">
