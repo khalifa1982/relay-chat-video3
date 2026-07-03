@@ -2648,3 +2648,34 @@ wrong earlier to say it works in Android Chrome).
       screen." Desktop-without-support falls back to "Try Chrome, Edge, or Firefox on desktop." No
       functional change (screen share was never reachable on mobile); just an honest, correct message.
 - [x] Updated the pinned #2 test. 597 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.72.1`.
+
+## v2.73.0 — Bottom-nav overhaul: docked in-flow tab bar, per-tab accent colors, composer seated on the nav (delivered 2026-07-03)
+
+Three-screenshot UI request: (1) redesign the bottom nav with premium icons + a DISTINCT active color per
+section, (2) eliminate the dead vertical band between page content and the nav, (3) pin the Messages
+composer immediately above the nav with the chat scrolling above both.
+
+- [x] **Tab bar is now IN-FLOW, docked at the very bottom** — no longer `position:fixed` floating pill.
+      As the last flex child of the viewport-bounded shell column, page content ends EXACTLY at the
+      bar's top edge: the `pb-28` clearance zone (the gap band the user circled) is deleted entirely,
+      nothing can hide behind the bar, and the bar can never scroll away (scrolling happens in the
+      sibling container). Still hidden during calls via `body.relay-call-active`.
+- [x] **Per-tab active accents** (user spec): Calls **green** `#22c55e`, History **sky** `#38bdf8`,
+      Messages **orange** `#fb923c`, Contacts **purple** `#a78bfa`. Active tab = white icon on a
+      gradient squircle with a soft matching glow + label tinted in the tab's hue (darker shade on the
+      light theme for contrast). Refreshed icon set: `History` / `MessageCircle` / `UsersRound` replace
+      `Clock` / `MessageSquare` / `UserRound`. Desktop sidebar mirrors the accent (tinted active row).
+      Colors are inline styles — runtime-composed Tailwind classes are invisible to the JIT compiler.
+- [x] **Root cause of the gap/composer misplacement found by in-browser probing**: pages filled the
+      shell with `h-full`, but `height:100%` does NOT resolve against the scroll container's
+      flex-derived (non-explicit) height — Chrome silently falls back to content height, so short
+      conversations collapsed upward leaving a void above the nav (previously masked by `pb-28` +
+      usually-full content). Fix: the scroll container is now a flex COLUMN and Messages/Dialer fill it
+      with `flex-1` (flex-grow needs no percentage resolution); `<main>` also gets `max-md:h-svh` so
+      the mobile shell height is definite. Composer now sits at pixel-0 above the nav in ALL
+      conversation lengths (verified: composerBottom == navTop == 766.4 on a 390×844 viewport).
+- [x] Verified with headless-Chromium screenshots (mocked tRPC/SSE — sandbox has no MySQL): all four
+      tab accents, dark + light themes, mobile + desktop, empty + full conversations; geometry probes
+      assert 0px content→nav and composer→nav gaps and the nav flush with the viewport bottom.
+- [x] 11 new pins in `client/src/app/appShellNav.test.ts`; updated the two `h-full`-era pins.
+      608 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.73.0`.

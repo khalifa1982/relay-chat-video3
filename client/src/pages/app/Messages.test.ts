@@ -24,9 +24,10 @@ describe("Messages.tsx — messaging overhaul", () => {
     expect(SRC).not.toMatch(/className="absolute inset-0 overflow-y-auto/);
   });
 
-  it("does NOT cancel AppShell's mobile pb-28 — it's the only clearance keeping the fixed bottom tab bar from covering the composer (a prior attempt to cancel it regressed to a hidden-behind-the-nav composer)", () => {
-    expect(SRC).toMatch(/className="h-full flex md:p-6 gap-0 md:gap-6 min-h-0"/);
-    expect(SRC).not.toMatch(/className="h-full -mb-28/);
+  it("page root fills the shell with flex-1 (NOT h-full) and no negative-margin hacks — height:100% doesn't resolve against the flex-derived scroll-container height (short conversations collapsed upward, leaving a void above the in-flow tab bar), and a historical -mb-28 hack once hid the composer behind the old fixed nav", () => {
+    expect(SRC).toMatch(/className="flex-1 flex md:p-6 gap-0 md:gap-6 min-h-0"/);
+    expect(SRC).not.toMatch(/className="h-full flex md:p-6/);
+    expect(SRC).not.toMatch(/className="[^"]*-mb-28/);
   });
 
   it("messages use a three-dot context menu (not hover-only buttons)", () => {

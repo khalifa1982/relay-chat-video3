@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Phone, MessageSquare, UserRound, Clock, LogOut, Sparkles, Sun, Moon, Smartphone, Monitor, ArrowLeft } from "lucide-react";
+import { Phone, MessageCircle, UsersRound, History, LogOut, Sparkles, Sun, Moon, Smartphone, Monitor, ArrowLeft } from "lucide-react";
 import { detectDeviceType } from "@/lib/deviceType";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
@@ -17,12 +17,18 @@ import { MissedCallToast, NotificationBell } from "./MissedCalls";
 /**
  * Tab keys used by the bottom-nav / sidebar. We hard-code the routes here
  * so the bottom-nav matches across pages.
+ *
+ * Each tab carries its OWN accent (`color`, plus a darker `shade` for the
+ * active gradient + light-theme text) so tapping a section lights it up in a
+ * distinct hue — Calls green, History sky, Messages orange, Contacts purple.
+ * These are applied via inline styles, NOT template-composed Tailwind classes:
+ * the JIT compiler can't see class names assembled at runtime.
  */
 const TABS = [
-  { key: "dialer", path: "/app/dialer", label: "Calls", icon: Phone },
-  { key: "history", path: "/app/history", label: "History", icon: Clock },
-  { key: "messages", path: "/app/messages", label: "Messages", icon: MessageSquare },
-  { key: "contacts", path: "/app/contacts", label: "Contacts", icon: UserRound },
+  { key: "dialer", path: "/app/dialer", label: "Calls", icon: Phone, color: "#22c55e", shade: "#15803d" },
+  { key: "history", path: "/app/history", label: "History", icon: History, color: "#38bdf8", shade: "#0369a1" },
+  { key: "messages", path: "/app/messages", label: "Messages", icon: MessageCircle, color: "#fb923c", shade: "#c2410c" },
+  { key: "contacts", path: "/app/contacts", label: "Contacts", icon: UsersRound, color: "#a78bfa", shade: "#7c3aed" },
 ] as const;
 
 /** Small "Mobile"/"Desktop" chip shown next to the country flag, detected
@@ -261,12 +267,18 @@ function Inner({ children }: { children: React.ReactNode }) {
                 className={
                   "group flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1 transition-colors " +
                   "outline-none focus-visible:ring-sidebar-ring focus-visible:ring-[3px] " +
-                  (active
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground font-semibold"
-                    : "hover:bg-sidebar-accent/15 text-sidebar-foreground")
+                  (active ? "font-semibold" : "hover:bg-sidebar-accent/15 text-sidebar-foreground")
+                }
+                style={
+                  active
+                    ? {
+                        background: `color-mix(in oklab, ${tab.color} 16%, transparent)`,
+                        color: theme === "light" ? tab.shade : tab.color,
+                      }
+                    : undefined
                 }
               >
-                <Icon className="size-5 shrink-0" />
+                <Icon className="size-5 shrink-0" strokeWidth={active ? 2.3 : 2} />
                 <span className="flex-1">{tab.label}</span>
                 {tab.key === "messages" && unreadTotal > 0 && (
                   <span className="inline-flex min-w-5 h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-xs items-center justify-center font-bold">
@@ -331,7 +343,13 @@ function Inner({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* ── main column ────────────────────────────────────────── */}
-      <main className="flex-1 flex flex-col min-w-0 min-h-svh">
+      {/* max-md:h-svh makes the mobile shell's height DEFINITE (not just a
+          min-height floor), so the percentage chain below it resolves: pages
+          using h-full (Messages, Dialer) genuinely fill the scroll area and
+          their bottom-anchored bars (composer) land exactly on the tab bar.
+          With only min-h-svh, `height:100%` inside the flex chain falls back
+          to content height and short pages collapse upward. */}
+      <main className="flex-1 flex flex-col min-w-0 min-h-svh max-md:h-svh">
         {/* mobile header */}
         <header
           className={
@@ -414,49 +432,64 @@ function Inner({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <div className="flex-1 min-h-0 overflow-y-auto pb-28 md:pb-0">{children}</div>
+        {/* The scroll container ends EXACTLY at the tab bar's top edge — the
+            bar below is an in-flow flex sibling, not a floating overlay, so no
+            clearance padding is needed and content can never hide behind it.
+            It is itself a flex COLUMN so full-height pages (Messages, Dialer)
+            can fill it with flex-1 — flex-grow needs no percentage resolution,
+            whereas height:100% against a flex-derived (non-explicit) height
+            silently falls back to content height in Chrome and collapses
+            short pages upward. */}
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">{children}</div>
 
-        {/* Apple-style glass tab bar: floating, compact icons, per-tab
-            accent color, and a safe-area inset so it never collides
-            with the home indicator. */}
+        {/* Docked glass tab bar. IN-FLOW (not position:fixed): as the last
+            flex child of the viewport-bounded column it is permanently pinned
+            to the very bottom — the scrolling happens in the sibling above, so
+            the bar can never scroll away and nothing can slide under it.
+            (During a call, body.relay-call-active hides all .relay-appshell-chrome,
+            which also returns this bar's row to the call UI.) Each tab lights up
+            in its own accent — green / sky / orange / purple — as a gradient
+            squircle with a soft matching glow. */}
         <nav
           className={
-            "relay-appshell-chrome md:hidden fixed bottom-2 inset-x-3 z-30 rounded-2xl " +
-            "border border-white/10 " +
-            "bg-card/65 " +
-            "shadow-[0_8px_32px_rgba(0,0,0,0.25)] " +
-            "supports-[backdrop-filter]:bg-card/40 supports-[backdrop-filter]:backdrop-blur-2xl supports-[backdrop-filter]:backdrop-saturate-150"
+            "relay-appshell-chrome md:hidden shrink-0 z-30 " +
+            "border-t border-white/10 " +
+            "bg-card/80 " +
+            "shadow-[0_-8px_24px_rgba(0,0,0,0.18)] " +
+            "supports-[backdrop-filter]:bg-card/60 supports-[backdrop-filter]:backdrop-blur-2xl supports-[backdrop-filter]:backdrop-saturate-150"
           }
           style={{
-            paddingBottom: "max(0.4rem, env(safe-area-inset-bottom))",
+            paddingBottom: "max(0.35rem, env(safe-area-inset-bottom))",
           }}
         >
           <div className="grid grid-cols-4">
             {TABS.map((tab) => {
               const active = location.startsWith(tab.path);
               const Icon = tab.icon;
-              const accentClass =
-                tab.key === "dialer"
-                  ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
-                  : tab.key === "messages"
-                    ? "bg-primary/15 text-primary"
-                    : tab.key === "history"
-                      ? "bg-primary/10 text-primary"
-                      : "bg-accent/20 text-accent";
               return (
                 <Link
                   key={tab.key}
                   href={tab.path}
-                  className="flex flex-col items-center gap-0.5 py-2.5 transition-all duration-150 active:scale-[0.96] outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-xl"
+                  aria-current={active ? "page" : undefined}
+                  className="flex flex-col items-center gap-1 pt-2 pb-1 transition-transform duration-150 active:scale-[0.94] outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-xl"
                   style={{ transitionTimingFunction: "cubic-bezier(0.23,1,0.32,1)" }}
                 >
                   <span
                     className={
-                      "relative inline-flex items-center justify-center rounded-xl size-9 transition-colors " +
-                      (active ? accentClass : "text-muted-foreground")
+                      "relative inline-flex items-center justify-center rounded-[14px] size-10 transition-all duration-200 " +
+                      (active ? "" : "text-muted-foreground")
+                    }
+                    style={
+                      active
+                        ? {
+                            color: "#fff",
+                            background: `linear-gradient(135deg, ${tab.color} 0%, ${tab.shade} 100%)`,
+                            boxShadow: `0 4px 14px ${tab.color}59, inset 0 1px 0 rgba(255,255,255,0.28)`,
+                          }
+                        : undefined
                     }
                   >
-                    <Icon className="size-[18px]" />
+                    <Icon className="size-[19px]" strokeWidth={active ? 2.4 : 2} />
                     {tab.key === "messages" && unreadTotal > 0 && (
                       <span className="absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] items-center justify-center font-bold ring-2 ring-card">
                         {unreadTotal > 99 ? "99+" : unreadTotal}
@@ -470,9 +503,10 @@ function Inner({ children }: { children: React.ReactNode }) {
                   </span>
                   <span
                     className={
-                      "text-[10px] font-medium tracking-wide transition-colors " +
-                      (active ? "text-foreground" : "text-muted-foreground")
+                      "text-[10px] font-semibold tracking-wide transition-colors " +
+                      (active ? "" : "text-muted-foreground")
                     }
+                    style={active ? { color: theme === "light" ? tab.shade : tab.color } : undefined}
                   >
                     {tab.label}
                   </span>

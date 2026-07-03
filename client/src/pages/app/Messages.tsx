@@ -129,16 +129,17 @@ export default function MessagesPage() {
   }, [activeConvoId]);
 
   return (
-    // NOTE: AppShell's mobile pb-28 is NOT wasted space to reclaim — it's the
-    // ONLY clearance keeping the FIXED (floating, z-30) bottom tab bar from
-    // overlapping page content, since a `position:fixed` element is out of
-    // flow and paints on top of whatever sits beneath it. A prior attempt to
-    // cancel that padding here (-mb-28) "fixed" the wrong problem: it let this
-    // page grow 112px taller, which pushed the composer DOWN into the zone the
-    // floating nav covers — hiding the composer behind it. Do not reintroduce
-    // that cancellation; the message-list flex fix below (flex-col instead of
-    // relative-with-only-absolute-children) is what actually fixes the layout.
-    <div className="h-full flex md:p-6 gap-0 md:gap-6 min-h-0">
+    // NOTE: AppShell's bottom tab bar is an IN-FLOW flex sibling BELOW this
+    // page's scroll container (not a floating fixed overlay), so this page's
+    // h-full ends exactly at the bar's top edge — the composer at the bottom
+    // of the conversation column sits immediately ABOVE the nav, and the
+    // message list scrolls above both. No clearance padding and no
+    // negative-margin hacks are needed (a historical -mb-28 hack hid the
+    // composer behind the old fixed nav — never reintroduce one). The
+    // message-list flex fix below (flex-col instead of
+    // relative-with-only-absolute-children) is what keeps WebKit from
+    // collapsing the list area.
+    <div className="flex-1 flex md:p-6 gap-0 md:gap-6 min-h-0">
       {/* ── thread list (always visible on desktop; hidden when a thread is open on mobile) ── */}
       <aside
         className={

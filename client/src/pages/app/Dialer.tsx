@@ -230,7 +230,10 @@ export default function DialerPage() {
   const recent = useMemo(() => (history.data ?? []).slice(0, 8), [history.data]);
 
   return (
-    <div className="dialer-shell relative h-full">
+    // flex-1 (not h-full): fills the AppShell scroll column via flex-grow so
+    // the keypad genuinely stretches down to the tab bar — height:100% does
+    // not resolve against the flex-derived container height.
+    <div className="dialer-shell relative flex-1 min-h-0 flex flex-col">
       {/* Missed Call alert — shown when arriving from the landing popup. */}
       {showMissed && missedCount > 0 && missedLatest && phase === "idle" && (
         <div className="absolute inset-x-0 top-0 z-20 px-3 pt-3 md:px-6 md:pt-6">
@@ -270,7 +273,7 @@ export default function DialerPage() {
       )}
       {/* ── idle dialer surface (always rendered; hidden visually when phase != idle) */}
       <div
-        className="grid md:grid-cols-[1fr_minmax(0,420px)] gap-0 md:gap-6 md:p-6 h-full"
+        className="grid md:grid-cols-[1fr_minmax(0,420px)] gap-0 md:gap-6 md:p-6 flex-1 min-h-0"
         style={{
           // The whole dialer must fit inside the viewport with no scroll.
           // 100dvh accounts for mobile browser chrome correctly.
