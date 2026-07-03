@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "wouter";
 import {
   Phone,
   PhoneCall,
@@ -107,6 +108,7 @@ export default function DialerPage() {
   // rung from any tab; the Dialer just drives it (dial / read phase + the
   // authoritative signaling pin).
   const engine = useRelayEngine();
+  const [, setLocation] = useLocation();
   const { phase, ready: engineReady, pin: enginePin } = engine;
   const [dialed, setDialed] = useState("");
   const [showGroup, setShowGroup] = useState(false);
@@ -243,18 +245,27 @@ export default function DialerPage() {
       {showMissed && missedCount > 0 && missedLatest && phase === "idle" && (
         <div className="absolute inset-x-0 top-0 z-20 px-3 pt-3 md:px-6 md:pt-6">
           <div className="mx-auto max-w-md flex items-center gap-3 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 shadow-lg backdrop-blur-md">
-            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-destructive/20 text-destructive">
-              <PhoneMissed className="size-5" />
-            </span>
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold text-foreground">
-                {missedCount === 1 ? "Missed Call" : `${missedCount} Missed Calls`}
-              </div>
-              <div className="text-xs text-muted-foreground truncate">
-                from <span className="font-medium text-foreground/90">{missedLatest.name}</span>
-                {missedLatest.number ? ` · ${formatDialed(missedLatest.number)}` : ""}
-              </div>
-            </div>
+            {/* The alert body is a LINK to the full Missed log (History →
+                Missed filter) — it used to be inert text, a dead end. */}
+            <button
+              type="button"
+              onClick={() => setLocation("/app/history?filter=missed")}
+              className="flex flex-1 min-w-0 items-center gap-3 text-left outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-lg"
+            >
+              <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-destructive/20 text-destructive">
+                <PhoneMissed className="size-5" />
+              </span>
+              <span className="flex-1 min-w-0 block">
+                <span className="block text-sm font-semibold text-foreground">
+                  {missedCount === 1 ? "Missed Call" : `${missedCount} Missed Calls`}
+                </span>
+                <span className="block text-xs text-muted-foreground truncate">
+                  from <span className="font-medium text-foreground/90">{missedLatest.name}</span>
+                  {missedLatest.number ? ` · ${formatDialed(missedLatest.number)}` : ""}
+                  {" — tap to see all"}
+                </span>
+              </span>
+            </button>
             {missedLatest.number && (
               <Button
                 size="sm"

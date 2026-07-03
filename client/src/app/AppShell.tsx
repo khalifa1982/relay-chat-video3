@@ -212,7 +212,9 @@ function Inner({ children }: { children: React.ReactNode }) {
   };
   const viewMissed = () => {
     dismissPopup();
-    navigate("/app/dialer?missed=1");
+    // Straight to the full Missed log (History → Missed filter pre-selected);
+    // reviewing it also acknowledges the missed calls (clears the badges).
+    navigate("/app/history?filter=missed");
   };
 
   if (!me) return null;
@@ -241,7 +243,7 @@ function Inner({ children }: { children: React.ReactNode }) {
             <NotificationBell
               missedCount={missedCount}
               unreadCount={unreadTotal}
-              onOpenHistory={() => navigate("/app/history")}
+              onOpenHistory={() => navigate("/app/history?filter=missed")}
               onOpenMessages={() => navigate("/app/messages")}
               dnd={dnd}
               onDndChange={setDnd}
@@ -462,7 +464,7 @@ function Inner({ children }: { children: React.ReactNode }) {
             <NotificationBell
               missedCount={missedCount}
               unreadCount={unreadTotal}
-              onOpenHistory={() => navigate("/app/history")}
+              onOpenHistory={() => navigate("/app/history?filter=missed")}
               onOpenMessages={() => navigate("/app/messages")}
               dnd={dnd}
               onDndChange={setDnd}

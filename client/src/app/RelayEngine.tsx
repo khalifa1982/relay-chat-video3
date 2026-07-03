@@ -71,6 +71,20 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   // / accidental close. Drives the prominent "Reconnecting… / Exit call" prompt.
   const [rejoining, setRejoining] = useState(false);
 
+  // Incoming-ring "quick reply": the engine calls back with (callerPin, text)
+  // when the callee picks a canned response; we deliver it as a normal chat
+  // message (open/create the 1:1 thread, then send) so it lands in Messages
+  // on both sides. Mutations live here (React layer) — the engine is plain JS.
+  const openThread = trpc.messages.openThread.useMutation();
+  const sendMessage = trpc.messages.send.useMutation();
+  const quickReplyRef = useRef<(toPin: string, text: string) => void>(() => {});
+  quickReplyRef.current = (toPin, text) => {
+    openThread
+      .mutateAsync({ number: toPin })
+      .then((r) => sendMessage.mutateAsync({ conversationId: r.conversationId, kind: "text", body: text }))
+      .catch(() => {/* best-effort — the decline itself already went through */});
+  };
+
   // Latest identity values, read by the (mount-once) auto-register loop.
   const nameRef = useRef<string | null>(null);
   nameRef.current = me?.displayName ?? null;
@@ -106,6 +120,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     handle.setOnStateChange(setPhase);
     handle.setOnPinChange(setPin);
     handle.setOnRejoinChange(setRejoining);
+    handle.setOnQuickReply((toPin, text) => quickReplyRef.current(toPin, text));
     if (flagRef.current) handle.setSelfFlag(flagRef.current);
     handleRef.current = handle;
 

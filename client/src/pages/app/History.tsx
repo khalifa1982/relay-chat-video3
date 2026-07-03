@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useLocation } from "wouter";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useSearch } from "wouter";
 import {
   Clock,
   Phone,
@@ -88,7 +88,17 @@ export default function HistoryPage() {
   const engine = useRelayEngine();
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
-  const [filter, setFilter] = useState<Filter>("all");
+  // ?filter=missed|dialed|all — every missed-call notification (landing toast,
+  // Dialer banner, bell panel) deep-links straight into the Missed log here.
+  const search = useSearch();
+  const urlFilter = useMemo<Filter | null>(() => {
+    const f = new URLSearchParams(search).get("filter");
+    return f === "missed" || f === "dialed" || f === "all" ? (f as Filter) : null;
+  }, [search]);
+  const [filter, setFilter] = useState<Filter>(urlFilter ?? "all");
+  useEffect(() => {
+    if (urlFilter) setFilter(urlFilter);
+  }, [urlFilter]);
   // Open (or create) a 1:1 thread with a number and jump straight into it.
   const openThread = trpc.messages.openThread.useMutation({
     onSuccess: (res) => setLocation(`/app/messages?c=${res.conversationId}`),

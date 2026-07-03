@@ -37,7 +37,7 @@ describe("missed-call notification system", () => {
   it("the landing popup identifies the caller and routes to the dialer", () => {
     expect(MISSED).toMatch(/export function MissedCallToast/);
     expect(MISSED).toMatch(/latest\.name/);
-    expect(SHELL).toMatch(/navigate\("\/app\/dialer\?missed=1"\)/);
+    expect(SHELL).toMatch(/navigate\("\/app\/history\?filter=missed"\)/);
   });
 
   it("the notification bell badges with missed + unread and the History tab badges missed", () => {

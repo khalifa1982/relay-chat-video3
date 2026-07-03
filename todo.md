@@ -2838,3 +2838,25 @@ surfaced a self-perpetuating failure loop, not one bug:
       no zombies. 651 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.78.1`.
       If calls STILL fail after publishing, the LiveKit Cloud project itself (creds/quota/status)
       should be checked — the app now reports that failure honestly instead of looping.
+
+## v2.79.0 — Rich incoming-call card + working missed-call pathways (delivered 2026-07-03)
+
+Two-part spec from the user (screenshot of the old bare Accept/Decline popup):
+
+- [x] **Incoming-call overlay overhauled** into a rich caller card: **circular** avatar, larger name
+      with the caller's **national flag** beside it, and their **PIN** (mono, accent) for in-service
+      identity verification. Actions: a split answer — **Voice** (mic icon, blue; camera stays OFF,
+      upgradeable in-call — same rule as a voice dial, so the SFU publishes no video at all) and
+      **Video** (camera icon, green) — a prominent full-width red **Decline**, and a **quick-reply**
+      fold-out ("I'll call you back shortly" / "Can't talk right now — text me" / "On my way") that
+      sends the caller a REAL chat message through the v2 messaging stack (engine → host hook →
+      `messages.openThread` + `messages.send`) and declines the ring.
+- [x] **Missed-call pathways all lead to the Missed log now** (History → Missed filter, deep-linked via
+      `?filter=missed`, which History honours and reacts to): the landing missed-call toast's View
+      actions, the notification bell's history action (both desktop + mobile), and the Dialer's
+      missed-call banner — whose body is now a working LINK ("tap to see all") instead of inert text.
+      Reviewing History still acknowledges the missed calls (badges clear).
+- [x] Verified live (two browsers, real signaling + mesh): card shows name/PIN/flag + all four actions;
+      picking a quick reply fires BOTH messaging mutations, closes the overlay, and the caller's dial
+      ends; answering as Voice connects with the camera off on the answerer. 662 passing (1 pre-existing
+      skip), tsc + build clean. Footer → `v2.79.0`.

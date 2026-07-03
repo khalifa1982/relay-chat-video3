@@ -217,11 +217,25 @@ export const RELAY_MARKUP = `
 <div class="overlay" id="ringOverlay">
   <div class="ring-card">
     <div class="av" id="ringAv">?</div>
-    <div class="who" id="ringWho">Someone</div>
+    <div class="who"><span id="ringWho">Someone</span><span class="ring-flag" id="ringFlag"></span></div>
+    <div class="ring-pin" id="ringPin"></div>
     <div class="sub" id="ringSub">is calling you&hellip;</div>
     <div class="ring-actions">
-      <button class="r-btn r-decline" id="declineBtn">Decline</button>
-      <button class="r-btn r-accept" id="acceptBtn">Accept</button>
+      <button class="r-btn r-accept-voice" id="acceptVoiceBtn" title="Answer with microphone only (camera off)">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/><path d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.9V21a1 1 0 1 0 2 0v-3.1A7 7 0 0 0 19 11z"/></svg>
+        Voice
+      </button>
+      <button class="r-btn r-accept" id="acceptBtn" title="Answer with the camera on">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+        Video
+      </button>
+    </div>
+    <button class="r-btn r-decline r-decline-wide" id="declineBtn">Decline</button>
+    <button class="qr-toggle" id="quickReplyBtn" type="button">Can't talk? Send a quick reply</button>
+    <div class="quick-replies" id="quickReplies">
+      <button type="button" class="qr-opt" data-msg="I'll call you back shortly.">I'll call you back shortly</button>
+      <button type="button" class="qr-opt" data-msg="Can't talk right now — text me.">Can't talk right now — text me</button>
+      <button type="button" class="qr-opt" data-msg="On my way.">On my way</button>
     </div>
   </div>
 </div>
@@ -352,13 +366,29 @@ export const RELAY_CSS = `
 .relay-root .overlay.active{display:flex;animation:relayFade .25s ease both}
 .relay-root .ring-card{width:min(380px,90vw);background:var(--surface);border:1px solid var(--border2);border-radius:24px;
   padding:34px;text-align:center;box-shadow:0 30px 80px -20px rgba(0,0,0,.7)}
-.relay-root .ring-card .av{width:84px;height:84px;border-radius:24px;background:var(--grad);margin:0 auto 18px;
-  display:grid;place-items:center;color:#04201B;font-family:"Bricolage Grotesque";font-weight:800;font-size:34px;
-  animation:relayRing 1.1s ease-in-out infinite}
+.relay-root .ring-card .av{width:96px;height:96px;border-radius:50%;background:var(--grad);margin:0 auto 16px;
+  display:grid;place-items:center;color:#04201B;font-family:"Bricolage Grotesque";font-weight:800;font-size:36px;
+  animation:relayRing 1.1s ease-in-out infinite;box-shadow:0 14px 44px -10px rgba(45,212,191,.45)}
 @keyframes relayRing{0%,100%{transform:rotate(0) scale(1)}25%{transform:rotate(-7deg) scale(1.04)}75%{transform:rotate(7deg) scale(1.04)}}
-.relay-root .ring-card .who{font-family:"Bricolage Grotesque";font-weight:700;font-size:24px;margin-bottom:4px}
-.relay-root .ring-card .sub{color:var(--muted);font-size:14px;margin-bottom:26px}
-.relay-root .ring-actions{display:flex;gap:14px}
+.relay-root .ring-card .who{font-family:"Bricolage Grotesque";font-weight:700;font-size:27px;margin-bottom:2px;
+  display:flex;align-items:center;justify-content:center;gap:8px}
+.relay-root .ring-card .ring-flag{font-size:22px;line-height:1}
+.relay-root .ring-card .ring-pin{font-family:"JetBrains Mono",monospace;font-size:15px;letter-spacing:.08em;color:var(--accent);margin-bottom:2px}
+.relay-root .ring-card .sub{color:var(--muted);font-size:14px;margin-bottom:22px}
+.relay-root .ring-actions{display:flex;gap:12px}
+.relay-root .ring-actions .r-btn{display:flex;align-items:center;justify-content:center;gap:8px}
+.relay-root .ring-actions .r-btn svg{width:18px;height:18px}
+.relay-root .r-accept-voice{background:rgba(86,140,255,.16);color:#8ab4ff;border:1px solid rgba(86,140,255,.38)}
+.relay-root .r-accept-voice:hover{background:rgba(86,140,255,.28)}
+.relay-root .r-decline-wide{width:100%;margin-top:12px;flex:none}
+.relay-root .qr-toggle{display:block;width:100%;margin-top:16px;background:none;border:none;cursor:pointer;
+  color:var(--muted);font-size:13px;font-family:inherit;text-decoration:underline;text-underline-offset:3px}
+.relay-root .qr-toggle:hover{color:var(--text)}
+.relay-root .quick-replies{display:none;margin-top:12px;gap:8px;flex-direction:column}
+.relay-root .quick-replies.open{display:flex;animation:relayFade .2s ease both}
+.relay-root .qr-opt{border:1px solid var(--border2);background:var(--surface2);color:var(--text);border-radius:12px;
+  padding:11px 14px;font-size:14px;font-family:inherit;cursor:pointer;text-align:left;transition:.15s}
+.relay-root .qr-opt:hover{border-color:var(--accent);color:var(--accent)}
 .relay-root .r-btn{flex:1;border:none;border-radius:16px;padding:16px;font-family:"Bricolage Grotesque";font-weight:700;
   font-size:15px;cursor:pointer;transition:.15s}
 .relay-root .r-decline{background:rgba(255,92,114,.14);color:var(--danger);border:1px solid rgba(255,92,114,.3)}

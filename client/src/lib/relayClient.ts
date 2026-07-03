@@ -138,6 +138,10 @@ export interface RelayHandle {
   getPin: () => string | null;
   /** Subscribe to authoritative pin changes (fires on every `registered`). */
   setOnPinChange: (cb: ((pin: string | null) => void) | null) => void;
+  /** Wire the incoming-ring "quick reply" to the host's messaging stack:
+   *  called with (callerPin, text) when the callee picks a canned response
+   *  (the engine then declines the ring). */
+  setOnQuickReply: (cb: ((toPin: string, text: string) => void) | null) => void;
   /** Subscribe to auto-rejoin status: true while the engine is honoring a
    *  reload/crash snapshot to rejoin an active call, false once it has rejoined
    *  or given up. Lets the app show a "Reconnecting… / Exit call" prompt. */
@@ -1428,6 +1432,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
   // ---------- programmatic API for embedding hosts ----------
   let onPhaseChange: ((p: RelayPhase) => void) | null = null;
+  // Quick-reply hook: the engine has no messaging stack of its own, so the
+  // host app (RelayEngineProvider) wires this to the v2 messages API. Called
+  // with the caller's pin + the canned text when the callee picks a reply.
+  let onQuickReply: ((toPin: string, text: string) => void) | null = null;
   let lastPhase: RelayPhase = "idle";
   function emitPhase(p: RelayPhase) {
     if (lastPhase === p) return;
@@ -1826,7 +1834,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId! };
     const ringAv = $("ringAv"); if (ringAv) ringAv.textContent = initials(m.fromName!);
     const ringWho = $("ringWho"); if (ringWho) ringWho.textContent = m.fromName!;
+    // Caller identity verification: their PIN (mono, formatted) + country flag.
+    const ringPin = $("ringPin");
+    if (ringPin) ringPin.textContent = m.from && m.from.length === 6 ? m.from.slice(0, 3) + "-" + m.from.slice(3) : (m.from || "");
+    const ringFlag = $("ringFlag"); if (ringFlag) ringFlag.textContent = m.flag || "";
     const ringSub = $("ringSub"); if (ringSub) ringSub.textContent = "is calling you…";
+    $("quickReplies")?.classList.remove("open"); // fresh ring → replies folded
     $("ringOverlay")?.classList.add("active");
     playRingtone("incoming");
     // Promote the embedding host (Dialer) to fullscreen so the callee actually
@@ -1839,13 +1852,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (pendingRing && pendingRing.from === m.from) declineInvite();
     }, 60000);
   }
-  async function acceptInvite() {
+  async function acceptInvite(opts?: { voice?: boolean }) {
     const r = pendingRing; pendingRing = null;
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     $("ringOverlay")?.classList.remove("active");
     stopRingtone();
     if (!r) { emitPhase("idle"); return; }
     try { await ensureMedia(); } catch { sendWS({ type: "reject", to: r.from }); emitPhase("idle"); return; }
+    // "Answer as Voice": camera stays OFF (same rule as a voice DIAL — the
+    // SFU publishes no video at all while camOn is false; tapping the camera
+    // button mid-call upgrades to video instantly).
+    if (opts?.voice && localStream && localStream.getVideoTracks().length > 0) {
+      setCam(false);
+    }
     // Accepting is a user gesture — arm the audio unlock now so the remote
     // voice stream (which arrives a second or two later, OUTSIDE any gesture and
     // thus gated by Android's autoplay policy) plays on the user's next touch
@@ -4382,8 +4401,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("shareUrl") as HTMLElement | null)?.addEventListener("click", onShareClick);
   ($("backKey") as HTMLElement | null)?.addEventListener("click", onBackKey);
   ($("callBtn") as HTMLElement | null)?.addEventListener("click", startCall);
-  ($("acceptBtn") as HTMLElement | null)?.addEventListener("click", acceptInvite);
+  ($("acceptBtn") as HTMLElement | null)?.addEventListener("click", () => void acceptInvite());
+  ($("acceptVoiceBtn") as HTMLElement | null)?.addEventListener("click", () => void acceptInvite({ voice: true }));
   ($("declineBtn") as HTMLElement | null)?.addEventListener("click", declineInvite);
+  // Quick reply: fold-out canned responses; picking one messages the caller
+  // (via the host app's messaging stack) and declines the ring.
+  ($("quickReplyBtn") as HTMLElement | null)?.addEventListener("click", () => {
+    $("quickReplies")?.classList.toggle("open");
+  });
+  root.querySelectorAll<HTMLButtonElement>(".qr-opt").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const r = pendingRing;
+      const text = btn.dataset.msg || btn.textContent || "";
+      if (!r || !text) return;
+      try { onQuickReply?.(r.from, text); toast("Reply sent — call declined"); }
+      catch { toast("Couldn't send the reply.", true); }
+      declineInvite();
+    });
+  });
   ($("cwSwitch") as HTMLElement | null)?.addEventListener("click", switchCall);
   ($("cwDecline") as HTMLElement | null)?.addEventListener("click", declineWaiting);
   ($("heldSwap") as HTMLElement | null)?.addEventListener("click", swapCall);
@@ -4579,6 +4614,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       }
       setTileFlag("tile-self", selfFlag);
     },
+    setOnQuickReply(cb) { onQuickReply = cb; },
     setOnPinChange(cb) {
       onPinChange = cb;
       // Fire immediately with the current value so a late subscriber syncs up.
