@@ -190,6 +190,34 @@ describe("relay signaling", () => {
     expect(ring?.roomId).toBe(room?.roomId);
   });
 
+  it("acks the CALLER with `ringing` (callee pin + name) once the ring is delivered", () => {
+    // Drives the caller's staged progress: "Calling…" (invite sent) flips to
+    // "Ringing…" only when the server confirms the callee is actually alerting.
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    const bPin = (b.last() as { pin: string }).pin;
+    a.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "invite", to: bPin });
+
+    const ringing = a.outbox.find((m): m is { type: string; pin: string; name: string } =>
+      typeof m === "object" && m !== null && (m as { type: string }).type === "ringing"
+    );
+    expect(ringing?.pin).toBe(bPin);
+    expect(ringing?.name).toBe("Bob");
+  });
+
+  it("does NOT send a `ringing` ack when the callee is offline (error:offline instead)", () => {
+    const a = register(reg, "Alice");
+    a.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "invite", to: "000001" });
+
+    expect(a.outbox.some(m => (m as { type?: string }).type === "ringing")).toBe(false);
+    const err = a.outbox.find((m): m is { type: string; code: string } =>
+      (m as { type?: string }).type === "error"
+    );
+    expect(err?.code).toBe("offline");
+  });
+
   it("on accept: newcomer learns existing members; existing members are notified", () => {
     const a = register(reg, "Alice");
     const b = register(reg, "Bob");

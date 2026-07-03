@@ -120,8 +120,11 @@ export type RelayPhase = "idle" | "dialing" | "ringing" | "in-call";
 export interface RelayHandle {
   destroy: () => void;
   /** Programmatic dial. Returns true if the engine accepted the request.
-   *  `opts.voice` starts the call with the camera off (a voice call). */
-  dial: (number: string, opts?: { voice?: boolean }) => boolean;
+   *  `opts.voice` starts the call with the camera off (a voice call — video
+   *  stays disabled until the user explicitly enables it in-call; omitting it
+   *  is a "Dial by Video": the session connects with the camera already live).
+   *  `opts.displayName` labels the dial-progress card with the callee's name. */
+  dial: (number: string, opts?: { voice?: boolean; displayName?: string }) => boolean;
   /** Start a GROUP call — ring up to 10 numbers into one room. Returns true if
    *  at least one valid number was accepted. */
   dialGroup: (numbers: string[], opts?: { voice?: boolean }) => boolean;
@@ -278,6 +281,44 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // while it was still ringing. Set by acceptInvite/createPeer/addLkTile (any
   // evidence a second party is in the call); reset by hangUp.
   let callAnswered = false;
+  // OUTGOING dial in progress (caller side). Non-null from the moment we send
+  // the invite until the call is ESTABLISHED (markEstablished) or torn down.
+  // Drives the staged call-progress flow the phone expects:
+  //   "Calling…"  — invite sent (immediately after PIN entry)
+  //   "Ringing…"  — server acked that the callee's device is actually alerting
+  //   "Connecting…" — callee answered; media/session being established
+  //   connected   — full in-call interface appears (and only then)
+  // While set, #call carries .pre-connect: a dedicated dial card (avatar,
+  // number, voice/video chip, live status) replaces the grid, and every
+  // control except End Call is hidden.
+  let outgoingDial: { pin: string; name?: string; video: boolean; group?: boolean } | null = null;
+  function showDialCard() {
+    $("call")?.classList.add("pre-connect");
+    const d = outgoingDial; if (!d) return;
+    const av = $("dcAv"); if (av) av.textContent = d.group ? "👥" : (d.name ? initials(d.name) : "#");
+    const num = $("dcNum"); if (num) num.textContent = d.group || d.pin.length !== 6 ? d.pin : d.pin.slice(0, 3) + "-" + d.pin.slice(3);
+    const nm = $("dcName"); if (nm) { nm.textContent = d.name || ""; nm.style.display = d.name ? "" : "none"; }
+    const md = $("dcMode");
+    if (md) {
+      // The visual confirmation of the SESSION MODE, from the very start:
+      // a video dial connects with the camera already live; a voice dial
+      // stays camera-off until the user explicitly enables it in-call.
+      md.textContent = d.video ? "Video call" : "Voice call";
+      md.classList.toggle("video", d.video);
+    }
+  }
+  function exitPreConnect() {
+    outgoingDial = null;
+    $("call")?.classList.remove("pre-connect");
+  }
+  // The callee ANSWERED our outgoing dial (first remote party appeared):
+  // advance "Ringing…" → the real connecting sequence. The dial card stays up
+  // until the media session is actually ESTABLISHED — only then does the full
+  // in-call interface appear (markEstablished → exitPreConnect).
+  function onCalleeAnswered() {
+    if (!outgoingDial) return;
+    if (!establishedOnce) runConnSequence();
+  }
   function clearLkWatchdog() { if (lkWatchdog) { clearTimeout(lkWatchdog); lkWatchdog = null; } lkJoinTries = 0; }
   // Reliability net for the SFU path: if media isn't up a few seconds after the
   // call UI opens (token mint failed, SSE frame dropped, or connect() failed),
@@ -432,6 +473,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
         if (pendingGroupInvites.length) {
           const q = pendingGroupInvites; pendingGroupInvites = [];
           q.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t }); });
+        }
+        break;
+      case "ringing":
+        // Server confirmed our invite was DELIVERED — the callee's device is
+        // now actually alerting. Advance the caller's staged progress from
+        // "Calling…" (request sent) to "Ringing…" (destination being alerted).
+        if (inCall && outgoingDial && !callAnswered) {
+          setCallStatus("ringing");
+          // Upgrade the dial card with the callee's registered display name if
+          // the dialer didn't know it (dialed a raw number, not a contact).
+          if (m.name && !outgoingDial.group && !outgoingDial.name) {
+            outgoingDial.name = String(m.name);
+            showDialCard();
+          }
         }
         break;
       case "ring":         onRing(m); break;
@@ -1311,7 +1366,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (peers[dialed]) { toast("You're already connected to them.", true); return; }
     try { await ensureMedia(); } catch { return; }
     const target = dialed; dialed = ""; refreshDisplay(); closeAddPad();
-    if (!inCall) { inCall = true; enterCallUI("Calling…"); emitPhase("dialing"); playRingtone("outgoing"); }
+    if (!inCall) {
+      inCall = true;
+      outgoingDial = { pin: target, video: camOn };
+      enterCallUI("Calling…", { outgoing: true });
+      emitPhase("dialing");
+      playRingtone("outgoing");
+    }
     sendWS({ type: "invite", to: target });
     toast("Calling " + target + "…");
   }
@@ -1324,7 +1385,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     lastPhase = p;
     try { onPhaseChange?.(p); } catch { /* ignore subscriber errors */ }
   }
-  async function programmaticDial(target: string, opts?: { voice?: boolean }): Promise<boolean> {
+  async function programmaticDial(target: string, opts?: { voice?: boolean; displayName?: string }): Promise<boolean> {
     if (!/^\d{6}$/.test(target)) return false;
     if (!me.pin) return false; // not registered yet — caller should retry
     if (target === me.pin) { toast("That's your own number.", true); return false; }
@@ -1339,7 +1400,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     if (!inCall) {
       inCall = true;
-      enterCallUI(opts?.voice ? "Voice call…" : "Calling…");
+      outgoingDial = { pin: target, name: opts?.displayName, video: !opts?.voice };
+      enterCallUI(opts?.voice ? "Voice call…" : "Calling…", { outgoing: true });
       emitPhase("dialing");
       playRingtone("outgoing");
     }
@@ -1366,7 +1428,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try { await ensureMedia(); } catch { return false; }
     if (opts?.voice && localStream && localStream.getVideoTracks().length > 0) setCam(false);
     const alreadyInRoom = inCall && !!roomId;
-    if (!inCall) { inCall = true; enterCallUI(opts?.voice ? "Voice call…" : "Calling…"); emitPhase("dialing"); }
+    if (!inCall) {
+      inCall = true;
+      outgoingDial = { pin: clean.length + " people", name: "Group call", video: !opts?.voice, group: true };
+      enterCallUI(opts?.voice ? "Voice call…" : "Calling…", { outgoing: true });
+      emitPhase("dialing");
+    }
     if (alreadyInRoom) {
       clean.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t }); });
     } else {
@@ -1907,6 +1974,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     };
     room.on(RoomEventEnum.TrackSubscribed, (track, _pub, participant) => {
       addLkTile(participant.identity, participant.name || participant.identity);
+      // First REMOTE media flowing = the call is genuinely connected. This is
+      // what flips an outgoing SFU dial from "Connecting…" to the full in-call
+      // UI (room.connect() alone can't — the caller connects while ringing).
+      if (!establishedOnce) markEstablished();
       const el = lkParticipantTiles[participant.identity];
       if (!el) return;
       if (track.kind === TrackEnum.Kind.Video) {
@@ -2040,7 +2111,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
       }
       lkConnected = true;
       clearLkWatchdog();
-      markEstablished(); // SFU media is up → top bar shows "Connected"
+      // Our own SFU uplink being ready does NOT mean the CALL is connected:
+      // an outgoing caller joins the room alone while the callee is still
+      // ringing. Only mark established when a second party is (or already
+      // was) in — otherwise the top bar claimed "Connected" mid-ring and the
+      // full in-call UI appeared before anyone answered. The still-ringing
+      // case establishes later: answer → onCalleeAnswered ("Connecting…") →
+      // first TrackSubscribed → markEstablished.
+      if (!outgoingDial || callAnswered) markEstablished();
+      else diag("livekit: uplink ready — waiting for the callee to answer");
       diag("livekit: connected + published");
     } catch (e) {
       // Connect/publish failed (expired token, transient SFU/network fault).
@@ -2404,6 +2483,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function addLkTile(id: string, name: string) {
     if (lkParticipantTiles[id]) return;
     callAnswered = true; // a second party exists — the join watchdog may enforce media
+    onCalleeAnswered();  // outgoing dial: "Ringing…" → the real connecting sequence
     const grid = $("videoGrid"); if (!grid) return;
     const t = document.createElement("div");
     t.className = "relay-tile"; t.id = "tile-" + id;
@@ -2497,6 +2577,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function createPeer(pin: string, name: string, initiator: boolean): PeerEntry {
     if (peers[pin]) return peers[pin];
     callAnswered = true; // a second party exists — the join watchdog may enforce media
+    onCalleeAnswered();  // outgoing dial: "Ringing…" → the real connecting sequence
     const pc = new RTCPeerConnection(iceConfig);
     const peer: PeerEntry = { pc, name: name || "Guest", dc: null, el: null, candQ: [], remoteSet: false, gotStream: false, initiator, graceT: null, restartT: null, iceRestarts: 0, slowT: null };
     peers[pin] = peer;
@@ -2857,7 +2938,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // live, we hold the call open and try to recover for RECONNECT_WINDOW_MS
   // before tearing down — so a brief tunnel/elevator/Wi-Fi blip doesn't kill
   // the call.
-  type CallStatus = "connecting" | "encrypting" | "live" | "reconnecting";
+  type CallStatus = "calling" | "ringing" | "connecting" | "encrypting" | "live" | "reconnecting";
   let callStatus: CallStatus = "connecting";
   let establishedOnce = false; // reached "live" at least once this call
   let reconnectHardT: ReturnType<typeof setTimeout> | null = null;
@@ -2865,19 +2946,31 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let connSeqTimers: ReturnType<typeof setTimeout>[] = [];
   const RECONNECT_WINDOW_MS = 10000;
   const STATUS_LABEL: Record<CallStatus, string> = {
+    calling: "Calling…",
+    ringing: "Ringing…",
     connecting: "Connecting…",
     encrypting: "Securing connection…",
     live: "Connected",
     reconnecting: "Reconnecting…",
   };
+  const ALL_ST_CLASSES = ["st-calling", "st-ringing", "st-connecting", "st-encrypting", "st-live", "st-reconnecting"];
   function setCallStatus(s: CallStatus, labelOverride?: string) {
     callStatus = s;
+    const text = labelOverride ?? STATUS_LABEL[s];
     const lbl = $("callRoomLbl");
-    if (lbl) lbl.textContent = labelOverride ?? STATUS_LABEL[s];
+    if (lbl) lbl.textContent = text;
     const ct = $("call")?.querySelector(".call-head .ct");
     if (ct) {
-      ct.classList.remove("st-connecting", "st-encrypting", "st-live", "st-reconnecting");
+      ct.classList.remove(...ALL_ST_CLASSES);
       ct.classList.add("st-" + s);
+    }
+    // Mirror the live status onto the pre-connect dial card (its own status
+    // line sits under the callee identity, like a phone's dialing screen).
+    const dst = $("dcStatusTxt"); if (dst) dst.textContent = text;
+    const card = $("dialCard");
+    if (card) {
+      card.classList.remove(...ALL_ST_CLASSES);
+      card.classList.add("st-" + s);
     }
   }
   function clearConnSeq() {
@@ -2938,6 +3031,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // even after the conversation was live. Both calls are idempotent.
   function markEstablished() {
     establishedOnce = true;
+    exitPreConnect();        // ONLY now does the full in-call interface appear
     exitReconnecting();
     clearConnSeq();
     stopRingtone();          // definitively kill any outgoing dial tone
@@ -3003,14 +3097,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
       ["failed", "closed"].includes(p.pc.connectionState));
     if (allTerminal) enterReconnecting();
   }
-  function enterCallUI(label: string) {
+  function enterCallUI(label: string, opts?: { outgoing?: boolean }) {
     show("call");
     establishedOnce = false;
     exitReconnecting();
     resetSpeakerView(); // fresh call → no stale spotlight/active-speaker focus
     startStatsSampler(); // live per-tile bitrate
     void seedAudioOutputs(); // snapshot outputs so a later BT connect is detected
-    runConnSequence();
+    if (opts?.outgoing) {
+      // OUTGOING dial: staged progress — "Calling…" now, "Ringing…" on the
+      // server's delivery ack, and the real connecting sequence only once the
+      // callee answers (onCalleeAnswered). Show the dedicated dial card.
+      setCallStatus("calling");
+      showDialCard();
+    } else {
+      // Callee accept / rejoin / resume: the session starts establishing now.
+      exitPreConnect(); // never carry a stale dial card into a non-dial entry
+      runConnSequence();
+    }
     // On the SFU path, start the join watchdog so a failed/slow token or connect
     // recovers (re-request) or surfaces an error instead of a silent dead call.
     if (livekitEnabled) armLkWatchdog();
@@ -4081,6 +4185,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     pendingRing = null;
     $("ringOverlay")?.classList.remove("active");
+    exitPreConnect(); // clear any in-flight dial card / pre-connect gating
     clearConnSeq();
     exitReconnecting();
     establishedOnce = false;
@@ -4341,7 +4446,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("nameInput") as HTMLInputElement | null)?.focus();
 
   return {
-    dial(target: string, opts?: { voice?: boolean }): boolean {
+    dial(target: string, opts?: { voice?: boolean; displayName?: string }): boolean {
       // returns true synchronously if validation passes; the actual call is async,
       // but the host UI just needs to know whether to flip to in-call mode.
       if (!/^\d{6}$/.test(target)) return false;

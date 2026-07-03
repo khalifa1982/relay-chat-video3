@@ -2679,3 +2679,31 @@ composer immediately above the nav with the chat scrolling above both.
       assert 0px content→nav and composer→nav gaps and the nav flush with the viewport bottom.
 - [x] 11 new pins in `client/src/app/appShellNav.test.ts`; updated the two `h-full`-era pins.
       608 passing (1 pre-existing skip), tsc + build clean. Footer → `v2.73.0`.
+
+## v2.74.0 — Staged call progress: Calling → Ringing → Connecting → connected (delivered 2026-07-03)
+
+Caller-side flow per the phone-style spec (reference screenshots): a dedicated dial screen with honest
+staged states, and the full in-call interface only once the call is actually established.
+
+- [x] **New pre-connect dial screen** (`#dialCard` in the call view): callee avatar/number/name, a
+      Voice/Video mode chip, and a live status line. While it's up (`#call.pre-connect`) every control
+      except **End Call** is hidden and the tile grid is not shown.
+- [x] **Staged states**: "Calling…" the instant the invite is sent (pulsing indicator) → "Ringing…" when
+      the server ACKS the ring was delivered (new `ringing` signaling message — the ack also carries the
+      callee's registered display name, so raw-number dials get labeled) → "Connecting…" only when the
+      callee answers → "Connected" + full interface on real media establishment.
+- [x] **Fixed: SFU caller claimed "Connected" while still ringing.** On the LiveKit path the caller joins
+      the room alone at dial time; `room.connect()` used to `markEstablished()` immediately. Now
+      establishment waits for a second party: answer → connecting sequence → first remote
+      `TrackSubscribed` → established. (Mesh path unchanged: pc `connected` establishes.)
+- [x] **Voice-first video defaults** (confirmed + pinned): Voice Dial starts camera-off (SFU publishes no
+      video track at all; tap camera to enable mid-call), Dial-by-Video connects with the camera live —
+      the dial card's chip ("Voice call" / "Video call") is the visual confirmation of the session mode
+      from the start. Dialer passes the callee's directory name to label the card.
+- [x] **Verified live end-to-end** (two headless Chromium browsers, fake media, REAL signaling + mesh
+      WebRTC on the dev server): dial → pre-connect card w/ only End visible → "Ringing…" (ack) → accept
+      on the callee → full UI + "Connected" on the caller; camOff stayed true through a voice call; video
+      dial showed the "Video call" chip with camera on.
+- [x] 2 new server tests (ringing ack delivered / absent when offline) + 16 static pins in
+      `client/src/lib/callProgress.test.ts`. 626 passing (1 pre-existing skip), tsc + build clean.
+      Footer → `v2.74.0`.

@@ -105,6 +105,13 @@ export const RELAY_MARKUP = `
       </div>
     </div>
     <div class="call-main">
+      <div id="dialCard" class="dial-card">
+        <div class="dc-av" id="dcAv">#</div>
+        <div class="dc-num" id="dcNum">&mdash;</div>
+        <div class="dc-name" id="dcName"></div>
+        <div class="dc-mode" id="dcMode">Voice call</div>
+        <div class="dc-status"><span class="dc-dot"></span><span id="dcStatusTxt">Calling&hellip;</span></div>
+      </div>
       <div class="grid" id="videoGrid"></div>
       <div class="chat" id="chatPanel">
         <div class="chat-head"><span class="chat-title">Chat</span><button class="chat-close-btn" id="chatClose" aria-label="Close chat" title="Close chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
@@ -372,6 +379,29 @@ export const RELAY_CSS = `
 .relay-root .call-head .ct.st-live .live-dot{background:var(--accent);box-shadow:0 0 10px var(--accent);animation:none}
 .relay-root .call-head .timer{font-family:"JetBrains Mono";color:var(--text);font-size:14px}
 .relay-root .call-main{flex:1;min-height:0;display:flex}
+/* ── pre-connect dial screen ─────────────────────────────────────────
+   While an OUTGOING dial is in flight (#call.pre-connect), a dedicated
+   phone-style dialing card replaces the grid — callee avatar/number/name,
+   a Voice/Video mode chip, and the live staged status (Calling… → Ringing…
+   → Connecting…). Every control except End Call is hidden; the full in-call
+   interface appears only once the call is actually established. */
+.relay-root .dial-card{display:none;flex:1;min-height:0;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:24px}
+.relay-root #call.pre-connect .dial-card{display:flex;animation:relayFade .3s ease both}
+.relay-root #call.pre-connect .call-main .grid{display:none}
+.relay-root #call.pre-connect .ctrl-bar .ctrl{display:none}
+.relay-root #call.pre-connect .ctrl-bar .ctrl.hangup{display:flex}
+.relay-root .dial-card .dc-av{width:96px;height:96px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:700;color:var(--text);background:linear-gradient(160deg,#262b36,#14171d);border:1px solid var(--border);box-shadow:0 18px 50px rgba(0,0,0,.45);margin-bottom:8px}
+.relay-root .dial-card .dc-num{font-family:"JetBrains Mono",monospace;font-size:34px;font-weight:700;letter-spacing:.08em;color:var(--text)}
+.relay-root .dial-card .dc-name{font-size:17px;color:var(--muted)}
+.relay-root .dial-card .dc-mode{font-size:12px;font-weight:700;letter-spacing:.04em;padding:5px 14px;border-radius:999px;background:rgba(255,255,255,.07);border:1px solid var(--border);color:var(--muted)}
+.relay-root .dial-card .dc-mode.video{background:rgba(124,92,255,.16);border-color:rgba(124,92,255,.45);color:#c4b5ff}
+.relay-root .dial-card .dc-status{display:flex;align-items:center;gap:9px;margin-top:10px;font-size:15px;font-weight:600;color:var(--muted)}
+.relay-root .dial-card .dc-dot{width:9px;height:9px;border-radius:50%;background:#8ab4ff;box-shadow:0 0 10px #8ab4ff;animation:relayPulse2 1.1s ease-in-out infinite}
+.relay-root .dial-card.st-ringing .dc-dot{background:#3ddc84;box-shadow:0 0 12px #3ddc84;animation-duration:.8s}
+.relay-root .dial-card.st-ringing .dc-status{color:#3ddc84}
+.relay-root .dial-card.st-connecting .dc-dot,.relay-root .dial-card.st-encrypting .dc-dot{background:#f5b338;box-shadow:0 0 10px #f5b338}
+.relay-root .call-head .ct.st-calling .live-dot{background:#8ab4ff;box-shadow:0 0 10px #8ab4ff;animation:relayPulse2 1.2s ease-in-out infinite}
+.relay-root .call-head .ct.st-ringing .live-dot{background:#3ddc84;box-shadow:0 0 10px #3ddc84;animation:relayPulse2 .8s ease-in-out infinite}
 .relay-root .grid{flex:1;min-height:0;padding:16px;display:grid;gap:12px;align-content:center}
 .relay-root .relay-tile{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden;
   min-height:0;display:flex;align-items:center;justify-content:center}

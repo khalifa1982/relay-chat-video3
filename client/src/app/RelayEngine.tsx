@@ -15,7 +15,7 @@ import { trpc } from "@/lib/trpc";
 interface RelayEngineValue {
   /** Programmatic dial. Returns true if the engine accepted the request.
    *  `opts.voice` starts a voice call (camera off). */
-  dial: (number: string, opts?: { voice?: boolean }) => boolean;
+  dial: (number: string, opts?: { voice?: boolean; displayName?: string }) => boolean;
   /** Start a GROUP call — ring up to 10 numbers into one room. */
   dialGroup: (numbers: string[], opts?: { voice?: boolean }) => boolean;
   /** End/leave the current call (or cancel an outgoing one). */

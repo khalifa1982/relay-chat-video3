@@ -902,6 +902,12 @@ export function handleMessage(
       } else {
         safeSend(target.socket, ringMsg);
       }
+      // Ack the CALLER that the ring was actually DELIVERED — the callee's
+      // device is now alerting. This drives the caller's staged progress
+      // ("Calling…" = request sent → "Ringing…" = destination being alerted).
+      // Includes the callee's registered display name so the caller's dial
+      // card can label a raw-number dial.
+      safeSend(conn.socket, { type: "ringing", pin: to, name: target.name });
       // Remember we're ringing this callee so we can cancel it if we bail.
       self.ringing.add(to);
       // Fan out a notification hint so the callee's other open tabs

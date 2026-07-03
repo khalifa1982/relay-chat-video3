@@ -183,7 +183,11 @@ export default function DialerPage() {
 
   function startCallNow(opts?: { voice?: boolean }) {
     if (dialed.length !== 6) return;
-    const ok = engine.dial(dialed, opts);
+    // Label the engine's dial-progress card with the callee's directory name
+    // when the 6-digit preview already resolved it (best-effort — the server's
+    // "ringing" ack also carries the name for raw-number dials).
+    const displayName = previewQuery.data?.displayName || undefined;
+    const ok = engine.dial(dialed, { ...opts, displayName });
     if (ok) {
       // Phase is driven by the engine (via the provider), so we just clear the
       // dialed buffer; the ghost number reappears once the call ends.
