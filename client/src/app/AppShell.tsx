@@ -113,6 +113,34 @@ function Inner({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // GROUND-TRUTH viewport height for the mobile shell. CSS viewport units
+  // proved unreliable on real iPhones: dvh (v2.76) reported the toolbar-
+  // collapsed height while the scroll lock keeps Safari's toolbar visible,
+  // so the tab bar + Messages composer sat BELOW the fold with no way to
+  // scroll to them — the last messages / history rows were unreachable.
+  // window.innerHeight IS the actual layout viewport right now; measure it,
+  // keep it fresh (rotation, toolbar show/hide, split view), and size the
+  // shell with it. 100svh remains the CSS fallback until the first
+  // measurement lands. An explicit px height also makes the whole flex
+  // chain below unambiguously definite for Safari's layout engine.
+  useEffect(() => {
+    const root = document.documentElement;
+    const set = () => {
+      try { root.style.setProperty("--relay-vh", window.innerHeight + "px"); } catch { /* */ }
+    };
+    set();
+    window.addEventListener("resize", set);
+    window.addEventListener("orientationchange", set);
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", set);
+    return () => {
+      window.removeEventListener("resize", set);
+      window.removeEventListener("orientationchange", set);
+      vv?.removeEventListener("resize", set);
+      root.style.removeProperty("--relay-vh");
+    };
+  }, []);
+
   // Pre-fetch the threads & calls list once we have an identity so the
   // tab badges are warm by the time the user taps them.
   useEffect(() => {
@@ -358,17 +386,26 @@ function Inner({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* ── main column ────────────────────────────────────────── */}
-      {/* max-md:h-svh makes the mobile shell's height DEFINITE (not just a
-          min-height floor) so the flex chain below it resolves — and SMALL
-          (svh = the viewport with the browser's toolbars VISIBLE), so the tab
-          bar always fits on screen. dvh was tried (v2.76) and CUT THE TAB BAR
-          OFF on a real iPhone: with the document scroll-locked, iOS Safari
-          reported the large (toolbar-collapsed) height, making the shell
-          taller than the visible area with no way to scroll to the bar. The
-          scroll lock also means the toolbar never collapses on our page, so
-          svh matches the visible viewport in practice. Do not switch back to
-          dvh without re-testing on a physical iPhone. */}
-      <main className="flex-1 flex flex-col min-w-0 min-h-svh max-md:h-svh">
+      {/* The mobile shell is sized by the MEASURED viewport (--relay-vh =
+          window.innerHeight, kept fresh above), NOT by CSS viewport units:
+          dvh (v2.76) reported the toolbar-collapsed height on a real iPhone
+          while the scroll lock keeps the toolbar visible, so the tab bar and
+          composer sat below the fold and long chats/history lists could
+          never be scrolled to their end. 100svh is only the first-paint
+          fallback before the measurement lands. The explicit px height also
+          makes the whole flex chain below unambiguously definite, so every
+          inner list scrolls within the visible area. Do not swap this back
+          to a bare viewport unit without a physical-iPhone retest.
+
+          max-md:flex-none is LOAD-BEARING: with flex-1 (basis 0%), a flex
+          item's MAIN-axis size ignores its height property, and its CONTENT
+          contribution inflates the auto-height root column — so any page
+          taller than the viewport (a long chat, a full call log) blew the
+          shell up to content height, pushed the tab bar/composer below the
+          fold, and killed every inner scroll area. flex-none makes the
+          explicit height authoritative on mobile; md+ keeps flex-1, where
+          the root is a ROW and it governs width, not height. */}
+      <main className="flex-1 max-md:flex-none flex flex-col min-w-0 min-h-svh max-md:h-[var(--relay-vh,100svh)]">
         {/* mobile header */}
         <header
           className={

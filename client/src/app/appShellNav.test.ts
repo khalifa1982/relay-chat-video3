@@ -30,14 +30,27 @@ describe("AppShell — docked in-flow bottom nav (no gap above, nothing hidden u
   it("the scroll container carries NO clearance padding and is a flex column so pages fill it with flex-1 (height:100% does not resolve against flex-derived heights)", () => {
     expect(SHELL).not.toMatch(/pb-28/);
     expect(SHELL).toMatch(/className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">\{children\}<\/div>/);
-    // svh (NOT dvh): the small viewport unit always fits above the browser's
-    // toolbars. dvh (tried in v2.76) cut the tab bar off on a real iPhone —
-    // with the document scroll-locked, iOS Safari reported the large
-    // (toolbar-collapsed) height, so the shell was taller than the visible
-    // area and the bar was unreachable. Re-test on a physical iPhone before
-    // ever switching this unit again.
-    expect(SHELL).toMatch(/max-md:h-svh/);
+    // MEASURED height (NOT a bare CSS viewport unit): dvh (v2.76) reported
+    // the toolbar-collapsed height on a real iPhone while the scroll lock
+    // keeps the toolbar visible — the tab bar + composer sat below the fold
+    // and long chats/history lists could never be scrolled to their end.
+    // window.innerHeight is ground truth; svh is only the first-paint
+    // fallback. Re-test on a physical iPhone before changing this.
+    expect(SHELL).toMatch(/max-md:h-\[var\(--relay-vh,100svh\)\]/);
     expect(SHELL).not.toMatch(/max-md:h-dvh/);
+    expect(SHELL).not.toMatch(/max-md:h-svh\b/);
+    // flex-none on mobile is LOAD-BEARING: with flex-1 (basis 0%) the height
+    // property is ignored on the main axis and the item's CONTENT contribution
+    // inflates the auto-height root column — a long chat or full call log
+    // blew the shell up to content height, pushing the tab bar/composer below
+    // the fold and killing every inner scroll area (real-iPhone bug).
+    expect(SHELL).toMatch(/max-md:flex-none/);
+  });
+
+  it("the shell keeps --relay-vh = window.innerHeight fresh (resize / rotation / visualViewport)", () => {
+    expect(SHELL).toMatch(/setProperty\("--relay-vh", window\.innerHeight \+ "px"\)/);
+    expect(SHELL).toMatch(/addEventListener\("orientationchange", set\)/);
+    expect(SHELL).toMatch(/visualViewport/);
   });
 
   it("the DOCUMENT is locked while the shell is mounted — all scrolling is internal, so the app can never be shoved past its own end (v2.76 overscroll fix)", () => {

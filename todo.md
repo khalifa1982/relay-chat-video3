@@ -2782,3 +2782,27 @@ Real-device screenshot feedback on v2.76:
 - [x] Verified: headless-Chromium geometry (nav flush at viewport bottom, shell == viewport height) +
       dialer screenshot of the new trio. 645 passing (1 pre-existing skip), tsc + build clean.
       Footer → `v2.77.0`. NEEDS a quick real-iPhone confirm that the bar is now fully visible.
+
+## v2.78.0 — Long chats & call logs scroll again: measured shell height + flex-none (delivered 2026-07-03)
+
+Real-iPhone report: a LONG conversation or a full call-history list could not be scrolled to its end —
+the tab bar and Messages composer sat below the visible screen, and with the v2.76 document lock there
+was no longer any way to reach them.
+
+- [x] **Root cause (reproduced headlessly with a 40-message chat):** `<main>` is a `flex-1` item
+      (flex-basis 0%) of the root column, so its explicit height is IGNORED on the main axis and its
+      CONTENT contribution inflates the auto-height root — any page taller than the viewport blew the
+      shell up to full content height (measured 3455px on an 844px viewport), pushing the bar/composer
+      below the fold and killing every inner scroll area (`canScrollList:false`). Short pages masked it.
+- [x] **Fix 1 — `max-md:flex-none`** on `<main>`: the explicit height is now authoritative on mobile
+      (md+ keeps `flex-1`, where the root is a ROW and it governs width). Pinned as load-bearing.
+- [x] **Fix 2 — measured viewport height:** the mobile shell is sized by `--relay-vh =
+      window.innerHeight` (kept fresh on resize / orientationchange / visualViewport), with `100svh`
+      only as the first-paint fallback — after v2.76's dvh mis-report on a real iPhone, CSS viewport
+      units are no longer trusted for the shell. An explicit px height also makes the whole flex chain
+      unambiguously definite for Safari.
+- [x] **Verified headlessly:** 40-message chat → shell exactly 844px, list scrolls, LAST message
+      reachable above the bar, composer visible, nav flush; viewport resized to 700px → shell tracks to
+      700 and everything stays reachable; 25-row history → final row reachable. 646 passing, tsc +
+      build clean. Footer → `v2.78.0`. NEEDS real-iPhone confirm (publish first — the phone was still
+      running v2.76 when this was reported).
