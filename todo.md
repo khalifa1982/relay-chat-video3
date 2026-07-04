@@ -2992,7 +2992,7 @@ messages rejected server-side, blocked calls silently declined by the engine via
 brought to v2.73 (flex-1, no stale pb-24). 9 new pins; 707 passing. Footer → v2.82.0.
 
 ## Feature: Privacy Policy page at /privacy-policy
-- [ ] Create client/src/pages/PrivacyPolicy.tsx with standard privacy policy content for RELAY
-- [ ] Register /privacy-policy route in App.tsx
-- [ ] Add Privacy Policy link in the landing page footer (all 6 locales)
-- [ ] tsc clean + vitest pass; checkpoint; guide Publish
+- [x] Create client/src/pages/PrivacyPolicy.tsx with standard privacy policy content for RELAY
+- [x] Register /privacy-policy route in App.tsx
+- [x] Add Privacy Policy link in the landing page footer (all 6 locales)
+- [x] tsc clean + 708 vitest pass; checkpoint 103c5bea; guide Publish
