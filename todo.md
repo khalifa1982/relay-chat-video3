@@ -2990,3 +2990,9 @@ block / edit / delete), category grouping (Favorites, VIP, Family, Friends, Team
 dialog chip picker, and ENFORCED blocking (additive contacts.category + contacts.blocked; blocked
 messages rejected server-side, blocked calls silently declined by the engine via setBlockedPins). Layout
 brought to v2.73 (flex-1, no stale pb-24). 9 new pins; 707 passing. Footer → v2.82.0.
+
+## Feature: Privacy Policy page at /privacy-policy
+- [ ] Create client/src/pages/PrivacyPolicy.tsx with standard privacy policy content for RELAY
+- [ ] Register /privacy-policy route in App.tsx
+- [ ] Add Privacy Policy link in the landing page footer (all 6 locales)
+- [ ] tsc clean + vitest pass; checkpoint; guide Publish

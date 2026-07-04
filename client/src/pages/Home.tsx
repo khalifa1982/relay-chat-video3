@@ -1270,6 +1270,9 @@ export default function Home() {
             <a href="/technology" className="font-semibold transition-colors hover:text-slate-700" style={{ color: ACCENT }}>
               {c.tech_link} {arrow}
             </a>
+            <a href="/privacy-policy" className="transition-colors hover:text-slate-700 text-slate-500">
+              {c.privacy_link}
+            </a>
             <span>{c.footer_rights}</span>
             <span>v{APP_VERSION}</span>
           </div>

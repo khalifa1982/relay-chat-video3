@@ -23,6 +23,7 @@ import Dialer from "./pages/app/Dialer";
 const Home = lazy(() => import("./pages/Home"));
 const Docs = lazy(() => import("./pages/Docs"));
 const Technology = lazy(() => import("./pages/Technology"));
+const PrivacyPolicy = lazy(() => import("./pages/PrivacyPolicy"));
 const TurnTest = lazy(() => import("./pages/TurnTest"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const History = lazy(() => import("./pages/app/History"));
@@ -90,6 +91,7 @@ function Router() {
         </Route>
         <Route path={"/docs"} component={Docs} />
         <Route path={"/technology"} component={Technology} />
+        <Route path={"/privacy-policy"} component={PrivacyPolicy} />
         <Route path={"/turn-test"} component={TurnTest} />
         <Route path={"/404"} component={NotFound} />
         <Route component={NotFound} />
