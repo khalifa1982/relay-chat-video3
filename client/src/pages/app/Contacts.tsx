@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import {
   Phone,
+  PhoneCall,
+  Video,
   MessageSquare,
   Star,
   StarOff,
@@ -13,6 +15,11 @@ import {
   CheckCircle2,
   AlertCircle,
   MoreVertical,
+  Ban,
+  Crown,
+  Users as UsersIcon,
+  Home,
+  Heart,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +47,8 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { trpc } from "@/lib/trpc";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
@@ -48,6 +57,17 @@ function initialsFrom(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
   return parts.map((p) => p[0]?.toUpperCase() ?? "").join("").slice(0, 2) || "??";
 }
+
+type Category = "vip" | "family" | "friend" | "team";
+/** Ordered category sections. `favourite` (star) is its own leading section,
+ *  then the explicit groups, then everyone else. */
+const CATEGORY_META: Record<Category, { label: string; icon: typeof Crown; tint: string }> = {
+  vip: { label: "VIP", icon: Crown, tint: "text-amber-400" },
+  family: { label: "Family", icon: Home, tint: "text-rose-400" },
+  friend: { label: "Friends", icon: Heart, tint: "text-sky-400" },
+  team: { label: "Team", icon: UsersIcon, tint: "text-violet-400" },
+};
+const CATEGORY_ORDER: Category[] = ["vip", "family", "friend", "team"];
 
 function relativeTime(d: Date | string | null): string {
   if (!d) return "never";
@@ -91,6 +111,7 @@ export default function ContactsPage() {
     jobTitle?: string;
     website?: string;
     birthday?: string;
+    category?: Category | null;
   } | null>(null);
 
   // Shared by the desktop icon button AND the mobile dropdown menu item, so the
@@ -107,10 +128,12 @@ export default function ContactsPage() {
       jobTitle: c.jobTitle ?? "",
       website: c.website ?? "",
       birthday: c.birthday ?? "",
+      category: c.category ?? null,
     });
   }
 
-  const filtered = useMemo(() => {
+  type Row = NonNullable<typeof contacts.data>[number];
+  const filtered = useMemo<Row[]>(() => {
     const q = search.trim().toLowerCase();
     const list = contacts.data ?? [];
     return list
@@ -121,14 +144,28 @@ export default function ContactsPage() {
           c.number.includes(q)
       )
       .sort((a, b) => {
-        if (a.favourite !== b.favourite) return a.favourite ? -1 : 1;
         if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
         return (a.displayName || a.number).localeCompare(b.displayName || b.number);
       });
   }, [contacts.data, search]);
 
+  // Group into sections: Favorites first (the star pin, cross-cuts categories),
+  // then each explicit category, then "Other". Within a section, online-first.
+  const sections = useMemo(() => {
+    const favorites = filtered.filter((c) => c.favourite);
+    const out: Array<{ key: string; label: string; icon: typeof Crown; tint: string; rows: Row[] }> = [];
+    if (favorites.length) out.push({ key: "fav", label: "Favorites", icon: Star, tint: "text-amber-400", rows: favorites });
+    for (const cat of CATEGORY_ORDER) {
+      const rows = filtered.filter((c) => c.category === cat && !c.favourite);
+      if (rows.length) out.push({ key: cat, ...CATEGORY_META[cat], rows });
+    }
+    const other = filtered.filter((c) => !c.favourite && !c.category);
+    if (other.length) out.push({ key: "other", label: "All contacts", icon: UsersIcon, tint: "text-muted-foreground", rows: other });
+    return out;
+  }, [filtered]);
+
   return (
-    <div className="h-full md:p-6 flex flex-col gap-4">
+    <div className="flex-1 min-h-0 md:p-6 flex flex-col gap-4">
       <header className="px-4 md:px-0 flex items-center justify-between gap-2">
         <h2 className="text-xl font-semibold">Contacts</h2>
         <Button
@@ -151,7 +188,7 @@ export default function ContactsPage() {
           />
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto pb-24 md:pb-0 md:rounded-2xl md:glass-surface-md">
+      <div className="flex-1 min-h-0 overflow-y-auto md:rounded-2xl md:glass-surface-md">
         {contacts.isLoading ? (
           <ul>
             {Array.from({ length: 5 }).map((_, i) => (
@@ -194,134 +231,44 @@ export default function ContactsPage() {
             )}
           </Empty>
         ) : (
-          <ul>
-            {filtered.map((c) => (
-              <li
-                key={c.id}
-                className="flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border last:border-b-0 hover:bg-muted/30 transition-colors"
-              >
-                <div className="relative shrink-0">
-                  <div className="size-11 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
-                    {initialsFrom(c.displayName || c.number)}
+          <div>
+            {sections.map((section) => {
+              const SIcon = section.icon;
+              return (
+                <section key={section.key}>
+                  <div className="sticky top-0 z-10 flex items-center gap-2 px-4 md:px-5 py-2 bg-card/85 backdrop-blur-md border-b border-border/60">
+                    <SIcon className={"size-3.5 " + section.tint} />
+                    <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                      {section.label}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground/70">{section.rows.length}</span>
                   </div>
-                  {/* Presence LED — green = online, red = offline; fully hidden
-                      for a guest inactive >24h (privacy). */}
-                  {!c.presenceHidden && (
-                    <span
-                      aria-label={c.isOnline ? "Online" : "Offline"}
-                      className={
-                        "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
-                        (c.isOnline ? "bg-[color:var(--relay-online)]" : "bg-red-500")
-                      }
-                    />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium truncate flex items-center gap-1.5">
-                    {c.favourite && <Star className="size-3.5 text-primary fill-primary" />}
-                    <span className="truncate">{c.displayName || c.number}</span>
-                    {c.verified && <VerifiedBadge size={14} />}
-                  </div>
-                  <div className="text-xs text-muted-foreground font-mono">
-                    {c.number}
-                    {c.presenceHidden ? null : c.isOnline ? (
-                      <> · <span className="text-[color:var(--relay-online)]">online</span></>
-                    ) : (
-                      <> · last seen {relativeTime(c.lastSeenAt)}</>
-                    )}
-                  </div>
-                  {(c.company || c.jobTitle) && (
-                    <div className="text-xs text-muted-foreground truncate mt-0.5">
-                      {[c.jobTitle, c.company].filter(Boolean).join(" · ")}
-                    </div>
-                  )}
-                </div>
-                <div className="hidden sm:flex items-center gap-1">
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    aria-label="Favorite"
-                    onClick={() =>
-                      upsert.mutate({
-                        number: c.number,
-                        displayName: c.displayName,
-                        favourite: !c.favourite,
-                      })
-                    }
-                  >
-                    {c.favourite ? (
-                      <StarOff className="size-4" />
-                    ) : (
-                      <Star className="size-4" />
-                    )}
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    aria-label="Edit"
-                    onClick={() => openEdit(c)}
-                  >
-                    <Pencil className="size-4" />
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    aria-label="Delete"
-                    onClick={() => setDeleteId(c.id)}
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
-                </div>
-                {/* Mobile: the desktop's 3 icon buttons don't fit on a touch
-                    screen, so Favorite/Edit/Delete collapse into one menu. */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button size="icon" variant="ghost" aria-label="More options" className="sm:hidden">
-                      <MoreVertical className="size-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="sm:hidden">
-                    <DropdownMenuItem
-                      onClick={() =>
-                        upsert.mutate({
-                          number: c.number,
-                          displayName: c.displayName,
-                          favourite: !c.favourite,
-                        })
-                      }
-                    >
-                      {c.favourite ? (
-                        <><StarOff className="size-4" /> Unfavorite</>
-                      ) : (
-                        <><Star className="size-4" /> Favorite</>
-                      )}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => openEdit(c)}>
-                      <Pencil className="size-4" /> Edit
-                    </DropdownMenuItem>
-                    <DropdownMenuItem variant="destructive" onClick={() => setDeleteId(c.id)}>
-                      <Trash2 className="size-4" /> Delete
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  aria-label="Message"
-                  onClick={() => openThread.mutate({ number: c.number })}
-                >
-                  <MessageSquare className="size-4" />
-                </Button>
-                <Button
-                  size="icon"
-                  aria-label="Call"
-                  onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(c.number)}`)}
-                >
-                  <Phone className="size-4" />
-                </Button>
-              </li>
-            ))}
-          </ul>
+                  <ul>
+                    {section.rows.map((c) => (
+                      <ContactRow
+                        key={c.id}
+                        c={c}
+                        onVoice={() => setLocation(`/app/dialer?to=${encodeURIComponent(c.number)}&voice=1`)}
+                        onVideo={() => setLocation(`/app/dialer?to=${encodeURIComponent(c.number)}&video=1`)}
+                        onMessage={() => openThread.mutate({ number: c.number })}
+                        onEdit={() => openEdit(c)}
+                        onDelete={() => setDeleteId(c.id)}
+                        onToggleFavorite={() =>
+                          upsert.mutate({ number: c.number, favourite: !c.favourite })
+                        }
+                        onToggleBlock={() =>
+                          upsert.mutate({ number: c.number, blocked: !c.blocked })
+                        }
+                        onSetCategory={(category) =>
+                          upsert.mutate({ number: c.number, category: c.category === category ? null : category })
+                        }
+                      />
+                    ))}
+                  </ul>
+                </section>
+              );
+            })}
+          </div>
         )}
       </div>
 
@@ -367,6 +314,158 @@ export default function ContactsPage() {
 }
 
 /* ============================================================
+   One contact row: avatar + presence LED, name + PIN + verified,
+   online/last-seen, and inline actions — Voice (default tap target),
+   Video, Message, plus a 3-dot menu (Favorite / category / Block /
+   Edit / Delete). Tapping the row's main area starts a VOICE call, as
+   requested ("make them directly go to the voice").
+   ============================================================ */
+function ContactRow({
+  c,
+  onVoice,
+  onVideo,
+  onMessage,
+  onEdit,
+  onDelete,
+  onToggleFavorite,
+  onToggleBlock,
+  onSetCategory,
+}: {
+  c: {
+    id: number;
+    number: string;
+    displayName: string | null;
+    favourite: boolean;
+    verified: boolean;
+    isOnline: boolean;
+    lastSeenAt: Date | string | null;
+    presenceHidden: boolean;
+    company: string | null;
+    jobTitle: string | null;
+    category: Category | null;
+    blocked: boolean;
+  };
+  onVoice: () => void;
+  onVideo: () => void;
+  onMessage: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onToggleFavorite: () => void;
+  onToggleBlock: () => void;
+  onSetCategory: (cat: Category) => void;
+}) {
+  return (
+    <li
+      className={
+        "flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border last:border-b-0 hover:bg-muted/30 transition-colors " +
+        (c.blocked ? "opacity-60" : "")
+      }
+    >
+      {/* Main area → VOICE call (the requested default). */}
+      <button
+        type="button"
+        onClick={onVoice}
+        disabled={c.blocked}
+        className="flex flex-1 min-w-0 items-center gap-3 text-left outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-lg disabled:cursor-not-allowed"
+        aria-label={`Call ${c.displayName || c.number}`}
+      >
+        <div className="relative shrink-0">
+          <div className="size-11 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
+            {initialsFrom(c.displayName || c.number)}
+          </div>
+          {/* Presence LED — green online / red offline; hidden for a stale guest. */}
+          {!c.presenceHidden && (
+            <span
+              aria-label={c.isOnline ? "Online" : "Offline"}
+              className={
+                "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
+                (c.isOnline ? "bg-[color:var(--relay-online)]" : "bg-red-500")
+              }
+            />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate flex items-center gap-1.5">
+            {c.favourite && <Star className="size-3.5 text-amber-400 fill-amber-400 shrink-0" />}
+            {c.blocked && <Ban className="size-3.5 text-red-500 shrink-0" />}
+            <span className="truncate">{c.displayName || c.number}</span>
+            {c.verified && <VerifiedBadge size={14} />}
+          </div>
+          <div className="text-xs text-muted-foreground font-mono">
+            {c.number.length === 6 ? c.number.slice(0, 3) + "-" + c.number.slice(3) : c.number}
+            {c.blocked ? (
+              <> · <span className="text-red-500">blocked</span></>
+            ) : c.presenceHidden ? null : c.isOnline ? (
+              <> · <span className="text-[color:var(--relay-online)]">online</span></>
+            ) : (
+              <> · last seen {relativeTime(c.lastSeenAt)}</>
+            )}
+          </div>
+          {(c.company || c.jobTitle) && (
+            <div className="text-xs text-muted-foreground truncate mt-0.5">
+              {[c.jobTitle, c.company].filter(Boolean).join(" · ")}
+            </div>
+          )}
+        </div>
+      </button>
+
+      {/* Inline actions: Voice / Video / Message + overflow menu. */}
+      <div className="flex items-center gap-0.5 shrink-0">
+        <Button size="icon" variant="ghost" aria-label="Voice call" title="Voice call" onClick={onVoice} disabled={c.blocked}>
+          <PhoneCall className="size-[18px] text-[color:var(--relay-online,#06d6a0)]" />
+        </Button>
+        <Button size="icon" variant="ghost" aria-label="Video call" title="Video call" onClick={onVideo} disabled={c.blocked} className="hidden xs:inline-flex">
+          <Video className="size-[18px]" />
+        </Button>
+        <Button size="icon" variant="ghost" aria-label="Message" title="Message" onClick={onMessage}>
+          <MessageSquare className="size-[18px]" />
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="icon" variant="ghost" aria-label="More options">
+              <MoreVertical className="size-[18px]" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuItem onClick={onVideo} className="xs:hidden">
+              <Video className="size-4" /> Video call
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onToggleFavorite}>
+              {c.favourite ? <><StarOff className="size-4" /> Unfavorite</> : <><Star className="size-4" /> Favorite</>}
+            </DropdownMenuItem>
+            <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/70 pt-2">
+              Category
+            </DropdownMenuLabel>
+            {CATEGORY_ORDER.map((cat) => {
+              const CIcon = CATEGORY_META[cat].icon;
+              const active = c.category === cat;
+              return (
+                <DropdownMenuItem key={cat} onClick={() => onSetCategory(cat)}>
+                  <CIcon className={"size-4 " + CATEGORY_META[cat].tint} />
+                  {CATEGORY_META[cat].label}
+                  {active && <CheckCircle2 className="size-3.5 ml-auto text-primary" />}
+                </DropdownMenuItem>
+              );
+            })}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onEdit}>
+              <Pencil className="size-4" /> Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onToggleBlock}>
+              <Ban className={"size-4 " + (c.blocked ? "" : "text-red-500")} />
+              {c.blocked ? "Unblock" : "Block"}
+            </DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" onClick={onDelete}>
+              <Trash2 className="size-4" /> Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </li>
+  );
+}
+
+/* ============================================================
    Add / Edit contact dialog with live PIN preview.
 
    When the user types a complete 6-digit number, we hit
@@ -392,6 +491,7 @@ function AddContactDialog({
     jobTitle?: string;
     website?: string;
     birthday?: string;
+    category?: Category | null;
   };
   onClose: () => void;
   onSave: (values: {
@@ -405,6 +505,7 @@ function AddContactDialog({
     website: string | null;
     birthday: string | null;
     favourite?: boolean;
+    category?: Category | null;
   }) => void;
   saving: boolean;
   error: string | null;
@@ -418,6 +519,7 @@ function AddContactDialog({
   const [jobTitle, setJobTitle] = useState(editing.jobTitle ?? "");
   const [website, setWebsite] = useState(editing.website ?? "");
   const [birthday, setBirthday] = useState(editing.birthday ?? "");
+  const [category, setCategory] = useState<Category | null>(editing.category ?? null);
   const [touchedName, setTouchedName] = useState(
     Boolean(editing.displayName)
   );
@@ -677,6 +779,33 @@ function AddContactDialog({
               maxLength={500}
             />
           </div>
+          <div>
+            <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
+              Category
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {CATEGORY_ORDER.map((cat) => {
+                const CIcon = CATEGORY_META[cat].icon;
+                const active = category === cat;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setCategory(active ? null : cat)}
+                    className={
+                      "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors " +
+                      (active
+                        ? "border-primary bg-primary/10 text-foreground"
+                        : "border-border text-muted-foreground hover:text-foreground")
+                    }
+                  >
+                    <CIcon className={"size-3.5 " + CATEGORY_META[cat].tint} />
+                    {CATEGORY_META[cat].label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         {/* Sticky footer — always visible regardless of form length. */}
@@ -696,6 +825,7 @@ function AddContactDialog({
                 jobTitle: jobTitle.trim() || null,
                 website: website.trim() || null,
                 birthday: birthday.trim() || null,
+                category,
               })
             }
             disabled={number.length !== 6 || saving}

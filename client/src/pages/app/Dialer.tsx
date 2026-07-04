@@ -125,7 +125,14 @@ export default function DialerPage() {
     );
     if (!to || to === enginePin) return;
     autoDialedRef.current = true;
-    engine.dial(to);
+    // Contacts deep-links carry the intent: ?voice=1 (default from a contact
+    // tap) or ?video=1. Voice keeps the camera off and runs the consent flow.
+    let voice = false;
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      voice = sp.get("voice") === "1" || (sp.get("video") !== "1" && sp.has("voice"));
+    } catch { /* */ }
+    engine.dial(to, { voice });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engineReady, enginePin]);
 

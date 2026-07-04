@@ -85,6 +85,19 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
       .catch(() => {/* best-effort — the decline itself already went through */});
   };
 
+  // BLOCKED numbers → the engine silently declines their calls. Sourced from
+  // the contact list (blocked flag), refreshed with it.
+  const contactsList = trpc.contacts.list.useQuery(undefined, {
+    enabled: !!me,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  useEffect(() => {
+    const blocked = (contactsList.data ?? []).filter((c) => c.blocked).map((c) => c.number);
+    handleRef.current?.setBlockedPins(blocked);
+  }, [contactsList.data]);
+
   // Latest identity values, read by the (mount-once) auto-register loop.
   const nameRef = useRef<string | null>(null);
   nameRef.current = me?.displayName ?? null;

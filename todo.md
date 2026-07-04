@@ -2981,3 +2981,12 @@ Three-part user request.
       there is no password to forget). Copy updated both modes; back link returns to guest.
 
 696+ tests passing (11 new consent pins), tsc + build clean. Footer → `v2.81.0`.
+
+## v2.82.0 — Contacts list redesign: rich rows, inline call actions, categories, block (delivered 2026-07-04)
+
+Per the user's reference screenshot: rich rows (avatar + presence LED + name + formatted PIN + verified +
+online/last-seen), row tap → VOICE call, inline Voice/Video/Message + a 3-dot menu (favorite / category /
+block / edit / delete), category grouping (Favorites, VIP, Family, Friends, Team, All Contacts) with a
+dialog chip picker, and ENFORCED blocking (additive contacts.category + contacts.blocked; blocked
+messages rejected server-side, blocked calls silently declined by the engine via setBlockedPins). Layout
+brought to v2.73 (flex-1, no stale pb-24). 9 new pins; 707 passing. Footer → v2.82.0.

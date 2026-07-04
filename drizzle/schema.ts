@@ -213,6 +213,12 @@ export const contacts = mysqlTable(
     jobTitle: varchar("jobTitle", { length: 128 }),
     website: varchar("website", { length: 256 }),
     birthday: varchar("birthday", { length: 32 }),
+    /** Contact group: "vip" | "family" | "friend" | "team" | null (v2.82).
+     *  Additive nullable column applied by the boot migrator. */
+    category: varchar("category", { length: 16 }),
+    /** Owner has BLOCKED this number: their calls are auto-declined on this
+     *  device and their 1:1 messages to the owner are rejected (v2.82). */
+    blocked: boolean("blocked"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

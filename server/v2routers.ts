@@ -35,6 +35,7 @@ import {
   listConferenceHistory,
   getHistoryClearedAt,
   clearCallHistory,
+  isNumberBlockedBy,
   listContacts,
   listMessages,
   searchMessages,
@@ -570,6 +571,8 @@ export const v2ContactsRouter = router({
         jobTitle: r.jobTitle ?? null,
         website: r.website ?? null,
         birthday: r.birthday ?? null,
+        category: (r.category as "vip" | "family" | "friend" | "team" | null) ?? null,
+        blocked: r.blocked === true,
         identityId: ident ?? null,
         isOnline: hidden ? false : (pres?.isOnline ?? false),
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
@@ -612,6 +615,10 @@ export const v2ContactsRouter = router({
           .optional()
           .refine(v => !v || /^https?:\/\//i.test(v), { message: "Must start with http:// or https://" }),
         birthday: z.string().trim().max(32).nullable().optional(),
+        /** Contact group for the categorized list (v2.82). */
+        category: z.enum(["vip", "family", "friend", "team"]).nullable().optional(),
+        /** Block this number: their calls auto-decline, their 1:1 messages are rejected. */
+        blocked: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -888,6 +895,20 @@ export const v2MessagesRouter = router({
         if (!owned) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Attachment not found or not yours" });
         }
+      }
+      // BLOCKING (1:1 only): a recipient who blocked the sender receives
+      // nothing — the send fails honestly instead of silently delivering.
+      try {
+        const pids = (await getConversationParticipantIds(input.conversationId)).filter((p) => p !== me.id);
+        if (pids.length === 1) {
+          const blocked = await isNumberBlockedBy(pids[0], me.number);
+          if (blocked) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "You can't message this person." });
+          }
+        }
+      } catch (e) {
+        if (e instanceof TRPCError) throw e; // block verdicts propagate
+        /* lookup hiccups never block sending */
       }
       const row = await sendMessage({
         conversationId: input.conversationId,

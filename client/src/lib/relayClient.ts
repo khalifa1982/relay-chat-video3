@@ -144,6 +144,9 @@ export interface RelayHandle {
    *  called with (callerPin, text) when the callee picks a canned response
    *  (the engine then declines the ring). */
   setOnQuickReply: (cb: ((toPin: string, text: string) => void) | null) => void;
+  /** Numbers whose incoming calls are silently declined (per-contact block).
+   *  Replace-style: pass the full current list each time. */
+  setBlockedPins: (pins: string[]) => void;
   /** Subscribe to auto-rejoin status: true while the engine is honoring a
    *  reload/crash snapshot to rejoin an active call, false once it has rejoined
    *  or given up. Lets the app show a "Reconnecting… / Exit call" prompt. */
@@ -446,6 +449,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     };
     lkWatchdog = setTimeout(tick, 4500);
   }
+  // Numbers this user has BLOCKED (pushed by the host app from their contact
+  // list). An incoming ring from any of them is silently declined — same
+  // treatment as Do-Not-Disturb, but per-number.
+  let blockedPins = new Set<string>();
   let pendingRing: PendingRing | null = null;
   // Call waiting: a second incoming call while already in a call.
   let waitingRing: PendingRing | null = null;
@@ -2033,6 +2040,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // Do Not Disturb: silently auto-decline (no ring overlay, no chime/notify).
     // The caller sees a normal "declined" and the miss is still recorded.
     if (isDndOn()) { sendWS({ type: "reject", to: m.from }); return; }
+    // BLOCKED number: silently decline — no overlay, no sound, nothing.
+    if (m.from && blockedPins.has(m.from)) { sendWS({ type: "reject", to: m.from }); return; }
     if (inCall) {
       if (m.roomId === roomId) return; // already in this room
       // Call waiting: alert (Switch / Decline) instead of auto-rejecting. Only
@@ -5112,6 +5121,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       setTileFlag("tile-self", selfFlag);
     },
     setOnQuickReply(cb) { onQuickReply = cb; },
+    setBlockedPins(pins) { blockedPins = new Set(pins); },
     setOnPinChange(cb) {
       onPinChange = cb;
       // Fire immediately with the current value so a late subscriber syncs up.

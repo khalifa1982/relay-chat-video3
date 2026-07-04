@@ -633,6 +633,9 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "identities", column: "missedCallsSeenAt", ddl: "ADD COLUMN `missedCallsSeenAt` timestamp NULL" },
     // Per-user "Clear history" high-water mark (v2.75).
     { table: "identities", column: "historyClearedAt", ddl: "ADD COLUMN `historyClearedAt` timestamp NULL" },
+    // Contact categories + per-contact block (v2.82).
+    { table: "contacts", column: "category", ddl: "ADD COLUMN `category` varchar(16)" },
+    { table: "contacts", column: "blocked", ddl: "ADD COLUMN `blocked` boolean" },
     // Self-hosted email/password auth (v2.54).
     { table: "users", column: "passwordHash", ddl: "ADD COLUMN `passwordHash` text" },
     { table: "users", column: "emailVerified", ddl: "ADD COLUMN `emailVerified` boolean" },
@@ -756,6 +759,7 @@ export async function listContacts(ownerId: number) {
 const CONTACT_UPDATABLE = [
   "displayName", "avatarUrl", "favourite", "notes",
   "email", "phone", "company", "jobTitle", "website", "birthday",
+  "category", "blocked",
 ] as const;
 
 /**
@@ -785,6 +789,8 @@ export async function upsertContact(input: {
   jobTitle?: string | null;
   website?: string | null;
   birthday?: string | null;
+  category?: string | null;
+  blocked?: boolean;
 }) {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
@@ -801,6 +807,8 @@ export async function upsertContact(input: {
     jobTitle: input.jobTitle ?? null,
     website: input.website ?? null,
     birthday: input.birthday ?? null,
+    category: input.category ?? null,
+    blocked: input.blocked ?? false,
   };
   // Only overwrite columns the caller explicitly provided, so a partial update
   // (e.g. a favourite toggle that omits email/notes/…) never wipes saved fields.
@@ -818,6 +826,18 @@ export async function upsertContact(input: {
     .where(and(eq(contacts.ownerId, input.ownerId), eq(contacts.number, input.number)))
     .limit(1);
   return rows[0];
+}
+
+/** True when `ownerId` has a contact row for `number` marked BLOCKED. */
+export async function isNumberBlockedBy(ownerId: number, number: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db
+    .select({ blocked: contacts.blocked })
+    .from(contacts)
+    .where(and(eq(contacts.ownerId, ownerId), eq(contacts.number, number)))
+    .limit(1);
+  return rows[0]?.blocked === true;
 }
 
 export async function deleteContact(ownerId: number, contactId: number) {
