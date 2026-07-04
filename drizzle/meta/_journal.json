@@ -36,6 +36,13 @@
       "when": 1782846644439,
       "tag": "0004_familiar_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1783187638238,
+      "tag": "0005_supreme_lionheart",
+      "breakpoints": true
     }
   ]
 }
