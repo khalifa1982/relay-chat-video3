@@ -79,7 +79,7 @@ interface PeerEntry {
    *  X…" so a slow/stuck first connect doesn't look identical to a normal one. */
   slowT?: ReturnType<typeof setTimeout> | null;
 }
-interface PendingRing { from: string; fromName: string; roomId: string; flag?: string; }
+interface PendingRing { from: string; fromName: string; roomId: string; flag?: string; video?: boolean; }
 interface Recent { id: string; name: string; }
 
 interface Msg {
@@ -108,6 +108,8 @@ interface Msg {
   livekitUrl?: string;
   token?: string;
   url?: string;
+  /** invite/ring: the caller dialed this as a VIDEO call (mutual-consent flow). */
+  video?: boolean;
   // Recording (LiveKit Egress). `recording` (boolean) on `registered` advertises
   // availability; the `recording` status message carries `on` + `by`.
   recording?: boolean;
@@ -285,6 +287,76 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // while it was still ringing. Set by acceptInvite/createPeer/addLkTile (any
   // evidence a second party is in the call); reset by hangUp.
   let callAnswered = false;
+  // ── mutual-consent video (1:1 protocol) ──────────────────────────────────
+  // Video transmits ONLY once BOTH parties have agreed, per call:
+  //   • a VIDEO dial: the callee answering with the Video button is the
+  //     consent (they reply `video-accept`); answering Voice replies
+  //     `video-decline` and the call stays voice-only.
+  //   • mid-call upgrade: tapping the camera in an unapproved 1:1 call sends
+  //     `video-request` — the other side gets an in-call prompt; accepting
+  //     turns BOTH cameras on. Declining keeps voice-only.
+  // Once approved, camera toggles are free for the rest of the call (turning
+  // video OFF never needs consent). Group calls (3+) bypass the gate.
+  let videoApproved = false;
+  let callIsGroup = false;
+  let videoReqT: ReturnType<typeof setTimeout> | null = null; // our outstanding request
+  function clearVideoReq() { if (videoReqT) { clearTimeout(videoReqT); videoReqT = null; } }
+  function videoGateActive(): boolean {
+    return inCall && !videoApproved && !callIsGroup;
+  }
+  // Actually start transmitting video AFTER approval (both media paths). The
+  // local camera may already be live (video dial) — publication was gated —
+  // and the mesh senders may be the null slots from the gated createPeer, so
+  // ALWAYS push the track into every transport here.
+  function unlockApprovedVideo() {
+    videoApproved = true;
+    clearVideoReq();
+    if (!camOn) setCam(true); // flips enabled + self tile (+ SFU sync)
+    if (livekitEnabled) void syncLivekitVideoPublication(true);
+    else { const t = currentCameraVideoTrack(); if (t) void replaceVideoEverywhere(t).then(() => syncCamEnabled()); }
+  }
+  // Consent can arrive BEFORE the transport exists (the callee's video-accept
+  // often beats peer-joined/ICE). Re-assert "approved video is actually
+  // flowing" whenever a connection settles — fills any mesh sender that was
+  // negotiated as a null slot pre-consent, and republishes on the SFU.
+  function ensureApprovedVideoFlowing() {
+    if (!inCall || !camOn || !(videoApproved || callIsGroup) || screenSharing) return;
+    if (livekitEnabled) { void syncLivekitVideoPublication(true); return; }
+    const t = currentCameraVideoTrack();
+    if (!t) return;
+    const someoneMissingOurVideo = Object.values(peers).some(
+      p => !p.pc.getSenders().some(s => s.track && s.track.kind === "video")
+    );
+    if (someoneMissingOurVideo) void replaceVideoEverywhere(t).then(() => syncCamEnabled());
+  }
+  function requestVideoUpgrade() {
+    if (videoReqT) { toast("Video request already sent — waiting for them…"); return; }
+    sendWS({ type: "video-request" });
+    toast("Video request sent — their camera prompt is up. Video starts when they accept.");
+    videoReqT = setTimeout(() => {
+      videoReqT = null;
+      toast("No response to your video request — the call stays voice-only for now.", true);
+    }, 30_000);
+  }
+  function onVideoRequest(m: Msg) {
+    if (!inCall) return;
+    const nm = $("vaName"); if (nm) nm.textContent = m.fromName || nameOf(m.from || "") || "They";
+    $("videoAsk")?.classList.add("show");
+  }
+  function onVideoAccept() {
+    if (!inCall) return;
+    unlockApprovedVideo();
+    toast("Video is on — both sides. 🎥");
+  }
+  function onVideoDecline() {
+    if (!inCall) return;
+    clearVideoReq();
+    // A declined VIDEO DIAL: our camera was locally live (preview) but never
+    // transmitted — drop to a clean voice call.
+    if (camOn) setCam(false);
+    toast("They kept the call voice-only. You can send a video request anytime.");
+  }
+  function hideVideoAsk() { $("videoAsk")?.classList.remove("show"); }
   // OUTGOING dial in progress (caller side). Non-null from the moment we send
   // the invite until the call is ESTABLISHED (markEstablished) or torn down.
   // Drives the staged call-progress flow the phone expects:
@@ -518,7 +590,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // Group call: now that the room exists, ring the remaining invitees.
         if (pendingGroupInvites.length) {
           const q = pendingGroupInvites; pendingGroupInvites = [];
-          q.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t }); });
+          q.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t, video: camOn }); });
         }
         break;
       case "ringing":
@@ -562,6 +634,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
         break;
       case "peer-hold":    onPeerHold(m); break;
       case "peer-screen":  onPeerScreen(m); break;
+      case "video-request": onVideoRequest(m); break;
+      case "video-accept":  onVideoAccept(); break;
+      case "video-decline": onVideoDecline(); break;
       case "kicked":
         toast("You were removed from the call by the host.", true);
         hangUp("kicked");
@@ -1225,7 +1300,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // hand the VIDEO track to an empty AUDIO sender. Resolve the empty
         // slot through its transceiver's receiver kind instead.
         const sender = senders.find(s => s.track && s.track.kind === "video")
-                    || pc.getTransceivers().find(tr => !tr.sender.track && tr.receiver?.track?.kind === "video")?.sender
+                    || pc.getTransceivers().find(tr => tr.mid !== null && !tr.sender.track && tr.receiver?.track?.kind === "video")?.sender
                     || null;
         if (sender) await sender.replaceTrack(track);
       } catch { /* */ }
@@ -1555,7 +1630,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       emitPhase("dialing");
       playRingtone("outgoing");
     }
-    sendWS({ type: "invite", to: target });
+    sendWS({ type: "invite", to: target, video: camOn });
     toast("Calling " + target + "…");
   }
 
@@ -1591,7 +1666,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       emitPhase("dialing");
       playRingtone("outgoing");
     }
-    sendWS({ type: "invite", to: target });
+    sendWS({ type: "invite", to: target, video: !opts?.voice });
     toast("Calling " + target + "…");
     return true;
   }
@@ -1614,6 +1689,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try { await ensureMedia(); } catch { return false; }
     if (opts?.voice && localStream && localStream.getVideoTracks().length > 0) setCam(false);
     const alreadyInRoom = inCall && !!roomId;
+    callIsGroup = true; // conferences bypass the 1:1 video-consent gate
     if (!inCall) {
       inCall = true;
       outgoingDial = { pin: clean.length + " people", name: "Group call", video: !opts?.voice, group: true };
@@ -1621,11 +1697,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
       emitPhase("dialing");
     }
     if (alreadyInRoom) {
-      clean.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t }); });
+      clean.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t, video: camOn }); });
     } else {
       const [first, ...rest] = clean;
       pendingGroupInvites = rest;
-      sendWS({ type: "invite", to: first });
+      sendWS({ type: "invite", to: first, video: camOn });
     }
     toast("Starting group call (" + clean.length + ")…");
     return true;
@@ -1912,6 +1988,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!rid) return;
     roomId = rid;
     inCall = true;
+    videoApproved = true; // resuming an established call — consent already settled
     enterCallUI("In call");
     recordMemberDevices(m.members);
     recordMemberRoles(m.members);
@@ -1966,14 +2043,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
       return;
     }
     if (pendingRing) { sendWS({ type: "reject", to: m.from }); return; }
-    pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId! };
+    pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, video: !!m.video };
+    // Mutual-consent protocol: a VOICE call is answered as voice — the Video
+    // answer button only appears when the CALLER dialed this as a video call
+    // (answering with it is the callee's consent).
+    const vBtn = $("acceptBtn"); if (vBtn) vBtn.style.display = m.video ? "" : "none";
     const ringAv = $("ringAv"); if (ringAv) ringAv.textContent = initials(m.fromName!);
     const ringWho = $("ringWho"); if (ringWho) ringWho.textContent = m.fromName!;
     // Caller identity verification: their PIN (mono, formatted) + country flag.
     const ringPin = $("ringPin");
     if (ringPin) ringPin.textContent = m.from && m.from.length === 6 ? m.from.slice(0, 3) + "-" + m.from.slice(3) : (m.from || "");
     const ringFlag = $("ringFlag"); if (ringFlag) ringFlag.textContent = m.flag || "";
-    const ringSub = $("ringSub"); if (ringSub) ringSub.textContent = "is calling you…";
+    const ringSub = $("ringSub"); if (ringSub) ringSub.textContent = m.video ? "Video call…" : "Voice call…";
     $("quickReplies")?.classList.remove("open"); // fresh ring → replies folded
     $("ringOverlay")?.classList.add("active");
     playRingtone("incoming");
@@ -2000,6 +2081,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (opts?.voice && localStream && localStream.getVideoTracks().length > 0) {
       setCam(false);
     }
+    // Mutual-consent: answering a VIDEO-dialed call with the Video button IS
+    // the consent — mark it before media publishes. The reply to the caller is
+    // sent AFTER the `accept` below (the server relays video-* by the sender's
+    // room, which it only learns from the accept).
+    if (r.video && !opts?.voice) videoApproved = true;
     // Accepting is a user gesture — arm the audio unlock now so the remote
     // voice stream (which arrives a second or two later, OUTSIDE any gesture and
     // thus gated by Android's autoplay policy) plays on the user's next touch
@@ -2008,6 +2094,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     callAnswered = true; // WE answered — the watchdog may enforce media now
     inCall = true; roomId = r.roomId; enterCallUI("In call");
     sendWS({ type: "accept", roomId: r.roomId });
+    // Mutual-consent reply to the caller (after `accept`, so the server knows
+    // our room): Video answer = both sides transmit; Voice answer on a video
+    // dial = the caller stands their camera down.
+    if (r.video) sendWS({ type: opts?.voice ? "video-decline" : "video-accept" });
   }
   function declineInvite() {
     const r = pendingRing; pendingRing = null;
@@ -2087,6 +2177,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     roomId = rid;
     inCall = true;
+    videoApproved = true; // resuming an established call — consent already settled
     enterCallUI("In call");          // shows the call screen + arms the SFU watchdog
     recordMemberDevices(m.members);
     recordMemberRoles(m.members);
@@ -2408,7 +2499,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // "voice-only" call still occupied a video publication/subscription on
         // the SFU (just disabled), wasting bandwidth and showing peers a black
         // tile instead of a clean voice-call UI.
-        if (camOn) {
+        // Mutual-consent gate: a 1:1 VIDEO DIALER's camera is live locally
+        // (self-preview) but must NOT transmit until the callee consents —
+        // video-accept unlocks the publication (unlockApprovedVideo).
+        if (camOn && (videoApproved || callIsGroup)) {
           for (const t of send.getVideoTracks()) await publishSafe(t, "camera");
         }
         for (const t of send.getAudioTracks()) await publishSafe(t, "microphone");
@@ -2424,6 +2518,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // first TrackSubscribed → markEstablished.
       if (!outgoingDial || callAnswered) markEstablished();
       else diag("livekit: uplink ready — waiting for the callee to answer");
+      ensureApprovedVideoFlowing(); // consent may have landed before connect
       diag("livekit: connected + published");
     } catch (e) {
       // Connect/publish failed (expired token, transient SFU/network fault).
@@ -2794,6 +2889,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (lkParticipantTiles[id]) return;
     callAnswered = true; // a second party exists — the join watchdog may enforce media
     onCalleeAnswered();  // outgoing dial: "Ringing…" → the real connecting sequence
+    if (Object.keys(lkParticipantTiles).length >= 1) callIsGroup = true; // 2nd remote → conference
     const grid = $("videoGrid"); if (!grid) return;
     const t = document.createElement("div");
     t.className = "relay-tile"; t.id = "tile-" + id;
@@ -2864,6 +2960,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // Parity with the mesh path's removePeer, which posts a "left" notice — plus
     // a visible toast (the chat drawer is closed by default during a call).
     if (inCall) { addSysMsg(nm + " left the call."); toast(nm + " left the call."); }
+    // 1:1 auto-end (see removePeer): don't linger in a dead solo call.
+    if (inCall && !callIsGroup && callAnswered && aloneInCall()) {
+      toast("Call ended.");
+      hangUp("remote-left");
+    }
   }
   // Tear down the LiveKit room + its tiles. Safe to call when not on the SFU path.
   function teardownLivekit() {
@@ -2912,6 +3013,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (peers[pin]) return peers[pin];
     callAnswered = true; // a second party exists — the join watchdog may enforce media
     onCalleeAnswered();  // outgoing dial: "Ringing…" → the real connecting sequence
+    if (Object.keys(peers).length >= 1) callIsGroup = true; // 2nd remote → conference
     const pc = new RTCPeerConnection(iceConfig);
     const peer: PeerEntry = { pc, name: name || "Guest", dc: null, el: null, candQ: [], remoteSet: false, gotStream: false, initiator, graceT: null, restartT: null, iceRestarts: 0, slowT: null };
     peers[pin] = peer;
@@ -2935,9 +3037,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (sendStream) {
       sendStream.getAudioTracks().forEach(t => pc.addTrack(t, sendStream));
       const sharing = screenSharing && screenStream;
+      // Mutual-consent gate (mesh): un-approved 1:1 video rides NOTHING — the
+      // always-negotiated null-track transceiver below keeps the m-line ready
+      // for the moment consent arrives (replaceVideoEverywhere fills it).
+      const consentOk = videoApproved || callIsGroup;
       const vtrack = sharing
         ? (screenStream!.getVideoTracks()[0] || null)
-        : (sendStream.getVideoTracks()[0] || null);
+        : (consentOk ? (sendStream.getVideoTracks()[0] || null) : null);
       // Group the video under sendStream's msid (same stream id as the audio),
       // even while screen-sharing — the transmitted track is still `vtrack` (the
       // screen). Grouping it under a SEPARATE stream (screenStream) gave audio and
@@ -2945,15 +3051,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // two `e.streams[0]` and attachRemote's `v.srcObject = stream` kept only the
       // last → silent audio OR a black tile for whoever joined during a share.
       if (vtrack) pc.addTrack(vtrack, sendStream);
-      // NO local camera track (denied/absent/died at join): still negotiate a
-      // VIDEO m-line, sendrecv, with a null-track sender. Without this, an
-      // AUDIO-ONLY INITIATOR's offer carried no video m-line at all — and an
-      // SDP answer can't add one — so every camera-ful peer's video silently
-      // never reached them ("their videos are all dead for me"), and their own
-      // later camera-enable had no sender slot to ride into. The null-track
-      // sender is exactly the `senders.find(s => !s.track)` slot that
-      // replaceVideoEverywhere fills when the camera is (re)acquired.
-      else pc.addTransceiver("video", { direction: "sendrecv" });
+      // NO video track to send right now (no camera, or 1:1 consent not yet
+      // given): the OFFERER still negotiates a VIDEO m-line — sendrecv with a
+      // null-track sender — because an SDP answer can't add one later. The
+      // null-track sender is the slot replaceVideoEverywhere fills when the
+      // camera is (re)acquired or consent arrives. ONLY the initiator: on the
+      // ANSWERER, an addTransceiver slot is never associated with the offered
+      // m-line (it stays an mid-less ORPHAN that swallowed the camera track);
+      // the answerer's slot comes from the offer itself, flipped to sendrecv
+      // in onSignal before the answer is created.
+      else if (initiator) pc.addTransceiver("video", { direction: "sendrecv" });
     }
     // Party-size-scaled encoder caps (see applyMeshVideoCaps). Deferred a tick
     // so the freshly-added senders are queryable.
@@ -2992,6 +3099,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         peer.iceRestarts = 0;
         clearSlowConnect(peer);
         markEstablished(); // first live media → top bar shows "Connected"
+        ensureApprovedVideoFlowing(); // consent may have landed before this pc existed
       } else if (st === "closed") {
         removePeer(pin);
       }
@@ -3062,6 +3170,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
         peer.remoteSet = true;
         await flushCand(from);
         if (data.sdp.type === "offer") {
+          // Answer every offered VIDEO m-line as sendrecv even while we have
+          // nothing to send yet (camera off / consent pending). The default
+          // answer direction is recvonly, which would LOCK this side out of
+          // ever sending video without a renegotiation — the consented camera
+          // later rides in via plain replaceTrack.
+          peer.pc.getTransceivers().forEach(tr => {
+            if (tr.receiver?.track?.kind === "video" && tr.direction === "recvonly") {
+              try { tr.direction = "sendrecv"; } catch { /* older UAs — best effort */ }
+            }
+          });
           const answer = await peer.pc.createAnswer();
           await peer.pc.setLocalDescription(answer);
           sendWS({ type: "signal", to: from, data: { sdp: peer.pc.localDescription } });
@@ -3132,6 +3250,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (inCall && !quiet) {
       addSysMsg((nm || "Someone") + " left the call.");
       toast((nm || "Someone") + " left the call.");
+    }
+    // 1:1: the other party leaving ENDS the call (like a phone). Lingering in
+    // a dead solo call swallowed the next incoming ring as call-waiting.
+    // Groups keep the room open (the host may ring more people in).
+    if (inCall && !quiet && !callIsGroup && callAnswered && aloneInCall()) {
+      toast("Call ended.");
+      hangUp("remote-left");
     }
   }
 
@@ -3569,10 +3694,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // the FROZEN last frame when a peer disabled their camera (or their
       // uplink stalled), which testers read as "their camera is dead/stuck".
       // `!tr.muted` flips the tile to the avatar until frames actually flow.
-      const has = stream.getVideoTracks().some(tr => !tr.muted && tr.enabled && tr.readyState === "live");
+      // AND the element must have real frames (videoWidth > 0): the always-
+      // negotiated consent m-line delivers a live-but-silent track during
+      // voice calls, which otherwise painted a BLACK tile instead of the
+      // avatar. The `resize` listener below re-syncs when frames start.
+      const hasLiveTrack = stream.getVideoTracks().some(tr => !tr.muted && tr.enabled && tr.readyState === "live");
+      const has = hasLiveTrack && ((v?.videoWidth || 0) > 0);
       const ph = entry.el!.querySelector(".ph") as HTMLElement | null;
       if (ph) ph.style.display = has ? "none" : "flex";
     };
+    v?.addEventListener("resize", sync);
     sync();
     stream.getVideoTracks().forEach(tr => { tr.onmute = sync; tr.onunmute = sync; tr.onended = sync; });
   }
@@ -4287,6 +4418,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
         : (lp.videoTrackPublications ? Array.from(lp.videoTrackPublications.values()) : []);
       const videoPubs = pubs.filter((pub: any) => pub?.kind === "video" || pub?.track?.kind === "video");
       if (enabled && videoPubs.length === 0) {
+        // Mutual-consent choke point: NO fresh camera publication in an
+        // un-approved 1:1 call, whoever asks (toggle, recovery, filter swap).
+        if (!videoApproved && !callIsGroup) return;
         const track = currentCameraVideoTrack();
         // Re-acquire if the camera track died (e.g. an OS/policy stop), so we
         // never republish a dead track = a permanently black tile.
@@ -4363,6 +4497,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function toggleCam() {
     if (!localStream) return;
+    // Mutual-consent: turning video ON in an un-approved 1:1 call sends a
+    // request instead — the other side's prompt (accept = both cameras on)
+    // is what actually starts video. Turning OFF never needs consent.
+    if (!camOn && videoGateActive() && !screenSharing) {
+      requestVideoUpgrade();
+      return;
+    }
     setCam(!camOn);
   }
   // The camera video track we publish when NOT screen-sharing: the filtered
@@ -4594,7 +4735,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     addInviteOfflineGuard = true;
     if (addInviteGuardT) clearTimeout(addInviteGuardT);
     addInviteGuardT = setTimeout(() => { addInviteOfflineGuard = false; addInviteGuardT = null; }, 6000);
-    sendWS({ type: "invite", to: pin });
+    sendWS({ type: "invite", to: pin, video: camOn });
     toast("Inviting " + pin + "…");
     closeAddPad();
     addInviting = false;
@@ -4610,6 +4751,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("ringOverlay")?.classList.remove("active");
     exitPreConnect(); // clear any in-flight dial card / pre-connect gating
     clearDialTimeout(); // an ended call must never fire a stale "No answer."
+    videoApproved = false; callIsGroup = false; // consent is per-call
+    clearVideoReq();
+    hideVideoAsk();
     clearConnSeq();
     exitReconnecting();
     establishedOnce = false;
@@ -4763,6 +4907,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
     });
   });
   ($("cwSwitch") as HTMLElement | null)?.addEventListener("click", switchCall);
+  ($("vaAccept") as HTMLElement | null)?.addEventListener("click", () => {
+    hideVideoAsk();
+    unlockApprovedVideo();
+    sendWS({ type: "video-accept" });
+    toast("Video on — both sides. 🎥");
+  });
+  ($("vaDecline") as HTMLElement | null)?.addEventListener("click", () => {
+    hideVideoAsk();
+    sendWS({ type: "video-decline" });
+  });
   ($("cwDecline") as HTMLElement | null)?.addEventListener("click", declineWaiting);
   ($("heldSwap") as HTMLElement | null)?.addEventListener("click", swapCall);
   ($("heldMerge") as HTMLElement | null)?.addEventListener("click", mergeCall);

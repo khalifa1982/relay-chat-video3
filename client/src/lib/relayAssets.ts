@@ -95,6 +95,15 @@ export const RELAY_MARKUP = `
         <button id="cwSwitch" class="cw-btn cw-switch">Answer</button>
       </div>
     </div>
+    <div id="videoAsk" class="video-ask">
+      <div class="va-info"><span class="va-cam">&#127909;</span>
+        <span class="va-meta"><b id="vaName">Someone</b><span class="va-sub">wants to start video &mdash; accepting turns on BOTH cameras</span></span>
+      </div>
+      <div class="va-actions">
+        <button id="vaDecline" class="va-btn va-decline" type="button">Not now</button>
+        <button id="vaAccept" class="va-btn va-accept" type="button">Turn on video</button>
+      </div>
+    </div>
     <div id="heldBar" class="held-bar">
       <div class="held-info"><span class="held-pulse"></span>
         <span class="held-meta"><b>On hold</b><span class="held-name" id="heldName"></span></span>
@@ -765,6 +774,21 @@ export const RELAY_CSS = `
 .relay-root .conn-step.done .conn-tick::after{content:"✓";color:#04201B;font-size:13px;font-weight:800;line-height:1}
 /* Call waiting — a second incoming call during an active call */
 .relay-root .call-waiting{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:36;display:none;align-items:center;gap:14px;background:rgba(20,23,29,.92);border:1px solid var(--border2);border-radius:16px;padding:10px 12px 10px 16px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
+/* ── mutual-consent video prompt (1:1): "X wants to start video" ── */
+.relay-root .video-ask{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:37;display:none;align-items:center;gap:14px;background:rgba(20,23,29,.94);border:1px solid rgba(124,92,255,.4);border-radius:16px;padding:10px 12px 10px 16px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
+.relay-root .video-ask.show{display:flex;animation:relayFade .25s ease both}
+.relay-root .va-info{display:flex;align-items:center;gap:10px;min-width:0}
+.relay-root .va-cam{font-size:22px;line-height:1}
+.relay-root .va-meta{display:flex;flex-direction:column;min-width:0}
+.relay-root .va-meta b{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.relay-root .va-sub{font-size:12px;color:var(--muted)}
+.relay-root .va-actions{display:flex;gap:8px}
+.relay-root .va-btn{border:none;border-radius:12px;padding:9px 14px;font-family:inherit;font-weight:700;font-size:13px;cursor:pointer;transition:.15s;white-space:nowrap}
+.relay-root .va-decline{background:rgba(255,255,255,.08);color:var(--muted);border:1px solid var(--border2)}
+.relay-root .va-decline:hover{color:var(--text)}
+.relay-root .va-accept{background:rgba(124,92,255,.2);color:#c4b5ff;border:1px solid rgba(124,92,255,.5)}
+.relay-root .va-accept:hover{background:rgba(124,92,255,.32)}
+@media (max-width:680px){.relay-root .video-ask{flex-direction:column;gap:10px;top:10px;padding:12px 14px}.relay-root .va-actions{width:100%}.relay-root .va-btn{flex:1}}
 .relay-root .call-waiting.show{display:flex;animation:cwIn .3s cubic-bezier(0.23,1,0.32,1) both}
 @keyframes cwIn{from{opacity:0;transform:translateX(-50%) translateY(-16px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 .relay-root .call-waiting .cw-info{font-size:14px;color:var(--text);display:flex;align-items:center;gap:9px}

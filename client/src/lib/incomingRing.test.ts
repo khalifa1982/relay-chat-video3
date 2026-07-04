@@ -40,7 +40,7 @@ describe("incoming-call overlay — rich caller card", () => {
     expect(CLIENT).toMatch(/acceptInvite\(opts\?: \{ voice\?: boolean \}\)/);
     expect(CLIENT).toMatch(/acceptInvite\(\{ voice: true \}\)/);
     // Voice answer mirrors the voice-dial rule: camera off, upgradeable in-call.
-    expect(CLIENT).toMatch(/if \(opts\?\.voice && localStream && localStream\.getVideoTracks\(\)\.length > 0\) \{\s*\n\s*setCam\(false\);\s*\n\s*\}\s*\n\s*\/\/ Accepting is a user gesture/);
+    expect(CLIENT).toMatch(/if \(opts\?\.voice && localStream && localStream\.getVideoTracks\(\)\.length > 0\) \{\s*\n\s*setCam\(false\);\s*\n\s*\}/);
   });
 
   it("Decline stays prominent and full-width (red)", () => {

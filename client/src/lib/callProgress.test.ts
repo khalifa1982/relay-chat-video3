@@ -91,8 +91,8 @@ describe("voice-first video defaults", () => {
     expect(CLIENT).toMatch(/if \(opts\?\.voice && localStream && localStream\.getVideoTracks\(\)\.length > 0\) \{\s*\n\s*setCam\(false\);/);
   });
 
-  it("SFU voice calls never publish a video track at all", () => {
-    expect(CLIENT).toMatch(/if \(camOn\) \{\s*\n\s*for \(const t of send\.getVideoTracks\(\)\) await publishSafe\(t, "camera"\);/);
+  it("SFU voice calls never publish a video track at all (and 1:1 video needs mutual consent)", () => {
+    expect(CLIENT).toMatch(/if \(camOn && \(videoApproved \|\| callIsGroup\)\) \{\s*\n\s*for \(const t of send\.getVideoTracks\(\)\) await publishSafe\(t, "camera"\);/);
   });
 
   it("the dial card visually confirms the session mode from the start (Video call vs Voice call chip)", () => {

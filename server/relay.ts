@@ -650,6 +650,8 @@ export interface RelayMessage {
   // Host moderation (`mod` message): action + optional target pin.
   action?: string;
   target?: string;
+  /** invite: the caller dialed this as a VIDEO call (mutual-consent flow). */
+  video?: boolean;
 }
 
 export type InviteHook = (info: {
@@ -901,6 +903,9 @@ export function handleMessage(
         fromName: self.name,
         flag: self.flag,
         roomId: self.roomId,
+        // Mutual-consent video: the callee's ring card shows the dialed mode,
+        // and only a VIDEO dial offers the "answer with video" (= consent).
+        video: !!msg.video,
       };
       // Multi-device ring: if the callee is idle (not already in a call), ring
       // EVERY one of their devices — first to accept wins (the accept handler
@@ -1316,6 +1321,18 @@ export function handleMessage(
         reg.rooms.delete(heldRid);
       }
       safeSend(conn.socket, { type: "merged", roomId: activeRid, members: membersOf(reg, activeRid, conn.pin) });
+      break;
+    }
+
+    case "video-request":
+    case "video-accept":
+    case "video-decline": {
+      // Mutual-consent video (1:1): cameras transmit only after BOTH parties
+      // agree. Pure relay of the sender's intent to the rest of their room,
+      // stamped with who it came from.
+      const rid = self.roomId;
+      if (!rid) break;
+      broadcastToRoom(reg, rid, { type: msg.type, from: conn.pin, fromName: self.name }, conn.pin);
       break;
     }
 

@@ -2938,3 +2938,46 @@ unit tests (24 new pins + 2 new server tests), tsc + build clean. Footer → `v2
 publish source tags for screen shares; the stale-offer rebuild guard's post-refresh window; playCue's
 queued-oscillator resume blast. None match the reported symptoms' frequency; all candidates for a
 follow-up batch.
+
+## v2.81.0 — Fast startup, mutual-consent video protocol, guest-first login (delivered 2026-07-04)
+
+Three-part user request.
+
+**Startup speed / lightness**
+- [x] Route-level code splitting: the ENTRY chunk carried the entire app — including the docs page's
+      markdown/diagram/highlighting stack (mermaid, KaTeX, cytoscape, per-language grammars) — 1,941 kB
+      (565 kB gzip) parsed before the keypad could paint. Now only the shell + Dialer are eager;
+      Home/Docs/Technology/TurnTest/History/Messages/Contacts/Profile are lazy chunks. Entry: **718 kB
+      (211 kB gzip) — 63% smaller**; /docs' 887 kB loads only on /docs.
+- [x] Immutable caching: hashed /assets now ship `Cache-Control: public, max-age=1y, immutable`
+      (express.static sent NO cache header at all — every open re-downloaded megabytes); index.html is
+      no-cache so publishes appear immediately.
+
+**Mutual-consent video (proper protocol, 1:1)**
+- [x] Camera transmits ONLY once both parties agree, per call. Signaling: invite/ring now carry the
+      dialed mode; new `video-request` / `video-accept` / `video-decline` messages relayed by the server.
+- [x] VOICE dial: the ring card HIDES the video answer (voice-first, as specified). Mid-call camera tap
+      sends a request — nothing transmits; the peer gets an in-call prompt ("X wants to start video —
+      accepting turns on BOTH cameras"); accept → both cameras on together; decline → stays voice-only.
+      Once approved, camera toggles are free for the rest of the call (turning OFF never needs consent).
+- [x] VIDEO dial: answering with the Video button IS the consent (both sides transmit); answering Voice
+      stands the caller's camera down (their preview was live locally but NEVER transmitted — publication
+      is consent-gated on both media paths, incl. the SFU republish choke and mesh addTrack).
+- [x] WebRTC mechanics that make it renegotiation-free: the OFFERER always negotiates a video m-line
+      (null-track sendrecv transceiver); the ANSWERER flips offered video m-lines to sendrecv before
+      answering (the default recvonly answer would have locked that side out of ever sending); consent
+      re-asserts on connection settle (accept can beat peer-joined); empty-slot sender lookup ignores
+      mid-less orphans; remote tiles show the avatar until REAL frames arrive (videoWidth>0 + resize
+      listener — the always-negotiated m-line otherwise painted a black tile in voice calls).
+- [x] Groups (3+) bypass the gate; rejoin/resume keep consent settled. NEW: a 1:1 call now ENDS when the
+      other party hangs up (lingering in a dead solo call swallowed the next incoming ring as
+      call-waiting — surfaced by the consent E2E).
+- [x] Verified live (scratchpad/consent-e2e.mjs, two browsers, real signaling+mesh): all three protocol
+      cases pass in BOTH directions; six-party matrix still 30/30; cam-denied probes intact.
+
+**Guest-first login**
+- [x] OnboardingGate default is now GUEST: display name + "Enter as guest" primary; "Login / Register
+      with email →" secondary (passwordless one-time code — login and registration are the same step, so
+      there is no password to forget). Copy updated both modes; back link returns to guest.
+
+696+ tests passing (11 new consent pins), tsc + build clean. Footer → `v2.81.0`.

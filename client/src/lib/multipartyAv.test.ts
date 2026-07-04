@@ -14,11 +14,15 @@ import path from "node:path";
 const SRC = fs.readFileSync(path.resolve(__dirname, "relayClient.ts"), "utf8");
 
 describe("mesh — camera-less participants (the '2/6 cameras dead' class)", () => {
-  it("an audio-only peer still negotiates a VIDEO m-line (null-track sendrecv transceiver)", () => {
-    // Without this, an audio-only INITIATOR's offer had no video m-line — an
-    // answer can't add one — so every peer's video was silently dead for them
-    // and their own later camera-enable had no sender slot.
-    expect(SRC).toMatch(/else pc\.addTransceiver\("video", \{ direction: "sendrecv" \}\);/);
+  it("a video-less OFFERER still negotiates a VIDEO m-line; the ANSWERER flips offered video to sendrecv", () => {
+    // Without the offerer's null-track transceiver, an audio-only initiator's
+    // offer had no video m-line — an answer can't add one. And the answerer
+    // must declare sendrecv (default answers recvonly), or IT could never
+    // send video later without renegotiation. addTransceiver is OFFERER-only:
+    // on the answerer it stays an mid-less orphan that swallowed the track.
+    expect(SRC).toMatch(/else if \(initiator\) pc\.addTransceiver\("video", \{ direction: "sendrecv" \}\);/);
+    expect(SRC).toMatch(/if \(tr\.receiver\?\.track\?\.kind === "video" && tr\.direction === "recvonly"\) \{\s*\n\s*try \{ tr\.direction = "sendrecv"; \}/);
+    expect(SRC).toMatch(/tr\.mid !== null && !tr\.sender\.track && tr\.receiver\?\.track\?\.kind === "video"/);
   });
 
   it("enabling the camera with NO live local track REACQUIRES on the mesh (v2.72 only gave the SFU this)", () => {
@@ -37,8 +41,10 @@ describe("mesh — camera-less participants (the '2/6 cameras dead' class)", () 
 });
 
 describe("remote video going quiet shows the AVATAR, never a frozen last frame", () => {
-  it("mesh: the tile placeholder keys off !muted (receiver-side enabled is always true)", () => {
-    expect(SRC).toMatch(/stream\.getVideoTracks\(\)\.some\(tr => !tr\.muted && tr\.enabled && tr\.readyState === "live"\)/);
+  it("mesh: the tile placeholder keys off !muted AND real frames (a live-but-silent consent m-line must not paint a black tile)", () => {
+    expect(SRC).toMatch(/const hasLiveTrack = stream\.getVideoTracks\(\)\.some\(tr => !tr\.muted && tr\.enabled && tr\.readyState === "live"\);/);
+    expect(SRC).toMatch(/const has = hasLiveTrack && \(\(v\?\.videoWidth \|\| 0\) > 0\);/);
+    expect(SRC).toMatch(/v\?\.addEventListener\("resize", sync\);/);
   });
 
   it("SFU: TrackMuted/TrackUnmuted handlers exist and toggle the placeholder", () => {
@@ -138,6 +144,6 @@ describe("second-wave audit fixes (finders re-reviewed the fresh code)", () => {
   });
 
   it("the null-sender fallback in replaceVideoEverywhere is KIND-aware (video never lands on an empty audio sender)", () => {
-    expect(SRC).toMatch(/pc\.getTransceivers\(\)\.find\(tr => !tr\.sender\.track && tr\.receiver\?\.track\?\.kind === "video"\)\?\.sender/);
+    expect(SRC).toMatch(/pc\.getTransceivers\(\)\.find\(tr => tr\.mid !== null && !tr\.sender\.track && tr\.receiver\?\.track\?\.kind === "video"\)\?\.sender/);
   });
 });

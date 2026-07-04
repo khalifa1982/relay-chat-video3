@@ -13,17 +13,18 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Entry / login screen. Shows the app once an identity exists; otherwise a
- * fast, glassy screen whose PRIMARY path is passwordless email sign-in: type
- * your email → get a one-time code → in (registering first if you're new). A
- * "continue as guest" name path stays as a secondary option. No third-party
- * sign-in. Forced dark for a consistent striking look; the animated backdrop is
- * pure CSS, gated behind prefers-reduced-motion.
+ * fast, glassy screen whose PRIMARY path is GUEST entry: type a display name →
+ * straight in (cookied to this device for 30 days). Registered sign-in
+ * (passwordless email code — login and registration are the same flow, so
+ * there's no password to forget) is the secondary path behind a "Login /
+ * Register" button. No third-party sign-in. Forced dark for a consistent
+ * striking look; the animated backdrop is pure CSS, reduced-motion gated.
  */
 export function OnboardingGate({ children }: OnboardingGateProps) {
   const { me, loading, startGuest, startGuestPending, startGuestError, refresh } = useIdentity();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [guestMode, setGuestMode] = useState(false);
+  const [emailMode, setEmailMode] = useState(false); // guest-first: email is the secondary path
   const [authEmail, setAuthEmail] = useState<string | null>(null);
 
   if (loading) {
@@ -66,15 +67,67 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
             <span className="text-[1.6rem] font-bold tracking-tight">RELAY</span>
           </div>
           <p className="mx-auto mt-2.5 max-w-[19rem] text-sm leading-relaxed text-muted-foreground">
-            Sign in with your email — no password. We'll send you a one-time code.
+            {emailMode
+              ? "Login or register with your email — no password, we send you a one-time code."
+              : "Pick a name and jump straight in — no account needed."}
           </p>
         </div>
 
         {/* Card */}
         <div className="rounded-3xl border border-border/60 bg-card/60 p-6 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150">
-          {!guestMode ? (
+          {!emailMode ? (
             <>
-              {/* PRIMARY: passwordless email sign-in */}
+              {/* PRIMARY: guest entry */}
+              <form onSubmit={onGuestSubmit}>
+                <label
+                  htmlFor="relay-name"
+                  className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
+                >
+                  Your display name
+                </label>
+                <Input
+                  id="relay-name"
+                  autoFocus
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Alex"
+                  maxLength={64}
+                  className="h-12 rounded-xl text-base"
+                />
+                {startGuestError && (
+                  <p className="mt-2.5 text-sm text-destructive">{startGuestError.message}</p>
+                )}
+                <Button
+                  type="submit"
+                  disabled={!name.trim() || startGuestPending}
+                  className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
+                >
+                  {startGuestPending ? "Setting up…" : (<><User2 className="size-4" /> Enter as guest</>)}
+                </Button>
+              </form>
+
+              <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground/70">
+                <span className="h-px flex-1 bg-border/60" /> or{" "}
+                <span className="h-px flex-1 bg-border/60" />
+              </div>
+
+              {/* SECONDARY: registered account (passwordless email code) */}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setEmailMode(true)}
+                className="h-12 w-full gap-2 rounded-xl border-border/60 text-base"
+              >
+                Login / Register with email <ArrowRight className="size-4" />
+              </Button>
+              <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
+                Guests stay on this device for 30 days. Registering keeps your number
+                forever and earns a verified badge.
+              </p>
+            </>
+          ) : (
+            <>
+              {/* Registered sign-in / registration — passwordless email code */}
               <form onSubmit={onEmailSubmit}>
                 <label
                   htmlFor="relay-email"
@@ -101,62 +154,16 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                   Continue with email <ArrowRight className="size-4" />
                 </Button>
               </form>
-
-              <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground/70">
-                <span className="h-px flex-1 bg-border/60" /> or{" "}
-                <span className="h-px flex-1 bg-border/60" />
-              </div>
-
-              {/* SECONDARY: quick guest access */}
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setGuestMode(true)}
-                className="h-12 w-full gap-2 rounded-xl border-border/60 text-base"
-              >
-                <User2 className="size-4" /> Continue as guest
-              </Button>
               <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
-                Registering with email keeps your number forever and earns a verified badge.
-                Guests stay on this device for 30 days.
+                Login and registration are the same step — the code we email you does both.
+                No password, so there's nothing to forget.
               </p>
-            </>
-          ) : (
-            <>
-              {/* Guest name entry (secondary path) */}
-              <form onSubmit={onGuestSubmit}>
-                <label
-                  htmlFor="relay-name"
-                  className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
-                >
-                  Your display name
-                </label>
-                <Input
-                  id="relay-name"
-                  autoFocus
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. Alex"
-                  maxLength={64}
-                  className="h-12 rounded-xl text-base"
-                />
-                {startGuestError && (
-                  <p className="mt-2.5 text-sm text-destructive">{startGuestError.message}</p>
-                )}
-                <Button
-                  type="submit"
-                  disabled={!name.trim() || startGuestPending}
-                  className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
-                >
-                  {startGuestPending ? "Setting up…" : (<>Enter as guest <ArrowRight className="size-4" /></>)}
-                </Button>
-              </form>
               <button
                 type="button"
-                onClick={() => setGuestMode(false)}
+                onClick={() => setEmailMode(false)}
                 className="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground"
               >
-                ← Sign in with email instead
+                ← Continue as guest instead
               </button>
             </>
           )}
