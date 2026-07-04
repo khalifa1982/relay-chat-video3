@@ -639,6 +639,23 @@ describe("relay signaling", () => {
     void b;
   });
 
+  it("a newcomer's `joined` roster EXCLUDES ghost members (their tiles would never connect)", () => {
+    const { a, rid, aPin, bPin } = setupCall();
+    // B's client record is long gone (grace expired) but membership persists.
+    reg.clients.delete(bPin);
+    // A now invites C into the same room; C accepts.
+    const c = new FakeConn("dev-c");
+    handleMessage(reg, c.asConn(), { type: "register", name: "C" });
+    handleMessage(reg, a.asConn(), { type: "invite", to: c.pin! });
+    handleMessage(reg, c.asConn(), { type: "accept", roomId: rid });
+    const joined = c.outbox.find((m) => rtype(m) === "joined") as
+      | { members: Array<{ pin: string }> }
+      | undefined;
+    expect(joined).toBeTruthy();
+    expect(joined!.members.some((m) => m.pin === aPin)).toBe(true);  // live member listed
+    expect(joined!.members.some((m) => m.pin === bPin)).toBe(false); // ghost excluded
+  });
+
   it("does NOT rejoin into a room of GHOSTS — all other members' clients gone → membership released (zombie-call fix)", () => {
     // The immortal-zombie loop this kills: media fails mid-setup, both tabs
     // close without an explicit leave, membership persists; every later app

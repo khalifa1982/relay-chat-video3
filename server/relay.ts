@@ -565,6 +565,9 @@ function membersOf(reg: RelayRegistry, roomId: string, selfPin: string) {
   const rmeta = reg.roomMeta.get(roomId);
   return Array.from(reg.rooms.get(roomId) || [])
     .filter(p => p !== selfPin)
+    // Exclude GHOSTS (membership without a live client record) — listing them
+    // gave resumed/merged/rejoining participants permanently dead tiles.
+    .filter(p => reg.clients.has(p))
     .map(p => ({
       pin: p,
       name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest",
@@ -1003,6 +1006,11 @@ export function handleMessage(
       const roomMetaForRoles = reg.roomMeta.get(roomId);
       const members = Array.from(room)
         .filter(p => p !== conn.pin)
+        // GHOSTS (membership kept, client record long gone) must not reach the
+        // newcomer's roster: each one became a permanently dead "connecting…"
+        // tile — the newcomer offers to nobody, forever. A member mid-grace
+        // still has a client record and stays listed.
+        .filter(p => reg.clients.has(p))
         .map(p => ({
           pin: p,
           name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest",

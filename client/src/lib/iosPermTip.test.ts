@@ -32,7 +32,7 @@ describe("iOS permission tip — one-time pointer to Safari's permanent Allow", 
     expect(SRC).toMatch(/set Camera and Microphone to Allow/);
   });
 
-  it("ensureMedia still reuses a live stream — the app never double-prompts within a session", () => {
-    expect(SRC).toMatch(/if \(localStream\) return outStream\(\);/);
+  it("ensureMedia still reuses a live stream — the app never double-prompts within a session (v2.80: reuse now checks the mic is actually ALIVE first)", () => {
+    expect(SRC).toMatch(/const audioLive = localStream\.getAudioTracks\(\)\.some\(t => t\.readyState === "live"\);\s*\n\s*if \(audioLive\) return outStream\(\);/);
   });
 });

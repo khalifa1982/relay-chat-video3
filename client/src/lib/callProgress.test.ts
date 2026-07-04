@@ -92,7 +92,7 @@ describe("voice-first video defaults", () => {
   });
 
   it("SFU voice calls never publish a video track at all", () => {
-    expect(CLIENT).toMatch(/if \(camOn\) \{\s*\n\s*for \(const t of send\.getVideoTracks\(\)\) await room\.localParticipant\.publishTrack\(t\);/);
+    expect(CLIENT).toMatch(/if \(camOn\) \{\s*\n\s*for \(const t of send\.getVideoTracks\(\)\) await publishSafe\(t, "camera"\);/);
   });
 
   it("the dial card visually confirms the session mode from the start (Video call vs Voice call chip)", () => {

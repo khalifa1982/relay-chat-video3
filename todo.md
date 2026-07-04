@@ -2860,3 +2860,81 @@ Two-part spec from the user (screenshot of the old bare Accept/Decline popup):
       picking a quick reply fires BOTH messaging mutations, closes the overlay, and the caller's dial
       ends; answering as Voice connects with the camera off on the answerer. 662 passing (1 pre-existing
       skip), tsc + build clean. Footer → `v2.79.0`.
+
+## v2.80.0 — Multi-party A/V reliability: 19 defects fixed from the 6-participant QA report (delivered 2026-07-04)
+
+Field report: in a 6-party call, 2/6 cameras dead or "not recognized", 1/6 muted or distorted — across
+Chrome/Firefox/Edge/Safari, desktop+mobile. Investigated with a 6-dimension multi-agent code audit
+(client SFU publish/subscribe, mesh, capture, audio routing, server) + EMPIRICAL 6-browser matrix tests
+(scratchpad/six-party.mjs asserts all 30 remote streams live from every participant's perspective, and
+cam-denied.mjs exercises the no-camera participant). Fixes, by symptom class:
+
+**"Their camera is dead/frozen" class**
+- [x] Mesh: an audio-only INITIATOR's offer carried NO video m-line — an answer can't add one, so every
+      peer's video was silently dead toward camera-less users forever. Now a null-track `sendrecv` video
+      transceiver is always negotiated (it's also the sender slot a later camera-enable rides into).
+- [x] Mesh: remote tile placeholder keyed off receiver-side `enabled` (always true) — a peer disabling
+      their camera (or an uplink stall) FROZE the last frame instead of showing the avatar. Keys off
+      `!muted` now.
+- [x] SFU: NO handlers existed for TrackMuted/TrackUnmuted or TrackStreamStateChanged — publisher mutes,
+      congestion, and adaptiveStream PAUSES (46px spotlight thumbs / minimized 2-up qualify!) froze
+      tiles per-viewer. All three now toggle the avatar and kick playback on resume.
+- [x] SFU: adaptiveStream's pauseVideoInBackground froze ALL remote video ~5s after backgrounding —
+      which is exactly when auto-PiP composes those streams. Disabled (size-based adaptation stays on).
+- [x] SFU: publish failures were swallowed silently (bare catch) — now retried once, then reported
+      honestly ("others may not see/hear you"). Fresh publishes from replaceVideoEverywhere require
+      camera-on or an active share (no black disabled-track publications); stopping a screen share with
+      the camera off now publishes NOTHING instead of swapping in the disabled camera track.
+
+**"My camera is never recognized" class**
+- [x] Mesh had NO camera-reacquire path (v2.72 only added the SFU's): for users whose camera was
+      denied/absent/claimed at join, the camera button silently did nothing forever. Enabling now
+      reacquires (same-facing first — the flip helper deliberately refuses the current device and could
+      bind the wrong camera), hot-swaps into every peer, re-arms the death watch, and fails HONESTLY
+      (button off + toast) instead of pretending.
+- [x] The audio-only join fallback never reflected on the camera button (looked "on" while sending
+      nothing).
+
+**"One participant muted / distorted" class**
+- [x] LOCAL track death (phone-call interrupt, Bluetooth swap, camera claimed by another app) was never
+      detected — LiveKit silently mutes a dead user track and the mesh keeps a dead sender: permanent
+      one-way mute. Every local track now carries an `onended` self-heal that reacquires the mic and
+      swaps it into mesh senders + the SFU publication (+ the filter pipeline's output, so later joiners
+      don't inherit the corpse). `ensureMedia` refuses to reuse a dead cached stream between calls, and
+      unmuting a dead mic genuinely retries (the recovery toast said it would — now it does).
+- [x] SFU inbound audio armed the one-tap autoplay unlock ONLY on Android — desktop Safari's rejected
+      play() left a participant permanently silent. The kick + unlock now run on every platform, plus
+      the room-level AudioPlaybackStatusChanged signal arms it too.
+- [x] Android loudspeaker: the Web-Audio tap used the SHARED stream object — when the active-speaker
+      analyser already held that single allowed tap, one participant's element fell back to the
+      earpiece (one quiet/odd voice). Taps now wrap fresh MediaStreams and coexist; and the 2s routing
+      scan no longer mutes new joiners into a SUSPENDED AudioContext.
+- [x] Held→resumed (call-waiting) mesh peers stayed PAUSED after thaw — permanently silent with frozen
+      video. Thaw now resumes playback (one-tap unlock as fallback).
+
+**Systemic / multi-party scale**
+- [x] sendWS was fire-and-forget: ONE dropped signaling POST (network blip, or a 429 from the per-IP
+      limiter when six testers behind one office NAT join at once — 15 links × SDP/ICE ≈ hundreds of
+      messages) permanently killed that pair's media. Now retried with backoff (250/750/2250ms).
+- [x] Mesh encoders now SCALE with party size (≤1: 1.2Mbps, ≤3: 700kbps, >3: 350kbps + half resolution,
+      re-applied on join/leave) — previously 5 uncapped ~720p30 encoders per client saturated uplinks
+      and melted phones, which IS the reporter's suspected "bandwidth/processing allocation" defect.
+- [x] Server: member lists (accept-joined + membersOf for resume/merge/held) now EXCLUDE ghost members
+      (membership persisted, client record long gone) — each ghost was a permanently dead "connecting…"
+      tile for every later joiner.
+- [x] Second-wave regression caught by the audit reviewing the fresh code: the new null-track
+      transceiver is msid-less, so remote ontrack fired with EMPTY e.streams and attachRemote(undefined)
+      wiped the tile — killing the camera-less participant's own AUDIO for everyone. ontrack now merges
+      bare tracks into the tile's existing stream; attachRemote is null-guarded. Also: kind-aware
+      empty-sender fallback (video could land on an empty AUDIO sender), and unsubscribed Android
+      <audio> nodes are removed from the DOM (leak).
+
+**Verified**: 6-browser matrix 30/30 live streams from every perspective (was 29/30 with frozen-frame
+artifacts); camera-denied participant now RECEIVES all video, gets honest button state + errors; 687
+unit tests (24 new pins + 2 new server tests), tsc + build clean. Footer → `v2.80.0`.
+
+**Deferred (recorded, not fixed here)**: server→client delivery guarantee across SSE reconnect gaps
+(needs a seq/ack envelope); host moderation leaking across held rooms; two-tabs-one-cid eviction churn;
+publish source tags for screen shares; the stale-offer rebuild guard's post-refresh window; playCue's
+queued-oscillator resume blast. None match the reported symptoms' frequency; all candidates for a
+follow-up batch.

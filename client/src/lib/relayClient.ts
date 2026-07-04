@@ -449,16 +449,38 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (!destroyed) connectWS();
     }, 1500);
   }
+  // Signaling rides plain POSTs. A single DROPPED message used to be fatal for
+  // a mesh pair — an offer/answer that never arrives means that pair never
+  // gets media, with no retry anywhere ("his video/audio doesn't work for me,
+  // works for everyone else"). And drops genuinely happen: transient network
+  // blips, and 429s from the per-IP abuse limiter when several participants
+  // behind ONE office NAT join at once (a 6-party mesh setup is 15 links ×
+  // offer/answer/ICE ≈ hundreds of messages in a few seconds from one IP).
+  // Retry with backoff (250ms/750ms/2250ms); out-of-order arrival is already
+  // handled (per-peer candidate queues). `leave` stays fire-and-forget — a
+  // teardown must never linger; the server's disconnect grace covers it.
   function sendWS(obj: any) {
-    try {
-      const body = JSON.stringify({ cid, message: obj });
-      fetch("/api/relay/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
-        keepalive: true,
-      }).catch(() => { /* ignore — SSE will reconnect */ });
-    } catch { /* */ }
+    const retriable = !!obj && obj.type !== "leave";
+    let body: string;
+    try { body = JSON.stringify({ cid, message: obj }); } catch { return; }
+    void (async () => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const res = await fetch("/api/relay/send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body,
+            keepalive: true,
+          });
+          if (res.ok || !retriable || attempt >= 3) return;
+          diag("send retry " + (obj?.type || "?") + " (http " + res.status + ")");
+        } catch {
+          if (!retriable || attempt >= 3) return;
+          diag("send retry " + (obj?.type || "?") + " (network)");
+        }
+        await new Promise(r => setTimeout(r, 250 * Math.pow(3, attempt) + Math.random() * 150));
+      }
+    })();
   }
 
   // True when we're in a call but no remote party is present yet — used to
@@ -892,21 +914,34 @@ export function startRelay(root: HTMLElement): RelayHandle {
   const loudspeakerMutedEls = new Set<HTMLMediaElement>();
   function routeElToLoudspeaker(el: HTMLMediaElement) {
     if (!loudspeakerCtx || loudspeakerMutedEls.has(el)) return;
+    // NEVER mute an element into a context that isn't RUNNING: the 2s scan
+    // used to route a newly-joined participant while the context sat
+    // suspended (backgrounded tab) — their element got muted with no live
+    // Web-Audio path = that one voice silent. Try to resume; route them on a
+    // later scan tick once the context is actually running.
+    if (loudspeakerCtx.state !== "running") {
+      void loudspeakerCtx.resume().catch(() => {});
+      return;
+    }
     const stream = el.srcObject as MediaStream | null;
     if (!stream || stream.getAudioTracks().length === 0) return;
     try {
-      const src = loudspeakerCtx.createMediaStreamSource(stream);
+      // Tap a FRESH MediaStream wrapping the same audio tracks, not the shared
+      // element stream: on several Android/Chrome builds a WebRTC stream OBJECT
+      // accepts only ONE MediaStreamAudioSourceNode, and the active-speaker
+      // analyser may already hold that tap. The old shared-object tap then
+      // threw for exactly ONE participant, whose element stayed on the
+      // EARPIECE while everyone else played through the loudspeaker — heard as
+      // "his audio is quiet/weird/distorted". A fresh wrapper stream gives
+      // this route its own graph source and coexists with the analyser.
+      const src = loudspeakerCtx.createMediaStreamSource(new MediaStream(stream.getAudioTracks()));
       src.connect(loudspeakerCtx.destination);
       loudspeakerNodes.push(src);
-      // Mute the element ONLY AFTER the Web-Audio loudspeaker path is wired. A
-      // remote WebRTC stream can be tapped by just ONE MediaStreamAudioSourceNode
-      // (the active-speaker analyser already taps it), so createMediaStreamSource
-      // can throw here — and if we'd muted FIRST, that throw would leave the
-      // element muted with no working route = total silence. Muting last means a
-      // failed tap simply leaves the element audible (earpiece), never silent.
+      // Mute the element ONLY AFTER the Web-Audio loudspeaker path is wired —
+      // a failed tap must leave the element audible (earpiece), never silent.
       loudspeakerMutedEls.add(el);
       el.muted = true;
-    } catch { /* stream already tapped — leave el UNMUTED so audio still plays */ }
+    } catch { /* tap failed — leave el UNMUTED so audio still plays */ }
   }
   /** Re-route any NEW remote audio onto the loudspeaker (called when participants
    *  join while loudspeaker mode is on). No-op when off. */
@@ -1056,22 +1091,108 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // while we awaited above.
     if (pipeline) processedStream = pipeline.getOutputStream();
   }
+  // ── local-track death watch ──────────────────────────────────────────────
+  // The OS can kill a LIVE local track mid-call: a phone-call interrupt, a
+  // Bluetooth headset connecting/disconnecting (the mic moves devices), or
+  // another app claiming the camera. LiveKit just MUTES a dead user-provided
+  // track (no event we handled) and the mesh keeps a dead sender — the user
+  // stayed permanently one-way muted / black with zero feedback ("completely
+  // muted" in the 6-party QA). Watch every local track and self-heal.
+  function watchLocalTracks(stream: MediaStream) {
+    stream.getTracks().forEach(t => {
+      t.onended = () => { void recoverDeadLocalTrack(t.kind); };
+    });
+  }
+  async function recoverDeadLocalTrack(kind: string) {
+    if (!inCall || !localStream) return;
+    diag("local " + kind + " track ENDED — attempting reacquire");
+    if (kind === "audio") {
+      try {
+        const fresh = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
+        const at = fresh.getAudioTracks()[0];
+        if (!at) throw new Error("no-track");
+        at.onended = () => { void recoverDeadLocalTrack("audio"); };
+        localStream.getAudioTracks().forEach(t => { try { localStream!.removeTrack(t); } catch { /* */ } });
+        localStream.addTrack(at);
+        // The filter pipeline's OUTPUT stream carries the audio too — future
+        // mesh peers addTrack from processedStream, so leaving the dead track
+        // there would hand new joiners a silent mic.
+        if (processedStream) {
+          processedStream.getAudioTracks().forEach(t => { try { processedStream!.removeTrack(t); } catch { /* */ } });
+          try { processedStream.addTrack(at); } catch { /* */ }
+        }
+        at.enabled = micOn;
+        // Mesh: hot-swap into every peer's audio sender (no renegotiation).
+        for (const id in peers) {
+          try {
+            const sender = peers[id].pc.getSenders().find(s => s.track && s.track.kind === "audio");
+            if (sender) await sender.replaceTrack(at);
+          } catch { /* per-peer best effort */ }
+        }
+        // SFU: swap the published audio in place (or republish).
+        if (lkRoom) {
+          const lp: any = (lkRoom as any).localParticipant;
+          const pubs: any[] = typeof lp.getTrackPublications === "function"
+            ? lp.getTrackPublications()
+            : (lp.audioTrackPublications ? Array.from(lp.audioTrackPublications.values()) : []);
+          let swapped = false;
+          for (const pub of pubs) {
+            const lt = pub?.track;
+            if ((pub?.kind === "audio" || lt?.kind === "audio") && lt) {
+              if (typeof lt.replaceTrack === "function") { await lt.replaceTrack(at); swapped = true; break; }
+              if (lt.mediaStreamTrack) { try { await lp.unpublishTrack(lt.mediaStreamTrack, false); } catch { /* */ } }
+            }
+          }
+          if (!swapped) await lp.publishTrack(at);
+        }
+        toast("Microphone reconnected.");
+      } catch {
+        toast("Your microphone was lost — check the device, then tap mute/unmute to retry.", true);
+      }
+      return;
+    }
+    // Video: reuse the per-path camera reacquire flows. If the camera is OFF
+    // there's nothing to do now — the next enable reacquires anyway.
+    if (!camOn) return;
+    if (livekitEnabled) {
+      await syncLivekitVideoPublication(true);
+    } else {
+      const track = await reacquireCameraForPublish();
+      if (track) { await replaceVideoEverywhere(track); syncCamEnabled(); }
+    }
+  }
   async function ensureMedia(): Promise<MediaStream> {
-    // Reuse a live camera/mic — don't re-prompt. (We key off localStream, not
-    // processedStream, because plain calls never create a processedStream.)
-    if (localStream) return outStream();
+    // Reuse a live camera/mic — don't re-prompt. But only if the cached MIC is
+    // actually ALIVE: tracks can die BETWEEN calls (phone-call interrupt,
+    // Bluetooth swap, device unplugged while idle) and reusing a dead stream
+    // meant joining the next call permanently one-way muted.
+    if (localStream) {
+      const audioLive = localStream.getAudioTracks().some(t => t.readyState === "live");
+      if (audioLive) return outStream();
+      diag("cached media is dead — reacquiring fresh");
+      try { localStream.getTracks().forEach(t => t.stop()); } catch { /* */ }
+      localStream = null;
+      if (pipeline) { try { pipeline.destroy(); } catch { /* */ } pipeline = null; }
+      processedStream = null;
+    }
     try {
       localStream = await acquireRawStream(facingMode);
     } catch {
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
         camOn = false;
-        toast("No camera found — joining with audio only.");
+        // Reflect the fallback on the camera BUTTON too — it used to keep its
+        // "on" look, so tapping it toggled a camera that didn't exist and the
+        // user had no signal their video was never being sent.
+        $("camBtn")?.classList.add("off");
+        toast("No camera found — joining with audio only. Tap the camera button to retry once it's available.");
       } catch (e2) {
         toast("Mic/camera blocked. Allow access in your browser, then retry.", true);
         throw e2;
       }
     }
+    // Self-heal when the OS kills a track mid-call (see recoverDeadLocalTrack).
+    watchLocalTracks(localStream);
     // First grant of the session: on iOS Safari, show the one-time pointer to
     // the PERMANENT per-site Allow (the popup itself is browser policy we
     // cannot suppress from a web page).
@@ -1098,9 +1219,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   async function replaceVideoEverywhere(track: MediaStreamTrack | null) {
     for (const id in peers) {
       try {
-        const senders = peers[id].pc.getSenders();
+        const pc = peers[id].pc;
+        const senders = pc.getSenders();
+        // KIND-AWARE empty-slot fallback: a bare `find(s => !s.track)` could
+        // hand the VIDEO track to an empty AUDIO sender. Resolve the empty
+        // slot through its transceiver's receiver kind instead.
         const sender = senders.find(s => s.track && s.track.kind === "video")
-                    || senders.find(s => !s.track);
+                    || pc.getTransceivers().find(tr => !tr.sender.track && tr.receiver?.track?.kind === "video")?.sender
+                    || null;
         if (sender) await sender.replaceTrack(track);
       } catch { /* */ }
     }
@@ -1132,7 +1258,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
               if (lt.mediaStreamTrack) { try { await lp.unpublishTrack(lt.mediaStreamTrack); } catch { /* */ } }
             }
           }
-          if (!swapped) await lp.publishTrack(track);
+          // Publish a FRESH video publication only when video should actually
+          // be flowing (camera on, or an active screen share) — an unguarded
+          // publish here could push a disabled/black track during a voice call.
+          if (!swapped && (camOn || screenSharing)) await lp.publishTrack(track);
         }
       } catch { /* */ }
     }
@@ -1654,6 +1783,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     e.frozen = null;
     const grid = $("videoGrid");
     if (e.el && grid && !e.el.parentNode) grid.appendChild(e.el);
+    // Resume PLAYBACK too: the tile's <video> was paused for the hold and a
+    // re-appended element does not auto-resume — without this the resumed
+    // party stayed permanently silent with a frozen frame. If the browser
+    // gates the un-gestured play(), the one-tap unlock recovers it.
+    const vid = e.el?.querySelector("video") as HTMLVideoElement | null;
+    if (vid) void vid.play().catch(() => armAudioUnlock());
   }
   function updateHeldBar() {
     const bar = $("heldBar");
@@ -2030,7 +2165,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // the library default "music" (48 kbps) — clearer voice at lower bitrate for
     // weak/mobile connections. DTX + RED are already on by default. On the ctor
     // (not the publish call) so it doesn't disturb the pinned publishTrack test.
-    const roomOpts: Record<string, unknown> = { adaptiveStream: true, dynacast: true };
+    // pauseVideoInBackground OFF: the default pauses every remote video ~5s
+    // after the tab is backgrounded — which froze the auto-PiP composite (the
+    // whole point of PiP is watching the call WHILE backgrounded) and left
+    // tiles frozen for a beat on return. Bandwidth is still adapted per-tile
+    // by element size/visibility; only the hidden-tab blanket pause is off.
+    const roomOpts: Record<string, unknown> = {
+      adaptiveStream: { pauseVideoInBackground: false },
+      dynacast: true,
+    };
     if (AudioPresetsEnum?.speech) roomOpts.publishDefaults = { audioPreset: AudioPresetsEnum.speech };
     // A throwing Room constructor must NEVER kill the dial path (joinLivekit is
     // retried by the watchdog, so a persistent throw = every call dies) — fall
@@ -2092,6 +2235,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
             root.appendChild(audioEl);
             void audioEl.play?.().catch(() => armAudioUnlock());
           } catch { /* */ }
+        } else {
+          // ALL other platforms too: attach()'s internal play() can be
+          // rejected by autoplay policy (desktop Safari especially — the
+          // track arrives seconds after the accept gesture) and LiveKit only
+          // emits an event we never handled — that participant stayed SILENT
+          // until some unrelated tap. Kick play() ourselves and arm the
+          // one-tap unlock on rejection.
+          void (audioEl as HTMLMediaElement).play?.().catch(() => armAudioUnlock());
         }
         // Don't flip the tile to audio-only (which hides the video) if this
         // participant is ALSO publishing camera video — audio commonly
@@ -2103,9 +2254,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
     room.on(RoomEventEnum.TrackUnsubscribed, (track, _pub, participant) => {
       let detached: HTMLMediaElement[] = [];
       try { detached = (track.detach() as HTMLMediaElement[] | HTMLMediaElement) as HTMLMediaElement[]; } catch { /* */ }
-      // Drop any detached audio elements from the sink-tracking list.
+      // Drop any detached audio elements from the sink-tracking list, and pull
+      // them out of the DOM (the Android path inserts hidden <audio> nodes into
+      // the call root — without this they accumulated for the whole call).
       const arr = Array.isArray(detached) ? detached : (detached ? [detached] : []);
-      arr.forEach(d => { const i = lkAudioEls.indexOf(d); if (i >= 0) lkAudioEls.splice(i, 1); });
+      arr.forEach(d => {
+        const i = lkAudioEls.indexOf(d);
+        if (i >= 0) lkAudioEls.splice(i, 1);
+        try { d.remove(); } catch { /* not in the DOM — fine */ }
+      });
       const el = lkParticipantTiles[participant.identity];
       if (el && track.kind === TrackEnum.Kind.Video) {
         if (isScreenPub(_pub)) {
@@ -2122,6 +2279,51 @@ export function startRelay(root: HTMLElement): RelayHandle {
         layoutGrid();
       }
     });
+    // A remote CAMERA video going quiet must flip the tile to the avatar, not
+    // freeze on the last frame. Two distinct signals cover it:
+    //  - TrackMuted/TrackUnmuted: the publisher disabled their camera (or
+    //    their uplink died) — with no handler the tile froze and testers read
+    //    it as "their camera is dead".
+    //  - TrackStreamStateChanged: adaptiveStream PAUSES a subscription whose
+    //    <video> is tiny/offscreen (our 46px spotlight thumbs, minimized
+    //    2-up) — a paused-but-subscribed stream also froze silently, and only
+    //    for SOME viewers (whoever had that tile small), which is exactly the
+    //    sporadic per-viewer "camera failure" a multi-party test reports.
+    const isRemoteCameraVideo = (pub: unknown): boolean => {
+      const p = pub as { kind?: string; track?: { kind?: string } } | null;
+      return (p?.kind === "video" || p?.track?.kind === "video") && !isScreenPub(pub);
+    };
+    if (RoomEventEnum.TrackMuted) {
+      room.on(RoomEventEnum.TrackMuted, (pub: any, participant: any) => {
+        if (!isRemoteCameraVideo(pub)) return;
+        const el = lkParticipantTiles[participant?.identity];
+        if (el) bindLkPlaceholder(el, false);
+      });
+    }
+    if (RoomEventEnum.TrackUnmuted) {
+      room.on(RoomEventEnum.TrackUnmuted, (pub: any, participant: any) => {
+        if (!isRemoteCameraVideo(pub)) return;
+        const el = lkParticipantTiles[participant?.identity];
+        if (!el) return;
+        const v = el.querySelector("video") as HTMLVideoElement | null;
+        if (v && pub?.track?.attach) { try { pub.track.attach(v); } catch { /* */ } }
+        void v?.play?.().catch(() => {});
+        bindLkPlaceholder(el, lkHasVideo(participant));
+      });
+    }
+    if (RoomEventEnum.TrackStreamStateChanged) {
+      room.on(RoomEventEnum.TrackStreamStateChanged, (pub: any, state: any, participant: any) => {
+        if (!isRemoteCameraVideo(pub)) return;
+        const el = lkParticipantTiles[participant?.identity];
+        if (!el) return;
+        if (String(state) === "paused") bindLkPlaceholder(el, false);
+        else {
+          const v = el.querySelector("video") as HTMLVideoElement | null;
+          void v?.play?.().catch(() => {});
+          bindLkPlaceholder(el, lkHasVideo(participant));
+        }
+      });
+    }
     // SFU active-speaker: LiveKit reports speakers loudest-first. Map them to
     // tile ids, drop ourselves (we don't auto-spotlight self), and relayout so
     // the spotlight follows whoever's talking.
@@ -2139,6 +2341,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     room.on(RoomEventEnum.ParticipantConnected, p => addLkTile(p.identity, p.name || p.identity));
     room.on(RoomEventEnum.ParticipantDisconnected, p => removeLkTile(p.identity));
+    // The room-level "audio playback is blocked" signal (autoplay policy
+    // rejected our elements) — arm the one-tap unlock so the FIRST touch
+    // anywhere restores every remote voice.
+    if ((RoomEventEnum as any).AudioPlaybackStatusChanged) {
+      room.on((RoomEventEnum as any).AudioPlaybackStatusChanged, () => {
+        try { if ((room as any).canPlaybackAudio === false) armAudioUnlock(); } catch { /* */ }
+      });
+    }
     room.on(RoomEventEnum.DataReceived, (payload: Uint8Array) => {
       try { receiveChatFrame(new TextDecoder().decode(payload)); } catch { /* */ }
     });
@@ -2177,6 +2387,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
       } catch { /* enumeration best-effort */ }
       // Publish the SAME processed stream the mesh sends, so filters/blur survive.
       const send = processedStream || localStream;
+      // A failed publish used to be swallowed by the outer catch — the user
+      // sat in the call with a dead camera/mic and ZERO feedback ("4 of 6
+      // cameras worked"). Retry once, then say it plainly.
+      const publishSafe = async (t: MediaStreamTrack, what: "camera" | "microphone") => {
+        for (let i = 0; i < 2; i++) {
+          try { await room.localParticipant.publishTrack(t); return; }
+          catch { diag("livekit: publish " + what + " failed" + (i ? " (giving up)" : " — retrying")); await new Promise(r => setTimeout(r, 600)); }
+        }
+        toast(
+          what === "microphone"
+            ? "Couldn't send your microphone — others may not hear you. Toggle mute to retry."
+            : "Couldn't send your camera — others may not see you. Toggle the camera to retry.",
+          true,
+        );
+      };
       if (send) {
         // A VOICE call (camOn already false here — set before enterCallUI) must
         // not publish a video track at all: an unconditional publish meant every
@@ -2184,9 +2409,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // the SFU (just disabled), wasting bandwidth and showing peers a black
         // tile instead of a clean voice-call UI.
         if (camOn) {
-          for (const t of send.getVideoTracks()) await room.localParticipant.publishTrack(t);
+          for (const t of send.getVideoTracks()) await publishSafe(t, "camera");
         }
-        for (const t of send.getAudioTracks()) await room.localParticipant.publishTrack(t);
+        for (const t of send.getAudioTracks()) await publishSafe(t, "microphone");
       }
       lkConnected = true;
       clearLkWatchdog();
@@ -2275,6 +2500,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     micOn = on;
     localStream.getAudioTracks().forEach(t => (t.enabled = on));
     $("micBtn")?.classList.toggle("off", !on);
+    // Unmuting with a DEAD mic (OS killed the track) actually reacquires — the
+    // recovery toast tells users to "toggle mute to retry", so the toggle must
+    // genuinely retry, not just flip `enabled` on a corpse.
+    if (on && inCall && !localStream.getAudioTracks().some(t => t.readyState === "live")) {
+      void recoverDeadLocalTrack("audio");
+    }
   }
   function setTileRole(tileId: string, role: string | null | undefined) {
     const el = document.getElementById(tileId);
@@ -2653,6 +2884,30 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const c = peer.el.querySelector(".connecting") as HTMLElement | null;
     if (c) c.textContent = "connecting…";
   }
+  // MESH bandwidth/CPU allocation: at 6 participants every client runs FIVE
+  // independent video encoders — uncapped 720p30 × 5 saturates a laptop uplink
+  // and melts phones (the "resource conflict at scale" a 6-party test feels as
+  // random camera/audio degradation). Scale each sender's bitrate/resolution
+  // with the party size; re-applied on every join/leave. Best-effort — older
+  // browsers without setParameters simply keep default behaviour.
+  function applyMeshVideoCaps() {
+    if (livekitEnabled) return;
+    const n = Object.keys(peers).length;
+    const maxBitrate = n <= 1 ? 1_200_000 : n <= 3 ? 700_000 : 350_000;
+    const scale = n <= 3 ? 1 : 2;
+    for (const id in peers) {
+      peers[id].pc.getSenders().forEach(s => {
+        if (!s.track || s.track.kind !== "video") return;
+        try {
+          const p = s.getParameters();
+          if (!p.encodings || p.encodings.length === 0) p.encodings = [{} as RTCRtpEncodingParameters];
+          p.encodings[0].maxBitrate = maxBitrate;
+          p.encodings[0].scaleResolutionDownBy = scale;
+          void s.setParameters(p);
+        } catch { /* per-sender best effort */ }
+      });
+    }
+  }
   function createPeer(pin: string, name: string, initiator: boolean): PeerEntry {
     if (peers[pin]) return peers[pin];
     callAnswered = true; // a second party exists — the join watchdog may enforce media
@@ -2690,7 +2945,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // two `e.streams[0]` and attachRemote's `v.srcObject = stream` kept only the
       // last → silent audio OR a black tile for whoever joined during a share.
       if (vtrack) pc.addTrack(vtrack, sendStream);
+      // NO local camera track (denied/absent/died at join): still negotiate a
+      // VIDEO m-line, sendrecv, with a null-track sender. Without this, an
+      // AUDIO-ONLY INITIATOR's offer carried no video m-line at all — and an
+      // SDP answer can't add one — so every camera-ful peer's video silently
+      // never reached them ("their videos are all dead for me"), and their own
+      // later camera-enable had no sender slot to ride into. The null-track
+      // sender is exactly the `senders.find(s => !s.track)` slot that
+      // replaceVideoEverywhere fills when the camera is (re)acquired.
+      else pc.addTransceiver("video", { direction: "sendrecv" });
     }
+    // Party-size-scaled encoder caps (see applyMeshVideoCaps). Deferred a tick
+    // so the freshly-added senders are queryable.
+    setTimeout(applyMeshVideoCaps, 0);
     pc.onicecandidate = e => {
       if (e.candidate) {
         sendWS({ type: "signal", to: pin, data: { candidate: e.candidate } });
@@ -2699,7 +2966,22 @@ export function startRelay(root: HTMLElement): RelayHandle {
         diag("local cand-end " + pin.slice(-4));
       }
     };
-    pc.ontrack = e => { diag("ontrack from " + pin.slice(-4)); attachRemote(pin, e.streams[0]); };
+    pc.ontrack = e => {
+      diag("ontrack from " + pin.slice(-4) + (e.streams?.length ? "" : " (msid-less)"));
+      const s = e.streams && e.streams[0];
+      if (s) { attachRemote(pin, s); return; }
+      // MSID-LESS m-line — e.g. a peer's null-track video transceiver (their
+      // camera was absent at join). e.streams is EMPTY here; blindly passing
+      // e.streams[0] handed attachRemote `undefined`, which wiped the tile's
+      // srcObject and with it the peer's ALREADY-ATTACHED AUDIO — one
+      // camera-less participant silently killed their own audio for everyone.
+      // Merge the bare track into the tile's existing stream instead.
+      const cur = (peers[pin]?.el?.querySelector("video") as HTMLVideoElement | null)
+        ?.srcObject as MediaStream | null;
+      const merged = cur || new MediaStream();
+      try { if (e.track) merged.addTrack(e.track); } catch { /* dup add — fine */ }
+      attachRemote(pin, merged);
+    };
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
       diag("conn " + pin.slice(-4) + " " + st);
@@ -2842,6 +3124,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenShareIds.delete(goneId);
     speakerOrder = speakerOrder.filter(s => s !== goneId);
     layoutGrid();
+    applyMeshVideoCaps(); // fewer parties → raise per-sender quality again
     // `quiet` skips the "X left the call" notice — used when we're immediately
     // rebuilding the peer (a refresh/reconnect re-offer), not a genuine leave.
     // Surface it as a visible toast too (the chat drawer is closed by default,
@@ -3258,6 +3541,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     layoutGrid();
   }
   function attachRemote(id: string, stream: MediaStream) {
+    if (!stream) return; // defensive: never wipe a tile with a missing stream
     const entry = peers[id]; if (!entry) return;
     if (!entry.el) addTile(id, entry.name);
     if (!entry.el) return;
@@ -3279,7 +3563,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // Tap the remote audio for active-speaker metering (mesh path only).
     registerMeshAnalyser(id, stream);
     const sync = () => {
-      const has = stream.getVideoTracks().some(tr => tr.enabled && tr.readyState === "live");
+      // A REMOTE track's `.enabled` is the receiver-side flag (always true) —
+      // the sender turning their camera off surfaces here as `muted` (no
+      // frames arriving). Checking only enabled/readyState kept the tile on
+      // the FROZEN last frame when a peer disabled their camera (or their
+      // uplink stalled), which testers read as "their camera is dead/stuck".
+      // `!tr.muted` flips the tile to the avatar until frames actually flow.
+      const has = stream.getVideoTracks().some(tr => !tr.muted && tr.enabled && tr.readyState === "live");
       const ph = entry.el!.querySelector(".ph") as HTMLElement | null;
       if (ph) ph.style.display = has ? "none" : "flex";
     };
@@ -3386,7 +3676,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     ensureMeshSpeakerMonitor();
     if (!meshAudioCtx) return;
     try {
-      const src = meshAudioCtx.createMediaStreamSource(stream);
+      // Fresh wrapper stream (see routeElToLoudspeaker): keeps this metering
+      // tap from colliding with the loudspeaker tap on the same remote stream.
+      const src = meshAudioCtx.createMediaStreamSource(new MediaStream(stream.getAudioTracks()));
       const node = meshAudioCtx.createAnalyser();
       node.fftSize = 256;
       src.connect(node); // analyser is a sink only — never connected to destination
@@ -3960,9 +4252,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
   async function reacquireCameraForPublish(): Promise<MediaStreamTrack | null> {
     if (!localStream) return null;
     try {
-      const fresh = await acquireFlippedCamera(facingMode);
+      // Plain SAME-facing acquisition FIRST: acquireFlippedCamera is built for
+      // flipping and deliberately avoids the current device — using it alone
+      // here could bind the wrong camera, or fail outright on single-camera
+      // desktops (the "camera never comes back" recovery failure). It stays as
+      // the fallback for devices where the direct constraint is rejected.
+      let fresh: MediaStream | null = null;
+      try {
+        fresh = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: facingMode } },
+          audio: false,
+        });
+      } catch { /* fall through to the flip helper */ }
+      if (!fresh || fresh.getVideoTracks().length === 0) fresh = await acquireFlippedCamera(facingMode);
       const v = fresh?.getVideoTracks()[0];
       if (!v) return null;
+      // Re-arm the death watch on the fresh track (the old watcher died with
+      // the old track — a second device loss must stay recoverable).
+      v.onended = () => { void recoverDeadLocalTrack("video"); };
       const audio = localStream.getAudioTracks();
       localStream = new MediaStream([...audio, v]);
       if (pipeline) { await pipeline.setInputStream(localStream); return pipeline.getOutputStream()?.getVideoTracks()[0] || v; }
@@ -3985,6 +4292,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // never republish a dead track = a permanently black tile.
         const live = track && track.readyState !== "ended" ? track : await reacquireCameraForPublish();
         if (live) await lp.publishTrack(live);
+        else {
+          // No camera obtainable — be HONEST instead of showing an "on" camera
+          // button that transmits nothing (testers read that as "the system
+          // doesn't recognize my video input").
+          camOn = false;
+          $("camBtn")?.classList.add("off");
+          const st = $("tile-self"); if (st && !screenSharing) st.classList.add("audio-only");
+          toast("Camera unavailable — check that RELAY has camera permission and no other app is using it.", true);
+        }
       } else if (!enabled && videoPubs.length > 0) {
         for (const pub of videoPubs) {
           const lt = pub?.track;
@@ -4013,6 +4329,28 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // earpiece mid-call. Both re-appliers are idempotent/guarded.
       void syncLivekitVideoPublication(camOn).then(() => { if (camOn) reapplyAudioRouting(); });
     } else if (camOn) {
+      // MESH: enabling with NO live camera track (denied/absent at join, or the
+      // OS killed it) must REACQUIRE. v2.72 gave the SFU this path; the mesh
+      // had none, so for exactly the "my camera is never recognized" users the
+      // camera button silently did nothing forever. The fresh track rides into
+      // each peer's video sender (guaranteed by createPeer's null-track
+      // transceiver) via replaceTrack — no renegotiation.
+      const haveLive = localStream.getVideoTracks().some(t => t.readyState === "live");
+      if (!haveLive) {
+        void (async () => {
+          const track = await reacquireCameraForPublish();
+          if (track) {
+            await replaceVideoEverywhere(track);
+            syncCamEnabled();
+            const st = $("tile-self"); if (st && !screenSharing) st.classList.remove("audio-only");
+          } else {
+            camOn = false;
+            $("camBtn")?.classList.add("off");
+            const st = $("tile-self"); if (st && !screenSharing) st.classList.add("audio-only");
+            toast("Camera unavailable — check that RELAY has camera permission and no other app is using it.", true);
+          }
+        })();
+      }
       reapplyAudioRouting();
     }
   }
@@ -4128,8 +4466,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenSharing = false;
     const dying = screenStream;
     screenStream = null;
-    // Swap the live camera/filtered track back in for every peer + the SFU.
-    await replaceVideoEverywhere(currentCameraVideoTrack());
+    // Swap the live camera/filtered track back in for every peer + the SFU —
+    // but when the camera is OFF, swap in NOTHING (null → mesh senders empty,
+    // SFU publication dropped). Swapping the DISABLED camera track into the
+    // live screen publication kept a "video" flowing that renders as a solid
+    // BLACK tile for every subscriber ("his camera is dead") until the next
+    // camera toggle.
+    await replaceVideoEverywhere(camOn ? currentCameraVideoTrack() : null);
     try { dying?.getTracks().forEach(t => { t.onended = null; t.stop(); }); } catch { /* */ }
     $("screenBtn")?.classList.remove("on");
     const selfTile = $("tile-self");

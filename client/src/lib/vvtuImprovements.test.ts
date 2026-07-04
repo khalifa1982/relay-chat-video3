@@ -46,7 +46,7 @@ describe("voice improvements", () => {
 describe("video improvements", () => {
   it("unpublishes camera video on the SFU for a voice-only call instead of sending it disabled", () => {
     expect(CLIENT).toMatch(/async function syncLivekitVideoPublication/);
-    expect(CLIENT).toMatch(/if \(camOn\) \{\s*\n\s*for \(const t of send\.getVideoTracks\(\)\) await room\.localParticipant\.publishTrack\(t\);/);
+    expect(CLIENT).toMatch(/if \(camOn\) \{\s*\n\s*for \(const t of send\.getVideoTracks\(\)\) await publishSafe\(t, "camera"\);/);
   });
 
   it("caps screen-share resolution/framerate separately from the camera", () => {
