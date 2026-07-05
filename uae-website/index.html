@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UAE.com — The New Era of AI</title>
+    <meta name="description" content="UAE.com - The new era of Artificial Intelligence is coming soon.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Preloader -->
+    <div id="preloader">
+        <div class="preloader-ring"></div>
+        <div class="preloader-text">INITIALIZING</div>
+    </div>
+
+    <!-- Section 1: UAE Map with AI Mesh Network -->
+    <section id="section-map" class="section">
+        <canvas id="meshCanvas"></canvas>
+        <div class="map-container">
+            <svg id="uaeMap" viewBox="0 0 800 500" preserveAspectRatio="xMidYMid meet"></svg>
+        </div>
+        <div class="hash-overlay" id="hashOverlay"></div>
+        <div class="scroll-indicator">
+            <div class="scroll-arrow"></div>
+        </div>
+    </section>
+
+    <!-- Section 2: Central Message -->
+    <section id="section-message" class="section">
+        <div class="message-container">
+            <div class="message-line line-1">The new era of</div>
+            <div class="message-line line-2">AI</div>
+            <div class="message-line line-3">Artificial Intelligence</div>
+            <div class="message-line line-4">is coming soon.</div>
+        </div>
+        <div class="particle-field" id="particleField"></div>
+    </section>
+
+    <!-- Section 3: Chat Interface Demo -->
+    <section id="section-chat" class="section">
+        <div class="chat-wrapper">
+            <div class="chat-header">
+                <div class="chat-logo">
+                    <span class="logo-icon">◆</span>
+                    <span class="logo-text">UAE.AI</span>
+                </div>
+                <div class="chat-subtitle">Sport Intelligent System</div>
+            </div>
+            <div class="chat-container" id="chatContainer">
+                <div class="chat-messages" id="chatMessages"></div>
+                <div class="chat-input-area">
+                    <div class="chat-input-box">
+                        <span id="chatInputText" class="chat-input-text"></span>
+                        <span class="chat-cursor">|</span>
+                    </div>
+                    <button class="chat-send-btn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div class="search-animation" id="searchAnimation">
+                <div class="search-ring ring-1"></div>
+                <div class="search-ring ring-2"></div>
+                <div class="search-ring ring-3"></div>
+                <div class="search-core">ANALYZING</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Section 4: Coming Soon -->
+    <section id="section-final" class="section">
+        <div class="final-container">
+            <div class="final-text">Coming soon.</div>
+            <div class="final-domain">UAE.com</div>
+        </div>
+        <canvas id="finalCanvas"></canvas>
+    </section>
+
+    <!-- Version Footer -->
+    <div class="version-footer">v2.0</div>
+
+    <script src="script.js"></script>
+</body>
+</html>
