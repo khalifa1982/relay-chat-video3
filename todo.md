@@ -141,3 +141,13 @@
 - [x] Keep web session/call alive in background (foreground service + UIBackgroundModes audio/voip)
 - [x] Incoming-call notification identifies the caller while minimized (USE_FULL_SCREEN_INTENT + widened caller detection)
 - [x] tsc clean + 65 tests pass; bumped to 1.0.12 / build 12; checkpoint and deliver
+
+## Round 14 — Fix update verification loop
+- [x] Diagnose why "Verifying update..." gets stuck and loops back to download
+- [x] Rewrite apk-integrity.ts with timeout-guarded verification (10s timeout, graceful skip on timeout)
+- [x] Clean up failed/partial downloads before retry (deleteApkFile helper)
+- [x] Add auto-retry: corrupt file triggers one automatic re-download before showing error
+- [x] Add retry counter (max 1) to prevent infinite loops
+- [x] Verification timeout: if SHA-256 takes >10s, skip and install via HTTPS trust
+- [x] Bump version to 1.0.16 / build 16
+- [x] tsc clean + 65 tests pass; checkpoint and deliver

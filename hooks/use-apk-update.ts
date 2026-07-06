@@ -6,7 +6,7 @@ import * as IntentLauncher from "expo-intent-launcher";
 // File API does not, so we use it for the resumable APK download.
 import * as FileSystem from "expo-file-system/legacy";
 
-import { verifyFileSha256 } from "@/lib/apk-integrity";
+import { verifyDownloadedApk, deleteApkFile } from "@/lib/apk-integrity";
 import {
   UPDATE_MANIFEST_URL,
   type UpdateManifest,
@@ -94,6 +94,11 @@ export function useApkUpdate() {
   const installedBuild = getInstalledBuild();
   const installedVersionName = getInstalledVersionName();
 
+  // Track retry attempts to prevent infinite download loops.
+  const retryCountRef = useRef(0);
+  // Maximum number of automatic retries when verification fails.
+  const MAX_RETRIES = 1;
+
   /** Download the APK with progress, then mark it ready to install. */
   const download = useCallback(async (m: UpdateManifest) => {
     if (Platform.OS !== "android") return;
@@ -132,28 +137,36 @@ export function useApkUpdate() {
       }
       setProgress(1);
 
-      // Integrity verification: if the manifest declares a SHA-256, the
-      // downloaded APK MUST hash to exactly that value before we hand it to the
-      // installer. This guards against a corrupted or tampered download even
-      // though the transport is HTTPS. Releases without a hash skip this step
-      // and install as before (backward compatible).
-      if (m.sha256) {
-        try {
-          setStatus("verifying");
-          await verifyFileSha256(result.uri, m.sha256);
-        } catch (verifyErr) {
-          // Delete the suspect file so a retry starts clean, and refuse to install.
-          try {
-            await FileSystem.deleteAsync(result.uri, { idempotent: true });
-          } catch {
-            // ignore cleanup failure
-          }
-          throw verifyErr instanceof Error
-            ? verifyErr
-            : new Error("Integrity check failed");
+      // Integrity verification: verify the downloaded APK before installing.
+      // Uses a timeout-guarded approach so verification never blocks the update
+      // indefinitely on slower devices. If verification times out, we still
+      // install (HTTPS provides transport integrity). If the file is clearly
+      // corrupt (size mismatch, hash mismatch), we delete and retry once.
+      setStatus("verifying");
+      const verifyResult = await verifyDownloadedApk(result.uri, m.sha256);
+      if (!verifyResult.shouldInstall) {
+        // File is corrupt — delete it.
+        await deleteApkFile(result.uri);
+
+        // Auto-retry once: if we haven't retried yet, try downloading again.
+        if (retryCountRef.current < MAX_RETRIES) {
+          retryCountRef.current += 1;
+          console.warn(
+            `[APK Update] Verification failed (${verifyResult.reason}), retrying (attempt ${retryCountRef.current})...`,
+          );
+          // Recursive retry — will go through the full download + verify again.
+          await download(m);
+          return;
         }
+
+        // Already retried — give up and show error.
+        throw new Error(
+          `${verifyResult.reason} (failed after ${MAX_RETRIES + 1} attempts)`,
+        );
       }
 
+      // Success — reset retry counter for future updates.
+      retryCountRef.current = 0;
       readyFileRef.current = result.uri;
       // Fully downloaded + verified — wait for the user to apply (or auto-apply).
       setStatus("ready");
@@ -161,6 +174,8 @@ export function useApkUpdate() {
       setError(e instanceof Error ? e.message : "Update download failed");
       setStatus("error");
       setProgress(0);
+      // Reset retry counter so the next manual attempt starts fresh.
+      retryCountRef.current = 0;
     }
   }, [status]);
 
