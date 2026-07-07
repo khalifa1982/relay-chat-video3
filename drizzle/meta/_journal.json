@@ -43,6 +43,13 @@
       "when": 1783187638238,
       "tag": "0005_supreme_lionheart",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1783452443553,
+      "tag": "0006_gifted_matthew_murdock",
+      "breakpoints": true
     }
   ]
 }
