@@ -20,6 +20,7 @@ import { detectDeviceType } from "./deviceType";
 import { probeBrowserMedia, buildCapabilityReport } from "@shared/mediaCapabilities";
 import { readSnapshot, writeSnapshot, clearSnapshot, type RejoinSnapshot } from "./rejoinSnapshot";
 import { isDndOn } from "@/app/dnd";
+import { notify } from "@/app/notifications";
 
 interface IceConfig {
   iceServers: Array<{ urls: string; username?: string; credential?: string }>;
@@ -79,7 +80,7 @@ interface PeerEntry {
    *  X…" so a slow/stuck first connect doesn't look identical to a normal one. */
   slowT?: ReturnType<typeof setTimeout> | null;
 }
-interface PendingRing { from: string; fromName: string; roomId: string; flag?: string; video?: boolean; }
+interface PendingRing { from: string; fromName: string; roomId: string; flag?: string; video?: boolean; at?: number; }
 interface Recent { id: string; name: string; }
 
 interface Msg {
@@ -110,6 +111,9 @@ interface Msg {
   url?: string;
   /** invite/ring: the caller dialed this as a VIDEO call (mutual-consent flow). */
   video?: boolean;
+  /** ringing ack: the callee has no live connection — the server is PAGING
+   *  them (push notification + late ring delivery when their app opens). */
+  paging?: boolean;
   // Recording (LiveKit Egress). `recording` (boolean) on `registered` advertises
   // availability; the `recording` status message carries `on` + `by`.
   recording?: boolean;
@@ -387,7 +391,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       dialTimeoutT = null;
       if (!inCall || callAnswered) return;
       toast("No answer.", true);
-      hangUp("no-answer");
+      failDial("No answer — they'll see your missed call.", "no-answer");
     }, 65_000);
   }
   function showDialCard() {
@@ -604,8 +608,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // Server confirmed our invite was DELIVERED — the callee's device is
         // now actually alerting. Advance the caller's staged progress from
         // "Calling…" (request sent) to "Ringing…" (destination being alerted).
+        // `paging` variant: the callee has NO live connection — the server is
+        // waking their phone with a push and will deliver the ring the moment
+        // their app opens. Say so honestly instead of faking "Ringing…".
         if (inCall && outgoingDial && !callAnswered) {
-          setCallStatus("ringing");
+          if (m.paging) setCallStatus("ringing", "Reaching their phone…");
+          else setCallStatus("ringing");
           // Upgrade the dial card with the callee's registered display name if
           // the dialer didn't know it (dialed a raw number, not a contact).
           if (m.name && !outgoingDial.group && !outgoingDial.name) {
@@ -624,11 +632,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "livekit-token": onLivekitToken(m); break;
       case "rejected":
         toast(nameOf(m.from!) + " declined.");
-        if (inCall && aloneInCall()) hangUp("peer-rejected");
+        if (inCall && aloneInCall()) {
+          if (outgoingDial && !establishedOnce) failDial("They declined.", "peer-rejected");
+          else hangUp("peer-rejected");
+        }
         break;
       case "busy":
         toast("They're on another call.", true);
-        if (inCall && aloneInCall()) hangUp("peer-busy");
+        if (inCall && aloneInCall()) {
+          if (outgoingDial && !establishedOnce) failDial("They're on another call.", "peer-busy");
+          else hangUp("peer-busy");
+        }
         break;
       case "peer-left":    removePeer(m.pin!); break;
       case "force-mute":   onForceMute(m); break;
@@ -658,7 +672,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
           addInviteOfflineGuard = false;
           if (addInviteGuardT) { clearTimeout(addInviteGuardT); addInviteGuardT = null; }
         } else if (fatalCode && inCall && aloneInCall()) {
-          hangUp("server-error:" + (m.code || "?"));
+          if (outgoingDial && !establishedOnce) {
+            failDial(m.message || "They're unreachable right now.", "server-error:" + (m.code || "?"));
+          } else {
+            hangUp("server-error:" + (m.code || "?"));
+          }
         }
         break;
       }
@@ -1790,6 +1808,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       try { n.disconnect(); } catch { /* already disconnected */ }
     });
     ringtoneNodes.clear();
+    try { navigator.vibrate?.(0); } catch { /* no vibration API */ }
+    stopTitleFlash();
   }
   function playRingtone(kind: "incoming" | "outgoing") {
     stopRingtone();
@@ -1805,6 +1825,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // Incoming: classic two-burst ring (480Hz then 440Hz). Outgoing: a single
         // soft repeating dial-tone beep so the caller hears it's actually ringing.
         const bursts: Array<[number, number]> = kind === "incoming" ? [[480, 0], [440, 0.45]] : [[425, 0]];
+        // Physical ring on phones that support it (Android — iOS has no
+        // vibration API). Re-fired per burst cycle; stopRingtone cancels.
+        if (kind === "incoming") { try { navigator.vibrate?.([400, 200, 400]); } catch { /* */ } }
         bursts.forEach(([freq, offset]) => {
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
@@ -1826,6 +1849,49 @@ export function startRelay(root: HTMLElement): RelayHandle {
       fire();
       ringtoneTimer = setInterval(fire, kind === "incoming" ? 3000 : 2000);
     } catch { /* best-effort — visual ring overlay still shows */ }
+  }
+
+  // iOS Safari refuses to START an AudioContext outside a user gesture: a
+  // context first created inside onRing (an SSE event handler) is born
+  // "suspended", resume() outside a gesture is ignored, and every oscillator
+  // playRingtone schedules is SILENT — the classic "iPhone shows the incoming
+  // call but never makes a sound". Pre-create + resume the engine's audio
+  // contexts on the FIRST gesture anywhere in the app (entering the app is
+  // itself a tap, so this is effectively always armed before the first ring).
+  // resume() on a running context is a no-op, so re-fires are harmless.
+  function unlockEngineAudio() {
+    try {
+      const Ctx = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext | undefined;
+      if (!Ctx) return;
+      if (!ringtoneCtx) ringtoneCtx = new Ctx();
+      void ringtoneCtx.resume().catch?.(() => {});
+      if (!cueCtx) cueCtx = new Ctx();
+      void cueCtx.resume().catch?.(() => {});
+    } catch { /* best-effort */ }
+  }
+
+  // Tab-title flash while an incoming call rings, so a backgrounded DESKTOP tab
+  // shows "📞 Incoming call" in the tab strip even without notification
+  // permission. Started by onRing, stopped by stopRingtone (accept / decline /
+  // cancel / timeout all funnel there).
+  let titleFlashT: ReturnType<typeof setInterval> | null = null;
+  let titleFlashOrig: string | null = null;
+  function startTitleFlash(text: string) {
+    if (typeof document === "undefined" || titleFlashT) return;
+    titleFlashOrig = document.title;
+    let on = true;
+    document.title = text;
+    titleFlashT = setInterval(() => {
+      on = !on;
+      document.title = on ? text : (titleFlashOrig || "RELAY");
+    }, 1200);
+  }
+  function stopTitleFlash() {
+    if (titleFlashT) { clearInterval(titleFlashT); titleFlashT = null; }
+    if (titleFlashOrig != null) {
+      try { document.title = titleFlashOrig; } catch { /* */ }
+      titleFlashOrig = null;
+    }
   }
 
   // Call-waiting HOLD state: the OTHER call we've parked while we talk on the
@@ -2045,14 +2111,31 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (inCall) {
       if (m.roomId === roomId) return; // already in this room
       // Call waiting: alert (Switch / Decline) instead of auto-rejecting. Only
-      // one waiter at a time; a second concurrent caller is rejected.
-      if (waitingRing) { sendWS({ type: "reject", to: m.from }); return; }
-      waitingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, flag: m.flag };
+      // one CURRENT waiter at a time — but a waiter from the SAME caller (their
+      // redial / a server redelivery) or one whose ring window has long passed
+      // (its 30s auto-decline froze with the tab in the background) is replaced,
+      // not used as grounds to auto-reject the fresh call.
+      if (waitingRing && waitingRing.from !== m.from && Date.now() - (waitingRing.at || 0) <= 70_000) {
+        sendWS({ type: "reject", to: m.from });
+        return;
+      }
+      waitingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, flag: m.flag, at: Date.now() };
       showCallWaiting(m.fromName || nameOf(m.from!), m.from, m.flag);
       return;
     }
-    if (pendingRing) { sendWS({ type: "reject", to: m.from }); return; }
-    pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, video: !!m.video };
+    // A pendingRing normally means "already being rung — reject the second
+    // caller". But a ZOMBIE pendingRing — left behind when our SSE died before
+    // the caller's ring-cancel arrived and the 60s decline timer froze with the
+    // backgrounded tab — must not blind-reject the NEXT real call: that was the
+    // top cause of "redial drops in two seconds" (the callee's stale state
+    // auto-declined the fresh ring with zero user interaction). A ring from the
+    // SAME caller (redial / server redelivery after our reconnect) or one past
+    // the 70s ring window REPLACES the stale presentation instead.
+    if (pendingRing && pendingRing.from !== m.from && Date.now() - (pendingRing.at || 0) <= 70_000) {
+      sendWS({ type: "reject", to: m.from });
+      return;
+    }
+    pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, video: !!m.video, at: Date.now() };
     // Mutual-consent protocol: a VOICE call is answered as voice — the Video
     // answer button only appears when the CALLER dialed this as a video call
     // (answering with it is the callee's consent).
@@ -2067,6 +2150,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("quickReplies")?.classList.remove("open"); // fresh ring → replies folded
     $("ringOverlay")?.classList.add("active");
     playRingtone("incoming");
+    // Out-of-tab alerting: flash the tab title, and (when the page is hidden
+    // and permission was granted) raise a system notification. notify() itself
+    // suppresses when visible + honours DND, so this never double-alerts.
+    startTitleFlash("📞 Incoming call — RELAY");
+    notify({
+      title: `Incoming ${m.video ? "video" : "voice"} call`,
+      body: `${m.fromName || m.from || "Someone"} · ${m.from || ""} is calling you on RELAY`,
+      tag: "relay-ring-" + (m.from || ""),
+      autoCloseMs: 30_000,
+      onClick: () => { try { window.focus(); } catch { /* */ } },
+    });
     // Promote the embedding host (Dialer) to fullscreen so the callee actually
     // SEES the Accept/Decline overlay. Without this the engine stays parked
     // off-screen for an incoming call and the callee can never answer — which
@@ -2465,6 +2559,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     room.on(RoomEventEnum.Disconnected, () => {
       if (lkRoom !== room || !inCall) return;
+      // PRE-ESTABLISHMENT the caller sits ALONE in the SFU room while the
+      // callee is still being rung — a Disconnected here (network blip, server
+      // room churn right after a redial) is transient, NOT the end of the
+      // call. Killing the dial made redials "drop within two seconds, before
+      // it even rings". Ditch this Room object and re-request a token; the lk
+      // watchdog keeps retrying while ringing, and the dial's own no-answer /
+      // ring-timeout bounds still limit the call's lifetime.
+      if (!establishedOnce) {
+        lkRoom = null;
+        lkConnected = false;
+        diag("livekit: disconnected pre-establishment — retrying, not hanging up");
+        sendWS({ type: "refresh-livekit" });
+        return;
+      }
       // Terminal: LiveKit already gave the call its (longer) reconnect window
       // and gave up. End the call rather than show a misleading countdown.
       hangUp("livekit-disconnected");
@@ -3473,6 +3581,26 @@ export function startRelay(root: HTMLElement): RelayHandle {
     connSeqTimers.forEach(t => clearTimeout(t));
     connSeqTimers = [];
   }
+  // Honest terminal state for a FAILED outgoing dial. The old abrupt teardown
+  // hid the reason entirely: the toast lives inside the engine root, which the
+  // host parks at opacity-0 the instant the phase flips to idle — so a dial
+  // that died as offline/declined/busy looked like a silent two-second glitch.
+  // Hold the dial card up with the outcome for a beat, THEN tear down.
+  let failDialT: ReturnType<typeof setTimeout> | null = null;
+  function clearFailDial() {
+    if (failDialT) { clearTimeout(failDialT); failDialT = null; }
+  }
+  function failDial(message: string, reason: string) {
+    if (failDialT) return; // already presenting a failure
+    if (!inCall || establishedOnce || !outgoingDial) { hangUp(reason); return; }
+    clearDialTimeout();
+    stopRingtone();
+    setCallStatus("calling", message); // renders on the dial card status line
+    failDialT = setTimeout(() => {
+      failDialT = null;
+      hangUp(reason);
+    }, 1900);
+  }
   // Drive connecting → encrypting while the transport comes up; the real "live"
   // flip happens when a peer / the SFU actually connects.
   function runConnSequence() {
@@ -4224,6 +4352,33 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // stays silent on return), and restore the filtered video track. Drop an
       // auto-opened PiP (the full grid is back), but leave a window the user
       // opened by hand. Throttle the primed composite.
+      // FIRST: the OS likely froze our SSE while backgrounded (iOS suspends
+      // timers + sockets within seconds of locking). Reconnect + re-register
+      // IMMEDIATELY so this device is reachable — and receives any ring the
+      // server is holding for us (deliverPendingRing) — in under a second,
+      // instead of waiting out an error/backoff cycle. No-op while healthy.
+      if (!destroyed && (!ws || ws.readyState !== 1 || !wsReady)) {
+        try { ws?.close(); } catch { /* */ }
+        connectWS();
+      }
+      // Zombie-ring sweep: a 60s decline timer frozen with the backgrounded tab
+      // can leave an ancient incoming-ring (or call-waiting) overlay + state up
+      // for hours — and that stale state used to blind-auto-reject the next real
+      // call. Past the 70s ring window, clear it silently; the caller is gone.
+      if (pendingRing && Date.now() - (pendingRing.at || 0) > 70_000) {
+        pendingRing = null;
+        if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
+        $("ringOverlay")?.classList.remove("active");
+        stopRingtone();
+        emitPhase(inCall ? "in-call" : "idle");
+      }
+      if (waitingRing && Date.now() - (waitingRing.at || 0) > 70_000) {
+        waitingRing = null;
+        hideCallWaiting();
+      }
+      // iOS also re-suspends AudioContexts in the background — resume the
+      // ringtone context so a ring that arrives right after return is audible.
+      if (ringtoneCtx && ringtoneCtx.state === "suspended") { try { void ringtoneCtx.resume(); } catch { /* */ } }
       if (loudspeakerOn) { try { void loudspeakerCtx?.resume(); } catch { /* */ } }
       if (inCall) void bgSwapVideo(false);
       if (pipAutoEntered) { pipAutoEntered = false; void exitPip(); }
@@ -4760,6 +4915,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("ringOverlay")?.classList.remove("active");
     exitPreConnect(); // clear any in-flight dial card / pre-connect gating
     clearDialTimeout(); // an ended call must never fire a stale "No answer."
+    clearFailDial(); // an explicit End during the failure card mustn't re-fire
     videoApproved = false; callIsGroup = false; // consent is per-call
     clearVideoReq();
     hideVideoAsk();
@@ -4999,6 +5155,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // Auto-PiP: when enabled, open a PiP window the moment the app is backgrounded
   // mid-call (and close it on return). One listener for the engine's lifetime.
   document.addEventListener("visibilitychange", onVisibilityChange);
+  // First-gesture audio unlock (iOS): pre-create + resume the ringtone/cue
+  // AudioContexts inside a real user gesture, so an incoming ring that arrives
+  // later (via SSE — no gesture) is actually AUDIBLE. Self-removes after firing.
+  const onFirstGesture = () => {
+    unlockEngineAudio();
+    document.removeEventListener("pointerdown", onFirstGesture);
+    document.removeEventListener("keydown", onFirstGesture);
+  };
+  document.addEventListener("pointerdown", onFirstGesture);
+  document.addEventListener("keydown", onFirstGesture);
   if (typeof navigator !== "undefined" && navigator.mediaDevices?.addEventListener) {
     try { navigator.mediaDevices.addEventListener("devicechange", onAudioDeviceChange); } catch { /* */ }
   }
@@ -5154,6 +5320,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
       if (waitingTimeoutT) { clearTimeout(waitingTimeoutT); waitingTimeoutT = null; }
       waitingRing = null;
+      clearFailDial();
       clearConnSeq();
       exitReconnecting();
       // Disconnect the SFU before stopping local tracks (no-op on the mesh path).
@@ -5195,6 +5362,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("beforeunload", onUnload);
       window.removeEventListener("pagehide", onUnload);
+      document.removeEventListener("pointerdown", onFirstGesture);
+      document.removeEventListener("keydown", onFirstGesture);
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("online", onOnline);
       // best-effort: tell server we're leaving

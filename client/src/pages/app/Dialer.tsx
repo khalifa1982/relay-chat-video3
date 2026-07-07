@@ -170,7 +170,9 @@ export default function DialerPage() {
       } else if (e.key === "Enter") {
         if (dialed.length === 6) {
           e.preventDefault();
-          startCallNow();
+          // Voice-first (v2.81 protocol): hardware Enter mirrors the Voice
+          // button — video is an explicit choice, never a keyboard default.
+          startCallNow({ voice: true });
         }
       }
     };
@@ -278,7 +280,7 @@ export default function DialerPage() {
                 size="sm"
                 variant="ghost"
                 className="shrink-0 text-destructive hover:text-destructive"
-                onClick={() => { engine.dial(missedLatest.number); setShowMissed(false); }}
+                onClick={() => { engine.dial(missedLatest.number, { voice: true }); setShowMissed(false); }}
               >
                 <Phone className="size-4 mr-1" /> Call back
               </Button>

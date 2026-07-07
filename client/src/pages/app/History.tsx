@@ -176,18 +176,48 @@ export default function HistoryPage() {
 
   const loading = conferences.isLoading || oneToOne.isLoading;
   const errored = conferences.isError && oneToOne.isError;
+  // Voice-first everywhere (v2.81 protocol): a History redial starts as a
+  // VOICE call — video is a mid-call, mutual-consent upgrade, never a default.
   const redial = (num: string) => {
-    if (num) engine.dial(num);
+    if (num) engine.dial(num, { voice: true });
   };
   // Re-create a group call: ring every participant into one conference.
   const redialGroup = (numbers: string[]) => {
     const nums = numbers.filter(Boolean);
-    if (nums.length > 1) engine.dialGroup(nums);
-    else if (nums.length === 1) engine.dial(nums[0]);
+    if (nums.length > 1) engine.dialGroup(nums, { voice: true });
+    else if (nums.length === 1) engine.dial(nums[0], { voice: true });
   };
   const message = (num: string) => {
     if (num) openThread.mutate({ number: num });
   };
+
+  // Live reachability per number (ONE batched query, refreshed with the log):
+  // a green/grey LED on each row tells the user BEFORE they redial whether the
+  // other side is even reachable — dialing someone offline pages their phone.
+  const presenceNumbers = useMemo(() => {
+    const set = new Set<string>();
+    for (const it of items) {
+      if (it.kind === "solo") {
+        const other = it.call.other?.number;
+        if (other && /^\d{6}$/.test(other)) set.add(other);
+      } else {
+        for (const p of it.conf.participants) {
+          if (!p.isSelf && p.number && /^\d{6}$/.test(p.number)) set.add(p.number);
+        }
+        if (it.conf.dialedNumber && /^\d{6}$/.test(it.conf.dialedNumber)) set.add(it.conf.dialedNumber);
+      }
+      if (set.size >= 100) break; // server caps the batch at 100
+    }
+    return Array.from(set).slice(0, 100).sort();
+  }, [items]);
+  const presence = trpc.directory.presenceMany.useQuery(
+    { numbers: presenceNumbers },
+    { enabled: !!me && presenceNumbers.length > 0, refetchInterval: 30_000, refetchIntervalInBackground: false }
+  );
+  const onlineSet = useMemo(
+    () => new Set((presence.data ?? []).filter((p) => p.isOnline).map((p) => p.number)),
+    [presence.data]
+  );
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 min-h-0 flex-col px-4 pb-3 pt-4 md:pb-6">
@@ -298,9 +328,20 @@ export default function HistoryPage() {
                     onRedial={redial}
                     onRedialGroup={redialGroup}
                     onMessage={message}
+                    online={
+                      presence.data
+                        ? onlineSet.has(it.conf.dialedNumber || it.conf.participants.find((p) => !p.isSelf)?.number || "")
+                        : undefined
+                    }
                   />
                 ) : (
-                  <SoloItem key={it.key} call={it.call} onRedial={redial} onMessage={message} />
+                  <SoloItem
+                    key={it.key}
+                    call={it.call}
+                    onRedial={redial}
+                    onMessage={message}
+                    online={presence.data ? onlineSet.has(it.call.other?.number ?? "") : undefined}
+                  />
                 )
               )}
             </ul>
@@ -311,18 +352,36 @@ export default function HistoryPage() {
   );
 }
 
+/** Green/grey reachability LED pinned to a row's icon bubble. `undefined`
+ *  (presence not loaded yet) renders nothing — no flicker, no wrong claims. */
+function PresenceLed({ online }: { online: boolean | undefined }) {
+  if (online === undefined) return null;
+  return (
+    <span
+      aria-label={online ? "Online" : "Offline"}
+      title={online ? "Online now" : "Offline — calling will page their phone"}
+      className={
+        "absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-background " +
+        (online ? "bg-[color:var(--relay-online,#06d6a0)]" : "bg-zinc-500/80")
+      }
+    />
+  );
+}
+
 function ConferenceItem({
   conf,
   direction,
   onRedial,
   onRedialGroup,
   onMessage,
+  online,
 }: {
   conf: ConfRow;
   direction: "in" | "out";
   onRedial: (num: string) => void;
   onRedialGroup: (numbers: string[]) => void;
   onMessage: (num: string) => void;
+  online: boolean | undefined;
 }) {
   const others = conf.participants.filter((p) => !p.isSelf);
   const otherNumbers = others.map((p) => p.number).filter(Boolean);
@@ -351,8 +410,9 @@ function ConferenceItem({
       aria-label={`${direction === "out" ? "Outgoing" : "Incoming"} call with ${title}, ${formatDuration(conf.durationSec)} duration`}
     >
       <div className="flex items-center gap-3">
-        <span className={"grid size-9 shrink-0 place-items-center rounded-xl " + tone.bubble}>
+        <span className={"relative grid size-9 shrink-0 place-items-center rounded-xl " + tone.bubble}>
           <Icon className="size-[18px]" />
+          <PresenceLed online={online} />
         </span>
         <div className="min-w-0 flex-1">
           <div className={"truncate font-medium " + tone.name}>{title}</div>
@@ -431,10 +491,12 @@ function SoloItem({
   call,
   onRedial,
   onMessage,
+  online,
 }: {
   call: CallRow;
   onRedial: (num: string) => void;
   onMessage: (num: string) => void;
+  online: boolean | undefined;
 }) {
   const missedIn = call.direction === "in";
   const tone = missedIn ? TONE.missed : TONE.out;
@@ -455,8 +517,9 @@ function SoloItem({
       aria-label={`${label} — ${peerName}`}
     >
       <div className="flex items-center gap-3">
-        <span className={"grid size-9 shrink-0 place-items-center rounded-xl " + tone.bubble}>
+        <span className={"relative grid size-9 shrink-0 place-items-center rounded-xl " + tone.bubble}>
           <Icon className="size-[18px]" />
+          <PresenceLed online={online} />
         </span>
         <div className="min-w-0 flex-1">
           <div className={"truncate font-medium " + tone.name}>{peerName}</div>

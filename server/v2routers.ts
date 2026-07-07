@@ -55,7 +55,10 @@ import {
   getConversationParticipantIds,
   recentAutoReplyExists,
   getPublicStats,
+  upsertPushSubscription,
+  deletePushSubscription,
 } from "./v2db";
+import { vapidConfig } from "./webPush";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
 import { setSessionCookie } from "./authLocal";
@@ -496,6 +499,35 @@ export const v2DirectoryRouter = router({
     .query(async ({ input }) => {
       if (input.ids.length === 0) return [];
       return getPresenceForIds(input.ids);
+    }),
+
+  /**
+   * Batched online/offline for a set of NUMBERS (one query pair, not N
+   * lookups) — powers the presence LEDs on History rows so the user can see
+   * BEFORE redialing whether someone is reachable. Applies the same guest
+   * privacy rule as `lookup`; unknown numbers are simply omitted.
+   */
+  presenceMany: publicProcedure
+    .input(z.object({ numbers: z.array(NumberSchema).max(100) }))
+    .query(async ({ input }) => {
+      const uniq = Array.from(new Set(input.numbers));
+      if (uniq.length === 0) return [];
+      const idents = await getIdentitiesByNumbers(uniq);
+      if (idents.length === 0) return [];
+      const presList = await getPresenceForIds(idents.map((i) => i.id));
+      const presById = new Map(presList.map((p) => [p.identityId, p]));
+      return idents.map((i) => {
+        const pres = presById.get(i.id);
+        const hidden = isGuestPresenceHidden({
+          isGuest: i.userId == null,
+          isOnline: pres?.isOnline ?? false,
+          lastSeenAt: pres?.lastSeenAt ?? null,
+        });
+        return {
+          number: i.number,
+          isOnline: hidden ? false : (pres?.isOnline ?? false),
+        };
+      });
     }),
 
   /**
@@ -1344,4 +1376,46 @@ export const v2OtpAuthRouter = router({
     ctx.res.clearCookie("relay_session", { ...opts, maxAge: -1 });
     return { ok: true };
   }),
+});
+
+/* ── web push router (v2.83) ──────────────────────────────────────
+ * Registers/removes a browser's Web Push subscription so the server can WAKE
+ * this device for incoming calls (paging) and missed-call notices even when
+ * no tab/SSE is alive. `publicKey` hands the client the VAPID application
+ * server key it must subscribe with (null ⇒ push disabled on this deploy). */
+export const v2PushRouter = router({
+  publicKey: publicProcedure.query(() => {
+    const cfg = vapidConfig();
+    return { key: cfg?.publicKey ?? null };
+  }),
+
+  subscribe: publicProcedure
+    .input(
+      z.object({
+        endpoint: z.string().min(10).max(500),
+        keys: z.object({
+          p256dh: z.string().min(10).max(255),
+          auth: z.string().min(6).max(120),
+        }),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      await upsertPushSubscription({
+        identityId: me.id,
+        endpoint: input.endpoint,
+        p256dh: input.keys.p256dh,
+        auth: input.keys.auth,
+      });
+      return { ok: true };
+    }),
+
+  /** Endpoint URLs are unguessable capability URLs, so possession is proof
+   *  enough to remove one (same trust model as the push service itself). */
+  unsubscribe: publicProcedure
+    .input(z.object({ endpoint: z.string().min(10).max(500) }))
+    .mutation(async ({ input }) => {
+      await deletePushSubscription(input.endpoint);
+      return { ok: true };
+    }),
 });

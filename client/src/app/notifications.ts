@@ -120,8 +120,11 @@ interface NotifyOpts {
   tag?: string;
   /** Optional URL to fetch as the notification icon. */
   icon?: string;
-  /** Called when the user clicks the notification. */
+  /** Called when the user clicks the notification (constructor path only). */
   onClick?: () => void;
+  /** App path to open on tap when the notification is shown via the service
+   *  worker (sw.js notificationclick reads it from `data.url`). */
+  url?: string;
   /** Auto-close after this many ms. Default 6000. Pass 0 to keep open. */
   autoCloseMs?: number;
 }
@@ -144,6 +147,29 @@ export function notify(opts: NotifyOpts): boolean {
   // in-app UI is enough.
   if (typeof document !== "undefined" && document.visibilityState === "visible") {
     return false;
+  }
+  // Prefer the service-worker route: iOS (installed PWA) does NOT support the
+  // `new Notification()` constructor at all — pages must go through
+  // registration.showNotification — and Android Chrome has deprecated the
+  // constructor for years. Tap-handling for this path lives in sw.js
+  // (notificationclick → focus/open `data.url`). Falls back to the classic
+  // constructor (with its richer onClick) where no SW is controlling.
+  try {
+    if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+      void navigator.serviceWorker.ready.then((reg) =>
+        reg.showNotification(opts.title, {
+          body: opts.body,
+          tag: opts.tag,
+          icon: opts.icon || "/icon.svg",
+          data: { url: opts.url || "/app/dialer" },
+          // @ts-expect-error — vibrate not in lib.dom.d.ts NotificationOptions
+          vibrate: [80, 40, 80],
+        })
+      );
+      return true;
+    }
+  } catch {
+    /* fall through to the constructor path */
   }
   try {
     const n = new Notification(opts.title, {

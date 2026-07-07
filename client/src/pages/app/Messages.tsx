@@ -780,7 +780,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           <Button
             size="icon"
             variant="ghost"
-            onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(thread.peerNumber)}`)}
+            onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(thread.peerNumber)}&voice=1`)}
             aria-label="Call"
           >
             <Phone className="size-5" />

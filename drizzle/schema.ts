@@ -413,6 +413,34 @@ export const conferenceHistory = mysqlTable(
 export type ConferenceHistory = typeof conferenceHistory.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
+ * push_subscriptions — Web Push endpoints per identity (one row per browser/
+ * device that granted notification permission). Used to WAKE a device that has
+ * no live SSE connection: incoming-call pages ("X is calling — open RELAY")
+ * and missed-call notices. Endpoints are pruned when the push service reports
+ * them gone (404/410). Created at boot by ensureSchemaExtensions
+ * (CREATE TABLE IF NOT EXISTS) — additive, never touches existing data.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const pushSubscriptions = mysqlTable(
+  "push_subscriptions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    identityId: int("identityId").notNull(),
+    /** Push service URL — unique per browser profile/device subscription. */
+    endpoint: varchar("endpoint", { length: 500 }).notNull(),
+    /** Client public key (base64url) for payload encryption. */
+    p256dh: varchar("p256dh", { length: 255 }).notNull(),
+    /** Client auth secret (base64url) for payload encryption. */
+    auth: varchar("auth", { length: 120 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    identityIdx: index("push_sub_identity_idx").on(t.identityId),
+    endpointUnique: uniqueIndex("push_sub_endpoint_unique").on(t.endpoint),
+  }),
+);
+export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
  * conference_participants — join rows so each identity can query "the
  * conferences I was in" with an index (instead of scanning the JSON roster).
  * ────────────────────────────────────────────────────────────────────────── */

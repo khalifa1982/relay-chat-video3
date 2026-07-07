@@ -2996,3 +2996,72 @@ brought to v2.73 (flex-1, no stale pb-24). 9 new pins; 707 passing. Footer → v
 - [x] Register /privacy-policy route in App.tsx
 - [x] Add Privacy Policy link in the landing page footer (all 6 locales)
 - [x] tsc clean + 708 vitest pass; checkpoint 103c5bea; guide Publish
+
+## v2.83.0 — Reachability: pre-ring dial drops fixed + calls that actually RING phones (2026-07-07)
+
+User reports: (1) "check the history page — sometimes when I click to dial, it keeps dropping the
+call within the first two seconds, before it even starts ringing"; (2) "on the iOS version: when
+the user receives a call, there is no ringing sound or notification."
+
+Root-caused with a multi-agent audit (18 agents; every mechanism adversarially verified against
+the code). Both issues share one root: a callee whose SSE is gone (locked/backgrounded phone,
+closed tab) could never be rung — and several client/server states turned that into instant drops.
+
+### Issue 1 — dials dropping within ~2s, pre-ring
+- **Callee zombie-ring blind reject (top cause)**: a stale `pendingRing`/`waitingRing` (left when
+  the caller's ring-cancel died in a closed SSE and the 60s decline timer froze with the
+  backgrounded tab) auto-REJECTED the next real call with zero user interaction — the caller
+  dropped in ~1s as "declined". Rings are now stamped (`at`); a ring from the SAME caller (redial /
+  server redelivery) or past the 70s window REPLACES the stale presentation instead of rejecting,
+  and returning to the foreground sweeps zombie ring state.
+- **Mid-dial re-register reaped the dial room**: the engine re-registers during dials (geo-flag
+  re-affirm ~1-2s after boot, SSE blip → ready). v2.78.1's ghost-room guard saw the caller's solo
+  dial room and `leaveRoom()`d it — callee's accept then bounced `gone`. `sendRejoinIfInRoom` now
+  recognizes a LIVE dial (pending rings + young unanswered room) and leaves it alone.
+- **Instant `offline` bounce → PAGING**: an invite to a real-but-unreachable number no longer kills
+  the dial in <1s. The server now detects dead-but-in-grace sockets (`RelaySocket.alive`), keeps
+  the dial alive, answers the caller `ringing{paging}` ("Reaching their phone…"), fires a Web Push
+  to wake the device, and DELIVERS the ring the moment the callee's app opens
+  (`reg.pendingRings` + `deliverPendingRing` on register — also fixes the reload-mid-ring lost
+  ring and the ring-swallowed-into-closed-socket fake "Ringing…"). Only truly nonexistent numbers
+  fail fast ("That number doesn't exist."). Misses are recorded when the caller gives up (never
+  double-recorded).
+- **Pre-establishment SFU `Disconnected` retries** (token re-request; watchdog keeps the dial
+  alive) instead of `hangUp("livekit-disconnected")` killing the dial on a transient.
+- **Honest failure card**: a failed dial (declined / busy / unreachable / no-answer) now shows its
+  reason ON the dial card for ~2s before teardown — the old instant teardown hid the toast (the
+  engine root parks at opacity-0 when phase→idle), so offline dials looked like a silent glitch.
+- **History rows got presence LEDs** (green/grey) from ONE batched `directory.presenceMany` query —
+  see BEFORE redialing whether someone is reachable.
+- **Voice-first everywhere**: History redial (1:1 + group), Dialer missed-call banner, Messages
+  thread call button, hardware Enter — all were still defaulting to VIDEO dials.
+
+### Issue 2 — iOS: no ring sound, no notification
+- **Foreground sound fixed**: the ringtone `AudioContext` was created INSIDE the SSE ring handler —
+  iOS keeps such contexts suspended (silent oscillators). Both engine contexts are now pre-created
+  + resumed on the FIRST real gesture (entering the app is a tap), re-resumed on foreground, and
+  the app-layer chime context gets the same treatment (AppShell one-time unlock).
+- **Ring alerting**: vibration (Android), tab-title flash ("📞 Incoming call — RELAY"), and a
+  system notification when the page is hidden. `notify()` now routes through
+  `ServiceWorkerRegistration.showNotification` (iOS PWA + Android don't support the constructor)
+  with `data.url` deep links.
+- **Web Push — devices ring even with RELAY closed**: `push_subscriptions` table (+ boot-migrator
+  DDL), `push` tRPC router (publicKey/subscribe/unsubscribe), `server/webPush.ts` (VAPID keys
+  DERIVED deterministically from JWT_SECRET — stable across restarts/instances, zero new env; or
+  set VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY/VAPID_SUBJECT), sw.js `push` + `notificationclick`
+  handlers (calls: requireInteraction + vibrate; tap focuses/opens the app), incoming-call page
+  push on unreachable invite + missed-call push (guests too) in the relay hooks, and a one-time
+  "Never miss a call — Enable" banner (AppShell). iPhone/iPad: Apple only allows web push for
+  Home-Screen-installed apps on iOS 16.4+ — the banner shows an "Add to Home Screen" tip there.
+- **Fast re-attach**: returning to the foreground reconnects the relay SSE immediately (was: wait
+  for the error/backoff cycle), so a re-opened phone is reachable — and receives any held ring —
+  in under a second.
+
+Tests: +30 (relayPaging protocol suite incl. page→push→late-ring→accept round trip and the
+mid-dial re-register guard; webPush VAPID derivation; callReachability static pins) → **737
+passing**. E2E (headless Chromium × real signaling): voice ring w/ title flash + hidden video
+answer; ring REDELIVERED after callee reload; mesh establishes ("Connected" both sides); 1:1
+auto-end after remote hangup; nonexistent-number dial shows the fail card then tears down.
+`web-push` dependency added. Note: sandbox E2E surfaced that a LiveKit-configured-but-unreachable
+deploy kills every answered call at ~16s via the join watchdog (correct behavior; worth
+remembering when LIVEKIT_* points at a dead SFU).

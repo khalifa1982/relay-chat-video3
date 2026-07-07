@@ -13,6 +13,8 @@ import { useRealtime } from "./useRealtime";
 import { useDnd } from "./dnd";
 import { useTheme } from "@/contexts/ThemeContext";
 import { MissedCallToast, NotificationBell } from "./MissedCalls";
+import { PushBanner } from "./PushBanner";
+import { unlockAudio } from "./notifications";
 
 /**
  * Tab keys used by the bottom-nav / sidebar. We hard-code the routes here
@@ -70,6 +72,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // user can flip from Profile.
   useEffect(() => {
     document.documentElement.classList.add("relay-v2");
+  }, []);
+
+  // One-time gesture unlock for the notification-sound AudioContext: iOS won't
+  // start ANY WebAudio outside a user gesture, so the call ring / message chime
+  // fired later from an SSE event would be silent. Entering the app is itself a
+  // tap, so this is armed long before the first alert. Self-removes on fire.
+  useEffect(() => {
+    const unlock = () => {
+      unlockAudio();
+      document.removeEventListener("pointerdown", unlock);
+    };
+    document.addEventListener("pointerdown", unlock);
+    return () => document.removeEventListener("pointerdown", unlock);
   }, []);
 
   // PasscodeGate sits outermost: if a device passcode is set the lock
@@ -498,7 +513,12 @@ function Inner({ children }: { children: React.ReactNode }) {
             whereas height:100% against a flex-derived (non-explicit) height
             silently falls back to content height in Chrome and collapses
             short pages upward. */}
-        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">{children}</div>
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">
+          {/* One-time "get call alerts" opt-in (Web Push) + iOS install tip.
+              Renders nothing once granted / denied / dismissed. */}
+          <PushBanner />
+          {children}
+        </div>
 
         {/* Docked glass tab bar. IN-FLOW (not position:fixed): as the last
             flex child of the viewport-bounded column it is permanently pinned

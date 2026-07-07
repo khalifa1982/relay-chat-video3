@@ -39,6 +39,7 @@ import {
   identities,
   messages,
   presence,
+  pushSubscriptions,
   users,
 } from "../drizzle/schema";
 import { getDb } from "./db";
@@ -715,6 +716,21 @@ export async function ensureSchemaExtensions(): Promise<void> {
         \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
         KEY \`email_otps_email_idx\` (\`email\`),
         KEY \`email_otps_expires_idx\` (\`expiresAt\`)
+      )`,
+    },
+    {
+      // Web Push endpoints per identity — wakes devices with no live SSE
+      // (incoming-call paging + missed-call notices). v2.83.
+      name: "push_subscriptions",
+      ddl: `CREATE TABLE IF NOT EXISTS \`push_subscriptions\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`identityId\` int NOT NULL,
+        \`endpoint\` varchar(500) NOT NULL,
+        \`p256dh\` varchar(255) NOT NULL,
+        \`auth\` varchar(120) NOT NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY \`push_sub_endpoint_unique\` (\`endpoint\`),
+        KEY \`push_sub_identity_idx\` (\`identityId\`)
       )`,
     },
   ];
@@ -1838,4 +1854,59 @@ export async function getPublicStats(): Promise<PublicStats> {
     totalParties: Number(totalRow?.n ?? 0),
     onlineNow: Number(onlineRow?.n ?? 0),
   };
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Web Push subscriptions (v2.83) — one row per browser/device that granted
+ * notification permission. Used to wake devices with NO live SSE connection:
+ * incoming-call paging and missed-call notices.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+export async function upsertPushSubscription(input: {
+  identityId: number;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .insert(pushSubscriptions)
+    .values({
+      identityId: input.identityId,
+      endpoint: input.endpoint.slice(0, 500),
+      p256dh: input.p256dh.slice(0, 255),
+      auth: input.auth.slice(0, 120),
+    })
+    .onDuplicateKeyUpdate({
+      // Same endpoint re-registered (e.g. after a login switch on the same
+      // browser) → re-bind it to the CURRENT identity + fresh keys.
+      set: {
+        identityId: input.identityId,
+        p256dh: input.p256dh.slice(0, 255),
+        auth: input.auth.slice(0, 120),
+      },
+    });
+}
+
+export async function deletePushSubscription(endpoint: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, endpoint.slice(0, 500)));
+}
+
+export async function listPushSubscriptions(
+  identityId: number,
+): Promise<Array<{ endpoint: string; p256dh: string; auth: string }>> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      endpoint: pushSubscriptions.endpoint,
+      p256dh: pushSubscriptions.p256dh,
+      auth: pushSubscriptions.auth,
+    })
+    .from(pushSubscriptions)
+    .where(eq(pushSubscriptions.identityId, identityId));
+  return rows;
 }

@@ -116,6 +116,7 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
                 title: "New message",
                 body: "You have a new RELAY message.",
                 tag: `relay-msg-${payload.conversationId}`,
+                url: `/app/messages?c=${payload.conversationId}`,
                 onClick: () => {
                   if (typeof window !== "undefined") {
                     // Route via the ?c= query the app actually reads — the old
@@ -135,6 +136,7 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
               title: `Incoming call from ${payload.fromName || payload.fromNumber}`,
               body: `RELAY · ${payload.fromNumber}`,
               tag: `relay-call-${payload.roomId}`,
+              url: `/app/dialer?incoming=${payload.fromNumber}`,
               autoCloseMs: 25_000,
               onClick: () => {
                 if (typeof window !== "undefined") {

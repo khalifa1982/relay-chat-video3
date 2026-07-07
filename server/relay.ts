@@ -46,6 +46,11 @@ interface IceServer {
 export interface RelaySocket {
   send: (obj: unknown) => void;
   close: () => void;
+  /** True while the underlying SSE response can still be written to. Lets the
+   *  invite path detect a dead-but-in-grace callee socket (backgrounded phone)
+   *  and PAGE them instead of dropping the ring into a closed stream. Optional
+   *  so test doubles / legacy sockets keep working (absent ⇒ assumed alive). */
+  alive?: () => boolean;
 }
 
 export interface RelayClient {
@@ -148,9 +153,29 @@ export interface RelayRegistry {
   roomReapT: Map<string, ReturnType<typeof setTimeout>>;
   /** Per-room lifetime metadata for conference-history logging. */
   roomMeta: Map<string, RoomMeta>;
+  /**
+   * Undelivered/live rings, calleePin -> latest ring details. Written on every
+   * invite; consumed by the register handler so a callee who (re)connects
+   * mid-ring — page reload, SSE blip, or a PAGED offline device opening the app
+   * from a push notification — gets the ring DELIVERED late instead of never.
+   * Entries expire after PENDING_RING_TTL_MS and are cleared on accept/reject/
+   * cancel, so a stale ring can never resurrect.
+   */
+  pendingRings: Map<string, PendingRing>;
   /** Set by attachRelay — fired from reapRoom when a real call ends. */
   onConferenceEnd?: ConferenceEndHook;
 }
+
+export interface PendingRing {
+  from: string;      // caller pin
+  roomId: string;    // the caller's dial room the accept must target
+  video: boolean;    // mutual-consent flow: was this dialed as a video call?
+  at: number;        // unix ms when the invite was dispatched
+}
+
+/** How long a pending ring stays redeliverable. Slightly longer than the
+ *  caller's 65s client-side no-answer backstop so the window is caller-owned. */
+export const PENDING_RING_TTL_MS = 70_000;
 
 export function createRegistry(): RelayRegistry {
   return {
@@ -164,7 +189,56 @@ export function createRegistry(): RelayRegistry {
     heldRoom: new Map(),
     roomReapT: new Map(),
     roomMeta: new Map(),
+    pendingRings: new Map(),
   };
+}
+
+/** Drop a callee's pending ring, optionally only when it matches a caller/room
+ *  (so clearing one call's ring can't erase a different caller's). */
+export function clearPendingRing(
+  reg: RelayRegistry,
+  calleePin: string,
+  match?: { from?: string; roomId?: string }
+) {
+  const pr = reg.pendingRings.get(calleePin);
+  if (!pr) return;
+  if (match?.from && pr.from !== match.from) return;
+  if (match?.roomId && pr.roomId !== match.roomId) return;
+  reg.pendingRings.delete(calleePin);
+}
+
+/**
+ * (Re)deliver a live ring to a callee who just (re)connected. Fired from the
+ * register handler. Verifies the call is still genuinely ringing (caller
+ * connected, still ringing this pin, still in the same room, TTL fresh) so a
+ * stale entry can never pop a ghost ring. Also upgrades the caller's dial card
+ * from "paging" to a real "Ringing…" ack, since the callee's device is now
+ * actually alerting. The entry is kept until accept/reject/cancel/TTL so a
+ * second reload mid-ring redelivers again.
+ */
+export function deliverPendingRing(reg: RelayRegistry, calleePin: string) {
+  const pr = reg.pendingRings.get(calleePin);
+  if (!pr) return;
+  if (Date.now() - pr.at > PENDING_RING_TTL_MS) {
+    reg.pendingRings.delete(calleePin);
+    return;
+  }
+  const caller = reg.clients.get(pr.from);
+  if (!caller || !caller.ringing.has(calleePin) || caller.roomId !== pr.roomId) {
+    reg.pendingRings.delete(calleePin);
+    return;
+  }
+  const callee = reg.clients.get(calleePin);
+  if (!callee) return;
+  safeSend(callee.socket, {
+    type: "ring",
+    from: pr.from,
+    fromName: caller.name,
+    flag: caller.flag,
+    roomId: pr.roomId,
+    video: pr.video,
+  });
+  safeSend(caller.socket, { type: "ringing", pin: calleePin, name: callee.name });
 }
 
 /** Record/refresh a participant in a room's history roster (pin -> name). */
@@ -282,6 +356,18 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
   // eventual death auto-declined them ("calls disconnect within seconds").
   const connectedOthers = members.filter(m => reg.clients.has(m.pin)).length;
   if (members.length === 0 || connectedOthers === 0) {
+    // …unless this member is a caller MID-DIAL: legitimately alone in a FRESH
+    // room while their callee still rings. Re-registers happen DURING dials
+    // (geo-flag re-affirm ~1-2s after boot, SSE blip → ready → register), and
+    // reaping here killed the dial out from under the caller — the callee's
+    // accept then bounced with error{gone} while the caller rang to the 65s
+    // backstop. A live dial = outstanding pending rings + a young, unanswered
+    // room; keep it (there's nothing to rejoin — the client never left).
+    const c = reg.clients.get(pin);
+    const midDial =
+      !!c && c.ringing.size > 0 && !!rmeta && !rmeta.accepted &&
+      Date.now() - rmeta.startedAt < PENDING_RING_TTL_MS;
+    if (midDial) return;
     // ALONE (stale solo dial room) or only ghosts left. Don't drop the user
     // into a dead "call" screen; release the membership so they land in the
     // lobby, and let the orphaned room reap.
@@ -504,6 +590,8 @@ export function cancelPendingRings(reg: RelayRegistry, callerPin: string): strin
   pins.forEach(calleePin => {
     const callee = reg.clients.get(calleePin);
     if (callee) safeSend(callee.socket, { type: "ring-cancel", from: callerPin });
+    // The call is over — a later (re)connect must not get this ring redelivered.
+    clearPendingRing(reg, calleePin, { from: callerPin });
   });
   c.ringing.clear();
   return pins;
@@ -674,6 +762,25 @@ export type MissedCallHook = (info: {
 }) => void;
 
 /**
+ * Fired when an invite targets a number with NO live relay connection (never
+ * registered, or its SSE died — a backgrounded/locked phone). The hook answers
+ * from the DB whether the number belongs to a real identity (and its display
+ * name) and, when it does, pushes a "call is coming in" notification to that
+ * identity's subscribed devices (Web Push). The relay then PAGES: it keeps the
+ * dial alive so the callee can open the app and receive the ring late
+ * (deliverPendingRing), instead of instantly bouncing the caller with
+ * "offline". Resolving { exists: false } (or rejecting) falls back to the
+ * classic offline error.
+ */
+export type PageCalleeHook = (info: {
+  calleePin: string;
+  callerPin: string;
+  callerName: string;
+  roomId: string;
+  video: boolean;
+}) => Promise<{ exists: boolean; name?: string } | null>;
+
+/**
  * Protocol logic. Kept as a pure function over (registry, socket-state,
  * message) so it's straightforward to unit-test without spinning up an
  * HTTP server. The optional `onInvite` callback is fired exactly once
@@ -686,7 +793,8 @@ export function handleMessage(
   conn: { socket: RelaySocket; pin: string | null; setPin: (p: string) => void; cid?: string },
   msg: RelayMessage,
   onInvite?: InviteHook,
-  onMissedCall?: MissedCallHook
+  onMissedCall?: MissedCallHook,
+  onPageCallee?: PageCalleeHook
 ) {
   const type = msg && msg.type;
 
@@ -729,6 +837,9 @@ export function handleMessage(
         safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
         // A within-grace re-attach (same cid) also auto-rejoins its active call.
         sendRejoinIfInRoom(reg, conn.socket, conn.pin);
+        // …and receives any ring that's still live (page reload / paged device
+        // opening from a push) — the ring would otherwise be lost forever.
+        deliverPendingRing(reg, conn.pin);
       }
       return;
     }
@@ -807,6 +918,9 @@ export function handleMessage(
     safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
     // AUTO-REJOIN an active call this number is still a member of (no re-invite).
     sendRejoinIfInRoom(reg, conn.socket, pin);
+    // Deliver any ring that's still live for this number: a reload mid-ring, or
+    // a PAGED offline device the user just opened from the push notification.
+    deliverPendingRing(reg, pin);
     return;
   }
 
@@ -825,24 +939,103 @@ export function handleMessage(
         });
         break;
       }
-      const target = reg.clients.get(to);
-      if (!target) {
-        if (process.env.RELAY_DIAG === "1" || process.env.NODE_ENV === "development") {
-          console.log(`[relay-diag]    invite -> ${to} REJECTED: target not registered (known pins: ${Array.from(reg.clients.keys()).join(",")})`);
+      // Create the caller's dial room on first use — shared by the live-ring
+      // path and the paging path (a paged callee's late accept needs a room).
+      const ensureDialRoom = (): string => {
+        if (!self.roomId) {
+          const rid = newRoomId();
+          joinRoomMember(reg, rid, conn.pin!);
+          self.roomId = rid;
+          // Seed conference-history metadata: the caller is the first roster
+          // member and `to` is the dialed number. `accepted` flips on the first
+          // accept (below), so an unanswered dial is never logged as a conference.
+          reg.roomMeta.set(rid, {
+            startedAt: Date.now(),
+            answeredAt: null,
+            lastActiveAt: Date.now(),
+            dialedNumber: to,
+            accepted: false,
+            roster: new Map([[conn.pin!, self.name]]),
+            hostPin: conn.pin, // the creator is the host
+            cohosts: new Set(),
+          });
+          safeSend(conn.socket, { type: "room", roomId: rid, selfRole: "host", hostPin: conn.pin });
+          // On the LiveKit path, the caller joins the SFU room immediately (alone)
+          // so the callee connects near-instantly the moment they accept.
+          pushLivekitToken(reg, conn.pin!, rid);
         }
-        safeSend(conn.socket, {
-          type: "error",
-          code: "offline",
-          message: "That number doesn't exist or is offline.",
-        });
-        // The callee was offline — record the miss and (for registered users)
-        // email them. The hook resolves identity from the DB by number, so it
-        // works even though an offline callee has no in-memory registry entry.
-        try {
-          onMissedCall?.({ calleePin: to, callerPin: conn.pin, callerName: self.name, reason: "cancelled" });
-        } catch { /* never let a notification hook break call setup */ }
+        // Whether the room is new or growing, make sure the caller is in the roster.
+        rosterTouch(reg, self.roomId!, conn.pin!, self.name);
+        return self.roomId!;
+      };
+      const target = reg.clients.get(to);
+      // A registry record whose SSE stream is already CLOSED (a backgrounded /
+      // locked phone inside the 30s disconnect grace) can't be rung — writes to
+      // it silently vanish, which used to leave the caller on a fake
+      // "Ringing…" until the 65s backstop. With the paging hook wired, treat a
+      // dead socket exactly like an unregistered number so the callee gets
+      // PAGED (push + late ring on reconnect) instead.
+      const targetReachable =
+        !!target && (!onPageCallee || !target.socket.alive || target.socket.alive());
+      if (!targetReachable) {
+        if (!onPageCallee) {
+          // Legacy path (no paging hook — protocol unit tests, bare deploys):
+          // instant offline error + missed-call record, exactly as before.
+          if (process.env.RELAY_DIAG === "1" || process.env.NODE_ENV === "development") {
+            console.log(`[relay-diag]    invite -> ${to} REJECTED: target not registered (known pins: ${Array.from(reg.clients.keys()).join(",")})`);
+          }
+          safeSend(conn.socket, {
+            type: "error",
+            code: "offline",
+            message: "That number doesn't exist or is offline.",
+          });
+          // The callee was offline — record the miss and (for registered users)
+          // email them. The hook resolves identity from the DB by number, so it
+          // works even though an offline callee has no in-memory registry entry.
+          try {
+            onMissedCall?.({ calleePin: to, callerPin: conn.pin, callerName: self.name, reason: "cancelled" });
+          } catch { /* never let a notification hook break call setup */ }
+          break;
+        }
+        // PAGE the callee: their device isn't connected, but the number may
+        // belong to a real identity whose phone can be woken with a push
+        // notification. Keep the dial alive (the caller's staged UI shows
+        // "Reaching their phone…"); if they open the app within the ring
+        // window, register redelivers the ring (deliverPendingRing) and the
+        // call proceeds normally. The miss is recorded only when the caller
+        // gives up (leave → cancelPendingRings), never double-recorded here.
+        if (process.env.RELAY_DIAG === "1" || process.env.NODE_ENV === "development") {
+          console.log(`[relay-diag]    invite -> ${to} PAGING: target ${target ? "in-grace (dead socket)" : "not registered"}`);
+        }
+        const pagingRoomId = ensureDialRoom();
+        self.ringing.add(to);
+        reg.pendingRings.set(to, { from: conn.pin, roomId: pagingRoomId, video: !!msg.video, at: Date.now() });
+        const callerPin = conn.pin;
+        const callerSocket = conn.socket;
+        const failPage = (message: string) => {
+          const callerNow = reg.clients.get(callerPin);
+          // The caller may have hung up (or started something else) meanwhile.
+          if (!callerNow || !callerNow.ringing.has(to)) return;
+          callerNow.ringing.delete(to);
+          clearPendingRing(reg, to, { from: callerPin });
+          safeSend(callerSocket, { type: "error", code: "offline", message });
+        };
+        onPageCallee({ calleePin: to, callerPin, callerName: self.name, roomId: pagingRoomId, video: !!msg.video })
+          .then(info => {
+            const callerNow = reg.clients.get(callerPin);
+            if (!callerNow || !callerNow.ringing.has(to)) return;
+            if (info && info.exists) {
+              // Staged-progress ack, flagged as PAGING (device being woken, not
+              // yet alerting) so the dial card is honest about the difference.
+              safeSend(callerSocket, { type: "ringing", pin: to, name: info.name, paging: true });
+            } else {
+              failPage("That number doesn't exist.");
+            }
+          })
+          .catch(() => failPage("That number doesn't exist or is offline."));
         break;
       }
+      if (!target) break; // unreachable (targetReachable ⇒ target) — narrows TS
       // CALL WAITING: we no longer reject the caller as "busy" when the target is
       // already in another call. Instead the invite rings through and the callee's
       // client shows a call-waiting popup (Answer = put the current call on hold
@@ -858,30 +1051,7 @@ export function handleMessage(
         // Target is already in THIS room — nothing to do.
         break;
       }
-      if (!self.roomId) {
-        const rid = newRoomId();
-        joinRoomMember(reg, rid, conn.pin);
-        self.roomId = rid;
-        // Seed conference-history metadata: the caller is the first roster
-        // member and `to` is the dialed number. `accepted` flips on the first
-        // accept (below), so an unanswered dial is never logged as a conference.
-        reg.roomMeta.set(rid, {
-          startedAt: Date.now(),
-          answeredAt: null,
-          lastActiveAt: Date.now(),
-          dialedNumber: to,
-          accepted: false,
-          roster: new Map([[conn.pin, self.name]]),
-          hostPin: conn.pin, // the creator is the host
-          cohosts: new Set(),
-        });
-        safeSend(conn.socket, { type: "room", roomId: rid, selfRole: "host", hostPin: conn.pin });
-        // On the LiveKit path, the caller joins the SFU room immediately (alone)
-        // so the callee connects near-instantly the moment they accept.
-        pushLivekitToken(reg, conn.pin, rid);
-      }
-      // Whether the room is new or growing, make sure the caller is in the roster.
-      rosterTouch(reg, self.roomId!, conn.pin, self.name);
+      ensureDialRoom();
       const room = reg.rooms.get(self.roomId!);
       // 10-way only on the SFU; the mesh fallback stays capped at 6 (a 10-way
       // mesh is ~45 peer connections — far too heavy for the fallback path).
@@ -925,6 +1095,10 @@ export function handleMessage(
       safeSend(conn.socket, { type: "ringing", pin: to, name: target.name });
       // Remember we're ringing this callee so we can cancel it if we bail.
       self.ringing.add(to);
+      // Keep the ring redeliverable: if the callee's page reloads (or their SSE
+      // blips) mid-ring, their re-register gets the ring again instead of a
+      // silent void (deliverPendingRing). Cleared on accept/reject/cancel/TTL.
+      reg.pendingRings.set(to, { from: conn.pin, roomId: self.roomId!, video: !!msg.video, at: Date.now() });
       // Fan out a notification hint so the callee's other open tabs
       // (e.g. Messages, Contacts) also see the incoming call.
       if (onInvite && conn.pin && self.roomId) {
@@ -1073,6 +1247,8 @@ export function handleMessage(
       const activeRec = reg.recordings.get(roomId);
       if (activeRec) safeSend(conn.socket, { type: "recording", on: true, by: activeRec.by });
       const newcomerPin = conn.pin;
+      // Answered — this call's ring must never redeliver on a later reconnect.
+      clearPendingRing(reg, newcomerPin, { roomId });
       members.forEach(m => {
         const o = reg.clients.get(m.pin);
         if (o) {
@@ -1102,6 +1278,7 @@ export function handleMessage(
       // a "declined" call_history row between two parties.
       if (target && target.ringing.has(conn.pin)) {
         target.ringing.delete(conn.pin);
+        clearPendingRing(reg, conn.pin, { from: targetPin });
         safeSend(target.socket, { type: "rejected", from: conn.pin });
         // Record the decline (call_history). Caller=targetPin, callee=us.
         try {
@@ -1450,7 +1627,8 @@ export function attachRelay(
   app: Express,
   onInvite?: InviteHook,
   onMissedCall?: MissedCallHook,
-  onConferenceEnd?: ConferenceEndHook
+  onConferenceEnd?: ConferenceEndHook,
+  onPageCallee?: PageCalleeHook
 ): RelayRegistry {
   const reg = createRegistry();
   reg.onConferenceEnd = onConferenceEnd;
@@ -1515,6 +1693,9 @@ export function attachRelay(
           /* noop */
         }
       },
+      // Lets the invite path spot a dead-but-in-grace callee (backgrounded
+      // phone) and page them instead of ringing into a closed stream.
+      alive: () => !closed,
     };
 
     const conn: RelayConnection = { cid, socket, pin: null };
@@ -1695,7 +1876,8 @@ export function attachRelay(
       },
       message as RelayMessage,
       onInvite,
-      onMissedCall
+      onMissedCall,
+      onPageCallee
     );
     res.json({ ok: true });
   });

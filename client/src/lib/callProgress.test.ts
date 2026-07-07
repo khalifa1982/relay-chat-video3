@@ -113,7 +113,10 @@ describe("v2.78.1 — answered-call reliability (zombie-call fixes)", () => {
 
   it("outgoing dials carry a no-answer backstop: armed at dial, cleared on answer and on teardown", () => {
     expect(CLIENT).toMatch(/function armDialTimeout\(\)/);
-    expect(CLIENT).toMatch(/hangUp\("no-answer"\)/);
+    // v2.83: the no-answer teardown routes through failDial so the outcome is
+    // SHOWN on the dial card first (the old instant hangUp hid the toast —
+    // the engine root parks at opacity-0 the moment phase flips to idle).
+    expect(CLIENT).toMatch(/failDial\("No answer — they'll see your missed call\.", "no-answer"\)/);
     expect(CLIENT).toMatch(/showDialCard\(\);\s*\n\s*armDialTimeout\(\);/);
     expect(CLIENT).toMatch(/function onCalleeAnswered\(\) \{\s*\n\s*clearDialTimeout\(\);/);
     expect(CLIENT).toMatch(/clearDialTimeout\(\); \/\/ an ended call must never fire a stale "No answer\."/);

@@ -11,6 +11,7 @@ import {
   v2CallsRouter,
   v2StatsRouter,
   v2OtpAuthRouter,
+  v2PushRouter,
 } from "./v2routers";
 
 export const appRouter = router({
@@ -33,6 +34,7 @@ export const appRouter = router({
   attachments: v2AttachmentsRouter,
   calls: v2CallsRouter,
   stats: v2StatsRouter,
+  push: v2PushRouter,
 });
 
 export type AppRouter = typeof appRouter;

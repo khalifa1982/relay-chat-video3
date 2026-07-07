@@ -15,6 +15,7 @@ import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
 import { registerV2Events, publishToIdentity } from "../v2events";
 import { getIdentityByNumber, reapStalePresence, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation } from "../v2db";
+import { sendPushToIdentity } from "../webPush";
 import { sweepExpiredOtps } from "../authOtp";
 import { inboundConfig, inboundAddress, registerEmailInbound } from "../emailInbound";
 import { getUserById } from "../db";
@@ -167,7 +168,16 @@ async function startServer() {
             status: info.reason === "rejected" ? "declined" : "missed",
           }).catch(() => {});
         }
-        if (info.reason !== "cancelled") return; // don't email deliberate declines
+        if (info.reason !== "cancelled") return; // don't notify deliberate declines
+        // Missed-call PUSH — works for guests too (no email needed) and reaches
+        // phones that were asleep for the ring itself.
+        sendPushToIdentity(callee.id, {
+          kind: "missed-call",
+          title: `Missed call from ${info.callerName || info.callerPin}`,
+          body: "Tap to see your missed calls on RELAY.",
+          tag: "relay-missed",
+          url: "/app/history?filter=missed",
+        }).catch(() => {});
         if (callee.userId == null) return; // guests have no email
         const user = await getUserById(callee.userId);
         if (!user?.email) return;
@@ -212,6 +222,28 @@ async function startServer() {
       } catch (err) {
         console.warn("[conference-history]", err);
       }
+    },
+    async (info) => {
+      // onPageCallee: an invite targeted a number with NO live signaling
+      // connection (backgrounded/locked phone, closed tab). Answer whether the
+      // number belongs to a real identity — if so the relay PAGES it (keeps the
+      // dial alive + redelivers the ring when the app opens) and we WAKE the
+      // device with a Web Push so a pocketed phone actually alerts.
+      const callee = await getIdentityByNumber(info.calleePin);
+      if (!callee) return { exists: false };
+      const caller = info.callerName
+        ? `${info.callerName} (${info.callerPin})`
+        : info.callerPin;
+      sendPushToIdentity(callee.id, {
+        kind: "incoming-call",
+        title: `Incoming ${info.video ? "video" : "voice"} call`,
+        body: `${caller} is calling you on RELAY — tap to answer.`,
+        tag: `relay-call-${info.roomId}`,
+        url: "/app/dialer",
+      }).catch(() => {
+        /* push is best-effort — the page itself still works via reconnect */
+      });
+      return { exists: true, name: callee.displayName ?? undefined };
     }
   );
   // Version endpoint for the client's auto-update checker. Returns the version
