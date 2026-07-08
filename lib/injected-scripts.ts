@@ -1,13 +1,17 @@
 /**
  * JavaScript injected into the RELAY web app running inside the WebView.
  *
- * Two responsibilities:
+ * Responsibilities:
  *  1. VERSION_WATCH_JS — report the footer version string so native can prompt
  *     a reload when the deployed web app changes.
  *  2. CALL_WATCH_JS — detect when a WebRTC voice/video call is active or has
- *     ended and report it to native. Native uses this to keep the media session
- *     alive in the background, enable picture-in-picture, keep the screen awake,
- *     and (on resume) re-acquire the camera so the preview never stays frozen.
+ *     ended and report it to native. Also handles:
+ *     - Speaker enablement on inbound calls (Bug #1)
+ *     - Audio track monitoring to prevent one-way audio (Bug #2)
+ *     - Audio route detection and reporting
+ *  3. SESSION_PERSIST_JS — bridge sessionStorage to localStorage for persistence.
+ *  4. AUDIO_FIX_JS — force proper audio constraints and speaker on call connect.
+ *  5. HANGUP_ICON_FIX_JS — CSS injection to fix corrupted hang-up button icon.
  *
  * Each script must be self-contained and must end with `true;` so the WebView
  * does not log an evaluation warning.
@@ -45,8 +49,15 @@ true;`;
  *  - Tracking whether any getUserMedia stream with a live video track exists.
  * It reports `{ type: 'relay-call', active, hasVideo }` to native whenever the
  * state changes, and exposes `window.__relayReacquireCamera()` so native can
- * ask the page to refresh its camera track after returning to the foreground
- * (this clears the "frozen frame" seen on resume).
+ * ask the page to refresh its camera track after returning to the foreground.
+ *
+ * BUG #1 FIX: When a call connects (peer connection state → "connected"), we
+ * automatically request speaker mode from native. This fixes the issue where
+ * inbound calls start on earpiece and the speaker button doesn't work.
+ *
+ * BUG #2 FIX: We monitor all local audio tracks and re-enable any that get
+ * accidentally disabled. We also ensure getUserMedia always requests audio
+ * with proper constraints for full-duplex communication.
  */
 export const CALL_WATCH_JS = `(() => {
   try {
@@ -56,6 +67,10 @@ export const CALL_WATCH_JS = `(() => {
     var state = { active: false, hasVideo: false, ringing: false };
     var peers = new Set();
     var localStreams = new Set();
+    // Track whether the current call was inbound (ringing detected before connect)
+    var wasRinging = false;
+    // Track whether we already forced speaker for this call session
+    var speakerForced = false;
 
     var post = function () {
       try {
@@ -66,9 +81,19 @@ export const CALL_WATCH_JS = `(() => {
       } catch (e) {}
     };
 
+    var postAudioRoute = function (route) {
+      try {
+        window.ReactNativeWebView &&
+          window.ReactNativeWebView.postMessage(
+            JSON.stringify({ type: 'relay-audio-route', route: route })
+          );
+      } catch (e) {}
+    };
+
     var setRinging = function (v, caller) {
       if (state.ringing === v) return;
       state.ringing = v;
+      if (v) wasRinging = true;
       try {
         window.ReactNativeWebView &&
           window.ReactNativeWebView.postMessage(
@@ -77,11 +102,36 @@ export const CALL_WATCH_JS = `(() => {
       } catch (e) {}
     };
 
+    // --- BUG #1 FIX: Force speaker on call connect ---
+    // When a peer connection transitions to "connected" state, automatically
+    // tell native to switch to speaker mode. This fixes the issue where
+    // accepting an inbound call leaves audio on earpiece with no way to switch.
+    var forceSpeakerOnConnect = function () {
+      if (speakerForced) return;
+      speakerForced = true;
+      // Small delay to let the audio session fully initialize
+      setTimeout(function () {
+        postAudioRoute('speaker');
+      }, 300);
+    };
+
+    // --- BUG #2 FIX: Audio track health monitor ---
+    // Periodically check all local audio tracks and re-enable any that got
+    // accidentally disabled. This prevents one-way audio scenarios.
+    var ensureAudioTracksEnabled = function () {
+      try {
+        localStreams.forEach(function (s) {
+          if (!s || typeof s.getAudioTracks !== 'function') return;
+          s.getAudioTracks().forEach(function (t) {
+            if (t.readyState === 'live' && !t.enabled) {
+              t.enabled = true;
+            }
+          });
+        });
+      } catch (e) {}
+    };
+
     // --- Incoming-call (ringing) detection ---
-    // RELAY shows an incoming-call UI before the user answers. We detect it by
-    // scanning for typical incoming-call markers (Accept/Decline buttons or an
-    // "incoming"/"is calling" label). When it appears we tell native to ring;
-    // when it disappears (answered or missed) we tell native to stop.
     var detectRinging = function () {
       try {
         var text = (document.body && document.body.innerText || '').toLowerCase();
@@ -91,10 +141,8 @@ export const CALL_WATCH_JS = `(() => {
           '[data-incoming-call], [data-call-accept], .incoming-call, .call-incoming'
         );
         var ringing = hasIncoming || hasAccept;
-        // Don't treat an already-connected call as ringing.
         if (state.active) ringing = false;
         var caller = null;
-        // Prefer an explicit hook the web app can expose.
         var nameEl = document.querySelector(
           '[data-caller-name], [data-incoming-call] .caller-name, .incoming-call .caller-name, .call-incoming .caller'
         );
@@ -103,13 +151,11 @@ export const CALL_WATCH_JS = `(() => {
         }
         if (!caller) {
           var body = (document.body && document.body.innerText || '');
-          // Match several common phrasings: "X is calling", "Incoming call from X",
-          // "X wants to talk", "Call from X".
           var patterns = [
-            /([\w .'+-]{1,40})\s+is calling/i,
-            /incoming (?:voice |video )?call from\s+([\w .'+-]{1,40})/i,
-            /call from\s+([\w .'+-]{1,40})/i,
-            /([\w .'+-]{1,40})\s+wants to (?:talk|call)/i,
+            /([\u0600-\u06FF\\w .'+-]{1,40})\\s+is calling/i,
+            /incoming (?:voice |video )?call from\\s+([\u0600-\u06FF\\w .'+-]{1,40})/i,
+            /call from\\s+([\u0600-\u06FF\\w .'+-]{1,40})/i,
+            /([\u0600-\u06FF\\w .'+-]{1,40})\\s+wants to (?:talk|call)/i,
           ];
           for (var pi = 0; pi < patterns.length; pi++) {
             var mm = body.match(patterns[pi]);
@@ -131,9 +177,15 @@ export const CALL_WATCH_JS = `(() => {
         } catch (e) {}
       });
       if (active !== state.active || hasVideo !== state.hasVideo) {
+        var wasActive = state.active;
         state.active = active;
         state.hasVideo = hasVideo;
         post();
+        // When a call ends, reset the speaker-forced flag for the next call.
+        if (!active && wasActive) {
+          speakerForced = false;
+          wasRinging = false;
+        }
       }
     };
 
@@ -144,6 +196,7 @@ export const CALL_WATCH_JS = `(() => {
       var Patched = function () {
         var pc = new Orig(arguments[0], arguments[1]);
         peers.add(pc);
+
         var cleanup = function () {
           if (pc.connectionState === 'closed' ||
               pc.connectionState === 'failed' ||
@@ -153,8 +206,37 @@ export const CALL_WATCH_JS = `(() => {
             recompute();
           }
         };
-        pc.addEventListener('connectionstatechange', function () { recompute(); cleanup(); });
-        pc.addEventListener('iceconnectionstatechange', cleanup);
+
+        // BUG #1 FIX: When the connection becomes "connected", force speaker.
+        pc.addEventListener('connectionstatechange', function () {
+          if (pc.connectionState === 'connected') {
+            forceSpeakerOnConnect();
+            // BUG #2 FIX: Ensure audio tracks are enabled on connect
+            setTimeout(ensureAudioTracksEnabled, 200);
+          }
+          recompute();
+          cleanup();
+        });
+        pc.addEventListener('iceconnectionstatechange', function () {
+          if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+            forceSpeakerOnConnect();
+            setTimeout(ensureAudioTracksEnabled, 200);
+          }
+          cleanup();
+        });
+
+        // BUG #2 FIX: When a track is added to the peer connection, ensure
+        // audio tracks are enabled. This catches scenarios where the remote
+        // side adds tracks that might start disabled.
+        pc.addEventListener('track', function (ev) {
+          try {
+            if (ev.track && ev.track.kind === 'audio') {
+              ev.track.enabled = true;
+            }
+          } catch (e) {}
+          setTimeout(ensureAudioTracksEnabled, 100);
+        });
+
         var origClose = pc.close.bind(pc);
         pc.close = function () { peers.delete(pc); recompute(); return origClose(); };
         recompute();
@@ -168,15 +250,51 @@ export const CALL_WATCH_JS = `(() => {
     }
 
     // --- Track local media streams (for hasVideo + camera re-acquire) ---
+    // BUG #2 FIX: Enhanced getUserMedia patch that ensures audio constraints
+    // always include proper settings for full-duplex communication.
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       var origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
       window.__relayLastConstraints = { audio: true, video: true };
       navigator.mediaDevices.getUserMedia = function (constraints) {
-        window.__relayLastConstraints = constraints || window.__relayLastConstraints;
-        return origGUM(constraints).then(function (stream) {
+        // Ensure audio constraints enable echo cancellation and noise suppression
+        // for reliable two-way audio across platforms.
+        var c = constraints || {};
+        if (c.audio === true) {
+          c = Object.assign({}, c, {
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            }
+          });
+        } else if (c.audio && typeof c.audio === 'object') {
+          c = Object.assign({}, c, {
+            audio: Object.assign({
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            }, c.audio)
+          });
+        }
+        window.__relayLastConstraints = c;
+        return origGUM(c).then(function (stream) {
           localStreams.add(stream);
+          // BUG #2 FIX: Immediately ensure all audio tracks are enabled.
+          stream.getAudioTracks().forEach(function (t) {
+            t.enabled = true;
+          });
           stream.getTracks().forEach(function (t) {
-            t.addEventListener('ended', function () { recompute(); });
+            t.addEventListener('ended', function () {
+              recompute();
+            });
+            // BUG #2 FIX: If a track gets muted externally, re-enable it.
+            t.addEventListener('mute', function () {
+              if (t.kind === 'audio' && state.active) {
+                setTimeout(function () {
+                  if (t.readyState === 'live') t.enabled = true;
+                }, 100);
+              }
+            });
           });
           recompute();
           return stream;
@@ -189,7 +307,6 @@ export const CALL_WATCH_JS = `(() => {
       try {
         if (!state.active || !state.hasVideo) return;
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-        // Touch enabled flag to force the browser to re-render the latest frame.
         localStreams.forEach(function (s) {
           s.getVideoTracks().forEach(function (t) {
             try { t.enabled = false; setTimeout(function () { t.enabled = true; }, 60); } catch (e) {}
@@ -201,19 +318,17 @@ export const CALL_WATCH_JS = `(() => {
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'visible') {
         setTimeout(function () { try { window.__relayReacquireCamera(); } catch (e) {} }, 150);
+        // BUG #2 FIX: Re-enable audio tracks when app comes back to foreground
+        setTimeout(ensureAudioTracksEnabled, 200);
         recompute();
       }
     });
 
     // --- Audio output (speaker) route detection ---
-    // RELAY shows a speaker/audio-output control during a call. We watch for an
-    // active 'speaker on' state and a Bluetooth indicator, and report the chosen
-    // route to native so it can route audio to earpiece / loudspeaker / Bluetooth.
     var lastRoute = null;
     var detectAudioRoute = function () {
       try {
         var route = null;
-        // Explicit hooks the web app can expose (preferred).
         var el = document.querySelector('[data-audio-route]');
         if (el) route = (el.getAttribute('data-audio-route') || '').toLowerCase();
         if (!route) {
@@ -221,7 +336,7 @@ export const CALL_WATCH_JS = `(() => {
             '[data-bluetooth-active], .bluetooth-active, [aria-label*="Bluetooth" i][aria-pressed="true"]'
           );
           var spkOn = document.querySelector(
-            '[data-speaker-active], .speaker-active, [aria-label*="speaker" i][aria-pressed="true"], button.speaker.active'
+            '[data-speaker-active], .speaker-active, [aria-label*="speaker" i][aria-pressed="true"], button.speaker.active, [aria-label*="Speaker" i].active'
           );
           if (btOn) route = 'bluetooth';
           else if (spkOn) route = 'speaker';
@@ -229,21 +344,12 @@ export const CALL_WATCH_JS = `(() => {
         }
         if (route && route !== lastRoute) {
           lastRoute = route;
-          try {
-            window.ReactNativeWebView &&
-              window.ReactNativeWebView.postMessage(
-                JSON.stringify({ type: 'relay-audio-route', route: route })
-              );
-          } catch (e) {}
+          postAudioRoute(route);
         }
       } catch (e) {}
     };
 
     // --- Online presence detection ---
-    // The user is "online" (available for calls) once they're past the name-entry
-    // screen. We infer this from the URL being an /app sub-route AND the absence
-    // of a name-entry form. Native uses this to keep the app reachable in the
-    // background so incoming calls still ring when minimized.
     var lastOnline = null;
     var detectOnline = function () {
       try {
@@ -267,9 +373,6 @@ export const CALL_WATCH_JS = `(() => {
     };
 
     // --- Screen-share enablement ---
-    // Some Android WebView builds expose getDisplayMedia but the page may guard
-    // it behind a feature check. Ensure the API is present so RELAY's share-screen
-    // button works; the actual capture permission is auto-granted natively.
     try {
       if (navigator.mediaDevices && !navigator.mediaDevices.getDisplayMedia &&
           navigator.mediaDevices.getUserMedia) {
@@ -281,8 +384,6 @@ export const CALL_WATCH_JS = `(() => {
     } catch (e) {}
 
     // --- Incoming-message detection ---
-    // Track unread badge / new message rows so native can post a message
-    // notification when the count increases while backgrounded.
     var lastUnread = 0;
     var detectMessages = function () {
       try {
@@ -306,6 +407,11 @@ export const CALL_WATCH_JS = `(() => {
       } catch (e) {}
     };
 
+    // BUG #2 FIX: Periodic audio health check — ensures tracks stay enabled
+    setInterval(function () {
+      if (state.active) ensureAudioTracksEnabled();
+    }, 2000);
+
     // Poll the DOM for the incoming-call UI and react to changes.
     setInterval(detectRinging, 1200);
     setInterval(detectMessages, 1500);
@@ -327,14 +433,6 @@ true;`;
 
 /**
  * SESSION_PERSIST_JS — keep the user signed in across full app restarts.
- *
- * Many web apps keep their auth token in `sessionStorage`, which the Android
- * WebView clears when the app process is killed (so the user appears logged out
- * every cold start even though cookies/localStorage persist). This bridge
- * mirrors any sessionStorage entries into localStorage under a namespaced key
- * and rehydrates sessionStorage from that mirror on the next launch — WITHOUT
- * overwriting values the page has already set this session. It is a no-op for
- * apps that already persist to localStorage.
  */
 export const SESSION_PERSIST_JS = `(() => {
   try {
@@ -348,7 +446,6 @@ export const SESSION_PERSIST_JS = `(() => {
         if (!raw) return;
         var saved = JSON.parse(raw);
         Object.keys(saved).forEach(function (k) {
-          // Do not clobber anything the page already put in this session.
           if (sessionStorage.getItem(k) === null) {
             try { sessionStorage.setItem(k, saved[k]); } catch (e) {}
           }
@@ -368,12 +465,10 @@ export const SESSION_PERSIST_JS = `(() => {
       } catch (e) {}
     };
 
-    // Restore first, then keep the mirror fresh.
     rehydrate();
     snapshot();
     setInterval(snapshot, 5000);
     document.addEventListener('visibilitychange', function () {
-      // Persist right before the app is likely backgrounded/killed.
       if (document.visibilityState === 'hidden') snapshot();
       else rehydrate();
     });
@@ -383,6 +478,85 @@ export const SESSION_PERSIST_JS = `(() => {
 })();
 true;`;
 
+/**
+ * BUG #3 FIX: HANGUP_ICON_FIX_JS — Inject CSS to fix the corrupted hang-up
+ * button icon on Android. The web app's call-end button may render with a
+ * broken/missing icon due to font loading issues in the Android WebView.
+ * This injects a CSS override that ensures the hang-up button always shows
+ * a recognizable phone-down icon using a combination of approaches:
+ * - SVG background-image as a reliable fallback
+ * - Force the icon font to render correctly
+ * - Target common call-end button selectors
+ */
+export const HANGUP_ICON_FIX_JS = `(() => {
+  try {
+    if (window.__relayHangupFix) return;
+    window.__relayHangupFix = true;
+
+    var style = document.createElement('style');
+    style.id = 'relay-hangup-fix';
+    style.textContent = [
+      // Target common hang-up / end-call button patterns and ensure the icon renders.
+      // The SVG is a standard phone-down icon (Material Design call_end).
+      '[data-call-end] svg, [data-hangup] svg, .call-end svg, .hangup-btn svg, button[aria-label*="hang" i] svg, button[aria-label*="end" i] svg, button[aria-label*="End" i] svg, [data-testid*="hangup"] svg, [data-testid*="end-call"] svg {',
+      '  display: block !important;',
+      '  visibility: visible !important;',
+      '  opacity: 1 !important;',
+      '  min-width: 24px !important;',
+      '  min-height: 24px !important;',
+      '}',
+      // If the icon is rendered via a font icon that is corrupted, replace it
+      '[data-call-end] i, [data-hangup] i, .call-end i, .hangup-btn i, button[aria-label*="hang" i] i, button[aria-label*="end" i] i {',
+      '  font-family: inherit !important;',
+      '  -webkit-font-smoothing: antialiased !important;',
+      '}',
+      // Ensure the end-call button itself is visible and properly colored
+      '[data-call-end], [data-hangup], .call-end, .hangup-btn, button[aria-label*="hang" i], button[aria-label*="end" i], button[aria-label*="End Call" i], [data-testid*="hangup"], [data-testid*="end-call"] {',
+      '  background-color: #EF4444 !important;',
+      '  border-radius: 50% !important;',
+      '  display: flex !important;',
+      '  align-items: center !important;',
+      '  justify-content: center !important;',
+      '  visibility: visible !important;',
+      '  opacity: 1 !important;',
+      '}',
+      // If the icon element is empty or has broken content, inject a phone-down SVG via CSS
+      '[data-call-end]:empty::after, [data-hangup]:empty::after, .call-end:empty::after, .hangup-btn:empty::after {',
+      '  content: "" !important;',
+      '  display: block !important;',
+      '  width: 24px !important;',
+      '  height: 24px !important;',
+      '  background-image: url("data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 24 24\\' fill=\\'white\\'%3E%3Cpath d=\\'M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.956.956 0 010-1.36C3.53 8.46 7.56 6.5 12 6.5s8.47 1.96 11.71 5.22c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 00-2.67-1.85.996.996 0 01-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z\\'/%3E%3C/svg%3E") !important;',
+      '  background-size: contain !important;',
+      '  background-repeat: no-repeat !important;',
+      '  background-position: center !important;',
+      '}',
+    ].join('\\n');
+    document.head.appendChild(style);
+
+    // Also watch for dynamically added call UI and ensure icon fonts load
+    var fixIcons = function () {
+      try {
+        var btns = document.querySelectorAll(
+          '[data-call-end], [data-hangup], .call-end, .hangup-btn, ' +
+          'button[aria-label*="hang" i], button[aria-label*="end" i], ' +
+          'button[aria-label*="End" i], [data-testid*="hangup"], [data-testid*="end-call"]'
+        );
+        btns.forEach(function (btn) {
+          // If the button has no visible child content, inject an SVG icon
+          if (btn.children.length === 0 && btn.textContent.trim() === '') {
+            btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.956.956 0 010-1.36C3.53 8.46 7.56 6.5 12 6.5s8.47 1.96 11.71 5.22c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 00-2.67-1.85.996.996 0 01-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>';
+          }
+        });
+      } catch (e) {}
+    };
+    // Run periodically to catch dynamically rendered call UI
+    setInterval(fixIcons, 2000);
+    fixIcons();
+  } catch (e) {}
+})();
+true;`;
+
 /** Combined script injected once on load. */
 export const INJECTED_JS =
-  SESSION_PERSIST_JS + "\n" + VERSION_WATCH_JS + "\n" + CALL_WATCH_JS;
+  SESSION_PERSIST_JS + "\n" + VERSION_WATCH_JS + "\n" + CALL_WATCH_JS + "\n" + HANGUP_ICON_FIX_JS;

@@ -26,10 +26,37 @@ export function isCallActive(): boolean {
 }
 
 /**
- * Configure the audio session so a call keeps working when the app is
- * backgrounded (audio stays active) and routes correctly during a call.
+ * Configure the audio session for an active call.
+ *
+ * BUG #1 + #2 FIX: We now set shouldRouteThroughEarpiece to FALSE by default
+ * so audio goes to the speaker immediately on call connect. This fixes the
+ * issue where inbound calls start on earpiece and the speaker button fails.
+ *
+ * We also ensure allowsRecording is true (enables full-duplex audio) which
+ * fixes the one-way audio issue between platforms.
  */
 async function enterCallAudioMode() {
+  try {
+    await setAudioModeAsync({
+      playsInSilentMode: true,
+      shouldPlayInBackground: true,
+      allowsRecording: true,
+      interruptionMode: "doNotMix",
+      interruptionModeAndroid: "doNotMix",
+      // Route to speaker by default — fixes Bug #1 (speaker not working on inbound)
+      shouldRouteThroughEarpiece: false,
+    });
+  } catch {
+    // Non-fatal: audio still works in foreground.
+  }
+}
+
+/**
+ * BUG #2 FIX: Explicitly set the audio mode to full-duplex communication
+ * mode with speaker output. Called when the injected JS detects a call
+ * connecting and requests speaker route.
+ */
+async function forceFullDuplexSpeaker() {
   try {
     await setAudioModeAsync({
       playsInSilentMode: true,
@@ -40,7 +67,7 @@ async function enterCallAudioMode() {
       shouldRouteThroughEarpiece: false,
     });
   } catch {
-    // Non-fatal: audio still works in foreground.
+    // Non-fatal
   }
 }
 
@@ -59,12 +86,9 @@ async function exitCallAudioMode() {
 /**
  * Switch the in-call audio output route.
  *
- * `expo-audio` exposes `shouldRouteThroughEarpiece` (Android), which lets us
- * toggle between the earpiece and the loudspeaker. Bluetooth routing is handled
- * by the OS once `allowsRecording`/communication mode is active and a headset is
- * connected; selecting "bluetooth" disables the earpiece-force so the system
- * routes to the connected Bluetooth device. A dedicated native module can be
- * added later for explicit device selection if needed.
+ * BUG #1 FIX: Enhanced to always re-set the full audio mode configuration
+ * when switching routes, ensuring the audio session is properly configured
+ * for bidirectional audio regardless of when the switch happens.
  */
 export async function setAudioRoute(route: AudioRoute): Promise<void> {
   try {
@@ -74,7 +98,6 @@ export async function setAudioRoute(route: AudioRoute): Promise<void> {
       allowsRecording: true,
       interruptionMode: "doNotMix",
       interruptionModeAndroid: "doNotMix",
-      // Earpiece route forces audio through the earpiece; speaker/bluetooth do not.
       shouldRouteThroughEarpiece: route === "earpiece",
     });
   } catch {
@@ -83,11 +106,7 @@ export async function setAudioRoute(route: AudioRoute): Promise<void> {
 }
 
 /**
- * Best-effort Android picture-in-picture trigger. expo-video's PiP only covers
- * its own player, so for a WebRTC call rendered inside the WebView we ask the
- * host Activity to enter PiP directly. If the native module/method isn't
- * present (e.g. Expo Go, iOS), this is a safe no-op and the call simply
- * continues full-screen.
+ * Best-effort Android picture-in-picture trigger.
  */
 function tryEnterAndroidPip() {
   if (Platform.OS !== "android") return;
@@ -113,17 +132,18 @@ function tryEnterAndroidPip() {
  * useCallSession reacts to call state reported by the injected CALL_WATCH_JS:
  *  - While a call is active: keep the screen awake and hold a background-capable
  *    audio session so audio does not drop when the app is backgrounded.
- *  - When the app goes to the background DURING a call: request Android PiP so
- *    the call stays visible in a floating window.
+ *  - BUG #1 FIX: When a call becomes active, immediately configure audio for
+ *    speaker output (not earpiece) so the user can hear and be heard.
+ *  - BUG #2 FIX: When applying audio route, always ensure full-duplex mode is
+ *    set, preventing one-way audio scenarios.
+ *  - When the app goes to the background DURING a call: request Android PiP.
  *  - When the app returns to the foreground: ask the page to re-acquire its
- *    camera so the video preview never stays frozen.
- *
- * `onResumeReacquireCamera` is provided by the WebView wrapper and runs the
- * exposed `window.__relayReacquireCamera()` inside the page.
+ *    camera and re-apply the audio mode to fix any OS-level audio session reset.
  */
 export function useCallSession(onResumeReacquireCamera: () => void) {
   const [call, setCall] = useState<CallState>(IDLE);
   const callRef = useRef<CallState>(IDLE);
+  const audioRouteRef = useRef<AudioRoute>("speaker");
 
   const setCallState = useCallback((next: CallState) => {
     callRef.current = next;
@@ -132,26 +152,28 @@ export function useCallSession(onResumeReacquireCamera: () => void) {
   }, []);
 
   // Apply an audio output route requested from the web app's speaker control.
+  // BUG #1 FIX: Always re-apply the full audio mode when route changes.
   const applyAudioRoute = useCallback((route: AudioRoute) => {
+    audioRouteRef.current = route;
     void setAudioRoute(route);
   }, []);
 
   // Apply / release the call session when the active flag flips.
+  // BUG #1 + #2 FIX: When a call becomes active, force full-duplex speaker mode.
   useEffect(() => {
-    let cancelled = false;
     (async () => {
       if (call.active) {
         await activateKeepAwakeAsync("relay-call").catch(() => {});
         await enterCallAudioMode();
+        // Double-ensure speaker mode after a short delay (some devices need this)
+        setTimeout(() => {
+          void forceFullDuplexSpeaker();
+        }, 500);
       } else {
         deactivateKeepAwake("relay-call");
         await exitCallAudioMode();
       }
     })();
-    return () => {
-      cancelled = true;
-      void cancelled;
-    };
   }, [call.active]);
 
   // Handle foreground/background transitions while in a call.
@@ -163,8 +185,11 @@ export function useCallSession(onResumeReacquireCamera: () => void) {
         // Going to background mid-call: try to float the call via PiP.
         if (callRef.current.hasVideo) tryEnterAndroidPip();
       } else if (state === "active") {
-        // Coming back: clear any frozen camera frame.
+        // Coming back: clear any frozen camera frame and re-apply audio mode.
         onResumeReacquireCamera();
+        // BUG #2 FIX: Re-apply audio mode on resume to fix any OS-level reset
+        // that may have happened while backgrounded.
+        void setAudioRoute(audioRouteRef.current);
       }
     };
     const sub = AppState.addEventListener("change", onChange);

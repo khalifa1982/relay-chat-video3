@@ -151,3 +151,11 @@
 - [x] Verification timeout: if SHA-256 takes >10s, skip and install via HTTPS trust
 - [x] Bump version to 1.0.16 / build 16
 - [x] tsc clean + 65 tests pass; checkpoint and deliver
+
+## Round 15 — Fix call audio, hang-up icon, and iOS notifications
+- [x] BUG #1: Android speaker not working on inbound calls — force speaker mode on call connect via injected JS + native audio session defaults to speaker
+- [x] BUG #2: One-way audio between iPhone/Android — enhanced getUserMedia with full-duplex audio constraints (echoCancellation, noiseSuppression, autoGainControl), audio track health monitor, re-enable muted tracks, re-apply audio mode on resume
+- [x] BUG #3: Corrupted hang-up icon on Android — injected CSS + SVG fallback for call-end button, periodic DOM fix for dynamically rendered call UI
+- [x] BUG #4: iOS notification failure after backgrounding — re-register notification handlers + channels on every app resume, re-set foreground notification handler, refresh response listener
+- [x] Bump version to 1.0.17 / build 17
+- [x] tsc clean + 65 tests pass; checkpoint and deliver

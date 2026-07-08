@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { Platform } from "react-native";
+import { AppState, type AppStateStatus, Platform } from "react-native";
 import * as Notifications from "expo-notifications";
 import {
   createAudioPlayer,
@@ -37,6 +37,10 @@ Notifications.setNotificationHandler({
  *    incoming-call heads-up notification.
  *  - "messages": high importance for incoming chat messages.
  * Also registers the Accept/Decline action category for calls.
+ *
+ * BUG #4 FIX: This function is now called on every app resume (not just mount)
+ * to ensure notification permissions and channels are always properly registered
+ * after iOS suspends the app's background processes.
  */
 export async function setupCallNotifications(): Promise<boolean> {
   try {
@@ -89,9 +93,16 @@ export async function setupCallNotifications(): Promise<boolean> {
 
 /**
  * Manages the incoming-call ringtone + heads-up notification and incoming
- * message notifications. The call notification uses MAX importance, is sticky,
- * carries a full-screen-intent hint, and exposes Accept/Decline actions so it
- * behaves like a call screen even when the app is backgrounded.
+ * message notifications.
+ *
+ * BUG #4 FIX (iOS notification failure after backgrounding):
+ * The issue is that iOS suspends the app's JS execution after backgrounding,
+ * which can cause the notification response listener to become stale. We now:
+ * 1. Re-run setupCallNotifications() on every app resume to ensure channels
+ *    and permissions are fresh.
+ * 2. Re-register the notification response listener on resume.
+ * 3. Set the notification handler again on resume to ensure iOS doesn't
+ *    suppress notifications after the app was in management/settings screens.
  */
 export function useCallNotifications(callbacks?: {
   onAccept?: () => void;
@@ -100,25 +111,34 @@ export function useCallNotifications(callbacks?: {
   const playerRef = useRef<AudioPlayer | null>(null);
   const cbRef = useRef(callbacks);
   cbRef.current = callbacks;
+  const responseSubRef = useRef<Notifications.EventSubscription | null>(null);
+
+  // Handler for notification action responses (Accept/Decline taps)
+  const handleNotificationResponse = useCallback(
+    (response: Notifications.NotificationResponse) => {
+      const action = response.actionIdentifier;
+      if (action === CALL_ACTION_DECLINE) {
+        cbRef.current?.onDecline?.();
+      } else {
+        // Default tap or Accept → bring the call into the foreground.
+        cbRef.current?.onAccept?.();
+      }
+    },
+    [],
+  );
 
   // Set up permissions + channels once on mount, and listen for action taps.
   useEffect(() => {
     void setupCallNotifications();
 
-    const sub = Notifications.addNotificationResponseReceivedListener(
-      (response) => {
-        const action = response.actionIdentifier;
-        if (action === CALL_ACTION_DECLINE) {
-          cbRef.current?.onDecline?.();
-        } else {
-          // Default tap or Accept → bring the call into the foreground.
-          cbRef.current?.onAccept?.();
-        }
-      },
-    );
+    responseSubRef.current =
+      Notifications.addNotificationResponseReceivedListener(
+        handleNotificationResponse,
+      );
 
     return () => {
-      sub.remove();
+      responseSubRef.current?.remove();
+      responseSubRef.current = null;
       try {
         playerRef.current?.remove();
       } catch {
@@ -126,7 +146,41 @@ export function useCallNotifications(callbacks?: {
       }
       playerRef.current = null;
     };
-  }, []);
+  }, [handleNotificationResponse]);
+
+  // BUG #4 FIX: Re-register notification infrastructure on every app resume.
+  // iOS may suspend the notification listener when the app is backgrounded
+  // (especially after visiting management/settings screens). Re-registering
+  // ensures incoming calls and messages trigger notifications properly.
+  useEffect(() => {
+    const onChange = (state: AppStateStatus) => {
+      if (state === "active") {
+        // Re-setup channels and permissions (idempotent, fast)
+        void setupCallNotifications();
+
+        // Re-set the foreground notification handler to ensure iOS doesn't
+        // suppress notifications after the app was suspended.
+        Notifications.setNotificationHandler({
+          handleNotification: async () => ({
+            shouldPlaySound: false,
+            shouldSetBadge: false,
+            shouldShowBanner: true,
+            shouldShowList: true,
+          }),
+        });
+
+        // Re-register the response listener (remove old, add new)
+        // This ensures the listener is fresh and not stale from suspension.
+        responseSubRef.current?.remove();
+        responseSubRef.current =
+          Notifications.addNotificationResponseReceivedListener(
+            handleNotificationResponse,
+          );
+      }
+    };
+    const sub = AppState.addEventListener("change", onChange);
+    return () => sub.remove();
+  }, [handleNotificationResponse]);
 
   const startRingtone = useCallback(async () => {
     try {
@@ -165,7 +219,6 @@ export function useCallNotifications(callbacks?: {
             categoryIdentifier: CALL_CATEGORY_ID,
             data: {
               type: "incoming-call",
-              // Hint for native layers / future full-screen-intent handling.
               fullScreenIntent: true,
             },
             ...(Platform.OS === "android"
