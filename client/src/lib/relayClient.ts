@@ -21,6 +21,7 @@ import { probeBrowserMedia, buildCapabilityReport } from "@shared/mediaCapabilit
 import { readSnapshot, writeSnapshot, clearSnapshot, type RejoinSnapshot } from "./rejoinSnapshot";
 import { isDndOn } from "@/app/dnd";
 import { notify } from "@/app/notifications";
+import { RINGTONE_NOTES, RINGTONE_LOOP_MS, RINGTONE_PEAK_GAIN, RINGTONE_WAVE } from "@shared/ringtone";
 
 interface IceConfig {
   iceServers: Array<{ urls: string; username?: string; credential?: string }>;
@@ -1012,6 +1013,61 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let loudspeakerScanT: ReturnType<typeof setInterval> | null = null;
   const loudspeakerNodes: AudioNode[] = [];
   const loudspeakerMutedEls = new Set<HTMLMediaElement>();
+  /**
+   * Persisted speakerphone preference — and the fix for BOTH mobile audio
+   * reports. PHONES DEFAULT ON: iOS routes WebRTC audio to the tiny EARPIECE
+   * while the mic is live, so an iPhone held at arm's length "hears nothing"
+   * (reported as one-way audio on every Android↔iPhone call — the iPhone side
+   * was silent in both directions); Android WebViews land on the earpiece for
+   * ANSWERED calls too (reported as "speaker won't enable until I hang up and
+   * redial"). A video-caller UI is used at arm's length like FaceTime-on-
+   * speaker, so speaker-on is the honest default; the audio button toggles it
+   * per call and the choice is remembered. WebAudio output rides the MEDIA
+   * route, which follows a connected headset/AirPods automatically — never
+   * blasts into someone's ear.
+   */
+  function loudspeakerPref(): boolean {
+    try {
+      const v = window.localStorage.getItem("relay_loudspeaker");
+      if (v === "1") return true;
+      if (v === "0") return false;
+    } catch { /* */ }
+    return IS_IOS || IS_ANDROID;
+  }
+  function setLoudspeakerPref(on: boolean) {
+    try { window.localStorage.setItem("relay_loudspeaker", on ? "1" : "0"); } catch { /* */ }
+  }
+  /** Create the loudspeaker context (with its auto-resume guard) if needed. */
+  function ensureLoudspeakerCtx(): AudioContext | null {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return null;
+    if (!loudspeakerCtx) {
+      loudspeakerCtx = new Ctx();
+      // The OS can suspend this context when the tab is backgrounded (Android),
+      // which — because the source <audio>/<video> elements are muted while the
+      // Web-Audio route carries the sound — would silence ALL incoming audio.
+      // Auto-resume the moment it flips to suspended while loudspeaker is on.
+      loudspeakerCtx.onstatechange = () => {
+        if (loudspeakerOn && loudspeakerCtx && loudspeakerCtx.state === "suspended") {
+          void loudspeakerCtx.resume().catch(() => {});
+        }
+      };
+    }
+    return loudspeakerCtx;
+  }
+  /**
+   * Pre-create + resume the loudspeaker context INSIDE a user gesture (the
+   * Answer / dial tap), so the speaker auto-apply at establishment finds a
+   * RUNNING context — iOS refuses resume() outside a gesture. No routing and
+   * no muting happens here, so it can never affect audibility by itself.
+   */
+  function loudspeakerPrime() {
+    if (!loudspeakerPref()) return;
+    try {
+      const ctx = ensureLoudspeakerCtx();
+      if (ctx) void ctx.resume().catch(() => {});
+    } catch { /* best-effort */ }
+  }
   function routeElToLoudspeaker(el: HTMLMediaElement) {
     if (!loudspeakerCtx || loudspeakerMutedEls.has(el)) return;
     // NEVER mute an element into a context that isn't RUNNING: the 2s scan
@@ -1050,20 +1106,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   async function loudspeakerEnable(): Promise<boolean> {
     try {
-      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!Ctx) return false;
-      if (!loudspeakerCtx) {
-        loudspeakerCtx = new Ctx();
-        // The OS can suspend this context when the tab is backgrounded (Android),
-        // which — because the source <audio>/<video> elements are muted while the
-        // Web-Audio route carries the sound — would silence ALL incoming audio.
-        // Auto-resume the moment it flips to suspended while loudspeaker is on.
-        loudspeakerCtx.onstatechange = () => {
-          if (loudspeakerOn && loudspeakerCtx && loudspeakerCtx.state === "suspended") {
-            void loudspeakerCtx.resume().catch(() => {});
-          }
-        };
-      }
+      if (!ensureLoudspeakerCtx() || !loudspeakerCtx) return false;
       await loudspeakerCtx.resume();
       if (loudspeakerCtx.state !== "running") return false; // never mute → never silent
       loudspeakerOn = true;
@@ -1084,18 +1127,29 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try { void loudspeakerCtx?.suspend(); } catch { /* */ }
   }
   async function toggleLoudspeaker() {
-    if (loudspeakerOn) { loudspeakerDisable(); updateAudioBtn(); toast("Loudspeaker off"); return; }
+    if (loudspeakerOn) {
+      loudspeakerDisable();
+      setLoudspeakerPref(false); // remembered: next calls start on the earpiece
+      updateAudioBtn();
+      toast("Speaker off — earpiece");
+      return;
+    }
     const ok = await loudspeakerEnable();
+    if (ok) setLoudspeakerPref(true); // remembered for the NEXT call too
     updateAudioBtn();
-    toast(ok ? "Loudspeaker on 🔊" : "Couldn't switch the output on this device.", !ok);
+    toast(ok ? "Speaker on 🔊" : "Couldn't switch the output on this device.", !ok);
   }
   function openAudioMenu() {
+    // PHONES: the OS owns earpiece/speaker/Bluetooth routing and exposes no
+    // output list to the web — Android enumerates NO audiooutput devices even
+    // where setSinkId exists, so the old sink menu opened EMPTY ("No selectable
+    // outputs"), a dead end that read as "the speaker button does nothing on
+    // answered calls". On mobile the button is a straight speakerphone TOGGLE:
+    // the WebAudio media-route force, which works on Android AND iOS and
+    // follows a connected headset/AirPods automatically.
+    if (IS_ANDROID || IS_IOS) { void toggleLoudspeaker(); return; }
     if (!audioOutSupported) {
-      // No web output-picker here. On ANDROID, offer the loudspeaker-force toggle
-      // (a real, reversible control) instead of a dead-end message. On iOS, audio
-      // routing already works natively — don't touch it; just say so honestly.
-      if (IS_ANDROID) void toggleLoudspeaker();
-      else toast("Your device routes call audio automatically (headset/Bluetooth switches on its own).");
+      toast("Your device routes call audio automatically (headset/Bluetooth switches on its own).");
       return;
     }
     void refreshAudioOutputs();
@@ -1646,6 +1700,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!/^\d{6}$/.test(dialed)) return;
     if (dialed === me.pin) { toast("That's your own number.", true); return; }
     if (peers[dialed]) { toast("You're already connected to them.", true); return; }
+    loudspeakerPrime(); // dial tap gesture — before ensureMedia consumes it
     try { await ensureMedia(); } catch { return; }
     const target = dialed; dialed = ""; refreshDisplay(); closeAddPad();
     if (!inCall) {
@@ -1822,32 +1877,35 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const fire = () => {
         const ctx = ringtoneCtx; if (!ctx) return;
         const now = ctx.currentTime;
-        // Incoming: classic two-burst ring (480Hz then 440Hz). Outgoing: a single
-        // soft repeating dial-tone beep so the caller hears it's actually ringing.
-        const bursts: Array<[number, number]> = kind === "incoming" ? [[480, 0], [440, 0.45]] : [[425, 0]];
+        // Incoming: RELAY's signature ringtone — a distinct custom melody at a
+        // fixed MEDIUM-LOUD level (spec + rationale in shared/ringtone.ts; the
+        // Profile "Test ringtone" preview plays the same spec). Outgoing: a
+        // single soft repeating dial-tone beep so the caller hears ringing.
         // Physical ring on phones that support it (Android — iOS has no
         // vibration API). Re-fired per burst cycle; stopRingtone cancels.
         if (kind === "incoming") { try { navigator.vibrate?.([400, 200, 400]); } catch { /* */ } }
-        bursts.forEach(([freq, offset]) => {
+        const notes: Array<{ freq: number; at: number; dur: number; gain?: number }> =
+          kind === "incoming" ? RINGTONE_NOTES : [{ freq: 425, at: 0, dur: 0.9, gain: 0.12 }];
+        notes.forEach(n => {
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
-          osc.type = "sine";
-          osc.frequency.value = freq;
-          const t0 = now + offset;
-          const dur = kind === "incoming" ? 0.4 : 0.9;
+          osc.type = kind === "incoming" ? RINGTONE_WAVE : "sine";
+          osc.frequency.value = n.freq;
+          const t0 = now + n.at;
+          const peak = n.gain ?? RINGTONE_PEAK_GAIN;
           gain.gain.setValueAtTime(0.0001, t0);
-          gain.gain.exponentialRampToValueAtTime(0.12, t0 + 0.05);
-          gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          gain.gain.exponentialRampToValueAtTime(peak, t0 + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t0 + n.dur);
           osc.connect(gain); gain.connect(ctx.destination);
           ringtoneNodes.add(osc); ringtoneNodes.add(gain);
-          // Self-prune once this burst finishes so the Set never grows unbounded
+          // Self-prune once this note finishes so the Set never grows unbounded
           // across a long ring.
           osc.onended = () => { ringtoneNodes.delete(osc); ringtoneNodes.delete(gain); };
-          osc.start(t0); osc.stop(t0 + dur + 0.05);
+          osc.start(t0); osc.stop(t0 + n.dur + 0.05);
         });
       };
       fire();
-      ringtoneTimer = setInterval(fire, kind === "incoming" ? 3000 : 2000);
+      ringtoneTimer = setInterval(fire, kind === "incoming" ? RINGTONE_LOOP_MS : 2000);
     } catch { /* best-effort — visual ring overlay still shows */ }
   }
 
@@ -2177,6 +2235,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("ringOverlay")?.classList.remove("active");
     stopRingtone();
     if (!r) { emitPhase("idle"); return; }
+    // The Answer tap IS the gesture — prime the speaker route NOW, before the
+    // getUserMedia await consumes/outlives the transient activation (phones
+    // apply the remembered speaker state at establishment).
+    loudspeakerPrime();
     try { await ensureMedia(); } catch { sendWS({ type: "reject", to: r.from }); emitPhase("idle"); return; }
     // "Answer as Voice": camera stays OFF (same rule as a voice DIAL — the
     // SFU publishes no video at all while camOn is false; tapping the camera
@@ -3662,6 +3724,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
     emitPhase("in-call");    // caller: leave "dialing" so the ring UI clears
     updateMediaSession(true); // OS "active media" signal + lock-screen controls
     if (callStatus !== "live") setCallStatus("live");
+    // PHONES: apply the remembered speakerphone state the moment the call is
+    // live (default ON — see loudspeakerPref; the Answer/dial tap already
+    // primed the context inside a real gesture so this resume sticks). If the
+    // context still isn't running, enable() refuses to mute anything — the
+    // worst case is exactly the old earpiece behavior, never silence.
+    if ((IS_IOS || IS_ANDROID) && loudspeakerPref() && !loudspeakerOn) {
+      void loudspeakerEnable().then(ok => { if (ok) updateAudioBtn(); });
+    }
   }
   // MESH reconnect: WE own recovery (ICE restarts + signaling), so we run a
   // hard 10s window with a visible countdown and tear the call down if it
@@ -5242,6 +5312,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (!/^\d{6}$/.test(target)) return false;
       if (!me.pin) return false;
       if (target === me.pin) return false;
+      // Still inside the tap that triggered the dial — prime the speaker route
+      // before the async media work consumes the transient activation.
+      loudspeakerPrime();
       // fire-and-forget the actual async call
       void programmaticDial(target, opts);
       return true;
@@ -5250,6 +5323,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (!me.pin) return false;
       const valid = targets.filter(t => /^\d{6}$/.test(String(t)) && t !== me.pin);
       if (valid.length === 0) return false;
+      loudspeakerPrime();
       void programmaticGroupDial(targets, opts);
       return true;
     },

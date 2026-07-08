@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Bell, BellOff, Check, Lock, Moon, ScanFace, ShieldCheck, Sun } from "lucide-react";
+import { Bell, BellOff, Check, Lock, Moon, ScanFace, ShieldCheck, Sun, Volume2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
@@ -12,8 +12,10 @@ import {
   getNotifPermission,
   requestNotifPermission,
   unlockAudio,
+  playRingtonePreview,
   type NotifPermission,
 } from "@/app/notifications";
+import { ensurePushSubscription, iosNeedsInstallForPush } from "@/app/pushClient";
 import { useDnd } from "@/app/dnd";
 import {
   BioSection,
@@ -478,6 +480,14 @@ function NotificationsSection() {
     getNotifPermission()
   );
   const [busy, setBusy] = useState(false);
+  // Web Push (rings/notices with the app CLOSED): the VAPID key the browser
+  // must subscribe with, and this device's subscription state.
+  const pubKey = trpc.push.publicKey.useQuery(undefined, {
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+  const subscribePush = trpc.push.subscribe.useMutation();
+  const [pushReady, setPushReady] = useState(false);
 
   // The browser's permission state can change in another tab — re-poll
   // when this tab gets focus.
@@ -486,6 +496,14 @@ function NotificationsSection() {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, []);
+
+  // Permission already granted → make sure this device's push subscription is
+  // registered (it can vanish after browser updates), and reflect the state.
+  useEffect(() => {
+    if (perm !== "granted" || !pubKey.data?.key) return;
+    void ensurePushSubscription(pubKey.data.key, (sub) => subscribePush.mutateAsync(sub)).then(setPushReady);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perm, pubKey.data?.key]);
 
   if (perm === "unsupported") {
     return (
@@ -534,15 +552,24 @@ function NotificationsSection() {
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">
             {perm === "granted"
-              ? "You'll see a system notification and hear a chime when the app is in another tab."
+              ? pushReady
+                ? "Call alerts reach this device even when RELAY is closed — plus a chime when the app is in another tab."
+                : "You'll see a system notification and hear a chime when the app is in another tab."
               : perm === "denied"
                 ? "Allow notifications for this site in your browser settings, then refresh."
-                : "We'll show a system notification — we never push promotional content."}
+                : "We'll ring this device for incoming calls — we never push promotional content."}
           </p>
-          <div className="mt-3">
+          {iosNeedsInstallForPush() ? (
+            <p className="text-xs text-sky-500/90 mt-1.5">
+              iPhone/iPad: to get rung while RELAY is closed, use Safari's Share →{" "}
+              <span className="font-medium">Add to Home Screen</span>, then open RELAY from the icon
+              (Apple only allows call alerts for installed web apps).
+            </p>
+          ) : null}
+          <div className="mt-3 flex flex-wrap items-center gap-2.5">
             {perm === "granted" ? (
               <span className="inline-flex items-center gap-1.5 text-sm text-[color:var(--relay-online)]">
-                <Check className="size-4" /> Enabled
+                <Check className="size-4" /> {pushReady ? "Call alerts on" : "Enabled"}
               </span>
             ) : perm === "denied" ? (
               <span className="inline-flex items-center gap-1.5 text-sm text-destructive">
@@ -560,12 +587,28 @@ function NotificationsSection() {
                   unlockAudio();
                   const result = await requestNotifPermission();
                   setPerm(result);
+                  // Same gesture: register this device for call-alert pushes.
+                  if (result === "granted" && pubKey.data?.key) {
+                    await ensurePushSubscription(pubKey.data.key, (sub) => subscribePush.mutateAsync(sub)).then(setPushReady);
+                  }
                   setBusy(false);
                 }}
               >
                 {busy ? "Requesting…" : "Enable notifications"}
               </Button>
             )}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => playRingtonePreview()}
+              className="inline-flex items-center gap-1.5"
+            >
+              <Volume2 className="size-4" /> Test ringtone
+            </Button>
+            <span className="text-[11px] text-muted-foreground">
+              RELAY's own ringtone — fixed medium volume, distinct from system sounds.
+            </span>
           </div>
         </div>
       </div>

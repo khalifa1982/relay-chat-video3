@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.83.0)", () => {
-    expect(APP_VERSION).toBe("2.83.0");
+  it("is the current release (2.84.0)", () => {
+    expect(APP_VERSION).toBe("2.84.0");
   });
 });
 
@@ -212,9 +212,9 @@ describe("robust auto-rejoin across the Update reload (v2.57)", () => {
 });
 
 describe("Android loudspeaker force (Web Audio routing, v2.57)", () => {
-  it("offers a reversible loudspeaker toggle on Android (not iOS)", () => {
+  it("offers a reversible loudspeaker toggle on phones (v2.84: iOS too — its earpiece routing was heard as one-way audio)", () => {
     expect(RELAY_CLIENT).toMatch(/const IS_ANDROID =/);
-    expect(RELAY_CLIENT).toMatch(/if \(IS_ANDROID\) void toggleLoudspeaker\(\)/);
+    expect(RELAY_CLIENT).toMatch(/if \(IS_ANDROID \|\| IS_IOS\) \{ void toggleLoudspeaker\(\); return; \}/);
   });
   it("only mutes source elements AFTER the context is confirmed running (never silence)", () => {
     const en = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf("async function loudspeakerEnable"));

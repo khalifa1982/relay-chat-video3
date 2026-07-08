@@ -3065,3 +3065,39 @@ auto-end after remote hangup; nonexistent-number dial shows the fail card then t
 `web-push` dependency added. Note: sandbox E2E surfaced that a LiveKit-configured-but-unreachable
 deploy kills every answered call at ~16s via the join watchdog (correct behavior; worth
 remembering when LIVEKIT_* points at a dead SFU).
+
+## v2.84.0 — Mobile call audio: speaker toggle + default, honest hang-up icon, signature ringtone (2026-07-08)
+
+Field reports (Android wrapper + iPhone, screenshot of v2.83.0 dial card):
+
+1. **Android: speaker unresponsive on ANSWERED calls** (worked only after hang-up + redial).
+   Root cause: modern Android exposes `setSinkId`, so the audio button opened the sink MENU —
+   but Android enumerates NO audiooutput devices, so the menu was an empty dead end and the
+   loudspeaker force (which works) was unreachable. Fix: on Android AND iOS the audio button is a
+   straight speakerphone TOGGLE (`toggleLoudspeaker`); the sink menu stays desktop-only.
+2. **iPhone↔Android "one-way audio" (iPhone side silent in BOTH directions)**. Root cause: iOS
+   routes WebRTC audio to the tiny EARPIECE while the mic is live — a phone held at arm's length
+   hears ~nothing, read as "no audio from the Android side" whichever side dialed. Fix: phones now
+   DEFAULT the speaker ON via a persisted preference (`relay_loudspeaker`; the in-call toggle
+   remembers the choice), the speaker AudioContext is PRIMED inside the Answer/dial gesture
+   (`loudspeakerPrime` — iOS refuses resume() outside gestures; called in acceptInvite, dial(),
+   dialGroup(), legacy startCall), and the remembered state is APPLIED at `markEstablished`. All
+   v2.80 safety invariants kept: never mute into a non-running context (worst case = old earpiece
+   behavior, never silence), auto-resume on suspend, headset-connect auto-handback. NEEDS a real
+   two-phone retest to confirm the field symptom.
+3. **Hang-up icon corrupted/misleading on Android**: the icon was a PICKUP receiver rotated 135°
+   via an inline CSS transform — some Android WebViews ignore the transform and showed an ANSWER
+   icon on the End button. Replaced with the drawn Material `call_end` path (no transform).
+4. **Custom ringtone @ medium-loud**: new `shared/ringtone.ts` — RELAY's signature "din-DING ×2"
+   triangle-wave motif over a low-octave warmth layer, looped every 2.6s, peak gain 0.28 (well
+   above the old 0.12, deliberately below max; hardware volume still applies on top). ONE spec,
+   two players: the engine's `playRingtone("incoming")` and Profile's new **Test ringtone**
+   button (`playRingtonePreview` in notifications.ts). Outgoing dial-tone unchanged.
+5. **Profile → Notifications** now manages call alerts end-to-end: granting permission also
+   registers the device's Web Push subscription (status shown as "Call alerts on"), with the
+   Add-to-Home-Screen note on iPhone (Apple gates web push to installed apps — this is also the
+   honest answer to "backgrounded iPhone doesn't ring until reopened": enable alerts + install).
+
+Tests: +9 (callAudio pins) and 1 updated (audio button = phone toggle) → **746 passing**.
+E2E re-run green (ring/redelivery/establish/auto-end/fail-card) + new icon assertions
+(call_end path present, no rotate style). tsc + build clean.

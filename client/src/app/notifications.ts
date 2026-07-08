@@ -21,6 +21,7 @@
  */
 
 import { isDndOn } from "./dnd";
+import { RINGTONE_NOTES, RINGTONE_PEAK_GAIN, RINGTONE_WAVE } from "@shared/ringtone";
 
 export type NotifPermission = "granted" | "denied" | "default" | "unsupported";
 
@@ -224,4 +225,30 @@ export function unlockAudio(): void {
   if (ctx.state === "suspended") void ctx.resume().catch(() => {});
   // 10ms silent tone — counts as the gesture-driven first play.
   tone(440, 10, 0.0001);
+}
+
+/**
+ * Play ONE loop of the incoming-call ringtone (the exact spec the call engine
+ * uses — shared/ringtone.ts) so the user can hear the sound and its fixed
+ * medium-loud level from Profile. Call from a click handler (gesture); it also
+ * doubles as an audio unlock.
+ */
+export function playRingtonePreview(): void {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === "suspended") void ctx.resume().catch(() => {});
+  const t0 = ctx.currentTime + 0.03;
+  for (const n of RINGTONE_NOTES) {
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = RINGTONE_WAVE;
+    osc.frequency.value = n.freq;
+    const start = t0 + n.at;
+    g.gain.setValueAtTime(0.0001, start);
+    g.gain.exponentialRampToValueAtTime(n.gain ?? RINGTONE_PEAK_GAIN, start + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + n.dur);
+    osc.connect(g).connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start + n.dur + 0.05);
+  }
 }
