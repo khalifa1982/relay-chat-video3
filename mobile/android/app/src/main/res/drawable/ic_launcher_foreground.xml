@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Vector port of client/public/icon.svg (central node + relaying signal
+     arcs), scaled into the adaptive-icon 108dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <group
+        android:scaleX="0.62"
+        android:scaleY="0.62"
+        android:pivotX="256"
+        android:pivotY="256">
+        <path
+            android:fillColor="#3FE0C5"
+            android:pathData="M256,256 m-26,0 a26,26 0 1,1 52,0 a26,26 0 1,1 -52,0" />
+        <path
+            android:strokeColor="#3FE0C5"
+            android:strokeWidth="22"
+            android:strokeLineCap="round"
+            android:pathData="M196,196 A85,85 0 0 0 196,316" />
+        <path
+            android:strokeColor="#3FE0C5"
+            android:strokeWidth="22"
+            android:strokeLineCap="round"
+            android:pathData="M316,196 A85,85 0 0 1 316,316" />
+        <path
+            android:strokeColor="#3FE0C5"
+            android:strokeWidth="22"
+            android:strokeLineCap="round"
+            android:strokeAlpha="0.55"
+            android:pathData="M156,156 A141,141 0 0 0 156,356" />
+        <path
+            android:strokeColor="#3FE0C5"
+            android:strokeWidth="22"
+            android:strokeLineCap="round"
+            android:strokeAlpha="0.55"
+            android:pathData="M356,156 A141,141 0 0 1 356,356" />
+    </group>
+</vector>

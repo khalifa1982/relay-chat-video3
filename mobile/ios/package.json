@@ -1,0 +1,11 @@
+{
+  "name": "relay-ios-shell",
+  "private": true,
+  "version": "1.0.0",
+  "description": "RELAY iOS shell — Capacitor wrapper around the live web app (see mobile/README.md).",
+  "dependencies": {
+    "@capacitor/cli": "^6.2.1",
+    "@capacitor/core": "^6.2.1",
+    "@capacitor/ios": "^6.2.1"
+  }
+}

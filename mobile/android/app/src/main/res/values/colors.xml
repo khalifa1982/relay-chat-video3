@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- RELAY dark background (matches manifest.webmanifest theme_color). -->
+    <color name="relayBackground">#0A0D10</color>
+    <color name="relayAccent">#3FE0C5</color>
+</resources>

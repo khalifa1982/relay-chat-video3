@@ -1,0 +1,47 @@
+// RELAY — Trusted Web Activity (TWA): the store-grade Android shell around the
+// live web app. It launches https://www.your-chat.org/app inside REAL Chrome
+// (full WebRTC, Web Push, autoplay + permission behavior identical to the
+// browser) with no browser UI once Digital Asset Links verify — see
+// server/wellKnown.ts and mobile/README.md. This is Google's recommended way
+// to ship a production PWA to the Play Store, and it means every web deploy
+// IS the app update: feature and visual parity are structural, not aspirational.
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'org.yourchat.relay'
+    compileSdk 35
+
+    defaultConfig {
+        // Must match TWA_PACKAGE_NAME on the server (assetlinks.json).
+        applicationId "org.yourchat.relay"
+        minSdk 24
+        targetSdk 35
+        // Bump BOTH for every Play upload (versionCode monotonically).
+        versionCode 1
+        versionName "1.0.0"
+
+        // The origin this app is bound to. Change here AND in strings.xml
+        // (asset_statements) if the canonical domain ever moves.
+        manifestPlaceholders = [
+            hostName: "www.your-chat.org",
+            defaultUrl: "https://www.your-chat.org/app",
+        ]
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.6.2'
+}

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Splash/launcher theme: dark, no action bar — shown for the instant
+         before Chrome takes over, so launch never flashes white. -->
+    <style name="Theme.Relay.Launcher" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/relayBackground</item>
+        <item name="android:statusBarColor">@color/relayBackground</item>
+        <item name="android:navigationBarColor">@color/relayBackground</item>
+    </style>
+</resources>

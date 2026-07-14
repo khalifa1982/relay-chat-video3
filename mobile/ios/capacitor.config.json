@@ -1,0 +1,14 @@
+{
+  "appId": "org.yourchat.relay",
+  "appName": "RELAY",
+  "webDir": "www",
+  "server": {
+    "url": "https://www.your-chat.org/app",
+    "allowNavigation": ["www.your-chat.org", "your-chat.org", "relaychat-lduywq6l.manus.space"]
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#0A0D10",
+    "allowsLinkPreview": false
+  }
+}

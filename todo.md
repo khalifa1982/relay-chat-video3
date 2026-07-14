@@ -3101,3 +3101,46 @@ Field reports (Android wrapper + iPhone, screenshot of v2.83.0 dial card):
 Tests: +9 (callAudio pins) and 1 updated (audio button = phone toggle) → **746 passing**.
 E2E re-run green (ring/redelivery/establish/auto-end/fail-card) + new icon assertions
 (call_end path present, no rotate style). tsc + build clean.
+
+## v2.85.0 — Mobile store shells: Android TWA (APK via CI) + iOS Capacitor + launch runbook (2026-07-14)
+
+Request: take RELAY to the Play Store + App Store with full web parity ("coordinate the team").
+Reality stated honestly: there is no human team in this environment — the architect/design/QA
+outputs below were produced directly, and the steps only the OWNER can perform (developer
+accounts, signing, store listings) are documented as [YOU] items in mobile/README.md.
+
+**Architecture decision (recorded in mobile/README.md §1):** wrapper-first, no rewrite.
+Android = Trusted Web Activity (real Chrome — proper WebRTC audio routing, Web Push, permission
+persistence; strictly better than the current BETA WebView wrapper). iOS = Capacitor WKWebView
+shell loading the live site. Parity is structural: every web deploy IS the mobile release
+(the v2.48 auto-updater handles versioning in-app). React Native / Kotlin+Swift rewrites
+rejected for now: they'd re-implement the 5,000-line call engine (mesh+SFU, consent, hold/merge,
+rejoin, paging, push) twice and re-fight the v2.80–v2.84 audio wars; first justified native step
+is CallKit/ConnectionService (logged as deferred §7).
+
+Shipped:
+- **mobile/android/** — complete TWA Gradle project (androidbrowserhelper 2.6.2, package
+  `org.yourchat.relay`, bound to https://www.your-chat.org/app, portrait, dark splash, adaptive
+  + monochrome launcher icon hand-ported from icon.svg to VectorDrawable, deep-link intent
+  filter with autoVerify).
+- **.github/workflows/android-apk.yml** — CI producing `RELAY-debug-apk` (directly installable),
+  unsigned release APK, and the Play `app-release.aab` on demand + on mobile/android changes.
+- **server/wellKnown.ts** (+ registration in _core/index.ts) — `/.well-known/assetlinks.json`,
+  env-driven (`TWA_SHA256_FINGERPRINTS`, optional `TWA_PACKAGE_NAME`), 404-with-hint until
+  configured; validates + normalizes fingerprints; unlocks the TWA's full-screen mode.
+- **mobile/ios/** — real Capacitor 6 iOS Xcode project (scaffolded, checked in) loading the live
+  app; Info.plist carries NSCamera/NSMicrophoneUsageDescription (missing = crash + rejection),
+  UIBackgroundModes audio, ITSAppUsesNonExemptEncryption=false. Build needs a Mac (documented).
+- **mobile/README.md** — owner's runbook: strategy ADR, Play Console ($25) + Apple Developer
+  ($99/yr) account setup, Play App Signing + assetlinks fingerprints wiring, store-listing
+  checklists (privacy policy URL already live at /privacy-policy), review-gotcha notes
+  (Guideline 4.2, purpose strings), Material/HIG parity notes, latency posture, deferred
+  native steps (CallKit/ConnectionService first).
+- **mobile/QA-TEST-PLAN.md** — 22-scenario release protocol distilled from RELAY's actual
+  field-failure history (establishment, paging/redelivery, audio routing incl. the v2.84
+  acceptance tests, consent protocol, shell specifics, messaging smoke) over a 5-device matrix.
+
+Tests: +6 (wellKnown: pure assetlinks builder incl. normalization/rejection + repo wiring pins
+binding server↔Android package/origin↔iOS plist↔CI) → **752 passing**. Gate note: a stray
+npm install from the iOS scaffold clobbered the root pnpm node_modules (vite/vitest vanished);
+clean `pnpm install` restored it — mobile/ios has its own package.json + .gitignore isolation.

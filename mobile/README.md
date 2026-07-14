@@ -1,0 +1,167 @@
+# RELAY Mobile — Android & iOS store apps
+
+*Owner's runbook. Written 2026-07-14 (v2.85.0). Everything an agent can build is
+already in this repo; the steps only the account owner can perform are marked
+**[YOU]**.*
+
+---
+
+## 1 · Architecture decision (read this first)
+
+**Strategy: store-grade native shells around the live web app — not a rewrite.**
+
+| Option | Verdict | Why |
+|---|---|---|
+| **Android TWA + iOS Capacitor shell** (chosen) | ✅ ship now | 100% feature & visual parity *by construction* — the shells run the real app. Every web deploy is instantly the mobile release (the in-app auto-updater already handles versioning). One codebase; the store apps never lag. |
+| React Native rewrite | ❌ not now | Would re-implement ~5,000 lines of call engine (mesh + SFU, consent protocol, call-waiting/hold/merge, rejoin, paging, push) that took 30+ releases to stabilize. RN's WebRTC story is a third-party module with its own audio-routing quirks — we'd re-fight the exact battles just won in v2.80–v2.84, ×2 platforms. |
+| Kotlin + Swift rewrites | ❌ not now | Same as above with double the surface. Justified only when there's a native-only requirement (CallKit/ConnectionService integration is the first real one — see §7). |
+
+The engine, protocol, and API layer are already latency-tuned for mobile
+(v2.81 code-splitting: 1,941→723 kB entry; immutable asset caching; SSE
+signaling with reconnect-on-foreground; Web Push wake-ups; tRPC batching).
+The shells add zero network hops — the "mobile API" **is** the web API.
+
+Key advantage over the current `BETA 1.0.16` WebView wrapper: the TWA runs
+**real Chrome** (proper WebRTC audio routing, autoplay policy, Web Push,
+permission persistence). Several Android-only audio oddities reported against
+the wrapper simply don't exist in Chrome.
+
+---
+
+## 2 · What's in this repo
+
+```
+mobile/
+├── android/            Complete TWA Gradle project → APK/AAB (package org.yourchat.relay)
+├── ios/                Capacitor shell — real Xcode project under ios/App
+│   ├── capacitor.config.json   (loads https://www.your-chat.org/app)
+│   └── ios/App/App/Info.plist  (camera/mic purpose strings, background audio)
+├── README.md           This runbook
+└── QA-TEST-PLAN.md     Release test protocol (device matrix + call scenarios)
+.github/workflows/android-apk.yml   CI: builds installable APK + Play AAB
+server/wellKnown.ts     /.well-known/assetlinks.json (env-driven)
+```
+
+---
+
+## 3 · Android — from repo to Play Store
+
+### 3.1 Get an APK today (no toolchain needed)
+GitHub → **Actions → "Android APK" → Run workflow**. Artifacts:
+- `RELAY-debug-apk` — install directly on any phone (enable "install unknown
+  apps"). This is your test build.
+- `RELAY-release-aab` — the bundle you'll sign & upload to Play.
+
+Local alternative: open `mobile/android/` in Android Studio (it generates the
+Gradle wrapper) → Build.
+
+### 3.2 **[YOU]** Google Play account & signing
+1. Create a [Play Console](https://play.google.com/console) developer account —
+   $25 one-time, needs a Google account + identity verification (can take a
+   couple of days; start early).
+2. Create app → name **RELAY**, package `org.yourchat.relay` (must match
+   `mobile/android/app/build.gradle`; change *before* first upload if you want
+   a different id — it's permanent).
+3. Use **Play App Signing** (default). Generate an upload key locally:
+   `keytool -genkeypair -v -keystore relay-upload.keystore -alias relay -keyalg RSA -keysize 2048 -validity 10000`
+   Keep the keystore + password in a password manager. Sign the AAB:
+   `jarsigner -keystore relay-upload.keystore app-release.aab relay` (or let
+   Android Studio do it), then upload.
+
+### 3.3 **[YOU]** Digital Asset Links → full-screen
+After the first upload, Play Console → **Test and release → App integrity →
+App signing** shows two SHA-256 fingerprints (App signing key + Upload key).
+In Manus **Settings → Secrets** add:
+```
+TWA_SHA256_FINGERPRINTS = AA:BB:...:11, CC:DD:...:22   ← both, comma-separated
+```
+(`TWA_PACKAGE_NAME` only if you changed the package id.) Publish the app from
+Manus, then verify `https://www.your-chat.org/.well-known/assetlinks.json`
+returns them. Until then the Android app works but shows Chrome's URL bar.
+
+### 3.4 **[YOU]** Store listing
+- Screenshots: phone 1080×1920+ (Dialer, in-call, Messages, Contacts, History).
+- Feature graphic 1024×500, icon 512×512 (export `client/public/icon.svg`).
+- Privacy policy URL: `https://www.your-chat.org/privacy-policy` (already live).
+- Data-safety form: collects display name, optional email; camera/mic used for
+  calls, not recorded server-side by default; messages stored to deliver them.
+- Content rating questionnaire → communication app.
+- Review notes: "WebRTC calling app. Test: open app → Enter as guest → dial the
+  6-digit number of a second test device." Provide two guest numbers.
+
+---
+
+## 4 · iOS — from repo to App Store
+
+Building iOS requires a Mac with Xcode (Apple's rule — no CI shortcut without
+a paid macOS runner).
+
+### 4.1 Build steps (any Mac)
+```bash
+cd mobile/ios
+npm install
+npx cap sync ios          # installs Pods (needs CocoaPods: `brew install cocoapods`)
+npx cap open ios          # opens ios/App/App.xcworkspace in Xcode
+```
+In Xcode: set your Team (Signing & Capabilities), bundle id
+`org.yourchat.relay` (or your choice — set it once, it's permanent per app),
+then **Product → Archive → Distribute** (TestFlight first).
+
+### 4.2 **[YOU]** Apple Developer account
+1. Enroll at [developer.apple.com](https://developer.apple.com/programs/enroll/)
+   — $99/year. Individual enrollment is fastest; an organization needs a D-U-N-S
+   number (free but slow to issue).
+2. App Store Connect → New App → RELAY, the bundle id above.
+
+### 4.3 iOS review — known gotchas (already handled in the project)
+- Camera/mic **purpose strings** are set in Info.plist (missing ones = instant
+  crash + rejection).
+- `UIBackgroundModes: audio` keeps a call alive when backgrounded.
+- Guideline 4.2 ("web clipping"): communication apps wrapping their own
+  functional web app generally pass — emphasize in review notes that this is a
+  full-featured calling/messaging product, include test numbers. If review
+  pushes back, the standard remedies are Capacitor-native touches (haptics,
+  share sheet) — cross that bridge if it comes.
+- Push inside the shell uses the site's Web Push (works in WKWebView-hosted
+  content only when installed as PWA — for the **shell** app, notifications
+  arrive via the same standalone-PWA rules; native APNs/VoIP push is the §7
+  upgrade if review or UX demands it).
+
+---
+
+## 5 · Design parity (Material / HIG)
+
+The web app already implements a phone-native layout: bottom tab bar with
+per-tab accents, sheet-style dialogs, safe-area-aware shell height (measured
+`--relay-vh`), portrait lock, dark OLED palette, large touch targets, ringtone
++ haptics. Platform deltas the shells inherit for free: system back gesture
+(Android/Chrome history), status-bar theming (`#0A0D10` in both shells),
+adaptive/monochrome launcher icon (Material You) from the same brand SVG.
+No separate mobile design track is needed while parity is the mandate.
+
+---
+
+## 6 · Performance / latency (the KPI)
+
+Nothing mobile-specific to add server-side — the shells consume the same
+optimized stack, measured this session:
+- entry bundle 723 kB (route-split), hashed assets `immutable, max-age=1y`
+- signaling: SSE + POST with 250ms→backoff retries, instant reconnect on
+  foreground, 30s disconnect grace, ring redelivery, Web Push paging
+- media: LiveKit SFU (10-way) with mesh fallback; Opus `speech` preset; DTX;
+  per-party mesh bitrate caps
+- JSON payloads are small (superjson via tRPC, batched); no serialization
+  change would move the needle vs. RTT — the dominant term is TURN/SFU
+  proximity. **If latency ever regresses**: check the LiveKit region and TURN
+  host locality first.
+
+---
+
+## 7 · Deliberately deferred (next native steps, in order of value)
+
+1. **Android ConnectionService / iOS CallKit + VoIP push** — OS-level incoming
+   call screen when the app is closed. Requires going hybrid (Capacitor plugin
+   or small native layer) and APNs VoIP certificates. This is the single
+   biggest UX gap between "wrapped" and "native" for a caller.
+2. Native APNs/FCM push transport for the shells (today: Web Push semantics).
+3. In-app review prompts, share-sheet targets, app shortcuts.

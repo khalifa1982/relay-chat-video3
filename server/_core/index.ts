@@ -16,6 +16,7 @@ import { registerV2Upload } from "../v2upload";
 import { registerV2Events, publishToIdentity } from "../v2events";
 import { getIdentityByNumber, reapStalePresence, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation } from "../v2db";
 import { sendPushToIdentity } from "../webPush";
+import { registerWellKnown } from "../wellKnown";
 import { sweepExpiredOtps } from "../authOtp";
 import { inboundConfig, inboundAddress, registerEmailInbound } from "../emailInbound";
 import { getUserById } from "../db";
@@ -130,6 +131,10 @@ async function startServer() {
   app.use(cookieParser());
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+  // /.well-known/assetlinks.json — proves the RELAY Android app (TWA) and this
+  // origin share an owner, unlocking the app's full-screen mode. Env-driven
+  // (TWA_SHA256_FINGERPRINTS); 404s harmlessly until configured.
+  registerWellKnown(app);
   // RELAY signaling — SSE + POST on /api/relay/{stream,send}. We use
   // plain HTTP because the production gateway downgrades raw WebSocket
   // upgrades on arbitrary paths.
