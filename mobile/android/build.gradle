@@ -1,4 +1,4 @@
 // RELAY Android — Trusted Web Activity shell (see mobile/README.md).
 plugins {
-    id 'com.android.application' version '8.5.2' apply false
+    id 'com.android.application' version '8.9.2' apply false
 }

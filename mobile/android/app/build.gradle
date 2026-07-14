@@ -11,13 +11,13 @@ plugins {
 
 android {
     namespace 'org.yourchat.relay'
-    compileSdk 35
+    compileSdk 36
 
     defaultConfig {
         // Must match TWA_PACKAGE_NAME on the server (assetlinks.json).
         applicationId "org.yourchat.relay"
         minSdk 24
-        targetSdk 35
+        targetSdk 35  // Play's 2026 minimum; compileSdk rides ahead at 36
         // Bump BOTH for every Play upload (versionCode monotonically).
         versionCode 1
         versionName "1.0.0"
