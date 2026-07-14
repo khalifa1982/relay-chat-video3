@@ -3184,3 +3184,31 @@ Honest limits recorded: Decline on the native ring screen only dismisses locally
 reject endpoint yet — caller sees no-answer); token rotation re-registers on next app open;
 CallKit-style iOS parity still deferred. Tests: +14 (fcm JWT verified against a real RSA key;
 nativeAndroid pins binding engine⇄bridge⇄Java⇄server) → **766 passing**. tsc + vite build clean.
+
+## Native rewrite — Milestone 1 (mobile/native, React Native) (2026-07-14)
+
+Owner mandate (superseding the shell strategy): a FULL native rewrite — "a real app such as
+WhatsApp and Telegram", compiled code, no webview/mirror-browser — with absolute functional
+parity against the UNMODIFIED backend. Stack decision (recommended, unopposed): React Native +
+TypeScript + Swift/Kotlin native modules — the existing TS call engine/protocol can port with
+near-line fidelity (lowest parity-drift risk vs re-deriving 5k lines twice in Kotlin+Swift),
+while CallKit/ConnectionService (M4) provide the real OS call experience. Milestone plan M1–M6
+recorded in mobile/README.md §1.
+
+M1 shipped (RN 0.86, compiled, installs side-by-side as org.yourchat.relay.next):
+- Typed client (src/lib/api.ts) speaking the existing tRPC/superjson HTTP API with the SAME
+  device-id identity mechanism the web uses (x-relay-device-id; guest identity survives
+  restarts) — whoami/startGuest/heartbeat/lookup/contacts/threads/call+conference history.
+- Native tab shell (react-navigation bottom tabs) with the web's tab set + per-tab accents and
+  the RELAY dark palette ported to src/lib/theme.ts; Onboarding (guest-first, matching v2.81),
+  native keypad Dialer with live presence preview + ghost-number rule, History (merged
+  conference+solo rows, web color language), Messages threads, Contacts (favorites/categories/
+  blocked/presence LEDs), Profile. 30s presence heartbeat.
+- Voice/Video buttons present but explicitly labeled "Milestone 3" (honest placeholder — the
+  engine port is next); M1 is read-parity + identity, not call-capable.
+- CI: .github/workflows/native-rn.yml → RELAY-RN-debug-apk (installable) + unsigned AAB.
+- Pins: client/src/lib/nativeRewrite.test.ts (no Capacitor dep, store package id, /api/trpc +
+  superjson + device-id, tab parity, CI artifact) → 770 passing.
+
+Honest scope: M1 renders live data and holds identity; every write action (send message, place
+call, edit contact) activates with its milestone (M2/M3). Backend untouched this milestone.

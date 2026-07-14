@@ -8,7 +8,34 @@ already in this repo; the steps only the account owner can perform are marked
 
 ## 1 · Architecture decision (read this first)
 
-**Strategy: store-grade native shells around the live web app — not a rewrite.**
+> **SUPERSEDED (2026-07-14, owner mandate):** RELAY mobile is now a **full
+> native rewrite** — compiled UI, no webview anywhere, WhatsApp/Telegram as
+> the quality bar. Stack: **React Native + TypeScript + Swift/Kotlin native
+> modules** (chosen because the existing TypeScript call engine + protocol
+> port with near-line fidelity — the only tractable path to absolute feature
+> parity — while CallKit/ConnectionService deliver the native call
+> experience). Lives at **`mobile/native/`**; built by
+> `.github/workflows/native-rn.yml`.
+>
+> Milestones (each ends in an installable build):
+> **M1 ✅ Foundation** — typed client for the unmodified backend (tRPC/
+> superjson + device-id identity), native tab shell in the RELAY visual
+> identity, live-data Dialer/History/Messages/Contacts/Profile.
+> **M2** Messaging + contacts write-parity (send, attachments, voice notes,
+> read receipts, typing, block, categories). **M3** The call engine port
+> (SSE+POST signaling verbatim, mesh via react-native-webrtc + LiveKit RN
+> SDK, staged progress, consent protocol, call waiting, rejoin/paging).
+> **M4** OS call experience — CallKit + ConnectionService + VoIP push (the
+> "rings like a real phone" milestone). **M5** Filters (MediaPipe native),
+> screen share, native PiP, recording. **M6** Full QA matrix + store swap.
+>
+> The Capacitor app below (v2.86) remains the **interim/store-now option**
+> and its native layer (FCM plumbing, server fcm.ts, signing/CI/runbooks)
+> carries over. Mobile-convention substitutions (allowed by the mandate):
+> store updates replace the 30s self-updater; native biometrics replace
+> WebAuthn; native PiP replaces browser PiP.
+
+**Previous strategy (v2.85–v2.86): store-grade native shells around the live web app.**
 
 | Option | Verdict | Why |
 |---|---|---|
@@ -32,6 +59,8 @@ the wrapper simply don't exist in Chrome.
 
 ```
 mobile/
+├── native/             ★ THE NATIVE REWRITE (React Native, M1) — compiled
+│                         UI, typed client to the existing API, no webview
 ├── app/                The shared Capacitor project (one config, two platforms)
 │   ├── capacitor.config.json   (loads https://www.your-chat.org/app)
 │   ├── android/        ★ NATIVE Android app (v2.86) — Capacitor + native call
