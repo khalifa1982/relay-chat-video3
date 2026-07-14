@@ -3144,3 +3144,43 @@ Tests: +6 (wellKnown: pure assetlinks builder incl. normalization/rejection + re
 binding server↔Android package/origin↔iOS plist↔CI) → **752 passing**. Gate note: a stray
 npm install from the iOS scaffold clobbered the root pnpm node_modules (vite/vitest vanished);
 clean `pnpm install` restored it — mobile/ios has its own package.json + .gitignore isolation.
+
+## v2.86.0 — NATIVE Android app: Capacitor shell + native call layer (2026-07-14)
+
+User (after seeing the TWA): "you just made me an iframe… it's not a real app — improve it."
+Decision (user-selected): go straight to the native app; store launch waits for it.
+
+**Architecture:** the web app stays the UI + call engine (parity preserved); mobile/app (renamed
+from mobile/ios — ONE shared Capacitor project, both platforms) gains an Android platform with a
+native call layer in Java (`org.yourchat.relay`):
+- **Full-screen incoming ring with the app CLOSED**: `RelayFcmService` receives FCM DATA messages
+  → `NotificationHelper.showIncomingCall` posts a CATEGORY_CALL notification on a ringtone-sound
+  channel with `fullScreenIntent` → `IncomingCallActivity` (showWhenLocked/turnScreenOn, dark
+  RELAY palette, Answer/Decline built in code). Answer opens the app → the held ring re-delivers
+  (v2.83 `deliverPendingRing`) → in-app answer. Ring self-clears after the 65s window.
+- **Real OS speakerphone** (`CallAudioPlugin`): AudioManager MODE_IN_COMMUNICATION with
+  `setCommunicationDevice` (API 31+) / `setSpeakerphoneOn` fallback. The engine's speaker toggle
+  and speaker-default now prefer this route in the native app (WebAudio force stays the browser
+  fallback).
+- **Ongoing-call foreground service** (`CallService`, microphone|mediaPlayback types + graceful
+  fallback) started at establishment, stopped at hang-up — Android can no longer freeze a live
+  backgrounded call (closes long-standing backlog item #38 for the native app).
+- **FCM plumbing end-to-end**: `CallNativePlugin.getPushToken` (guarded — resolves null until
+  google-services.json exists) → web `nativeBridge.ts` → RelayEngine registers the token via
+  `push.subscribe { kind: "fcm" }` → `push_subscriptions.kind` column (schema + migrator) →
+  `server/fcm.ts` (zero-dep FCM v1: RS256 JWT from FIREBASE_SERVICE_ACCOUNT_JSON → OAuth token
+  cached → HIGH-priority DATA sends, 70s TTL for rings, dead-token pruning) wired into
+  `sendPushToIdentity` beside Web Push.
+- **Toolchain**: AGP 8.9.2 / Gradle 8.11.1 / compileSdk+targetSdk 35 / minSdk 24, Firebase BoM
+  33.7.0; google-services applies ONLY when the config file exists, so the app builds today.
+- **CI**: `android-apk.yml` gains a `native` job (npm ci → cap sync android → gradlew) emitting
+  RELAY-NATIVE-debug-apk / RELAY-NATIVE-release-aab (+ -SIGNED with the same keystore secrets);
+  the TWA job remains as fallback. Runbook: native section + [YOU] Firebase steps (~10 min:
+  google-services.json committed at mobile/app/android/app/, FIREBASE_SERVICE_ACCOUNT_JSON in
+  Manus secrets). QA plan: +3 native scenarios (closed-app full-screen ring, FGS persistence,
+  OS speaker toggle).
+
+Honest limits recorded: Decline on the native ring screen only dismisses locally (no server
+reject endpoint yet — caller sees no-answer); token rotation re-registers on next app open;
+CallKit-style iOS parity still deferred. Tests: +14 (fcm JWT verified against a real RSA key;
+nativeAndroid pins binding engine⇄bridge⇄Java⇄server) → **766 passing**. tsc + vite build clean.

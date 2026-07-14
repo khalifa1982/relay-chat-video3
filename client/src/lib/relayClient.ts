@@ -22,6 +22,7 @@ import { readSnapshot, writeSnapshot, clearSnapshot, type RejoinSnapshot } from 
 import { isDndOn } from "@/app/dnd";
 import { notify } from "@/app/notifications";
 import { RINGTONE_NOTES, RINGTONE_LOOP_MS, RINGTONE_PEAK_GAIN, RINGTONE_WAVE } from "@shared/ringtone";
+import { isNativeAndroid, nativeSetSpeaker, nativeSetInCall } from "./nativeBridge";
 
 interface IceConfig {
   iceServers: Array<{ urls: string; username?: string; credential?: string }>;
@@ -1127,6 +1128,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try { void loudspeakerCtx?.suspend(); } catch { /* */ }
   }
   async function toggleLoudspeaker() {
+    // NATIVE ANDROID APP: real OS speakerphone routing (AudioManager) — no
+    // WebAudio hop, identical to the system dialer. Falls through to the
+    // WebAudio force if the native call fails for any reason.
+    if (isNativeAndroid()) {
+      const next = !loudspeakerOn;
+      if (await nativeSetSpeaker(next)) {
+        loudspeakerOn = next;
+        setLoudspeakerPref(next);
+        updateAudioBtn();
+        toast(next ? "Speaker on 🔊" : "Speaker off — earpiece");
+        return;
+      }
+    }
     if (loudspeakerOn) {
       loudspeakerDisable();
       setLoudspeakerPref(false); // remembered: next calls start on the earpiece
@@ -3724,11 +3738,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
     emitPhase("in-call");    // caller: leave "dialing" so the ring UI clears
     updateMediaSession(true); // OS "active media" signal + lock-screen controls
     if (callStatus !== "live") setCallStatus("live");
-    // PHONES: apply the remembered speakerphone state the moment the call is
-    // live (default ON — see loudspeakerPref; the Answer/dial tap already
-    // primed the context inside a real gesture so this resume sticks). If the
-    // context still isn't running, enable() refuses to mute anything — the
-    // worst case is exactly the old earpiece behavior, never silence.
+    // NATIVE ANDROID APP: enter OS call mode + start the ongoing-call
+    // foreground service (Android never freezes a live call), then apply the
+    // remembered speaker state through the REAL AudioManager route.
+    if (isNativeAndroid()) {
+      void nativeSetInCall(true);
+      if (loudspeakerPref() && !loudspeakerOn) {
+        void nativeSetSpeaker(true).then(ok => {
+          if (ok) { loudspeakerOn = true; updateAudioBtn(); }
+        });
+      }
+      return;
+    }
+    // PHONES (browser/TWA/iOS): apply the remembered speakerphone state the
+    // moment the call is live (default ON — see loudspeakerPref; the
+    // Answer/dial tap already primed the context inside a real gesture so this
+    // resume sticks). If the context still isn't running, enable() refuses to
+    // mute anything — the worst case is exactly the old earpiece behavior,
+    // never silence.
     if ((IS_IOS || IS_ANDROID) && loudspeakerPref() && !loudspeakerOn) {
       void loudspeakerEnable().then(ok => { if (ok) updateAudioBtn(); });
     }
@@ -4976,6 +5003,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function hangUp(reason: string = "manual") {
     sendWS({ type: "leave", reason });
+    // Native Android: leave OS call mode + drop the ongoing-call service.
+    if (isNativeAndroid()) void nativeSetInCall(false);
     // The user explicitly ended the call — don't auto-rejoin it on a later reload.
     clearPendingRejoin();
     stopRingtone();

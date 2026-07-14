@@ -52,9 +52,9 @@ describe("mobile shells — repo wiring", () => {
   });
 
   it("the iOS shell loads the live app and carries the call-critical Info.plist keys", () => {
-    const cap = read("mobile/ios/capacitor.config.json");
+    const cap = read("mobile/app/capacitor.config.json");
     expect(cap).toContain('"url": "https://www.your-chat.org/app"');
-    const plist = read("mobile/ios/ios/App/App/Info.plist");
+    const plist = read("mobile/app/ios/App/App/Info.plist");
     expect(plist).toContain("NSCameraUsageDescription");
     expect(plist).toContain("NSMicrophoneUsageDescription");
     expect(plist).toMatch(/UIBackgroundModes[\s\S]{0,80}audio/);

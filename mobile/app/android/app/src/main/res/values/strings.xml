@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">RELAY</string>
+    <string name="title_activity_main">RELAY</string>
+    <string name="package_name">org.yourchat.relay</string>
+    <string name="custom_url_scheme">org.yourchat.relay</string>
+</resources>

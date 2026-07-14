@@ -1391,21 +1391,32 @@ export const v2PushRouter = router({
 
   subscribe: publicProcedure
     .input(
-      z.object({
-        endpoint: z.string().min(10).max(500),
-        keys: z.object({
-          p256dh: z.string().min(10).max(255),
-          auth: z.string().min(6).max(120),
-        }),
-      })
+      z
+        .object({
+          endpoint: z.string().min(10).max(500),
+          /** Web Push encryption keys — required for browsers, absent for FCM
+           *  (the native Android app registers a bare device token). */
+          keys: z
+            .object({
+              p256dh: z.string().min(10).max(255),
+              auth: z.string().min(6).max(120),
+            })
+            .optional(),
+          kind: z.enum(["webpush", "fcm"]).optional(),
+        })
+        .refine(v => (v.kind ?? "webpush") === "fcm" || !!v.keys, {
+          message: "keys are required for webpush subscriptions",
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
+      const kind = input.kind ?? "webpush";
       await upsertPushSubscription({
         identityId: me.id,
         endpoint: input.endpoint,
-        p256dh: input.keys.p256dh,
-        auth: input.keys.auth,
+        p256dh: kind === "fcm" ? "fcm" : input.keys!.p256dh,
+        auth: kind === "fcm" ? "fcm" : input.keys!.auth,
+        kind,
       });
       return { ok: true };
     }),

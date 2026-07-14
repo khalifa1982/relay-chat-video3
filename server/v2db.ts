@@ -644,6 +644,8 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "identities", column: "verified", ddl: "ADD COLUMN `verified` boolean" },
     { table: "identities", column: "firstName", ddl: "ADD COLUMN `firstName` varchar(64)" },
     { table: "identities", column: "lastName", ddl: "ADD COLUMN `lastName` varchar(64)" },
+    // Native Android app push transport (v2.86).
+    { table: "push_subscriptions", column: "kind", ddl: "ADD COLUMN `kind` varchar(10)" },
   ];
   for (const a of adds) {
     try {
@@ -1867,9 +1869,12 @@ export async function upsertPushSubscription(input: {
   endpoint: string;
   p256dh: string;
   auth: string;
+  /** "webpush" (default) or "fcm" (native Android — endpoint = device token). */
+  kind?: "webpush" | "fcm";
 }): Promise<void> {
   const db = await getDb();
   if (!db) return;
+  const kind = input.kind ?? "webpush";
   await db
     .insert(pushSubscriptions)
     .values({
@@ -1877,14 +1882,16 @@ export async function upsertPushSubscription(input: {
       endpoint: input.endpoint.slice(0, 500),
       p256dh: input.p256dh.slice(0, 255),
       auth: input.auth.slice(0, 120),
+      kind,
     })
     .onDuplicateKeyUpdate({
-      // Same endpoint re-registered (e.g. after a login switch on the same
-      // browser) → re-bind it to the CURRENT identity + fresh keys.
+      // Same endpoint/token re-registered (e.g. after a login switch on the
+      // same device) → re-bind it to the CURRENT identity + fresh keys.
       set: {
         identityId: input.identityId,
         p256dh: input.p256dh.slice(0, 255),
         auth: input.auth.slice(0, 120),
+        kind,
       },
     });
 }
@@ -1897,7 +1904,7 @@ export async function deletePushSubscription(endpoint: string): Promise<void> {
 
 export async function listPushSubscriptions(
   identityId: number,
-): Promise<Array<{ endpoint: string; p256dh: string; auth: string }>> {
+): Promise<Array<{ endpoint: string; p256dh: string; auth: string; kind: string | null }>> {
   const db = await getDb();
   if (!db) return [];
   const rows = await db
@@ -1905,6 +1912,7 @@ export async function listPushSubscriptions(
       endpoint: pushSubscriptions.endpoint,
       p256dh: pushSubscriptions.p256dh,
       auth: pushSubscriptions.auth,
+      kind: pushSubscriptions.kind,
     })
     .from(pushSubscriptions)
     .where(eq(pushSubscriptions.identityId, identityId));

@@ -16,9 +16,82 @@ on:
     branches: [main]
     paths:
       - "mobile/android/**"
+      - "mobile/app/**"
       - ".github/workflows/android-apk.yml"
 
 jobs:
+  # ── The NATIVE Android app (mobile/app — Capacitor + native call layer). ──
+  # This is the PRIMARY store artifact since v2.86: full-screen incoming-call
+  # ring, OS speakerphone routing, ongoing-call foreground service, FCM push.
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Capacitor tooling
+        working-directory: mobile/app
+        run: npm ci
+
+      - name: Sync web assets + plugins into the native project
+        working-directory: mobile/app
+        run: npx cap sync android
+
+      - name: Build native debug APK + Play bundle
+        working-directory: mobile/app/android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug bundleRelease
+
+      - name: Upload NATIVE debug APK (installable)
+        uses: actions/upload-artifact@v4
+        with:
+          name: RELAY-NATIVE-debug-apk
+          path: mobile/app/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload NATIVE Play bundle (AAB, unsigned)
+        uses: actions/upload-artifact@v4
+        with:
+          name: RELAY-NATIVE-release-aab
+          path: mobile/app/android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+
+      - name: Sign NATIVE Play bundle (when signing secrets are configured)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "No ANDROID_KEYSTORE_BASE64 secret — skipping signing (see mobile/README.md §3.2)."
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/upload.keystore
+          cp mobile/app/android/app/build/outputs/bundle/release/app-release.aab /tmp/RELAY-NATIVE-release-signed.aab
+          jarsigner \
+            -keystore /tmp/upload.keystore \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -keypass "${KEY_PASSWORD:-$KEYSTORE_PASSWORD}" \
+            -sigalg SHA256withRSA -digestalg SHA-256 \
+            /tmp/RELAY-NATIVE-release-signed.aab "$KEY_ALIAS"
+          jarsigner -verify /tmp/RELAY-NATIVE-release-signed.aab
+          echo "Signed native bundle ready."
+
+      - name: Upload SIGNED NATIVE Play bundle (only when signing ran)
+        uses: actions/upload-artifact@v4
+        with:
+          name: RELAY-NATIVE-release-aab-SIGNED
+          path: /tmp/RELAY-NATIVE-release-signed.aab
+          if-no-files-found: ignore
+
+  # ── The TWA shell (mobile/android) — kept as a lightweight fallback. ──
   build:
     runs-on: ubuntu-latest
     steps:

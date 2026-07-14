@@ -9,6 +9,7 @@ import {
 import { useLocation } from "wouter";
 import { X, Loader2, PhoneOff } from "lucide-react";
 import { startRelay, type RelayHandle, type RelayPhase } from "@/lib/relayClient";
+import { isNativeAndroid, nativeEnsureNotifPermission, nativeGetPushToken } from "@/lib/nativeBridge";
 import { RELAY_MARKUP, RELAY_CSS } from "@/lib/relayAssets";
 import { trpc } from "@/lib/trpc";
 
@@ -84,6 +85,21 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
       .then((r) => sendMessage.mutateAsync({ conversationId: r.conversationId, kind: "text", body: text }))
       .catch(() => {/* best-effort — the decline itself already went through */});
   };
+
+  // NATIVE ANDROID APP: register this device's FCM token so the server can
+  // WAKE it for incoming calls even when the app is closed (kind:"fcm" —
+  // browsers/PWA use Web Push instead). No-op outside the native shell, and
+  // resolves to nothing until Firebase is configured (mobile/README.md).
+  const pushSubscribe = trpc.push.subscribe.useMutation();
+  useEffect(() => {
+    if (!me || !isNativeAndroid()) return;
+    void (async () => {
+      await nativeEnsureNotifPermission();
+      const token = await nativeGetPushToken();
+      if (token) pushSubscribe.mutate({ endpoint: token, kind: "fcm" });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.id]);
 
   // BLOCKED numbers → the engine silently declines their calls. Sourced from
   // the contact list (blocked flag), refreshed with it.

@@ -431,6 +431,9 @@ export const pushSubscriptions = mysqlTable(
     p256dh: varchar("p256dh", { length: 255 }).notNull(),
     /** Client auth secret (base64url) for payload encryption. */
     auth: varchar("auth", { length: 120 }).notNull(),
+    /** Transport: "webpush" (browsers/PWA; null = legacy rows) or "fcm"
+        (the native Android app — endpoint holds the FCM device token). */
+    kind: varchar("kind", { length: 10 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({

@@ -50,7 +50,17 @@ each scenario below has broken at least once in RELAY's history.*
 
 ## D · Shell-specific
 
-14. **TWA full-screen**: after assetlinks are configured, launch shows NO URL
+14. **Native full-screen ring (closed app)**: force-stop the RELAY app on
+    Android → call its number → the phone rings with the FULL-SCREEN
+    Answer/Decline screen (even locked); Answer opens the app and the held
+    ring is delivered. *(Requires Firebase configured — mobile/README.md.)*
+14b. **Native ongoing-call service**: during a call, background the app for
+    2+ minutes → audio keeps flowing; an "Ongoing call" notification shows;
+    hang-up removes it.
+14c. **Native speaker toggle**: in-call audio button flips earpiece↔speaker
+    through the OS (verify with volume UI / actual loudness), remembered on
+    the next call.
+15. **TWA full-screen**: after assetlinks are configured, launch shows NO URL
     bar. (`https://www.your-chat.org/.well-known/assetlinks.json` must return
     the fingerprints.)
 15. **First-run permissions**: camera/mic prompts appear once, are remembered

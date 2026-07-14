@@ -20,6 +20,7 @@
  */
 import crypto from "crypto";
 import { listPushSubscriptions, deletePushSubscription } from "./v2db";
+import { sendFcmData } from "./fcm";
 
 export interface PushPayload {
   kind: "incoming-call" | "missed-call";
@@ -81,15 +82,33 @@ export function vapidConfig(): { publicKey: string; privateKey: string; subject:
  * Best-effort: failures never propagate; dead endpoints (404/410) are pruned.
  */
 export async function sendPushToIdentity(identityId: number, payload: PushPayload): Promise<number> {
-  const cfg = vapidConfig();
-  if (!cfg) return 0;
-  let subs: Array<{ endpoint: string; p256dh: string; auth: string }>;
+  let subs: Array<{ endpoint: string; p256dh: string; auth: string; kind?: string | null }>;
   try {
     subs = await listPushSubscriptions(identityId);
   } catch {
     return 0;
   }
   if (subs.length === 0) return 0;
+  // NATIVE ANDROID (kind="fcm"): the endpoint IS the FCM device token; deliver
+  // the same payload as a data message so RelayFcmService renders the
+  // full-screen ring / notification even with the app closed.
+  const fcmTokens = subs.filter(s => s.kind === "fcm").map(s => s.endpoint);
+  let fcmDelivered = 0;
+  if (fcmTokens.length > 0) {
+    const r = await sendFcmData(fcmTokens, {
+      kind: payload.kind,
+      title: payload.title,
+      body: payload.body ?? "",
+      tag: payload.tag ?? "",
+      url: payload.url ?? "",
+    });
+    fcmDelivered = r.delivered;
+    await Promise.all(r.invalidTokens.map(t => deletePushSubscription(t).catch(() => {})));
+  }
+  subs = subs.filter(s => s.kind !== "fcm");
+  const cfg = vapidConfig();
+  if (!cfg) return fcmDelivered;
+  if (subs.length === 0) return fcmDelivered;
   let webpush: typeof import("web-push");
   try {
     webpush = (await import("web-push")).default as unknown as typeof import("web-push");
@@ -98,7 +117,7 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
     return 0;
   }
   const body = JSON.stringify(payload);
-  let delivered = 0;
+  let delivered = fcmDelivered;
   await Promise.all(
     subs.map(async (s) => {
       try {

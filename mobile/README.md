@@ -32,15 +32,50 @@ the wrapper simply don't exist in Chrome.
 
 ```
 mobile/
-├── android/            Complete TWA Gradle project → APK/AAB (package org.yourchat.relay)
-├── ios/                Capacitor shell — real Xcode project under ios/App
+├── app/                The shared Capacitor project (one config, two platforms)
 │   ├── capacitor.config.json   (loads https://www.your-chat.org/app)
-│   └── ios/App/App/Info.plist  (camera/mic purpose strings, background audio)
+│   ├── android/        ★ NATIVE Android app (v2.86) — Capacitor + native call
+│   │                     layer: full-screen incoming ring, OS speakerphone,
+│   │                     ongoing-call foreground service, FCM push
+│   └── ios/App/        iOS Xcode project (camera/mic strings, bg audio)
+├── android/            TWA shell (kept as a lightweight fallback)
 ├── README.md           This runbook
 └── QA-TEST-PLAN.md     Release test protocol (device matrix + call scenarios)
-.github/workflows/android-apk.yml   CI: builds installable APK + Play AAB
+.github/workflows/android-apk.yml   CI: native APK/AAB (primary) + TWA
 server/wellKnown.ts     /.well-known/assetlinks.json (env-driven)
+server/fcm.ts           FCM sender for the native app (FIREBASE_SERVICE_ACCOUNT_JSON)
 ```
+
+### The native Android app (v2.86) — what's native and why
+
+The web app remains the UI + call engine; native Android code adds what no
+web shell can do:
+- **Full-screen incoming call** (`IncomingCallActivity` via FCM
+  `fullScreenIntent`): rings over the lock screen with Answer/Decline even
+  when the app is CLOSED. Answer opens the app; the signaling server
+  redelivers the held ring (`deliverPendingRing`) and the in-app flow takes over.
+- **Real speakerphone routing** (`CallAudioPlugin` → AudioManager) — the
+  in-call speaker button now switches the OS route like the system dialer.
+- **Ongoing-call foreground service** (`CallService`) — Android never freezes
+  a live call in the background.
+- **FCM device token** registered with the server as
+  `push_subscriptions.kind = "fcm"`; the server delivers incoming-call /
+  missed-call DATA messages via FCM v1 (`server/fcm.ts`).
+
+### **[YOU]** Firebase setup (~10 min — push stays dormant until this)
+
+1. https://console.firebase.google.com → **Add project** (name: RELAY;
+   Analytics optional/off).
+2. In the project: **Add app → Android**, package name **`org.yourchat.relay`**
+   → download **`google-services.json`** → commit it at
+   `mobile/app/android/app/google-services.json` (it contains no secrets; the
+   build auto-detects it and enables FCM).
+3. **Project settings → Service accounts → Generate new private key** →
+   download the JSON. In Manus **Settings → Secrets** add
+   `FIREBASE_SERVICE_ACCOUNT_JSON` = the ENTIRE file content (one line is
+   fine). Publish from Manus. Server-side FCM sends are now live.
+4. Rebuild the app (Actions → Android APK) and reinstall — the app registers
+   its token on next open, and closed-app rings work.
 
 ---
 
@@ -48,9 +83,11 @@ server/wellKnown.ts     /.well-known/assetlinks.json (env-driven)
 
 ### 3.1 Get an APK today (no toolchain needed)
 GitHub → **Actions → "Android APK" → Run workflow**. Artifacts:
-- `RELAY-debug-apk` — install directly on any phone (enable "install unknown
-  apps"). This is your test build.
-- `RELAY-release-aab` — the bundle you'll sign & upload to Play.
+- **`RELAY-NATIVE-debug-apk`** — the native app; install directly on any phone
+  (enable "install unknown apps"). This is your test build.
+- **`RELAY-NATIVE-release-aab`** — the bundle you'll sign & upload to Play
+  (`RELAY-NATIVE-release-aab-SIGNED` appears once the signing secrets are set).
+- `RELAY-debug-apk` / `RELAY-release-aab` — the TWA fallback shell.
 
 Local alternative: open `mobile/android/` in Android Studio (it generates the
 Gradle wrapper) → Build.
@@ -103,7 +140,7 @@ a paid macOS runner).
 
 ### 4.1 Build steps (any Mac)
 ```bash
-cd mobile/ios
+cd mobile/app
 npm install
 npx cap sync ios          # installs Pods (needs CocoaPods: `brew install cocoapods`)
 npx cap open ios          # opens ios/App/App.xcworkspace in Xcode
