@@ -64,9 +64,14 @@ Gradle wrapper) → Build.
    a different id — it's permanent).
 3. Use **Play App Signing** (default). Generate an upload key locally:
    `keytool -genkeypair -v -keystore relay-upload.keystore -alias relay -keyalg RSA -keysize 2048 -validity 10000`
-   Keep the keystore + password in a password manager. Sign the AAB:
-   `jarsigner -keystore relay-upload.keystore app-release.aab relay` (or let
-   Android Studio do it), then upload.
+   Keep the keystore + password in a password manager.
+4. **Easiest signing path — let CI do it**: add four GitHub repo secrets
+   (Settings → Secrets and variables → Actions): `ANDROID_KEYSTORE_BASE64`
+   (`base64 -w0 relay-upload.keystore`), `ANDROID_KEYSTORE_PASSWORD`,
+   `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. Every "Android APK" run then
+   also emits **`RELAY-release-aab-SIGNED`** — download, unzip, upload that
+   `.aab` straight to Play Console. (Manual alternative:
+   `jarsigner -keystore relay-upload.keystore app-release.aab relay`.)
 
 ### 3.3 **[YOU]** Digital Asset Links → full-screen
 After the first upload, Play Console → **Test and release → App integrity →

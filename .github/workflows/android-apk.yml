@@ -59,3 +59,40 @@ jobs:
           name: RELAY-release-aab
           path: mobile/android/app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: error
+
+      # ── Optional: produce a READY-TO-UPLOAD signed bundle ────────────────
+      # Add these repository secrets (Settings → Secrets and variables →
+      # Actions) and every run also emits RELAY-release-aab-SIGNED:
+      #   ANDROID_KEYSTORE_BASE64   — `base64 -w0 relay-upload.keystore`
+      #   ANDROID_KEYSTORE_PASSWORD — keystore password
+      #   ANDROID_KEY_ALIAS         — key alias (e.g. relay)
+      #   ANDROID_KEY_PASSWORD      — key password (omit if same as keystore)
+      # Without the secrets this step prints a note and the run stays green.
+      - name: Sign Play bundle (when signing secrets are configured)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "No ANDROID_KEYSTORE_BASE64 secret — skipping signing (see workflow comments / mobile/README.md §3.2)."
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/upload.keystore
+          cp mobile/android/app/build/outputs/bundle/release/app-release.aab /tmp/RELAY-release-signed.aab
+          jarsigner \
+            -keystore /tmp/upload.keystore \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -keypass "${KEY_PASSWORD:-$KEYSTORE_PASSWORD}" \
+            -sigalg SHA256withRSA -digestalg SHA-256 \
+            /tmp/RELAY-release-signed.aab "$KEY_ALIAS"
+          jarsigner -verify /tmp/RELAY-release-signed.aab
+          echo "Signed bundle ready."
+
+      - name: Upload SIGNED Play bundle (only when signing ran)
+        uses: actions/upload-artifact@v4
+        with:
+          name: RELAY-release-aab-SIGNED
+          path: /tmp/RELAY-release-signed.aab
+          if-no-files-found: ignore
