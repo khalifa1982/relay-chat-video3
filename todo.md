@@ -3427,3 +3427,20 @@ enumerated interop risks; the plan cross-checked the four readers and resolved 7
 - **Filters: descoped from M5, documented** — MediaPipe-native camera processing is only
   verifiable on physical device GPUs; no CI-checkable path from this environment. Ships with
   the device-verified pass (alongside iOS/Mac work). Pinned in nativeRewrite.test.ts (M5 block).
+- **M5 adversarial review (agent vs installed livekit libs + web/server ground truth) — 6
+  confirmed defects, all fixed**: (1+2 CRITICAL — screen share was a silent no-op on Android 10+:
+  the WebRTC lib's mediaProjection foreground service is disabled until `LiveKitReactNative.
+  setup()` runs in Application.onCreate (never called — also the lib's mandatory init), and the
+  capture SecurityException is swallowed internally so a frameless track was "shared" while the
+  room got told screen-on; plus CallService's manifest type declaration lacked mediaProjection so
+  the post-grant FGS upgrade threw and fell back silently → setup(this) added + manifest type
+  added; (3) SFU viewers rendered the sharer's muted CAMERA under the "viewing a shared screen"
+  chip — publishTiles now prefers the ScreenShare-source publication; (4) a sharer who hung
+  up/crashed left a permanent spotlight — peerScreenPin now clears on removePeer/
+  ParticipantDisconnected and only the matching pin's screen{off} clears; (5) enabling the camera
+  mid-share minted a duplicate video m-line and killed the share (remote-reachable via
+  video-accept) — enableCamera is state-only while sharing (stop-share restores per camOn);
+  (6) mesh peers joining mid-share got the parked camera (black) instead of the screen —
+  createPeer now offers the screen track to newcomers (web-parity bug class). Verified OK:
+  bridge/Kotlin compile surface, PiP gating, recording races, protocol vocabulary, re-register
+  recAvailable.

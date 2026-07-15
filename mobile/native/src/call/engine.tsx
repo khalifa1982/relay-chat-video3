@@ -223,8 +223,15 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     const room = lkRoom.current;
     if (room) {
       room.remoteParticipants.forEach(rp => {
+        // Prefer a SCREEN-SHARE publication when one exists — natively the
+        // share is a SEPARATE publication behind the camera one, and taking
+        // the first pub rendered the (muted) camera under a "viewing their
+        // screen" chip (review finding).
         let track: unknown | null = null;
-        rp.videoTrackPublications.forEach(pub => { if (pub.track && !track) track = pub.track; });
+        rp.videoTrackPublications.forEach(pub => {
+          const src = (pub as unknown as { source?: string }).source;
+          if (pub.track && (src === Track.Source.ScreenShare || !track)) track = pub.track;
+        });
         let stream: MediaStream | null = null;
         if (track) {
           // Wrap the SFU video track in a stable MediaStream (cached per
@@ -303,12 +310,19 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     const peer: Peer = { pc, stream, name, pendingCandidates: [], hasRemoteDesc: false, initiator };
     peers.current.set(pin, peer);
     const ls = localStream.current;
-    if (ls) ls.getTracks().forEach(t => pc.addTrack(t, ls));
+    // Mid-share joiners must receive the SCREEN, not the parked camera —
+    // the web fixed this exact bug class (a fresh group member saw black).
+    const screenVt = st.current.sharingScreen ? screenStream.current?.getVideoTracks()[0] : null;
+    if (ls) {
+      ls.getAudioTracks().forEach(t => pc.addTrack(t, ls));
+      const vt = screenVt ?? ls.getVideoTracks()[0];
+      if (vt) pc.addTrack(vt as never, ls as never);
+    }
     // v2.80 m-line discipline: a camera-less INITIATOR still negotiates a
     // sendrecv video m-line, so a later consent upgrade needs only
     // replaceTrack (no renegotiation, no glare) and the peer's camera has an
     // inbound slot from day one.
-    if (initiator && !(ls && ls.getVideoTracks().length > 0)) {
+    if (initiator && !screenVt && !(ls && ls.getVideoTracks().length > 0)) {
       try {
         (pc as unknown as { addTransceiver: (k: string, o: object) => void })
           .addTransceiver("video", { direction: "sendrecv" });
@@ -351,6 +365,8 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     if (!peer) return;
     peers.current.delete(pin);
     try { peer.pc.close(); } catch { /* */ }
+    // A sharer who leaves never sends screen{off} — clear their spotlight.
+    if (st.current.peerScreenPin === pin) patch({ peerScreenPin: "" });
     publishTiles();
     // 1:1 auto-end (v2.81): the other party left — end rather than sit alone.
     // Groups stay open (the host may ring more people in — web parity), and a
@@ -452,7 +468,8 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       if (room.remoteParticipants.size > 1) markGroup();
       publishTiles();
     });
-    room.on(RoomEvent.ParticipantDisconnected, () => {
+    room.on(RoomEvent.ParticipantDisconnected, (rp?: { identity?: string }) => {
+      if (rp?.identity && st.current.peerScreenPin === rp.identity) patch({ peerScreenPin: "" });
       publishTiles();
       if (inCall.current && room.remoteParticipants.size === 0 && established.current &&
           !callIsGroup.current && !heldByPeer.current) {
@@ -503,7 +520,9 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
         break;
       case "peer-screen":
         if (!m.pin) break;
-        patch({ peerScreenPin: m.on !== false ? m.pin : "" });
+        if (m.on !== false) patch({ peerScreenPin: m.pin });
+        // Only the SHARER's own off clears (two group sharers must not desync).
+        else if (st.current.peerScreenPin === m.pin) patch({ peerScreenPin: "" });
         publishTiles();
         break;
       case "room": {
@@ -1002,6 +1021,11 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     try {
       await ensureMedia(true);
       patch({ camOn: true });
+      // Mid-share the video slot carries the SCREEN track — swapping the
+      // camera in would kill the share, and the addTrack fallback would mint
+      // a duplicate m-line (web guards every enable path the same way).
+      // stop-share restores the camera per camOn, so state-only is enough.
+      if (st.current.sharingScreen) return;
       const room = lkRoom.current;
       if (room) await room.localParticipant.setCameraEnabled(true);
       else {

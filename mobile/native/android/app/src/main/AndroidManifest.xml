@@ -55,7 +55,7 @@
       <service
         android:name=".CallService"
         android:exported="false"
-        android:foregroundServiceType="microphone|mediaPlayback" />
+        android:foregroundServiceType="microphone|mediaPlayback|mediaProjection" />
 
       <!-- FCM data messages (incoming-call / missed-call) even when closed. -->
       <service

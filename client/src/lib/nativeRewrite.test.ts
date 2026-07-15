@@ -256,6 +256,18 @@ describe("native rewrite — M5 screen share / PiP / recording (Android)", () =>
     expect(e).toMatch(/screenShare: true/);
     expect(read("mobile/native/android/app/src/main/java/com/relaynative/CallService.java"))
       .toContain("FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION");
+    // Review findings: the lib's projection FGS is OFF until setup() runs
+    // (share silently sends black without it), and startForeground with a
+    // type missing from the manifest declaration throws.
+    expect(read("mobile/native/android/app/src/main/java/com/relaynative/MainApplication.kt"))
+      .toContain("LiveKitReactNative.setup(this)");
+    expect(read("mobile/native/android/app/src/main/AndroidManifest.xml"))
+      .toContain("microphone|mediaPlayback|mediaProjection");
+    // Mid-share parity: camera enable is state-only, joiners get the SCREEN.
+    const eng = read("mobile/native/src/call/engine.tsx");
+    expect(eng).toMatch(/if \(st\.current\.sharingScreen\) return;/);
+    expect(eng).toMatch(/screenVt \?\? ls\.getVideoTracks\(\)\[0\]/);
+    expect(eng).toContain("Track.Source.ScreenShare"); // SFU viewers pick the share pub
   });
 
   it("PiP: in-call home press shrinks to Picture-in-Picture, gated by the engine", () => {
