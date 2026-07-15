@@ -69,6 +69,30 @@ describe("native rewrite — M1 foundation", () => {
     expect(cl).toContain("Modal");
   });
 
+  it("M3: the call engine port speaks the production protocol", () => {
+    const sig = read("mobile/native/src/call/signaling.ts");
+    expect(sig).toContain("/api/relay/stream?cid=");
+    expect(sig).toContain("/api/relay/send");
+    expect(sig).toMatch(/250 \* Math\.pow\(3, attempt\)/); // v2.80 retry parity
+    const eng = read("mobile/native/src/call/engine.tsx");
+    // Staged progress incl. the v2.83 paging state + stale-ring replace rule.
+    expect(eng).toContain('"paging"');
+    expect(eng).toMatch(/cur\.from !== m\.from && Date\.now\(\) - cur\.at <= 70_000/);
+    // Mutual-consent video protocol (v2.81 vocabulary).
+    for (const t of ['"video-request"', '"video-accept"', '"video-decline"']) expect(eng).toContain(t);
+    // Mesh glare rule: the NEWCOMER (joined.members) offers.
+    expect(eng).toMatch(/case "joined":[\s\S]*?meshOffer/);
+    // 1:1 auto-end + 65s no-answer backstop.
+    expect(eng).toContain('hangupInternal("remote-left")');
+    expect(eng).toContain("65_000");
+    // One WebRTC stack for mesh + SFU; native audio routing.
+    expect(eng).toContain("@livekit/react-native-webrtc");
+    expect(eng).toContain("InCallManager");
+    // Wired into the UI.
+    expect(read("mobile/native/App.tsx")).toContain("<CallOverlay />");
+    expect(read("mobile/native/src/screens/Dialer.tsx")).toContain("call.dial(dialed");
+  });
+
   it("CI builds the milestone APK", () => {
     const wf = read(".github/workflows/native-rn.yml");
     expect(wf).toContain("RELAY-RN-debug-apk");

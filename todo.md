@@ -3240,3 +3240,37 @@ mobile/native (React Native) now has the full messaging surface against the UNMO
   infra). Deps added: react-native-sse, react-native-image-picker, @react-navigation/native-stack.
 - Pins extended (nativeRewrite.test.ts M2 block: procedure paths, real thread fields, upload
   contract, SSE bus, receipts/unsend/reply/typing, Android-safe sheet) → 771 passing.
+
+## Native rewrite — Milestone 3 (core): the call engine port (2026-07-15)
+
+mobile/native can now CALL — the engine that took v2.74–v2.84 to harden, ported to compiled
+native against the unmodified relay server:
+- **Signaling** (src/call/signaling.ts): the exact SSE (/api/relay/stream?cid=) + POST
+  (/api/relay/send) protocol — register-with-preferred-pin under my identity number,
+  re-register on every `ready`, 1.5s stream reconnect, the v2.80 250·3^n send retry (a dropped
+  offer is pair-fatal on the mesh), foreground ensureConnected.
+- **Engine** (src/call/engine.tsx, a root CallProvider): staged progress calling → ringing /
+  "Reaching their phone…" (v2.83 paging ack) → connecting → live; 65s no-answer backstop; the
+  v2.83 stale-ring replace rule (same-caller redelivery/redial never blind-rejected); honest
+  failure card (declined / busy / unreachable) before teardown; 1:1 auto-end on remote-left;
+  kicked/error handling.
+- **Mesh**: one shared @livekit/react-native-webrtc stack — newcomer-offers glare rule (offers
+  on `joined` members, waits on `peer-joined`, matching the web), ICE candidate queue until
+  remote description, connectionstate → establishment, renegotiation for consent upgrades.
+- **SFU**: livekit-token push → Room.connect (AudioSession started), mic publish, camera only
+  after consent, TrackSubscribed → establishment, remote video tracks wrapped into cached
+  MediaStreams so ONE RTCView path renders mesh + SFU tiles; pre-establishment Disconnected
+  retries via refresh-livekit (v2.83 parity) instead of dying.
+- **Mutual-consent video (v2.81)**: voice-first dials; a video dial's camera stays OFF until the
+  callee answers-with-video (video-accept) or accepts the in-call ask; mid-call camera tap sends
+  video-request → peer prompt → BOTH cameras on together; decline keeps voice.
+- **Native audio**: react-native-incall-manager — communication mode at establishment, system
+  default ringtone for incoming, earpiece/speaker toggle with speaker DEFAULT ON (v2.84 parity).
+- **UI** (src/screens/CallOverlay.tsx): dial card (avatar/pin/name/mode chip/status), incoming
+  ring screen (Answer-as-Voice always; Answer-as-Video only on video dials; Decline), in-call
+  tile grid + self-preview, controls (mute/cam/flip/speaker/end), consent ask banner. Wired:
+  Dialer Voice/Video, Contacts voice+video actions, History call-back (voice-first).
+- Deferred to M3.5 explicitly: call waiting (hold/swap/merge), group calls, rejoin-after-restart,
+  voice notes, screen share/recording, filters (M5). Deps: @livekit/react-native(+webrtc fork),
+  react-native-incall-manager; CAMERA/RECORD_AUDIO/etc. added to the RN manifest; WebRTC globals
+  registered in index.js.

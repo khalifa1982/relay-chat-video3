@@ -27,9 +27,18 @@ already in this repo; the steps only the account owner can perform are marked
 > realtime over the same /api/v2/events SSE bus (+ polling safety net),
 > thread mute (client-side, like the web), new-chat by number, contacts
 > add/edit/favorite/category/block/delete with an Android-safe action sheet.
-> Deferred to M3 (A/V infra): voice-note record/playback, group creation. **M3** The call engine port
-> (SSE+POST signaling verbatim, mesh via react-native-webrtc + LiveKit RN
-> SDK, staged progress, consent protocol, call waiting, rejoin/paging).
+> Deferred to M3 (A/V infra): voice-note record/playback, group creation.
+> **M3 ✅ (core) The call engine port** — the production signaling protocol
+> verbatim (SSE+POST, retry/backoff, re-register-on-ready), mesh WebRTC
+> (newcomer-offers glare rule, candidate queue, renegotiation) + LiveKit SFU
+> on ONE shared @livekit/react-native-webrtc stack, staged progress
+> (calling → ringing/"reaching their phone…" → connecting → live, 65s
+> backstop), v2.83 stale-ring replace rules, v2.81 mutual-consent video
+> (request/accept/decline — both cameras together), 1:1 auto-end, native
+> earpiece/speaker routing (speaker default ON, v2.84 parity), full-screen
+> in-app ring + in-call UI wired to Dialer/Contacts/History.
+> Deferred to M3.5: call waiting (hold/swap/merge), group calls,
+> rejoin-after-restart, voice notes, screen share/recording.
 > **M4** OS call experience — CallKit + ConnectionService + VoIP push (the
 > "rings like a real phone" milestone). **M5** Filters (MediaPipe native),
 > screen share, native PiP, recording. **M6** Full QA matrix + store swap.

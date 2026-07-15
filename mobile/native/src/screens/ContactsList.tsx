@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Alert, FlatList, Modal, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { api, type ContactRow } from "../lib/api";
+import { useCall } from "../call/engine";
 import { onEvent } from "../lib/events";
 import { colors, spacing } from "../lib/theme";
 
@@ -11,6 +12,7 @@ const CATEGORY_LABEL: Record<string, string> = { vip: "VIP", family: "Family", f
 /** Contacts with M2 write-parity: add/edit/favorite/category/block/delete +
  *  Message action; grouped Favorites → categories → the rest, like the web. */
 export function ContactsList({ navigation }: { navigation: { navigate: (s: string, p?: object) => void } }) {
+  const call = useCall();
   const [rows, setRows] = useState<ContactRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -81,6 +83,9 @@ export function ContactsList({ navigation }: { navigation: { navigate: (s: strin
                 </Text>
                 <Text style={s.sub}>{fmtPin(item.c.number)}{item.c.isOnline ? " · online" : ""}</Text>
               </View>
+              <TouchableOpacity style={s.msgBtn} onPress={() => call.dial(item.c.number, { voice: true, displayName: item.c.displayName ?? undefined })}>
+                <Text style={{ fontSize: 16 }}>📞</Text>
+              </TouchableOpacity>
               <TouchableOpacity style={s.msgBtn} onPress={() => message(item.c)}>
                 <Text style={{ fontSize: 16 }}>💬</Text>
               </TouchableOpacity>
@@ -97,6 +102,12 @@ export function ContactsList({ navigation }: { navigation: { navigate: (s: strin
             {sheet ? (
               <>
                 <Text style={s.sheetTitle}>{sheet.displayName ?? fmtPin(sheet.number)} · {fmtPin(sheet.number)}</Text>
+                <TouchableOpacity style={s.sheetRow} onPress={() => sheetAction(() => call.dial(sheet.number, { voice: true, displayName: sheet.displayName ?? undefined }))}>
+                  <Text style={s.sheetText}>📞  Voice call</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={s.sheetRow} onPress={() => sheetAction(() => call.dial(sheet.number, { displayName: sheet.displayName ?? undefined }))}>
+                  <Text style={s.sheetText}>🎥  Video call</Text>
+                </TouchableOpacity>
                 <TouchableOpacity style={s.sheetRow} onPress={() => sheetAction(() => message(sheet))}>
                   <Text style={s.sheetText}>💬  Message</Text>
                 </TouchableOpacity>

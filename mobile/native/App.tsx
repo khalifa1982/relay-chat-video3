@@ -12,6 +12,8 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { api, type Whoami } from "./src/lib/api";
 import { SessionProvider } from "./src/lib/session";
+import { CallProvider } from "./src/call/engine";
+import { CallOverlay } from "./src/screens/CallOverlay";
 import { colors } from "./src/lib/theme";
 import { Onboarding } from "./src/screens/Onboarding";
 import { Dialer } from "./src/screens/Dialer";
@@ -107,6 +109,7 @@ export default function App() {
 
   return (
     <SessionProvider value={me}>
+      <CallProvider me={me}>
       <NavigationContainer theme={navTheme}>
         <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
         <Stack.Navigator
@@ -131,6 +134,8 @@ export default function App() {
           />
         </Stack.Navigator>
       </NavigationContainer>
+      <CallOverlay />
+      </CallProvider>
     </SessionProvider>
   );
 }

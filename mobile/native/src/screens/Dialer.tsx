@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { api, type LookupResult, type Whoami } from "../lib/api";
+import { useCall } from "../call/engine";
 import { colors, spacing } from "../lib/theme";
 
 const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"];
@@ -8,6 +9,7 @@ const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"];
 /** Native keypad — same layout, ghost-number rule, and presence preview as
  *  the web Dialer. Live calls land in Milestone 3 (engine port). */
 export function Dialer({ me }: { me: Whoami }) {
+  const call = useCall();
   const [dialed, setDialed] = useState("");
   const [peer, setPeer] = useState<LookupResult | null>(null);
 
@@ -24,8 +26,11 @@ export function Dialer({ me }: { me: Whoami }) {
   const fmt = (n: string) => (n.length > 3 ? `${n.slice(0, 3)} ${n.slice(3)}` : n);
   const display = dialed || (me.number ? fmt(me.number) : "");
 
-  const notYet = () =>
-    Alert.alert("Calls arrive in Milestone 3", "The native call engine (voice, video, groups) is the next milestone — this build carries identity, messaging views, contacts and history against the live backend.");
+  const startCall = (voice: boolean) => {
+    if (dialed.length !== 6) return;
+    call.dial(dialed, { voice, displayName: peer?.displayName });
+    setDialed("");
+  };
 
   return (
     <View style={s.root}>
@@ -41,10 +46,10 @@ export function Dialer({ me }: { me: Whoami }) {
         ))}
       </View>
       <View style={s.row}>
-        <TouchableOpacity style={[s.action, { backgroundColor: "#1D4ED8" }]} onPress={notYet}>
+        <TouchableOpacity style={[s.action, { backgroundColor: "#1D4ED8" }]} onPress={() => startCall(true)}>
           <Text style={s.actionText}>Voice</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[s.action, { backgroundColor: "#15803D" }]} onPress={notYet}>
+        <TouchableOpacity style={[s.action, { backgroundColor: "#15803D" }]} onPress={() => startCall(false)}>
           <Text style={s.actionText}>Video</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[s.action, { backgroundColor: colors.surfaceRaised }]} onPress={() => setDialed(d => d.slice(0, -1))}>

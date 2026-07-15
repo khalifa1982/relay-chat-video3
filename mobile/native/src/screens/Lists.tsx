@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
-import { api, type CallRow, type ConferenceRow, type ContactRow, type ThreadRow } from "../lib/api";
+import { TouchableOpacity } from "react-native";
+import { api, type CallRow, type ConferenceRow } from "../lib/api";
+import { useCall } from "../call/engine";
 import { colors, spacing } from "../lib/theme";
 
 /** M1 read-parity screens: History / Messages / Contacts render LIVE data from
@@ -22,6 +24,7 @@ const fmtWhen = (d: string | Date | null) => (d ? new Date(d).toLocaleString() :
 const fmtPin = (n: string | null) => (n && n.length === 6 ? `${n.slice(0, 3)}-${n.slice(3)}` : n ?? "");
 
 export function History() {
+  const call = useCall();
   const calls = useData(api.callHistory, [] as CallRow[]);
   const confs = useData(api.conferenceHistory, [] as ConferenceRow[]);
   const items = [
@@ -30,6 +33,7 @@ export function History() {
       title: c.participants.filter(p => !p.isSelf).map(p => p.name).join(", ") || `Call to ${fmtPin(c.dialedNumber)}`,
       sub: `${c.participants[0]?.isSelf ? "Outgoing" : "Incoming"} · ${Math.round(c.durationSec / 60)}m · ${fmtWhen(c.startedAt)}`,
       tone: c.participants[0]?.isSelf ? colors.tabCalls : colors.tabHistory,
+      redial: c.dialedNumber ?? c.participants.find(p => !p.isSelf)?.number ?? null,
     })),
     // Parity with the web's isSoloRow: answered/ended calls are represented by
     // conferenceHistory above — the solo list is ONLY the never-connected rows.
@@ -38,6 +42,7 @@ export function History() {
       title: c.other?.displayName ?? fmtPin(c.other?.number ?? null) ?? "Unknown",
       sub: `${c.direction === "in" ? (c.status === "declined" ? "Declined" : "Missed") : "No answer"} · ${fmtWhen(c.startedAt)}`,
       tone: c.direction === "in" ? colors.danger : colors.tabCalls,
+      redial: c.other?.number ?? null,
     })),
   ].sort((a, b) => b.at - a.at);
 
@@ -55,6 +60,13 @@ export function History() {
             <Text style={[s.title, { color: item.tone }]} numberOfLines={1}>{item.title}</Text>
             <Text style={s.sub} numberOfLines={1}>{item.sub}</Text>
           </View>
+          {item.redial && /^\d{6}$/.test(item.redial) ? (
+            <TouchableOpacity
+              style={s.callBack}
+              onPress={() => call.dial(item.redial as string, { voice: true })}>
+              <Text style={{ fontSize: 16 }}>📞</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       )}
     />
@@ -65,6 +77,7 @@ const s = StyleSheet.create({
   list: { flex: 1, backgroundColor: colors.bg },
   row: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: spacing(4), paddingVertical: spacing(3), borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   dot: { width: 10, height: 10, borderRadius: 5 },
+  callBack: { padding: 10 },
   avatar: { width: 44, height: 44, borderRadius: 22, borderWidth: 2, backgroundColor: colors.surfaceRaised, alignItems: "center", justifyContent: "center" },
   avatarText: { color: colors.text, fontWeight: "700" },
   led: { position: "absolute", right: -1, bottom: -1, width: 12, height: 12, borderRadius: 6, borderWidth: 2, borderColor: colors.bg },
