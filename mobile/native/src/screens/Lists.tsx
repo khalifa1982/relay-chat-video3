@@ -59,59 +59,6 @@ export function History() {
   );
 }
 
-export function Messages() {
-  const t = useData(api.threads, [] as ThreadRow[]);
-  return (
-    <FlatList
-      style={s.list}
-      data={t.data}
-      keyExtractor={i => String(i.conversationId)}
-      refreshControl={<RefreshControl refreshing={t.refreshing} onRefresh={t.refresh} tintColor={colors.accent} />}
-      ListEmptyComponent={<Text style={s.empty}>No conversations yet.</Text>}
-      renderItem={({ item }) => (
-        <View style={s.row}>
-          <View style={[s.avatar, { borderColor: colors.tabMessages }]}>
-            <Text style={s.avatarText}>{(item.title || "?").slice(0, 2).toUpperCase()}</Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={s.title} numberOfLines={1}>{item.title}</Text>
-            <Text style={s.sub} numberOfLines={1}>{item.lastBody ?? "…"}</Text>
-          </View>
-          {item.unread > 0 ? <View style={s.badge}><Text style={s.badgeText}>{item.unread}</Text></View> : null}
-        </View>
-      )}
-    />
-  );
-}
-
-export function Contacts() {
-  const c = useData(api.contacts, [] as ContactRow[]);
-  const sorted = [...c.data].sort((a, b) => Number(b.favourite) - Number(a.favourite));
-  return (
-    <FlatList
-      style={s.list}
-      data={sorted}
-      keyExtractor={i => String(i.id)}
-      refreshControl={<RefreshControl refreshing={c.refreshing} onRefresh={c.refresh} tintColor={colors.accent} />}
-      ListEmptyComponent={<Text style={s.empty}>No contacts yet.</Text>}
-      renderItem={({ item }) => (
-        <View style={s.row}>
-          <View style={[s.avatar, { borderColor: colors.tabContacts }]}>
-            <Text style={s.avatarText}>{(item.displayName ?? item.number).slice(0, 2).toUpperCase()}</Text>
-            <View style={[s.led, { backgroundColor: item.isOnline ? colors.online : colors.textMuted }]} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={s.title} numberOfLines={1}>
-              {item.displayName ?? fmtPin(item.number)} {item.favourite ? "★" : ""}
-            </Text>
-            <Text style={s.sub}>{fmtPin(item.number)}{item.category ? ` · ${item.category}` : ""}{item.blocked ? " · blocked" : ""}</Text>
-          </View>
-        </View>
-      )}
-    />
-  );
-}
-
 const s = StyleSheet.create({
   list: { flex: 1, backgroundColor: colors.bg },
   row: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: spacing(4), paddingVertical: spacing(3), borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },

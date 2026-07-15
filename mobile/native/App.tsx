@@ -9,14 +9,21 @@ import React, { useEffect, useState } from "react";
 import { ActivityIndicator, StatusBar, Text, View } from "react-native";
 import { NavigationContainer, DarkTheme } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { api, type Whoami } from "./src/lib/api";
+import { SessionProvider } from "./src/lib/session";
 import { colors } from "./src/lib/theme";
 import { Onboarding } from "./src/screens/Onboarding";
 import { Dialer } from "./src/screens/Dialer";
-import { History, Messages, Contacts } from "./src/screens/Lists";
+import { History } from "./src/screens/Lists";
+import { MessagesList } from "./src/screens/MessagesList";
+import { ContactsList } from "./src/screens/ContactsList";
+import { Conversation } from "./src/screens/Conversation";
+import { ContactEdit } from "./src/screens/ContactEdit";
 import { Profile } from "./src/screens/Profile";
 
 const Tab = createBottomTabNavigator();
+const Stack = createNativeStackNavigator();
 
 const navTheme = {
   ...DarkTheme,
@@ -73,9 +80,7 @@ export default function App() {
     );
   }
 
-  return (
-    <NavigationContainer theme={navTheme}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
+  const Tabs = () => (
       <Tab.Navigator
         screenOptions={({ route }) => {
           const tab = TABS.find(t => t.name === route.name)!;
@@ -94,10 +99,38 @@ export default function App() {
       >
         <Tab.Screen name="Calls">{() => <Dialer me={me} />}</Tab.Screen>
         <Tab.Screen name="History" component={History} />
-        <Tab.Screen name="Messages" component={Messages} />
-        <Tab.Screen name="Contacts" component={Contacts} />
+        <Tab.Screen name="Messages" component={MessagesList as never} />
+        <Tab.Screen name="Contacts" component={ContactsList as never} />
         <Tab.Screen name="Profile">{() => <Profile me={me} />}</Tab.Screen>
       </Tab.Navigator>
-    </NavigationContainer>
+  );
+
+  return (
+    <SessionProvider value={me}>
+      <NavigationContainer theme={navTheme}>
+        <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
+        <Stack.Navigator
+          screenOptions={{
+            headerStyle: { backgroundColor: colors.bg },
+            headerTintColor: colors.text,
+            headerTitleStyle: { fontWeight: "700" },
+          }}
+        >
+          <Stack.Screen name="Tabs" component={Tabs} options={{ headerShown: false }} />
+          <Stack.Screen
+            name="Conversation"
+            component={Conversation as never}
+            options={({ route }) => ({ title: (route.params as { title?: string })?.title ?? "Conversation" })}
+          />
+          <Stack.Screen
+            name="ContactEdit"
+            component={ContactEdit as never}
+            options={({ route }) => ({
+              title: (route.params as { contact?: unknown })?.contact ? "Edit contact" : "New contact",
+            })}
+          />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </SessionProvider>
   );
 }

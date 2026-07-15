@@ -21,8 +21,13 @@ already in this repo; the steps only the account owner can perform are marked
 > **M1 ✅ Foundation** — typed client for the unmodified backend (tRPC/
 > superjson + device-id identity), native tab shell in the RELAY visual
 > identity, live-data Dialer/History/Messages/Contacts/Profile.
-> **M2** Messaging + contacts write-parity (send, attachments, voice notes,
-> read receipts, typing, block, categories). **M3** The call engine port
+> **M2 ✅ Messaging + contacts write-parity** — Conversation screen (bubbles,
+> read ticks from message.status, reply/quote, long-press unsend, typing
+> pings + indicator, image attachments via the same /api/v2/upload flow),
+> realtime over the same /api/v2/events SSE bus (+ polling safety net),
+> thread mute (client-side, like the web), new-chat by number, contacts
+> add/edit/favorite/category/block/delete with an Android-safe action sheet.
+> Deferred to M3 (A/V infra): voice-note record/playback, group creation. **M3** The call engine port
 > (SSE+POST signaling verbatim, mesh via react-native-webrtc + LiveKit RN
 > SDK, staged progress, consent protocol, call waiting, rejoin/paging).
 > **M4** OS call experience — CallKit + ConnectionService + VoIP push (the

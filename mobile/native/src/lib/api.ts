@@ -1,8 +1,9 @@
 /**
  * Typed client for RELAY's EXISTING backend — the tRPC/superjson HTTP API the
- * web app uses, consumed unmodified (the parity mandate: same endpoints, same
- * shapes). M1 hand-types the procedures it uses; a generated type bundle from
- * server/routers.ts replaces these in M2 so drift is impossible.
+ * web app uses, consumed unmodified (parity mandate). Every shape below was
+ * transcribed from server/v2routers.ts / server/v2upload.ts and is pinned by
+ * the M2 verification pass; a generated type bundle replaces these hand types
+ * when the server gains a type-export build step.
  */
 import { createTRPCUntypedClient, httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
@@ -37,20 +38,59 @@ export interface ContactRow {
   id: number;
   number: string;
   displayName: string | null;
+  avatarUrl: string | null;
   favourite: boolean | null;
-  category: string | null;
-  blocked: boolean | null;
-  isOnline?: boolean;
-  verified?: boolean | null;
+  notes: string | null;
+  category: "vip" | "family" | "friend" | "team" | null;
+  blocked: boolean;
+  identityId: number | null;
+  isOnline: boolean;
+  lastSeenAt: string | Date | null;
+  verified: boolean;
 }
 
+/** messages.threads — exact server shape (v2routers.ts threads query). */
 export interface ThreadRow {
   conversationId: number;
+  kind: string; // "dm" | "group"
+  title: string | null;
+  memberCount: number;
+  peerIdentityId: number;
   peerNumber: string | null;
-  title: string;
-  lastBody: string | null;
-  lastAt: string | Date | null;
-  unread: number;
+  peerDisplayName: string | null;
+  peerAvatarUrl: string | null;
+  peerIsOnline: boolean;
+  peerVerified: boolean;
+  lastMessageAt: string | Date | null;
+  lastMessageBody: string | null;
+  lastMessageKind: string | null;
+  unreadCount: number;
+}
+
+export interface Attachment {
+  id: number;
+  url: string;
+  mimeType: string;
+  sizeBytes: number;
+  width?: number | null;
+  height?: number | null;
+  durationMs?: number | null;
+  filename?: string | null;
+}
+
+/** messages.list row — exact server shape. */
+export interface MessageRow {
+  id: number;
+  conversationId: number;
+  senderIdentityId: number;
+  kind: "text" | "image" | "video" | "audio" | "file";
+  body: string | null;
+  meta: unknown;
+  status: string | null; // "read" once the peer has read it
+  createdAt: string | Date;
+  editedAt: string | Date | null;
+  attachment: Attachment | null;
+  replyToId: number | null;
 }
 
 export interface CallRow {
@@ -78,7 +118,13 @@ export interface LookupResult {
   verified: boolean | null;
 }
 
+export interface ConversationInfo {
+  conversationId: number;
+  members: Array<{ id: number; number: string; displayName: string; avatarUrl: string | null; isMe: boolean }>;
+}
+
 export const api = {
+  // identity / presence
   whoami: () => client.query("identity.whoami") as Promise<Whoami | null>,
   startGuest: async (displayName: string) =>
     client.mutation("identity.startGuest", {
@@ -88,9 +134,79 @@ export const api = {
   heartbeat: () => client.mutation("directory.heartbeat") as Promise<unknown>,
   lookup: (number: string) =>
     client.query("directory.lookup", { number }) as Promise<LookupResult | null>,
+
+  // contacts (write-parity M2)
   contacts: () => client.query("contacts.list") as Promise<ContactRow[]>,
+  contactUpsert: (input: {
+    number: string;
+    displayName?: string | null;
+    favourite?: boolean;
+    notes?: string | null;
+    category?: "vip" | "family" | "friend" | "team" | null;
+    blocked?: boolean;
+  }) => client.mutation("contacts.upsert", input) as Promise<unknown>,
+  contactRemove: (number: string) =>
+    client.mutation("contacts.remove", { number }) as Promise<unknown>,
+
+  // messaging (write-parity M2)
   threads: () => client.query("messages.threads") as Promise<ThreadRow[]>,
+  openThread: (number: string) =>
+    client.mutation("messages.openThread", { number }) as Promise<{
+      conversationId: number;
+      otherIdentityId: number;
+      otherNumber: string;
+      otherDisplayName: string;
+      isSelf: boolean;
+    }>,
+  conversationInfo: (conversationId: number) =>
+    client.query("messages.conversationInfo", { conversationId }) as Promise<ConversationInfo>,
+  messages: (conversationId: number, opts?: { beforeId?: number; limit?: number }) =>
+    client.query("messages.list", { conversationId, ...opts }) as Promise<MessageRow[]>,
+  send: (input: {
+    conversationId: number;
+    kind?: "text" | "image" | "video" | "audio" | "file";
+    body?: string | null;
+    attachmentId?: number | null;
+    replyToId?: number | null;
+  }) => client.mutation("messages.send", input) as Promise<MessageRow>,
+  markRead: (conversationId: number) =>
+    client.mutation("messages.markRead", { conversationId }) as Promise<unknown>,
+  typing: (conversationId: number) =>
+    client.mutation("messages.typing", { conversationId }) as Promise<unknown>,
+  unsend: (messageId: number) =>
+    client.mutation("messages.remove", { messageId }) as Promise<unknown>,
+
+  // call history (read since M1)
   callHistory: () => client.query("calls.history") as Promise<CallRow[]>,
   conferenceHistory: () =>
     client.query("calls.conferenceHistory") as Promise<ConferenceRow[]>,
 };
+
+/**
+ * Attachment upload — the same HTTP endpoint the web uses (POST /api/v2/upload,
+ * base64 JSON body; identity via cookie or the x-relay-device-id fallback,
+ * verified against server/v2upload.ts). Returns the attachment row whose `id`
+ * feeds messages.send({ attachmentId }).
+ */
+export async function uploadAttachment(input: {
+  dataBase64: string;
+  mimeType: string;
+  filename?: string;
+  width?: number;
+  height?: number;
+}): Promise<Attachment> {
+  const res = await fetch(`${BASE_URL}/api/v2/upload`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      "x-relay-device-id": await getDeviceId(),
+    },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const j = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(j?.error || `Upload failed (${res.status})`);
+  }
+  return (await res.json()) as Attachment;
+}

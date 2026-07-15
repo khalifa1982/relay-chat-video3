@@ -14,7 +14,11 @@ export function Onboarding({ onReady }: { onReady: (me: Whoami) => void }) {
     setBusy(true);
     setError(null);
     try {
-      const me = await api.startGuest(name.trim());
+      await api.startGuest(name.trim());
+      // startGuest returns a slim shape — whoami is the full identity the
+      // rest of the app types against (verified/email/etc).
+      const me = await api.whoami();
+      if (!me) throw new Error("no identity");
       onReady(me);
     } catch {
       setError("Couldn't reach RELAY — check your connection and try again.");

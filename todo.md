@@ -3212,3 +3212,31 @@ M1 shipped (RN 0.86, compiled, installs side-by-side as org.yourchat.relay.next)
 
 Honest scope: M1 renders live data and holds identity; every write action (send message, place
 call, edit contact) activates with its milestone (M2/M3). Backend untouched this milestone.
+
+## Native rewrite — Milestone 2: messaging + contacts write-parity (2026-07-15)
+
+mobile/native (React Native) now has the full messaging surface against the UNMODIFIED backend:
+- **Conversation screen**: bubble thread (inverted list), read ticks straight from
+  `message.status` ("read" → ✓✓), reply/quote (replyToId + quoted render), long-press → Reply/
+  Unsend (messages.remove, own messages only), typing pings (messages.typing, 2.5s throttle) +
+  "typing…" indicator, image attachments via the SAME `/api/v2/upload` base64 endpoint (device-id
+  identity verified in server/v2upload.ts) → messages.send{attachmentId}, markRead on open +
+  on incoming, group-aware sender names via messages.conversationInfo.
+- **Realtime**: the same `/api/v2/events` SSE bus the web consumes (react-native-sse with the
+  x-relay-device-id header; server auth confirmed via createContext) — message/read/typing events
+  drive the screens, with the web's polling safety net kept.
+- **Threads list**: REAL server field names (peerDisplayName/lastMessageBody/unreadCount/
+  peerIsOnline/peerVerified — fixing M1's guessed ThreadRow shape), unread badges, presence LEDs,
+  long-press per-thread mute (client-side AsyncStorage, parity with the web's localStorage mute),
+  new-chat modal (6-digit number → messages.openThread → Conversation).
+- **Contacts write-parity**: add/edit screen (name, category chips VIP/Family/Friend/Team,
+  favorite, block, notes) → contacts.upsert (exact zod shape), delete → contacts.remove, Message
+  action → openThread; grouped Favorites → categories → rest. Android fix baked in: the action
+  menu is a bottom-sheet Modal (Android caps Alert.alert at 3 buttons).
+- **Fixes from the adversarial pass prep**: startGuest's slim return is followed by whoami() for
+  the full identity shape (Profile reads verified/email); navigation moved to a root stack
+  (Conversation/ContactEdit push over the tabs) with a SessionProvider (no prop drilling).
+- Deferred to M3 explicitly: voice-note record/playback + group creation (both ride M3's A/V
+  infra). Deps added: react-native-sse, react-native-image-picker, @react-navigation/native-stack.
+- Pins extended (nativeRewrite.test.ts M2 block: procedure paths, real thread fields, upload
+  contract, SSE bus, receipts/unsend/reply/typing, Android-safe sheet) → 771 passing.
