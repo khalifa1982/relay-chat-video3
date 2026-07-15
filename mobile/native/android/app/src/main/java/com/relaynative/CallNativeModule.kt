@@ -71,7 +71,9 @@ class CallNativeModule(reactContext: ReactApplicationContext) :
       granted = ContextCompat.checkSelfPermission(
         reactApplicationContext, Manifest.permission.POST_NOTIFICATIONS
       ) == PackageManager.PERMISSION_GRANTED
-      val activity = currentActivity
+      // RN 0.80+: the activity accessor lives on the react context (the base
+      // class's getCurrentActivity() is a Kotlin fun — no property syntax).
+      val activity = reactApplicationContext.currentActivity
       if (!granted && activity != null) {
         ActivityCompat.requestPermissions(
           activity, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9911
