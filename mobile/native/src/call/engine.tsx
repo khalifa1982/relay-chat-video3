@@ -113,6 +113,9 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
   const callAnswered = useRef(false);
   const established = useRef(false);
   const dialTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const failT = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lkWatchdog = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lkTries = useRef(0);
   const ringTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inCall = useRef(false);
 
@@ -123,9 +126,10 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
   const publishTiles = () => {
     const tiles: RemoteTile[] = [];
     peers.current.forEach((p, pin) => {
+      const vts = p.stream.getVideoTracks() as unknown as Array<{ muted?: boolean; enabled?: boolean }>;
       tiles.push({
         key: pin, name: p.name, stream: p.stream,
-        hasVideo: p.stream.getVideoTracks().length > 0,
+        hasVideo: vts.some(t => !t.muted && t.enabled !== false),
       });
     });
     const room = lkRoom.current;
@@ -160,6 +164,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     if (established.current) return;
     established.current = true;
     clearTimer(dialTimeout);
+    clearTimer(lkWatchdog);
     patch({ status: "live", phase: "in-call" });
     // Native call audio: communication mode + speaker default ON (v2.84).
     InCallManager.start({ media: st.current.isVideoCall ? "video" : "audio" });
@@ -196,8 +201,23 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     peers.current.set(pin, peer);
     const ls = localStream.current;
     if (ls) ls.getTracks().forEach(t => pc.addTrack(t, ls));
+    // v2.80 m-line discipline: a camera-less INITIATOR still negotiates a
+    // sendrecv video m-line, so a later consent upgrade needs only
+    // replaceTrack (no renegotiation, no glare) and the peer's camera has an
+    // inbound slot from day one.
+    if (initiator && !(ls && ls.getVideoTracks().length > 0)) {
+      try {
+        (pc as unknown as { addTransceiver: (k: string, o: object) => void })
+          .addTransceiver("video", { direction: "sendrecv" });
+      } catch { /* older stack — renegotiation fallback still works */ }
+    }
     (pc as unknown as { ontrack: (e: { track: { kind: string } }) => void }).ontrack = (e: { track: unknown }) => {
       try { (stream as unknown as { addTrack: (t: unknown) => void }).addTrack(e.track); } catch { /* dup */ }
+      // A null-track sendrecv m-line delivers a muted video track (the web's
+      // camera-less peers) — re-render tiles when it (un)mutes so a black
+      // rectangle never replaces the avatar (v2.80 regression class).
+      const trk = e.track as { kind?: string; onmute?: () => void; onunmute?: () => void };
+      if (trk.kind === "video") { trk.onmute = publishTiles; trk.onunmute = publishTiles; }
       publishTiles();
       markEstablished();
     };
@@ -238,7 +258,19 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
   const onSignal = async (from: string, data: Msg["data"]) => {
     if (!data) return;
     let peer = peers.current.get(from);
+    // A fresh OFFER for a dead pc means the peer rebuilt their session
+    // (reload/rejoin) — applying it onto the stale pc stalls forever (web
+    // parity). Rebuild without triggering the 1:1 auto-end.
+    if (peer && data.sdp?.type === "offer") {
+      const cs = (peer.pc as unknown as { connectionState: string }).connectionState;
+      if (cs === "failed" || cs === "closed" || cs === "disconnected") {
+        try { peer.pc.close(); } catch { /* */ }
+        peers.current.delete(from);
+        peer = undefined as never;
+      }
+    }
     if (!peer) peer = createPeer(from, from, false);
+    try {
     if (data.sdp) {
       await peer.pc.setRemoteDescription(new RTCSessionDescription(data.sdp as never) as never);
       peer.hasRemoteDesc = true;
@@ -246,6 +278,16 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
         try { await peer.pc.addIceCandidate(new RTCIceCandidate(c as never) as never); } catch { /* stale */ }
       }
       if (data.sdp.type === "offer") {
+        // v2.81 answerer rule: flip offered recvonly video m-lines to sendrecv
+        // BEFORE answering, so a later consent upgrade needs no renegotiation.
+        try {
+          const trs = (peer.pc as unknown as { getTransceivers: () => Array<{ receiver?: { track?: { kind?: string } }; direction: string }> }).getTransceivers();
+          for (const tr of trs) {
+            if (tr.receiver?.track?.kind === "video" && tr.direction === "recvonly") {
+              try { tr.direction = "sendrecv"; } catch { /* best effort */ }
+            }
+          }
+        } catch { /* older stack */ }
         const answer = await peer.pc.createAnswer();
         await peer.pc.setLocalDescription(answer as never);
         void sig.current?.send({ type: "signal", to: from, data: { sdp: peer.pc.localDescription as never } });
@@ -257,6 +299,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
         peer.pendingCandidates.push(data.candidate);
       }
     }
+    } catch { /* negotiation hiccup — the retry/rebuild paths recover */ }
   };
 
   const renegotiateAll = async () => {
@@ -264,9 +307,37 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
   };
 
   // ── LiveKit SFU ──
+  const armLkWatchdog = () => {
+    clearTimer(lkWatchdog);
+    lkTries.current = 0;
+    const tick = () => {
+      lkWatchdog.current = null;
+      if (!inCall.current || !livekitEnabled.current || established.current) return;
+      const room = lkRoom.current as unknown as { state?: string } | null;
+      if (room && room.state === "connected") { lkWatchdog.current = setTimeout(tick, 4000); return; }
+      if (!callAnswered.current) {
+        // Still ringing — keep the token fresh forever; the ring timers govern.
+        void sig.current?.send({ type: "refresh-livekit" });
+        lkWatchdog.current = setTimeout(tick, 4000);
+        return;
+      }
+      lkTries.current++;
+      if (lkTries.current > 3) {
+        hangupInternal("livekit-join-timeout");
+        return;
+      }
+      void sig.current?.send({ type: "refresh-livekit" });
+      lkWatchdog.current = setTimeout(tick, 4000);
+    };
+    lkWatchdog.current = setTimeout(tick, 4500);
+  };
+
   const joinLivekit = async (rid: string) => {
     const tok = lkPendingToken.current;
     if (lkRoom.current || !tok || tok.roomId !== rid) return;
+    // Consume the token — a failed connect must retry with a FRESH one
+    // (they're short-TTL), which the watchdog's refresh-livekit provides.
+    lkPendingToken.current = null;
     const room = new Room();
     lkRoom.current = room;
     room.on(RoomEvent.TrackSubscribed, () => { publishTiles(); markEstablished(); });
@@ -321,7 +392,14 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
         // or server redelivery) or an EXPIRED pending ring replaces; only a
         // genuinely-concurrent second caller is rejected.
         const cur = st.current.incoming;
-        if (inCall.current) { void sig.current?.send({ type: "reject", to: m.from }); return; } // call waiting = M3.5
+        if (inCall.current) {
+          // A redelivered ring for the call we're IN (SSE blip mid-answer →
+          // re-register → deliverPendingRing) must be ignored, not rejected —
+          // rejecting killed the caller's dial room out from under our accept.
+          if (m.roomId === roomId.current || m.from === st.current.peerPin) return;
+          void sig.current?.send({ type: "reject", to: m.from }); // call waiting = M3.5
+          return;
+        }
         if (cur && cur.from !== m.from && Date.now() - cur.at <= 70_000) {
           void sig.current?.send({ type: "reject", to: m.from });
           return;
@@ -330,6 +408,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
           from: m.from!, fromName: m.fromName || m.from!, roomId: m.roomId!,
           video: !!m.video, at: Date.now(),
         };
+        stopRing(); // a same-caller replace must not stack ringtones
         patch({ incoming: ring, phase: "incoming" });
         InCallManager.startRingtone("_DEFAULT_", [0, 400, 200, 400], "default", 60);
         clearTimer(ringTimeout);
@@ -391,14 +470,23 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       case "kicked":
         hangupInternal("kicked");
         break;
+      case "rejoin":
+        // Rejoin-after-restart is M3.5; ignoring the offer would leave the
+        // SERVER thinking we're still in the old room (ghost membership that
+        // pollutes the next dial). Decline it explicitly.
+        if (!inCall.current) void sig.current?.send({ type: "leave", reason: "rejoin-declined" });
+        break;
       case "video-request":
         if (inCall.current) patch({ videoAsk: m.fromName || "They" });
         break;
       case "video-accept":
+        if (!inCall.current) break; // straggler after teardown — never grab media idle
         videoApproved.current = true;
         void enableCamera();
         break;
       case "video-decline":
+        if (!inCall.current) break;
+        videoApproved.current = false; // consent is per-ask, not permanent
         patch({ videoAsk: null });
         break;
       case "error": {
@@ -417,8 +505,10 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
   };
 
   const failDial = (message: string) => {
+    if (failT.current) return; // already presenting a failure
+    clearTimer(dialTimeout);
     patch({ status: "calling", peerName: message });
-    setTimeout(() => hangupInternal("dial-failed"), 1900);
+    failT.current = setTimeout(() => { failT.current = null; hangupInternal("dial-failed"); }, 1900);
   };
 
   const cleanupMedia = () => {
@@ -440,6 +530,8 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     void sig.current?.send({ type: "leave", reason });
     stopRing();
     clearTimer(dialTimeout);
+    clearTimer(failT);
+    clearTimer(lkWatchdog);
     inCall.current = false;
     callAnswered.current = false;
     established.current = false;
@@ -466,11 +558,21 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       const room = lkRoom.current;
       if (room) await room.localParticipant.setCameraEnabled(true);
       else {
-        // Mesh: the new camera track must reach every peer → renegotiate.
+        // Mesh: fill the PRE-ALLOCATED video m-line with replaceTrack — no
+        // renegotiation, no RN↔RN offer glare. Renegotiate only for peers
+        // without a reserved slot (legacy path).
         const vt = localStream.current?.getVideoTracks()[0];
         if (vt) {
-          peers.current.forEach(p => { try { p.pc.addTrack(vt as never, localStream.current as never); } catch { /* */ } });
-          await renegotiateAll();
+          const needOffer: string[] = [];
+          peers.current.forEach((p, pin) => {
+            try {
+              const trs = (p.pc as unknown as { getTransceivers: () => Array<{ receiver?: { track?: { kind?: string } }; sender: { track: unknown | null; replaceTrack: (t: unknown) => Promise<void> } }> }).getTransceivers();
+              const slot = trs.find(tr => tr.receiver?.track?.kind === "video" && !tr.sender.track);
+              if (slot) { void slot.sender.replaceTrack(vt as never); return; }
+            } catch { /* fall through */ }
+            try { p.pc.addTrack(vt as never, localStream.current as never); needOffer.push(pin); } catch { /* */ }
+          });
+          for (const pin of needOffer) await meshOffer(pin).catch(() => {});
         }
       }
     } catch { /* camera denied — stay voice */ }
@@ -499,7 +601,8 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       inCall.current = true;
       established.current = false;
       callAnswered.current = false;
-      videoApproved.current = video; // a video DIAL is consent-pending on answer
+      videoApproved.current = false; // consent comes ONLY from the callee
+                                     // (answer-with-video → video-accept)
       patch({
         phase: "dialing", status: "calling", peerPin: number,
         peerName: opts?.displayName ?? "", isVideoCall: video, camOn: false,
@@ -507,6 +610,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       void (async () => {
         try { await ensureMedia(false); } catch { hangupInternal("no-media"); return; }
         void sig.current?.send({ type: "invite", to: number, video });
+        armLkWatchdog(); // SFU deployments: keep the join token fresh while ringing
         clearTimer(dialTimeout);
         dialTimeout.current = setTimeout(() => {
           if (inCall.current && !callAnswered.current) failDial("No answer — they'll see your missed call.");
@@ -526,8 +630,20 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
         peerName: r.fromName, peerPin: r.from, isVideoCall: r.video, camOn: answerVideo,
       });
       void (async () => {
-        try { await ensureMedia(answerVideo); } catch { hangupInternal("no-media"); return; }
+        try {
+          await ensureMedia(answerVideo);
+        } catch {
+          // Media denied: REJECT so the caller hears it now (a `leave` would
+          // ring them to the 65s backstop and leave a ghost pending ring).
+          void sig.current?.send({ type: "reject", to: r.from });
+          inCall.current = false;
+          callAnswered.current = false;
+          cleanupMedia();
+          patch({ phase: "idle", status: "calling", peerName: "", peerPin: "", camOn: false });
+          return;
+        }
         void sig.current?.send({ type: "accept", roomId: r.roomId });
+        armLkWatchdog(); // callee-side backstop: media must come up or the call ends honestly
         if (r.video) void sig.current?.send({ type: answerVideo ? "video-accept" : "video-decline" });
       })();
     },

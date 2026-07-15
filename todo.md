@@ -3274,3 +3274,21 @@ native against the unmodified relay server:
   voice notes, screen share/recording, filters (M5). Deps: @livekit/react-native(+webrtc fork),
   react-native-incall-manager; CAMERA/RECORD_AUDIO/etc. added to the RN manifest; WebRTC globals
   registered in index.js.
+- **Adversarial fidelity review (agent vs server/relay.ts + web engine + installed native libs)
+  found 8 real issues — all fixed pre-merge**: (B1) the v2.80/81 mesh video m-line discipline was
+  missing → re-added (camera-less initiator pre-allocates a sendrecv video transceiver; answerer
+  flips recvonly→sendrecv pre-answer; consent upgrade fills the slot via replaceTrack — which also
+  kills RN↔RN offer glare; tiles compute hasVideo from track MUTE state so web's null-track m-lines
+  never paint black rectangles); (B2) SFU watchdog ported (refresh-livekit every 4s while ringing,
+  3 bounded tries post-answer then honest teardown; tokens consumed-on-use); (B3) consent violation
+  — caller no longer self-approves video at dial, video-decline resets approval, video-accept/
+  decline gated on inCall (idle camera-grab leak closed); (B4) in-call ring redelivery for the SAME
+  call (SSE blip mid-answer) is ignored instead of rejected (rejecting reaped the caller's room out
+  from under our accept); (B5) failDial timer tracked + cleared (stale timer could leave-cancel the
+  NEXT dial); (B6) answer-with-no-media now sends reject (leave rang the caller to the 65s backstop
+  and left a ghost pending ring); (B7) onSignal hardened (try/catch + dead-pc rebuild on fresh
+  offers — reloaded web peers re-offer into a stale pc otherwise); (B8) server `rejoin` while idle
+  is explicitly declined (ghost room membership polluted the next dial). Review also CONFIRMED:
+  glare rule parity both directions, accept/consent ordering, SDP/candidate shape interop, LiveKit
+  token ordering, ring-redelivery rules, and no-crash API usage across the installed native libs.
+  → 772 repo tests green; RN tsc clean.
