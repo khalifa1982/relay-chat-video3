@@ -19,6 +19,10 @@ export function MessagesList({ navigation }: { navigation: { navigate: (s: strin
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeNum, setComposeNum] = useState("");
   const [composeErr, setComposeErr] = useState<string | null>(null);
+  // Group compose (M3.5): title + up to 19 member numbers.
+  const [composeGroup, setComposeGroup] = useState(false);
+  const [groupTitle, setGroupTitle] = useState("");
+  const [groupNums, setGroupNums] = useState<string[]>([]);
 
   const refresh = useCallback(() => {
     setRefreshing(true);
@@ -45,18 +49,47 @@ export function MessagesList({ navigation }: { navigation: { navigate: (s: strin
   }, [refresh]);
 
   const open = (t: ThreadRow) =>
-    navigation.navigate("Conversation", { conversationId: t.conversationId, title: threadTitle(t) });
+    navigation.navigate("Conversation", { conversationId: t.conversationId, title: threadTitle(t), kind: t.kind });
+
+  const resetCompose = () => {
+    setComposeOpen(false);
+    setComposeNum("");
+    setComposeErr(null);
+    setComposeGroup(false);
+    setGroupTitle("");
+    setGroupNums([]);
+  };
 
   const startCompose = async () => {
     if (!/^\d{6}$/.test(composeNum)) { setComposeErr("Enter a 6-digit number"); return; }
     try {
       const r = await api.openThread(composeNum);
-      setComposeOpen(false);
-      setComposeNum("");
-      setComposeErr(null);
-      navigation.navigate("Conversation", { conversationId: r.conversationId, title: r.otherDisplayName });
+      resetCompose();
+      navigation.navigate("Conversation", { conversationId: r.conversationId, title: r.otherDisplayName, kind: "dm" });
     } catch {
       setComposeErr("That number isn't a RELAY user yet");
+    }
+  };
+
+  const addGroupNum = () => {
+    if (!/^\d{6}$/.test(composeNum)) { setComposeErr("Enter a 6-digit number"); return; }
+    setGroupNums(g => (g.includes(composeNum) || g.length >= 19 ? g : [...g, composeNum]));
+    setComposeNum("");
+    setComposeErr(null);
+  };
+
+  const startGroup = async () => {
+    if (!groupTitle.trim()) { setComposeErr("Give the group a name"); return; }
+    const nums = /^\d{6}$/.test(composeNum) && !groupNums.includes(composeNum)
+      ? [...groupNums, composeNum] : groupNums; // a typed-but-unadded number counts
+    if (nums.length === 0) { setComposeErr("Add at least one member"); return; }
+    try {
+      const r = await api.createGroup({ title: groupTitle.trim(), numbers: nums });
+      resetCompose();
+      refresh();
+      navigation.navigate("Conversation", { conversationId: r.conversationId, title: r.title ?? groupTitle.trim(), kind: "group" });
+    } catch {
+      setComposeErr("None of those numbers are RELAY users yet");
     }
   };
 
@@ -98,27 +131,60 @@ export function MessagesList({ navigation }: { navigation: { navigate: (s: strin
       <TouchableOpacity style={s.fab} onPress={() => setComposeOpen(true)}>
         <Text style={s.fabText}>✚</Text>
       </TouchableOpacity>
-      <Modal visible={composeOpen} transparent animationType="fade" onRequestClose={() => setComposeOpen(false)}>
+      <Modal visible={composeOpen} transparent animationType="fade" onRequestClose={resetCompose}>
         <View style={s.modalBack}>
           <View style={s.modalCard}>
-            <Text style={s.modalTitle}>New chat</Text>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <TouchableOpacity style={[s.segBtn, !composeGroup && s.segOn]} onPress={() => { setComposeGroup(false); setComposeErr(null); }}>
+                <Text style={{ color: composeGroup ? colors.textMuted : colors.bg, fontWeight: "700" }}>New chat</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.segBtn, composeGroup && s.segOn]} onPress={() => { setComposeGroup(true); setComposeErr(null); }}>
+                <Text style={{ color: composeGroup ? colors.bg : colors.textMuted, fontWeight: "700" }}>New group</Text>
+              </TouchableOpacity>
+            </View>
+            {composeGroup ? (
+              <TextInput
+                style={s.modalInput}
+                placeholder="Group name"
+                placeholderTextColor={colors.textMuted}
+                maxLength={128}
+                value={groupTitle}
+                onChangeText={v => { setGroupTitle(v); setComposeErr(null); }}
+              />
+            ) : null}
             <TextInput
               style={s.modalInput}
-              placeholder="6-digit RELAY number"
+              placeholder={composeGroup ? "Add a 6-digit member number" : "6-digit RELAY number"}
               placeholderTextColor={colors.textMuted}
               keyboardType="number-pad"
               maxLength={6}
               value={composeNum}
               onChangeText={v => { setComposeNum(v.replace(/\D/g, "")); setComposeErr(null); }}
+              onSubmitEditing={composeGroup ? addGroupNum : startCompose}
               autoFocus
             />
+            {composeGroup && groupNums.length > 0 ? (
+              <Text style={s.groupChips} numberOfLines={2}>
+                {groupNums.map(fmtPin).join("  ")}
+              </Text>
+            ) : null}
             {composeErr ? <Text style={s.modalErr}>{composeErr}</Text> : null}
             <View style={{ flexDirection: "row", gap: 10, marginTop: spacing(3) }}>
-              <TouchableOpacity style={[s.modalBtn, { backgroundColor: colors.surfaceRaised }]} onPress={() => setComposeOpen(false)}>
+              <TouchableOpacity style={[s.modalBtn, { backgroundColor: colors.surfaceRaised }]} onPress={resetCompose}>
                 <Text style={{ color: colors.text }}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[s.modalBtn, { backgroundColor: colors.tabMessages }]} onPress={startCompose}>
-                <Text style={{ color: colors.bg, fontWeight: "700" }}>Start</Text>
+              {composeGroup ? (
+                <TouchableOpacity style={[s.modalBtn, { backgroundColor: colors.surfaceRaised }]} onPress={addGroupNum}>
+                  <Text style={{ color: colors.text }}>Add</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                style={[s.modalBtn, { backgroundColor: colors.tabMessages }]}
+                onPress={composeGroup ? startGroup : startCompose}
+              >
+                <Text style={{ color: colors.bg, fontWeight: "700" }}>
+                  {composeGroup ? `Create${groupNums.length ? ` (${groupNums.length})` : ""}` : "Start"}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -129,6 +195,9 @@ export function MessagesList({ navigation }: { navigation: { navigate: (s: strin
 }
 
 const s = StyleSheet.create({
+  segBtn: { flex: 1, borderRadius: 10, alignItems: "center", paddingVertical: 8, backgroundColor: colors.surfaceRaised },
+  segOn: { backgroundColor: colors.tabMessages },
+  groupChips: { color: colors.text, fontSize: 13, fontWeight: "700", marginTop: 8, fontVariant: ["tabular-nums"] },
   root: { flex: 1, backgroundColor: colors.bg },
   row: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: spacing(4), paddingVertical: spacing(3), borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   avatar: { width: 46, height: 46, borderRadius: 23, borderWidth: 2, borderColor: colors.tabMessages, backgroundColor: colors.surfaceRaised, alignItems: "center", justifyContent: "center" },

@@ -12,6 +12,8 @@ export function Dialer({ me }: { me: Whoami }) {
   const call = useCall();
   const [dialed, setDialed] = useState("");
   const [peer, setPeer] = useState<LookupResult | null>(null);
+  /** Group dial staging (M3.5): 6-digit chips collected via the Group key. */
+  const [group, setGroup] = useState<string[]>([]);
 
   useEffect(() => {
     let alive = true;
@@ -32,6 +34,20 @@ export function Dialer({ me }: { me: Whoami }) {
     setDialed("");
   };
 
+  // Group key: a full number stages a chip; with chips staged and the pad
+  // empty it STARTS the conference (voice-first — v2.83 rule).
+  const groupKey = () => {
+    if (dialed.length === 6) {
+      setGroup(g => (g.includes(dialed) || g.length >= 9 ? g : [...g, dialed]));
+      setDialed("");
+      return;
+    }
+    if (group.length > 0) {
+      call.dialGroup(group, { voice: true });
+      setGroup([]);
+    }
+  };
+
   return (
     <View style={s.root}>
       <Text style={[s.number, !dialed && s.ghost]}>{display || "— — —  — — —"}</Text>
@@ -45,12 +61,25 @@ export function Dialer({ me }: { me: Whoami }) {
           </TouchableOpacity>
         ))}
       </View>
+      {group.length > 0 ? (
+        <View style={s.groupRow}>
+          <Text style={s.groupChips} numberOfLines={1}>
+            {group.map(n => `${n.slice(0, 3)}-${n.slice(3)}`).join("  ")}
+          </Text>
+          <TouchableOpacity onPress={() => setGroup([])}>
+            <Text style={s.groupClear}>Clear</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       <View style={s.row}>
         <TouchableOpacity style={[s.action, { backgroundColor: "#1D4ED8" }]} onPress={() => startCall(true)}>
           <Text style={s.actionText}>Voice</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[s.action, { backgroundColor: "#15803D" }]} onPress={() => startCall(false)}>
           <Text style={s.actionText}>Video</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[s.action, { backgroundColor: "#7C3AED" }]} onPress={groupKey}>
+          <Text style={s.actionText}>{dialed.length === 6 ? "+ Group" : group.length > 0 ? `Call ${group.length}` : "Group"}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[s.action, { backgroundColor: colors.surfaceRaised }]} onPress={() => setDialed(d => d.slice(0, -1))}>
           <Text style={s.actionText}>⌫</Text>
@@ -61,6 +90,9 @@ export function Dialer({ me }: { me: Whoami }) {
 }
 
 const s = StyleSheet.create({
+  groupRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: spacing(4), paddingBottom: spacing(1) },
+  groupChips: { flex: 1, color: colors.text, fontSize: 13, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  groupClear: { color: colors.textMuted, fontSize: 12 },
   root: { flex: 1, backgroundColor: colors.bg, alignItems: "center", paddingTop: spacing(10) },
   number: { color: colors.text, fontSize: 40, fontWeight: "700", letterSpacing: 4, fontVariant: ["tabular-nums"] },
   ghost: { color: colors.textMuted },

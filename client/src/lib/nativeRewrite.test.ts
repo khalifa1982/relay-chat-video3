@@ -170,3 +170,70 @@ describe("native rewrite — M4 rings-when-closed (Android)", () => {
     expect(read("mobile/native/src/lib/api.ts")).toMatch(/push\.subscribe.*kind: "fcm"/);
   });
 });
+
+describe("native rewrite — M3.5 call waiting / groups / rejoin / voice notes", () => {
+  const eng = () => read("mobile/native/src/call/engine.tsx");
+
+  it("call waiting: v2.83 replace rules, destructive answer is leave-THEN-accept, promote-on-death", () => {
+    const e = eng();
+    // The old blind in-call auto-reject is gone; only a fresh different-caller waiter rejects.
+    expect(e).toMatch(/w && w\.from !== m\.from && Date\.now\(\) - w\.at <= 70_000/);
+    // The switch awaits a RETRIED leave before accept (v2.50 race class).
+    expect(e).toMatch(/await sig\.current\?\.send\(\{ type: "leave", reason: "switch" \}, \{ attempts: 3 \}\)/);
+    expect(read("mobile/native/src/call/signaling.ts")).toContain("opts?.attempts");
+    // A dying call must promote a live waiter, not swallow it (v2.78.1).
+    expect(e).toMatch(/promoted/);
+    // peer-hold parks us instead of the SFU auto-end firing.
+    expect(e).toContain('case "peer-hold"');
+    expect(e).toMatch(/!callIsGroup\.current && !heldByPeer\.current/);
+    // In-call waiting cue is vibration — never a ringtone over live audio.
+    expect(e).toMatch(/Vibration\.vibrate/);
+    // UI: the answer button says what it does — END the current call.
+    expect(read("mobile/native/src/screens/CallOverlay.tsx")).toContain("End call & answer");
+  });
+
+  it("groups: room-flush dial, add-person offline guard, consent bypass, no 0-remote auto-end", () => {
+    const e = eng();
+    expect(e).toContain("dialGroup:");
+    expect(e).toMatch(/pendingGroupInvites\.current\.splice\(0\)/); // flushed on the server's `room` ack
+    expect(e).toMatch(/addInviteGuardUntil\.current = Date\.now\(\) \+ 6000/); // v2.50: offline add = toast, not teardown
+    expect(e).toMatch(/videoApproved\.current \|\| callIsGroup\.current/); // v2.81 group consent bypass
+    expect(e).toMatch(/aloneInCall\(\)/); // web-shaped teardown gates
+    expect(read("mobile/native/src/screens/Dialer.tsx")).toContain("call.dialGroup(group");
+  });
+
+  it("rejoin: snapshot gates registration, hijack guard, ghost-roster timeout", () => {
+    const snap = read("mobile/native/src/call/rejoinSnapshot.ts");
+    expect(snap).toContain("REJOIN_MAX_AGE_MS = 28_000");
+    const e = eng();
+    expect(e).toMatch(/readRejoinSnapshot/); // read BEFORE register
+    expect(e).toMatch(/snap\.pin !== me\.number/); // shared-device hijack guard
+    // The PERSISTED cid is what lets a restart reclaim the in-grace pin —
+    // without it the ≤28s snapshot window sits entirely inside the server's
+    // 30s grace and rejoin can never fire (review finding #1).
+    expect(e).toMatch(/await s\.restoreCid\(\)/);
+    expect(read("mobile/native/src/call/signaling.ts")).toContain('AsyncStorage.getItem("relay_cid")');
+    expect(e).toMatch(/s\.register\(me\.displayName, snapPin \?\? me\.number\)/);
+    expect(e).toContain('"rejoin-no-media"');
+    expect(e).toContain('"rejoin-declined"'); // idle offers still declined
+    expect(e).toMatch(/hangupInternal\("rejoin-failed"\)/); // rejoin rosters aren't ghost-filtered
+    // Room-keyed ring dedupe holds across the whole answer window (Step 0c).
+    expect(e).toMatch(/roomId\.current = r\.roomId/);
+  });
+
+  it("messaging: createGroup + routed group kind + absolute attachment URLs + m4a voice notes", () => {
+    expect(read("mobile/native/src/lib/api.ts")).toContain('"messages.createGroup"');
+    const conv = read("mobile/native/src/screens/Conversation.tsx");
+    expect(conv).toMatch(/kind === "group"/); // 2-member groups are groups
+    expect(conv).toContain("absUrl(m.attachment.url)"); // relative URLs unfetchable in RN
+    expect(conv).toContain('mimeType: "audio/mp4"'); // the codec every web <audio> plays
+    expect(conv).toContain('kind: "audio"');
+    const pkg = JSON.parse(read("mobile/native/package.json"));
+    expect(pkg.dependencies["react-native-audio-recorder-player"]).toBeTruthy();
+    // The classic react-native-fs has no AGP-8 namespace (breaks the CI
+    // build) — the maintained fork is the pinned choice.
+    expect(pkg.dependencies["@dr.pogodin/react-native-fs"]).toBeTruthy();
+    expect(pkg.dependencies["react-native-fs"]).toBeUndefined();
+    expect(read("mobile/native/src/screens/MessagesList.tsx")).toContain("startGroup");
+  });
+});

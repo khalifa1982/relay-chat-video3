@@ -7,6 +7,7 @@
  * in engine.tsx — this file only moves messages.
  */
 import EventSource from "react-native-sse";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BASE_URL } from "../lib/api";
 
 export interface IceServer { urls: string; username?: string; credential?: string }
@@ -30,6 +31,8 @@ export interface Msg {
   code?: string;
   video?: boolean;
   paging?: boolean;
+  /** peer-hold: true = parked by the peer's call-waiting switch. */
+  on?: boolean;
   livekit?: boolean;
   livekitUrl?: string;
   token?: string;
@@ -44,6 +47,23 @@ function randomCid(): string {
 
 export class RelaySignaling {
   private cid = randomCid();
+
+  /**
+   * Restore the persisted channel id BEFORE the first connect (web parity:
+   * localStorage `relay_cid`). Load-bearing for rejoin-after-restart AND the
+   * M4 FCM ring hand-off: the server keeps a killed app's pin reserved for a
+   * 30s disconnect grace, keyed to the OLD cid — a fresh random cid cannot
+   * reclaim that pin (register falls back to a random one, the rejoin offer
+   * and any held ring never arrive). Same cid ⇒ the register re-affirm path
+   * honors the pin and the server's identity-switch hijack guard works.
+   */
+  async restoreCid(): Promise<void> {
+    try {
+      const saved = await AsyncStorage.getItem("relay_cid");
+      if (saved && /^[0-9a-f]{32}$/.test(saved)) this.cid = saved;
+      else await AsyncStorage.setItem("relay_cid", this.cid);
+    } catch { /* keep the per-boot random cid */ }
+  }
   private es: EventSource | null = null;
   private retryT: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
@@ -102,10 +122,14 @@ export class RelaySignaling {
   /**
    * POST a signaling message. Non-`leave` messages retry 3× with the web
    * engine's 250·3^n backoff — a single dropped offer/answer is pair-fatal
-   * on the mesh, exactly the failure v2.80 fixed.
+   * on the mesh, exactly the failure v2.80 fixed. `leave` defaults to ONE
+   * attempt (teardown must never stall), but callers can override: the
+   * call-waiting switch AWAITS a retried leave before its accept, because
+   * the server processes a POST fully before responding (relay.ts) — the
+   * ordering guarantee that killed the v2.50 switch race.
    */
-  async send(message: Msg): Promise<void> {
-    const maxAttempts = message.type === "leave" ? 1 : 3;
+  async send(message: Msg, opts?: { attempts?: number }): Promise<boolean> {
+    const maxAttempts = opts?.attempts ?? (message.type === "leave" ? 1 : 3);
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         const res = await fetch(`${BASE_URL}/api/relay/send`, {
@@ -113,13 +137,14 @@ export class RelaySignaling {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ cid: this.cid, message }),
         });
-        if (res.ok) return;
+        if (res.ok) return true;
         if (res.status === 404) { this.connect(); } // channel gone — reconnect
       } catch { /* transient */ }
       if (attempt < maxAttempts - 1) {
         await new Promise(r => setTimeout(r, 250 * Math.pow(3, attempt) + Math.random() * 150));
       }
     }
+    return false;
   }
 
   /** Force a fresh stream (foreground return) — no-op if healthy. */

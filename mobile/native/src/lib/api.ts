@@ -174,6 +174,14 @@ export const api = {
     // The server returns the RAW inserted row (attachmentId, no joined
     // `attachment` object — only messages.list joins it).
   }) => client.mutation("messages.send", input) as Promise<Omit<MessageRow, "attachment"> & { attachmentId: number | null }>,
+  // Group threads (M3.5): server skips unknown numbers, needs ≥1 other member.
+  createGroup: (input: { title: string; numbers: string[] }) =>
+    client.mutation("messages.createGroup", input) as Promise<{
+      conversationId: number;
+      title: string | null;
+      memberCount: number;
+      skipped: number;
+    }>,
   markRead: (conversationId: number) =>
     client.mutation("messages.markRead", { conversationId }) as Promise<unknown>,
   typing: (conversationId: number) =>
@@ -201,12 +209,17 @@ export const api = {
  * verified against server/v2upload.ts). Returns the attachment row whose `id`
  * feeds messages.send({ attachmentId }).
  */
+/** Attachment URLs come back server-relative (`/manus-storage/{key}`) — not
+ *  fetchable from a native app without the origin prefix. */
+export const absUrl = (u: string) => (u.startsWith("http") ? u : `${BASE_URL}${u}`);
+
 export async function uploadAttachment(input: {
   dataBase64: string;
   mimeType: string;
   filename?: string;
   width?: number;
   height?: number;
+  durationMs?: number;
 }): Promise<Attachment> {
   const res = await fetch(`${BASE_URL}/api/v2/upload`, {
     method: "POST",

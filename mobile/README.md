@@ -37,8 +37,15 @@ already in this repo; the steps only the account owner can perform are marked
 > (request/accept/decline — both cameras together), 1:1 auto-end, native
 > earpiece/speaker routing (speaker default ON, v2.84 parity), full-screen
 > in-app ring + in-call UI wired to Dialer/Contacts/History.
-> Deferred to M3.5: call waiting (hold/swap/merge), group calls,
-> rejoin-after-restart, voice notes, screen share/recording.
+> **M3.5 ✅** — CALL WAITING (waiting card, v2.83 replace rules, destructive
+> "End call & answer" with an awaited retried leave→accept, promote-on-death,
+> `peer-hold` parking), GROUP CALLS (dialGroup + room-ack invite flush,
+> in-call ➕ add-person w/ offline guard, consent bypass, no 0-remote
+> auto-end), REJOIN-AFTER-RESTART (28s AsyncStorage snapshot gates
+> registration, snapshot-pin register, hijack guard, ghost-roster backstop),
+> GROUP THREADS (messages.createGroup + routed kind) and VOICE NOTES
+> (AAC m4a record/playback; absolute attachment URLs). Hold/swap/merge UI,
+> screen share, recording remain deferred (M5-adjacent).
 > **M4 ✅ (Android) Rings-when-closed** — the v2.86 native ring layer ported
 > to the RN namespace (`com.relaynative`): FCM data message →
 > `RelayFcmService` → full-screen lock-screen `IncomingCallActivity`

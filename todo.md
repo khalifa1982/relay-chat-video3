@@ -3337,3 +3337,71 @@ native against the unmodified relay server:
   reference gaps (not port divergences): no server ring-cancel push kind (stale lock-screen
   ring rides the 65s timeout), permission dialog result not awaited on first run.
   → 777 repo tests green; RN tsc clean.
+## Native rewrite — Milestone 3.5: call waiting, group calls, rejoin, voice notes + group threads (2026-07-15)
+Ported from the web/server contracts mapped by a 5-agent workflow (maps + ordered plan with 21
+enumerated interop risks; the plan cross-checked the four readers and resolved 7 contradictions).
+- **Call waiting** (engine.tsx): a second ring mid-call now presents a waiting card (vibration
+  cue only — never a ringtone over live audio) with the v2.83 replace rules (reject ONLY a fresh
+  different-caller ring; same-caller redelivery/expired waiter replaces); Decline sends reject;
+  **"End call & answer"** AWAITS a 3-attempt `leave` BEFORE the `accept` (the server processes a
+  POST fully before responding — strict ordering; unserialized leave+accept re-creates the v2.50
+  switch race where the server HOLDS the old room and the late leave kills the answered call),
+  keeping mic/audio-session/FGS across the switch; a dying call PROMOTES a live waiter into a
+  full incoming ring (v2.78.1); `ring-cancel` clears a matching waiter (deliberate divergence —
+  our answer is destructive, web's holds); 30s waiter auto-decline; foreground stale sweep.
+  Deviation from web documented: native answers END the current call (no hold/swap UI yet) —
+  button copy says so.
+- **peer-hold**: new handler — the held side shows "On hold" and SUPPRESSES both auto-end sites
+  (the web holder tears down its SFU connection; without this flag the held native side read it
+  as "remote left" and ended the call). Upstream finding reported: web's own SFU held side has
+  the same auto-end hole (relayClient onPeerHold is pure UI).
+- **Group calls**: `dialGroup` (dedupe/cap 10/self-exclude, voice-first, first invite creates the
+  room, rest FLUSH on the server's `room` ack so History's roster-order direction inference
+  stays intact), in-call ➕ add-person pad (auto-invites on the 6th digit; 6s offline-guard makes
+  `error{offline}` a toast — never a teardown, v2.50 parity; cap/dup/self validation with
+  notices), `callIsGroup` flips on 2nd mesh peer / 2nd SFU participant / answering into a >1
+  roster, groups BYPASS mutual-consent video (v2.81) and never auto-end at 0 remotes, and the
+  `rejected`/fatal-`error` teardowns are gated on `aloneInCall()` (one invitee's decline can't
+  kill a live conference). Dialer gains the purple Group key (stage 6-digit chips → Call N).
+- **Rejoin-after-restart**: AsyncStorage snapshot (roomId, server-authoritative pin, mic/cam/
+  speaker, isVideoCall, isGroup, peer, ts; 28s freshness < the server's 30s grace; refreshed
+  every 10s while established + on background) — the boot effect READS IT BEFORE REGISTERING
+  (an unarmed register auto-declines the rejoin offer, permanently forfeiting the room),
+  registers under the SNAPSHOT pin, pre-arms the in-call UI ("Reconnecting to your call…"),
+  10s no-offer watchdog; positive `rejoin` adopts the room (mesh: we're the newcomer — offer to
+  every member, 15s ghost-roster backstop since rejoin rosters aren't ghost-filtered; SFU: the
+  pushed token + bounded watchdog); snapshot cleared on hangup/consume/identity-change and
+  DISCARDED when its pin ≠ the current identity's number (shared-device hijack guard — RN's
+  per-boot random cid disables the server's identitySwitch detection).
+- **Group threads + voice notes** (messaging): `messages.createGroup` wired (compose modal grows
+  a New chat / New group toggle — title + up to 19 member chips); Conversation trusts the ROUTED
+  thread kind (`kind === "group"` — the old members>2 heuristic rendered legal 2-member groups
+  as DMs); attachment URLs go through `absUrl` (server returns relative /manus-storage/… — the
+  existing image bubbles were broken in RN too); voice notes record AAC-in-MP4 (m4a) via
+  react-native-audio-recorder-player 3.6.14 + react-native-fs (tap 🎤 → tap 🟥 to send; <0.7s
+  discarded; RECORD_AUDIO runtime ask) and upload with `durationMs` → `messages.send
+  kind:"audio"`; audio bubbles play via one shared player (m4a chosen over the web's webm/opus —
+  every web <audio> decodes it, iOS Safari can't decode opus).
+- Engine send() gained an attempts override (signaling.ts) for the awaited switch leave.
+- Pinned in nativeRewrite.test.ts (M3.5 block, 4 tests). Known-deferred, logged: hold/swap/merge
+  UI, `refresh-ice` (long mesh calls with short-TTL TURN creds), per-sender group typing labels,
+  screen share/recording/filters (M5).
+- **M3.5 adversarial review (agent vs server/web ground truth + installed libs) — 7 confirmed
+  defects, all fixed pre-merge**: (1) CRITICAL — rejoin could never fire: the ≤28s snapshot
+  window sits entirely INSIDE the server's 30s disconnect grace, and a per-boot random cid can't
+  reclaim an in-grace pin (register fell back to a RANDOM pin, silently breaking dials/rings/M4
+  FCM hand-off for the whole session) → the cid is now PERSISTED in AsyncStorage (`relay_cid`,
+  web parity) and restored before the first connect; (2) react-native-fs 2.20 has no AGP-8
+  namespace = deterministic CI build failure → swapped to the maintained @dr.pogodin fork;
+  (3) the call-waiting switch continuation now re-validates `inCall` after the awaited leave
+  (a peer-left teardown mid-flight produced a mic-less zombie accept), keys the new roomId at
+  TAP time, and aborts honestly (`switch-failed`) if the leave never landed (send() now returns
+  success); (4) the switch disarms a boot-armed rejoin watchdog (it tore down the freshly
+  answered call within 10s); (5) `peer-left` clears held-by-peer (a held 1:1 stuck "On hold"
+  forever after the holder hung up; SFU auto-end now fires there); (6) the waiting card renders
+  during DIAL too (it was invisible → real callers machine-declined after 30s); (7) group
+  peer-hold no longer banners the whole call (1:1 only). Also fixed from the review's plausible
+  list: WRITE_EXTERNAL_STORAGE (maxSdk 28) declared + requested so voice notes work on
+  Android 7–9. Review VERIFIED: leave→accept ordering guarantee, ring/waiting predicate parity,
+  server rejoin-before-deliverPendingRing order, recorder/player API usage against the installed
+  lib, upload contracts, lockfile reproducibility.

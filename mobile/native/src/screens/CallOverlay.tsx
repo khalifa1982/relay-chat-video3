@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { RTCView, type MediaStream } from "@livekit/react-native-webrtc";
 import { useCall, type RemoteTile } from "../call/engine";
@@ -18,14 +18,50 @@ function Tile({ t }: { t: RemoteTile }) {
   );
 }
 
+/** In-call "+" — 6-digit mini pad that auto-invites on the 6th digit and
+ *  self-closes (the web's v2.49 add-person flow). */
+function AddPersonPad({ onInvite, onClose }: { onInvite: (n: string) => void; onClose: () => void }) {
+  const [digits, setDigits] = useState("");
+  useEffect(() => {
+    if (digits.length === 6) {
+      onInvite(digits);
+      onClose();
+    }
+  }, [digits, onInvite, onClose]);
+  return (
+    <View style={s.padWrap}>
+      <Text style={s.padEcho}>{digits.padEnd(6, "•").split("").join(" ")}</Text>
+      <View style={s.padGrid}>
+        {["1","2","3","4","5","6","7","8","9","⌫","0","✕"].map(k => (
+          <TouchableOpacity
+            key={k}
+            style={s.padKey}
+            onPress={() => {
+              if (k === "✕") { onClose(); return; }
+              if (k === "⌫") { setDigits(d => d.slice(0, -1)); return; }
+              setDigits(d => (d.length < 6 ? d + k : d));
+            }}
+          >
+            <Text style={s.padKeyText}>{k}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      <Text style={s.padHint}>Add someone — invites on the 6th digit</Text>
+    </View>
+  );
+}
+
 /** Full-screen call surface: dial card → ring screen → in-call grid. Rendered
  *  once at the root; visible whenever the engine isn't idle. */
 export function CallOverlay() {
   const call = useCall();
+  const [addOpen, setAddOpen] = useState(false);
+  useEffect(() => { if (call.phase === "idle") setAddOpen(false); }, [call.phase]);
   if (call.phase === "idle") return null;
 
   const statusLabel =
-    call.status === "calling" ? "Calling…"
+    call.rejoining && call.status !== "live" ? "Reconnecting to your call…"
+    : call.status === "calling" ? "Calling…"
     : call.status === "ringing" ? "Ringing…"
     : call.status === "paging" ? "Reaching their phone…"
     : call.status === "connecting" ? "Connecting…"
@@ -67,10 +103,18 @@ export function CallOverlay() {
           </View>
         ) : (
           <View style={{ flex: 1 }}>
+            {call.isGroup || call.onHold ? (
+              <View style={s.topBar}>
+                {call.isGroup ? <Text style={s.topChip}>Group call · {call.tiles.length + 1}</Text> : null}
+                {call.onHold ? <Text style={[s.topChip, s.holdChip]}>On hold — they'll be right back</Text> : null}
+              </View>
+            ) : null}
             <View style={s.grid}>
               {call.tiles.length === 0 ? (
                 <View style={[s.tileVideo, s.tileAvatar]}>
-                  <Text style={s.tileName}>Connected — waiting for media…</Text>
+                  <Text style={s.tileName}>
+                    {call.onHold ? "On hold…" : call.isGroup ? "Waiting for others to join…" : "Connected — waiting for media…"}
+                  </Text>
                 </View>
               ) : call.tiles.map(t => <Tile key={t.key} t={t} />)}
             </View>
@@ -90,6 +134,7 @@ export function CallOverlay() {
                 </View>
               </View>
             ) : null}
+            {addOpen ? <AddPersonPad onInvite={call.addToCall} onClose={() => setAddOpen(false)} /> : null}
             <View style={s.controls}>
               <TouchableOpacity style={[s.ctrl, !call.micOn && s.ctrlOff]} onPress={call.toggleMic}>
                 <Text style={s.ctrlText}>{call.micOn ? "🎙️" : "🔇"}</Text>
@@ -103,12 +148,36 @@ export function CallOverlay() {
               <TouchableOpacity style={[s.ctrl, call.speakerOn && s.ctrlOn]} onPress={call.toggleSpeaker}>
                 <Text style={s.ctrlText}>🔊</Text>
               </TouchableOpacity>
+              <TouchableOpacity style={[s.ctrl, addOpen && s.ctrlOn]} onPress={() => setAddOpen(o => !o)}>
+                <Text style={s.ctrlText}>➕</Text>
+              </TouchableOpacity>
               <TouchableOpacity style={[s.ctrl, { backgroundColor: colors.danger, width: 68 }]} onPress={call.hangup}>
                 <Text style={s.ctrlText}>⏚</Text>
               </TouchableOpacity>
             </View>
           </View>
         )}
+        {/* CALL WAITING (M3.5): a second caller mid-call OR mid-dial (web
+            shows it over the dial card too — hiding it silently machine-
+            declines a real caller after 30s). Answering ENDS the current
+            call/dial — no hold/swap yet, and the copy must say so. */}
+        {call.waiting ? (
+          <View style={s.waitCard}>
+            <Text style={s.waitTitle}>{call.waiting.fromName} is calling</Text>
+            <Text style={s.waitSub}>{fmtPin(call.waiting.from)} · {call.waiting.video ? "Video" : "Voice"} call</Text>
+            <View style={{ flexDirection: "row", gap: 10, marginTop: spacing(2) }}>
+              <TouchableOpacity style={[s.askBtn, { backgroundColor: colors.surfaceRaised }]} onPress={call.declineWaiting}>
+                <Text style={{ color: colors.text }}>Decline</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.askBtn, { backgroundColor: colors.danger }]} onPress={call.acceptWaiting}>
+                <Text style={{ color: "#fff", fontWeight: "700" }}>End call & answer</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+        {call.notice ? (
+          <View style={s.notice}><Text style={s.noticeText}>{call.notice}</Text></View>
+        ) : null}
       </View>
     </Modal>
   );
@@ -141,4 +210,18 @@ const s = StyleSheet.create({
   ctrlOff: { backgroundColor: colors.danger },
   ctrlOn: { backgroundColor: "#1f4d44" },
   ctrlText: { fontSize: 20 },
+  topBar: { flexDirection: "row", gap: 8, justifyContent: "center", paddingTop: spacing(3), paddingHorizontal: spacing(3), backgroundColor: colors.bg },
+  topChip: { color: colors.text, fontSize: 12, fontWeight: "700", backgroundColor: colors.surfaceRaised, borderRadius: 12, paddingHorizontal: spacing(2.5), paddingVertical: 4, overflow: "hidden" },
+  holdChip: { backgroundColor: "#4d3a1f", color: "#ffd28a" },
+  waitCard: { position: "absolute", left: spacing(3), right: spacing(3), top: spacing(10), backgroundColor: colors.surfaceRaised, borderRadius: 16, padding: spacing(3.5), borderWidth: 1, borderColor: colors.border },
+  waitTitle: { color: colors.text, fontSize: 16, fontWeight: "800" },
+  waitSub: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
+  notice: { position: "absolute", alignSelf: "center", bottom: 190, backgroundColor: "#000c", borderRadius: 12, paddingHorizontal: spacing(3), paddingVertical: spacing(2) },
+  noticeText: { color: "#fff", fontSize: 13 },
+  padWrap: { position: "absolute", alignSelf: "center", bottom: 108, backgroundColor: colors.surfaceRaised, borderRadius: 16, padding: spacing(3), alignItems: "center", borderWidth: 1, borderColor: colors.border },
+  padEcho: { color: colors.text, fontSize: 20, fontWeight: "800", letterSpacing: 2, fontVariant: ["tabular-nums"], marginBottom: spacing(2) },
+  padGrid: { flexDirection: "row", flexWrap: "wrap", width: 3 * 64 + 2 * 8, gap: 8, justifyContent: "center" },
+  padKey: { width: 64, height: 48, borderRadius: 10, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" },
+  padKeyText: { color: colors.text, fontSize: 18, fontWeight: "700" },
+  padHint: { color: colors.textMuted, fontSize: 11, marginTop: spacing(2) },
 });

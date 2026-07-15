@@ -1,23 +1,31 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, AppState, FlatList, Image, KeyboardAvoidingView, Platform,
-  StyleSheet, Text, TextInput, TouchableOpacity, View,
+  ActivityIndicator, Alert, AppState, FlatList, Image, KeyboardAvoidingView, PermissionsAndroid,
+  Platform, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 import { launchImageLibrary } from "react-native-image-picker";
-import { api, uploadAttachment, type ConversationInfo, type MessageRow } from "../lib/api";
+import AudioRecorderPlayer from "react-native-audio-recorder-player";
+// The classic react-native-fs has no AGP-8 namespace and breaks the CI build;
+// this fork is the maintained drop-in.
+import { readFile as fsReadFile } from "@dr.pogodin/react-native-fs";
+import { absUrl, api, uploadAttachment, type ConversationInfo, type MessageRow } from "../lib/api";
 import { onEvent } from "../lib/events";
 import { useMe } from "../lib/session";
 import { colors, spacing } from "../lib/theme";
+
+const recorder = new AudioRecorderPlayer();
 
 /**
  * M2 conversation screen — parity with the web thread view: bubbles with
  * read ticks (message.status), reply/quote, long-press Unsend for own
  * messages, image attachments (same /api/v2/upload flow), typing indicator,
  * live updates via the v2 SSE bus with a polling safety net, markRead on
- * focus + on incoming. Voice notes ship with the A/V milestone (M3).
+ * focus + on incoming. M3.5 adds GROUPS (routed kind — a 2-member group is
+ * still a group) and VOICE NOTES (AAC m4a — plays in every web <audio>,
+ * unlike the web's own webm/opus which iOS can't decode).
  */
-export function Conversation({ route }: { route: { params: { conversationId: number; title: string } } }) {
-  const { conversationId, title } = route.params;
+export function Conversation({ route }: { route: { params: { conversationId: number; title: string; kind?: string } } }) {
+  const { conversationId, title, kind } = route.params;
   const me = useMe();
   const [rows, setRows] = useState<MessageRow[]>([]);
   const [info, setInfo] = useState<ConversationInfo | null>(null);
@@ -75,7 +83,9 @@ export function Conversation({ route }: { route: { params: { conversationId: num
     const m = new Map(info?.members.map(x => [x.id, x.displayName]) ?? []);
     return (id: number) => m.get(id) ?? "…";
   }, [info]);
-  const isGroup = (info?.members.length ?? 2) > 2;
+  // Truth is the routed thread kind — a 2-member group is legal (createGroup
+  // min is ONE other member) and the old >2 heuristic rendered it as a DM.
+  const isGroup = kind === "group" || (kind == null && (info?.members.length ?? 2) > 2);
 
   const sendText = async () => {
     const body = draft.trim();
@@ -118,6 +128,99 @@ export function Conversation({ route }: { route: { params: { conversationId: num
       setSending(false);
     }
   };
+
+  // ── voice notes (M3.5): tap 🎤 to record, tap ■ to send. AAC in .m4a. ──
+  const [recording, setRecording] = useState(false);
+  const [recSecs, setRecSecs] = useState(0);
+  const recStartedAt = useRef(0);
+
+  const startVoiceNote = async () => {
+    if (sending || recording) return;
+    if (Platform.OS === "android") {
+      const ok = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+      if (ok !== PermissionsAndroid.RESULTS.GRANTED) return;
+      // API <29: the recorder writes via legacy external storage — without
+      // this grant every start rejects (Android 7–9 devices, minSdk 24).
+      if (Number(Platform.Version) < 29) {
+        const w = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
+        if (w !== PermissionsAndroid.RESULTS.GRANTED) return;
+      }
+    }
+    try {
+      await recorder.startRecorder();
+      recStartedAt.current = Date.now();
+      setRecSecs(0);
+      setRecording(true);
+      recorder.addRecordBackListener(e => {
+        setRecSecs(Math.floor((e.currentPosition ?? 0) / 1000));
+      });
+    } catch {
+      Alert.alert("Couldn't start recording");
+    }
+  };
+
+  const stopVoiceNote = async (send: boolean) => {
+    if (!recording) return;
+    setRecording(false);
+    recorder.removeRecordBackListener();
+    let path = "";
+    try { path = await recorder.stopRecorder(); } catch { return; }
+    if (!send) return;
+    const durationMs = Date.now() - recStartedAt.current;
+    if (durationMs < 700) return; // accidental tap — nothing worth sending
+    setSending(true);
+    try {
+      const dataBase64 = (await fsReadFile(path.replace("file://", ""), "base64")) as string;
+      const att = await uploadAttachment({
+        dataBase64,
+        // Android records AAC-in-MP4 — the one codec every web <audio> plays
+        // (the web's own webm/opus is undecodable on iOS Safari).
+        mimeType: "audio/mp4",
+        filename: "voice-note.m4a",
+        durationMs,
+      });
+      await api.send({ conversationId, kind: "audio", attachmentId: att.id, replyToId: replyTo?.id ?? null });
+      setReplyTo(null);
+      refresh();
+    } catch (e) {
+      Alert.alert("Not sent", e instanceof Error ? e.message : "Couldn't upload the voice note.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // One shared player — tapping another bubble stops the current one.
+  const [playingId, setPlayingId] = useState<number | null>(null);
+  const togglePlay = async (m: MessageRow) => {
+    try {
+      if (playingId === m.id) {
+        await recorder.stopPlayer();
+        setPlayingId(null);
+        return;
+      }
+      if (playingId != null) await recorder.stopPlayer().catch(() => {});
+      if (!m.attachment) return;
+      setPlayingId(m.id);
+      await recorder.startPlayer(absUrl(m.attachment.url));
+      recorder.addPlayBackListener(e => {
+        if (e.currentPosition >= e.duration) {
+          recorder.removePlayBackListener();
+          void recorder.stopPlayer().catch(() => {});
+          setPlayingId(null);
+        }
+      });
+    } catch {
+      setPlayingId(null);
+    }
+  };
+
+  useEffect(() => () => {
+    // Leaving the thread: stop any live capture/playback.
+    recorder.removeRecordBackListener();
+    recorder.removePlayBackListener();
+    void recorder.stopRecorder().catch(() => {});
+    void recorder.stopPlayer().catch(() => {});
+  }, []);
 
   const onChangeDraft = (t: string) => {
     setDraft(t);
@@ -162,9 +265,14 @@ export function Conversation({ route }: { route: { params: { conversationId: num
             </View>
           ) : null}
           {m.attachment && m.kind === "image" ? (
-            <Image source={{ uri: m.attachment.url }} style={s.image} resizeMode="cover" />
+            <Image source={{ uri: absUrl(m.attachment.url) }} style={s.image} resizeMode="cover" />
           ) : null}
-          {m.attachment && m.kind !== "image" ? (
+          {m.attachment && (m.kind === "audio" || m.attachment.mimeType?.startsWith("audio/")) ? (
+            <TouchableOpacity style={s.audioRow} onPress={() => togglePlay(m)}>
+              <Text style={s.audioBtn}>{playingId === m.id ? "■" : "▶"}</Text>
+              <Text style={s.audioLabel}>Voice message</Text>
+            </TouchableOpacity>
+          ) : m.attachment && m.kind !== "image" ? (
             <Text style={s.file}>📎 {m.attachment.filename ?? m.kind}</Text>
           ) : null}
           {m.body ? <Text style={s.body}>{m.body}</Text> : null}
@@ -195,18 +303,35 @@ export function Conversation({ route }: { route: { params: { conversationId: num
           <TouchableOpacity onPress={() => setReplyTo(null)}><Text style={s.replyClose}>✕</Text></TouchableOpacity>
         </View>
       ) : null}
+      {recording ? (
+        <View style={s.recBar}>
+          <Text style={s.recDot}>●</Text>
+          <Text style={s.recText}>Recording… {recSecs}s</Text>
+          <TouchableOpacity onPress={() => stopVoiceNote(false)}>
+            <Text style={s.recCancel}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       <View style={s.composer}>
-        <TouchableOpacity style={s.attach} onPress={sendImage} disabled={sending}>
+        <TouchableOpacity style={s.attach} onPress={sendImage} disabled={sending || recording}>
           <Text style={{ fontSize: 20 }}>🖼️</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={s.attach}
+          onPress={() => (recording ? stopVoiceNote(true) : startVoiceNote())}
+          disabled={sending}
+        >
+          <Text style={{ fontSize: 20 }}>{recording ? "🟥" : "🎤"}</Text>
         </TouchableOpacity>
         <TextInput
           style={s.input}
-          placeholder="Message"
+          placeholder={recording ? "Tap 🟥 to send the voice note" : "Message"}
           placeholderTextColor={colors.textMuted}
           value={draft}
           onChangeText={onChangeDraft}
           multiline
           maxLength={8000}
+          editable={!recording}
         />
         <TouchableOpacity style={[s.sendBtn, (!draft.trim() || sending) && { opacity: 0.4 }]}
           onPress={sendText} disabled={!draft.trim() || sending}>
@@ -231,6 +356,13 @@ const s = StyleSheet.create({
   quoteBody: { color: colors.textMuted, fontSize: 12 },
   image: { width: 220, height: 220, borderRadius: 10, marginBottom: 4, backgroundColor: colors.surface },
   file: { color: colors.text, marginBottom: 2 },
+  audioRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 6, minWidth: 160 },
+  audioBtn: { color: colors.text, fontSize: 18, width: 30, height: 30, borderRadius: 15, backgroundColor: "#00000040", textAlign: "center", lineHeight: 28, overflow: "hidden" },
+  audioLabel: { color: colors.text, fontSize: 14 },
+  recBar: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.surface, paddingHorizontal: spacing(3), paddingVertical: spacing(2), borderTopWidth: 1, borderTopColor: colors.border },
+  recDot: { color: colors.danger, fontSize: 14 },
+  recText: { color: colors.text, flex: 1, fontSize: 13 },
+  recCancel: { color: colors.textMuted, padding: 6 },
   body: { color: colors.text, fontSize: 15, lineHeight: 21 },
   meta: { color: colors.textMuted, fontSize: 10, alignSelf: "flex-end", marginTop: 2 },
   typing: { color: colors.textMuted, fontStyle: "italic", paddingHorizontal: spacing(4), paddingBottom: 4 },
