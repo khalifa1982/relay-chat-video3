@@ -20,12 +20,20 @@ export type V2Event =
 type Listener = (ev: V2Event) => void;
 
 let es: EventSource | null = null;
+let opening = false; // guards the async gap below — two mounts in one frame
 let retryT: ReturnType<typeof setTimeout> | null = null;
 const listeners = new Set<Listener>();
 
 async function open() {
+  if (es || opening) return;
+  opening = true;
+  let deviceId: string;
+  try {
+    deviceId = await getDeviceId();
+  } finally {
+    opening = false;
+  }
   if (es) return;
-  const deviceId = await getDeviceId();
   const source = new EventSource(`${BASE_URL}/api/v2/events`, {
     headers: { "x-relay-device-id": deviceId },
   });

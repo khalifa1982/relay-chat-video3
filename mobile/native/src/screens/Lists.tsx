@@ -31,7 +31,9 @@ export function History() {
       sub: `${c.participants[0]?.isSelf ? "Outgoing" : "Incoming"} · ${Math.round(c.durationSec / 60)}m · ${fmtWhen(c.startedAt)}`,
       tone: c.participants[0]?.isSelf ? colors.tabCalls : colors.tabHistory,
     })),
-    ...calls.data.map(c => ({
+    // Parity with the web's isSoloRow: answered/ended calls are represented by
+    // conferenceHistory above — the solo list is ONLY the never-connected rows.
+    ...calls.data.filter(c => c.status !== "answered" && c.status !== "ended").map(c => ({
       key: `s${c.id}`, at: new Date(c.startedAt).getTime(),
       title: c.other?.displayName ?? fmtPin(c.other?.number ?? null) ?? "Unknown",
       sub: `${c.direction === "in" ? (c.status === "declined" ? "Declined" : "Missed") : "No answer"} · ${fmtWhen(c.startedAt)}`,

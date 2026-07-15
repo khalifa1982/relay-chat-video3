@@ -114,7 +114,7 @@ export function ContactsList({ navigation }: { navigation: { navigate: (s: strin
                 <TouchableOpacity style={s.sheetRow} onPress={() => sheetAction(() =>
                   Alert.alert("Delete contact?", sheet.displayName ?? fmtPin(sheet.number), [
                     { text: "Cancel", style: "cancel" },
-                    { text: "Delete", style: "destructive", onPress: () => api.contactRemove(sheet.number).then(refresh).catch(() => {}) },
+                    { text: "Delete", style: "destructive", onPress: () => api.contactRemove(sheet.id).then(refresh).catch(() => {}) },
                   ]))}>
                   <Text style={[s.sheetText, { color: colors.danger }]}>🗑  Delete</Text>
                 </TouchableOpacity>

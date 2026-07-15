@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Platform,
+  ActivityIndicator, Alert, AppState, FlatList, Image, KeyboardAvoidingView, Platform,
   StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 import { launchImageLibrary } from "react-native-image-picker";
@@ -43,7 +43,9 @@ export function Conversation({ route }: { route: { params: { conversationId: num
     const off = onEvent(ev => {
       if (ev.kind === "message" && ev.conversationId === conversationId) {
         refresh();
-        api.markRead(conversationId).catch(() => {});
+        // HONEST receipts: never ✓✓ a message the user hasn't seen — only
+        // mark read while the app is actually in the foreground.
+        if (AppState.currentState === "active") api.markRead(conversationId).catch(() => {});
       } else if (ev.kind === "read" && ev.conversationId === conversationId) {
         refresh(); // my ticks flip to ✓✓
       } else if (ev.kind === "typing" && ev.conversationId === conversationId) {
@@ -52,10 +54,18 @@ export function Conversation({ route }: { route: { params: { conversationId: num
         typingClearT.current = setTimeout(() => setPeerTyping(false), 3500);
       }
     });
+    // Returning to the foreground with this thread open = the user sees it now.
+    const appStateSub = AppState.addEventListener("change", st => {
+      if (st === "active") {
+        refresh();
+        api.markRead(conversationId).catch(() => {});
+      }
+    });
     // Polling safety net (the web keeps one too).
     const poll = setInterval(refresh, 6000);
     return () => {
       off();
+      appStateSub.remove();
       clearInterval(poll);
       if (typingClearT.current) clearTimeout(typingClearT.current);
     };

@@ -83,7 +83,7 @@ export interface MessageRow {
   id: number;
   conversationId: number;
   senderIdentityId: number;
-  kind: "text" | "image" | "video" | "audio" | "file";
+  kind: "text" | "image" | "video" | "audio" | "file" | "system";
   body: string | null;
   meta: unknown;
   status: string | null; // "read" once the peer has read it
@@ -126,11 +126,13 @@ export interface ConversationInfo {
 export const api = {
   // identity / presence
   whoami: () => client.query("identity.whoami") as Promise<Whoami | null>,
+  // Server returns a SLIM shape (no verified/email) — callers follow with
+  // whoami() for the full identity (Onboarding does).
   startGuest: async (displayName: string) =>
     client.mutation("identity.startGuest", {
       displayName,
       deviceId: await getDeviceId(),
-    }) as Promise<Whoami & { reused?: boolean }>,
+    }) as Promise<Pick<Whoami, "id" | "number" | "displayName" | "avatarUrl" | "isGuest"> & { reused?: boolean }>,
   heartbeat: () => client.mutation("directory.heartbeat") as Promise<unknown>,
   lookup: (number: string) =>
     client.query("directory.lookup", { number }) as Promise<LookupResult | null>,
@@ -145,8 +147,9 @@ export const api = {
     category?: "vip" | "family" | "friend" | "team" | null;
     blocked?: boolean;
   }) => client.mutation("contacts.upsert", input) as Promise<unknown>,
-  contactRemove: (number: string) =>
-    client.mutation("contacts.remove", { number }) as Promise<unknown>,
+  // Server input is { id } — the contact ROW id, not the number.
+  contactRemove: (id: number) =>
+    client.mutation("contacts.remove", { id }) as Promise<unknown>,
 
   // messaging (write-parity M2)
   threads: () => client.query("messages.threads") as Promise<ThreadRow[]>,
@@ -168,7 +171,9 @@ export const api = {
     body?: string | null;
     attachmentId?: number | null;
     replyToId?: number | null;
-  }) => client.mutation("messages.send", input) as Promise<MessageRow>,
+    // The server returns the RAW inserted row (attachmentId, no joined
+    // `attachment` object — only messages.list joins it).
+  }) => client.mutation("messages.send", input) as Promise<Omit<MessageRow, "attachment"> & { attachmentId: number | null }>,
   markRead: (conversationId: number) =>
     client.mutation("messages.markRead", { conversationId }) as Promise<unknown>,
   typing: (conversationId: number) =>

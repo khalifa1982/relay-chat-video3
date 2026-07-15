@@ -37,7 +37,11 @@ export function MessagesList({ navigation }: { navigation: { navigate: (s: strin
     const off = onEvent(ev => {
       if (ev.kind === "message" || ev.kind === "read") refresh();
     });
-    return off;
+    // markRead notifies only PEERS — refresh on focus so MY unread badges
+    // clear when popping back from a conversation.
+    const nav = navigation as unknown as { addListener?: (e: string, cb: () => void) => () => void };
+    const focusOff = nav.addListener?.("focus", refresh);
+    return () => { off(); focusOff?.(); };
   }, [refresh]);
 
   const open = (t: ThreadRow) =>
