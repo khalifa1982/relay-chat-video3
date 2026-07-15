@@ -3405,3 +3405,7 @@ enumerated interop risks; the plan cross-checked the four readers and resolved 7
   Android 7–9. Review VERIFIED: leave→accept ordering guarantee, ring/waiting predicate parity,
   server rejoin-before-deliverPendingRing order, recorder/player API usage against the installed
   lib, upload contracts, lockfile reproducibility.
+- M3.5 CI fix: react-native-audio-recorder-player 3.6.14 doesn't compile on RN 0.86 (the same
+  `currentActivity` Kotlin property access RN 0.80 removed — the M4 bridge had the identical
+  bug) → patched via patch-package (postinstall) to route through reactContext; verified the
+  clean `npm ci` path applies it.

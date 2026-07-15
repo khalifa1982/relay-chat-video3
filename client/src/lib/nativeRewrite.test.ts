@@ -230,6 +230,12 @@ describe("native rewrite — M3.5 call waiting / groups / rejoin / voice notes",
     expect(conv).toContain('kind: "audio"');
     const pkg = JSON.parse(read("mobile/native/package.json"));
     expect(pkg.dependencies["react-native-audio-recorder-player"]).toBeTruthy();
+    // The lib's Kotlin predates RN 0.80 (currentActivity property access is
+    // gone) — patch-package fixes it at npm ci time; losing either the patch
+    // or the postinstall hook is a deterministic CI build failure.
+    expect(pkg.scripts.postinstall).toBe("patch-package");
+    expect(read("mobile/native/patches/react-native-audio-recorder-player+3.6.14.patch"))
+      .toContain("reactContext.currentActivity");
     // The classic react-native-fs has no AGP-8 namespace (breaks the CI
     // build) — the maintained fork is the pinned choice.
     expect(pkg.dependencies["@dr.pogodin/react-native-fs"]).toBeTruthy();
