@@ -103,9 +103,12 @@ export function CallOverlay() {
           </View>
         ) : (
           <View style={{ flex: 1 }}>
-            {call.isGroup || call.onHold ? (
+            {call.isGroup || call.onHold || call.recOn || call.sharingScreen || call.peerScreenPin ? (
               <View style={s.topBar}>
+                {call.recOn ? <Text style={[s.topChip, s.recChip]}>● REC</Text> : null}
                 {call.isGroup ? <Text style={s.topChip}>Group call · {call.tiles.length + 1}</Text> : null}
+                {call.sharingScreen ? <Text style={s.topChip}>Sharing your screen</Text> : null}
+                {call.peerScreenPin ? <Text style={s.topChip}>Viewing a shared screen</Text> : null}
                 {call.onHold ? <Text style={[s.topChip, s.holdChip]}>On hold — they'll be right back</Text> : null}
               </View>
             ) : null}
@@ -148,6 +151,14 @@ export function CallOverlay() {
               <TouchableOpacity style={[s.ctrl, call.speakerOn && s.ctrlOn]} onPress={call.toggleSpeaker}>
                 <Text style={s.ctrlText}>🔊</Text>
               </TouchableOpacity>
+              <TouchableOpacity style={[s.ctrl, call.sharingScreen && s.ctrlOn]} onPress={call.toggleScreenShare}>
+                <Text style={s.ctrlText}>🖥️</Text>
+              </TouchableOpacity>
+              {call.recAvailable ? (
+                <TouchableOpacity style={[s.ctrl, call.recOn && s.ctrlOff]} onPress={call.toggleRecording}>
+                  <Text style={s.ctrlText}>⏺</Text>
+                </TouchableOpacity>
+              ) : null}
               <TouchableOpacity style={[s.ctrl, addOpen && s.ctrlOn]} onPress={() => setAddOpen(o => !o)}>
                 <Text style={s.ctrlText}>➕</Text>
               </TouchableOpacity>
@@ -213,6 +224,7 @@ const s = StyleSheet.create({
   topBar: { flexDirection: "row", gap: 8, justifyContent: "center", paddingTop: spacing(3), paddingHorizontal: spacing(3), backgroundColor: colors.bg },
   topChip: { color: colors.text, fontSize: 12, fontWeight: "700", backgroundColor: colors.surfaceRaised, borderRadius: 12, paddingHorizontal: spacing(2.5), paddingVertical: 4, overflow: "hidden" },
   holdChip: { backgroundColor: "#4d3a1f", color: "#ffd28a" },
+  recChip: { backgroundColor: "#4d1f28", color: "#ff8aa0" },
   waitCard: { position: "absolute", left: spacing(3), right: spacing(3), top: spacing(10), backgroundColor: colors.surfaceRaised, borderRadius: 16, padding: spacing(3.5), borderWidth: 1, borderColor: colors.border },
   waitTitle: { color: colors.text, fontSize: 16, fontWeight: "800" },
   waitSub: { color: colors.textMuted, fontSize: 12, marginTop: 2 },

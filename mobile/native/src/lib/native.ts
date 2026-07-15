@@ -13,11 +13,12 @@
 import { NativeModules, Platform } from "react-native";
 
 type CallNativeType = {
-  startCallService(title: string | null): Promise<void>;
+  startCallService(title: string | null, screenShare: boolean): Promise<void>;
   stopCallService(): Promise<void>;
   cancelRing(): Promise<void>;
   ensureNotificationPermission(): Promise<{ granted: boolean }>;
   getPushToken(): Promise<{ token: string | null; reason?: string }>;
+  setPipEligible(eligible: boolean): Promise<void>;
 };
 
 const mod: CallNativeType | null =
@@ -25,8 +26,16 @@ const mod: CallNativeType | null =
     ? (NativeModules.CallNative as CallNativeType)
     : null;
 
-export function nativeStartCallService(title?: string): void {
-  void mod?.startCallService(title ?? null).catch(() => {});
+export function nativeStartCallService(title?: string, opts?: { screenShare?: boolean }): void {
+  // screenShare upgrades the FGS with the mediaProjection type — legal ONLY
+  // after the user granted the capture (Android 14 rule), so the engine calls
+  // this again post-grant rather than declaring the type up front.
+  void mod?.startCallService(title ?? null, !!opts?.screenShare).catch(() => {});
+}
+
+/** While true, leaving the app mid-call enters Picture-in-Picture (M5). */
+export function nativeSetPipEligible(eligible: boolean): void {
+  void mod?.setPipEligible(eligible).catch(() => {});
 }
 
 export function nativeStopCallService(): void {

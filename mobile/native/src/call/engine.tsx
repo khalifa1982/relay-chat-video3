@@ -35,7 +35,7 @@ import {
 import { api as serverApi, type Whoami } from "../lib/api";
 import {
   nativeCancelRing, nativeEnsureNotificationPermission, nativeGetPushToken,
-  nativeStartCallService, nativeStopCallService,
+  nativeSetPipEligible, nativeStartCallService, nativeStopCallService,
 } from "../lib/native";
 
 export type CallStatus = "calling" | "ringing" | "paging" | "connecting" | "live";
@@ -80,6 +80,15 @@ interface EngineState {
   rejoining: boolean;
   /** Transient toast surfaced by the engine (add-person feedback, "full"…). */
   notice: string | null;
+  // ── M5 ──
+  /** The server has LiveKit Egress recording configured (registered ack). */
+  recAvailable: boolean;
+  /** A recording is live in this room (any participant). */
+  recOn: boolean;
+  /** I'm sharing my screen. */
+  sharingScreen: boolean;
+  /** Pin of a REMOTE participant sharing their screen ("" = none). */
+  peerScreenPin: string;
 }
 
 interface EngineApi extends EngineState {
@@ -97,6 +106,8 @@ interface EngineApi extends EngineState {
   flipCam: () => void;
   toggleSpeaker: () => void;
   answerVideoAsk: (yes: boolean) => void;
+  toggleScreenShare: () => void;
+  toggleRecording: () => void;
 }
 
 const CallContext = createContext<EngineApi | null>(null);
@@ -121,6 +132,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     incoming: null, waiting: null, videoAsk: null, tiles: [], localStream: null,
     micOn: true, camOn: false, speakerOn: true,
     onHold: false, isGroup: false, rejoining: false, notice: null,
+    recAvailable: false, recOn: false, sharingScreen: false, peerScreenPin: "",
   });
   const [ready, setReady] = useState(false);
   const st = useRef(state);
@@ -157,6 +169,9 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
   const rejoinWatchdog = useRef<ReturnType<typeof setTimeout> | null>(null);
   const snapRefresh = useRef<ReturnType<typeof setInterval> | null>(null);
   const noticeT = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // M5: the active screen-capture stream (mesh path), busy re-entry guard.
+  const screenStream = useRef<MediaStream | null>(null);
+  const screenBusy = useRef(false);
 
   const clearTimer = (r: React.MutableRefObject<ReturnType<typeof setTimeout> | null>) => {
     if (r.current) { clearTimeout(r.current); r.current = null; }
@@ -247,6 +262,8 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     // M4: ongoing-call foreground service — Android must never freeze a
     // backgrounded live call (stopped in hangupInternal).
     nativeStartCallService(st.current.peerName || undefined);
+    // M5: leaving the app mid-call now enters Picture-in-Picture.
+    nativeSetPipEligible(true);
     // M3.5: keep a fresh rejoin snapshot while the call lives (RN has no
     // pagehide — a process kill gives no callback, so we refresh on a timer).
     writeSnap();
@@ -471,6 +488,23 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       case "registered":
         livekitEnabled.current = !!m.livekit;
         if (m.iceServers?.length) iceServers.current = m.iceServers;
+        patch({ recAvailable: !!m.recording });
+        break;
+      case "recording":
+        // Broadcast to the whole room — any participant may start/stop.
+        patch({ recOn: m.on !== false });
+        if (m.on !== false && m.by && m.by !== sig.current?.pin) {
+          showNotice("This call is being recorded.");
+        }
+        break;
+      case "recording-error":
+        patch({ recOn: false });
+        showNotice(m.message || "Couldn't start the recording.");
+        break;
+      case "peer-screen":
+        if (!m.pin) break;
+        patch({ peerScreenPin: m.on !== false ? m.pin : "" });
+        publishTiles();
         break;
       case "room": {
         roomId.current = m.roomId ?? null;
@@ -733,11 +767,17 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     roomId.current = null;
     stopSnapRefresh();
     void clearRejoinSnapshot();
+    nativeSetPipEligible(false);
+    if (screenStream.current) {
+      try { screenStream.current.getTracks().forEach(t => t.stop()); } catch { /* */ }
+      screenStream.current = null;
+    }
     cleanupMedia();
     setState(s => ({
       ...s, phase: "idle", status: "calling", peerName: "", peerPin: "",
       incoming: null, waiting: null, videoAsk: null, tiles: [], localStream: null,
       camOn: false, micOn: true, onHold: false, isGroup: false, rejoining: false,
+      recOn: false, sharingScreen: false, peerScreenPin: "",
     }));
     if (promoted) {
       patch({ incoming: { ...promoted }, phase: "incoming" });
@@ -814,11 +854,15 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       pendingGroupInvites.current = [];
       stopSnapRefresh();
       void clearRejoinSnapshot();
+      if (screenStream.current) {
+        try { screenStream.current.getTracks().forEach(t => t.stop()); } catch { /* */ }
+        screenStream.current = null;
+      }
       localStream.current?.getVideoTracks().forEach(t => { t.enabled = false; });
       patch({
         phase: "in-call", status: "connecting", peerName: w.fromName, peerPin: w.from,
         isVideoCall: w.video, camOn: false, tiles: [], videoAsk: null,
-        onHold: false, isGroup: false,
+        onHold: false, isGroup: false, recOn: false, sharingScreen: false, peerScreenPin: "",
       });
       void sig.current?.send({ type: "accept", roomId: w.roomId });
       armLkWatchdog();
@@ -874,6 +918,84 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       armLkWatchdog(); // callAnswered=true ⇒ bounded retries, honest teardown
     }
     void clearRejoinSnapshot(); // consumed — establishment re-writes it
+  };
+
+  /** M5 screen share. SFU: the LiveKit SDK owns capture+publication. Mesh:
+   *  getDisplayMedia (MediaProjection consent behind it) hot-swaps into the
+   *  pre-allocated video m-line — replaceTrack, no renegotiation. Both paths
+   *  announce via `{type:"screen"}` so every client spotlights the sharer. */
+  const stopScreenShareInternal = async (announce: boolean) => {
+    const dying = screenStream.current;
+    screenStream.current = null;
+    patch({ sharingScreen: false });
+    const room = lkRoom.current;
+    if (room) {
+      try { await room.localParticipant.setScreenShareEnabled(false); } catch { /* */ }
+    } else if (dying) {
+      // Restore the camera into the slot (or empty it if the cam is off).
+      const camTrack = st.current.camOn ? (localStream.current?.getVideoTracks()[0] ?? null) : null;
+      peers.current.forEach(p => {
+        try {
+          const senders = (p.pc as unknown as { getSenders: () => Array<{ track: { kind?: string } | null; replaceTrack: (t: unknown) => Promise<void> }> }).getSenders();
+          const s = senders.find(x => x.track && x.track.kind === "video");
+          if (s) void s.replaceTrack(camTrack as never);
+        } catch { /* */ }
+      });
+    }
+    if (dying) { try { dying.getTracks().forEach(t => { t.stop(); }); } catch { /* */ } }
+    if (announce && inCall.current) void sig.current?.send({ type: "screen", action: "off" });
+    // Drop the FGS back to mic-only types.
+    if (established.current) nativeStartCallService(st.current.peerName || undefined);
+  };
+
+  const toggleScreenShareInternal = () => {
+    if (!inCall.current || screenBusy.current) return;
+    if (st.current.sharingScreen) { screenBusy.current = true; void stopScreenShareInternal(true).finally(() => { screenBusy.current = false; }); return; }
+    screenBusy.current = true;
+    void (async () => {
+      try {
+        const room = lkRoom.current;
+        if (room) {
+          // SDK path: raises the MediaProjection consent itself.
+          await room.localParticipant.setScreenShareEnabled(true);
+          patch({ sharingScreen: true });
+        } else {
+          const md = mediaDevices as unknown as { getDisplayMedia?: (c: object) => Promise<MediaStream> };
+          if (!md.getDisplayMedia) { showNotice("Screen sharing isn't available on this device."); return; }
+          const disp = await md.getDisplayMedia({ video: true });
+          const track = disp.getVideoTracks()[0];
+          if (!inCall.current || !track) { disp.getTracks().forEach(t => t.stop()); return; }
+          screenStream.current = disp;
+          (track as unknown as { onended?: () => void }).onended = () => { void stopScreenShareInternal(true); };
+          let swapped = 0;
+          peers.current.forEach(p => {
+            try {
+              const senders = (p.pc as unknown as { getSenders: () => Array<{ track: { kind?: string } | null; replaceTrack: (t: unknown) => Promise<void> }> }).getSenders();
+              const s = senders.find(x => x.track && x.track.kind === "video");
+              if (s) { void s.replaceTrack(track as never); swapped++; return; }
+              const trs = (p.pc as unknown as { getTransceivers: () => Array<{ receiver?: { track?: { kind?: string } }; sender: { track: unknown | null; replaceTrack: (t: unknown) => Promise<void> } }> }).getTransceivers();
+              const slot = trs.find(tr => tr.receiver?.track?.kind === "video" && !tr.sender.track);
+              if (slot) { void slot.sender.replaceTrack(track as never); swapped++; }
+            } catch { /* */ }
+          });
+          if (swapped === 0) {
+            disp.getTracks().forEach(t => t.stop());
+            screenStream.current = null;
+            showNotice("Screen sharing needs a video-capable call.");
+            return;
+          }
+          patch({ sharingScreen: true });
+        }
+        void sig.current?.send({ type: "screen", action: "on" });
+        // Android 14: the mediaProjection FGS type may only be declared AFTER
+        // the user granted capture — restart the keep-alive with it now.
+        if (established.current) nativeStartCallService(st.current.peerName || undefined, { screenShare: true });
+      } catch {
+        // Consent dialog cancelled / SDK failure — stay as we were.
+      } finally {
+        screenBusy.current = false;
+      }
+    })();
   };
 
   const enableCamera = async () => {
@@ -1160,6 +1282,13 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       patch({ videoAsk: null });
       void sig.current?.send({ type: yes ? "video-accept" : "video-decline" });
       if (yes) { videoApproved.current = true; void enableCamera(); }
+    },
+    toggleScreenShare: toggleScreenShareInternal,
+    toggleRecording: () => {
+      if (!inCall.current || !st.current.recAvailable) return;
+      // Optimistic-off only for stop; start waits for the server broadcast
+      // (it may bounce with recording-error when Egress isn't reachable).
+      void sig.current?.send({ type: st.current.recOn ? "stop-recording" : "start-recording" });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [state, ready]);

@@ -35,9 +35,15 @@ public class CallService extends Service {
                 .build();
         try {
             if (Build.VERSION.SDK_INT >= 30) {
-                startForeground(NOTIF_ID, n,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                                | ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+                int types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                        | ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK;
+                // Screen share (M5): the mediaProjection type may only be used
+                // AFTER the user granted capture — the engine restarts us with
+                // this extra right after the grant.
+                if (intent != null && intent.getBooleanExtra("screenShare", false)) {
+                    types |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
+                }
+                startForeground(NOTIF_ID, n, types);
             } else {
                 startForeground(NOTIF_ID, n);
             }

@@ -32,15 +32,29 @@ class CallNativeModule(reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
-  fun startCallService(title: String?, promise: Promise) {
+  fun startCallService(title: String?, screenShare: Boolean, promise: Promise) {
     try {
       val i = Intent(reactApplicationContext, CallService::class.java)
       if (title != null) i.putExtra("title", title)
+      // mediaProjection FGS type is legal only AFTER the capture grant —
+      // the JS engine re-invokes with screenShare=true post-grant (M5).
+      i.putExtra("screenShare", screenShare)
       ContextCompat.startForegroundService(reactApplicationContext, i)
       promise.resolve(null)
     } catch (e: Exception) {
       promise.reject("start_call_service", "startCallService failed: ${e.message}")
     }
+  }
+
+  /** While true, MainActivity enters Picture-in-Picture on home/recents (M5). */
+  @ReactMethod
+  fun setPipEligible(eligible: Boolean, promise: Promise) {
+    pipEligible = eligible
+    promise.resolve(null)
+  }
+
+  companion object {
+    @JvmStatic @Volatile var pipEligible: Boolean = false
   }
 
   @ReactMethod

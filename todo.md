@@ -3409,3 +3409,21 @@ enumerated interop risks; the plan cross-checked the four readers and resolved 7
   `currentActivity` Kotlin property access RN 0.80 removed — the M4 bridge had the identical
   bug) → patched via patch-package (postinstall) to route through reactContext; verified the
   clean `npm ci` path applies it.
+## Native rewrite — Milestone 5 (Android core): screen share, native PiP, recording (2026-07-15)
+- **Screen share** (engine.tsx): SFU via `setScreenShareEnabled` (SDK owns the MediaProjection
+  consent); mesh via `getDisplayMedia` hot-swapped into the pre-allocated video m-line
+  (replaceTrack — no renegotiation), camera restored on stop, `track.onended` (system "stop
+  sharing") handled; both paths announce `{type:"screen", action}` → server `peer-screen`
+  broadcast → "Viewing a shared screen" chip. Android 14 discipline: the FGS gains the
+  mediaProjection type ONLY on the post-grant restart (CallService `screenShare` extra +
+  FOREGROUND_SERVICE_MEDIA_PROJECTION permission); stopping drops back to mic-only types.
+  Stopped on hangup AND across a call-waiting switch.
+- **Native PiP**: MainActivity.onUserLeaveHint → enterPictureInPictureMode (3:4), gated by
+  CallNativeModule.pipEligible which the engine sets at establishment and clears at hangup —
+  an idle app never pips; manifest `supportsPictureInPicture`.
+- **Recording controls**: `registered.recording` gates a ⏺ button; `start-recording`/
+  `stop-recording` messages; room-wide `recording {on, by}` → ● REC chip + "This call is being
+  recorded." notice; `recording-error` surfaces honestly. Server untouched.
+- **Filters: descoped from M5, documented** — MediaPipe-native camera processing is only
+  verifiable on physical device GPUs; no CI-checkable path from this environment. Ships with
+  the device-verified pass (alongside iOS/Mac work). Pinned in nativeRewrite.test.ts (M5 block).

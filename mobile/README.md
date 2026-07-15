@@ -59,8 +59,17 @@ already in this repo; the steps only the account owner can perform are marked
 > registered (`org.yourchat.relay` + debug `org.yourchat.relay.next`).
 > iOS CallKit + VoIP push (PushKit) is the Mac-verified half of M4 —
 > deferred until an Xcode environment is available.
-> **M5** Filters (MediaPipe native),
-> screen share, native PiP, recording. **M6** Full QA matrix + store swap.
+> **M5 ✅ (Android core)** — SCREEN SHARE (mesh: getDisplayMedia hot-swap
+> via replaceTrack; SFU: setScreenShareEnabled; `screen`→`peer-screen`
+> spotlight protocol; mediaProjection FGS type added only AFTER the capture
+> grant — Android 14 rule), NATIVE PiP (home mid-call shrinks to
+> Picture-in-Picture; engine-gated), RECORDING controls (start/stop-recording
+> + room-wide ● REC indicator + "being recorded" notice; server unchanged).
+> FILTERS are consciously DESCOPED from M5: the MediaPipe-native pipeline
+> (segmentation/face landmarks on the camera frames) can only be verified on
+> physical device GPUs — no CI-checkable path exists from this environment;
+> it ships in the device-verified pass alongside iOS (Mac) work.
+> **M6** Full QA matrix + store swap.
 >
 > The Capacitor app below (v2.86) remains the **interim/store-now option**
 > and its native layer (FCM plumbing, server fcm.ts, signing/CI/runbooks)

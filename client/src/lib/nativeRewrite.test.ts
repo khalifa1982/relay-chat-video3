@@ -243,3 +243,28 @@ describe("native rewrite — M3.5 call waiting / groups / rejoin / voice notes",
     expect(read("mobile/native/src/screens/MessagesList.tsx")).toContain("startGroup");
   });
 });
+
+describe("native rewrite — M5 screen share / PiP / recording (Android)", () => {
+  it("engine speaks the production screen + recording vocabulary", () => {
+    const e = read("mobile/native/src/call/engine.tsx");
+    for (const t of ['"start-recording"', '"stop-recording"', 'case "recording"', 'case "peer-screen"'])
+      expect(e).toContain(t);
+    expect(e).toMatch(/type: "screen", action: "on"/); // server broadcasts peer-screen
+    expect(e).toContain("setScreenShareEnabled"); // SFU path
+    expect(e).toContain("getDisplayMedia");       // mesh path (replaceTrack hot-swap)
+    // Android 14: mediaProjection FGS type only AFTER the capture grant.
+    expect(e).toMatch(/screenShare: true/);
+    expect(read("mobile/native/android/app/src/main/java/com/relaynative/CallService.java"))
+      .toContain("FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION");
+  });
+
+  it("PiP: in-call home press shrinks to Picture-in-Picture, gated by the engine", () => {
+    expect(read("mobile/native/android/app/src/main/java/com/relaynative/MainActivity.kt"))
+      .toContain("enterPictureInPictureMode");
+    expect(read("mobile/native/android/app/src/main/AndroidManifest.xml"))
+      .toContain('android:supportsPictureInPicture="true"');
+    const e = read("mobile/native/src/call/engine.tsx");
+    expect(e).toContain("nativeSetPipEligible(true)");  // at establish
+    expect(e).toContain("nativeSetPipEligible(false)"); // at hangup
+  });
+});

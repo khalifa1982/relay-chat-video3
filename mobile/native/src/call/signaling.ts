@@ -31,8 +31,14 @@ export interface Msg {
   code?: string;
   video?: boolean;
   paging?: boolean;
-  /** peer-hold: true = parked by the peer's call-waiting switch. */
+  /** peer-hold / peer-screen / recording: state flag. */
   on?: boolean;
+  /** screen: "on" | "off" (client→server). */
+  action?: string;
+  /** recording: who started it. */
+  by?: string;
+  /** registered: server has recording configured. */
+  recording?: boolean;
   livekit?: boolean;
   livekitUrl?: string;
   token?: string;
