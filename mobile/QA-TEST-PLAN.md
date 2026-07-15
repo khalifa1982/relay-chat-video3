@@ -83,3 +83,39 @@ each scenario below has broken at least once in RELAY's history.*
 **Pass bar:** all of A+B on devices 1–4, plus C11–12, D14–16. Log failures
 with device, OS version, and the in-call diagnostics overlay (`?` key /
 diag button → Copy).
+
+---
+
+## F · NATIVE REWRITE (mobile/native, RELAY-RN builds) — M3.5/M4/M5 scenarios
+
+Run on the debug APK (`org.yourchat.relay.next`, installs beside the store
+app). Web peer = your-chat.org in Chrome.
+
+23. **Rings when closed (M4)**: force-stop the app → web dials the RN number →
+    full-screen lock-screen ring; Answer opens the app and the SAME call rings
+    in-app (requires the Firebase [YOU] steps; BOTH package names registered).
+24. **Call waiting (M3.5)**: RN in a call with web-A; web-B dials the RN
+    number → waiting card (vibration, no ringtone over the call); "End call &
+    answer" ends A cleanly and connects B; Decline leaves A untouched.
+    Repeat while RN is DIALING (card must show over the dial screen).
+25. **Hold**: web-A answers ITS call waiting while talking to RN → RN shows
+    "On hold" and does NOT auto-end (SFU + mesh); web-A hanging up entirely
+    ends the RN call honestly.
+26. **Group calls (M3.5)**: Dialer → stage 2 numbers → Call 2; both ring, the
+    first decline must NOT kill the dial once anyone joined; in-call ➕ pad:
+    offline number = toast only. One member leaving never ends the group.
+27. **Rejoin (M3.5)**: mid-call, swipe-kill the app; reopen within ~25s →
+    "Reconnecting to your call…" and the SAME call resumes (mesh + SFU).
+    Reopen after >30s → clean idle, no ghost state on the next dial.
+28. **Voice notes (M3.5)**: record → send → web plays it; web sends one → RN
+    plays it. Also on an Android 9 device (storage permission path).
+29. **Screen share (M5)**: RN shares → web spotlights the RN screen (mesh AND
+    SFU); a NEW member ringed in mid-share sees the screen, not black;
+    stop-share restores the camera state; web shares → RN shows the chip +
+    the shared screen. RN camera toggle mid-share must not kill the share.
+30. **PiP (M5)**: home press mid-call → the call shrinks to a PiP window;
+    idle app never PiPs.
+31. **Recording (M5, LiveKit deploys)**: ⏺ starts — every participant shows
+    ● REC; stop ends it; MP4 lands in the operator bucket.
+
+**RN pass bar:** 23–27 + 29 on two physical Androids (one API ≤28, one 14+).

@@ -3444,3 +3444,16 @@ enumerated interop risks; the plan cross-checked the four readers and resolved 7
   createPeer now offers the screen track to newcomers (web-parity bug class). Verified OK:
   bridge/Kotlin compile surface, PiP gating, recording races, protocol vocabulary, re-register
   recAvailable.
+## Native rewrite — Milestone 6: QA matrix + release pipeline + store-swap runbook (2026-07-15)
+- QA-TEST-PLAN.md §F: 9 device scenarios covering the M3.5/M4/M5 surface (rings-when-closed,
+  call waiting incl. mid-dial, hold survival, group dial + add-person, rejoin ≤25s/>30s, voice
+  notes incl. Android 9, screen share incl. mid-share joiner + camera-toggle, PiP gating,
+  recording). RN pass bar: two physical Androids (one ≤API 28, one 14+).
+- native-rn.yml: release AAB now also SIGNED in CI (RELAY-RN-release-aab-SIGNED, same jarsigner +
+  4 secrets as android-apk.yml). versionName 3.0.0 / versionCode 2.
+- Store swap documented in README §1: same applicationId ⇒ upload the SIGNED RN AAB to the
+  EXISTING listing (staged rollout); [YOU] prerequisites: Firebase steps, §F device QA, signing
+  secrets. iOS remains Mac-blocked (CallKit/PushKit + App Store submission).
+- Milestones M1–M6 complete on the Android track. Remaining engineering (device-verified pass):
+  filters (MediaPipe native), hold/swap/merge UI, per-tile group hold badges, refresh-ice,
+  iOS everything.

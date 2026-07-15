@@ -51,3 +51,35 @@ jobs:
           name: RELAY-RN-release-aab
           path: mobile/native/android/app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: error
+
+      # ── M6: READY-TO-UPLOAD signed bundle for the STORE SWAP ─────────────
+      # Same secrets as android-apk.yml (mobile/README.md §3.2). The RN app
+      # shares applicationId org.yourchat.relay, so this AAB uploads straight
+      # to the EXISTING Play listing as the next release. Without the secrets
+      # the step prints a note and the run stays green.
+      - name: Sign Play bundle (when signing secrets are configured)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "No ANDROID_KEYSTORE_BASE64 secret — skipping signing (see mobile/README.md §3.2)."
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/upload.keystore
+          cp mobile/native/android/app/build/outputs/bundle/release/app-release.aab /tmp/RELAY-RN-release-signed.aab
+          jarsigner -keystore /tmp/upload.keystore \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -keypass "${KEY_PASSWORD:-$KEYSTORE_PASSWORD}" \
+            -sigalg SHA256withRSA -digestalg SHA-256 \
+            /tmp/RELAY-RN-release-signed.aab "$KEY_ALIAS"
+          echo "Signed RN bundle ready."
+
+      - name: Upload SIGNED Play bundle (only when signing ran)
+        uses: actions/upload-artifact@v4
+        with:
+          name: RELAY-RN-release-aab-SIGNED
+          path: /tmp/RELAY-RN-release-signed.aab
+          if-no-files-found: ignore

@@ -69,7 +69,18 @@ already in this repo; the steps only the account owner can perform are marked
 > (segmentation/face landmarks on the camera frames) can only be verified on
 > physical device GPUs — no CI-checkable path exists from this environment;
 > it ships in the device-verified pass alongside iOS (Mac) work.
-> **M6** Full QA matrix + store swap.
+> **M6 ✅ (runbook + release pipeline)** — QA-TEST-PLAN §F adds the 9 RN
+> scenarios (waiting/hold/groups/rejoin/voice-notes/share/PiP/recording);
+> native-rn.yml now also emits **RELAY-RN-release-aab-SIGNED** (same 4
+> signing secrets as android-apk.yml); versionName 3.0.0 / versionCode 2.
+> STORE SWAP: the RN app shares `applicationId org.yourchat.relay`, so the
+> swap is just uploading RELAY-RN-release-aab-SIGNED to the EXISTING Play
+> listing as the next release (staged rollout recommended) — no new listing,
+> installs update in place. **[YOU]** prerequisites before that upload:
+> (1) Firebase steps below (else no rings-when-closed), (2) the §F device
+> QA pass on two physical Androids — no device testing was possible from
+> the build environment, (3) signing secrets in GitHub if not already set.
+> iOS (CallKit/PushKit + App Store) remains blocked on a Mac/Xcode pass.
 >
 > The Capacitor app below (v2.86) remains the **interim/store-now option**
 > and its native layer (FCM plumbing, server fcm.ts, signing/CI/runbooks)

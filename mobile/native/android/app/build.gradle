@@ -82,8 +82,8 @@ android {
         applicationId "org.yourchat.relay"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "3.0.0-m1"
+        versionCode 2
+        versionName "3.0.0"
     }
     signingConfigs {
         debug {
