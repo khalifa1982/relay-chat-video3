@@ -39,8 +39,20 @@ already in this repo; the steps only the account owner can perform are marked
 > in-app ring + in-call UI wired to Dialer/Contacts/History.
 > Deferred to M3.5: call waiting (hold/swap/merge), group calls,
 > rejoin-after-restart, voice notes, screen share/recording.
-> **M4** OS call experience — CallKit + ConnectionService + VoIP push (the
-> "rings like a real phone" milestone). **M5** Filters (MediaPipe native),
+> **M4 ✅ (Android) Rings-when-closed** — the v2.86 native ring layer ported
+> to the RN namespace (`com.relaynative`): FCM data message →
+> `RelayFcmService` → full-screen lock-screen `IncomingCallActivity`
+> (Answer opens the app; the signaling server redelivers the held ring),
+> ongoing-call foreground service started at establish/stopped at hang-up
+> (background calls never freeze), POST_NOTIFICATIONS runtime ask, and the
+> FCM token registered via the same `push.subscribe kind:"fcm"` server
+> contract as the Capacitor app. Builds WITHOUT Firebase (conditional
+> google-services apply); rings-when-closed lights up after the Firebase
+> **[YOU]** steps below — note the RN app needs BOTH package names
+> registered (`org.yourchat.relay` + debug `org.yourchat.relay.next`).
+> iOS CallKit + VoIP push (PushKit) is the Mac-verified half of M4 —
+> deferred until an Xcode environment is available.
+> **M5** Filters (MediaPipe native),
 > screen share, native PiP, recording. **M6** Full QA matrix + store swap.
 >
 > The Capacitor app below (v2.86) remains the **interim/store-now option**
@@ -109,10 +121,13 @@ web shell can do:
 
 1. https://console.firebase.google.com → **Add project** (name: RELAY;
    Analytics optional/off).
-2. In the project: **Add app → Android**, package name **`org.yourchat.relay`**
-   → download **`google-services.json`** → commit it at
-   `mobile/app/android/app/google-services.json` (it contains no secrets; the
-   build auto-detects it and enables FCM).
+2. In the project: **Add app → Android** THREE times — package names
+   **`org.yourchat.relay`** (release), **`org.yourchat.relay.next`** (the RN
+   app's debug builds), and any other id you test with. Download the single
+   **`google-services.json`** (it lists every registered app) → commit it at
+   BOTH `mobile/app/android/app/google-services.json` (Capacitor app) and
+   `mobile/native/android/app/google-services.json` (RN rewrite). It contains
+   no secrets; each build auto-detects it and enables FCM.
 3. **Project settings → Service accounts → Generate new private key** →
    download the JSON. In Manus **Settings → Secrets** add
    `FIREBASE_SERVICE_ACCOUNT_JSON` = the ENTIRE file content (one line is

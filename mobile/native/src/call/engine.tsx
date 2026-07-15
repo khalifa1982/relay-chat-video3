@@ -22,7 +22,11 @@ import { AudioSession } from "@livekit/react-native";
 import { Room, RoomEvent, Track } from "livekit-client";
 import InCallManager from "react-native-incall-manager";
 import { RelaySignaling, type IceServer, type Msg } from "./signaling";
-import { type Whoami } from "../lib/api";
+import { api as serverApi, type Whoami } from "../lib/api";
+import {
+  nativeCancelRing, nativeEnsureNotificationPermission, nativeGetPushToken,
+  nativeStartCallService, nativeStopCallService,
+} from "../lib/native";
 
 export type CallStatus = "calling" | "ringing" | "paging" | "connecting" | "live";
 export type CallPhase = "idle" | "incoming" | "dialing" | "in-call";
@@ -169,6 +173,9 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     // Native call audio: communication mode + speaker default ON (v2.84).
     InCallManager.start({ media: st.current.isVideoCall ? "video" : "audio" });
     InCallManager.setSpeakerphoneOn(st.current.speakerOn);
+    // M4: ongoing-call foreground service — Android must never freeze a
+    // backgrounded live call (stopped in hangupInternal).
+    nativeStartCallService(st.current.peerName || undefined);
   }, []);
 
   // ── media ──
@@ -411,6 +418,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
         stopRing(); // a same-caller replace must not stack ringtones
         patch({ incoming: ring, phase: "incoming" });
         InCallManager.startRingtone("_DEFAULT_", [0, 400, 200, 400], "default", 60);
+        nativeCancelRing(); // the in-app ring supersedes the FCM lock-screen one
         clearTimer(ringTimeout);
         ringTimeout.current = setTimeout(() => {
           if (st.current.incoming?.from === ring.from) declineIncomingInternal();
@@ -529,6 +537,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
   const hangupInternal = (reason: string) => {
     void sig.current?.send({ type: "leave", reason });
     stopRing();
+    nativeStopCallService(); // M4: release the ongoing-call keep-alive
     clearTimer(dialTimeout);
     clearTimer(failT);
     clearTimer(lkWatchdog);
@@ -585,8 +594,25 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     s.onMessage = handleMessage;
     s.onRegistered = () => setReady(true);
     s.register(me.displayName, me.number);
+    // M4: rings-when-closed — ask for POST_NOTIFICATIONS (Android 13+), then
+    // register this device's FCM token so the server can PAGE it for calls
+    // that arrive with the app dead (server/relay.ts onPageCallee →
+    // sendPushToIdentity → sendFcmData → RelayFcmService full-screen ring).
+    // Token is null until Firebase is configured — silently skipped.
+    void (async () => {
+      await nativeEnsureNotificationPermission();
+      const token = await nativeGetPushToken();
+      if (token) await serverApi.pushSubscribe(token).catch(() => {});
+    })();
     const appSub = AppState.addEventListener("change", stt => {
-      if (stt === "active") s.ensureConnected();
+      if (stt === "active") {
+        s.ensureConnected();
+        // Android 12+ blocks FGS starts from the background: if the call
+        // ESTABLISHED while backgrounded (caller backgrounded mid-ring), the
+        // keep-alive start was rejected — retry now that we're foreground.
+        // Idempotent when it already runs (same notification re-posted).
+        if (established.current) nativeStartCallService(st.current.peerName || undefined);
+      }
     });
     return () => { appSub.remove(); s.destroy(); sig.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -185,6 +185,14 @@ export const api = {
   callHistory: () => client.query("calls.history") as Promise<CallRow[]>,
   conferenceHistory: () =>
     client.query("calls.conferenceHistory") as Promise<ConferenceRow[]>,
+
+  // push (M4): register the FCM device token so the server can page this
+  // phone for incoming calls with the app closed. kind:"fcm" makes the
+  // endpoint the raw token — no WebPush keys (server/v2routers.ts push.subscribe).
+  pushSubscribe: (token: string) =>
+    client.mutation("push.subscribe", { endpoint: token, kind: "fcm" }) as Promise<unknown>,
+  pushUnsubscribe: (token: string) =>
+    client.mutation("push.unsubscribe", { endpoint: token }) as Promise<unknown>,
 };
 
 /**

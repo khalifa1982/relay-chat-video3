@@ -1,4 +1,4 @@
-package org.yourchat.relay;
+package com.relaynative;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -22,9 +22,9 @@ public final class NotificationHelper {
     private NotificationHelper() {}
 
     public static void ensureChannels(Context ctx) {
-        // Channels exist only on API 26+; NotificationCompat works channel-less
-        // below — an unguarded NotificationChannel is a NoClassDefFoundError
-        // process crash on Android 7.x and older.
+        // Channels exist only on API 26+; minSdk is 24 and NotificationCompat
+        // works channel-less there — an unguarded NotificationChannel is a
+        // NoClassDefFoundError process crash at app boot on Android 7.x.
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null) return;

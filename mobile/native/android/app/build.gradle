@@ -112,9 +112,25 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
+    // Native call layer (M4): notifications + FCM wake-ups for incoming calls.
+    // firebase-messaging is inert until google-services.json is added (the
+    // module guards on FirebaseApp.getApps()) — see mobile/README.md Firebase.
+    implementation("androidx.core:core:1.15.0")
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-messaging")
+
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
     } else {
         implementation jscFlavor
     }
+}
+
+// Apply the Google Services plugin ONLY when the Firebase config is present,
+// so CI and Firebase-less checkouts keep building (FCM simply stays off).
+def relayServicesJson = file('google-services.json')
+if (relayServicesJson.exists()) {
+    apply plugin: 'com.google.gms.google-services'
+} else {
+    logger.lifecycle("google-services.json not found — building WITHOUT FCM (rings-when-closed disabled).")
 }

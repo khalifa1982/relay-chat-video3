@@ -3292,3 +3292,48 @@ native against the unmodified relay server:
   glare rule parity both directions, accept/consent ordering, SDP/candidate shape interop, LiveKit
   token ordering, ring-redelivery rules, and no-crash API usage across the installed native libs.
   → 772 repo tests green; RN tsc clean.
+## Native rewrite — Milestone 4 (Android): rings-when-closed (2026-07-15)
+- **The v2.86 native ring layer, ported to the RN app** (`mobile/native/android`, namespace
+  `com.relaynative`): `RelayFcmService` (FCM DATA messages → we control presentation even with the
+  app dead), `NotificationHelper` (relay_incoming_ring HIGH channel with TYPE_RINGTONE sound +
+  vibration, relay_ongoing_call, relay_general; ring notification carries fullScreenIntent +
+  65s setTimeoutAfter so a stale ring self-clears), `IncomingCallActivity` (showWhenLocked +
+  turnScreenOn full-screen Answer/Decline over the lock screen — Answer opens MainActivity, the
+  engine registers, and server-side `deliverPendingRing` hands the live ring to the in-app flow),
+  `CallService` (microphone|mediaPlayback foreground service — backgrounded live calls never
+  freeze).
+- **CallNative RN bridge** (`CallNativeModule.kt` + `CallNativePackage`, registered in
+  MainApplication): startCallService/stopCallService, ensureNotificationPermission
+  (POST_NOTIFICATIONS runtime ask, 13+), getPushToken (guarded by FirebaseApp.getApps — null until
+  Firebase is configured), cancelRing. JS wrappers in `src/lib/native.ts` are safe no-ops on
+  iOS/missing module.
+- **Engine hooks** (src/call/engine.tsx): FGS starts at markEstablished / stops in hangupInternal;
+  the in-app ring cancels the FCM lock-screen notification (no double ring); on boot the engine
+  asks notification permission then registers the FCM token via the SAME server contract as the
+  Capacitor app — `push.subscribe { endpoint: token, kind: "fcm" }` (api.ts pushSubscribe/
+  pushUnsubscribe; server/v2routers.ts + server/fcm.ts unchanged).
+- **Build**: google-services classpath at root + conditional apply (`google-services.json`
+  present ⇒ FCM on; absent ⇒ builds fine, rings-when-closed off) — CI needs no Firebase. Manifest:
+  FOREGROUND_SERVICE(+MICROPHONE/MEDIA_PLAYBACK), POST_NOTIFICATIONS, USE_FULL_SCREEN_INTENT,
+  VIBRATE; services + lock-screen activity declared. firebase-bom 33.7.0. The RN app's DEBUG id is
+  `org.yourchat.relay.next` — the Firebase [YOU] runbook now says to register BOTH package names
+  and commit the one google-services.json into BOTH app projects (public config, ignore entry
+  deliberately commented out).
+- iOS CallKit + PushKit remain the Mac-verified half of M4 (deferred until an Xcode environment).
+- Pinned in client/src/lib/nativeRewrite.test.ts (M4 block: files/namespace, fullScreenIntent +
+  timeout, bridge methods + Firebase guard, manifest surface, conditional apply, engine wiring).
+- **Adversarial review (agent vs installed RN 0.86 internals + Capacitor reference + server
+  contract) — 1 confirmed defect, fixed in BOTH apps**: unguarded `NotificationChannel`
+  (API 26+) ran at app boot via the module's initialize() with minSdk 24 ⇒ NoClassDefFoundError
+  process crash on Android 7.x — `ensureChannels` now early-returns below API 26 (the Capacitor
+  `org.yourchat.relay` helper had the identical latent bug; fixed there too, pinned for both).
+  Also closed: Android 12+ rejects FGS starts from the background, so a call that established
+  while backgrounded silently lost its keep-alive — the engine now retries startCallService on
+  the foreground transition (idempotent). Review VERIFIED: bridgeless legacy-module interop
+  (NativeModules.CallNative reachable, @ReactMethod signatures pass TurboModuleInteropUtils),
+  namespace/manifest resolution, google-services 4.4.2 vs Gradle 9.3.1 linkage (decompiled),
+  FCM data-message keys match RelayFcmService, push.subscribe contract + identity binding,
+  FGS never leaks (all teardowns route through hangupInternal). Documented as shared-with-
+  reference gaps (not port divergences): no server ring-cancel push kind (stale lock-screen
+  ring rides the 65s timeout), permission dialog result not awaited on first run.
+  → 777 repo tests green; RN tsc clean.
