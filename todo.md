@@ -3457,3 +3457,9 @@ enumerated interop risks; the plan cross-checked the four readers and resolved 7
 - Milestones M1–M6 complete on the Android track. Remaining engineering (device-verified pass):
   filters (MediaPipe native), hold/swap/merge UI, per-tile group hold badges, refresh-ice,
   iOS everything.
+- Field fix (owner report, screenshot): the CI debug APK red-screened "Unable to load script" on
+  a real phone — RN debug builds skip JS bundling by default and expect a Metro dev server.
+  `debuggableVariants = []` now bundles the JS into the debug APK (standalone; bridgeless RN
+  falls back from Metro to bundled assets), and CI additionally emits **RELAY-RN-release-apk**
+  (production-behavior test build, no dev support — the right one for the §F QA pass; debug-
+  keystore signed, so uninstall it before installing the Play release). Pinned.

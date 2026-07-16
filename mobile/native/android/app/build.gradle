@@ -22,6 +22,13 @@ react {
     //   skip the bundling of the JS bundle and the assets. Default is "debug", "debugOptimized".
     //   If you add flavors like lite, prod, etc. you'll have to list your debuggableVariants.
     // debuggableVariants = ["liteDebug", "liteDebugOptimized", "prodDebug", "prodDebugOptimized"]
+    //
+    // RELAY: EMPTY on purpose — the milestone debug APK is installed on
+    // phones with no Metro dev server anywhere near them ("Unable to load
+    // script" red screen otherwise). Bundling the JS into debug makes the
+    // CI artifact standalone; bridgeless RN falls back from Metro to the
+    // bundled assets automatically.
+    debuggableVariants = []
 
     /* Bundling */
     //   A list containing the node command and its flags. Default is just 'node'.

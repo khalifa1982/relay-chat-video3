@@ -93,10 +93,15 @@ describe("native rewrite — M1 foundation", () => {
     expect(read("mobile/native/src/screens/Dialer.tsx")).toContain("call.dial(dialed");
   });
 
-  it("CI builds the milestone APK", () => {
+  it("CI builds the milestone APK — STANDALONE (no Metro dev server on user phones)", () => {
     const wf = read(".github/workflows/native-rn.yml");
     expect(wf).toContain("RELAY-RN-debug-apk");
+    expect(wf).toContain("RELAY-RN-release-apk"); // production-behavior test build
     expect(wf).toContain("mobile/native/android");
+    // The debug APK must embed the JS bundle — an empty debuggableVariants
+    // list is what bundles it (the default skips bundling for debug, which
+    // red-screens "Unable to load script" on any phone without Metro).
+    expect(read("mobile/native/android/app/build.gradle")).toMatch(/debuggableVariants = \[\]/);
   });
 });
 

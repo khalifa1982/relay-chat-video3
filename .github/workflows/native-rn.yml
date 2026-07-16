@@ -32,17 +32,27 @@ jobs:
         working-directory: mobile/native
         run: npm ci
 
-      - name: Build debug APK + release AAB
+      - name: Build debug APK + release APK + release AAB
         working-directory: mobile/native/android
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon assembleDebug bundleRelease
+          ./gradlew --no-daemon assembleDebug assembleRelease bundleRelease
 
       - name: Upload debug APK (installable — Milestone build)
         uses: actions/upload-artifact@v4
         with:
           name: RELAY-RN-debug-apk
           path: mobile/native/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      # Production-behavior test build: no dev support, JS embedded, package
+      # org.yourchat.relay (debug-keystore signed — uninstall before installing
+      # the Play release). Prefer THIS one for the QA-TEST-PLAN §F pass.
+      - name: Upload release APK (production-behavior test build)
+        uses: actions/upload-artifact@v4
+        with:
+          name: RELAY-RN-release-apk
+          path: mobile/native/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
       - name: Upload release AAB (unsigned)
