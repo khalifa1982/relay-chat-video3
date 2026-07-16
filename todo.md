@@ -3463,3 +3463,11 @@ enumerated interop risks; the plan cross-checked the four readers and resolved 7
   falls back from Metro to bundled assets), and CI additionally emits **RELAY-RN-release-apk**
   (production-behavior test build, no dev support — the right one for the §F QA pass; debug-
   keystore signed, so uninstall it before installing the Play release). Pinned.
+- Field fix #2 (owner screenshot: "Couldn't reach RELAY" with working internet): the RN app's
+  BASE_URL pointed at www.your-chat.org, which answers 301 → the APEX your-chat.org — tRPC
+  mutations are POSTs and don't survive the redirect, so startGuest failed on every phone.
+  BASE_URL is now the apex; verified live from the sandbox with the app's exact boot sequence
+  (startGuest → guest 451811 created, whoami, /api/relay/stream SSE `ready`, /api/v2/events
+  ping). Pinned (www is now a test failure). Note: production serves v2.84.0 — the v2.85/86
+  server additions (FCM push router) go live when the owner Publishes the latest checkpoint
+  from Manus; the app degrades gracefully until then.

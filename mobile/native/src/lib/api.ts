@@ -10,7 +10,11 @@ import superjson from "superjson";
 import { getDeviceId } from "./deviceId";
 
 /** The live backend. Point at a preview deployment for testing if needed. */
-export const BASE_URL = "https://www.your-chat.org";
+// APEX host, deliberately: www.your-chat.org answers 301 → your-chat.org,
+// and tRPC mutations are POSTs — they don't survive a redirect (the field
+// bug behind "Couldn't reach RELAY" on a phone with working internet).
+// Verified live: startGuest/whoami/relay-SSE/v2-events all 200 on the apex.
+export const BASE_URL = "https://your-chat.org";
 
 const client = createTRPCUntypedClient({
   links: [
