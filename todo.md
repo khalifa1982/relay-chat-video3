@@ -3471,3 +3471,10 @@ enumerated interop risks; the plan cross-checked the four readers and resolved 7
   ping). Pinned (www is now a test failure). Note: production serves v2.84.0 — the v2.85/86
   server additions (FCM push router) go live when the owner Publishes the latest checkpoint
   from Manus; the app degrades gracefully until then.
+## v2.87.1 — Sign-out actually signs you out (owner-reported) (2026-07-16)
+- Profile's Sign out cleared the guest cookie but NOT the device-id binding — the next visit
+  silently restored the same identity ("logs me in without asking my name"). It now rotates the
+  device id (guests AND members — an upgraded member's identity still carries its guest-era
+  binding) and severs the relay channel, matching the AppShell path.
+- Both sign-out buttons now land on /app (the entry screen: guest name form + member sign-in),
+  not the marketing homepage. Pinned in deviceId.test.ts.

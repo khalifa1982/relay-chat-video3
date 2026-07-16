@@ -168,3 +168,23 @@ describe("getDeviceId — sticky per-browser identity", () => {
     expect(getDeviceId()).toBe(id);
   });
 });
+
+describe("sign-out truly ends the session (v2.87.1 — owner-reported glitch)", () => {
+  const read = (p: string) =>
+    require("node:fs").readFileSync(require("node:path").resolve(__dirname, "../../..", p), "utf8");
+
+  it("Profile's sign-out rotates the device id and lands on the app entry screen", () => {
+    const src = read("client/src/pages/app/Profile.tsx");
+    // Clearing the cookie alone let the device-id binding resurrect the same
+    // guest on the next visit ("logs me in without filling my name again").
+    expect(src).toContain("resetDeviceId();");
+    expect(src).toContain('window.location.href = "/app"');
+    expect(src).not.toContain('window.location.href = "/";');
+  });
+
+  it("AppShell's sign-out lands on the app entry screen, not the marketing page", () => {
+    const src = read("client/src/app/AppShell.tsx");
+    expect(src).toContain('window.location.href = "/app"');
+    expect(src).not.toContain('window.location.href = "/"))');
+  });
+});

@@ -3,7 +3,7 @@ import { Bell, BellOff, Check, Lock, Moon, ScanFace, ShieldCheck, Sun, Volume2 }
 import { trpc } from "@/lib/trpc";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
-import { clearRelayChannel } from "@/lib/deviceId";
+import { clearRelayChannel, resetDeviceId } from "@/lib/deviceId";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -333,11 +333,19 @@ export default function ProfilePage() {
               } catch {
                 /* ignore */
               }
+              // A sign-out must TRULY end the session (v2.87.1 — the owner
+              // caught this): the cookie alone isn't the whole story, the
+              // DEVICE-ID binding silently restores the same identity on the
+              // next visit. Rotate it for guests AND members (an upgraded
+              // member's identity still carries its guest-era device binding).
+              resetDeviceId();
               // Sever the relay signaling channel before navigating away so the
               // next user on this browser gets a fresh number and can't be
               // auto-rejoined into this session's live call.
               clearRelayChannel();
-              window.location.href = "/";
+              // Land on the app's ENTRY screen (guest name form + sign-in) —
+              // not the marketing homepage.
+              window.location.href = "/app";
             }}
           >
             Sign out

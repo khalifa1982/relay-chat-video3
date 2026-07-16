@@ -395,7 +395,7 @@ function Inner({ children }: { children: React.ReactNode }) {
           <Button
             variant="ghost"
             className="w-full justify-start gap-2 text-muted-foreground"
-            onClick={() => signOut().then(() => (window.location.href = "/"))}
+            onClick={() => signOut().then(() => (window.location.href = "/app"))}
           >
             <LogOut className="size-4" /> Sign out
           </Button>
@@ -497,7 +497,7 @@ function Inner({ children }: { children: React.ReactNode }) {
                 variant="ghost"
                 size="sm"
                 className="text-muted-foreground"
-                onClick={() => signOut().then(() => (window.location.href = "/"))}
+                onClick={() => signOut().then(() => (window.location.href = "/app"))}
               >
                 <LogOut className="size-4" />
               </Button>
