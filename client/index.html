@@ -45,7 +45,24 @@
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+    <!-- Fonts (v2.88): the families the CALL SCREEN actually renders — Hanken
+         Grotesk (engine body), Bricolage Grotesque (headings/buttons),
+         JetBrains Mono (timer/keypad/PIN digits) — were referenced 36 times in
+         relayAssets.ts but never loaded, so the flagship screen fell back to
+         default serif. Instrument Serif / Space Grotesk / Space Mono stay for
+         the /technology marketing page. Loaded NON-BLOCKING (media="print" →
+         flips to all onload) so first paint never waits on Google Fonts;
+         font-display:swap keeps text visible while binaries stream in. -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap"
+      rel="stylesheet"
+      media="print"
+      onload="this.media='all'" />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap"
+        rel="stylesheet" />
+    </noscript>
   </head>
 
   <body>

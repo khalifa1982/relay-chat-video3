@@ -232,6 +232,9 @@ export const contacts = mysqlTable(
   (t) => ({
     ownerNumberUnique: uniqueIndex("contacts_owner_number_unique").on(t.ownerId, t.number),
     ownerIdx: index("contacts_owner_idx").on(t.ownerId),
+    /** v2.88 (boot-migrator applied): presence-audience lookups resolve
+     *  "who saved this number?" on every offline→online transition. */
+    numberIdx: index("contacts_number_idx").on(t.number),
   }),
 );
 export type Contact = typeof contacts.$inferSelect;
@@ -319,6 +322,12 @@ export const messages = mysqlTable(
   (t) => ({
     conversationIdx: index("messages_conversation_idx").on(t.conversationId, t.createdAt),
     senderIdx: index("messages_sender_idx").on(t.senderIdentityId),
+    /* Hot-path indexes (v2.88), applied to the live DB by the boot migrator
+       (ensureSchemaExtensions ADD INDEX — idempotent, additive): */
+    /** listThreads groupwise-max + listMessages pagination (ORDER BY id). */
+    convoIdIdx: index("messages_convo_id_idx").on(t.conversationId, t.id),
+    /** getAttachmentForIdentity's auth check (was a full scan per check). */
+    attachmentIdx: index("messages_attachment_idx").on(t.attachmentId),
   }),
 );
 export type Message = typeof messages.$inferSelect;
@@ -468,6 +477,31 @@ export const conferenceParticipants = mysqlTable(
   }),
 );
 export type ConferenceParticipant = typeof conferenceParticipants.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * online_watches — "tell me when they're back online" (v2.88 call-back alert).
+ * One row per (watcher, target); re-watching refreshes the 24h expiry. When
+ * the target's heartbeat flips them offline→online, every unexpired watcher
+ * gets a push + SSE nudge and the rows are consumed (one-shot). Created at
+ * boot by ensureSchemaExtensions (CREATE TABLE IF NOT EXISTS).
+ * ────────────────────────────────────────────────────────────────────────── */
+export const onlineWatches = mysqlTable(
+  "online_watches",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    /** Who asked to be alerted. */
+    watcherId: int("watcherId").notNull(),
+    /** Whose comeback they're waiting for. */
+    targetId: int("targetId").notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    pairUnique: uniqueIndex("watch_pair_unique").on(t.watcherId, t.targetId),
+    targetIdx: index("watch_target_idx").on(t.targetId),
+  }),
+);
+export type OnlineWatch = typeof onlineWatches.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
  * signaling — DB-backed WebRTC SDP/ICE mailbox.

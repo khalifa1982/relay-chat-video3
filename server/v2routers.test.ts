@@ -351,3 +351,87 @@ describe("v2 SSE event bus — publisher safety", () => {
     ).not.toThrow();
   });
 });
+
+/* ============================================================
+   v2.88 — voicemail message encoding + call-back alert surface.
+
+   A voicemail is a NORMAL chat audio message carrying the closed
+   meta shape { voicemail: true } (nothing else may ride in meta
+   from the client), delivered into the caller↔callee DM thread.
+   ============================================================ */
+describe("voicemail message encoding (v2.88)", () => {
+  const fake = {
+    id: 1,
+    number: "555333",
+    displayName: "Me",
+    avatarUrl: null,
+    userId: null,
+    isGuest: true,
+    guestExpiresAt: new Date(),
+  };
+
+  it("accepts kind:'audio' + meta:{voicemail:true} (zod passes; auth check is what fires)", async () => {
+    const caller = appRouter.createCaller(makeCtx(null));
+    // With NO identity the input must still clear zod and fail on auth —
+    // proving the voicemail shape is a legal messages.send payload.
+    await expect(
+      caller.messages.send({
+        conversationId: 1,
+        kind: "audio",
+        body: null,
+        attachmentId: 7,
+        meta: { voicemail: true },
+      })
+    ).rejects.toThrow(/no identity/i);
+  });
+
+  it("rejects voicemail:false — the marker is a literal true, present or absent", async () => {
+    const caller = appRouter.createCaller(makeCtx(fake));
+    await expect(
+      caller.messages.send({
+        conversationId: 1,
+        kind: "audio",
+        attachmentId: 7,
+        // @ts-expect-error — deliberately illegal: the schema is z.literal(true)
+        meta: { voicemail: false },
+      })
+    ).rejects.toThrow();
+  });
+
+  it("meta is a CLOSED shape — clients can't smuggle arbitrary JSON keys", async () => {
+    const caller = appRouter.createCaller(makeCtx(null));
+    // Unknown keys are stripped by zod (default z.object behavior), so this
+    // must fail on AUTH (shape fine, extra key discarded) — not crash.
+    await expect(
+      caller.messages.send({
+        conversationId: 1,
+        kind: "audio",
+        attachmentId: 7,
+        meta: { voicemail: true, autoReply: true } as unknown as { voicemail: true },
+      })
+    ).rejects.toThrow(/no identity/i);
+  });
+});
+
+describe("directory.watchOnline (v2.88 call-back alert)", () => {
+  it("requires an identity", async () => {
+    const caller = appRouter.createCaller(makeCtx(null));
+    await expect(caller.directory.watchOnline({ number: "482015" })).rejects.toThrow(/no identity/i);
+  });
+
+  it("rejects malformed numbers via zod", async () => {
+    const fake = {
+      id: 2,
+      number: "555444",
+      displayName: "Me",
+      avatarUrl: null,
+      userId: null,
+      isGuest: true,
+      guestExpiresAt: new Date(),
+    };
+    const caller = appRouter.createCaller(makeCtx(fake));
+    await expect(
+      caller.directory.watchOnline({ number: "12ab" as unknown as string })
+    ).rejects.toThrow();
+  });
+});

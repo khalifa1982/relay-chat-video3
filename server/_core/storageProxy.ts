@@ -1,6 +1,50 @@
 import type { Express } from "express";
 import { ENV } from "./env";
 
+/* In-process signed-URL cache (v2.88). Every /manus-storage view used to pay a
+ * presign round-trip to Forge and told the browser `no-store`, so a chat
+ * screen with 20 avatars re-presigned all 20 on every render. Attachment keys
+ * are content-addressed and IMMUTABLE (uploads mint a fresh hashed key, never
+ * overwrite), so caching is safe:
+ *   - server side: remember the signed URL for 60s (comfortably below the
+ *     presigned GET's expiry) keyed by storage key;
+ *   - client side: `private, max-age=60` on the redirect response lets the
+ *     browser reuse the redirect itself without re-asking us at all.
+ */
+const CACHE_TTL_MS = 60_000;
+const CACHE_MAX_ENTRIES = 2_000; // ~200 KB worst case; swept before insert
+const signedUrlCache = new Map<string, { url: string; expiresAt: number }>();
+
+/** Test/ops hook — drop every cached signed URL. */
+export function _clearStorageProxyCache(): void {
+  signedUrlCache.clear();
+}
+
+function cacheGet(key: string, now: number): string | null {
+  const hit = signedUrlCache.get(key);
+  if (!hit) return null;
+  if (hit.expiresAt <= now) {
+    signedUrlCache.delete(key);
+    return null;
+  }
+  return hit.url;
+}
+
+function cacheSet(key: string, url: string, now: number): void {
+  if (signedUrlCache.size >= CACHE_MAX_ENTRIES) {
+    // Cheap pressure valve: drop expired entries first, then oldest-inserted.
+    signedUrlCache.forEach((v, k) => {
+      if (v.expiresAt <= now) signedUrlCache.delete(k);
+    });
+    while (signedUrlCache.size >= CACHE_MAX_ENTRIES) {
+      const oldest = signedUrlCache.keys().next().value;
+      if (oldest === undefined) break;
+      signedUrlCache.delete(oldest);
+    }
+  }
+  signedUrlCache.set(key, { url, expiresAt: now + CACHE_TTL_MS });
+}
+
 export function registerStorageProxy(app: Express) {
   app.get("/manus-storage/*", async (req, res) => {
     const key = (req.params as Record<string, string>)[0];
@@ -11,6 +55,14 @@ export function registerStorageProxy(app: Express) {
 
     if (!ENV.forgeApiUrl || !ENV.forgeApiKey) {
       res.status(500).send("Storage proxy not configured");
+      return;
+    }
+
+    const now = Date.now();
+    const cached = cacheGet(key, now);
+    if (cached) {
+      res.set("Cache-Control", "private, max-age=60");
+      res.redirect(307, cached);
       return;
     }
 
@@ -38,7 +90,8 @@ export function registerStorageProxy(app: Express) {
         return;
       }
 
-      res.set("Cache-Control", "no-store");
+      cacheSet(key, url, now);
+      res.set("Cache-Control", "private, max-age=60");
       res.redirect(307, url);
     } catch (err) {
       console.error("[StorageProxy] failed:", err);

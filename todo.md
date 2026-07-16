@@ -3471,6 +3471,26 @@ enumerated interop risks; the plan cross-checked the four readers and resolved 7
   ping). Pinned (www is now a test failure). Note: production serves v2.84.0 — the v2.85/86
   server additions (FCM push router) go live when the owner Publishes the latest checkpoint
   from Manus; the app degrades gracefully until then.
+## v2.87.0 — 4-digit PIN sign-in + lockout, built-in SMTP mailer, code-delivery fix (2026-07-16)
+> (Backfilled in the v2.88.0 pass — this release shipped without its changelog entry.)
+- **Registration codes never arrived** (owner report): outbound mail went only through Resend,
+  whose unverified-domain TEST MODE delivers solely to the account owner's address (422 for
+  everyone else, silently swallowed). `server/smtp.ts` is a new ZERO-DEP SMTP client
+  (STARTTLS + implicit-TLS 465, AUTH LOGIN, dot-stuffed MIME) configured via
+  `SMTP_HOST/PORT/SECURE/USER/PASS/FROM`; it now takes PRIORITY in `server/email.ts`, with
+  Resend as the fallback.
+- **4-digit PIN sign-in** (`server/authPin.ts` + `otpAuth.loginProbe/loginWithPin/setLoginPin/
+  pinStatus`): the login screen probes FIRST (sends nothing) — a PIN account lands on the PIN
+  pad with "Email me a code instead" one tap away; unknown emails go to registration; everyone
+  else gets an emailed code. The PIN is set during registration (new `setup` stage) or in
+  Profile's "Sign-in PIN" section.
+- **Lockout**: 3 wrong PIN entries warn with the remaining count; the 4th LOCKS the account
+  (`users.loginPinLockedAt`) and emails the owner; a successful email-code sign-in unlocks
+  (`unlockLoginPin` in `verifyOtp`). Verified LIVE end-to-end against a real MySQL
+  (register → code → verify → PIN → 3 warnings → lock → lock email → unlock → PIN restored).
+- Schema: `users.loginPinHash/loginPinAttempts/loginPinLockedAt/preferPinLogin` via the boot
+  migrator + drizzle migration 0007. 43 new tests (`authPinSmtp.test.ts` + otpAuth additions).
+
 ## v2.87.1 — Sign-out actually signs you out (owner-reported) (2026-07-16)
 - Profile's Sign out cleared the guest cookie but NOT the device-id binding — the next visit
   silently restored the same identity ("logs me in without asking my name"). It now rotates the
@@ -3478,3 +3498,118 @@ enumerated interop risks; the plan cross-checked the four readers and resolved 7
   binding) and severs the relay channel, matching the AppShell path.
 - Both sign-out buttons now land on /app (the entry screen: guest name form + member sign-in),
   not the marketing homepage. Pinned in deviceId.test.ts.
+
+## v2.88.0 — Six-specialist audit batch: 13 fixes + busy line, voicemail, call-back alerts (2026-07-16)
+Sixteen verified items from a six-specialist audit (bug-sweep / backend-scale / frontend-speed /
+ui-design / ux-clicks / unique-features), implemented in order:
+
+1. **Sign-out actually signs out, everywhere.** `identity.signOutGuest` now expires ALL THREE
+   session cookies (`relay_guest`, `relay_session`, `app_session_id`) and `auth.logout` also
+   clears `relay_session` — an email-OTP/PIN member who "signed out" used to stay silently
+   signed in. Client: Profile's guest/member-branching handler is extracted into a shared
+   `useSignOut()` (client/src/app/useSignOut.tsx) wired into BOTH AppShell buttons (which used
+   to call the GUEST mutation even for members) and Profile; the guest path is gated behind an
+   AlertDialog (a guest sign-out is an identity wipe). Regression tests pin all three Set-Cookie
+   expirations (auth.logout.test.ts).
+2. **Upload 401 for email-registered members fixed.** `/api/v2/upload` resolved OAuth → guest
+   cookie → device id but never the `relay_session` cookie, so OTP/PIN members couldn't send
+   avatars, attachments, or voice notes. It now resolves identity via the SAME `createContext`
+   as tRPC and the SSE bus.
+3. **PIN accounts route to the PIN pad on auto-send.** AuthPanel's auto-send effect called
+   `requestOtp` directly, bypassing v2.87's probe — a PIN account arriving via the gate got an
+   email code instead of its PIN pad. Shared `routeAfterProbe()` now serves both paths. Bonus:
+   the 6-digit emailed code AUTO-SUBMITS on the final digit (v2.49 keypad convention); the
+   4-digit PIN deliberately does NOT (lock-after-4-wrong-tries — auto-firing typos burns
+   attempts).
+4. **Body parsers scoped per route.** The global 50 MB JSON parser is gone: `/api/v2/upload`
+   gets raw-binary (41 MB) + base64-JSON (15 MB) parsers, `/api/email/inbound` gets 5 MB (with
+   the HMAC-verified rawBody stash moved into its scoped parser), everything else 1 MB.
+5. **Raw binary upload path (OOM killer).** A 40 MB base64 upload peaked at ~250-300 MB on the
+   512 MiB instance — an OOM wipes the in-memory relay registry and drops every live call. The
+   web client now POSTs the Blob as `application/octet-stream` (metadata in the query string);
+   `storagePut` passes the Buffer straight to fetch (no Blob re-copy). The legacy base64 JSON
+   route STAYS for old clients and mobile/native's uploadAttachment, capped at 10 MB decoded
+   (plenty for its voice notes/images).
+6. **listThreads groupwise-max + hot indexes + send dedupe.** The thread-list preview query
+   selected EVERY non-deleted message across all of a user's conversations (no LIMIT, first-
+   per-convo in JS, polled every 4s) — now `MAX(id) GROUP BY conversationId` + an `inArray`
+   fetch of just the winners. Boot migrator (mirrored in drizzle/schema.ts) adds
+   `messages(conversationId,id)`, `messages(attachmentId)` (attachment auth checks full-scanned
+   messages), and `contacts(number)` (presence transitions full-scanned contacts); the migrator
+   now also swallows MySQL's "duplicate key name" so re-boots stay quiet. `messages.send`
+   fetches the participant roster ONCE instead of three times.
+7. **SSE-gated poll demotion.** `useRealtime` exports a module-level `isSseConnected()` flag +
+   `demotablePollInterval(fast, slow)`; messages.list polls 2s→20s, threads 4s→30s, Dialer
+   history 10s→30s while the SSE stream is up (its events already invalidate those exact
+   queries — polling stays as the offline safety net), and reconnect refetches immediately.
+8. **Unauthenticated endpoints hardened.** `/api/relay/stream`: cid capped at 200 chars,
+   per-IP open-rate limit + a ~25-concurrent-streams-per-IP cap decremented exactly once on
+   either close path; the same for `/api/v2/events`. `/api/relay/ice`: per-IP rate limit and
+   300s-TTL probe TURN creds instead of full 3600s ones. All gates honor RELAY_RATELIMIT_OFF.
+9. **Storage proxy cached.** `/manus-storage/*` paid a Forge presign round-trip per view and
+   sent `no-store`; attachment keys are content-hashed and immutable, so signed URLs are now
+   cached in-process for 60s and the redirect carries `private, max-age=300`.
+10. **Bundle: lazy call engine + stable vendor chunks.** relayClient + relayAssets are
+    dynamically imported inside RelayEngine's mount effect (cancelled-flag guarded; type-only
+    static imports remain) so the engine leaves the entry chunk; `manualChunks` splits
+    react/react-dom/scheduler, @tanstack+@trpc+superjson+wouter, and lucide-react into hashed
+    vendor chunks that stay byte-identical across releases — the 30s auto-updater's forced
+    reload stops re-downloading unchanged vendor code every deploy.
+11. **Fonts fixed.** index.html loaded Instrument Serif/Space Grotesk/Space Mono (used only by
+    /technology) while the call screen's Hanken Grotesk/Bricolage Grotesque/JetBrains Mono —
+    referenced 36× in relayAssets.ts — were never loaded, rendering the timer and keypad digits
+    in default serif. The Google Fonts link now carries all six families NON-BLOCKING
+    (media="print" onload swap + noscript fallback), every bare font-family in relayAssets got
+    a generic fallback, and `--font-mono` maps Tailwind's font-mono to JetBrains Mono.
+    (Deviation from the audit: /technology genuinely uses the old three, so they stay.)
+12. **Voice-first + dial hygiene.** GroupCallScreen defaults to VOICE (pill order Voice→Video);
+    deep-linked auto-dials are voice unless `?video=1` (the bare `/i/<pin>` invite links placed
+    VIDEO dials before — pinned in Dialer.test.ts via `voiceFromDialParams`); a successful
+    auto-dial strips `?to=` with history.replaceState so reload/Back/the auto-updater can't
+    re-dial; the Recent-list phone button now actually dials (voice), matching History.
+13. **UI feedback + correctness batch.** Native confirm()/alert() replaced with AlertDialog/
+    toast patterns (Messages unsend + upload/mic errors, History clear, Profile regenerate);
+    onError toasts on contacts.upsert/remove, calls.clearHistory, and messages.openThread
+    (Contacts + History); the dead `xs:` variant fixed by defining `--breakpoint-xs: 30rem`
+    (Contacts' Video button was hidden at EVERY width); offline LEDs standardized on
+    `var(--relay-offline)` (red read as busy); History tone classes theme-paired
+    (600-in-light / 400-in-dark — raw *-500 failed light-theme contrast).
+14. **FEATURE — Carrier-style busy line.** `pinsInCall()` (server/relay.ts) is a pure read of
+    the in-memory registry (single-instance by design, like all relay state); `inCall` is
+    folded into directory.lookup, directory.presenceMany, and contacts.list (hidden guests are
+    never shown busy). Amber LED + "on a call" in the Dialer's 6-digit preview, Contacts rows,
+    and History rows — you know they'd bounce you BEFORE you dial. busyLine.test.ts.
+15. **FEATURE — Voicemail on no-answer/declined/offline.** The engine's new `setOnDialFailed`
+    hook fires when a 1:1 outgoing dial dies unconnected; RelayEngineProvider raises a
+    voicemail card (client/src/app/VoicemailPrompt.tsx): record ≤60s via the shared
+    MediaRecorder helpers (factored into client/src/lib/voiceNote.ts, now also used by
+    Messages' voice notes), upload through /api/v2/upload, delivered as a normal chat AUDIO
+    message with the closed meta shape `{voicemail:true}` into the caller↔callee DM thread —
+    zero new server infrastructure. The recipient gets a "Voicemail from X" push and the bubble
+    carries a phone-style Voicemail label. messages.send's meta input is deliberately closed
+    (z.literal(true)) so clients can't smuggle arbitrary JSON.
+16. **FEATURE — Call-back alert.** `directory.watchOnline` stores a one-shot (watcher, target)
+    row with a 24h expiry in the new `online_watches` table (boot migrator + drizzle mirror);
+    heartbeat's offline→online transition consumes the watches and fires a push
+    ("X is back online — tap to call") plus a `watched_online` SSE event that raises an in-app
+    toast with a one-tap Call action linking `/app/dialer?to=NUMBER&voice=1`. Surfaced on the
+    voicemail/fail card ("Tell me when they're back online") and on offline History rows (bell
+    button). (Deviation from the audit: the link uses the app's real `?to=` param, not the
+    nonexistent `?dial=`.)
+
+Housekeeping: backfilled the missing v2.87.0 changelog entry above; CLAUDE.md TL;DR updated.
+Tests: 795 → 815 passing (new: sign-out cookie clearing, listThreads groupwise-max shape,
+poll-demotion flag, voice-first invite links, busy-line presence field + pinsInCall, voicemail
+encoding + watchOnline validation; stale pins updated with comments, none deleted).
+- v2.88 adversarial review (agent vs live server + ground truth): 1 confirmed defect fixed —
+  voicemail was offered for NONEXISTENT numbers (with paging live, real-offline ends as
+  no-answer; the offline code ≈ typo'd number → unsendable recording, lying copy) → eligibility
+  narrowed to no-answer/declined. Also hardened from the review's plausible list: auth.logout
+  clears a leftover pre-upgrade guest cookie (next-visitor identity resurrection); a caller
+  alone in a still-ringing dial room no longer reads "on a call"; storage-proxy client cache
+  dropped to max-age=60 (Forge presign TTL unverifiable); a stale "didn't answer" card no
+  longer resurfaces after a later call. Verified-OK: upload matrix (both clients, live-probed),
+  sign-out cookie matrix, SSE caps (leak-free across all close paths, empirically), poll
+  demotion, listThreads shape parity, busy-line privacy, voicemail plumbing, bundle/fonts.
+  Known tradeoffs documented: old cached tabs >10MB base64 uploads 413 until refresh; SSE cap
+  ~25/IP has no signaling fallback behind one NAT. → 816 tests green.

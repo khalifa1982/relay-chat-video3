@@ -27,6 +27,7 @@ import {
   startRoomRecording,
   stopRoomRecording,
 } from "./recording";
+import { createRateLimiter, clientIpOf } from "./rateLimit";
 
 // TURN credentials are read on every call so the operator can add them via
 // `webdev_request_secrets` without restarting the server, and so unit tests
@@ -448,7 +449,7 @@ export function newRoomId(): string {
  * connect without a real TURN relay (run coturn separately on a
  * VPS and set the two env vars to enable that path).
  */
-export function iceServers(userId: string): IceServer[] {
+export function iceServers(userId: string, ttlSecOverride?: number): IceServer[] {
   const list: IceServer[] = [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
@@ -463,7 +464,9 @@ export function iceServers(userId: string): IceServer[] {
   const TURN_PORT = process.env.TURN_PORT || "3478";
   const TURN_TLS_PORT = process.env.TURN_TLS_PORT || "5349";
   const TURN_TLS = process.env.TURN_TLS === "1"; // only advertise turns: when a cert is configured
-  const TURN_TTL = parseInt(process.env.TURN_TTL || "3600", 10);
+  // `ttlSecOverride` lets the anonymous /api/relay/ice probe endpoint mint
+  // SHORT-lived creds (300s) instead of full call-length ones (v2.88).
+  const TURN_TTL = ttlSecOverride ?? parseInt(process.env.TURN_TTL || "3600", 10);
   if (TURN_SECRET && TURN_HOST) {
     // Operator-supplied TURN (recommended for production). coturn runs in
     // use-auth-secret mode: username = "<expiry-unix>:<userId>",
@@ -1618,6 +1621,39 @@ export function handleMessage(
   }
 }
 
+/* ── Carrier-style busy line (v2.88) ─────────────────────────────
+ * The module remembers the registry attachRelay created so the tRPC layer can
+ * ask "is this pin on a call right now?" — a pure READ of in-memory state.
+ * Single-instance by design (same instance serves the SSE signaling), exactly
+ * like the rest of this module; see CLAUDE.md's in-memory-state warning. */
+let activeRegistry: RelayRegistry | null = null;
+
+/** Test hook: point the busy-line reads at a synthetic registry. */
+export function _setActiveRegistryForTests(reg: RelayRegistry | null): void {
+  activeRegistry = reg;
+}
+
+/**
+ * Which of `pins` are currently IN A CALL (their primary client sits in a
+ * room)? Returns the subset as a Set. Empty when signaling isn't attached
+ * (tests / cold paths) — "not in a call" is the safe default.
+ */
+export function pinsInCall(pins: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  const reg = activeRegistry;
+  if (!reg) return out;
+  for (const pin of pins) {
+    const rid = reg.clients.get(pin)?.roomId;
+    if (!rid) continue;
+    // A caller alone in their DIAL room isn't "on a call" yet — only count
+    // rooms someone actually answered, or with 2+ members (review v2.88).
+    const meta = reg.roomMeta.get(rid);
+    const size = reg.rooms.get(rid)?.size ?? 0;
+    if (meta?.accepted || size > 1) out.add(pin);
+  }
+  return out;
+}
+
 /**
  * Mount the HTTP signaling endpoints on an Express app.
  *
@@ -1632,24 +1668,75 @@ export function attachRelay(
 ): RelayRegistry {
   const reg = createRegistry();
   reg.onConferenceEnd = onConferenceEnd;
+  activeRegistry = reg; // busy-line reads (pinsInCall) target the live registry
 
-  // Public ICE config endpoint. Returns the same fresh, time-limited TURN/STUN
-  // credentials the signaling layer issues, so browser-side tools (e.g. the
-  // /turn-test page) can probe the operator coturn with VALID use-auth-secret
-  // credentials instead of stale static ones.
+  // ── Abuse hardening for the UNAUTHENTICATED endpoints (v2.88) ──
+  // Both gates honor RELAY_RATELIMIT_OFF like the /send limiter. Limits are
+  // generous: a real client opens ONE stream and reconnects with backoff; only
+  // a flood or a connection-exhaustion attack ever trips them.
+  const rateLimitOff = () => process.env.RELAY_RATELIMIT_OFF === "1";
+  // Stream OPENS per IP: 30 burst, 1/s sustained (reconnect storms stay under).
+  const streamOpenLimiter = createRateLimiter({ capacity: 30, refillPerSec: 1 });
+  // ICE probes per IP: 10 burst, 1 every 2s sustained.
+  const iceLimiter = createRateLimiter({ capacity: 10, refillPerSec: 0.5 });
+  setInterval(() => {
+    const now = Date.now();
+    streamOpenLimiter.sweep(now, 10 * 60_000);
+    iceLimiter.sweep(now, 10 * 60_000);
+  }, 10 * 60_000).unref();
+  // Concurrent SSE streams per IP — each open stream holds a socket + timer,
+  // so an attacker opening thousands exhausts the instance. ~25 is far above
+  // any legitimate device count behind one NAT hitting ONE Cloud Run instance.
+  const MAX_STREAMS_PER_IP = 25;
+  const streamsPerIp = new Map<string, number>();
+
+  // Public ICE config endpoint. Returns fresh, time-limited TURN/STUN
+  // credentials so browser-side tools (e.g. the /turn-test page) can probe the
+  // operator coturn with VALID use-auth-secret credentials instead of stale
+  // static ones. Anonymous ⇒ rate-limited, and the creds are SHORT-lived
+  // (300s) — plenty for a probe, useless for freeloading relay bandwidth.
   app.get("/api/relay/ice", (req: Request, res: Response) => {
+    if (!rateLimitOff() && !iceLimiter.allow(clientIpOf(req), Date.now())) {
+      res.status(429).json({ error: "rate_limited" });
+      return;
+    }
     const who = String(req.query.u || "probe-" + Math.random().toString(36).slice(2, 8));
-    res.json({ iceServers: iceServers(who) });
+    res.json({ iceServers: iceServers(who, 300) });
   });
 
   // SSE channel: long-lived response that streams JSON-encoded server -> client
   // messages. Each event line is `data: <json>\n\n`.
   app.get("/api/relay/stream", (req: Request, res: Response) => {
     const cid = String(req.query.cid || "");
-    if (!cid) {
-      res.status(400).json({ error: "missing cid" });
+    // cid is client-minted (a 32-hex localStorage value) — reject the absent
+    // and the absurd (a multi-KB cid would bloat every registry map key).
+    if (!cid || cid.length > 200) {
+      res.status(400).json({ error: "missing or oversized cid" });
       return;
     }
+    const ip = clientIpOf(req);
+    if (!rateLimitOff()) {
+      if (!streamOpenLimiter.allow(ip, Date.now())) {
+        res.status(429).json({ error: "rate_limited" });
+        return;
+      }
+      if ((streamsPerIp.get(ip) ?? 0) >= MAX_STREAMS_PER_IP) {
+        res.status(429).json({ error: "too_many_streams" });
+        return;
+      }
+    }
+    // Count this stream against the IP. Decrement EXACTLY ONCE whichever way
+    // the stream dies — cleanup() (client drop) or socket.close() (server-side
+    // replacement on cid reconnect, which bypasses cleanup via `closed`).
+    streamsPerIp.set(ip, (streamsPerIp.get(ip) ?? 0) + 1);
+    let counted = true;
+    const uncountStream = () => {
+      if (!counted) return;
+      counted = false;
+      const n = (streamsPerIp.get(ip) ?? 1) - 1;
+      if (n <= 0) streamsPerIp.delete(ip);
+      else streamsPerIp.set(ip, n);
+    };
     // If the same cid reconnects (e.g. tab refresh), close the old channel.
     const prev = reg.connections.get(cid);
     if (prev) {
@@ -1687,6 +1774,7 @@ export function attachRelay(
         if (closed) return;
         closed = true;
         if (hb) { clearInterval(hb); hb = null; }
+        uncountStream();
         try {
           res.end();
         } catch {
@@ -1743,6 +1831,7 @@ export function attachRelay(
       if (closed) return;
       closed = true;
       if (hb) { clearInterval(hb); hb = null; }
+      uncountStream();
       const existing = reg.connections.get(cid);
       if (existing === conn) reg.connections.delete(cid);
       // Drop this device socket from the ring set — a dead socket can't receive

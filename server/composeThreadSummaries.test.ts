@@ -224,3 +224,35 @@ describe("composeThreadSummaries", () => {
     expect(out[0].lastMessagePreview).toBeNull();
   });
 });
+
+/* ============================================================
+   v2.88 — listThreads preview query is a GROUPWISE-MAX, not a
+   full history scan. The old query selected EVERY non-deleted
+   message across all of a user's conversations (no LIMIT) and
+   picked first-per-convo in JS — polled every few seconds, that
+   scan grew linearly with total message history. Pin the shape:
+   MAX(id) GROUP BY conversationId, then an inArray fetch of just
+   those rows.
+   ============================================================ */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+describe("listThreads groupwise-max shape (v2.88)", () => {
+  const src = readFileSync(join(__dirname, "v2db.ts"), "utf8");
+  const fn = src.slice(
+    src.indexOf("export async function listThreads"),
+    src.indexOf("export async function listMessages")
+  );
+
+  it("aggregates MAX(id) grouped by conversationId", () => {
+    expect(fn).toMatch(/MAX\(\$\{messages\.id\}\)/);
+    expect(fn).toMatch(/\.groupBy\(messages\.conversationId\)/);
+  });
+
+  it("fetches only the winning rows by id (inArray), not the whole history", () => {
+    expect(fn).toMatch(/inArray\(messages\.id,\s*latestIds\)/);
+    // The unbounded full-scan shape must stay gone: no ORDER BY createdAt
+    // over the un-aggregated messages select.
+    expect(fn).not.toMatch(/orderBy\(desc\(messages\.createdAt\)\)/);
+  });
+});

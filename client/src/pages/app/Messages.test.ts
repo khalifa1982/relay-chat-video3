@@ -117,9 +117,13 @@ describe("Messages.tsx — v2.71 iMessage-grade chat UI", () => {
     expect(SRC).toMatch(/typingConvos\.includes\(t\.conversationId\)/);
     expect(SRC).toMatch(/typing…/);
   });
-  it("presence LEDs: green online, RED offline (list + conversation header)", () => {
-    const reds = SRC.match(/bg-red-500/g) || [];
-    expect(reds.length).toBeGreaterThanOrEqual(2);
+  it("presence LEDs: green online, GREY offline (list + conversation header)", () => {
+    // v2.88: offline LEDs standardized on var(--relay-offline) — red read as
+    // "busy/error", and amber now means "on a call" elsewhere in the app.
+    const offline = SRC.match(/bg-\[color:var\(--relay-offline\)\]/g) || [];
+    expect(offline.length).toBeGreaterThanOrEqual(2);
+    const online = SRC.match(/bg-\[color:var\(--relay-online\)\]/g) || [];
+    expect(online.length).toBeGreaterThanOrEqual(2);
   });
   it("the app top bar is hidden on mobile while a conversation is open", () => {
     expect(SRC).toMatch(/relay-convo-open/);

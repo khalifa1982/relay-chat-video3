@@ -52,16 +52,13 @@ export async function storagePut(
   const { url: s3Url } = (await presignResp.json()) as { url: string };
   if (!s3Url) throw new Error("Forge returned empty presign URL");
 
-  // 2. PUT file directly to S3
-  const blob =
-    typeof data === "string"
-      ? new Blob([data], { type: contentType })
-      : new Blob([data as any], { type: contentType });
-
+  // 2. PUT file directly to S3. Pass the Buffer/string straight through —
+  // wrapping bytes in a Blob copied the whole payload a second time, which
+  // mattered on 40 MB uploads against the 512 MiB instance (v2.88).
   const uploadResp = await fetch(s3Url, {
     method: "PUT",
     headers: { "Content-Type": contentType },
-    body: blob,
+    body: data as BodyInit,
   });
 
   if (!uploadResp.ok) {

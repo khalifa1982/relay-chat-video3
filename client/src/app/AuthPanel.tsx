@@ -83,8 +83,39 @@ export function AuthPanel({
     setError(null);
   }
 
-  // When the gate already collected a valid email, send the code immediately so
-  // the user lands straight on the code entry (or registration for a new email).
+  async function sendEmailCode(email: string): Promise<void> {
+    const r = await requestOtp.mutateAsync({ email });
+    if (r.unregistered) { setStage("register"); return; }
+    if (!r.ok) {
+      setError("We couldn't send your code — email delivery isn't set up yet. Contact the operator.");
+      return;
+    }
+    toCodeStage();
+  }
+
+  /**
+   * Probe FIRST (sends nothing), then route: unknown email → registration; a
+   * PIN account → the PIN pad (no email fired unless asked); otherwise email a
+   * code. Shared by the manual email form AND the auto-send path below —
+   * v2.88 fix: the auto path used to call requestOtp directly, bypassing the
+   * probe, so PIN accounts arriving via the gate never saw their PIN pad.
+   */
+  async function routeAfterProbe(email: string): Promise<void> {
+    const p = await loginProbe.mutateAsync({ email });
+    if (p.unregistered) { setStage("register"); return; }
+    if (p.hasPin && !p.locked) {
+      setPin("");
+      setStage("pin");
+      return;
+    }
+    if (p.hasPin && p.locked) {
+      setNotice("This account is locked after too many wrong PINs — the email code below unlocks it.");
+    }
+    await sendEmailCode(email);
+  }
+
+  // When the gate already collected a valid email, route immediately so the
+  // user lands straight on the right stage (PIN pad / code entry / register).
   const didAutoRef = useRef(false);
   useEffect(() => {
     if (didAutoRef.current) return;
@@ -94,10 +125,7 @@ export function AuthPanel({
     (async () => {
       setError(null);
       try {
-        const r = await requestOtp.mutateAsync({ email: e });
-        if (r.unregistered) { setStage("register"); return; }
-        if (!r.ok) { setError("We couldn't send your code — email delivery isn't set up yet. Contact the operator."); return; }
-        toCodeStage();
+        await routeAfterProbe(e);
       } catch (err) {
         setError(messageOf(err, "Couldn't send a code. Try again."));
       }
@@ -105,34 +133,12 @@ export function AuthPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function sendEmailCode(): Promise<void> {
-    const r = await requestOtp.mutateAsync({ email: cleanEmail });
-    if (r.unregistered) { setStage("register"); return; }
-    if (!r.ok) {
-      setError("We couldn't send your code — email delivery isn't set up yet. Contact the operator.");
-      return;
-    }
-    toCodeStage();
-  }
-
   async function submitEmail(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setNotice(null);
     try {
-      // Probe FIRST (sends nothing): a PIN account goes to the PIN pad and
-      // no email is fired unless the user asks for one.
-      const p = await loginProbe.mutateAsync({ email: cleanEmail });
-      if (p.unregistered) { setStage("register"); return; }
-      if (p.hasPin && !p.locked) {
-        setPin("");
-        setStage("pin");
-        return;
-      }
-      if (p.hasPin && p.locked) {
-        setNotice("This account is locked after too many wrong PINs — the email code below unlocks it.");
-      }
-      await sendEmailCode();
+      await routeAfterProbe(cleanEmail);
     } catch (err) {
       setError(messageOf(err, "Couldn't send a code. Try again."));
     }
@@ -156,7 +162,7 @@ export function AuthPanel({
     setError(null);
     setNotice(null);
     try {
-      await sendEmailCode();
+      await sendEmailCode(cleanEmail);
     } catch (err) {
       setError(messageOf(err, "Couldn't send a code. Try again."));
     }
@@ -198,11 +204,18 @@ export function AuthPanel({
     }
   }
 
-  async function submitCode(e: React.FormEvent) {
-    e.preventDefault();
+  /**
+   * Verify a 6-digit emailed code. Called by the form's submit button AND
+   * auto-fired the instant the 6th digit lands (v2.88 — matches the v2.49
+   * keypad convention). The 4-digit PIN is deliberately NOT auto-submitted:
+   * with lock-after-4-wrong-tries, auto-firing typos burns attempts and can
+   * lock the account.
+   */
+  async function verifyCode(codeStr: string) {
+    if (verifyOtp.isPending) return;
     setError(null);
     try {
-      await verifyOtp.mutateAsync({ email: cleanEmail, code: code.trim() });
+      await verifyOtp.mutateAsync({ email: cleanEmail, code: codeStr.trim() });
       // Fresh REGISTRATION: offer the sign-in choice (email code vs 4-digit
       // PIN) right now, per spec — existing users manage it in Profile.
       if (wasRegistration) {
@@ -380,7 +393,13 @@ export function AuthPanel({
         )}
 
         {stage === "code" && (
-          <form onSubmit={submitCode} className="space-y-4">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void verifyCode(code);
+            }}
+            className="space-y-4"
+          >
             <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-primary/15 text-primary">
               <Mail className="size-7" />
             </div>
@@ -394,7 +413,13 @@ export function AuthPanel({
               pattern="\d{6}"
               maxLength={6}
               value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              onChange={(e) => {
+                const v = e.target.value.replace(/\D/g, "").slice(0, 6);
+                setCode(v);
+                // Auto-verify on the 6th digit (v2.49 keypad convention) —
+                // no extra tap. Wrong codes surface inline as before.
+                if (v.length === 6) void verifyCode(v);
+              }}
               placeholder="••••••"
               className="text-center text-2xl tracking-[0.5em] font-mono"
             />

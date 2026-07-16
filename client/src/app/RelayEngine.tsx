@@ -8,9 +8,13 @@ import {
 } from "react";
 import { useLocation } from "wouter";
 import { X, Loader2, PhoneOff } from "lucide-react";
-import { startRelay, type RelayHandle, type RelayPhase } from "@/lib/relayClient";
+// TYPE-ONLY import — erased at build. The call engine (relayClient + its
+// markup/CSS) is DYNAMICALLY imported inside the mount effect below (v2.88):
+// it's several hundred KB that only matters once a signed-in user is inside
+// /app, so it must not sit in the entry chunk the keypad paints from.
+import type { RelayHandle, RelayPhase } from "@/lib/relayClient";
 import { isNativeAndroid, nativeEnsureNotifPermission, nativeGetPushToken } from "@/lib/nativeBridge";
-import { RELAY_MARKUP, RELAY_CSS } from "@/lib/relayAssets";
+import { VoicemailPrompt, type FailedDialInfo } from "./VoicemailPrompt";
 import { trpc } from "@/lib/trpc";
 
 interface RelayEngineValue {
@@ -68,9 +72,19 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<RelayPhase>("idle");
   const [pin, setPin] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  // The engine's scoped CSS, set once the lazy chunk arrives (rendered below).
+  const [engineCss, setEngineCss] = useState("");
   // True while the engine is auto-rejoining an active call after a reload / crash
   // / accidental close. Drives the prominent "Reconnecting… / Exit call" prompt.
   const [rejoining, setRejoining] = useState(false);
+  // A 1:1 dial that never connected (no answer / declined / offline) — drives
+  // the post-dial voicemail + call-back-alert card (v2.88).
+  const [failedDial, setFailedDial] = useState<FailedDialInfo | null>(null);
+  // A new call supersedes an undismissed "they didn't answer" card — without
+  // this it resurfaces when the LATER call ends (review v2.88).
+  useEffect(() => {
+    if (phase !== "idle") setFailedDial(null);
+  }, [phase]);
 
   // Incoming-ring "quick reply": the engine calls back with (callerPin, text)
   // when the callee picks a canned response; we deliver it as a normal chat
@@ -144,51 +158,73 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     if (!inApp || !me) return;
     const el = engineRoot.current;
     if (!el) return;
-    el.innerHTML = RELAY_MARKUP;
-    const handle = startRelay(el);
-    handle.setOnStateChange(setPhase);
-    handle.setOnPinChange(setPin);
-    handle.setOnRejoinChange(setRejoining);
-    handle.setOnQuickReply((toPin, text) => quickReplyRef.current(toPin, text));
-    if (flagRef.current) handle.setSelfFlag(flagRef.current);
-    handleRef.current = handle;
+    // Lazily pull in the call engine + its markup/CSS (v2.88): a dynamic
+    // import splits them out of the entry chunk. `cancelled` guards the
+    // unmount-before-load race (fast tab away / identity change) so we never
+    // start an engine we can't destroy.
+    let cancelled = false;
+    let handle: RelayHandle | null = null;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let giveUp: ReturnType<typeof setTimeout> | null = null;
+    void (async () => {
+      const [{ startRelay }, { RELAY_MARKUP, RELAY_CSS }] = await Promise.all([
+        import("@/lib/relayClient"),
+        import("@/lib/relayAssets"),
+      ]);
+      if (cancelled) return;
+      setEngineCss(RELAY_CSS);
+      el.innerHTML = RELAY_MARKUP;
+      handle = startRelay(el);
+      handle.setOnStateChange(setPhase);
+      handle.setOnPinChange(setPin);
+      handle.setOnRejoinChange(setRejoining);
+      handle.setOnQuickReply((toPin, text) => quickReplyRef.current(toPin, text));
+      // Voicemail (v2.88): surface the "Leave a voice message / alert me when
+      // online" card after a failed 1:1 dial. The engine's own ~2s reason card
+      // shows first; this appears above it and outlives the teardown.
+      handle.setOnDialFailed((failInfo) => setFailedDial(failInfo));
+      if (flagRef.current) handle.setSelfFlag(flagRef.current);
+      handleRef.current = handle;
 
-    // Auto-register against the v2 identity (number + name) so the engine has a
-    // pin and is reachable without the user re-entering anything.
-    const tryRegister = () => {
-      const nameInput = el.querySelector<HTMLInputElement>("#nameInput");
-      const name = nameRef.current ?? "";
-      if (!nameInput || !name) return false;
-      if (!nameInput.value) nameInput.value = name;
-      handle.setPreferredPin(numberRef.current);
-      const btn = el.querySelector<HTMLButtonElement>("#joinBtn");
-      if (btn && !btn.disabled) {
-        btn.click();
-        return true;
-      }
-      return false;
-    };
-    let timer: ReturnType<typeof setInterval> | null = setInterval(() => {
-      if (tryRegister()) {
+      // Auto-register against the v2 identity (number + name) so the engine has a
+      // pin and is reachable without the user re-entering anything.
+      const tryRegister = () => {
+        const nameInput = el.querySelector<HTMLInputElement>("#nameInput");
+        const name = nameRef.current ?? "";
+        if (!nameInput || !name) return false;
+        if (!nameInput.value) nameInput.value = name;
+        handle?.setPreferredPin(numberRef.current);
+        const btn = el.querySelector<HTMLButtonElement>("#joinBtn");
+        if (btn && !btn.disabled) {
+          btn.click();
+          return true;
+        }
+        return false;
+      };
+      timer = setInterval(() => {
+        if (tryRegister()) {
+          if (timer) clearInterval(timer);
+          timer = null;
+          setTimeout(() => setReady(true), 350);
+        }
+      }, 200);
+      giveUp = setTimeout(() => {
         if (timer) clearInterval(timer);
-        timer = null;
-        setTimeout(() => setReady(true), 350);
-      }
-    }, 200);
-    const giveUp = setTimeout(() => {
-      if (timer) clearInterval(timer);
-      setReady(true);
-    }, 5_000);
+        setReady(true);
+      }, 5_000);
+    })();
 
     return () => {
+      cancelled = true;
       if (timer) clearInterval(timer);
-      clearTimeout(giveUp);
-      handle.destroy();
+      if (giveUp) clearTimeout(giveUp);
+      handle?.destroy();
       handleRef.current = null;
       setReady(false);
       setPhase("idle");
       setPin(null);
       setRejoining(false);
+      setFailedDial(null);
     };
     // Re-mount only when entering/leaving /app or when the identity id changes;
     // navigating between tabs keeps inApp + me.id stable, so the engine persists.
@@ -214,8 +250,9 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   return (
     <RelayEngineContext.Provider value={value}>
       {children}
-      {/* Engine CSS (scoped to .relay-root) + embed/overlay rules. */}
-      <style>{RELAY_CSS}</style>
+      {/* Engine CSS (scoped to .relay-root) + embed/overlay rules — empty
+          until the lazily-imported engine chunk lands. */}
+      <style>{engineCss}</style>
       <style>{`
         .relay-root.relay-embedded #register,
         .relay-root.relay-embedded #lobby { display: none !important; }
@@ -250,6 +287,12 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
           automatically; this gives the user an explicit, unmissable way OUT if
           they don't want to reconnect (request: "a clear and prominent Exit the
           call option"). It auto-dismisses the instant the rejoin resolves. */}
+      {/* Post-dial voicemail / call-back-alert card (v2.88): shown once the
+          failed dial's reason card has run its course. Hidden while a NEW call
+          is active so it can never cover live call UI. */}
+      {failedDial && phase === "idle" ? (
+        <VoicemailPrompt info={failedDial} onClose={() => setFailedDial(null)} />
+      ) : null}
       {rejoining ? (
         <div
           className="fixed inset-0 z-[80] flex flex-col items-center justify-center gap-6 bg-black/80 px-6 text-center backdrop-blur-md"

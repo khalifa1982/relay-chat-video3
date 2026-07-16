@@ -38,6 +38,7 @@ import {
   conversations,
   identities,
   messages,
+  onlineWatches,
   presence,
   pushSubscriptions,
   users,
@@ -556,6 +557,39 @@ export async function getPresenceAudienceIds(
   return Array.from(audience);
 }
 
+/* ── call-back alerts ("tell me when they're back online", v2.88) ── */
+
+export const ONLINE_WATCH_TTL_MS = 24 * 60 * 60 * 1000; // 24h then it lapses
+
+/** Register (or refresh) a one-shot watch: alert `watcherId` when `targetId`
+ *  next flips offline→online. Idempotent per pair — re-watching extends the
+ *  24h expiry instead of stacking rows. */
+export async function addOnlineWatch(watcherId: number, targetId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  const expiresAt = new Date(Date.now() + ONLINE_WATCH_TTL_MS);
+  await db
+    .insert(onlineWatches)
+    .values({ watcherId, targetId, expiresAt })
+    .onDuplicateKeyUpdate({ set: { expiresAt } });
+}
+
+/** Consume every watch on `targetId`: returns the UNEXPIRED watcher ids and
+ *  deletes ALL rows for the target (one-shot semantics — expired rows are
+ *  swept opportunistically here too). */
+export async function takeOnlineWatchers(targetId: number): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const now = new Date();
+  const rows = await db
+    .select({ watcherId: onlineWatches.watcherId, expiresAt: onlineWatches.expiresAt })
+    .from(onlineWatches)
+    .where(eq(onlineWatches.targetId, targetId));
+  if (rows.length === 0) return [];
+  await db.delete(onlineWatches).where(eq(onlineWatches.targetId, targetId));
+  return rows.filter((r) => new Date(r.expiresAt).getTime() > now.getTime()).map((r) => r.watcherId);
+}
+
 export interface PresenceLite {
   identityId: number;
   isOnline: boolean;
@@ -651,6 +685,16 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "users", column: "loginPinAttempts", ddl: "ADD COLUMN `loginPinAttempts` int" },
     { table: "users", column: "loginPinLockedAt", ddl: "ADD COLUMN `loginPinLockedAt` timestamp NULL" },
     { table: "users", column: "preferPinLogin", ddl: "ADD COLUMN `preferPinLogin` boolean" },
+    // Hot-path indexes (v2.88, mirrored in drizzle/schema.ts):
+    //  - messages(conversationId, id): the listThreads groupwise-max + every
+    //    listMessages page (ORDER BY id within a conversation).
+    //  - messages(attachmentId): getAttachmentForIdentity full-scanned messages
+    //    on EVERY attachment auth check.
+    //  - contacts(number): getPresenceAudienceIds full-scanned contacts on
+    //    every presence transition.
+    { table: "messages", column: "messages_convo_id_idx", ddl: "ADD INDEX `messages_convo_id_idx` (`conversationId`, `id`)" },
+    { table: "messages", column: "messages_attachment_idx", ddl: "ADD INDEX `messages_attachment_idx` (`attachmentId`)" },
+    { table: "contacts", column: "contacts_number_idx", ddl: "ADD INDEX `contacts_number_idx` (`number`)" },
   ];
   for (const a of adds) {
     try {
@@ -658,8 +702,9 @@ export async function ensureSchemaExtensions(): Promise<void> {
       console.log(`[schema] added ${a.table}.${a.column}`);
     } catch (e) {
       const msg = (e as Error)?.message || "";
-      // Already present (normal on every boot after the first) → ignore quietly.
-      if (!/duplicate column|exists|check that column/i.test(msg)) {
+      // Already present (normal on every boot after the first) → ignore
+      // quietly. "duplicate key name" is MySQL's ADD INDEX flavor of the same.
+      if (!/duplicate column|duplicate key name|exists|check that column/i.test(msg)) {
         console.warn(`[schema] ensure ${a.table}.${a.column} skipped:`, msg);
       }
     }
@@ -738,6 +783,20 @@ export async function ensureSchemaExtensions(): Promise<void> {
         \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY \`push_sub_endpoint_unique\` (\`endpoint\`),
         KEY \`push_sub_identity_idx\` (\`identityId\`)
+      )`,
+    },
+    {
+      // Call-back alerts (v2.88): "tell me when they're back online". One-shot
+      // rows consumed on the target's offline→online transition; 24h expiry.
+      name: "online_watches",
+      ddl: `CREATE TABLE IF NOT EXISTS \`online_watches\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`watcherId\` int NOT NULL,
+        \`targetId\` int NOT NULL,
+        \`expiresAt\` timestamp NOT NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY \`watch_pair_unique\` (\`watcherId\`, \`targetId\`),
+        KEY \`watch_target_idx\` (\`targetId\`)
       )`,
     },
   ];
@@ -1149,16 +1208,27 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
     .where(inArray(conversations.id, convoIds));
   const convoById = new Map(convos.map((c) => [c.id, c]));
 
-  // 4) the most-recent non-deleted message per conversation, for preview
-  const recents = await db
-    .select()
+  // 4) the most-recent non-deleted message per conversation, for preview.
+  // Groupwise-max (v2.88): SELECT MAX(id) GROUP BY conversationId, then fetch
+  // just those rows. The old query selected EVERY non-deleted message across
+  // ALL of a user's conversations with no LIMIT and picked first-per-convo in
+  // JS — polled every few seconds by every client, that scan grew linearly
+  // with total message history. Backed by the (conversationId, id) index.
+  const maxIdRows = await db
+    .select({
+      conversationId: messages.conversationId,
+      maxId: sql<number>`MAX(${messages.id})`,
+    })
     .from(messages)
     .where(and(inArray(messages.conversationId, convoIds), isNull(messages.deletedAt)))
-    .orderBy(desc(messages.createdAt));
+    .groupBy(messages.conversationId);
+  const latestIds = maxIdRows.map((r) => Number(r.maxId)).filter((n) => Number.isFinite(n));
+  const recents =
+    latestIds.length > 0
+      ? await db.select().from(messages).where(inArray(messages.id, latestIds))
+      : [];
   const latestByConvo = new Map<number, typeof recents[number]>();
-  for (const m of recents) {
-    if (!latestByConvo.has(m.conversationId)) latestByConvo.set(m.conversationId, m);
-  }
+  for (const m of recents) latestByConvo.set(m.conversationId, m);
 
   // 5) Find this user's own row so we can synthesise the "Notes (You)"
   // peer projection on self-conversations (where there's no other row).

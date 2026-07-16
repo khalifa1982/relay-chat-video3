@@ -105,25 +105,36 @@ async function startServer() {
     // Drop idle buckets every 5 min so the map can't grow unbounded.
     setInterval(() => relaySendLimiter.sweep(Date.now(), 5 * 60_000), 5 * 60_000).unref();
   }
-  // Configure body parser with larger size limit for file uploads.
-  // For the inbound-email webhook ONLY we also stash the exact raw bytes on
-  // req.rawBody (needed to verify the provider's HMAC webhook signature, which
-  // must be computed over the original payload — a re-serialized object won't
-  // byte-match). Scoped by URL so normal/large requests don't pay the cost.
+  // Body parsers, SCOPED per route (v2.88). The old global 50mb JSON parser
+  // meant ANY endpoint would happily buffer a 50 MB body on a 512 MiB
+  // instance; only the upload route needs big bodies.
+  //
+  //   /api/v2/upload   — raw binary (application/octet-stream, the primary
+  //                      path since v2.88: bytes go straight to a Buffer, no
+  //                      base64 inflation) + a legacy base64-JSON route for
+  //                      old clients / mobile-native, capped at 10 MB decoded
+  //                      (≈15 MB of base64 JSON).
+  //   /api/email/inbound — 5 MB JSON, with the exact raw bytes stashed on
+  //                      req.rawBody (the provider's HMAC webhook signature is
+  //                      computed over the original payload — a re-serialized
+  //                      object won't byte-match).
+  //   everywhere else  — 1 MB JSON/urlencoded; every other payload fits.
   app.use(
+    "/api/v2/upload",
+    express.raw({ type: "application/octet-stream", limit: "41mb" })
+  );
+  app.use("/api/v2/upload", express.json({ limit: "15mb" }));
+  app.use(
+    "/api/email/inbound",
     express.json({
-      limit: "50mb",
+      limit: "5mb",
       verify: (req, _res, buf) => {
-        const url = (req as { url?: string; originalUrl?: string }).url
-          || (req as { originalUrl?: string }).originalUrl
-          || "";
-        if (url.startsWith("/api/email/inbound")) {
-          (req as { rawBody?: Buffer }).rawBody = buf;
-        }
+        (req as { rawBody?: Buffer }).rawBody = buf;
       },
     })
   );
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  app.use(express.json({ limit: "1mb" }));
+  app.use(express.urlencoded({ limit: "1mb", extended: true }));
   // Populate req.cookies for all downstream middleware (tRPC context
   // reads `req.cookies.relay_guest` to resolve guest identities).
   // Without this, req.cookies is undefined and every guest looks signed

@@ -4,6 +4,13 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  /* v2.88: numbers ARE the product (PINs, timers, keypads) — render every
+     `font-mono` in the same JetBrains Mono the call engine uses, with honest
+     system fallbacks, instead of whatever ui-monospace the browser picks. */
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* v2.88: the `xs:` variant used by Contacts' Video button resolved to
+     NOTHING (no such default breakpoint in Tailwind 4) — define it. */
+  --breakpoint-xs: 30rem;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);

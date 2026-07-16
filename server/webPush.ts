@@ -23,7 +23,7 @@ import { listPushSubscriptions, deletePushSubscription } from "./v2db";
 import { sendFcmData } from "./fcm";
 
 export interface PushPayload {
-  kind: "incoming-call" | "missed-call";
+  kind: "incoming-call" | "missed-call" | "voicemail" | "contact-online";
   title: string;
   body?: string;
   /** Notification tag — same tag replaces instead of stacking. */

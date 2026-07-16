@@ -24,7 +24,10 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [manual, setManual] = useState("");
   const [search, setSearch] = useState("");
-  const [voice, setVoice] = useState(false);
+  // Voice-first (v2.81 protocol, applied here in v2.88): a group call starts
+  // camera-OFF unless the user explicitly picks Video — this was the last
+  // video-default dial site.
+  const [voice, setVoice] = useState(true);
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -212,16 +215,7 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
         {/* Footer: voice/video toggle + start */}
         <div className="shrink-0 space-y-3 border-t border-border/60 p-4">
           <div className="flex items-center justify-center gap-2">
-            <button
-              type="button"
-              onClick={() => setVoice(false)}
-              className={
-                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition " +
-                (!voice ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")
-              }
-            >
-              <Video className="size-4" /> Video
-            </button>
+            {/* Voice leads (v2.88): it's the default, so it comes first. */}
             <button
               type="button"
               onClick={() => setVoice(true)}
@@ -232,6 +226,16 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
               style={voice ? { background: "#2563eb" } : undefined}
             >
               <Phone className="size-4" /> Voice
+            </button>
+            <button
+              type="button"
+              onClick={() => setVoice(false)}
+              className={
+                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition " +
+                (!voice ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")
+              }
+            >
+              <Video className="size-4" /> Video
             </button>
           </div>
           <Button className="w-full" disabled={selected.size === 0} onClick={start}>

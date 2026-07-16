@@ -18,19 +18,26 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
 import { useIdentity } from "@/app/useIdentity";
+import { demotablePollInterval } from "@/app/useRealtime";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { GroupCallScreen } from "./GroupCallScreen";
 import { effectiveStatus, formatLastSeen, type StatusOverride } from "@shared/profileFields";
 
 /**
- * Compact presence line for a looked-up peer: "online now" / "away" /
- * "travelling" / WhatsApp-style "last seen …" when offline. Exported for tests.
+ * Compact presence line for a looked-up peer: carrier-style "on a call"
+ * (v2.88, amber) / "online now" / "away" / "travelling" / WhatsApp-style
+ * "last seen …" when offline. Exported for tests.
  */
 export function peerStatus(p: {
   isOnline: boolean;
   lastSeenAt: string | Date | null | undefined;
   statusOverride?: string | null;
-}): { text: string; online: boolean } {
+  /** Busy line (v2.88): the peer is in a live call right now. */
+  inCall?: boolean;
+}): { text: string; online: boolean; busy?: boolean } {
+  // Busy wins over everything: knowing they'll bounce you matters MORE than
+  // knowing they're online.
+  if (p.inCall) return { text: "on a call", online: true, busy: true };
   const eff = effectiveStatus(!!p.isOnline, (p.statusOverride ?? "") as StatusOverride);
   if (eff === "online") return { text: "online now", online: true };
   if (eff === "away") return { text: "away", online: true };
@@ -93,6 +100,21 @@ export function parseDialToParam(search: string): string | null {
   return /^\d{6}$/.test(to) ? to : null;
 }
 
+/**
+ * Voice-first auto-dial rule (v2.88): a deep-linked dial is VOICE unless the
+ * link explicitly asks for video (`?video=1`). The old rule required an
+ * explicit `voice` param, so the bare `/i/<pin>` invite links (which carry
+ * neither param) placed VIDEO dials — cameras-on to a stranger from a shared
+ * link. Exported for tests.
+ */
+export function voiceFromDialParams(search: string): boolean {
+  try {
+    return new URLSearchParams(search || "").get("video") !== "1";
+  } catch {
+    return true; // fail safe: voice
+  }
+}
+
 function timeAgo(iso: string | Date): string {
   const d = typeof iso === "string" ? new Date(iso) : iso;
   const diff = (Date.now() - d.getTime()) / 1000;
@@ -125,19 +147,27 @@ export default function DialerPage() {
     );
     if (!to || to === enginePin) return;
     autoDialedRef.current = true;
-    // Contacts deep-links carry the intent: ?voice=1 (default from a contact
-    // tap) or ?video=1. Voice keeps the camera off and runs the consent flow.
-    let voice = false;
-    try {
-      const sp = new URLSearchParams(window.location.search);
-      voice = sp.get("voice") === "1" || (sp.get("video") !== "1" && sp.has("voice"));
-    } catch { /* */ }
-    engine.dial(to, { voice });
+    // Deep-links carry the intent: ?video=1 is the ONLY thing that places a
+    // video dial — everything else (including the bare /i/<pin> invite links)
+    // is voice-first per the v2.81 protocol.
+    const voice = voiceFromDialParams(
+      typeof window !== "undefined" ? window.location.search : ""
+    );
+    const ok = engine.dial(to, { voice });
+    if (ok) {
+      // Strip the ?to= from the address bar so a reload, Back, or the 30s
+      // auto-updater's forced refresh can't silently RE-DIAL this number.
+      try {
+        window.history.replaceState(null, "", "/app/dialer");
+      } catch { /* */ }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engineReady, enginePin]);
 
   const history = trpc.calls.history.useQuery(undefined, {
-    refetchInterval: 10_000,
+    // SSE-gated (v2.88): 10s is the no-SSE safety net; while the stream is up
+    // (call_offer events invalidate this query) poll at 30s.
+    refetchInterval: demotablePollInterval(10_000, 30_000),
     enabled: !!me,
   });
   // "Missed Call" alert: shown when the user arrives here from the landing
@@ -347,7 +377,11 @@ export default function DialerPage() {
                         size="sm"
                         variant="ghost"
                         disabled={!peerNum}
-                        onClick={() => peerNum && setDialed(peerNum)}
+                        aria-label="Call back (voice)"
+                        title="Call back (voice)"
+                        // Dial immediately as VOICE (v2.88) — matching History's
+                        // call-back buttons; it used to only pre-fill the keypad.
+                        onClick={() => peerNum && engine.dial(peerNum, { voice: true })}
                       >
                         <Phone className="size-4" />
                       </Button>
@@ -432,6 +466,7 @@ export default function DialerPage() {
                         isOnline: previewIdentity.isOnline,
                         lastSeenAt: previewIdentity.lastSeenAt,
                         statusOverride: previewIdentity.statusOverride,
+                        inCall: previewIdentity.inCall,
                       });
                       return (
                         <span>
@@ -440,7 +475,15 @@ export default function DialerPage() {
                           </span>
                           {previewIdentity.verified && <VerifiedBadge size={13} className="ml-1" />}
                           {" · "}
-                          <span className={st.online ? "text-[color:var(--relay-online)]" : "text-muted-foreground"}>
+                          <span
+                            className={
+                              st.busy
+                                ? "text-amber-500 font-medium"
+                                : st.online
+                                  ? "text-[color:var(--relay-online)]"
+                                  : "text-muted-foreground"
+                            }
+                          >
                             {st.text}
                           </span>
                         </span>

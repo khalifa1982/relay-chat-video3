@@ -22,7 +22,36 @@ type V2Event =
       fromName: string;
       roomId: string;
     }
+  /** Call-back alert (v2.88): a number the user watched is back online. */
+  | { kind: "watched_online"; number: string; name: string }
   | { kind: "ping" };
+
+/* ── SSE-gated poll demotion (v2.88) ─────────────────────────────
+ * While the SSE channel is UP, the aggressive 2-4s polling in Messages /
+ * Dialer is pure waste — SSE events already invalidate those exact queries.
+ * This module-level flag lets any query use a CALLBACK refetchInterval that
+ * polls slowly while SSE is healthy and falls back to fast polling the moment
+ * the stream drops. Polling stays as the documented safety net either way. */
+let sseConnected = false;
+
+/** True while the realtime SSE stream is open (module-level — one stream per app). */
+export function isSseConnected(): boolean {
+  return sseConnected;
+}
+
+/** Internal/test setter — flipped by the hook's onopen/onerror handlers. */
+export function _setSseConnected(v: boolean): void {
+  sseConnected = v;
+}
+
+/**
+ * Build a React Query `refetchInterval` callback that polls at `demotedMs`
+ * while the SSE channel is connected and at `fastMs` when it isn't.
+ * Pure factory — unit-tested without a DOM.
+ */
+export function demotablePollInterval(fastMs: number, demotedMs: number): () => number {
+  return () => (sseConnected ? demotedMs : fastMs);
+}
 
 /**
  * Whether an inbound `message` SSE event should raise a chime / notification.
@@ -68,9 +97,14 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
 
       es.onopen = () => {
         backoff = 1000; // reset
+        _setSseConnected(true); // demote the fast polls — SSE now carries hints
         if (wasConnected) {
+          // Anything could have changed while the stream was down (the demoted
+          // polls are slow) — refetch the hint-driven queries immediately.
           utils.calls.missedSummary.invalidate().catch(() => {});
           utils.calls.history.invalidate().catch(() => {});
+          utils.messages.threads.invalidate().catch(() => {});
+          utils.messages.list.invalidate().catch(() => {});
         }
         wasConnected = true;
       };
@@ -167,12 +201,43 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
           case "contact":
             utils.contacts.list.invalidate().catch(() => {});
             break;
+          case "watched_online": {
+            // Call-back alert (v2.88): the user explicitly asked to be told.
+            const who = payload.name || payload.number;
+            const dialUrl = `/app/dialer?to=${payload.number}&voice=1`;
+            notify({
+              title: `${who} is back online`,
+              body: "You asked to be told — tap to call them now.",
+              tag: `relay-online-${payload.number}`,
+              url: dialUrl,
+              onClick: () => {
+                if (typeof window !== "undefined") window.location.href = dialUrl;
+              },
+            });
+            // In-app toast with a one-tap call action (lazy import keeps this
+            // hook dependency-light for tests).
+            void import("sonner").then(({ toast }) =>
+              toast.success(`${who} is back online`, {
+                action: {
+                  label: "Call",
+                  onClick: () => {
+                    if (typeof window !== "undefined") window.location.href = dialUrl;
+                  },
+                },
+              })
+            ).catch(() => {});
+            // Their presence LEDs are stale by definition — refresh them.
+            utils.contacts.list.invalidate().catch(() => {});
+            utils.directory.lookup.invalidate({ number: payload.number }).catch(() => {});
+            break;
+          }
         }
       };
 
       es.onerror = () => {
         es?.close();
         es = null;
+        _setSseConnected(false); // re-promote fast polling until we reconnect
         // NOTE: `wasConnected` is intentionally NOT reset here. It tracks "has
         // this hook EVER connected before" — staying true once set lets the
         // NEXT onopen (the actual reconnect) recognize itself as a recovery
@@ -191,6 +256,7 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
 
     return () => {
       closed = true;
+      _setSseConnected(false);
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;

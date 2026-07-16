@@ -38,7 +38,11 @@ describe("Contacts — rich rows + inline actions", () => {
 
   it("shows the PIN (formatted), presence LED, and verified badge", () => {
     expect(PAGE).toMatch(/c\.number\.slice\(0, 3\) \+ "-" \+ c\.number\.slice\(3\)/);
-    expect(PAGE).toMatch(/c\.isOnline \? "bg-\[color:var\(--relay-online\)\]" : "bg-red-500"/);
+    // v2.88: LED is amber "on a call" / green online / grey offline
+    // (var(--relay-offline) — red used to read as busy/error).
+    expect(PAGE).toMatch(/c\.inCall\s*\?\s*"bg-amber-400"/);
+    expect(PAGE).toMatch(/bg-\[color:var\(--relay-online\)\]/);
+    expect(PAGE).toMatch(/bg-\[color:var\(--relay-offline\)\]/);
     expect(PAGE).toMatch(/c\.verified && <VerifiedBadge/);
   });
 });
@@ -78,7 +82,8 @@ describe("Contacts — backend (category + block)", () => {
   });
 
   it("blocking is ENFORCED: blocked numbers can't message you, and their calls are silently declined", () => {
-    expect(ROUTERS).toMatch(/const blocked = await isNumberBlockedBy\(pids\[0\], me\.number\)/);
+    // v2.88: the roster is fetched once as `peerIds` (send-path dedupe).
+    expect(ROUTERS).toMatch(/const blocked = await isNumberBlockedBy\(peerIds\[0\], me\.number\)/);
     expect(V2DB).toMatch(/export async function isNumberBlockedBy/);
     expect(ENGINE).toMatch(/if \(m\.from && blockedPins\.has\(m\.from\)\) \{ sendWS\(\{ type: "reject", to: m\.from \}\); return; \}/);
     expect(PROVIDER).toMatch(/handleRef\.current\?\.setBlockedPins\(blocked\)/);

@@ -57,11 +57,14 @@ import {
   getPublicStats,
   upsertPushSubscription,
   deletePushSubscription,
+  addOnlineWatch,
+  takeOnlineWatchers,
 } from "./v2db";
-import { vapidConfig } from "./webPush";
+import { vapidConfig, sendPushToIdentity } from "./webPush";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
-import { setSessionCookie } from "./authLocal";
+import { setSessionCookie, LOCAL_SESSION_COOKIE } from "./authLocal";
+import { COOKIE_NAME } from "@shared/const";
 import { normalizeEmail, isValidEmail } from "./authCrypto";
 import {
   mintOtp,
@@ -85,6 +88,10 @@ import {
   unlockLoginPin,
 } from "./authPin";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
+// Carrier-style busy line (v2.88): pure read of the relay's in-memory registry
+// ("is this pin in a room right now?"). Single-instance by design — the same
+// instance serves the SSE signaling, so the read is authoritative here.
+import { pinsInCall } from "./relay";
 
 export const NumberSchema = z
   .string()
@@ -289,11 +296,18 @@ export const v2AuthRouter = router({
     }),
 
   /**
-   * Explicit sign-out for guest sessions (clears the guest cookie).
+   * Explicit sign-out. Historically this only cleared the guest cookie, but a
+   * sign-out must end EVERY session flavor on this browser (v2.88): an upgraded
+   * member could carry a live `relay_session` (email-OTP/PIN login) and/or an
+   * `app_session_id` (OAuth) alongside the guest cookie, so "signing out" left
+   * them silently signed in on the next visit.
    */
   signOutGuest: publicProcedure.mutation(async ({ ctx }) => {
     const opts = guestCookieOptions(ctx.req);
     ctx.res.clearCookie(GUEST_COOKIE, { ...opts, maxAge: -1 });
+    const sess = getSessionCookieOptions(ctx.req);
+    ctx.res.clearCookie(LOCAL_SESSION_COOKIE, { ...sess, maxAge: -1 });
+    ctx.res.clearCookie(COOKIE_NAME, { ...sess, maxAge: -1 });
     return { ok: true };
   }),
 
@@ -438,6 +452,8 @@ export const v2DirectoryRouter = router({
         statusOverride: hidden ? "" : ((id.statusOverride as "" | "away" | "travel" | null) ?? ""),
         presenceHidden: hidden,
         verified: id.verified,
+        // Carrier-style busy line (v2.88): they're ON A CALL right now.
+        inCall: hidden ? false : pinsInCall([id.number]).has(id.number),
       };
     }),
 
@@ -523,6 +539,8 @@ export const v2DirectoryRouter = router({
       if (idents.length === 0) return [];
       const presList = await getPresenceForIds(idents.map((i) => i.id));
       const presById = new Map(presList.map((p) => [p.identityId, p]));
+      // Busy line (v2.88): one in-memory read for the whole batch.
+      const inCallSet = pinsInCall(idents.map((i) => i.number));
       return idents.map((i) => {
         const pres = presById.get(i.id);
         const hidden = isGuestPresenceHidden({
@@ -533,8 +551,30 @@ export const v2DirectoryRouter = router({
         return {
           number: i.number,
           isOnline: hidden ? false : (pres?.isOnline ?? false),
+          inCall: hidden ? false : inCallSet.has(i.number),
         };
       });
+    }),
+
+  /**
+   * Call-back alert (v2.88): "tell me when they're back online". Registers a
+   * one-shot, 24h-expiring watch on a number; when that identity's heartbeat
+   * flips them offline→online, the watcher gets a push + an SSE nudge with a
+   * ready-to-dial link.
+   */
+  watchOnline: publicProcedure
+    .input(z.object({ number: NumberSchema }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const target = await getIdentityByNumber(input.number);
+      if (!target) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "That number isn't a RELAY user yet." });
+      }
+      if (target.id === me.id) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "That's your own number." });
+      }
+      await addOnlineWatch(me.id, target.id);
+      return { ok: true, displayName: target.displayName, number: target.number };
     }),
 
   /**
@@ -553,6 +593,28 @@ export const v2DirectoryRouter = router({
         publishPresenceTo(audience, me.number, true, new Date());
       } catch {
         /* ignore */
+      }
+      // Call-back alerts (v2.88): consume one-shot watches on this identity —
+      // every unexpired watcher gets an SSE nudge (in-app toast, instant) AND
+      // a push (reaches them if RELAY is closed), with a ready-to-dial link.
+      try {
+        const watchers = await takeOnlineWatchers(me.id);
+        for (const watcherId of watchers) {
+          publishToIdentity(watcherId, {
+            kind: "watched_online",
+            number: me.number,
+            name: me.displayName,
+          });
+          sendPushToIdentity(watcherId, {
+            kind: "contact-online",
+            title: `${me.displayName || me.number} is back online`,
+            body: "You asked to be told — tap to call them now.",
+            tag: `relay-online-${me.number}`,
+            url: `/app/dialer?to=${me.number}&voice=1`,
+          }).catch(() => {});
+        }
+      } catch {
+        /* watches are best-effort */
       }
     }
     return { ok: true, at: new Date() };
@@ -588,6 +650,8 @@ export const v2ContactsRouter = router({
     const ids = idents.map((i) => i.id);
     const presList = await getPresenceForIds(ids);
     const presByIdentity = new Map(presList.map((p) => [p.identityId, p]));
+    // Busy line (v2.88): which saved numbers are on a call right now.
+    const inCallSet = pinsInCall(idents.map((i) => i.number));
     return rows.map((r) => {
       const ident = idByNumber.get(r.number);
       const pres = ident != null ? presByIdentity.get(ident) : undefined;
@@ -617,6 +681,7 @@ export const v2ContactsRouter = router({
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
         presenceHidden: hidden,
         verified: ident != null ? (verifiedById.get(ident) ?? false) : false,
+        inCall: hidden ? false : inCallSet.has(r.number),
       };
     });
   }),
@@ -910,6 +975,11 @@ export const v2MessagesRouter = router({
         body: z.string().max(8000).nullable().optional(),
         attachmentId: z.number().int().positive().nullable().optional(),
         replyToId: z.number().int().positive().nullable().optional(),
+        /** Constrained metadata (v2.88). `voicemail: true` marks an audio
+         *  message recorded after a failed dial — rendered with a voicemail
+         *  label and pushed as "Voicemail from X". Deliberately a closed
+         *  shape: clients can't stuff arbitrary JSON into `messages.meta`. */
+        meta: z.object({ voicemail: z.literal(true) }).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -935,12 +1005,22 @@ export const v2MessagesRouter = router({
           throw new TRPCError({ code: "FORBIDDEN", message: "Attachment not found or not yours" });
         }
       }
+      // Participant roster, fetched ONCE (v2.88 — this used to be re-queried
+      // three times: block check, push fan-out, auto-reply). Best-effort: a
+      // lookup hiccup yields [] and, exactly as before, skips the block check,
+      // fan-out, and auto-reply without blocking the send itself.
+      let participantIds: number[] = [];
+      try {
+        participantIds = await getConversationParticipantIds(input.conversationId);
+      } catch {
+        participantIds = [];
+      }
+      const peerIds = participantIds.filter((p) => p !== me.id);
       // BLOCKING (1:1 only): a recipient who blocked the sender receives
       // nothing — the send fails honestly instead of silently delivering.
       try {
-        const pids = (await getConversationParticipantIds(input.conversationId)).filter((p) => p !== me.id);
-        if (pids.length === 1) {
-          const blocked = await isNumberBlockedBy(pids[0], me.number);
+        if (peerIds.length === 1) {
+          const blocked = await isNumberBlockedBy(peerIds[0], me.number);
           if (blocked) {
             throw new TRPCError({ code: "FORBIDDEN", message: "You can't message this person." });
           }
@@ -956,12 +1036,23 @@ export const v2MessagesRouter = router({
         body: trimmedBody,
         attachmentId: input.attachmentId ?? null,
         replyToId: input.replyToId ?? null,
+        meta: input.meta ?? null,
       });
+      // Voicemail (v2.88): wake the recipient's device — "Voicemail from X".
+      // 1:1 only (that's the only place voicemails are recorded). Best-effort.
+      if (input.meta?.voicemail && peerIds.length === 1) {
+        sendPushToIdentity(peerIds[0], {
+          kind: "voicemail",
+          title: `Voicemail from ${me.displayName || me.number}`,
+          body: "They couldn't reach you and left a voice message — tap to listen.",
+          tag: `relay-voicemail-${input.conversationId}`,
+          url: `/app/messages?c=${input.conversationId}`,
+        }).catch(() => {});
+      }
       // Fan out a push hint to every participant so their UIs refetch.
       // Includes the sender so their other tabs also stay in sync.
       try {
-        const peers = await getConversationParticipantIds(input.conversationId);
-        for (const pid of peers) {
+        for (const pid of participantIds) {
           publishToIdentity(pid, {
             kind: "message",
             conversationId: input.conversationId,
@@ -976,9 +1067,6 @@ export const v2MessagesRouter = router({
       // party is offline and hasn't auto-replied in the last 10 min, post a
       // one-time auto-reply FROM them so the sender knows they'll reply later.
       try {
-        const peerIds = (
-          await getConversationParticipantIds(input.conversationId)
-        ).filter((p) => p !== me.id);
         if (peerIds.length === 1) {
           const peerId = peerIds[0];
           const [pres] = await getPresenceForIds([peerId]);

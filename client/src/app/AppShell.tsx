@@ -5,6 +5,7 @@ import { detectDeviceType } from "@/lib/deviceType";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { useIdentity } from "./useIdentity";
+import { useSignOut } from "./useSignOut";
 import { AuthPanel } from "./AuthPanel";
 import { VerifiedBadge } from "./VerifiedBadge";
 import { OnboardingGate } from "./OnboardingGate";
@@ -99,7 +100,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 function Inner({ children }: { children: React.ReactNode }) {
-  const { me, signOut } = useIdentity();
+  const { me } = useIdentity();
+  // Shared sign-out flow (v2.88): AlertDialog confirm + full session/device
+  // teardown, branching guest/member correctly (the old inline handler called
+  // the GUEST mutation even for registered members).
+  const { requestSignOut, signOutDialog } = useSignOut(me);
   const [location, navigate] = useLocation();
   const utils = trpc.useUtils();
   // Passwordless upgrade panel (guest → verified user). No third-party sign-in.
@@ -395,7 +400,7 @@ function Inner({ children }: { children: React.ReactNode }) {
           <Button
             variant="ghost"
             className="w-full justify-start gap-2 text-muted-foreground"
-            onClick={() => signOut().then(() => (window.location.href = "/app"))}
+            onClick={requestSignOut}
           >
             <LogOut className="size-4" /> Sign out
           </Button>
@@ -497,7 +502,7 @@ function Inner({ children }: { children: React.ReactNode }) {
                 variant="ghost"
                 size="sm"
                 className="text-muted-foreground"
-                onClick={() => signOut().then(() => (window.location.href = "/app"))}
+                onClick={requestSignOut}
               >
                 <LogOut className="size-4" />
               </Button>
@@ -606,6 +611,7 @@ function Inner({ children }: { children: React.ReactNode }) {
           }}
         />
       )}
+      {signOutDialog}
     </div>
   );
 }

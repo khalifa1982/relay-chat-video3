@@ -173,8 +173,12 @@ describe("sign-out truly ends the session (v2.87.1 — owner-reported glitch)", 
   const read = (p: string) =>
     require("node:fs").readFileSync(require("node:path").resolve(__dirname, "../../..", p), "utf8");
 
-  it("Profile's sign-out rotates the device id and lands on the app entry screen", () => {
-    const src = read("client/src/pages/app/Profile.tsx");
+  // v2.88: the sign-out teardown moved into the SHARED useSignOut() hook —
+  // Profile and both AppShell buttons all delegate to it, so the pins now
+  // target the hook plus each caller's wiring (the invariants are unchanged:
+  // rotate the device id, land on /app, never the marketing page).
+  it("the shared sign-out hook rotates the device id and lands on the app entry screen", () => {
+    const src = read("client/src/app/useSignOut.tsx");
     // Clearing the cookie alone let the device-id binding resurrect the same
     // guest on the next visit ("logs me in without filling my name again").
     expect(src).toContain("resetDeviceId();");
@@ -182,9 +186,16 @@ describe("sign-out truly ends the session (v2.87.1 — owner-reported glitch)", 
     expect(src).not.toContain('window.location.href = "/";');
   });
 
-  it("AppShell's sign-out lands on the app entry screen, not the marketing page", () => {
+  it("Profile delegates its sign-out to the shared hook", () => {
+    const src = read("client/src/pages/app/Profile.tsx");
+    expect(src).toContain("useSignOut");
+    expect(src).toContain("requestSignOut");
+  });
+
+  it("AppShell's sign-out buttons use the shared hook (entry screen, not marketing page)", () => {
     const src = read("client/src/app/AppShell.tsx");
-    expect(src).toContain('window.location.href = "/app"');
+    expect(src).toContain("useSignOut");
+    expect(src).toContain("requestSignOut");
     expect(src).not.toContain('window.location.href = "/"))');
   });
 });

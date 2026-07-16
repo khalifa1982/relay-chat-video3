@@ -50,6 +50,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
+import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
 
@@ -86,14 +87,20 @@ export default function ContactsPage() {
   const contacts = trpc.contacts.list.useQuery(undefined, {
     refetchInterval: 30_000,
   });
+  // onError toasts (v2.88): a silently-failed favorite/block/delete/message
+  // tap is the worst case — the row just doesn't change and the user retries
+  // into the void. (The edit dialog surfaces upsert errors inline itself.)
   const upsert = trpc.contacts.upsert.useMutation({
     onSuccess: () => utils.contacts.list.invalidate(),
+    onError: (err) => toast.error(err.message || "Couldn't save that change."),
   });
   const remove = trpc.contacts.remove.useMutation({
     onSuccess: () => utils.contacts.list.invalidate(),
+    onError: () => toast.error("Couldn't remove that contact — try again."),
   });
   const openThread = trpc.messages.openThread.useMutation({
     onSuccess: (res) => setLocation(`/app/messages?c=${res.conversationId}`),
+    onError: (err) => toast.error(err.message || "Couldn't open that conversation."),
   });
 
   const [search, setSearch] = useState("");
@@ -338,6 +345,8 @@ function ContactRow({
     favourite: boolean;
     verified: boolean;
     isOnline: boolean;
+    /** Busy line (v2.88): in a live call right now. */
+    inCall: boolean;
     lastSeenAt: Date | string | null;
     presenceHidden: boolean;
     company: string | null;
@@ -373,13 +382,19 @@ function ContactRow({
           <div className="size-11 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
             {initialsFrom(c.displayName || c.number)}
           </div>
-          {/* Presence LED — green online / red offline; hidden for a stale guest. */}
+          {/* Presence LED — amber "on a call" (v2.88 busy line) / green online /
+              grey offline; hidden for a stale guest. */}
           {!c.presenceHidden && (
             <span
-              aria-label={c.isOnline ? "Online" : "Offline"}
+              aria-label={c.inCall ? "On a call" : c.isOnline ? "Online" : "Offline"}
+              title={c.inCall ? "On a call right now" : undefined}
               className={
                 "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
-                (c.isOnline ? "bg-[color:var(--relay-online)]" : "bg-red-500")
+                (c.inCall
+                  ? "bg-amber-400"
+                  : c.isOnline
+                    ? "bg-[color:var(--relay-online)]"
+                    : "bg-[color:var(--relay-offline)]")
               }
             />
           )}
@@ -395,7 +410,9 @@ function ContactRow({
             {c.number.length === 6 ? c.number.slice(0, 3) + "-" + c.number.slice(3) : c.number}
             {c.blocked ? (
               <> · <span className="text-red-500">blocked</span></>
-            ) : c.presenceHidden ? null : c.isOnline ? (
+            ) : c.presenceHidden ? null : c.inCall ? (
+              <> · <span className="text-amber-500">on a call</span></>
+            ) : c.isOnline ? (
               <> · <span className="text-[color:var(--relay-online)]">online</span></>
             ) : (
               <> · last seen {relativeTime(c.lastSeenAt)}</>

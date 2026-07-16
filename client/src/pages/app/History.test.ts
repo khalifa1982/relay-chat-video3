@@ -29,7 +29,10 @@ describe("History page — filter tabs + Clear History", () => {
   it("has a Clear History trash button on the right of the filter bar, guarded by a confirm", () => {
     expect(PAGE).toMatch(/aria-label="Clear history"/);
     expect(PAGE).toMatch(/Trash2/);
-    expect(PAGE).toMatch(/window\.confirm\("Clear your entire call history\? This can't be undone\."\)/);
+    // v2.88: the guard is the shared AlertDialog pattern, not window.confirm().
+    expect(PAGE).toMatch(/Clear your entire call history\?/);
+    expect(PAGE).toMatch(/AlertDialog open=\{confirmClear\}/);
+    expect(PAGE).not.toMatch(/window\.confirm\(/);
     expect(PAGE).toMatch(/trpc\.calls\.clearHistory\.useMutation/);
     // clearing refreshes everything the log feeds (badges included)
     expect(PAGE).toMatch(/utils\.calls\.missedSummary\.invalidate\(\)/);
@@ -43,9 +46,11 @@ describe("History page — filter tabs + Clear History", () => {
 
 describe("History rows — color coding + full metadata", () => {
   it("uses LITERAL tone classes: missed bright red, dialed vibrant green, received clear blue", () => {
-    expect(PAGE).toMatch(/bg-red-500\/12 text-red-500/);
-    expect(PAGE).toMatch(/bg-green-500\/12 text-green-500/);
-    expect(PAGE).toMatch(/bg-blue-500\/12 text-blue-500/);
+    // v2.88: theme-PAIRED shades (600 in light / 400 in dark) — the raw *-500
+    // failed contrast on the light theme. Still full literal class strings.
+    expect(PAGE).toMatch(/bg-red-500\/12 text-red-600 dark:text-red-400/);
+    expect(PAGE).toMatch(/bg-green-500\/12 text-green-600 dark:text-green-400/);
+    expect(PAGE).toMatch(/bg-blue-500\/12 text-blue-600 dark:text-blue-400/);
   });
 
   it("every row shows the FULL date + precise time, the duration, and the PIN", () => {

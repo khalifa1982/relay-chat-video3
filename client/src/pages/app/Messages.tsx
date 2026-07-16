@@ -24,15 +24,28 @@ import {
   Copy,
   Play,
   ChevronDown,
+  Voicemail,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
 import { trpc } from "@/lib/trpc";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
 import { previewOf } from "@/app/messagePreview";
 import { uploadAttachment } from "@/lib/uploadAttachment";
+import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
 import { linkify } from "@/lib/linkify";
 import { useIdentity } from "@/app/useIdentity";
+import { demotablePollInterval } from "@/app/useRealtime";
 import { useThreadMuted, isThreadMuted, onMutedChange } from "@/app/mutedThreads";
 import { useTypers, useTypingConversations } from "@/app/typingStore";
 import { useDraft } from "@/app/draftStore";
@@ -112,7 +125,9 @@ export default function MessagesPage() {
   const activeConvoId = activeConvoIdRaw ? parseInt(activeConvoIdRaw, 10) : null;
 
   const threads = trpc.messages.threads.useQuery(undefined, {
-    refetchInterval: 4_000,
+    // SSE-gated (v2.88): 4s is the OFFLINE safety net; while the SSE stream is
+    // up (it invalidates this exact query on every message) poll at 30s.
+    refetchInterval: demotablePollInterval(4_000, 30_000),
     refetchIntervalInBackground: false,
     enabled: !!me,
   });
@@ -205,12 +220,15 @@ export default function MessagesPage() {
                             <div className="size-12 rounded-full bg-primary/15 grid place-items-center text-primary font-bold text-sm">
                               {initialsFrom(t.peerDisplayName || t.peerNumber)}
                             </div>
-                            {/* Presence LED: green = online, red = offline. */}
+                            {/* Presence LED: green = online, grey = offline
+                                (red used to read as "busy/error" — v2.88). */}
                             <span
                               aria-label={t.peerIsOnline ? "Online" : "Offline"}
                               className={
                                 "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
-                                (t.peerIsOnline ? "bg-[color:var(--relay-online)]" : "bg-red-500")
+                                (t.peerIsOnline
+                                  ? "bg-[color:var(--relay-online)]"
+                                  : "bg-[color:var(--relay-offline)]")
                               }
                             />
                           </>
@@ -306,7 +324,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     { conversationId, limit: 100 },
     {
       enabled: !!me,
-      refetchInterval: 2_000,
+      // SSE-gated (v2.88): 2s only while the SSE stream is down; 20s while
+      // it's up (message events invalidate this query instantly).
+      refetchInterval: demotablePollInterval(2_000, 20_000),
       refetchIntervalInBackground: false,
     }
   );
@@ -384,9 +404,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   }
   // Who's typing in THIS conversation (excludes me; resolved to names below).
   const typers = useTypers(conversationId).filter((id) => id !== me?.id);
+  // Unsend confirmation via AlertDialog (v2.88 — native confirm() is gone).
+  const [unsendId, setUnsendId] = useState<number | null>(null);
   function deleteMessage(messageId: number) {
-    if (!window.confirm("Unsend this message? It will be removed for everyone.")) return;
-    removeMutation.mutate({ messageId });
+    setUnsendId(messageId);
   }
 
   // ── composer state ──
@@ -511,7 +532,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
 
   async function uploadFile(file: File) {
     if (file.size > 40 * 1024 * 1024) {
-      alert("File exceeds 40 MB limit");
+      toast.error("File exceeds the 40 MB limit.");
       return;
     }
     setUploading(true);
@@ -522,7 +543,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       });
       setPendingUpload({ id: json.id, url: json.url, mimeType: json.mimeType, filename: json.filename ?? file.name });
     } catch (err) {
-      alert("Upload failed: " + (err instanceof Error ? err.message : String(err)));
+      toast.error("Upload failed: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setUploading(false);
     }
@@ -587,108 +608,61 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   }
 
   // ── voice-note recording ──
-  // Safari (especially mobile) does not support "audio/webm". We probe the
-  // browser's supported MIME types and pick the first one that works.
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  // Held so an unmount mid-recording can release the mic (onstop wouldn't run).
-  const recordStreamRef = useRef<MediaStream | null>(null);
+  // The MediaRecorder plumbing (Safari-safe MIME probing, mic release, cap)
+  // lives in the SHARED client/src/lib/voiceNote.ts since v2.88 — the same
+  // helpers power the after-dial voicemail prompt.
+  const recordingRef = useRef<VoiceRecording | null>(null);
   const [recording, setRecording] = useState(false);
 
-  // Safety net: if the conversation unmounts while recording, stop the recorder
-  // and stop every track so the getUserMedia mic doesn't stay live (LED on).
+  // Safety net: if the conversation unmounts while recording, cancel so the
+  // getUserMedia mic doesn't stay live (LED on).
   useEffect(() => {
     return () => {
-      try {
-        mediaRecorderRef.current?.stop();
-      } catch {
-        /* ignore */
-      }
-      recordStreamRef.current?.getTracks().forEach((t) => t.stop());
-      recordStreamRef.current = null;
+      recordingRef.current?.cancel();
+      recordingRef.current = null;
     };
   }, []);
 
-  // Capability: MediaRecorder may be missing entirely on older iOS Safari.
-  const recorderSupported =
-    typeof window !== "undefined" &&
-    typeof window.MediaRecorder === "function";
-
-  function pickAudioMime(): { mimeType: string; ext: string } | null {
-    if (typeof window === "undefined" || !window.MediaRecorder) return null;
-    const candidates: Array<{ mimeType: string; ext: string }> = [
-      { mimeType: "audio/webm;codecs=opus", ext: "webm" },
-      { mimeType: "audio/webm", ext: "webm" },
-      { mimeType: "audio/mp4", ext: "m4a" }, // Safari
-      { mimeType: "audio/aac", ext: "m4a" }, // some Safari builds
-      { mimeType: "audio/ogg;codecs=opus", ext: "ogg" },
-    ];
-    for (const c of candidates) {
-      try {
-        if (window.MediaRecorder.isTypeSupported(c.mimeType)) return c;
-      } catch {
-        /* ignore */
-      }
-    }
-    // last-ditch: let the browser pick its default by passing no mimeType
-    return { mimeType: "", ext: "bin" };
-  }
-
   async function startRecording() {
-    if (!recorderSupported) {
-      alert(
+    if (!recorderSupported()) {
+      toast.error(
         "Voice notes aren't supported by this browser yet. Try the latest Safari/Chrome, or send an audio file via the paperclip instead."
       );
       return;
     }
     try {
-      const pick = pickAudioMime();
-      if (!pick) {
-        alert("No supported audio format found in this browser.");
-        return;
-      }
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      recordStreamRef.current = stream;
-      const rec = pick.mimeType
-        ? new MediaRecorder(stream, { mimeType: pick.mimeType })
-        : new MediaRecorder(stream);
-      const chunks: Blob[] = [];
-      rec.ondataavailable = (e) => e.data.size > 0 && chunks.push(e.data);
-      rec.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        recordStreamRef.current = null;
-        // uploadBlob() re-throws on failure (it only resets `uploading` in its
-        // own finally) — without this try/catch/finally, a failed upload left
-        // `recording` stuck true forever (the mic button looked like it was
-        // still recording even though the stream had already been stopped).
-        try {
-          // Use the recorder's actual mimeType (browsers sometimes substitute one).
-          const finalMime = rec.mimeType || pick.mimeType || "application/octet-stream";
-          const blob = new Blob(chunks, { type: finalMime });
-          await uploadBlob(blob, `voice-note.${pick.ext}`);
-        } catch {
-          toast.error("Failed to save voice note");
-        } finally {
-          setRecording(false);
-        }
-      };
-      mediaRecorderRef.current = rec;
-      rec.start();
+      const rec = await startVoiceRecording();
+      recordingRef.current = rec;
       setRecording(true);
+      void rec.done
+        .then(async (result) => {
+          if (!result) return; // cancelled / empty
+          // uploadBlob() re-throws on failure (it only resets `uploading` in
+          // its own finally) — catch here or `recording` sticks true forever.
+          try {
+            await uploadBlob(result.blob, `voice-note.${result.ext}`, result.durationMs);
+          } catch {
+            toast.error("Failed to save voice note");
+          }
+        })
+        .finally(() => {
+          recordingRef.current = null;
+          setRecording(false);
+        });
     } catch (err) {
-      alert(
+      toast.error(
         "Mic access required for voice notes: " +
           (err instanceof Error ? err.message : String(err))
       );
     }
   }
   function stopRecording() {
-    mediaRecorderRef.current?.stop();
-    mediaRecorderRef.current = null;
+    recordingRef.current?.stop();
   }
-  async function uploadBlob(blob: Blob, filename: string) {
+  async function uploadBlob(blob: Blob, filename: string, durationMs?: number) {
     setUploading(true);
     try {
-      const json = await uploadAttachment(blob, { filename, mimeType: blob.type });
+      const json = await uploadAttachment(blob, { filename, mimeType: blob.type, durationMs });
       sendMutation.mutate({
         conversationId,
         kind: "audio",
@@ -726,12 +700,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               <div className="size-9 rounded-full bg-primary/15 grid place-items-center text-primary font-bold text-[13px]">
                 {initialsFrom(thread?.peerDisplayName || thread?.peerNumber || "??")}
               </div>
-              {/* Presence LED: green = online, red = offline. */}
+              {/* Presence LED: green = online, grey = offline (v2.88 —
+                  red used to read as "busy/error"). */}
               <span
                 aria-label={thread?.peerIsOnline ? "Online" : "Offline"}
                 className={
                   "absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card " +
-                  (thread?.peerIsOnline ? "bg-[color:var(--relay-online)]" : "bg-red-500")
+                  (thread?.peerIsOnline
+                    ? "bg-[color:var(--relay-online)]"
+                    : "bg-[color:var(--relay-offline)]")
                 }
               />
             </>
@@ -973,6 +950,18 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       <span className="opacity-80"> · {previewOf(msgById.get(m.replyToId))}</span>
                     </div>
                   )}
+                  {/* Voicemail label (v2.88): an audio message recorded after a
+                      failed call carries meta.voicemail — say so, phone-style. */}
+                  {(m.meta as { voicemail?: boolean } | null)?.voicemail && (
+                    <div
+                      className={
+                        "mb-0.5 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide " +
+                        (mine ? "text-[#04201b]/70" : "text-primary")
+                      }
+                    >
+                      <Voicemail className="size-3.5" /> Voicemail
+                    </div>
+                  )}
                   {m.attachment && (
                     <AttachmentView
                       mimeType={m.attachment.mimeType}
@@ -1168,9 +1157,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               size="icon"
               className="h-11 w-11 rounded-full"
               aria-label={recording ? "Stop" : "Record"}
-              disabled={!recorderSupported}
+              disabled={!recorderSupported()}
               title={
-                recorderSupported
+                recorderSupported()
                   ? recording
                     ? "Stop recording"
                     : "Record a voice note"
@@ -1184,6 +1173,28 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       </div>
 
       {lightbox && <MediaLightbox media={lightbox} onClose={() => setLightbox(null)} />}
+      {/* Unsend confirmation (v2.88 — AlertDialog, not native confirm()). */}
+      <AlertDialog open={unsendId !== null} onOpenChange={(open) => !open && setUnsendId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unsend this message?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It will be removed for everyone in this conversation. This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (unsendId !== null) removeMutation.mutate({ messageId: unsendId });
+                setUnsendId(null);
+              }}
+            >
+              Unsend
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

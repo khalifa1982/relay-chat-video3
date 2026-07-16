@@ -1,5 +1,7 @@
+import { GUEST_COOKIE } from "./_core/context";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { LOCAL_SESSION_COOKIE } from "./authLocal";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import {
@@ -21,6 +23,12 @@ export const appRouter = router({
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+      // v2.88: members signed in via email-OTP/PIN carry `relay_session`, not
+      // the OAuth cookie — logout must clear BOTH or they stay signed in.
+      ctx.res.clearCookie(LOCAL_SESSION_COOKIE, { ...cookieOptions, maxAge: -1 });
+      // And a leftover PRE-UPGRADE guest cookie would resurrect a different
+      // guest identity for the next visitor on this browser (review v2.88).
+      ctx.res.clearCookie(GUEST_COOKIE, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
     }),
   }),

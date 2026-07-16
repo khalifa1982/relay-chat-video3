@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDialed, ghostNumberRule, parseDialToParam } from "./Dialer";
+import { formatDialed, ghostNumberRule, parseDialToParam, voiceFromDialParams } from "./Dialer";
 
 /**
  * Pure-logic tests for the redesigned Dialer (v2.1.1):
@@ -129,5 +129,31 @@ describe("parseDialToParam", () => {
   it("clips an over-long value to its first 6 digits", () => {
     // URL-encoded junk should still yield a clean 6-digit target.
     expect(parseDialToParam("?to=1234567")).toBe("123456");
+  });
+});
+
+/**
+ * v2.88 — voice-first deep links. `/i/<pin>` invite links redirect to
+ * `/app/dialer?to=<pin>` with NO video/voice param; the auto-dial they trigger
+ * must be a VOICE call (v2.81 protocol: video is an explicit choice, never a
+ * default). Only an explicit `?video=1` places a video dial.
+ */
+describe("voiceFromDialParams (v2.88)", () => {
+  it("NO params (the bare /i/<pin> invite link) → voice", () => {
+    expect(voiceFromDialParams("")).toBe(true);
+    expect(voiceFromDialParams("?to=482015")).toBe(true);
+  });
+
+  it("?voice=1 → voice (unchanged)", () => {
+    expect(voiceFromDialParams("?to=482015&voice=1")).toBe(true);
+  });
+
+  it("only an explicit ?video=1 places a video dial", () => {
+    expect(voiceFromDialParams("?to=482015&video=1")).toBe(false);
+  });
+
+  it("a malformed video value still defaults to voice", () => {
+    expect(voiceFromDialParams("?to=482015&video=yes")).toBe(true);
+    expect(voiceFromDialParams("?video=")).toBe(true);
   });
 });

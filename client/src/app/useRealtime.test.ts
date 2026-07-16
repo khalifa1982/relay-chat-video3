@@ -24,3 +24,35 @@ describe("shouldAlertForMessage", () => {
     expect(shouldAlertForMessage(42, undefined)).toBe(true);
   });
 });
+
+/**
+ * v2.88 — SSE-gated poll demotion. While the SSE stream is up (it invalidates
+ * the messages/threads/history queries on every event), the aggressive 2-4s
+ * polls demote to slow safety-net intervals; the moment the stream drops they
+ * re-promote. Pure module-level flag + interval factory, testable without DOM.
+ */
+import { isSseConnected, _setSseConnected, demotablePollInterval } from "./useRealtime";
+
+describe("SSE-gated poll demotion (v2.88)", () => {
+  it("starts disconnected (fast polling until the stream proves itself)", () => {
+    _setSseConnected(false);
+    expect(isSseConnected()).toBe(false);
+  });
+
+  it("demotablePollInterval returns the FAST interval while SSE is down", () => {
+    _setSseConnected(false);
+    const interval = demotablePollInterval(2_000, 20_000);
+    expect(interval()).toBe(2_000);
+  });
+
+  it("returns the DEMOTED interval while SSE is up, and re-promotes on drop", () => {
+    const interval = demotablePollInterval(4_000, 30_000);
+    _setSseConnected(true);
+    expect(isSseConnected()).toBe(true);
+    expect(interval()).toBe(30_000);
+    // Stream drops → the very next tick polls fast again (the callback is
+    // evaluated per-tick by React Query, so no re-render is needed).
+    _setSseConnected(false);
+    expect(interval()).toBe(4_000);
+  });
+});

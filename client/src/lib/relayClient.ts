@@ -150,6 +150,12 @@ export interface RelayHandle {
    *  called with (callerPin, text) when the callee picks a canned response
    *  (the engine then declines the ring). */
   setOnQuickReply: (cb: ((toPin: string, text: string) => void) | null) => void;
+  /** Voicemail hook (v2.88): fired when a 1:1 OUTGOING dial dies unconnected
+   *  (no-answer / declined / offline) so the host can offer to record a voice
+   *  message for the callee (delivered as a chat audio message). */
+  setOnDialFailed: (
+    cb: ((info: { pin: string; name: string | null; reason: string }) => void) | null
+  ) => void;
   /** Numbers whose incoming calls are silently declined (per-contact block).
    *  Replace-style: pass the full current list each time. */
   setBlockedPins: (pins: string[]) => void;
@@ -1734,6 +1740,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // host app (RelayEngineProvider) wires this to the v2 messages API. Called
   // with the caller's pin + the canned text when the callee picks a reply.
   let onQuickReply: ((toPin: string, text: string) => void) | null = null;
+  // Dial-failed hook (v2.88 voicemail): fired when a 1:1 OUTGOING dial ends
+  // without ever connecting — no answer, declined, or offline — so the host
+  // can offer "Leave a voice message" / "Tell me when they're back online".
+  let onDialFailed: ((info: { pin: string; name: string | null; reason: string }) => void) | null = null;
   let lastPhase: RelayPhase = "idle";
   function emitPhase(p: RelayPhase) {
     if (lastPhase === p) return;
@@ -3671,6 +3681,22 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!inCall || establishedOnce || !outgoingDial) { hangUp(reason); return; }
     clearDialTimeout();
     stopRingtone();
+    // Voicemail-eligible outcomes (v2.88): a 1:1 dial that never connected
+    // because they didn't answer / declined / are offline. Tell the host —
+    // it raises the "Leave a voice message / alert me when online" card once
+    // the engine finishes tearing down. Groups and self-inflicted failures
+    // (media denied, server errors other than offline) don't qualify.
+    const d = outgoingDial;
+    // NOT "server-error:offline": with paging live (production always), a
+    // REAL offline callee ends as "no-answer" — the offline code fires almost
+    // only for NONEXISTENT numbers, where a recorded voicemail would be
+    // unsendable (openThread NOT_FOUND) and the copy would lie (review v2.88).
+    if (
+      d && !d.group &&
+      (reason === "no-answer" || reason === "peer-rejected")
+    ) {
+      try { onDialFailed?.({ pin: d.pin, name: d.name ?? null, reason }); } catch { /* host errors never break teardown */ }
+    }
     setCallStatus("calling", message); // renders on the dial card status line
     failDialT = setTimeout(() => {
       failDialT = null;
@@ -5390,6 +5416,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       setTileFlag("tile-self", selfFlag);
     },
     setOnQuickReply(cb) { onQuickReply = cb; },
+    setOnDialFailed(cb) { onDialFailed = cb; },
     setBlockedPins(pins) { blockedPins = new Set(pins); },
     setOnPinChange(cb) {
       onPinChange = cb;

@@ -291,7 +291,7 @@ export const RELAY_CSS = `
 .relay-root .relay-screen.active{display:flex}
 @keyframes relayFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 
-.relay-root .relay-brand{display:flex;align-items:center;gap:11px;font-family:"Bricolage Grotesque";font-weight:800;letter-spacing:-.02em}
+.relay-root .relay-brand{display:flex;align-items:center;gap:11px;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;letter-spacing:-.02em}
 .relay-root .relay-brand .dot{width:13px;height:13px;border-radius:50%;background:var(--grad);box-shadow:0 0 18px rgba(63,224,197,.7);position:relative}
 .relay-root .relay-brand .dot::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--accent);animation:relayPulse 2.4s ease-out infinite}
 @keyframes relayPulse{0%{transform:scale(1);opacity:.7}100%{transform:scale(3.4);opacity:0}}
@@ -305,7 +305,7 @@ export const RELAY_CSS = `
 .relay-root .relay-field input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:14px;
   padding:17px 18px;color:var(--text);font-size:17px;font-family:inherit;outline:none;transition:.2s}
 .relay-root .relay-field input:focus{border-color:var(--accent);box-shadow:0 0 0 4px rgba(63,224,197,.12)}
-.relay-root .relay-btn{width:100%;border:none;border-radius:14px;padding:17px;font-family:"Bricolage Grotesque";font-weight:700;
+.relay-root .relay-btn{width:100%;border:none;border-radius:14px;padding:17px;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;
   font-size:16px;cursor:pointer;transition:.18s;letter-spacing:-.01em}
 .relay-root .relay-btn-primary{background:var(--grad);color:#04201B;box-shadow:0 10px 30px -10px rgba(63,224,197,.55)}
 .relay-root .relay-btn-primary:hover{transform:translateY(-2px);box-shadow:0 16px 40px -12px rgba(63,224,197,.7)}
@@ -317,7 +317,7 @@ export const RELAY_CSS = `
 .relay-root .topbar{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--border)}
 .relay-root .topbar .relay-brand{font-size:20px}
 .relay-root .me{display:flex;align-items:center;gap:12px}
-.relay-root .me .av{width:38px;height:38px;border-radius:11px;background:var(--grad);display:grid;place-items:center;color:#04201B;font-weight:800;font-family:"Bricolage Grotesque";font-size:16px}
+.relay-root .me .av{width:38px;height:38px;border-radius:11px;background:var(--grad);display:grid;place-items:center;color:#04201B;font-weight:800;font-family:"Bricolage Grotesque",sans-serif;font-size:16px}
 .relay-root .me .meta{line-height:1.25}
 .relay-root .me .meta b{font-weight:600;font-size:14px}
 .relay-root .me .meta span{display:block;font-size:12px;color:var(--muted)}
@@ -328,13 +328,13 @@ export const RELAY_CSS = `
 .relay-root .dial-wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 20px;gap:20px}
 .relay-root .mycode{text-align:center}
 .relay-root .mycode .lbl{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
-.relay-root .mycode .num{font-family:"JetBrains Mono";font-weight:700;font-size:38px;letter-spacing:.16em;
+.relay-root .mycode .num{font-family:"JetBrains Mono",monospace;font-weight:700;font-size:38px;letter-spacing:.16em;
   background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .relay-root .copy{margin-top:8px;background:var(--surface);border:1px solid var(--border);color:var(--muted);
   font-size:12px;padding:6px 13px;border-radius:9px;cursor:pointer;transition:.15s;font-family:inherit}
 .relay-root .copy:hover{border-color:var(--accent);color:var(--accent)}
 
-.relay-root .display{font-family:"JetBrains Mono";font-weight:700;font-size:30px;letter-spacing:.22em;min-height:42px;
+.relay-root .display{font-family:"JetBrains Mono",monospace;font-weight:700;font-size:30px;letter-spacing:.22em;min-height:42px;
   color:var(--text);text-align:center;width:100%;max-width:320px}
 .relay-root .display.empty{color:var(--faint)}
 .relay-root .pad{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;width:min(320px,80vw)}
@@ -342,11 +342,11 @@ export const RELAY_CSS = `
   display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;transition:.12s;user-select:none}
 .relay-root .relay-key:hover{background:var(--surface2);border-color:var(--border2)}
 .relay-root .relay-key:active{transform:scale(.94);border-color:var(--accent)}
-.relay-root .relay-key .d{font-family:"JetBrains Mono";font-weight:700;font-size:25px}
+.relay-root .relay-key .d{font-family:"JetBrains Mono",monospace;font-weight:700;font-size:25px}
 .relay-root .relay-key .l{font-size:9px;letter-spacing:.2em;color:var(--faint);margin-top:2px;height:11px}
 .relay-root .dial-actions{display:flex;gap:13px;width:min(320px,80vw)}
 .relay-root .call-btn{flex:1;border:none;border-radius:16px;padding:16px;background:var(--grad);color:#04201B;
-  font-family:"Bricolage Grotesque";font-weight:700;font-size:16px;cursor:pointer;display:flex;
+  font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:16px;cursor:pointer;display:flex;
   align-items:center;justify-content:center;gap:9px;transition:.15s;box-shadow:0 10px 26px -12px rgba(63,224,197,.6)}
 .relay-root .call-btn:hover{transform:translateY(-2px)}
 .relay-root .call-btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
@@ -356,22 +356,22 @@ export const RELAY_CSS = `
 
 .relay-root .directory{border-left:1px solid var(--border);padding:24px 22px;overflow:auto}
 @media (max-width:860px){.relay-root .directory{border-left:none;border-top:1px solid var(--border)}}
-.relay-root .directory h3{font-family:"Bricolage Grotesque";font-weight:600;font-size:13px;letter-spacing:.04em;
+.relay-root .directory h3{font-family:"Bricolage Grotesque",sans-serif;font-weight:600;font-size:13px;letter-spacing:.04em;
   text-transform:uppercase;color:var(--muted);margin-bottom:16px;display:flex;align-items:center;gap:8px}
 .relay-root .live-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
 .relay-root .relay-usr{display:flex;align-items:center;gap:13px;padding:12px;border-radius:13px;cursor:pointer;transition:.13s;border:1px solid transparent}
 .relay-root .relay-usr:hover{background:var(--surface);border-color:var(--border)}
 .relay-root .relay-usr .av{width:40px;height:40px;border-radius:12px;background:var(--surface2);display:grid;place-items:center;
-  font-family:"Bricolage Grotesque";font-weight:700;color:var(--accent);font-size:16px;border:1px solid var(--border)}
+  font-family:"Bricolage Grotesque",sans-serif;font-weight:700;color:var(--accent);font-size:16px;border:1px solid var(--border)}
 .relay-root .relay-usr .info{flex:1;min-width:0}
 .relay-root .relay-usr .info b{font-weight:600;font-size:15px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.relay-root .relay-usr .info span{font-family:"JetBrains Mono";font-size:12px;color:var(--muted);letter-spacing:.1em}
+.relay-root .relay-usr .info span{font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--muted);letter-spacing:.1em}
 .relay-root .relay-usr .go{opacity:0;color:var(--accent);font-size:18px;transition:.13s}
 .relay-root .relay-usr:hover .go{opacity:1}
 .relay-root .empty-dir{color:var(--faint);font-size:13px;line-height:1.7;padding:8px 4px}
 .relay-root .share-box{margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:13px;padding:15px}
 .relay-root .share-box .t{font-size:12px;color:var(--muted);margin-bottom:9px;display:flex;align-items:center;gap:7px}
-.relay-root .share-box .url{font-family:"JetBrains Mono";font-size:12px;color:var(--accent2);word-break:break-all;line-height:1.5;cursor:pointer}
+.relay-root .share-box .url{font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--accent2);word-break:break-all;line-height:1.5;cursor:pointer}
 .relay-root .share-box .url:hover{text-decoration:underline}
 
 .relay-root .overlay{position:fixed;inset:0;z-index:50;background:rgba(4,5,8,.72);backdrop-filter:blur(8px);
@@ -380,10 +380,10 @@ export const RELAY_CSS = `
 .relay-root .ring-card{width:min(380px,90vw);background:var(--surface);border:1px solid var(--border2);border-radius:24px;
   padding:34px;text-align:center;box-shadow:0 30px 80px -20px rgba(0,0,0,.7)}
 .relay-root .ring-card .av{width:96px;height:96px;border-radius:50%;background:var(--grad);margin:0 auto 16px;
-  display:grid;place-items:center;color:#04201B;font-family:"Bricolage Grotesque";font-weight:800;font-size:36px;
+  display:grid;place-items:center;color:#04201B;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:36px;
   animation:relayRing 1.1s ease-in-out infinite;box-shadow:0 14px 44px -10px rgba(45,212,191,.45)}
 @keyframes relayRing{0%,100%{transform:rotate(0) scale(1)}25%{transform:rotate(-7deg) scale(1.04)}75%{transform:rotate(7deg) scale(1.04)}}
-.relay-root .ring-card .who{font-family:"Bricolage Grotesque";font-weight:700;font-size:27px;margin-bottom:2px;
+.relay-root .ring-card .who{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:27px;margin-bottom:2px;
   display:flex;align-items:center;justify-content:center;gap:8px}
 .relay-root .ring-card .ring-flag{font-size:22px;line-height:1}
 .relay-root .ring-card .ring-pin{font-family:"JetBrains Mono",monospace;font-size:15px;letter-spacing:.08em;color:var(--accent);margin-bottom:2px}
@@ -402,7 +402,7 @@ export const RELAY_CSS = `
 .relay-root .qr-opt{border:1px solid var(--border2);background:var(--surface2);color:var(--text);border-radius:12px;
   padding:11px 14px;font-size:14px;font-family:inherit;cursor:pointer;text-align:left;transition:.15s}
 .relay-root .qr-opt:hover{border-color:var(--accent);color:var(--accent)}
-.relay-root .r-btn{flex:1;border:none;border-radius:16px;padding:16px;font-family:"Bricolage Grotesque";font-weight:700;
+.relay-root .r-btn{flex:1;border:none;border-radius:16px;padding:16px;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;
   font-size:15px;cursor:pointer;transition:.15s}
 .relay-root .r-decline{background:rgba(255,92,114,.14);color:var(--danger);border:1px solid rgba(255,92,114,.3)}
 .relay-root .r-decline:hover{background:rgba(255,92,114,.24)}
@@ -420,7 +420,7 @@ export const RELAY_CSS = `
 .relay-root .call-head .ct.st-reconnecting{color:#ff7a7a}
 .relay-root .call-head .ct.st-reconnecting .live-dot{background:#ff5d5d;box-shadow:0 0 10px #ff5d5d;animation:relayPulse2 .8s ease-in-out infinite}
 .relay-root .call-head .ct.st-live .live-dot{background:var(--accent);box-shadow:0 0 10px var(--accent);animation:none}
-.relay-root .call-head .timer{font-family:"JetBrains Mono";color:var(--text);font-size:14px}
+.relay-root .call-head .timer{font-family:"JetBrains Mono",monospace;color:var(--text);font-size:14px}
 .relay-root .call-main{flex:1;min-height:0;display:flex}
 /* ── pre-connect dial screen ─────────────────────────────────────────
    While an OUTGOING dial is in flight (#call.pre-connect), a dedicated
@@ -516,7 +516,7 @@ export const RELAY_CSS = `
    or while sharing your screen has its own .screen handling. */
 .relay-root .relay-tile.you:not(.audio-only) .ph{display:none}
 .relay-root .relay-tile .ph .av{width:74px;height:74px;border-radius:24px;background:var(--surface2);border:1px solid var(--border);
-  display:grid;place-items:center;font-family:"Bricolage Grotesque";font-weight:800;font-size:30px;color:var(--accent)}
+  display:grid;place-items:center;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:30px;color:var(--accent)}
 .relay-root .relay-tile .nm{position:absolute;left:12px;bottom:11px;display:flex;align-items:center;gap:7px;max-width:calc(100% - 24px);
   background:rgba(8,9,12,.62);backdrop-filter:blur(6px);padding:5px 11px;border-radius:9px;font-size:13px;font-weight:600;
   white-space:nowrap;overflow:hidden}
@@ -535,7 +535,7 @@ export const RELAY_CSS = `
      End-call button (which floats above the chat at a higher z-index). */
   .relay-root .chat-head .chat-close-btn{order:-1}}
 .relay-root .chat-head{padding:15px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;
-  font-family:"Bricolage Grotesque";font-weight:600;font-size:15px}
+  font-family:"Bricolage Grotesque",sans-serif;font-weight:600;font-size:15px}
 .relay-root .chat-head .chat-title{display:flex;align-items:center;gap:8px}
 /* Obvious, high-contrast close button (the old tiny grey × was unfindable on
    the full-screen mobile chat overlay). */
@@ -598,7 +598,7 @@ export const RELAY_CSS = `
 .relay-root #recordBtn.on{background:rgba(255,76,76,.22);border-color:rgba(255,76,76,.5);color:#ff5d5d}
 /* "● REC" live indicator in the call header. */
 .relay-root .call-head-right{display:flex;align-items:center;gap:12px}
-.relay-root .rec-ind{display:flex;align-items:center;gap:6px;font-family:"JetBrains Mono";font-size:12px;font-weight:700;letter-spacing:.06em;color:#ff5d5d}
+.relay-root .rec-ind{display:flex;align-items:center;gap:6px;font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700;letter-spacing:.06em;color:#ff5d5d}
 .relay-root .rec-blink{width:9px;height:9px;border-radius:50%;background:#ff3b3b;box-shadow:0 0 8px #ff3b3b;animation:relayPulse2 1s ease-in-out infinite}
 /* The screen-share button is hidden by default and revealed by JS only when the
    browser actually supports getDisplayMedia (Android Chrome yes, iOS Safari no)
@@ -625,7 +625,7 @@ export const RELAY_CSS = `
   .relay-root .ctrl-bar,.relay-root .filter-dock{backdrop-filter:blur(10px) saturate(1.3);-webkit-backdrop-filter:blur(10px) saturate(1.3)}}
 .relay-root .filter-dock.open{display:block;animation:relayFade .22s cubic-bezier(0.23,1,0.32,1) both}
 .relay-root .filter-dock-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:0 4px}
-.relay-root .filter-dock-head .t{font-family:"Bricolage Grotesque";font-weight:600;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px}
+.relay-root .filter-dock-head .t{font-family:"Bricolage Grotesque",sans-serif;font-weight:600;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px}
 .relay-root .filter-dock-head .x{background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1;padding:0 4px}
 .relay-root .filter-dock-head .x:hover{color:var(--text)}
 .relay-root .loading-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:relayPulse2 1.2s ease-in-out infinite}
@@ -687,7 +687,7 @@ export const RELAY_CSS = `
   box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:31;overflow:hidden}
 .relay-root .host-panel.open{display:flex;animation:relayFade .2s ease both}
 .relay-root .host-head{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid var(--border);
-  font-family:"Bricolage Grotesque";font-weight:600;font-size:14px}
+  font-family:"Bricolage Grotesque",sans-serif;font-weight:600;font-size:14px}
 .relay-root #hostClose{background:none;border:none;color:var(--text2,#9aa);font-size:14px;cursor:pointer;padding:3px 7px;border-radius:8px;font-weight:700}
 .relay-root #hostClose:hover{background:var(--bg2);color:var(--text)}
 .relay-root .host-actions{display:flex;gap:7px;padding:11px 13px;border-bottom:1px solid var(--border);flex-wrap:wrap}
@@ -698,7 +698,7 @@ export const RELAY_CSS = `
 .relay-root .hl-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 8px;border-radius:10px}
 .relay-root .hl-row:hover{background:var(--bg2)}
 .relay-root .hl-name{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;min-width:0}
-.relay-root .hl-name .hl-pin{font-family:"JetBrains Mono";font-size:10px;color:var(--text2,#9aa);font-weight:500}
+.relay-root .hl-name .hl-pin{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--text2,#9aa);font-weight:500}
 .relay-root .hl-badge{background:var(--accent);color:#04201B;font-size:8px;font-weight:800;padding:1px 4px;border-radius:4px;text-transform:uppercase}
 .relay-root .hl-acts{display:flex;gap:4px;flex-shrink:0}
 .relay-root .hl-acts button{background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:4px 7px;color:var(--text);
@@ -719,7 +719,7 @@ export const RELAY_CSS = `
   box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:32}
 .relay-root .tile-menu.open{display:flex;animation:relayFade .2s ease both}
 .relay-root .tm-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--border);
-  font-family:"Bricolage Grotesque";font-weight:600;font-size:14px}
+  font-family:"Bricolage Grotesque",sans-serif;font-weight:600;font-size:14px}
 .relay-root #tmClose{background:none;border:none;color:var(--text2,#9aa);font-size:14px;cursor:pointer;padding:3px 7px;border-radius:8px;font-weight:700}
 .relay-root #tmClose:hover{background:var(--bg2);color:var(--text)}
 .relay-root .tm-acts{display:flex;flex-direction:column;padding:6px}
@@ -743,14 +743,14 @@ export const RELAY_CSS = `
 .relay-root #addClose{background:none;border:none;color:var(--text2,#9aa);font-size:14px;line-height:1;cursor:pointer;padding:3px 7px;border-radius:8px;font-weight:700}
 .relay-root #addClose:hover{background:var(--bg2);color:var(--text)}
 .relay-root .addpad input{background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:12px;text-align:center;
-  font-family:"JetBrains Mono";font-weight:700;letter-spacing:.18em;color:var(--text);font-size:16px;outline:none}
+  font-family:"JetBrains Mono",monospace;font-weight:700;letter-spacing:.18em;color:var(--text);font-size:16px;outline:none}
 .relay-root .addpad input:focus{border-color:var(--accent)}
 .relay-root .addpad #addGo{background:var(--grad);border:none;border-radius:11px;padding:12px;color:#04201B;font-weight:700;cursor:pointer;font-family:inherit}
 /* On-screen keypad inside the add-person window (v2.49) — tap digits to dial the
    number; the invite fires automatically on the 6th digit. */
 .relay-root .addpad-keys{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
 .relay-root .addpad-key{background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:9px 0;
-  font-family:"JetBrains Mono";font-weight:700;font-size:17px;color:var(--text);cursor:pointer;transition:background .12s,transform .1s;text-align:center}
+  font-family:"JetBrains Mono",monospace;font-weight:700;font-size:17px;color:var(--text);cursor:pointer;transition:background .12s,transform .1s;text-align:center}
 .relay-root .addpad-key:hover{background:var(--surface)}
 .relay-root .addpad-key:active{transform:scale(.93)}
 .relay-root .addpad-key.spacer{visibility:hidden;border:none;background:none}
@@ -768,7 +768,7 @@ export const RELAY_CSS = `
 .relay-root .conn-seq.hide{animation:connSeqOut .4s ease both}
 @keyframes connSeqOut{to{opacity:0;visibility:hidden}}
 .relay-root .conn-seq-card{display:flex;flex-direction:column;gap:18px}
-.relay-root .conn-step{display:flex;align-items:center;gap:14px;font-family:"Bricolage Grotesque";font-weight:600;font-size:17px;color:var(--faint);opacity:.4;transform:translateX(-6px);transition:.32s cubic-bezier(0.23,1,0.32,1)}
+.relay-root .conn-step{display:flex;align-items:center;gap:14px;font-family:"Bricolage Grotesque",sans-serif;font-weight:600;font-size:17px;color:var(--faint);opacity:.4;transform:translateX(-6px);transition:.32s cubic-bezier(0.23,1,0.32,1)}
 .relay-root .conn-step.active{color:var(--text);opacity:1;transform:none}
 .relay-root .conn-step.done{color:var(--accent);opacity:1;transform:none}
 .relay-root .conn-tick{width:24px;height:24px;border-radius:50%;border:2px solid var(--border2);display:grid;place-items:center;flex:0 0 auto;transition:.3s}
@@ -799,7 +799,7 @@ export const RELAY_CSS = `
 .relay-root .call-waiting .cw-flag{font-size:20px;line-height:1}
 .relay-root .call-waiting .cw-flag:empty{display:none}
 .relay-root .call-waiting .cw-meta{display:flex;flex-direction:column;line-height:1.25;min-width:0}
-.relay-root .call-waiting .cw-num{font-family:"JetBrains Mono";font-size:11px;color:var(--text2,#9aa)}
+.relay-root .call-waiting .cw-num{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--text2,#9aa)}
 .relay-root .call-waiting .cw-num:empty{display:none}
 .relay-root .call-waiting .cw-sub{font-size:10.5px;color:var(--text2,#9aa)}
 /* "On hold" badge on a participant's tile when they take another call. */
@@ -809,7 +809,7 @@ export const RELAY_CSS = `
 .relay-root .call-waiting .cw-pulse{width:9px;height:9px;border-radius:50%;background:var(--accent);animation:cwPulse 1.3s ease-out infinite;flex:0 0 auto}
 @keyframes cwPulse{0%{box-shadow:0 0 0 0 rgba(63,224,197,.5)}100%{box-shadow:0 0 0 9px rgba(63,224,197,0)}}
 .relay-root .call-waiting .cw-actions{display:flex;gap:8px}
-.relay-root .call-waiting .cw-btn{border:none;border-radius:11px;padding:8px 14px;font-family:"Bricolage Grotesque";font-weight:700;font-size:13px;cursor:pointer;transition:.14s}
+.relay-root .call-waiting .cw-btn{border:none;border-radius:11px;padding:8px 14px;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:13px;cursor:pointer;transition:.14s}
 .relay-root .call-waiting .cw-decline{background:rgba(255,92,114,.16);color:var(--danger);border:1px solid rgba(255,92,114,.3)}
 .relay-root .call-waiting .cw-decline:hover{background:rgba(255,92,114,.26)}
 .relay-root .call-waiting .cw-switch{background:var(--grad);color:#04201B}
@@ -825,7 +825,7 @@ export const RELAY_CSS = `
 .relay-root .held-bar .held-name{font-size:13px;color:var(--text)}
 .relay-root .held-bar .held-name:empty{display:none}
 .relay-root .held-bar .held-actions{display:flex;gap:8px}
-.relay-root .held-bar .held-btn{border:none;border-radius:11px;padding:8px 14px;font-family:"Bricolage Grotesque";font-weight:700;font-size:13px;cursor:pointer;transition:.14s}
+.relay-root .held-bar .held-btn{border:none;border-radius:11px;padding:8px 14px;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:13px;cursor:pointer;transition:.14s}
 .relay-root .held-bar .held-swap{background:var(--grad);color:#04201B}
 .relay-root .held-bar .held-swap:hover{transform:translateY(-1px)}
 .relay-root .held-bar .held-merge{background:rgba(245,180,80,.16);color:#f5b450;border:1px solid rgba(245,180,80,.34)}
@@ -851,13 +851,13 @@ export const RELAY_CSS = `
 .relay-root .diag-overlay.open{display:flex;animation:relayFade .2s ease both}
 .relay-root .diag-card{width:min(720px,96vw);max-height:80vh;background:var(--surface);border:1px solid var(--border2);border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 30px 80px -20px rgba(0,0,0,.7)}
 .relay-root .diag-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
-.relay-root .diag-head b{font-family:"Bricolage Grotesque";font-weight:700;font-size:15px}
+.relay-root .diag-head b{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:15px}
 .relay-root .diag-actions{display:flex;gap:8px}
 .relay-root .diag-tool{background:var(--bg2);border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px;font-family:inherit}
 .relay-root .diag-tool:hover{border-color:var(--accent);color:var(--accent)}
 .relay-root .diag-body{flex:1;min-height:0;overflow:auto;padding:16px 18px;font-family:"JetBrains Mono",monospace;font-size:11.5px;line-height:1.55;color:var(--text);white-space:pre-wrap;background:var(--bg2)}
 .relay-root .diag-foot{padding:10px 18px;border-top:1px solid var(--border);color:var(--faint);font-size:12px}
-.relay-root .diag-foot kbd{background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-family:"JetBrains Mono";font-size:11px}
+.relay-root .diag-foot kbd{background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-family:"JetBrains Mono",monospace;font-size:11px}
 
 .relay-root .relay-tile .connecting{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.55);color:#fff;padding:7px 14px;border-radius:99px;font-size:12px;letter-spacing:.04em;backdrop-filter:blur(4px);border:1px solid var(--border2)}
 .relay-root .relay-tile[data-state="failed"] .connecting{color:var(--danger);border-color:rgba(255,92,114,.5)}

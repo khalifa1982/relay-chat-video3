@@ -3,8 +3,18 @@ import { Bell, BellOff, Check, Lock, Moon, ScanFace, ShieldCheck, Sun, Volume2 }
 import { trpc } from "@/lib/trpc";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
-import { clearRelayChannel, resetDeviceId } from "@/lib/deviceId";
+import { useSignOut } from "@/app/useSignOut";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -69,8 +79,9 @@ export default function ProfilePage() {
     return () => window.clearTimeout(id);
   }, [savedAt]);
 
-  const signOutGuestMut = trpc.identity.signOutGuest.useMutation();
-  const logoutUserMut = trpc.auth.logout.useMutation();
+  // Shared sign-out flow (v2.88): AlertDialog confirm + full session/device
+  // teardown — the same code path as the AppShell's sign-out buttons.
+  const { requestSignOut, signOutDialog, signOutPending } = useSignOut(me);
   const updateProfile = trpc.identity.updateProfile.useMutation({
     onSuccess: () => {
       refresh();
@@ -319,38 +330,13 @@ export default function ProfilePage() {
             type="button"
             variant="ghost"
             className="text-destructive hover:text-destructive"
-            onClick={async () => {
-              const msg = me.isGuest
-                ? "Sign out and forget this number on this device?"
-                : "Sign out of your account on this device?";
-              if (!confirm(msg)) return;
-              try {
-                if (me.isGuest) {
-                  await signOutGuestMut.mutateAsync();
-                } else {
-                  await logoutUserMut.mutateAsync();
-                }
-              } catch {
-                /* ignore */
-              }
-              // A sign-out must TRULY end the session (v2.87.1 — the owner
-              // caught this): the cookie alone isn't the whole story, the
-              // DEVICE-ID binding silently restores the same identity on the
-              // next visit. Rotate it for guests AND members (an upgraded
-              // member's identity still carries its guest-era device binding).
-              resetDeviceId();
-              // Sever the relay signaling channel before navigating away so the
-              // next user on this browser gets a fresh number and can't be
-              // auto-rejoined into this session's live call.
-              clearRelayChannel();
-              // Land on the app's ENTRY screen (guest name form + sign-in) —
-              // not the marketing homepage.
-              window.location.href = "/app";
-            }}
+            disabled={signOutPending}
+            onClick={requestSignOut}
           >
             Sign out
           </Button>
         </section>
+        {signOutDialog}
       </div>
     </div>
   );
@@ -368,6 +354,8 @@ function NumberAndFlag({ number, onRegenerated }: { number: string; onRegenerate
     retry: false,
   });
   const [regenNotice, setRegenNotice] = useState<string | null>(null);
+  // AlertDialog confirm (v2.88) — native confirm() is gone app-wide.
+  const [confirmRegen, setConfirmRegen] = useState(false);
   const regen = trpc.identity.regenerateNumber.useMutation({
     onSuccess: (res) => {
       setRegenNotice(
@@ -377,16 +365,6 @@ function NumberAndFlag({ number, onRegenerated }: { number: string; onRegenerate
       window.setTimeout(() => setRegenNotice(null), 6000);
     },
   });
-
-  function doRegenerate() {
-    const ok = window.confirm(
-      "Generate a NEW 6-digit number?\n\n" +
-        "• Everyone who has you saved as a contact is updated automatically — they can keep reaching you.\n" +
-        "• Your old number stops working immediately.\n" +
-        "• Anyone who only has your old number written down elsewhere will need the new one."
-    );
-    if (ok) regen.mutate();
-  }
 
   return (
     <section className="space-y-2">
@@ -426,7 +404,7 @@ function NumberAndFlag({ number, onRegenerated }: { number: string; onRegenerate
           type="button"
           variant="outline"
           size="sm"
-          onClick={doRegenerate}
+          onClick={() => setConfirmRegen(true)}
           disabled={regen.isPending}
         >
           {regen.isPending ? "Generating…" : "Regenerate number"}
@@ -438,6 +416,29 @@ function NumberAndFlag({ number, onRegenerated }: { number: string; onRegenerate
           <span className="text-xs text-destructive">Couldn't regenerate — try again.</span>
         )}
       </div>
+      <AlertDialog open={confirmRegen} onOpenChange={(open) => !open && setConfirmRegen(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Generate a new 6-digit number?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Everyone who saved you as a contact is updated automatically — they keep
+              reaching you. Your old number stops working immediately, and anyone who only
+              has it written down elsewhere will need the new one.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirmRegen(false);
+                regen.mutate();
+              }}
+            >
+              Regenerate
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import {
+  Bell,
   Clock,
   Phone,
   Users,
@@ -10,8 +11,19 @@ import {
   PhoneIncoming,
   Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
 import { formatDuration, formatFullWhen } from "@/lib/formatCall";
 import { useIdentity } from "@/app/useIdentity";
 import { useRelayEngine } from "@/app/RelayEngine";
@@ -45,22 +57,24 @@ type Filter = "all" | "dialed" | "missed";
 
 /* Per-direction accent recipe. FULL literal class strings — Tailwind's JIT
  * can't see classes assembled at runtime. The user spec: missed calls bright
- * RED, dialed (outgoing) vibrant GREEN, received (incoming) clear BLUE. */
+ * RED, dialed (outgoing) vibrant GREEN, received (incoming) clear BLUE.
+ * THEME-PAIRED (v2.88): the raw *-500 shades failed contrast on the light
+ * theme, so each tone is 600-in-light / 400-in-dark. */
 const TONE = {
   missed: {
-    bubble: "bg-red-500/12 text-red-500",
-    name: "text-red-500",
-    label: "text-red-500",
+    bubble: "bg-red-500/12 text-red-600 dark:text-red-400",
+    name: "text-red-600 dark:text-red-400",
+    label: "text-red-600 dark:text-red-400",
   },
   out: {
-    bubble: "bg-green-500/12 text-green-500",
-    name: "text-green-500",
-    label: "text-green-500",
+    bubble: "bg-green-500/12 text-green-600 dark:text-green-400",
+    name: "text-green-600 dark:text-green-400",
+    label: "text-green-600 dark:text-green-400",
   },
   in: {
-    bubble: "bg-blue-500/12 text-blue-500",
-    name: "text-blue-500",
-    label: "text-blue-500",
+    bubble: "bg-blue-500/12 text-blue-600 dark:text-blue-400",
+    name: "text-blue-600 dark:text-blue-400",
+    label: "text-blue-600 dark:text-blue-400",
   },
 } as const;
 
@@ -102,6 +116,8 @@ export default function HistoryPage() {
   // Open (or create) a 1:1 thread with a number and jump straight into it.
   const openThread = trpc.messages.openThread.useMutation({
     onSuccess: (res) => setLocation(`/app/messages?c=${res.conversationId}`),
+    // A silently-failed tap is the worst case (v2.88) — say why nothing opened.
+    onError: (err) => toast.error(err.message || "Couldn't open that conversation."),
   });
 
   // Answered calls (2..10 parties) with full roster + duration.
@@ -126,11 +142,10 @@ export default function HistoryPage() {
       utils.calls.conferenceHistory.invalidate();
       utils.calls.missedSummary.invalidate();
     },
+    onError: () => toast.error("Couldn't clear your history — try again."),
   });
-  function onClearHistory() {
-    if (!window.confirm("Clear your entire call history? This can't be undone.")) return;
-    clearHistory.mutate();
-  }
+  // AlertDialog confirm (v2.88 — native confirm() is gone app-wide).
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
@@ -190,6 +205,16 @@ export default function HistoryPage() {
   const message = (num: string) => {
     if (num) openThread.mutate({ number: num });
   };
+  // Call-back alert (v2.88): "tell me when they're back online" on offline
+  // rows — rides the same watch the post-dial voicemail card registers.
+  const watchOnline = trpc.directory.watchOnline.useMutation({
+    onSuccess: (res) =>
+      toast.success(`You'll be alerted when ${res.displayName || res.number} is back online.`),
+    onError: (err) => toast.error(err.message || "Couldn't set the alert."),
+  });
+  const watch = (num: string) => {
+    if (num) watchOnline.mutate({ number: num });
+  };
 
   // Live reachability per number (ONE batched query, refreshed with the log):
   // a green/grey LED on each row tells the user BEFORE they redial whether the
@@ -216,6 +241,11 @@ export default function HistoryPage() {
   );
   const onlineSet = useMemo(
     () => new Set((presence.data ?? []).filter((p) => p.isOnline).map((p) => p.number)),
+    [presence.data]
+  );
+  // Busy line (v2.88): numbers that are in a live call right now (amber LED).
+  const inCallSet = useMemo(
+    () => new Set((presence.data ?? []).filter((p) => p.inCall).map((p) => p.number)),
     [presence.data]
   );
 
@@ -287,12 +317,35 @@ export default function HistoryPage() {
           aria-label="Clear history"
           title="Clear your call history"
           disabled={clearHistory.isPending || items.length === 0}
-          onClick={onClearHistory}
+          onClick={() => setConfirmClear(true)}
           className="size-9 shrink-0 text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
         >
           <Trash2 className="size-[18px]" />
         </Button>
       </div>
+
+      <AlertDialog open={confirmClear} onOpenChange={(open) => !open && setConfirmClear(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear your entire call history?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Every call disappears from YOUR log (the people you called keep theirs).
+              This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirmClear(false);
+                clearHistory.mutate();
+              }}
+            >
+              Clear history
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl glass-surface-md shadow-xl shadow-black/10">
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -333,6 +386,9 @@ export default function HistoryPage() {
                         ? onlineSet.has(it.conf.dialedNumber || it.conf.participants.find((p) => !p.isSelf)?.number || "")
                         : undefined
                     }
+                    inCall={inCallSet.has(
+                      it.conf.dialedNumber || it.conf.participants.find((p) => !p.isSelf)?.number || ""
+                    )}
                   />
                 ) : (
                   <SoloItem
@@ -340,7 +396,9 @@ export default function HistoryPage() {
                     call={it.call}
                     onRedial={redial}
                     onMessage={message}
+                    onWatch={watch}
                     online={presence.data ? onlineSet.has(it.call.other?.number ?? "") : undefined}
+                    inCall={inCallSet.has(it.call.other?.number ?? "")}
                   />
                 )
               )}
@@ -352,17 +410,30 @@ export default function HistoryPage() {
   );
 }
 
-/** Green/grey reachability LED pinned to a row's icon bubble. `undefined`
- *  (presence not loaded yet) renders nothing — no flicker, no wrong claims. */
-function PresenceLed({ online }: { online: boolean | undefined }) {
+/** Amber/green/grey reachability LED pinned to a row's icon bubble: amber =
+ *  ON A CALL right now (v2.88 busy line — a redial would hit call waiting),
+ *  green = online, grey = offline. `undefined` (presence not loaded yet)
+ *  renders nothing — no flicker, no wrong claims. */
+function PresenceLed({ online, inCall }: { online: boolean | undefined; inCall?: boolean }) {
   if (online === undefined) return null;
+  const busy = online && inCall;
   return (
     <span
-      aria-label={online ? "Online" : "Offline"}
-      title={online ? "Online now" : "Offline — calling will page their phone"}
+      aria-label={busy ? "On a call" : online ? "Online" : "Offline"}
+      title={
+        busy
+          ? "On a call right now — you'd ring as call waiting"
+          : online
+            ? "Online now"
+            : "Offline — calling will page their phone"
+      }
       className={
         "absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-background " +
-        (online ? "bg-[color:var(--relay-online,#06d6a0)]" : "bg-zinc-500/80")
+        (busy
+          ? "bg-amber-400"
+          : online
+            ? "bg-[color:var(--relay-online,#06d6a0)]"
+            : "bg-[color:var(--relay-offline)]")
       }
     />
   );
@@ -375,6 +446,7 @@ function ConferenceItem({
   onRedialGroup,
   onMessage,
   online,
+  inCall,
 }: {
   conf: ConfRow;
   direction: "in" | "out";
@@ -382,6 +454,7 @@ function ConferenceItem({
   onRedialGroup: (numbers: string[]) => void;
   onMessage: (num: string) => void;
   online: boolean | undefined;
+  inCall?: boolean;
 }) {
   const others = conf.participants.filter((p) => !p.isSelf);
   const otherNumbers = others.map((p) => p.number).filter(Boolean);
@@ -412,7 +485,7 @@ function ConferenceItem({
       <div className="flex items-center gap-3">
         <span className={"relative grid size-9 shrink-0 place-items-center rounded-xl " + tone.bubble}>
           <Icon className="size-[18px]" />
-          <PresenceLed online={online} />
+          <PresenceLed online={online} inCall={inCall} />
         </span>
         <div className="min-w-0 flex-1">
           <div className={"truncate font-medium " + tone.name}>{title}</div>
@@ -491,12 +564,17 @@ function SoloItem({
   call,
   onRedial,
   onMessage,
+  onWatch,
   online,
+  inCall,
 }: {
   call: CallRow;
   onRedial: (num: string) => void;
   onMessage: (num: string) => void;
+  /** Call-back alert (v2.88): register a "they're back online" watch. */
+  onWatch?: (num: string) => void;
   online: boolean | undefined;
+  inCall?: boolean;
 }) {
   const missedIn = call.direction === "in";
   const tone = missedIn ? TONE.missed : TONE.out;
@@ -519,7 +597,7 @@ function SoloItem({
       <div className="flex items-center gap-3">
         <span className={"relative grid size-9 shrink-0 place-items-center rounded-xl " + tone.bubble}>
           <Icon className="size-[18px]" />
-          <PresenceLed online={online} />
+          <PresenceLed online={online} inCall={inCall} />
         </span>
         <div className="min-w-0 flex-1">
           <div className={"truncate font-medium " + tone.name}>{peerName}</div>
@@ -532,6 +610,19 @@ function SoloItem({
             {formatFullWhen(call.startedAt)}
           </div>
         </div>
+        {/* Offline peer → offer the v2.88 call-back alert right on the row. */}
+        {online === false && onWatch && peerNum ? (
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Alert me when they're back online"
+            title="Alert me when they're back online"
+            onClick={() => onWatch(peerNum)}
+            className="size-11"
+          >
+            <Bell className="size-4" />
+          </Button>
+        ) : null}
         <Button
           size="icon"
           variant="ghost"

@@ -174,6 +174,33 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Stable vendor chunks (v2.88): these libraries change only when we
+        // bump dependencies, but they used to be inlined into the app chunk —
+        // whose hash changes on EVERY release, so the 30s auto-updater's
+        // force-reload re-downloaded ~all vendor bytes each deploy. Split out,
+        // their hashed files stay byte-identical across releases and ride the
+        // 1-year immutable cache.
+        // NOTE: `scheduler` (react-dom's transitive dep) is deliberately NOT
+        // listed — pnpm's strict node_modules can't resolve it as an entry,
+        // and Rollup co-locates it with react-dom (its only importer) anyway.
+        manualChunks: {
+          // The subpath entries matter: the app imports react-dom/client and
+          // react/jsx-runtime, which are SEPARATE module ids from the package
+          // roots — without them the actual react-dom bulk stays in index.
+          "vendor-react": ["react", "react-dom", "react-dom/client", "react/jsx-runtime"],
+          "vendor-data": [
+            "@tanstack/react-query",
+            "@trpc/client",
+            "@trpc/react-query",
+            "superjson",
+            "wouter",
+          ],
+          "vendor-icons": ["lucide-react"],
+        },
+      },
+    },
   },
   server: {
     host: true,

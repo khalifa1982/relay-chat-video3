@@ -1,31 +1,37 @@
 /* ============================================================
    HTTP attachment upload endpoint for the v2.0 messages tab.
 
-   Clients POST { dataBase64, mimeType, filename, width?, height?,
-   durationMs? } with `credentials: 'include'` so the guest or
-   user cookie comes along. The endpoint:
-     1. resolves the caller's identity from the request,
-     2. stores the bytes via the project's `storagePut` helper,
-     3. records the attachment row in the DB,
-     4. returns { id, url, mimeType, sizeBytes, ... } so the client
+   TWO wire formats on the same POST /api/v2/upload (v2.88):
+
+   1. RAW BINARY (primary — the web client since v2.88):
+      Content-Type: application/octet-stream, the file bytes as the
+      body, metadata in the query string (?filename=&mime=&width=&
+      height=&durationMs=). No base64 inflation: a 40 MB upload peaks
+      at ~40 MB of process memory instead of the ~250-300 MB the
+      base64→string→Buffer pipeline cost on the 512 MiB instance (an
+      OOM there wiped the in-memory relay registry and dropped every
+      live call).
+   2. LEGACY base64 JSON ({ dataBase64, mimeType, filename, … }) —
+      kept for old clients and mobile/native's uploadAttachment,
+      capped at 10 MB decoded (plenty for voice notes/images; the
+      JSON body parser itself caps at 15 MB in `_core/index.ts`).
+
+   Both paths:
+     1. resolve the caller's identity via the shared context resolver,
+     2. store the bytes via the project's `storagePut` helper,
+     3. record the attachment row in the DB,
+     4. return { id, url, mimeType, sizeBytes, ... } so the client
         can immediately attach it to a `messages.send` mutation.
 
    We keep this on plain Express (not tRPC) because tRPC's superjson
-   pipeline isn't ideal for big base64 payloads, and we already cap
-   the JSON body at 50mb in `_core/index.ts`.
+   pipeline isn't ideal for binary/base64 payloads.
    ============================================================ */
 
 import type { Express, Request, Response } from "express";
 import crypto from "crypto";
-import { sdk } from "./_core/sdk";
 import { storagePut } from "./storage";
-import { extractDeviceId, GUEST_COOKIE } from "./_core/context";
-import {
-  ensureUserIdentity,
-  getIdentityByDeviceId,
-  getIdentityByGuestToken,
-  recordAttachment,
-} from "./v2db";
+import { createContext } from "./_core/context";
+import { recordAttachment } from "./v2db";
 
 const ALLOWED_MIME = /^(image|video|audio|application|text)\//i;
 // Deny script-bearing subtypes even when their top-level type passes ALLOWED_MIME.
@@ -33,7 +39,10 @@ const ALLOWED_MIME = /^(image|video|audio|application|text)\//i;
 // serving it same-origin would be a stored-XSS vector.
 const BLOCKED_MIME =
   /^(image\/svg\+xml|text\/html|application\/xhtml\+xml|application\/javascript|application\/x-msdownload|application\/x-sh)/i;
-const MAX_BYTES = 40 * 1024 * 1024; // 40 MB ceiling per attachment
+const MAX_BYTES = 40 * 1024 * 1024; // 40 MB ceiling per attachment (raw path)
+// Legacy base64-JSON route: 10 MB decoded. Base64 peaks at ~3-6x the payload in
+// process memory, so big files must use the raw path (the web client does).
+const MAX_BASE64_BYTES = 10 * 1024 * 1024;
 
 function safeName(name: string | undefined, fallback: string) {
   const trimmed = (name || "").trim();
@@ -44,58 +53,73 @@ function safeName(name: string | undefined, fallback: string) {
 export function registerV2Upload(app: Express) {
   app.post("/api/v2/upload", async (req: Request, res: Response) => {
     try {
-      // ── resolve caller identity (registered first, then guest) ──
-      let user: { id: number; name?: string | null } | null = null;
-      try {
-        const u = await sdk.authenticateRequest(req);
-        user = u ? { id: u.id, name: u.name ?? null } : null;
-      } catch {
-        user = null;
-      }
-
+      // ── resolve caller identity via the SAME context resolver as tRPC and
+      // the SSE bus (v2.88). The old hand-rolled resolution knew OAuth, guest
+      // cookies, and device ids — but NOT the `relay_session` cookie minted by
+      // email-OTP/PIN sign-in, so every registered (non-OAuth) member got a
+      // 401 on avatars, attachments, and voice notes.
       let identityId: number | null = null;
-      const guestToken: string | undefined = req.cookies?.[GUEST_COOKIE];
-      const deviceId = extractDeviceId(req);
-      if (user) {
-        const ident = await ensureUserIdentity({
-          userId: user.id,
-          displayName: user.name || "User",
-          guestToken: guestToken ?? null,
-        });
-        identityId = ident.id;
-      } else {
-        // Cookie first, device id as fallback. Same resolution order
-        // as the tRPC context resolver — see server/_core/context.ts.
-        if (guestToken) {
-          const ident = await getIdentityByGuestToken(guestToken);
-          if (ident) identityId = ident.id;
-        }
-        if (identityId == null && deviceId) {
-          const ident = await getIdentityByDeviceId(deviceId);
-          if (ident) identityId = ident.id;
-        }
+      try {
+        const ctx = await createContext({ req, res } as Parameters<typeof createContext>[0]);
+        identityId = ctx.identity?.id ?? null;
+      } catch {
+        identityId = null;
       }
       if (identityId == null) {
         return res.status(401).json({ error: "No identity. Sign in or start a guest session." });
       }
 
-      // ── validate payload ──
-      const { dataBase64, mimeType, filename, width, height, durationMs } = req.body || {};
-      if (typeof dataBase64 !== "string" || typeof mimeType !== "string") {
-        return res.status(400).json({ error: "dataBase64 and mimeType are required" });
+      // ── extract payload (raw binary vs legacy base64 JSON) ──
+      let buf: Buffer;
+      let mimeType: string;
+      let filename: string | undefined;
+      let width: number | undefined;
+      let height: number | undefined;
+      let durationMs: number | undefined;
+      const qnum = (v: unknown): number | undefined => {
+        const n = typeof v === "string" ? Number(v) : NaN;
+        return Number.isFinite(n) ? n : undefined;
+      };
+      if (Buffer.isBuffer(req.body)) {
+        // RAW path: bytes in the body, metadata in the query string.
+        buf = req.body;
+        mimeType = String(req.query.mime || "");
+        filename = typeof req.query.filename === "string" ? req.query.filename : undefined;
+        width = qnum(req.query.width);
+        height = qnum(req.query.height);
+        durationMs = qnum(req.query.durationMs);
+        if (!mimeType) {
+          return res.status(400).json({ error: "mime query parameter is required" });
+        }
+        if (buf.length > MAX_BYTES) {
+          return res.status(413).json({ error: `Attachment exceeds ${Math.floor(MAX_BYTES / 1024 / 1024)} MB limit` });
+        }
+      } else {
+        // LEGACY base64 JSON path (old clients + mobile/native).
+        const body = (req.body || {}) as Record<string, unknown>;
+        const dataBase64 = body.dataBase64;
+        if (typeof dataBase64 !== "string" || typeof body.mimeType !== "string") {
+          return res.status(400).json({ error: "dataBase64 and mimeType are required" });
+        }
+        mimeType = body.mimeType;
+        filename = typeof body.filename === "string" ? body.filename : undefined;
+        width = typeof body.width === "number" ? body.width : undefined;
+        height = typeof body.height === "number" ? body.height : undefined;
+        durationMs = typeof body.durationMs === "number" ? body.durationMs : undefined;
+        // strip an optional `data:...;base64,` prefix
+        const commaIdx = dataBase64.indexOf(",");
+        const raw = dataBase64.startsWith("data:") && commaIdx > 0 ? dataBase64.slice(commaIdx + 1) : dataBase64;
+        buf = Buffer.from(raw, "base64");
+        if (buf.length > MAX_BASE64_BYTES) {
+          return res.status(413).json({
+            error: `Base64 uploads are capped at ${Math.floor(MAX_BASE64_BYTES / 1024 / 1024)} MB — send larger files as application/octet-stream`,
+          });
+        }
       }
       if (!ALLOWED_MIME.test(mimeType) || BLOCKED_MIME.test(mimeType)) {
         return res.status(400).json({ error: "Unsupported mime type" });
       }
-
-      // strip an optional `data:...;base64,` prefix
-      const commaIdx = dataBase64.indexOf(",");
-      const raw = dataBase64.startsWith("data:") && commaIdx > 0 ? dataBase64.slice(commaIdx + 1) : dataBase64;
-      const buf = Buffer.from(raw, "base64");
       if (buf.length === 0) return res.status(400).json({ error: "Empty payload" });
-      if (buf.length > MAX_BYTES) {
-        return res.status(413).json({ error: `Attachment exceeds ${Math.floor(MAX_BYTES / 1024 / 1024)} MB limit` });
-      }
 
       const ext = (mimeType.split("/")[1] || "bin").split(/[+;]/)[0].slice(0, 8);
       const hash = crypto.randomBytes(4).toString("hex");

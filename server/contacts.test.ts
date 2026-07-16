@@ -93,18 +93,23 @@ describe("ensureSchemaExtensions — additive only (never destructive)", () => {
     expect(fnBody.length).toBeGreaterThan(50);
   });
 
-  it("every DDL string is an ADD COLUMN — no DROP/RENAME/TRUNCATE/DELETE", () => {
+  it("every DDL string is an ADD COLUMN or ADD INDEX — no DROP/RENAME/TRUNCATE/DELETE", () => {
     const ddls = [...fnBody.matchAll(/ddl:\s*"([^"]+)"/g)].map((m) => m[1]);
     expect(ddls.length).toBeGreaterThan(0);
     for (const d of ddls) {
-      expect(d, d).toMatch(/^ADD COLUMN /);
+      // v2.88 widened the migrator to also apply hot-path INDEXES — still
+      // strictly additive (an index never touches data).
+      expect(d, d).toMatch(/^ADD (COLUMN|INDEX) /);
     }
     expect(fnBody).not.toMatch(/\bDROP\b/i);
     expect(fnBody).not.toMatch(/\bTRUNCATE\b/i);
     expect(fnBody).not.toMatch(/\bDELETE\b/i);
   });
 
-  it("swallows the duplicate-column error so it's safe to run on every boot", () => {
+  it("swallows the duplicate-column AND duplicate-key errors so it's safe to run on every boot", () => {
     expect(fnBody).toMatch(/duplicate column/i);
+    // MySQL reports a re-added index as "Duplicate key name" — swallow that
+    // flavor too, or every boot after the first logs a scary warning.
+    expect(fnBody).toMatch(/duplicate key name/i);
   });
 });

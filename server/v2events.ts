@@ -13,6 +13,7 @@
  */
 import type { Express, Request, Response } from "express";
 import { createContext, GUEST_COOKIE } from "./_core/context";
+import { createRateLimiter, clientIpOf } from "./rateLimit";
 
 type SseClient = {
   res: Response;
@@ -34,6 +35,8 @@ export type V2Event =
       fromName: string;
       roomId: string;
     }
+  /** Call-back alert (v2.88): a number the user watched is back online. */
+  | { kind: "watched_online"; number: string; name: string }
   | { kind: "ping" };
 
 function writeEvent(client: SseClient, ev: V2Event) {
@@ -107,7 +110,28 @@ export function publishPresenceTo(
  * payload contains a `kind` we use as discriminator).
  */
 export function registerV2Events(app: Express): void {
+  // ── abuse hardening (v2.88, mirrors /api/relay/stream) ──
+  // Open-rate + concurrent-stream caps per IP; RELAY_RATELIMIT_OFF honors the
+  // same kill switch as the relay limiters. Each open stream pins a socket +
+  // heartbeat timer, so unbounded anonymous opens can exhaust the instance.
+  const rateLimitOff = () => process.env.RELAY_RATELIMIT_OFF === "1";
+  const openLimiter = createRateLimiter({ capacity: 30, refillPerSec: 1 });
+  setInterval(() => openLimiter.sweep(Date.now(), 10 * 60_000), 10 * 60_000).unref();
+  const MAX_STREAMS_PER_IP = 25;
+  const streamsPerIp = new Map<string, number>();
+
   app.get("/api/v2/events", async (req: Request, res: Response) => {
+    const ip = clientIpOf(req);
+    if (!rateLimitOff()) {
+      if (!openLimiter.allow(ip, Date.now())) {
+        res.status(429).json({ error: "rate_limited" });
+        return;
+      }
+      if ((streamsPerIp.get(ip) ?? 0) >= MAX_STREAMS_PER_IP) {
+        res.status(429).json({ error: "too_many_streams" });
+        return;
+      }
+    }
     // Resolve identity via the same context resolver so guest cookies work.
     let identityId: number | null = null;
     try {
@@ -150,6 +174,17 @@ export function registerV2Events(app: Express): void {
     }
     set.add(client);
 
+    // Count the stream against its IP; released exactly once in cleanup().
+    streamsPerIp.set(ip, (streamsPerIp.get(ip) ?? 0) + 1);
+    let counted = true;
+    const uncountStream = () => {
+      if (!counted) return;
+      counted = false;
+      const n = (streamsPerIp.get(ip) ?? 1) - 1;
+      if (n <= 0) streamsPerIp.delete(ip);
+      else streamsPerIp.set(ip, n);
+    };
+
     // Heartbeat every 25s — keeps proxies from closing the idle conn.
     const hb = setInterval(() => {
       if (client.closed) return;
@@ -165,6 +200,7 @@ export function registerV2Events(app: Express): void {
     const cleanup = () => {
       client.closed = true;
       clearInterval(hb);
+      uncountStream();
       const s = clientsByIdentity.get(identityId!);
       if (s) {
         s.delete(client);
