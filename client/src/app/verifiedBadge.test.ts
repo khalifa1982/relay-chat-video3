@@ -47,6 +47,13 @@ describe("passwordless auth — no third-party sign-in buttons remain", () => {
     const src = read("client/src/app/AuthPanel.tsx");
     expect(src).toMatch(/otpAuth\.requestOtp/);
     expect(src).toMatch(/otpAuth\.verifyOtp/);
-    expect(src).not.toMatch(/type="password"/);
+    // v2.87: masked 4-digit PIN inputs exist (type="password" hides digits),
+    // but there is still NO password AUTHENTICATION — no password autofill
+    // hooks, no password procedure. The PIN is a login shortcut with a
+    // 3-wrong-tries-then-lock rule, unlocked by the email code.
+    expect(src).not.toMatch(/autoComplete="current-password"/);
+    expect(src).not.toMatch(/otpAuth\.(login|register)Password/);
+    expect(src).toMatch(/otpAuth\.loginWithPin/);
+    expect(src).toMatch(/otpAuth\.loginProbe/);
   });
 });

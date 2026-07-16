@@ -282,6 +282,9 @@ export default function ProfilePage() {
         {/* notifications */}
         <NotificationsSection />
 
+        {/* sign-in PIN (v2.87) */}
+        <LoginPinSection />
+
         {/* do not disturb */}
         <DndSection />
 
@@ -475,6 +478,80 @@ function ThemeToggleSection() {
    permission. We show a clear three-state pill (Enable / Granted /
    Blocked) so the user always knows where they stand.
    ============================================================ */
+/** v2.87 — the 4-digit sign-in PIN: set/change/remove + the login preference.
+ *  Verified accounts only (guests have no email login to shortcut). Three
+ *  wrong entries at sign-in warn; the fourth locks until an email code. */
+function LoginPinSection() {
+  const status = trpc.otpAuth.pinStatus.useQuery(undefined, { refetchOnWindowFocus: false });
+  const save = trpc.otpAuth.setLoginPin.useMutation();
+  const [pin1, setPin1] = useState("");
+  const [pin2, setPin2] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  if (!status.data?.signedIn) return null;
+  const hasPin = status.data.hasPin;
+  const digits = (v: string) => v.replace(/\D/g, "").slice(0, 4);
+  const submit = async () => {
+    setMsg(null);
+    if (pin1.length !== 4) { setMsg("The PIN is exactly 4 digits."); return; }
+    if (pin1 !== pin2) { setMsg("The PINs don't match."); return; }
+    try {
+      await save.mutateAsync({ pin: pin1, preferPin: true });
+      setMsg(hasPin ? "PIN updated." : "PIN set — you can use it at your next sign-in.");
+      setPin1(""); setPin2(""); setEditing(false);
+      void status.refetch();
+    } catch (e) {
+      setMsg((e as { message?: string })?.message ?? "Couldn't save the PIN.");
+    }
+  };
+  const remove = async () => {
+    setMsg(null);
+    try {
+      await save.mutateAsync({ pin: null });
+      setMsg("PIN removed — sign-ins use email codes.");
+      setEditing(false);
+      void status.refetch();
+    } catch (e) {
+      setMsg((e as { message?: string })?.message ?? "Couldn't remove the PIN.");
+    }
+  };
+  return (
+    <section className="rounded-2xl border border-border bg-card p-4">
+      <h3 className="mb-1 text-sm font-bold">Sign-in PIN</h3>
+      <p className="mb-3 text-xs text-muted-foreground">
+        {hasPin
+          ? "A 4-digit PIN signs you in instead of an email code. Four wrong tries lock the account (an email code unlocks)."
+          : "Set a 4-digit PIN to sign in without waiting for an email code."}
+        {status.data.locked ? " Currently LOCKED — your next email-code sign-in unlocks it." : ""}
+      </p>
+      {!editing ? (
+        <div className="flex gap-2">
+          <Button size="sm" onClick={() => { setEditing(true); setMsg(null); }}>
+            {hasPin ? "Change PIN" : "Set a PIN"}
+          </Button>
+          {hasPin && (
+            <Button size="sm" variant="secondary" onClick={remove} disabled={save.isPending}>
+              Remove PIN
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-end gap-2">
+          <Input type="password" inputMode="numeric" maxLength={4} value={pin1}
+            onChange={(e) => setPin1(digits(e.target.value))} placeholder="New PIN"
+            className="w-28 text-center font-mono" />
+          <Input type="password" inputMode="numeric" maxLength={4} value={pin2}
+            onChange={(e) => setPin2(digits(e.target.value))} placeholder="Repeat"
+            className="w-28 text-center font-mono" />
+          <Button size="sm" onClick={submit} disabled={save.isPending || pin1.length !== 4}>Save</Button>
+          <Button size="sm" variant="secondary" onClick={() => { setEditing(false); setPin1(""); setPin2(""); }}>Cancel</Button>
+        </div>
+      )}
+      {msg && <p className="mt-2 text-xs text-muted-foreground">{msg}</p>}
+    </section>
+  );
+}
+
 function NotificationsSection() {
   const [perm, setPerm] = useState<NotifPermission>(() =>
     getNotifPermission()

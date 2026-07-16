@@ -1,22 +1,27 @@
 import { useEffect, useRef, useState } from "react";
-import { X, Mail, ShieldCheck, ArrowLeft } from "lucide-react";
+import { X, Mail, ShieldCheck, ArrowLeft, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
 
 /**
- * Passwordless email-OTP sign-in / registration (v2.68). NO password, NO
- * third-party identity provider.
+ * Passwordless email-OTP sign-in / registration (v2.68) + 4-digit PIN login
+ * (v2.87). NO password, NO third-party identity provider.
  *
- *   email  → "Send code": known email → code stage; unknown → registration.
+ *   email  → probe: unknown → registration; PIN account → PIN pad (email code
+ *            one tap away); otherwise → email a code.
  *   register (first/last/email) → sends a code, then → code stage.
  *   code   → 6-digit entry, "Resend" (60s cooldown), inline errors → verified.
+ *   pin    → 4-digit entry. Three wrong entries warn; the FOURTH locks the
+ *            account (the server emails the owner) — email code unlocks.
+ *   setup  → after REGISTRATION: choose how future sign-ins work (email code
+ *            every time, or the 4-digit PIN set right here).
  *
  * On success the server has set the session cookie; we invalidate whoami so the
  * app re-renders as the freshly-verified user (which also earns the blue badge).
  */
-type Stage = "email" | "register" | "code";
+type Stage = "email" | "register" | "code" | "pin" | "setup";
 
 export function AuthPanel({
   onClose,
@@ -52,8 +57,23 @@ export function AuthPanel({
   const register = trpc.otpAuth.register.useMutation();
   const resendOtp = trpc.otpAuth.resendOtp.useMutation();
   const verifyOtp = trpc.otpAuth.verifyOtp.useMutation();
+  const loginProbe = trpc.otpAuth.loginProbe.useMutation();
+  const loginWithPin = trpc.otpAuth.loginWithPin.useMutation();
+  const setLoginPin = trpc.otpAuth.setLoginPin.useMutation();
 
-  const busy = requestOtp.isPending || register.isPending || verifyOtp.isPending;
+  // v2.87 PIN state
+  const [pin, setPin] = useState("");
+  const [setupPin, setSetupPin] = useState("");
+  const [setupPin2, setSetupPin2] = useState("");
+  const [wasRegistration, setWasRegistration] = useState(false);
+  const pinRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (stage === "pin") setTimeout(() => pinRef.current?.focus(), 50);
+  }, [stage]);
+
+  const busy =
+    requestOtp.isPending || register.isPending || verifyOtp.isPending ||
+    loginProbe.isPending || loginWithPin.isPending || setLoginPin.isPending;
   const cleanEmail = email.trim().toLowerCase();
 
   function toCodeStage() {
@@ -85,24 +105,81 @@ export function AuthPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function sendEmailCode(): Promise<void> {
+    const r = await requestOtp.mutateAsync({ email: cleanEmail });
+    if (r.unregistered) { setStage("register"); return; }
+    if (!r.ok) {
+      setError("We couldn't send your code — email delivery isn't set up yet. Contact the operator.");
+      return;
+    }
+    toCodeStage();
+  }
+
   async function submitEmail(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setNotice(null);
     try {
-      const r = await requestOtp.mutateAsync({ email: cleanEmail });
-      if (r.unregistered) {
-        setStage("register");
+      // Probe FIRST (sends nothing): a PIN account goes to the PIN pad and
+      // no email is fired unless the user asks for one.
+      const p = await loginProbe.mutateAsync({ email: cleanEmail });
+      if (p.unregistered) { setStage("register"); return; }
+      if (p.hasPin && !p.locked) {
+        setPin("");
+        setStage("pin");
         return;
       }
-      if (!r.ok) {
-        setError("We couldn't send your code — email delivery isn't set up yet. Contact the operator.");
-        return;
+      if (p.hasPin && p.locked) {
+        setNotice("This account is locked after too many wrong PINs — the email code below unlocks it.");
       }
-      toCodeStage();
+      await sendEmailCode();
     } catch (err) {
       setError(messageOf(err, "Couldn't send a code. Try again."));
     }
+  }
+
+  async function submitPin(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    try {
+      await loginWithPin.mutateAsync({ email: cleanEmail, pin });
+      await utils.identity.whoami.invalidate();
+      if (onVerified) onVerified();
+      else onClose();
+    } catch (err) {
+      setPin("");
+      setError(messageOf(err, "That PIN didn't work."));
+    }
+  }
+
+  async function pinToEmailCode() {
+    setError(null);
+    setNotice(null);
+    try {
+      await sendEmailCode();
+    } catch (err) {
+      setError(messageOf(err, "Couldn't send a code. Try again."));
+    }
+  }
+
+  async function submitSetup(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (setupPin.length !== 4) { setError("The PIN is exactly 4 digits."); return; }
+    if (setupPin !== setupPin2) { setError("The PINs don't match."); return; }
+    try {
+      await setLoginPin.mutateAsync({ pin: setupPin, preferPin: true });
+      await utils.identity.whoami.invalidate();
+      if (onVerified) onVerified();
+      else onClose();
+    } catch (err) {
+      setError(messageOf(err, "Couldn't save the PIN. You can set it later in Profile."));
+    }
+  }
+
+  function skipSetup() {
+    if (onVerified) onVerified();
+    else onClose();
   }
 
   async function submitRegister(e: React.FormEvent) {
@@ -114,6 +191,7 @@ export function AuthPanel({
         setError("We couldn't send your code — email delivery isn't set up yet. Contact the operator.");
         return;
       }
+      setWasRegistration(true);
       toCodeStage();
     } catch (err) {
       setError(messageOf(err, "Couldn't start registration. Try again."));
@@ -125,6 +203,15 @@ export function AuthPanel({
     setError(null);
     try {
       await verifyOtp.mutateAsync({ email: cleanEmail, code: code.trim() });
+      // Fresh REGISTRATION: offer the sign-in choice (email code vs 4-digit
+      // PIN) right now, per spec — existing users manage it in Profile.
+      if (wasRegistration) {
+        setSetupPin("");
+        setSetupPin2("");
+        setError(null);
+        setStage("setup");
+        return;
+      }
       await utils.identity.whoami.invalidate();
       if (onVerified) onVerified();
       else onClose();
@@ -145,7 +232,12 @@ export function AuthPanel({
     }
   }
 
-  const title = stage === "code" ? "Enter your code" : stage === "register" ? "Create your account" : "Sign in";
+  const title =
+    stage === "code" ? "Enter your code"
+    : stage === "register" ? "Create your account"
+    : stage === "pin" ? "Enter your PIN"
+    : stage === "setup" ? "How do you want to sign in?"
+    : "Sign in";
 
   return (
     <div className="fixed inset-0 z-[110] grid place-items-center glass-overlay p-4" role="dialog" aria-modal="true">
@@ -220,6 +312,69 @@ export function AuthPanel({
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" className="w-full" disabled={busy || !firstName.trim() || !lastName.trim() || !cleanEmail}>
               {register.isPending ? "Sending…" : "Create account & send code"}
+            </Button>
+          </form>
+        )}
+
+        {stage === "pin" && (
+          <form onSubmit={submitPin} className="space-y-4">
+            <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-primary/15 text-primary">
+              <KeyRound className="size-7" />
+            </div>
+            <p className="text-center text-sm">
+              Enter the 4-digit PIN for <span className="font-semibold break-all">{cleanEmail}</span>.
+            </p>
+            <Input
+              ref={pinRef}
+              type="password"
+              inputMode="numeric"
+              pattern="\d{4}"
+              maxLength={4}
+              value={pin}
+              onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+              placeholder="••••"
+              className="text-center text-2xl tracking-[0.6em] font-mono"
+            />
+            {error && <p className="text-sm text-destructive text-center">{error}</p>}
+            <Button type="submit" className="w-full" disabled={busy || pin.length !== 4}>
+              {loginWithPin.isPending ? "Checking…" : "Sign in"}
+            </Button>
+            <Button type="button" variant="secondary" className="w-full" onClick={pinToEmailCode} disabled={busy}>
+              Email me a code instead
+            </Button>
+            <p className="text-center text-xs text-muted-foreground">
+              Three wrong tries are forgiven — a fourth locks the account until you sign in by email code.
+            </p>
+          </form>
+        )}
+
+        {stage === "setup" && (
+          <form onSubmit={submitSetup} className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              You're verified ✅ — one last choice. Set a 4-digit PIN to sign in
+              instantly next time, or skip to get a fresh email code on every
+              sign-in. You can change this anytime in Profile.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="pin-1">4-digit PIN</Label>
+                <Input id="pin-1" type="password" inputMode="numeric" maxLength={4} value={setupPin}
+                  onChange={(e) => setSetupPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                  placeholder="••••" className="text-center font-mono tracking-[0.4em]" autoFocus />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="pin-2">Repeat it</Label>
+                <Input id="pin-2" type="password" inputMode="numeric" maxLength={4} value={setupPin2}
+                  onChange={(e) => setSetupPin2(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                  placeholder="••••" className="text-center font-mono tracking-[0.4em]" />
+              </div>
+            </div>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <Button type="submit" className="w-full" disabled={busy || setupPin.length !== 4 || setupPin2.length !== 4}>
+              {setLoginPin.isPending ? "Saving…" : "Use this PIN to sign in"}
+            </Button>
+            <Button type="button" variant="secondary" className="w-full" onClick={skipSetup} disabled={busy}>
+              Skip — email me a code each time
             </Button>
           </form>
         )}

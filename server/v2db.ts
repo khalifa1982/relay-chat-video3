@@ -646,6 +646,11 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "identities", column: "lastName", ddl: "ADD COLUMN `lastName` varchar(64)" },
     // Native Android app push transport (v2.86).
     { table: "push_subscriptions", column: "kind", ddl: "ADD COLUMN `kind` varchar(10)" },
+    // 4-digit login PIN + lockout (v2.87).
+    { table: "users", column: "loginPinHash", ddl: "ADD COLUMN `loginPinHash` text" },
+    { table: "users", column: "loginPinAttempts", ddl: "ADD COLUMN `loginPinAttempts` int" },
+    { table: "users", column: "loginPinLockedAt", ddl: "ADD COLUMN `loginPinLockedAt` timestamp NULL" },
+    { table: "users", column: "preferPinLogin", ddl: "ADD COLUMN `preferPinLogin` boolean" },
   ];
   for (const a of adds) {
     try {

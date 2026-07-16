@@ -14,6 +14,8 @@
    RESEND_FROM="RELAY <notifications@yourdomain.com>".
    ============================================================ */
 
+import { smtpConfig, smtpSend } from "./smtp";
+
 export interface SendEmailInput {
   to: string | string[];
   subject: string;
@@ -31,9 +33,11 @@ export interface SendEmailResult {
 }
 
 /** Read per-call (like iceServers/TURN) so the key can be added via Manus
- *  Secrets without a restart. */
+ *  Secrets without a restart. v2.87: the BUILT-IN SMTP client (server/smtp.ts,
+ *  SMTP_HOST et al.) takes priority — no third-party API; Resend remains a
+ *  fallback for deploys that still use it. */
 export function emailEnabled(): boolean {
-  return Boolean(process.env.RESEND_API_KEY);
+  return Boolean(smtpConfig()) || Boolean(process.env.RESEND_API_KEY);
 }
 
 export function emailFrom(): string {
@@ -57,6 +61,21 @@ export function stripHtml(html: string): string {
 }
 
 export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
+  // v2.87: built-in SMTP first — the operator's own mailbox, no third party.
+  if (smtpConfig()) {
+    const to = Array.isArray(input.to) ? input.to : [input.to];
+    const replyTo = Array.isArray(input.replyTo) ? input.replyTo[0] : input.replyTo;
+    const r = await smtpSend({
+      to,
+      subject: input.subject,
+      html: input.html,
+      text: input.text ?? stripHtml(input.html),
+      replyTo,
+    });
+    if (r.ok) return { ok: true };
+    console.warn(`[email] smtp send failed (${r.error}) — trying Resend fallback if configured`);
+    // fall through to Resend when it's also configured
+  }
   const apiKey = process.env.RESEND_API_KEY || "";
   if (!apiKey) {
     // Feature gate — call sites never need to guard.

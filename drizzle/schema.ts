@@ -32,6 +32,13 @@ export const users = mysqlTable("users", {
   passwordHash: text("passwordHash"),
   /** True once the email-verification link has been clicked (local flow). */
   emailVerified: boolean("emailVerified"),
+  /* 4-digit login PIN (v2.87). Additive + nullable via ensureSchemaExtensions().
+     Three wrong entries warn; the fourth locks (loginPinLockedAt) until an
+     email-code sign-in unlocks. */
+  loginPinHash: text("loginPinHash"),
+  loginPinAttempts: int("loginPinAttempts"),
+  loginPinLockedAt: timestamp("loginPinLockedAt"),
+  preferPinLogin: boolean("preferPinLogin"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),

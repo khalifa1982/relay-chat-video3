@@ -77,6 +77,13 @@ import {
   OTP_MAX_ATTEMPTS,
   OTP_RESEND_COOLDOWN_MS,
 } from "./authOtp";
+import {
+  attemptPinLogin,
+  clearLoginPin,
+  isValidPin,
+  setLoginPin as setLoginPinDb,
+  unlockLoginPin,
+} from "./authPin";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
 
 export const NumberSchema = z
@@ -1338,6 +1345,8 @@ export const v2OtpAuthRouter = router({
       if (!userId) userId = await createOtpUser({ email, firstName: row.firstName, lastName: row.lastName });
       if (!userId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create your account." });
       await markUserEmailVerified(userId);
+      // v2.87: an email-code sign-in is the recovery path — unlock the PIN.
+      await unlockLoginPin(userId);
       // Upgrade the guest identity in place (preserves number/contacts/messages).
       const guestToken = (ctx.req.cookies?.[GUEST_COOKIE] as string | undefined) ?? null;
       const displayName =
@@ -1375,6 +1384,110 @@ export const v2OtpAuthRouter = router({
     const opts = getSessionCookieOptions(ctx.req);
     ctx.res.clearCookie("relay_session", { ...opts, maxAge: -1 });
     return { ok: true };
+  }),
+
+  /* ── 4-digit PIN login (v2.87) ──────────────────────────────────
+     Set during/after registration; usable INSTEAD of an email code.
+     Three wrong entries warn, the fourth LOCKS the account and emails
+     the owner; an email-code sign-in unlocks. */
+
+  /** Pre-login probe: does this email sign in by PIN? Sends NOTHING. */
+  loginProbe: publicProcedure
+    .input(z.object({ email: EmailSchema }))
+    .mutation(async ({ ctx, input }) => {
+      otpGate(ctx);
+      const email = normalizeEmail(input.email);
+      if (!isValidEmail(email)) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter a valid email." });
+      const user = await findUserByEmailAny(email);
+      if (!user) return { unregistered: true, hasPin: false, locked: false, preferPin: false };
+      const u = user as typeof user & {
+        loginPinHash?: string | null; loginPinLockedAt?: Date | null; preferPinLogin?: boolean | null;
+      };
+      return {
+        unregistered: false,
+        hasPin: Boolean(u.loginPinHash),
+        locked: Boolean(u.loginPinLockedAt),
+        preferPin: Boolean(u.preferPinLogin),
+      };
+    }),
+
+  /** Sign in with the 4-digit PIN (the email-code alternative). */
+  loginWithPin: publicProcedure
+    .input(z.object({ email: EmailSchema, pin: z.string().regex(/^\d{4}$/, { message: "Enter the 4-digit code" }) }))
+    .mutation(async ({ ctx, input }) => {
+      otpGate(ctx);
+      const email = normalizeEmail(input.email);
+      const user = await findUserByEmailAny(email);
+      if (!user) throw new TRPCError({ code: "UNAUTHORIZED", message: "No account with that email." });
+      const u = user as typeof user & {
+        loginPinHash?: string | null; loginPinAttempts?: number | null; loginPinLockedAt?: Date | null;
+      };
+      const verdict = await attemptPinLogin(
+        {
+          id: user.id,
+          email: user.email,
+          loginPinHash: u.loginPinHash ?? null,
+          loginPinAttempts: u.loginPinAttempts ?? 0,
+          loginPinLockedAt: u.loginPinLockedAt ?? null,
+          preferPinLogin: null,
+        },
+        input.pin
+      );
+      switch (verdict.outcome) {
+        case "ok": {
+          // Same sign-in semantics as verifyOtp: adopt/upgrade the guest
+          // identity so number/contacts/messages survive.
+          const guestToken = (ctx.req.cookies?.[GUEST_COOKIE] as string | undefined) ?? null;
+          await ensureUserIdentity({ userId: user.id, displayName: user.name ?? email.split("@")[0], guestToken });
+          setSessionCookie(ctx.res, user.id);
+          return { ok: true };
+        }
+        case "no-pin":
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "PIN sign-in isn't set up for this account — use an email code." });
+        case "locked":
+          throw new TRPCError({ code: "FORBIDDEN", message: "Account locked after too many wrong PINs. Sign in with an email code to unlock." });
+        case "locked-now":
+          throw new TRPCError({ code: "FORBIDDEN", message: "That was the 4th wrong PIN — the account is now locked and an email is on its way. Sign in with an email code to unlock." });
+        case "wrong":
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: verdict.attemptsLeft <= 1
+              ? "Incorrect PIN. Careful — one more wrong entry locks the account."
+              : `Incorrect PIN. ${verdict.attemptsLeft} tries left before the account locks.`,
+          });
+      }
+    }),
+
+  /** Set / change / remove the login PIN (signed-in users only). */
+  setLoginPin: publicProcedure
+    .input(z.object({
+      pin: z.string().regex(/^\d{4}$/).nullable(), // null ⇒ remove the PIN
+      preferPin: z.boolean().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const user = ctx.user;
+      if (!user) throw new TRPCError({ code: "UNAUTHORIZED", message: "Sign in first." });
+      if (input.pin === null) {
+        await clearLoginPin(user.id);
+        return { ok: true, hasPin: false };
+      }
+      if (!isValidPin(input.pin)) throw new TRPCError({ code: "BAD_REQUEST", message: "The PIN is exactly 4 digits." });
+      await setLoginPinDb(user.id, input.pin, input.preferPin ?? true);
+      return { ok: true, hasPin: true };
+    }),
+
+  /** PIN state for the signed-in user (Profile / post-register step). */
+  pinStatus: publicProcedure.query(async ({ ctx }) => {
+    const user = ctx.user as (typeof ctx.user & {
+      loginPinHash?: string | null; loginPinLockedAt?: Date | null; preferPinLogin?: boolean | null;
+    }) | null;
+    if (!user) return { signedIn: false, hasPin: false, locked: false, preferPin: false };
+    return {
+      signedIn: true,
+      hasPin: Boolean(user.loginPinHash),
+      locked: Boolean(user.loginPinLockedAt),
+      preferPin: Boolean(user.preferPinLogin),
+    };
   }),
 });
 
