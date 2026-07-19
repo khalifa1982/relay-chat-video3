@@ -3613,3 +3613,115 @@ encoding + watchOnline validation; stale pins updated with comments, none delete
   demotion, listThreads shape parity, busy-line privacy, voicemail plumbing, bundle/fonts.
   Known tradeoffs documented: old cached tabs >10MB base64 uploads 413 until refresh; SSE cap
   ~25/IP has no signaling fallback behind one NAT. → 816 tests green.
+
+## v2.89.0 — Photo downscale + thumbnails, PARTY LINES, instant offline presence (2026-07-19)
+Three items from the v2.88 audit backlog (docs-v288-backlog.md #1, #2, #19), in order:
+
+1. **PHOTO DOWNSCALE + THUMBNAILS** (backlog #1 — the biggest remaining mobile-data win).
+   Client pipeline (client/src/lib/imageDownscale.ts): photo attachments in Messages (picker +
+   clipboard paste) are decoded on-canvas BEFORE upload — longest edge capped at 2048px (never
+   upscaled), re-encoded webp q≈0.85 with a jpeg fallback (painted on a white underlay so
+   transparent PNGs don't flatten black); the ORIGINAL bytes are kept when the image already
+   fits under the cap AND the re-encode didn't shrink it. GIFs skip entirely (canvas re-encode
+   freezes the animation) and ANY decode/encode failure falls back to the untouched original
+   upload — the pipeline is an optimization, never a gate. A ≤512px THUMBNAIL is generated
+   from the same decode and uploaded FIRST (`POST /api/v2/upload?thumb=1` — stores bytes in
+   the caller's namespace, returns {storageKey,url}, NO attachment row), then referenced on
+   the main upload via `?thumbKey=` — validated server-side to the caller's OWN
+   `relay-chat/<identityId>/` prefix (no grafting strangers' objects), with thumbUrl DERIVED
+   from the key server-side, never client-supplied. New nullable `attachments.thumbKey` +
+   `thumbUrl` columns via the boot migrator (drizzle mirror updated); messages.list/search
+   already return whole attachment rows so the join needed no change. Bubbles now render the
+   THUMBNAIL with explicit width/height + aspect-ratio (no layout shift; max-w-full added so
+   panoramas can't overflow the bubble) and tap through to the FULL-SIZE url in the existing
+   lightbox. The legacy base64 route (mobile/native) is byte-identical — untouched.
+2. **PARTY LINES — dialable room numbers** (backlog #2, the signature feature). A user creates
+   a party line → it gets its OWN 6-digit number from the SAME number space as identities:
+   `party_lines` table (number UNIQUE, ownerIdentityId, title ≤64, createdAt) via boot
+   migrator + drizzle mirror, and BOTH allocators now check BOTH tables (shared `numberTaken`)
+   so a line can never shadow a person or vice versa. Server routing: `attachRelay` gains an
+   async `onResolveDial(pin)` hook (wired in _core/index.ts to `getPartyLineByNumber`)
+   consulted in the invite path BEFORE the identity/paging flow — the entire identity flow is
+   extracted into `runIdentityInvite()` (re-fetching registry state at run time; with no hook
+   the path stays fully synchronous and byte-identical, so the 60+ existing protocol tests
+   run unchanged). A dial to a line NEVER rings anyone: the caller gets the standard `room`
+   ack (flagged partyLine:true — group dials still flush their remaining invites on it, which
+   naturally rings those people INTO the line) plus a `joined` into the line's PERSISTENT room
+   `pl-<number>` with the current CONNECTED members (ghost-filtered), and existing members get
+   the standard `peer-joined` — exactly the add-person merge machinery. The room id is DERIVED
+   from the number, so room reaping (ROOM_ABANDON_MS / last leave) never kills the line — an
+   empty line is re-dialable forever; roomMeta is recreated on demand (hostPin null: lines
+   have no host). Concurrent dialers share the room under the standard 6-mesh/10-SFU cap
+   (`error{code:"full"}`); `accepted`/`answeredAt` flip when TWO members are concurrently
+   connected, so conference history logs real line calls (dialedNumber = the line's number)
+   and solo pop-ins never log. Guard rails: an in-call dialer with other people gets a
+   NON-fatal `busy` ("hang up first"), redialing your own line is a non-fatal `already`, and
+   a caller who hung up mid-resolve is never joined. Client: relayClient's `joined` handler
+   treats a partyLine envelope mid-dial as THE answer (callAnswered + callIsGroup — consent
+   bypass and no 1:1 auto-end when alone on the line) and marks an EMPTY line established
+   immediately (no peer/track event will); the dial card adopts the line's title.
+   directory.lookup resolves lines FIRST (same precedence as dialing) returning title +
+   `partyLine:true` + LIVE member count (`partyLineLiveCounts` — same in-memory registry read
+   as pinsInCall); the Dialer preview shows "Party line · N on the line" and the Voice button
+   reads "Join". New tRPC `partyLines` router (create/list/remove — guests allowed, per-IP
+   rate-limited, 10-lines-per-owner cap, owner-scoped delete); GroupCallScreen gains a
+   collapsed "Party lines" section (create with title → toast shows the allocated number;
+   list with live counts; copy dial-in; share via the existing /i/<number> invite-link
+   pattern, which auto-dials the line; delete). History labels pl- conferences with the
+   line's title (batched party_lines join; "Line <number>" when since deleted) and the
+   call-back button REJOINS the line instead of ringing ex-members individually.
+3. **INSTANT OFFLINE PRESENCE** (backlog #19). PresenceManager now reports leaving via
+   `navigator.sendBeacon("/api/v2/offline", JSON.stringify({deviceId}))` — a tRPC mutation
+   fired during unload is routinely dropped, which left a closed tab's LED green for up to
+   2 minutes. Fired on pagehide AND visibilitychange→hidden (mobile Safari often skips
+   pagehide on tab close); returning to visible heartbeats IMMEDIATELY so a mere tab-switch
+   flips right back online. New `POST /api/v2/offline` (server/v2offline.ts): scoped 4 KB
+   text parser (beacons post text/plain), identity via the SHARED createContext (cookies ride
+   same-origin) with the body deviceId as the cookie-loss fallback (beacons can't set the
+   x-relay-device-id header; same hex-8-64 shape rule), then the exact goOffline path —
+   markOffline + scoped publishPresenceTo. 401 when nothing resolves; the 2-min reaper stays
+   as the backstop.
+
+Housekeeping: version 2.89.0 (shared/version.ts + updateChecker pin); CLAUDE.md TL;DR updated.
+Tests: 816 → 876 passing (+1 skipped, 74 files). New: relayPartyLine.test.ts (13 protocol
+tests — join-without-ring, second-dialer merge, cap, empty-line re-dial + no-solo-logging,
+identity dials unaffected sync AND with the hook, resolver-failure fallback, in-call guard,
+already-on-line, hung-up-mid-resolve, live counts), partyLines.test.ts (9 — shared number
+space, migrator/mirror, router wiring, lookup precedence, client surfaces),
+v2offline.test.ts (16 — parseOfflineBody + route/client contracts), imageDownscale.test.ts
+(22 — fitWithin/keep-original/gif-skip/rename + upload threading, thumbKey ownership,
+derived thumbUrl, untouched base64 route, no-layout-shift rendering). Two v2.88-era source
+pins updated for the invite-path extraction (callerSocket / wantVideo — behavior unchanged,
+proven by the protocol suite). `pnpm check` + full `pnpm build` green.
+
+Adversarial review (pre-ship): 4 confirmed defects + 1 hardening found in the party-line
+dial path, all fixed. (D1) a `leave`/re-register/newer dial DURING the in-flight
+`onResolveDial` await wasn't detected — the deferred continuation could ghost-ring the
+callee, ring the old target into a new call's room, or enroll an idle caller as a phantom
+line member; fixed with per-client epoch stamps captured before the await and re-checked
+after (the onPageCallee state-before-await discipline), from one globally-monotonic
+sequence so a deleted-then-recreated record can never re-reach a captured stamp. TWO
+stamps, because one would break group dials: party-line JOINS check `dialEpoch` (re-
+stamped on every invite — newest dial wins) STRICTLY, while identity RINGS check
+`ctxEpoch` (seeded at record creation, bumped only by `leave` and a channel-takeover
+re-register) — the group-dial flush fires sibling invites in one burst, and invite N+1
+aborting in-flight invite N would have silently dropped group members whenever the DB
+resolver was slower than the inter-POST gap (guard-rail test included). (D2) no
+timeout on the resolver left dials in limbo on a wedged DB pool; the resolve is now raced
+against `RESOLVE_DIAL_TIMEOUT_MS` (1.5s → identity-flow fallback) with a settled flag so
+the late real resolve is ignored (flow runs exactly once). (D3) a LONE line occupant was
+EVICTED when someone they rang in declined — server: the reject handler's solo-room
+cleanup now skips `pl-` rooms; client: `rejected`/`busy` teardown is gated behind
+`inParkedCall()` (group calls + pl- rooms — covers rejoin, whose envelope has no partyLine
+flag). (D4) joinPartyLine's stale-solo-room cleanup reaped a LIVE mid-dial room, stranding
+the outstanding ring (the callee's accept bounced `gone`); it now runs the `leave`
+handler's full cancel first (cancelPendingRings ring-cancel fanout + pendingRings +
+caller bookkeeping + missed-call rows) before leaving. (D5) the resolver dispatch's
+`.then(ok).catch(fb)` also caught exceptions thrown INSIDE joinPartyLine/runIdentityInvite
+and re-ran the identity flow (double-ring footgun) — now the two-argument `.then(ok, err)`
+form plus a log-and-drop guard around the dispatch. Tests: 876 → 886 passing (+1 skipped):
+9 new protocol tests in relayPartyLine.test.ts (leave-mid-resolve ×2, newer-dial-wins,
+group-burst siblings all ring, re-register-takeover, timeout-fallback + late-resolve-
+ignored, lone-occupant survives decline + normal-dial cleanup preserved, mid-dial line
+join cancels cleanly) and 1 client source pin in partyLines.test.ts. `pnpm check` + full
+`pnpm build` green.

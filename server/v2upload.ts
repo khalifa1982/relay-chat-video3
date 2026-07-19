@@ -43,6 +43,8 @@ const MAX_BYTES = 40 * 1024 * 1024; // 40 MB ceiling per attachment (raw path)
 // Legacy base64-JSON route: 10 MB decoded. Base64 peaks at ~3-6x the payload in
 // process memory, so big files must use the raw path (the web client does).
 const MAX_BASE64_BYTES = 10 * 1024 * 1024;
+// Thumbnails (v2.89): a ≤512px webp/jpeg is a few tens of KB; 2 MB is generous.
+const MAX_THUMB_BYTES = 2 * 1024 * 1024;
 
 function safeName(name: string | undefined, fallback: string) {
   const trimmed = (name || "").trim();
@@ -80,6 +82,7 @@ export function registerV2Upload(app: Express) {
         const n = typeof v === "string" ? Number(v) : NaN;
         return Number.isFinite(n) ? n : undefined;
       };
+      let thumbKey: string | undefined;
       if (Buffer.isBuffer(req.body)) {
         // RAW path: bytes in the body, metadata in the query string.
         buf = req.body;
@@ -90,6 +93,41 @@ export function registerV2Upload(app: Express) {
         durationMs = qnum(req.query.durationMs);
         if (!mimeType) {
           return res.status(400).json({ error: "mime query parameter is required" });
+        }
+        // ── THUMBNAIL mode (v2.89): `?thumb=1` stores the bytes and returns
+        // {storageKey,url} WITHOUT creating an attachment row. The client
+        // uploads the ≤512px thumb first, then references its storageKey on
+        // the full image's upload (`?thumbKey=`). Images only, small cap.
+        if (req.query.thumb === "1") {
+          if (!/^image\//i.test(mimeType) || BLOCKED_MIME.test(mimeType)) {
+            return res.status(400).json({ error: "Thumbnails must be images" });
+          }
+          if (buf.length === 0) return res.status(400).json({ error: "Empty payload" });
+          if (buf.length > MAX_THUMB_BYTES) {
+            return res.status(413).json({ error: "Thumbnail exceeds 2 MB limit" });
+          }
+          const text = (mimeType.split("/")[1] || "img").split(/[+;]/)[0].slice(0, 8);
+          const thash = crypto.randomBytes(4).toString("hex");
+          // The identity-scoped prefix doubles as the OWNERSHIP check when the
+          // key is later referenced on the main upload.
+          const tkey = `relay-chat/${identityId}/thumb_${Date.now()}_${thash}.${text}`;
+          const stored = await storagePut(tkey, buf, mimeType);
+          return res.json({ thumb: true, storageKey: stored.key, url: stored.url });
+        }
+        // Optional thumbnail reference minted by a prior `?thumb=1` upload.
+        // Must live in the CALLER'S OWN storage namespace — anything else could
+        // graft a stranger's (or an arbitrary) object into a message bubble.
+        const rawThumbKey = req.query.thumbKey;
+        if (typeof rawThumbKey === "string" && rawThumbKey.length > 0) {
+          if (
+            rawThumbKey.length <= 256 &&
+            rawThumbKey.startsWith(`relay-chat/${identityId}/`) &&
+            !rawThumbKey.includes("..")
+          ) {
+            thumbKey = rawThumbKey;
+          } else {
+            return res.status(400).json({ error: "Invalid thumbKey" });
+          }
         }
         if (buf.length > MAX_BYTES) {
           return res.status(413).json({ error: `Attachment exceeds ${Math.floor(MAX_BYTES / 1024 / 1024)} MB limit` });
@@ -128,6 +166,10 @@ export function registerV2Upload(app: Express) {
 
       const { key: storedKey, url } = await storagePut(key, buf, mimeType);
 
+      // The thumb's servable URL is derived from its key exactly the way
+      // storagePut derives the main url — never taken from the client.
+      const thumbUrl = thumbKey ? `/manus-storage/${thumbKey}` : null;
+
       const row = await recordAttachment({
         storageKey: storedKey,
         url,
@@ -137,6 +179,8 @@ export function registerV2Upload(app: Express) {
         height: typeof height === "number" ? height : null,
         durationMs: typeof durationMs === "number" ? durationMs : null,
         filename: fnSafe,
+        thumbKey: thumbKey ?? null,
+        thumbUrl,
         uploadedByIdentityId: identityId,
       });
 
@@ -150,6 +194,7 @@ export function registerV2Upload(app: Express) {
         height: row.height ?? null,
         durationMs: row.durationMs ?? null,
         filename: fnSafe,
+        thumbUrl: row.thumbUrl ?? null,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

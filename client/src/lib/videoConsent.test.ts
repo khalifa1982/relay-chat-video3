@@ -73,6 +73,10 @@ describe("mutual-consent video — 1:1 protocol", () => {
 
   it("the server relays the consent messages to the room and flags rings with the dialed mode", () => {
     expect(SERVER).toMatch(/case "video-request":\s*\n\s*case "video-accept":\s*\n\s*case "video-decline": \{/);
-    expect(SERVER).toMatch(/video: !!msg\.video,/);
+    // v2.89: the invite body captures the dialed mode once as `wantVideo`
+    // (the party-line resolver defers the flow, so !!msg.video is snapshotted
+    // up front); the ring envelope still carries it.
+    expect(SERVER).toMatch(/const wantVideo = !!msg\.video;/);
+    expect(SERVER).toMatch(/video: wantVideo,/);
   });
 });

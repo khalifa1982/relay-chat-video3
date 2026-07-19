@@ -36,6 +36,10 @@ type ConfRow = {
   startedAt: string | Date;
   endedAt: string | Date;
   durationSec: number;
+  /** Party line (v2.89): this room was a dialable line (`pl-<number>`). */
+  partyLine?: boolean;
+  /** The line's title (null when the line has since been deleted). */
+  partyLineTitle?: string | null;
   participants: Array<{ number: string; name: string; isSelf: boolean }>;
 };
 
@@ -461,18 +465,23 @@ function ConferenceItem({
   const isGroup = conf.partyCount > 2 || otherNumbers.length > 1;
   const tone = direction === "out" ? TONE.out : TONE.in;
   const Icon = isGroup ? Users : direction === "out" ? PhoneOutgoing : PhoneIncoming;
-  // Title = the other people on the call (or the dialed number as a fallback).
-  const title =
-    others.length > 0
+  // Title = the party line's name (v2.89) when this room WAS a line, else the
+  // other people on the call (or the dialed number as a fallback).
+  const title = conf.partyLine
+    ? `${conf.partyLineTitle || `Line ${conf.dialedNumber ?? ""}`.trim()} (party line)`
+    : others.length > 0
       ? others.map((p) => p.name).join(", ")
       : conf.dialedNumber
         ? `Call to ${conf.dialedNumber}`
         : "Call";
   // Best number to call back: the dialed number, else the first other party.
   const callBack = conf.dialedNumber || others[0]?.number || "";
-  // For a GROUP, the call button rings everyone back into one conference.
+  // For a GROUP, the call button rings everyone back into one conference —
+  // except a PARTY LINE (v2.89), where redialing the LINE number rejoins the
+  // room without ringing anyone.
   const callBackAll = () => {
-    if (isGroup && otherNumbers.length > 1) onRedialGroup(otherNumbers);
+    if (conf.partyLine && conf.dialedNumber) onRedial(conf.dialedNumber);
+    else if (isGroup && otherNumbers.length > 1) onRedialGroup(otherNumbers);
     else onRedial(callBack);
   };
   const canCall = isGroup ? otherNumbers.length > 0 : !!callBack;

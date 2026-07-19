@@ -41,7 +41,8 @@ import {
 import { trpc } from "@/lib/trpc";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
 import { previewOf } from "@/app/messagePreview";
-import { uploadAttachment } from "@/lib/uploadAttachment";
+import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
+import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
 import { linkify } from "@/lib/linkify";
 import { useIdentity } from "@/app/useIdentity";
@@ -537,10 +538,38 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     }
     setUploading(true);
     try {
-      const json = await uploadAttachment(file, {
-        filename: file.name,
-        mimeType: file.type || "application/octet-stream",
-      });
+      let json;
+      // PHOTOS (v2.89): downscale on-canvas before upload (cap 2048px, webp
+      // q≈0.85 / jpeg fallback, original kept when it's already smaller) and
+      // ship a ≤512px thumbnail alongside — bubbles render the thumb, tapping
+      // opens the full image. GIFs skip (animation) and ANY pipeline failure
+      // falls back to the untouched original upload path.
+      const processed = isDownscalableImage(file.type)
+        ? await processImageForUpload(file).catch(() => null)
+        : null;
+      if (processed) {
+        let thumbKey: string | undefined;
+        if (processed.thumb) {
+          try {
+            const t = await uploadThumbnail(processed.thumb.blob, { mimeType: processed.thumb.mime });
+            thumbKey = t.storageKey;
+          } catch {
+            /* thumbs are best-effort — the full image still uploads */
+          }
+        }
+        json = await uploadAttachment(processed.main.blob, {
+          filename: processed.main.filename,
+          mimeType: processed.main.mime,
+          width: processed.main.width,
+          height: processed.main.height,
+          thumbKey,
+        });
+      } else {
+        json = await uploadAttachment(file, {
+          filename: file.name,
+          mimeType: file.type || "application/octet-stream",
+        });
+      }
       setPendingUpload({ id: json.id, url: json.url, mimeType: json.mimeType, filename: json.filename ?? file.name });
     } catch (err) {
       toast.error("Upload failed: " + (err instanceof Error ? err.message : String(err)));
@@ -827,6 +856,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             mimeType={m.attachment.mimeType}
                             url={m.attachment.url}
                             filename={m.attachment.filename ?? undefined}
+                            thumbUrl={m.attachment.thumbUrl ?? null}
+                            width={m.attachment.width ?? null}
+                            height={m.attachment.height ?? null}
                             onOpen={setLightbox}
                           />
                         )}
@@ -967,6 +999,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       mimeType={m.attachment.mimeType}
                       url={m.attachment.url}
                       filename={m.attachment.filename ?? undefined}
+                      thumbUrl={m.attachment.thumbUrl ?? null}
+                      width={m.attachment.width ?? null}
+                      height={m.attachment.height ?? null}
                       onOpen={setLightbox}
                     />
                   )}
@@ -1270,15 +1305,26 @@ function AttachmentView({
   mimeType,
   url,
   filename,
+  thumbUrl,
+  width,
+  height,
   onOpen,
 }: {
   mimeType: string;
   url: string;
   filename?: string;
+  /** ≤512px thumbnail (v2.89) — bubbles render this; tap opens the full url. */
+  thumbUrl?: string | null;
+  /** Pixel dimensions of the FULL image — drive an explicit aspect-ratio so
+   *  the bubble reserves its box before the bytes arrive (no layout shift). */
+  width?: number | null;
+  height?: number | null;
   onOpen?: (m: { url: string; type: "image" | "video"; name?: string }) => void;
 }) {
   if (mimeType.startsWith("image/")) {
-    // Thumbnail → click opens an in-app fullscreen preview (not a new tab).
+    // Thumbnail in the bubble (falls back to the full url for legacy/GIF
+    // rows) → click opens the FULL-SIZE image in the in-app lightbox.
+    const hasDims = typeof width === "number" && width > 0 && typeof height === "number" && height > 0;
     return (
       <button
         type="button"
@@ -1287,9 +1333,12 @@ function AttachmentView({
         aria-label="Open image"
       >
         <img
-          src={url}
+          src={thumbUrl || url}
           alt={filename || "image"}
-          className="rounded-xl max-h-64 w-auto object-cover hover:opacity-90 transition-opacity"
+          width={hasDims ? width! : undefined}
+          height={hasDims ? height! : undefined}
+          style={hasDims ? { aspectRatio: `${width} / ${height}` } : undefined}
+          className="rounded-xl max-h-64 w-auto max-w-full object-cover hover:opacity-90 transition-opacity"
           loading="lazy"
         />
       </button>

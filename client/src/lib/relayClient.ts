@@ -116,6 +116,11 @@ interface Msg {
   /** ringing ack: the callee has no live connection — the server is PAGING
    *  them (push notification + late ring delivery when their app opens). */
   paging?: boolean;
+  /** room/joined (v2.89): the dialed number was a PARTY LINE — the server
+   *  dropped us straight into its persistent room instead of ringing anyone. */
+  partyLine?: boolean;
+  /** joined (party line): the line's display title. */
+  lineTitle?: string;
   // Recording (LiveKit Egress). `recording` (boolean) on `registered` advertises
   // availability; the `recording` status message carries `on` + `by`.
   recording?: boolean;
@@ -584,6 +589,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
       : Object.keys(peers).length === 0;
   }
 
+  // True when we're in a PARKED room — a group call or a party line (server
+  // room ids "pl-<number>", see PARTY_LINE_ROOM_PREFIX in server/relay.ts).
+  // In a parked room you stay until YOU hang up: a `rejected`/`busy` for an
+  // add-invite must never tear the call down even while we're (still) alone
+  // on the line — mirroring how error{offline} guards the add-invite path.
+  // The roomId check matters on top of callIsGroup for a rejoin-after-reload
+  // onto a line, where the rejoin envelope carries no partyLine flag.
+  function inParkedCall(): boolean {
+    return callIsGroup || (!!roomId && roomId.startsWith("pl-"));
+  }
+
   // ---------- protocol ----------
   function handle(m: Msg) {
     // Capture the advisory LiveKit flag whenever the server stamps it
@@ -640,14 +656,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "livekit-token": onLivekitToken(m); break;
       case "rejected":
         toast(nameOf(m.from!) + " declined.");
-        if (inCall && aloneInCall()) {
+        // A decline is only fatal to a lone 1:1 DIALER. In a group call or on
+        // a party line the invite was an ADD — stay parked (inParkedCall).
+        if (inCall && aloneInCall() && !inParkedCall()) {
           if (outgoingDial && !establishedOnce) failDial("They declined.", "peer-rejected");
           else hangUp("peer-rejected");
         }
         break;
       case "busy":
         toast("They're on another call.", true);
-        if (inCall && aloneInCall()) {
+        if (inCall && aloneInCall() && !inParkedCall()) {
           if (outgoingDial && !establishedOnce) failDial("They're on another call.", "peer-busy");
           else hangUp("peer-busy");
         }
@@ -2313,6 +2331,25 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function onJoined(m: Msg) {
     stopRingtone(); // peer connected — stop the outgoing dial tone
     roomId = m.roomId || null;
+    // PARTY LINE (v2.89): dialing a party-line number joins its persistent
+    // room directly — the server answers the invite with `room` + `joined`
+    // instead of ringing anyone, so receiving `joined` while our OUTGOING dial
+    // is still unanswered IS the answer. Party lines are conference rooms:
+    // bypass the 1:1 video-consent gate and the 1:1 "peer left → auto-end"
+    // rule (you stay parked on the line until YOU hang up), and when the line
+    // is EMPTY mark the call established immediately — with no peers there is
+    // no peer/track event coming to do it for us.
+    if (m.partyLine && outgoingDial && !callAnswered) {
+      callIsGroup = true;
+      videoApproved = true;
+      callAnswered = true;
+      if (m.lineTitle && !outgoingDial.group && !outgoingDial.name) {
+        outgoingDial.name = String(m.lineTitle);
+        showDialCard();
+      }
+      onCalleeAnswered();
+      if (!m.members || m.members.length === 0) markEstablished();
+    }
     recordMemberDevices(m.members);
     recordMemberRoles(m.members);
     captureSelfRole(m);

@@ -39,6 +39,7 @@ import {
   identities,
   messages,
   onlineWatches,
+  partyLines,
   presence,
   pushSubscriptions,
   users,
@@ -69,18 +70,40 @@ function randomDigits6(): string {
   return `${first}${rest}`;
 }
 
+/**
+ * True when `candidate` is already taken in EITHER number table. Identities and
+ * party lines (v2.89) share ONE 6-digit number space — a dial resolves the
+ * party line first, so a collision would permanently shadow a person (or make a
+ * line unreachable). Both allocators check both tables.
+ */
+async function numberTaken(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, candidate: string): Promise<boolean> {
+  const existing = await db
+    .select({ id: identities.id })
+    .from(identities)
+    .where(eq(identities.number, candidate))
+    .limit(1);
+  if (existing.length > 0) return true;
+  try {
+    const line = await db
+      .select({ id: partyLines.id })
+      .from(partyLines)
+      .where(eq(partyLines.number, candidate))
+      .limit(1);
+    if (line.length > 0) return true;
+  } catch {
+    // party_lines may not exist yet on a first boot before the migrator ran —
+    // treat as free (identical to pre-v2.89 behavior).
+  }
+  return false;
+}
+
 export async function allocateNumber(): Promise<string> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
   for (let attempt = 0; attempt < 25; attempt++) {
     const candidate = randomDigits6();
     if (RESERVED_PREFIXES.some((p) => candidate.startsWith(p))) continue;
-    const existing = await db
-      .select({ id: identities.id })
-      .from(identities)
-      .where(eq(identities.number, candidate))
-      .limit(1);
-    if (existing.length === 0) return candidate;
+    if (!(await numberTaken(db, candidate))) return candidate;
   }
   throw new Error("could not allocate a unique 6-digit number");
 }
@@ -695,6 +718,11 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "messages", column: "messages_convo_id_idx", ddl: "ADD INDEX `messages_convo_id_idx` (`conversationId`, `id`)" },
     { table: "messages", column: "messages_attachment_idx", ddl: "ADD INDEX `messages_attachment_idx` (`attachmentId`)" },
     { table: "contacts", column: "contacts_number_idx", ddl: "ADD INDEX `contacts_number_idx` (`number`)" },
+    // Image thumbnails (v2.89, mirrored in drizzle/schema.ts): the client
+    // uploads a ≤512px thumb alongside a downscaled main image; bubbles render
+    // the thumb and tap through to the full-size url.
+    { table: "attachments", column: "thumbKey", ddl: "ADD COLUMN `thumbKey` varchar(256)" },
+    { table: "attachments", column: "thumbUrl", ddl: "ADD COLUMN `thumbUrl` text" },
   ];
   for (const a of adds) {
     try {
@@ -783,6 +811,22 @@ export async function ensureSchemaExtensions(): Promise<void> {
         \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY \`push_sub_endpoint_unique\` (\`endpoint\`),
         KEY \`push_sub_identity_idx\` (\`identityId\`)
+      )`,
+    },
+    {
+      // Party lines (v2.89): dialable ROOM numbers. One row per line; the
+      // number shares the identity number space (both allocators check both
+      // tables). The relay derives the persistent room id (`pl-<number>`)
+      // from this row, so an empty line is re-dialable forever.
+      name: "party_lines",
+      ddl: `CREATE TABLE IF NOT EXISTS \`party_lines\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`number\` varchar(6) NOT NULL,
+        \`ownerIdentityId\` int NOT NULL,
+        \`title\` varchar(64) NOT NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY \`party_lines_number_unique\` (\`number\`),
+        KEY \`party_lines_owner_idx\` (\`ownerIdentityId\`)
       )`,
     },
     {
@@ -1562,6 +1606,9 @@ export async function recordAttachment(input: {
   height?: number | null;
   durationMs?: number | null;
   filename?: string | null;
+  /** ≤512px thumbnail (v2.89) — key + servable URL, images only. */
+  thumbKey?: string | null;
+  thumbUrl?: string | null;
   uploadedByIdentityId: number;
 }) {
   const db = await getDb();
@@ -1579,6 +1626,8 @@ export async function recordAttachment(input: {
     height: input.height ?? null,
     durationMs: input.durationMs ?? null,
     filename: input.filename ?? null,
+    thumbKey: input.thumbKey ?? null,
+    thumbUrl: input.thumbUrl ?? null,
     uploadedByIdentityId: input.uploadedByIdentityId,
   });
   const insertId = Number(ins[0].insertId);
@@ -1992,4 +2041,100 @@ export async function listPushSubscriptions(
     .from(pushSubscriptions)
     .where(eq(pushSubscriptions.identityId, identityId));
   return rows;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Party lines (v2.89) — dialable ROOM numbers. A line gets its own 6-digit
+ * number from the SAME space as identities; dialing it never rings anyone,
+ * the caller just lands in the line's persistent relay room (`pl-<number>`).
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** Prevent one identity hoarding the number space. */
+export const MAX_PARTY_LINES_PER_OWNER = 10;
+
+/** Allocate a fresh 6-digit number that collides with NEITHER identities NOR
+ *  existing party lines (one shared number space — see numberTaken). */
+export async function allocatePartyLineNumber(): Promise<string> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  for (let attempt = 0; attempt < 25; attempt++) {
+    const candidate = randomDigits6();
+    if (RESERVED_PREFIXES.some((p) => candidate.startsWith(p))) continue;
+    if (!(await numberTaken(db, candidate))) return candidate;
+  }
+  throw new Error("could not allocate a unique 6-digit number");
+}
+
+export async function createPartyLine(input: {
+  ownerIdentityId: number;
+  title: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  const title = input.title.trim().slice(0, 64);
+  if (!title) throw new Error("title required");
+  const owned = await db
+    .select({ id: partyLines.id })
+    .from(partyLines)
+    .where(eq(partyLines.ownerIdentityId, input.ownerIdentityId));
+  if (owned.length >= MAX_PARTY_LINES_PER_OWNER) {
+    throw new Error(`You can have at most ${MAX_PARTY_LINES_PER_OWNER} party lines.`);
+  }
+  // The unique index on `number` is the true guard; retry on a lost race.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const number = await allocatePartyLineNumber();
+    try {
+      const ins = await db.insert(partyLines).values({
+        number,
+        ownerIdentityId: input.ownerIdentityId,
+        title,
+      });
+      const insertId = Number(ins[0].insertId);
+      const [row] = await db.select().from(partyLines).where(eq(partyLines.id, insertId)).limit(1);
+      if (row) return row;
+    } catch (e) {
+      const msg = (e as Error)?.message || "";
+      if (!/duplicate/i.test(msg)) throw e; // only a number race retries
+    }
+  }
+  throw new Error("could not allocate a party line number");
+}
+
+export async function getPartyLineByNumber(number: string) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(partyLines).where(eq(partyLines.number, number)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getPartyLinesByNumbers(numbers: string[]) {
+  const db = await getDb();
+  if (!db || numbers.length === 0) return [];
+  return db.select().from(partyLines).where(inArray(partyLines.number, numbers));
+}
+
+export async function listPartyLines(ownerIdentityId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(partyLines)
+    .where(eq(partyLines.ownerIdentityId, ownerIdentityId))
+    .orderBy(desc(partyLines.id));
+}
+
+/** Owner-scoped delete. Returns true when a row was actually removed. */
+export async function deletePartyLine(ownerIdentityId: number, id: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db
+    .select({ id: partyLines.id })
+    .from(partyLines)
+    .where(and(eq(partyLines.id, id), eq(partyLines.ownerIdentityId, ownerIdentityId)))
+    .limit(1);
+  if (rows.length === 0) return false;
+  await db
+    .delete(partyLines)
+    .where(and(eq(partyLines.id, id), eq(partyLines.ownerIdentityId, ownerIdentityId)));
+  return true;
 }

@@ -273,6 +273,10 @@ export default function DialerPage() {
     [dialed, myNumber]
   );
 
+  // Party line (v2.89): the previewed number is a dialable ROOM — the call
+  // button reads "Join" (nothing rings; you just land on the line).
+  const previewIsLine = dialed.length === 6 && !!previewIdentity?.partyLine;
+
   const recent = useMemo(() => (history.data ?? []).slice(0, 8), [history.data]);
 
   return (
@@ -460,6 +464,18 @@ export default function DialerPage() {
                 ) : ghost.mode === "typed" && dialed.length === 6 ? (
                   previewQuery.isLoading ? (
                     "Looking up…"
+                  ) : previewIdentity?.partyLine ? (
+                    // Party line (v2.89): a dialable room — show its title and
+                    // the live head-count instead of a person's presence.
+                    <span>
+                      <span className="font-semibold text-foreground">
+                        {previewIdentity.displayName}
+                      </span>
+                      {" · "}
+                      <span className="text-violet-400 font-medium">
+                        Party line · {previewIdentity.memberCount} on the line
+                      </span>
+                    </span>
                   ) : previewIdentity ? (
                     (() => {
                       const st = peerStatus({
@@ -575,12 +591,14 @@ export default function DialerPage() {
                       boxShadow: "0 10px 28px -8px color-mix(in oklab, #2563eb 70%, transparent)",
                       transitionTimingFunction: "var(--ease-out)",
                     }}
-                    aria-label="Voice call"
-                    title="Voice call (camera off)"
+                    aria-label={previewIsLine ? "Join the party line" : "Voice call"}
+                    title={previewIsLine ? "Join the party line (camera off)" : "Voice call (camera off)"}
                   >
                     <PhoneCall className="size-6" strokeWidth={2.2} />
                   </button>
-                  <span className="text-xs font-medium text-muted-foreground">Voice Call</span>
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {previewIsLine ? "Join" : "Voice Call"}
+                  </span>
                 </div>
                 {/* Video call (green). */}
                 <div className="flex flex-col items-center gap-1.5">

@@ -352,6 +352,15 @@ export const attachments = mysqlTable(
     durationMs: int("durationMs"),
     /** Optional original filename for files. */
     filename: varchar("filename", { length: 256 }),
+    /* Image thumbnails (v2.89). Additive + nullable, applied to the live DB by
+       ensureSchemaExtensions(). The client generates a ≤512px thumbnail on-canvas
+       and uploads it BEFORE the full image; message bubbles render the thumb and
+       tap through to the full-size `url`. Null for non-images / legacy rows /
+       the unchanged base64 (mobile) upload path. */
+    /** Storage key of the ≤512px thumbnail (in the uploader's own namespace). */
+    thumbKey: varchar("thumbKey", { length: 256 }),
+    /** Servable URL of the thumbnail (`/manus-storage/{thumbKey}`). */
+    thumbUrl: text("thumbUrl"),
     uploadedByIdentityId: int("uploadedByIdentityId").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
@@ -502,6 +511,37 @@ export const onlineWatches = mysqlTable(
   }),
 );
 export type OnlineWatch = typeof onlineWatches.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * party_lines — dialable ROOM numbers (v2.89, the signature feature).
+ *
+ * A user creates a party line and it gets its OWN 6-digit number from the SAME
+ * number space as identities (allocation checks BOTH tables, so a line can
+ * never shadow a person or vice versa). Dialing the number never rings anyone:
+ * the relay's invite path resolves it (onResolveDial) and drops the caller
+ * straight into the line's persistent room (`pl-<number>`). The room id is
+ * DERIVED from this row, so the in-memory room can be reaped freely when empty
+ * — the line stays dialable forever until the owner deletes it. Created at
+ * boot by ensureSchemaExtensions (CREATE TABLE IF NOT EXISTS).
+ * ────────────────────────────────────────────────────────────────────────── */
+export const partyLines = mysqlTable(
+  "party_lines",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    /** The line's public dialable 6-digit number. */
+    number: varchar("number", { length: 6 }).notNull(),
+    /** The identity that created (and can delete) the line. */
+    ownerIdentityId: int("ownerIdentityId").notNull(),
+    /** Display title, shown in directory lookups + History. */
+    title: varchar("title", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    numberUnique: uniqueIndex("party_lines_number_unique").on(t.number),
+    ownerIdx: index("party_lines_owner_idx").on(t.ownerIdentityId),
+  }),
+);
+export type PartyLine = typeof partyLines.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
  * signaling — DB-backed WebRTC SDP/ICE mailbox.

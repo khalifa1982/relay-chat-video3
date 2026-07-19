@@ -59,6 +59,12 @@ import {
   deletePushSubscription,
   addOnlineWatch,
   takeOnlineWatchers,
+  createPartyLine,
+  deletePartyLine,
+  getPartyLineByNumber,
+  getPartyLinesByNumbers,
+  listPartyLines,
+  MAX_PARTY_LINES_PER_OWNER,
 } from "./v2db";
 import { vapidConfig, sendPushToIdentity } from "./webPush";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
@@ -91,7 +97,8 @@ import { createRateLimiter, clientIpOf } from "./rateLimit";
 // Carrier-style busy line (v2.88): pure read of the relay's in-memory registry
 // ("is this pin in a room right now?"). Single-instance by design — the same
 // instance serves the SSE signaling, so the read is authoritative here.
-import { pinsInCall } from "./relay";
+// partyLineLiveCounts (v2.89) reads the same registry for "N on the line".
+import { pinsInCall, partyLineLiveCounts } from "./relay";
 
 export const NumberSchema = z
   .string()
@@ -429,10 +436,30 @@ export function isPrivateOrLocalIp(ip: string): boolean {
 }
 
 export const v2DirectoryRouter = router({
-  /** Look up a single number — returns null when unknown. */
+  /** Look up a single number — returns null when unknown. Party-line numbers
+   *  (v2.89) resolve FIRST (same precedence as the dial path) and return the
+   *  line's title + live head-count instead of a person. */
   lookup: publicProcedure
     .input(z.object({ number: NumberSchema }))
     .query(async ({ input }) => {
+      const line = await getPartyLineByNumber(input.number).catch(() => null);
+      if (line) {
+        const memberCount = partyLineLiveCounts([line.number]).get(line.number) ?? 0;
+        return {
+          id: line.id,
+          number: line.number,
+          displayName: line.title,
+          avatarUrl: null as string | null,
+          isOnline: memberCount > 0,
+          lastSeenAt: null as Date | null,
+          statusOverride: "" as "" | "away" | "travel",
+          presenceHidden: false,
+          verified: false,
+          inCall: false,
+          partyLine: true,
+          memberCount,
+        };
+      }
       const id = await getIdentityByNumber(input.number);
       if (!id) return null;
       const [pres] = await getPresenceForIds([id.id]);
@@ -454,6 +481,8 @@ export const v2DirectoryRouter = router({
         verified: id.verified,
         // Carrier-style busy line (v2.88): they're ON A CALL right now.
         inCall: hidden ? false : pinsInCall([id.number]).has(id.number),
+        partyLine: false,
+        memberCount: 0,
       };
     }),
 
@@ -1261,10 +1290,23 @@ export const v2CallsRouter = router({
     const me = requireIdentity(ctx);
     const clearedAt = await getHistoryClearedAt(me.id);
     const rows = await listConferenceHistory(me.id, 100, clearedAt);
+    // Party lines (v2.89): pl- rooms carry the line's number as dialedNumber —
+    // resolve their titles in ONE batched query so History can label them.
+    const lineNumbers = Array.from(
+      new Set(
+        rows
+          .filter((r) => (r.roomId ?? "").startsWith("pl-") && r.dialedNumber)
+          .map((r) => r.dialedNumber as string)
+      )
+    );
+    const titleByNumber = new Map(
+      (await getPartyLinesByNumbers(lineNumbers).catch(() => [])).map((l) => [l.number, l.title])
+    );
     return rows.map((r) => {
       const roster = Array.isArray(r.participants)
         ? (r.participants as Array<{ number?: string; name?: string; identityId?: number | null }>)
         : [];
+      const isPartyLine = (r.roomId ?? "").startsWith("pl-");
       return {
         id: r.id,
         roomId: r.roomId,
@@ -1273,6 +1315,9 @@ export const v2CallsRouter = router({
         startedAt: r.startedAt,
         endedAt: r.endedAt,
         durationSec: r.durationSec,
+        partyLine: isPartyLine,
+        // Null when the line has since been deleted (row keeps its number).
+        partyLineTitle: isPartyLine ? (titleByNumber.get(r.dialedNumber ?? "") ?? null) : null,
         // Surface everyone EXCEPT me first-class; keep the full list too.
         participants: roster.map((p) => ({
           number: p.number ?? "",
@@ -1628,6 +1673,70 @@ export const v2PushRouter = router({
     .input(z.object({ endpoint: z.string().min(10).max(500) }))
     .mutation(async ({ input }) => {
       await deletePushSubscription(input.endpoint);
+      return { ok: true };
+    }),
+});
+
+/* ── party lines router (v2.89) ───────────────────────────────────
+ * Dialable ROOM numbers. Guests allowed (an identity is an identity);
+ * per-IP rate-limited so the shared 6-digit number space can't be
+ * farmed, plus a per-owner cap enforced in the DB helper. */
+
+const partyLineIpLimiter = createRateLimiter({ capacity: 10, refillPerSec: 10 / 60 });
+setInterval(() => partyLineIpLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
+function partyLineGate(ctx: { req: unknown }) {
+  if (process.env.RELAY_RATELIMIT_OFF === "1") return;
+  if (!partyLineIpLimiter.allow(clientIpOf(ctx.req as Parameters<typeof clientIpOf>[0]), Date.now())) {
+    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many party-line changes. Try again shortly." });
+  }
+}
+
+export const v2PartyLinesRouter = router({
+  /** Create a line → it gets its OWN 6-digit number (shared number space with
+   *  identities — allocation checks both tables). */
+  create: publicProcedure
+    .input(z.object({ title: z.string().trim().min(1).max(64) }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      partyLineGate(ctx);
+      try {
+        const row = await createPartyLine({ ownerIdentityId: me.id, title: input.title });
+        return { id: row.id, number: row.number, title: row.title, createdAt: row.createdAt };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Could not create the party line.";
+        if (msg.includes("at most")) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: msg });
+        }
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the party line." });
+      }
+    }),
+
+  /** The caller's OWN lines, newest first, with live head-counts. */
+  list: publicProcedure.query(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    const rows = await listPartyLines(me.id);
+    const counts = partyLineLiveCounts(rows.map((r) => r.number));
+    return rows.map((r) => ({
+      id: r.id,
+      number: r.number,
+      title: r.title,
+      createdAt: r.createdAt,
+      liveCount: counts.get(r.number) ?? 0,
+      max: MAX_PARTY_LINES_PER_OWNER,
+    }));
+  }),
+
+  /** Owner-only delete. Anyone currently ON the line keeps talking until they
+   *  leave; the number just stops resolving for NEW dials. */
+  remove: publicProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      partyLineGate(ctx);
+      const removed = await deletePartyLine(me.id, input.id);
+      if (!removed) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "That party line isn't yours (or is already gone)." });
+      }
       return { ok: true };
     }),
 });

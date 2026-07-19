@@ -38,7 +38,9 @@ describe("staged call progress — Calling → Ringing → Connecting → connec
   });
 
   it("the server acks the caller once the ring is delivered (callee pin + registered name)", () => {
-    expect(SERVER).toMatch(/safeSend\(conn\.socket, \{ type: "ringing", pin: to, name: target\.name \}\)/);
+    // v2.89: the invite body moved into runIdentityInvite (party-line resolver
+    // runs first), so the caller's socket is the captured `callerSocket`.
+    expect(SERVER).toMatch(/safeSend\(callerSocket, \{ type: "ringing", pin: to, name: target\.name \}\)/);
   });
 
   it("answering advances Ringing… to the REAL connecting sequence (both mesh and SFU paths)", () => {

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { X, Users, Plus, Check, Video, Phone, Search } from "lucide-react";
+import { X, Users, Plus, Check, Video, Phone, Search, Radio, Copy, Share2, Trash2, ChevronDown } from "lucide-react";
+import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -92,6 +93,9 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
             <X className="size-4" />
           </Button>
         </div>
+
+        {/* Party lines (v2.89): dialable room numbers you own. */}
+        <PartyLinesSection />
 
         {/* Selected chips */}
         {selectedArr.length > 0 && (
@@ -243,6 +247,142 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function fmtNum(n: string): string {
+  return n.length === 6 ? `${n.slice(0, 3)} ${n.slice(3)}` : n;
+}
+
+/**
+ * Party lines (v2.89): create a dialable ROOM number, list the ones you own
+ * (with live head-counts), copy/share the dial-in, delete. Collapsed by
+ * default so the group-call picker stays clean. Sharing reuses the /i/<pin>
+ * invite-link pattern — opening the link auto-dials the line.
+ */
+function PartyLinesSection() {
+  const utils = trpc.useUtils();
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const lines = trpc.partyLines.list.useQuery(undefined, {
+    enabled: open,
+    refetchInterval: open ? 15_000 : false, // keep "N on the line" fresh
+  });
+  const createLine = trpc.partyLines.create.useMutation({
+    onSuccess: (line) => {
+      utils.partyLines.list.invalidate();
+      setTitle("");
+      toast.success(`Party line created — its number is ${fmtNum(line.number)}`);
+    },
+    onError: (err) => toast.error(err.message || "Couldn't create the party line."),
+  });
+  const removeLine = trpc.partyLines.remove.useMutation({
+    onSuccess: () => {
+      utils.partyLines.list.invalidate();
+      toast.success("Party line deleted");
+    },
+    onError: (err) => toast.error(err.message || "Couldn't delete the party line."),
+  });
+
+  function shareLine(l: { title: string; number: string }) {
+    const url = `${window.location.origin}/i/${l.number}`;
+    const text = `Join "${l.title}" on RELAY — dial ${fmtNum(l.number)}`;
+    if (typeof navigator !== "undefined" && navigator.share) {
+      navigator.share({ title: text, text, url }).catch(() => {});
+    } else {
+      navigator.clipboard
+        ?.writeText(`${text}\n${url}`)
+        .then(() => toast.success("Invite copied"))
+        .catch(() => toast.error("Couldn't copy the invite"));
+    }
+  }
+  function copyLine(l: { title: string; number: string }) {
+    navigator.clipboard
+      ?.writeText(`${l.title} — dial ${fmtNum(l.number)} on RELAY or open ${window.location.origin}/i/${l.number}`)
+      .then(() => toast.success("Dial-in copied"))
+      .catch(() => toast.error("Couldn't copy"));
+  }
+
+  return (
+    <div className="shrink-0 border-b border-border/60">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-4 py-2.5 text-left hover:bg-muted/30 transition-colors"
+      >
+        <Radio className="size-4 text-violet-400" />
+        <span className="flex-1 text-sm font-medium">Party lines</span>
+        <span className="text-xs text-muted-foreground">{open ? "Hide" : "Manage"}</span>
+        <ChevronDown className={"size-4 text-muted-foreground transition-transform " + (open ? "rotate-180" : "")} />
+      </button>
+      {open && (
+        <div className="space-y-2 px-4 pb-3">
+          <p className="text-xs text-muted-foreground">
+            A party line is a room with its own 6-digit number — anyone who dials it
+            lands in the same call. No ringing, no invites: just share the number.
+          </p>
+          <div className="flex gap-2">
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value.slice(0, 64))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && title.trim()) createLine.mutate({ title: title.trim() });
+              }}
+              placeholder="Line name (e.g. Family room)"
+            />
+            <Button
+              type="button"
+              onClick={() => createLine.mutate({ title: title.trim() })}
+              disabled={!title.trim() || createLine.isPending}
+            >
+              {createLine.isPending ? "Creating…" : "Create"}
+            </Button>
+          </div>
+          {lines.isLoading ? (
+            <div className="py-1 text-xs text-muted-foreground">Loading…</div>
+          ) : (lines.data?.length ?? 0) === 0 ? (
+            <div className="py-1 text-xs text-muted-foreground">No party lines yet.</div>
+          ) : (
+            (lines.data ?? []).map((l) => (
+              <div
+                key={l.id}
+                className="flex items-center gap-1.5 rounded-xl border border-border/60 px-3 py-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{l.title}</div>
+                  <div className="font-mono text-xs text-muted-foreground">
+                    {fmtNum(l.number)}
+                    {l.liveCount > 0 ? (
+                      <span className="ml-1.5 font-sans font-medium text-[color:var(--relay-online)]">
+                        · {l.liveCount} on the line
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <Button size="icon" variant="ghost" className="size-8" aria-label={`Copy dial-in for ${l.title}`} title="Copy dial-in" onClick={() => copyLine(l)}>
+                  <Copy className="size-4" />
+                </Button>
+                <Button size="icon" variant="ghost" className="size-8" aria-label={`Share ${l.title}`} title="Share invite link" onClick={() => shareLine(l)}>
+                  <Share2 className="size-4" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-8 text-muted-foreground hover:text-destructive"
+                  aria-label={`Delete ${l.title}`}
+                  title="Delete this party line"
+                  disabled={removeLine.isPending}
+                  onClick={() => removeLine.mutate({ id: l.id })}
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }

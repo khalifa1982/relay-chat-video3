@@ -14,7 +14,8 @@ import { serveStatic, setupVite } from "./vite";
 import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
 import { registerV2Events, publishToIdentity } from "../v2events";
-import { getIdentityByNumber, reapStalePresence, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation } from "../v2db";
+import { registerV2Offline } from "../v2offline";
+import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation } from "../v2db";
 import { sendPushToIdentity } from "../webPush";
 import { registerWellKnown } from "../wellKnown";
 import { sweepExpiredOtps } from "../authOtp";
@@ -260,6 +261,15 @@ async function startServer() {
         /* push is best-effort — the page itself still works via reconnect */
       });
       return { exists: true, name: callee.displayName ?? undefined };
+    },
+    async (pin) => {
+      // onResolveDial (v2.89): party lines. A dialed number that matches a
+      // party_lines row NEVER rings anyone — the relay drops the caller into
+      // the line's persistent room (`pl-<number>`). Anything else (including a
+      // DB hiccup — the relay catches a rejection) dials as an identity.
+      const line = await getPartyLineByNumber(pin);
+      if (line) return { partyLine: true as const, title: line.title };
+      return "identity" as const;
     }
   );
   // Version endpoint for the client's auto-update checker. Returns the version
@@ -274,6 +284,10 @@ async function startServer() {
   // v2.0 push channel — SSE that routes message/presence/read events
   // to the right identity. Production gateway is SSE-friendly.
   registerV2Events(app);
+  // Instant offline presence (v2.89): the sendBeacon target fired on
+  // pagehide/tab-hide so contacts' LEDs flip grey immediately instead of
+  // waiting out the 2-minute reaper (which stays as the backstop).
+  registerV2Offline(app);
   // Inbound email webhook (reply-to-thread). No-op until INBOUND_EMAIL_DOMAIN.
   registerEmailInbound(app);
   // Self-hosted email/password auth (register / verify / login / resend), served
