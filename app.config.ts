@@ -59,9 +59,9 @@ const config: ExpoConfig = {
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
       NSCameraUsageDescription:
-        "RELAY needs camera access so you can make video calls.",
+        "RELAY uses your camera to transmit live video to the person you are calling during a video call. For example, when you tap the video-call button next to a contact's name, your front camera activates so the other person can see you in real time.",
       NSMicrophoneUsageDescription:
-        "RELAY needs microphone access so you can make voice and video calls.",
+        "RELAY uses your microphone to capture and transmit your voice to the person you are speaking with during a voice or video call. For example, when you accept an incoming call or dial a contact, your microphone activates so the other person can hear you clearly throughout the conversation.",
       // Keep the call's audio session alive while backgrounded (voice/video calls).
       UIBackgroundModes: ["audio", "voip"],
     },
@@ -129,7 +129,8 @@ const config: ExpoConfig = {
     [
       "expo-audio",
       {
-        microphonePermission: "Allow $(PRODUCT_NAME) to access your microphone.",
+        microphonePermission:
+          "RELAY uses your microphone to capture and transmit your voice during voice and video calls. For example, when you accept an incoming call, your microphone activates so the other person can hear you.",
       },
     ],
     [

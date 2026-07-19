@@ -159,3 +159,10 @@
 - [x] BUG #4: iOS notification failure after backgrounding — re-register notification handlers + channels on every app resume, re-set foreground notification handler, refresh response listener
 - [x] Bump version to 1.0.17 / build 17
 - [x] tsc clean + 65 tests pass; checkpoint and deliver
+
+## Round 16 — Fix Apple App Store rejection (Guideline 2.2 + 5.1.1(ii))
+- [x] Guideline 2.2 (Beta Testing): Removed "BETA" badge from BuildStatusRow, hid entire update footer on iOS (iOS updates via App Store only), removed all beta/test visual indicators
+- [x] Guideline 5.1.1(ii) (Privacy - Data Collection): Updated NSMicrophoneUsageDescription with detailed explanation + specific example of how microphone data is used during calls
+- [x] Updated NSCameraUsageDescription with detailed explanation + specific example of video call usage
+- [x] Updated expo-audio plugin microphonePermission string with full explanation + example
+- [x] tsc clean + 65 tests pass; checkpoint and deliver
