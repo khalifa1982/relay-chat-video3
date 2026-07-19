@@ -57,6 +57,13 @@
       "when": 1784237738417,
       "tag": "0007_overconfident_jackal",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1784504785460,
+      "tag": "0008_fearless_human_torch",
+      "breakpoints": true
     }
   ]
 }
