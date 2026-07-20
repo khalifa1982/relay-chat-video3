@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useSearch } from "wouter";
 import {
+  ArrowDownLeft,
+  ArrowUpRight,
   Bell,
+  ChevronDown,
+  ChevronRight,
   Clock,
-  Phone,
-  Users,
   MessageSquare,
+  Phone,
   PhoneMissed,
   PhoneOutgoing,
-  PhoneIncoming,
   Trash2,
+  Users,
+  Video,
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
@@ -99,6 +103,31 @@ function isSoloRow(c: CallRow): boolean {
 
 function isMissedItem(it: Item): boolean {
   return it.kind === "solo" && it.direction === "in";
+}
+
+/** First letter of a display name for the avatar disc (empty ⇒ icon fallback). */
+function initialOf(name: string): string {
+  return (name || "").trim().charAt(0).toUpperCase();
+}
+
+/** Bucket a call timestamp into a collapsible day-section {key,label}. Pure
+ *  presentation — the underlying rows/handlers are untouched. */
+function dayBucket(ts: number, now: number): { key: string; label: string } {
+  const d = new Date(ts);
+  const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const n = new Date(now);
+  const todayStart = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+  const DAY = 86_400_000;
+  let label: string;
+  if (startOfDay === todayStart) label = "Today";
+  else if (startOfDay === todayStart - DAY) label = "Yesterday";
+  else
+    label = new Date(startOfDay).toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+  return { key: String(startOfDay), label };
 }
 
 export default function HistoryPage() {
@@ -193,12 +222,44 @@ export default function HistoryPage() {
     return items;
   }, [items, filter]);
 
+  // Group the (already filtered + newest-first) rows into collapsible day
+  // sections. Purely presentational: the item objects — and every prop the row
+  // components receive — are the exact same references as before.
+  const sections = useMemo(() => {
+    const now = Date.now();
+    const map = new Map<string, { key: string; label: string; items: Item[] }>();
+    for (const it of visible) {
+      const { key, label } = dayBucket(it.at, now);
+      let sec = map.get(key);
+      if (!sec) {
+        sec = { key, label, items: [] };
+        map.set(key, sec);
+      }
+      sec.items.push(it);
+    }
+    return Array.from(map.values());
+  }, [visible]);
+  // Collapsed day-sections (by key). Default = all expanded.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const toggleSection = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
   const loading = conferences.isLoading || oneToOne.isLoading;
   const errored = conferences.isError && oneToOne.isError;
   // Voice-first everywhere (v2.81 protocol): a History redial starts as a
   // VOICE call — video is a mid-call, mutual-consent upgrade, never a default.
   const redial = (num: string) => {
     if (num) engine.dial(num, { voice: true });
+  };
+  // Explicit video call from a row's blue button — an intentional user choice
+  // (same as the Contacts screen's Video action), not a voice-first default.
+  const videoCall = (num: string) => {
+    if (num) engine.dial(num, { voice: false });
   };
   // Re-create a group call: ring every participant into one conference.
   const redialGroup = (numbers: string[]) => {
@@ -302,7 +363,7 @@ export default function HistoryPage() {
                 {n > 0 && (
                   <span
                     className={
-                      "min-w-4 rounded-full px-1 text-[10px] leading-4 " +
+                      "min-w-4 rounded-full px-1 text-[10px] font-bold leading-4 " +
                       (f.key === "missed"
                         ? "bg-red-500/15 text-red-500"
                         : "bg-muted text-muted-foreground")
@@ -322,7 +383,7 @@ export default function HistoryPage() {
           title="Clear your call history"
           disabled={clearHistory.isPending || items.length === 0}
           onClick={() => setConfirmClear(true)}
-          className="size-9 shrink-0 text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+          className="size-9 shrink-0 rounded-lg text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
         >
           <Trash2 className="size-[18px]" />
         </Button>
@@ -375,42 +436,124 @@ export default function HistoryPage() {
                   : "No calls yet. Your conference and call history will appear here — who you dialed, how many people joined, their names and numbers, and how long the call lasted."}
             </div>
           ) : (
-            <ul>
-              {visible.map((it) =>
-                it.kind === "conf" ? (
-                  <ConferenceItem
-                    key={it.key}
-                    conf={it.conf}
-                    direction={it.direction}
-                    onRedial={redial}
-                    onRedialGroup={redialGroup}
-                    onMessage={message}
-                    online={
-                      presence.data
-                        ? onlineSet.has(it.conf.dialedNumber || it.conf.participants.find((p) => !p.isSelf)?.number || "")
-                        : undefined
-                    }
-                    inCall={inCallSet.has(
-                      it.conf.dialedNumber || it.conf.participants.find((p) => !p.isSelf)?.number || ""
+            <div>
+              {sections.map((sec) => {
+                const isCollapsed = collapsed.has(sec.key);
+                const sectionMissed = sec.items.some(isMissedItem);
+                return (
+                  <div key={sec.key}>
+                    {/* Collapsible day header: chevron + UPPERCASE label + count,
+                        with a danger dot when the day holds a missed call. */}
+                    <button
+                      type="button"
+                      onClick={() => toggleSection(sec.key)}
+                      aria-expanded={!isCollapsed}
+                      className="flex w-full items-center gap-2 px-4 pt-3 pb-1.5 text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      {isCollapsed ? (
+                        <ChevronRight className="size-3 shrink-0" strokeWidth={2.4} />
+                      ) : (
+                        <ChevronDown className="size-3 shrink-0" strokeWidth={2.4} />
+                      )}
+                      <span className="flex-1 text-left text-[11px] font-bold uppercase tracking-[0.12em]">
+                        {sec.label}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground/70">{sec.items.length}</span>
+                      {sectionMissed && (
+                        <span className="size-2 shrink-0 rounded-full bg-[#e2493b]" aria-hidden />
+                      )}
+                    </button>
+                    {!isCollapsed && (
+                      <ul>
+                        {sec.items.map((it) =>
+                          it.kind === "conf" ? (
+                            <ConferenceItem
+                              key={it.key}
+                              conf={it.conf}
+                              direction={it.direction}
+                              onRedial={redial}
+                              onRedialGroup={redialGroup}
+                              onMessage={message}
+                              onVideo={videoCall}
+                              online={
+                                presence.data
+                                  ? onlineSet.has(it.conf.dialedNumber || it.conf.participants.find((p) => !p.isSelf)?.number || "")
+                                  : undefined
+                              }
+                              inCall={inCallSet.has(
+                                it.conf.dialedNumber || it.conf.participants.find((p) => !p.isSelf)?.number || ""
+                              )}
+                            />
+                          ) : (
+                            <SoloItem
+                              key={it.key}
+                              call={it.call}
+                              onRedial={redial}
+                              onMessage={message}
+                              onVideo={videoCall}
+                              onWatch={watch}
+                              online={presence.data ? onlineSet.has(it.call.other?.number ?? "") : undefined}
+                              inCall={inCallSet.has(it.call.other?.number ?? "")}
+                            />
+                          )
+                        )}
+                      </ul>
                     )}
-                  />
-                ) : (
-                  <SoloItem
-                    key={it.key}
-                    call={it.call}
-                    onRedial={redial}
-                    onMessage={message}
-                    onWatch={watch}
-                    online={presence.data ? onlineSet.has(it.call.other?.number ?? "") : undefined}
-                    inCall={inCallSet.has(it.call.other?.number ?? "")}
-                  />
-                )
-              )}
-            </ul>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
       </section>
     </div>
+  );
+}
+
+/** A circular, gradient-filled row action (message / video / call / watch),
+ *  matching the Claude Design prototype. The accent hex is a shared brand
+ *  colour (identical in light + dark), so it's hardcoded per rule; the disc
+ *  brightens on hover. */
+function RoundAction({
+  rgb,
+  accent,
+  strong,
+  label,
+  title,
+  onClick,
+  disabled,
+  children,
+}: {
+  /** "r,g,b" of the accent, for the translucent gradient fill. */
+  rgb: string;
+  /** Solid accent hex for the icon (currentColor). */
+  accent: string;
+  /** Slightly stronger fill (the green call button in the prototype). */
+  strong?: boolean;
+  label: string;
+  title: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  const hi = strong ? 0.26 : 0.24;
+  const lo = strong ? 0.08 : 0.07;
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      className="grid size-[34px] shrink-0 place-items-center rounded-full transition hover:brightness-125 disabled:pointer-events-none disabled:opacity-40"
+      style={{
+        background: `linear-gradient(160deg, rgba(${rgb},${hi}), rgba(${rgb},${lo}))`,
+        color: accent,
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,.15)",
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -443,12 +586,28 @@ function PresenceLed({ online, inCall }: { online: boolean | undefined; inCall?:
   );
 }
 
+/** The small corner disc that overlaps an avatar's lower-left, showing call
+ *  direction: an up-right arrow (out) or down-left arrow (in/missed), tinted
+ *  with the row's tone. */
+function DirectionBadge({ direction, toneName }: { direction: "in" | "out"; toneName: string }) {
+  return (
+    <span className="absolute -bottom-1 -left-1 grid size-[18px] place-items-center rounded-full bg-background">
+      {direction === "out" ? (
+        <ArrowUpRight className={"size-3 " + toneName} strokeWidth={3} />
+      ) : (
+        <ArrowDownLeft className={"size-3 " + toneName} strokeWidth={3} />
+      )}
+    </span>
+  );
+}
+
 function ConferenceItem({
   conf,
   direction,
   onRedial,
   onRedialGroup,
   onMessage,
+  onVideo,
   online,
   inCall,
 }: {
@@ -457,6 +616,7 @@ function ConferenceItem({
   onRedial: (num: string) => void;
   onRedialGroup: (numbers: string[]) => void;
   onMessage: (num: string) => void;
+  onVideo: (num: string) => void;
   online: boolean | undefined;
   inCall?: boolean;
 }) {
@@ -464,7 +624,6 @@ function ConferenceItem({
   const otherNumbers = others.map((p) => p.number).filter(Boolean);
   const isGroup = conf.partyCount > 2 || otherNumbers.length > 1;
   const tone = direction === "out" ? TONE.out : TONE.in;
-  const Icon = isGroup ? Users : direction === "out" ? PhoneOutgoing : PhoneIncoming;
   // Title = the party line's name (v2.89) when this room WAS a line, else the
   // other people on the call (or the dialed number as a fallback).
   const title = conf.partyLine
@@ -485,19 +644,36 @@ function ConferenceItem({
     else onRedial(callBack);
   };
   const canCall = isGroup ? otherNumbers.length > 0 : !!callBack;
+  const initial = initialOf(others[0]?.name ?? "");
 
   return (
     <li
-      className="border-b border-border/60 px-4 py-3 last:border-b-0 hover:bg-muted/30 transition-colors"
+      className="border-b border-border/60 px-4 py-3 last:border-b-0 transition-colors hover:bg-muted/30"
       aria-label={`${direction === "out" ? "Outgoing" : "Incoming"} call with ${title}, ${formatDuration(conf.durationSec)} duration`}
     >
       <div className="flex items-center gap-3">
-        <span className={"relative grid size-9 shrink-0 place-items-center rounded-xl " + tone.bubble}>
-          <Icon className="size-[18px]" />
-          <PresenceLed online={online} inCall={inCall} />
-        </span>
+        {isGroup ? (
+          // Group → violet-tinted rounded-square Users disc.
+          <span
+            className="relative grid size-10 shrink-0 place-items-center rounded-xl"
+            style={{
+              background: "linear-gradient(160deg, rgba(167,139,250,.24), rgba(167,139,250,.07))",
+              color: "#a78bfa",
+            }}
+          >
+            <Users className="size-[18px]" />
+            <PresenceLed online={online} inCall={inCall} />
+          </span>
+        ) : (
+          // 1:1 answered call → round tone disc + a direction corner badge.
+          <span className={"relative grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold " + tone.bubble}>
+            {initial || <Phone className="size-[18px]" />}
+            <DirectionBadge direction={direction} toneName={tone.name} />
+            <PresenceLed online={online} inCall={inCall} />
+          </span>
+        )}
         <div className="min-w-0 flex-1">
-          <div className={"truncate font-medium " + tone.name}>{title}</div>
+          <div className="truncate text-[15px] font-bold text-foreground">{title}</div>
           <div className="text-xs text-muted-foreground">
             <span className={"font-semibold " + tone.label}>
               {direction === "out" ? "Outgoing" : "Incoming"}
@@ -517,28 +693,41 @@ function ConferenceItem({
             {formatFullWhen(conf.startedAt)}
           </div>
         </div>
-        <Button
-          size="icon"
-          variant="ghost"
-          disabled={!callBack}
-          aria-label="Message"
-          title="Message"
-          onClick={() => onMessage(callBack)}
-          className="size-11"
-        >
-          <MessageSquare className="size-4" />
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          disabled={!canCall}
-          aria-label={isGroup ? "Call the group back" : "Call back"}
-          title={isGroup ? "Call everyone back (group)" : "Call back"}
-          onClick={callBackAll}
-          className="size-11"
-        >
-          {isGroup ? <Users className="size-4" /> : <Phone className="size-4" />}
-        </Button>
+        <div className="flex items-center gap-1.5">
+          <RoundAction
+            rgb="251,146,60"
+            accent="#fb923c"
+            label="Message"
+            title="Message"
+            disabled={!callBack}
+            onClick={() => onMessage(callBack)}
+          >
+            <MessageSquare className="size-4" />
+          </RoundAction>
+          {!isGroup && (
+            <RoundAction
+              rgb="56,189,248"
+              accent="#38bdf8"
+              label="Video call"
+              title="Video call"
+              disabled={!callBack}
+              onClick={() => onVideo(callBack)}
+            >
+              <Video className="size-4" />
+            </RoundAction>
+          )}
+          <RoundAction
+            rgb="34,197,94"
+            accent="#22c55e"
+            strong
+            label={isGroup ? "Call the group back" : "Call back"}
+            title={isGroup ? "Call everyone back (group)" : "Call back"}
+            disabled={!canCall}
+            onClick={callBackAll}
+          >
+            {isGroup ? <Users className="size-4" /> : <Phone className="size-4" />}
+          </RoundAction>
+        </div>
       </div>
 
       {/* Roster: every participant's name + PIN. */}
@@ -547,7 +736,7 @@ function ConferenceItem({
           <span
             key={p.number}
             className={
-              "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] " +
+              "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold " +
               (p.isSelf
                 ? "bg-primary/15 text-primary"
                 : "bg-muted/60 text-muted-foreground")
@@ -555,10 +744,10 @@ function ConferenceItem({
             title={p.number}
             aria-label={p.isSelf ? "You" : `${p.name} (${p.number})`}
           >
-            <span className="max-w-[10rem] truncate font-medium">
+            <span className="max-w-[10rem] truncate">
               {p.isSelf ? "You" : p.name}
             </span>
-            {p.number ? <span className="font-mono opacity-70">{p.number}</span> : null}
+            {p.number ? <span className="font-mono opacity-60">{p.number}</span> : null}
           </span>
         ))}
       </div>
@@ -573,6 +762,7 @@ function SoloItem({
   call,
   onRedial,
   onMessage,
+  onVideo,
   onWatch,
   online,
   inCall,
@@ -580,6 +770,7 @@ function SoloItem({
   call: CallRow;
   onRedial: (num: string) => void;
   onMessage: (num: string) => void;
+  onVideo: (num: string) => void;
   /** Call-back alert (v2.88): register a "they're back online" watch. */
   onWatch?: (num: string) => void;
   online: boolean | undefined;
@@ -587,7 +778,6 @@ function SoloItem({
 }) {
   const missedIn = call.direction === "in";
   const tone = missedIn ? TONE.missed : TONE.out;
-  const Icon = missedIn ? PhoneMissed : PhoneOutgoing;
   const peerNum = call.other?.number ?? "";
   const peerName = call.other?.displayName ?? peerNum ?? "Unknown";
   const label = missedIn
@@ -597,19 +787,23 @@ function SoloItem({
       : call.status === "failed"
         ? "Failed"
         : "No answer";
+  const initial = initialOf(call.other?.displayName ?? "");
 
   return (
     <li
-      className="border-b border-border/60 px-4 py-3 last:border-b-0 hover:bg-muted/30 transition-colors"
+      className="border-b border-border/60 px-4 py-3 last:border-b-0 transition-colors hover:bg-muted/30"
       aria-label={`${label} — ${peerName}`}
     >
       <div className="flex items-center gap-3">
-        <span className={"relative grid size-9 shrink-0 place-items-center rounded-xl " + tone.bubble}>
-          <Icon className="size-[18px]" />
+        <span className={"relative grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold " + tone.bubble}>
+          {initial || <Phone className="size-[18px]" />}
+          <DirectionBadge direction={call.direction} toneName={tone.name} />
           <PresenceLed online={online} inCall={inCall} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className={"truncate font-medium " + tone.name}>{peerName}</div>
+          <div className={"truncate text-[15px] font-bold " + (missedIn ? tone.name : "text-foreground")}>
+            {peerName}
+          </div>
           <div className="text-xs text-muted-foreground">
             <span className={"font-semibold " + tone.label}>{label}</span>
             {call.channel === "voice" ? " · Voice" : call.channel === "video" ? " · Video" : ""}
@@ -619,41 +813,51 @@ function SoloItem({
             {formatFullWhen(call.startedAt)}
           </div>
         </div>
-        {/* Offline peer → offer the v2.88 call-back alert right on the row. */}
-        {online === false && onWatch && peerNum ? (
-          <Button
-            size="icon"
-            variant="ghost"
-            aria-label="Alert me when they're back online"
-            title="Alert me when they're back online"
-            onClick={() => onWatch(peerNum)}
-            className="size-11"
+        <div className="flex items-center gap-1.5">
+          {/* Offline peer → offer the v2.88 call-back alert right on the row. */}
+          {online === false && onWatch && peerNum ? (
+            <RoundAction
+              rgb="82,227,208"
+              accent="#52e3d0"
+              label="Alert me when they're back online"
+              title="Alert me when they're back online"
+              onClick={() => onWatch(peerNum)}
+            >
+              <Bell className="size-4" />
+            </RoundAction>
+          ) : null}
+          <RoundAction
+            rgb="251,146,60"
+            accent="#fb923c"
+            label="Message"
+            title="Message"
+            disabled={!peerNum}
+            onClick={() => onMessage(peerNum)}
           >
-            <Bell className="size-4" />
-          </Button>
-        ) : null}
-        <Button
-          size="icon"
-          variant="ghost"
-          disabled={!peerNum}
-          aria-label="Message"
-          title="Message"
-          onClick={() => onMessage(peerNum)}
-          className="size-11"
-        >
-          <MessageSquare className="size-4" />
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          disabled={!peerNum}
-          aria-label="Call back"
-          title="Call back"
-          onClick={() => onRedial(peerNum)}
-          className="size-11"
-        >
-          <Phone className="size-4" />
-        </Button>
+            <MessageSquare className="size-4" />
+          </RoundAction>
+          <RoundAction
+            rgb="56,189,248"
+            accent="#38bdf8"
+            label="Video call"
+            title="Video call"
+            disabled={!peerNum}
+            onClick={() => onVideo(peerNum)}
+          >
+            <Video className="size-4" />
+          </RoundAction>
+          <RoundAction
+            rgb="34,197,94"
+            accent="#22c55e"
+            strong
+            label="Call back"
+            title="Call back"
+            disabled={!peerNum}
+            onClick={() => onRedial(peerNum)}
+          >
+            <Phone className="size-4" />
+          </RoundAction>
+        </div>
       </div>
     </li>
   );
