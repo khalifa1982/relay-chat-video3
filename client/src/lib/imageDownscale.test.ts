@@ -132,7 +132,16 @@ describe("upload threading (source contracts)", () => {
     expect(V2UPLOAD).toMatch(/thumb:\s*true,\s*storageKey:/);
   });
   it("thumbKey must live in the CALLER'S OWN namespace (ownership check)", () => {
-    expect(V2UPLOAD).toMatch(/startsWith\(`relay-chat\/\$\{identityId\}\/`\)/);
+    // v2.91: the check is prefix-tolerant — the native S3 driver may bake a
+    // configured bucket prefix into stored keys, so ownership is asserted on
+    // the raw key OR on the key with exactly one configured prefix stripped.
+    expect(V2UPLOAD).toMatch(/const ownerNs = `relay-chat\/\$\{identityId\}\/`/);
+    expect(V2UPLOAD).toMatch(/rawThumbKey\.startsWith\(ownerNs\)/);
+    expect(V2UPLOAD).toMatch(/rawThumbKey\.slice\(s3Prefix\.length\)\.startsWith\(ownerNs\)/);
+    // v2.91 review D2: traversal check is SEGMENT-WISE (a legal thumb filename
+    // may contain ".." runs; only a full "."/".." path segment is rejected).
+    expect(V2UPLOAD).toMatch(/\.split\("\/"\)\s*\n?\s*\.some\(\(s\) => s === "\.\." \|\| s === "\."\)/);
+    expect(V2UPLOAD).not.toMatch(/!rawThumbKey\.includes\("\.\."\)/);
     expect(V2UPLOAD).toMatch(/Invalid thumbKey/);
   });
   it("thumbUrl is DERIVED server-side from the key — never taken from the client", () => {

@@ -10,10 +10,21 @@
  * Each connected identity gets one or more streams (a user can have
  * multiple tabs open). When we publish a payload to identity N, every
  * open stream for N receives it. Other identities don't.
+ *
+ * v2.91 — horizontal scale: when REDIS_URL is set, every publish is ALSO
+ * fanned out on the Redis channel `relay:v2ev` so identities whose SSE
+ * stream landed on a DIFFERENT instance (load-balanced /api/v2/events)
+ * still get their events. Order of operations is deliberate: deliver to
+ * THIS instance's local streams first, then publish for the others;
+ * subscribers drop envelopes stamped with their own instance id (see
+ * server/redisBus.ts), so nothing is ever delivered twice. With REDIS_URL
+ * unset the publish helpers are no-ops and behavior is byte-identical to
+ * the single-instance build.
  */
 import type { Express, Request, Response } from "express";
 import { createContext, GUEST_COOKIE } from "./_core/context";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
+import { publishBus, subscribeBus, V2EV_CHANNEL } from "./redisBus";
 
 type SseClient = {
   res: Response;
@@ -56,10 +67,40 @@ function writeEvent(client: SseClient, ev: V2Event) {
   }
 }
 
-export function publishToIdentity(identityId: number, ev: V2Event) {
+/** Deliver to THIS instance's streams only (no cross-instance publish). */
+function deliverLocal(identityId: number, ev: V2Event) {
   const set = clientsByIdentity.get(identityId);
   if (!set || set.size === 0) return;
   set.forEach((c) => writeEvent(c, ev));
+}
+
+/** Wire payload for the `relay:v2ev` Redis channel: targets + event.
+ *  `t` is a list of identity ids, or "*" for every connected stream. */
+type BusV2Payload = { t: number[] | "*"; ev: V2Event };
+
+/** Handle a foreign instance's envelope payload (exported for tests; own
+ *  envelopes never reach here — redisBus drops them by instance id). */
+export function _handleBusV2Event(payload: unknown): void {
+  const p = payload as Partial<BusV2Payload> | null;
+  if (!p || typeof p !== "object") return;
+  const ev = p.ev as V2Event | undefined;
+  if (!ev || typeof ev !== "object" || typeof (ev as { kind?: unknown }).kind !== "string")
+    return;
+  if (p.t === "*") {
+    clientsByIdentity.forEach((set) => set.forEach((c) => writeEvent(c, ev)));
+    return;
+  }
+  if (!Array.isArray(p.t)) return;
+  for (const id of p.t) {
+    if (typeof id === "number" && Number.isFinite(id)) deliverLocal(id, ev);
+  }
+}
+
+export function publishToIdentity(identityId: number, ev: V2Event) {
+  // Local first, THEN the bus — subscribers skip our envelope by instance id,
+  // so local streams get exactly one copy (see redisBus loop-safety).
+  deliverLocal(identityId, ev);
+  publishBus(V2EV_CHANNEL, { t: [identityId], ev } satisfies BusV2Payload);
 }
 
 export function broadcastPresence(
@@ -78,6 +119,7 @@ export function broadcastPresence(
   clientsByIdentity.forEach((set) => {
     set.forEach((c) => writeEvent(c, payload));
   });
+  publishBus(V2EV_CHANNEL, { t: "*", ev: payload } satisfies BusV2Payload);
 }
 
 /**
@@ -100,7 +142,10 @@ export function publishPresenceTo(
     lastSeenAt:
       lastSeenAt instanceof Date ? lastSeenAt.toISOString() : lastSeenAt,
   };
-  audienceIds.forEach((id) => publishToIdentity(id, payload));
+  // Local delivery for every audience member on THIS instance, then ONE bus
+  // envelope carrying the whole audience for the other instances.
+  audienceIds.forEach((id) => deliverLocal(id, payload));
+  publishBus(V2EV_CHANNEL, { t: audienceIds, ev: payload } satisfies BusV2Payload);
 }
 
 /**
@@ -110,6 +155,9 @@ export function publishPresenceTo(
  * payload contains a `kind` we use as discriminator).
  */
 export function registerV2Events(app: Express): void {
+  // Horizontal scale (v2.91): receive other instances' v2 events. No-op
+  // subscription bookkeeping when REDIS_URL is unset.
+  subscribeBus(V2EV_CHANNEL, _handleBusV2Event);
   // ── abuse hardening (v2.88, mirrors /api/relay/stream) ──
   // Open-rate + concurrent-stream caps per IP; RELAY_RATELIMIT_OFF honors the
   // same kill switch as the relay limiters. Each open stream pins a socket +
@@ -211,6 +259,30 @@ export function registerV2Events(app: Express): void {
     req.on("aborted", cleanup);
     res.on("close", cleanup);
   });
+}
+
+/** Test helper — attach a fake SSE client for an identity; returns cleanup.
+ *  Lets bus-delivery tests observe real writeEvent output without an HTTP
+ *  server (same spirit as relay's _setActiveRegistryForTests). */
+export function _addSseClientForTests(
+  identityId: number,
+  res: Pick<Response, "write"> & { destroyed?: boolean; writableEnded?: boolean }
+): () => void {
+  const client: SseClient = { res: res as Response, identityId, closed: false };
+  let set = clientsByIdentity.get(identityId);
+  if (!set) {
+    set = new Set();
+    clientsByIdentity.set(identityId, set);
+  }
+  set.add(client);
+  return () => {
+    client.closed = true;
+    const s = clientsByIdentity.get(identityId);
+    if (s) {
+      s.delete(client);
+      if (s.size === 0) clientsByIdentity.delete(identityId);
+    }
+  };
 }
 
 /** Test helper — returns current connected-identity count. */

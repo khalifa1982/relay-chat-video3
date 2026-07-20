@@ -28,6 +28,14 @@ import {
   stopRoomRecording,
 } from "./recording";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
+import {
+  busEnabled,
+  initBusyStateSync,
+  touchBusyState,
+  readBusyPinsFromRedis,
+  readPlCountsFromRedis,
+  type BusySnapshot,
+} from "./redisBus";
 
 // TURN credentials are read on every call so the operator can add them via
 // `webdev_request_secrets` without restarting the server, and so unit tests
@@ -299,10 +307,14 @@ function joinRoomMember(reg: RelayRegistry, roomId: string, pin: string) {
   reg.pinRoom.set(pin, roomId);
   const t = reg.roomReapT.get(roomId);
   if (t) { clearTimeout(t); reg.roomReapT.delete(roomId); }
+  // Busy-line mirror (v2.91): a coalesced next-tick sync, so an accept that
+  // joins + flips roomMeta.accepted in the same handler is observed settled.
+  touchBusyState();
 }
 
 /** Fully tear down a room (abandoned, or last member explicitly left). */
 function reapRoom(reg: RelayRegistry, roomId: string) {
+  touchBusyState(); // busy-line + party-line-count mirror (v2.91)
   const t = reg.roomReapT.get(roomId);
   if (t) { clearTimeout(t); reg.roomReapT.delete(roomId); }
   // Conference history: if this room was a REAL call (answered, ≥2 participants
@@ -644,6 +656,7 @@ function broadcastToRoom(
  * the membership so the member can auto-rejoin (see the grace reaper).
  */
 export function leaveRoom(reg: RelayRegistry, pin: string) {
+  touchBusyState(); // busy-line + party-line-count mirror (v2.91)
   const roomId = reg.pinRoom.get(pin) ?? reg.clients.get(pin)?.roomId ?? null;
   reg.pinRoom.delete(pin);
   const c = reg.clients.get(pin);
@@ -696,6 +709,7 @@ function membersOf(reg: RelayRegistry, roomId: string, selfPin: string) {
  * hang-up / disconnect, and when a 3rd call would otherwise displace the hold.
  */
 export function releaseHeldRoom(reg: RelayRegistry, pin: string) {
+  touchBusyState(); // busy-line + party-line-count mirror (v2.91)
   const heldRid = reg.heldRoom.get(pin);
   reg.heldRoom.delete(pin);
   if (!heldRid) return;
@@ -1122,6 +1136,10 @@ export function handleMessage(
     // Deliver any ring that's still live for this number: a reload mid-ring, or
     // a PAGED offline device the user just opened from the push notification.
     deliverPendingRing(reg, pin);
+    // Busy-line mirror (v2.91): a (re)registered client can change both party-
+    // line CONNECTED counts and busy verdicts (rejoin restores roomId) without
+    // crossing any join/leave funnel — sync the settled state.
+    touchBusyState();
     return;
   }
 
@@ -1734,6 +1752,12 @@ export function handleMessage(
         break;
       }
       reg.heldRoom.delete(conn.pin);
+      // Busy-line mirror (v2.91): merging a SOLO held party line deletes the
+      // empty held room below WITHOUT crossing any join/leave funnel (movers
+      // is empty, so joinRoomMember never runs) — the local live count drops
+      // but the Redis mirror would keep the stale count until the 30s full
+      // re-sync. Coalesced next-tick sync observes the settled state.
+      touchBusyState();
       const heldRoom = reg.rooms.get(heldRid)!;
       const activeMeta = reg.roomMeta.get(activeRid);
       const lkm = livekitConfig();
@@ -1956,6 +1980,67 @@ export function partyLineLiveCounts(numbers: readonly string[]): Map<string, num
   return out;
 }
 
+/* ── Tiered busy-state (v2.91, Redis bus) ────────────────────────
+ * On a multi-instance deploy the ALB pins ALL /api/relay/* traffic to ONE
+ * signaling node (see docs-aws-scale-out.md); the OTHER instances' registries
+ * are empty, so their local pinsInCall/partyLineLiveCounts reads would lie.
+ * The signaling node mirrors its registry into Redis (`relay:busypins` /
+ * `relay:plcounts`, written from the join/leave/reap funnels + a 30s full
+ * re-sync); these async wrappers read the mirror WHEN the bus is on AND this
+ * instance has no local relay clients (API tier). Everywhere else — .org,
+ * single-box .io, the signaling node itself — they return the local read,
+ * byte-identical to the sync functions. */
+
+/** Full busy-state truth of a registry — what the signaling node mirrors to
+ *  Redis. Exported for tests. Zero-count party lines are omitted (absent ==
+ *  0 for readers, and the sync HDELs entries that leave the map). */
+export function computeBusySnapshot(reg: RelayRegistry): BusySnapshot {
+  const busyPins: string[] = [];
+  reg.clients.forEach((c, pin) => {
+    const rid = c.roomId;
+    if (!rid) return;
+    const meta = reg.roomMeta.get(rid);
+    const size = reg.rooms.get(rid)?.size ?? 0;
+    if (meta?.accepted || size > 1) busyPins.push(pin); // pinsInCall semantics
+  });
+  const plCounts = new Map<string, number>();
+  reg.rooms.forEach((room, rid) => {
+    if (!rid.startsWith(PARTY_LINE_ROOM_PREFIX)) return;
+    let n = 0;
+    room.forEach(p => { if (reg.clients.has(p)) n++; });
+    if (n > 0) plCounts.set(rid.slice(PARTY_LINE_ROOM_PREFIX.length), n);
+  });
+  return { busyPins, plCounts, hasClients: reg.clients.size > 0 };
+}
+
+/** Local registry answer when this instance IS (or could be) the signaling
+ *  node; Redis mirror when it demonstrably isn't (bus on, zero local
+ *  clients). Failure-safe: any Redis error degrades to "not on a call". */
+export async function pinsInCallAsync(pins: readonly string[]): Promise<Set<string>> {
+  if (busEnabled() && !(activeRegistry && activeRegistry.clients.size > 0)) {
+    try {
+      return await readBusyPinsFromRedis(pins);
+    } catch {
+      return new Set();
+    }
+  }
+  return pinsInCall(pins);
+}
+
+/** Tiered variant of partyLineLiveCounts — same routing as pinsInCallAsync. */
+export async function partyLineLiveCountsAsync(
+  numbers: readonly string[]
+): Promise<Map<string, number>> {
+  if (busEnabled() && !(activeRegistry && activeRegistry.clients.size > 0)) {
+    try {
+      return await readPlCountsFromRedis(numbers);
+    } catch {
+      /* fall through to the (all-zero) local read */
+    }
+  }
+  return partyLineLiveCounts(numbers);
+}
+
 /**
  * Mount the HTTP signaling endpoints on an Express app.
  *
@@ -1972,6 +2057,10 @@ export function attachRelay(
   const reg = createRegistry();
   reg.onConferenceEnd = onConferenceEnd;
   activeRegistry = reg; // busy-line reads (pinsInCall) target the live registry
+  // Redis mirror of busy-line/party-line state (v2.91) — inert without
+  // REDIS_URL. The provider closes over THIS registry, matching
+  // activeRegistry's last-attach-wins semantics.
+  initBusyStateSync(() => computeBusySnapshot(reg));
 
   // ── Abuse hardening for the UNAUTHENTICATED endpoints (v2.88) ──
   // Both gates honor RELAY_RATELIMIT_OFF like the /send limiter. Limits are
@@ -2210,6 +2299,10 @@ export function attachRelay(
                 reg.clients.delete(pin);
                 reg.devices.delete(pin);
                 maybeScheduleRoomReap(reg, rid);
+                // Busy-line mirror (v2.91): the client record is gone (no
+                // longer "on a call" / no longer a CONNECTED line member) but
+                // no join/leave funnel ran on this path — sync explicitly.
+                touchBusyState();
               } else {
                 // Not in a call — full teardown (original behaviour).
                 leaveRoom(reg, pin);

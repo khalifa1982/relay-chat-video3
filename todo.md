@@ -3752,3 +3752,130 @@ and the Android APK (`.org`) are UNTOUCHED.
   the JWT_SECRET shared-vs-isolated decision.
 - BLOCKED on the owner: no AWS credentials/CLI in this environment. To provision AWS-side, add a
   SCOPED IAM key (user `relay-infra`, not root) to the session; delete it after build-out.
+
+## v2.91.0 — Horizontal scale for .io: native S3 driver, Redis event bus, tiered signaling, aws-ops workflow (2026-07-20)
+Four building blocks that let the AWS `.io` fleet run 2+ instances WITHOUT touching the hard
+invariant (the relay signaling registry stays in-memory single-process). Every block is
+env-gated and dormant by default — `.org` on Manus and a bare single-box `.io` are byte-identical
+to v2.90.
+- **Zero-dep native S3 storage driver** (`server/s3.ts`, following the smtp.ts/fcm.ts zero-dependency
+  pattern): full AWS Signature Version 4 with nothing but `node:crypto` — header-auth PUT
+  (single-chunk, `x-amz-content-sha256`) for uploads and query-string-auth presigned GETs
+  (`X-Amz-*`, UNSIGNED-PAYLOAD) for downloads. Verified byte-for-byte against the OFFICIAL AWS
+  test vectors from the Amazon S3 API Reference ("Authenticating Requests (AWS Signature
+  Version 4)"): the `examplebucket` GET-Object + PUT-Object header examples (canonical request,
+  string-to-sign, signatures `f0e8bdb8…`/`98ad7217…`) and the 86400s presigned-URL example
+  (final URL + signature `aeeed9bb…`). Env (read per-call): `S3_BUCKET/S3_REGION/S3_ACCESS_KEY/
+  S3_SECRET` (+`S3_ENDPOINT`, `S3_FORCE_PATH_STYLE=1` for R2/MinIO path-style, `S3_PREFIX`
+  default `relay-chat/`). `storagePut` uploads direct-to-bucket and returns the SAME
+  `/manus-storage/{key}` URL shape (DB rows/absUrl/clients stay storage-agnostic); the storage
+  proxy (`server/_core/storageProxy.ts`) gained an S3 branch — presign locally (no network),
+  60s cache, 307 redirect, 300s expiry — plus a `..`-traversal guard on the read path. Forge
+  remains the fallback when `S3_*` is absent (that's `.org`). Key hygiene: sanitizer rejects
+  traversal/control chars; prefix is ENSURE-style (never double-prefixes the already-namespaced
+  `relay-chat/<identityId>/…` upload keys, so the default config produces byte-identical keys to
+  Forge), and v2upload's thumbKey ownership check is prefix-tolerant for custom prefixes.
+- **Redis event bus** (`server/redisBus.ts`, gated on `REDIS_URL` — absent = today's behavior).
+  ioredis added as a REGULAR dependency (deliberate: production signaling infra wants a
+  battle-tested RESP client — AUTH/TLS/db from the URL, capped-backoff auto-reconnect,
+  auto re-subscribe; a hand-rolled RESP client was rejected). Two connections (commands+pub /
+  dedicated sub). Integrations:
+  - `server/v2events.ts`: `publishToIdentity`/`publishPresenceTo`/`broadcastPresence` now
+    deliver to THIS instance's SSE clients FIRST, then publish one `{t: targets|"*", ev}`
+    envelope on `relay:v2ev`; every instance subscribes and delivers foreign envelopes to its
+    local streams. Loop-safety: envelopes carry a per-boot random `INSTANCE_ID` and subscribers
+    drop their own (so nothing is delivered twice and `/api/v2/events` can stay load-balanced).
+  - **Busy line + party-line live counts across tiers**: the signaling node mirrors its registry
+    into `relay:busypins` (SET) + `relay:plcounts` (HASH) via diff-syncs (SADD/SREM/HSET/HDEL)
+    fired from the existing single funnels — `joinRoomMember`/`leaveRoom`/`reapRoom`/
+    `releaseHeldRoom`/register/grace-reap — coalesced to one next-tick sync per event burst,
+    plus a 30s full re-sync; both keys carry a 90s TTL so a crashed node can never leave ghost
+    state, and a write-guard keeps API-tier instances (no local relay clients) from ever
+    touching the keys. Read path: `pinsInCallAsync`/`partyLineLiveCountsAsync` in
+    `server/relay.ts` serve the LOCAL registry when this process holds relay clients (or the
+    bus is off) and the Redis mirror on API-tier instances; `directory.lookup`, `presenceMany`,
+    `contacts.list`, and `partyLines.list` switched to the tiered variants (guard tests
+    updated to pin the new shapes). Failure-safe: any Redis error degrades to "not on a call".
+  - **Cross-instance relay rooms are explicitly OUT OF SCOPE** (documented in the redisBus
+    header): the registry's call-state transitions are transactional per-process; splitting
+    them is phase 2 with its own design. ALL `/api/relay/*` traffic must hit ONE node.
+- **`docs-aws-scale-out.md`** — the tiered-routing runbook: exact console+CLI steps for the ALB
+  (ap-south-1 ACM cert, `relay-default` TG with both instances, `relay-signaling` TG with
+  instance A ONLY, 443 listener rule path `/api/relay/*` at priority 10 above the default rule,
+  idle timeout 300s for SSE), why `/api/v2/events` deliberately stays load-balanced (the bus
+  fans out), ElastiCache Redis provisioning (cluster mode OFF, one `cache.t4g.micro`, same
+  VPC/subnets as the EC2s, SG allowing 6379 from the app instances' SG), the
+  `REDIS_URL=redis://<primary-endpoint>:6379` + `S3_*` env flip on `/home/relay/.env` (pm2
+  `startOrReload --update-env`), the rule-BEFORE-Redis order of operations (single-writer
+  busy-state), manual signaling failover, and a verification checklist.
+- **`.github/workflows/aws-ops.yml`** — `workflow_dispatch`-ONLY ops workflow (never on push),
+  authed via `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` repo secrets (fails fast with
+  add-the-secrets instructions when absent), inputs: `action` = `verify` (read-only status:
+  caller identity, relay-app instances, TGs+targets, ALB, ACM in ap-south-1 AND us-east-1,
+  CloudFront aliases — zero mutations) | `cloudfront` (ensures a DNS-validated us-east-1 ACM
+  cert for your-chat.io+www, PRINTS the validation CNAMEs prominently and exits with re-run
+  guidance while pending; once ISSUED creates-or-updates the CloudFront distribution: ALB
+  origin https-only + Managed-AllViewer (the forwarded Host matches the ALB's cert), default
+  behavior Managed-CachingDisabled + compress, `/assets/*` Managed-CachingOptimized,
+  `/api/relay/stream*` + `/api/v2/events*` explicitly CachingDisabled with a 60s origin
+  response timeout (heartbeats are 25s), http2and3; prints the `dXXXX.cloudfront.net` domain
+  and the exact DNS change — NEVER touches DNS) | `alb-tune` (idle timeout 300s, creates the
+  `relay-signaling` TG if missing — port 3000, `/api/health` check — registers ONLY the
+  oldest-launched relay-app instance and deregisters extras, adds/refreshes the priority-10
+  `/api/relay/*` rule on 443 with an :80 fallback + warning, default rule untouched, prints
+  the final rule table). Managed policy IDs resolved by name with documented fallbacks; every
+  step idempotent and printing what it did.
+- Tests: 886 → **965 passing / 1 skipped** (+79). New: `server/s3.test.ts` (31 — the three
+  official AWS SigV4 vectors byte-for-byte, UriEncode rules, config gating, key
+  prefix/traversal safety, addressing modes, presign shape, storage driver selection with a
+  mocked fetch), `server/redisBus.test.ts` (32 — envelope encode/decode, own-instance skip,
+  REDIS_URL gating incl. tiered-read routing, local-first SSE delivery + single-envelope
+  audience publish, busy-state diff-sync/TTL/ghost-healing/API-tier write-guard/one-clearing-
+  sync/coalescing/failure-swallow, cross-tier read helpers, computeBusySnapshot semantics),
+  `server/redisBusLive.test.ts` (2 — the same wire paths against a REAL spawned `redis-server`
+  with real ioredis connections; auto-skips where the binary is absent, e.g. CI),
+  `server/awsOps.test.ts` (14 — workflow trigger/auth/action/DNS-hands-off pins + runbook
+  contracts). Updated guard pins: `busyLine.test.ts`/`partyLines.test.ts` (tiered read shapes),
+  `imageDownscale.test.ts` (prefix-tolerant thumbKey ownership), `updateChecker.test.ts`
+  (2.91.0).
+- NOT done here (deliberate): no cross-instance signaling, no DNS mutations, no automatic
+  signaling failover, and no live AWS/ElastiCache validation (no AWS credentials in this
+  environment — the S3 signer is proven against AWS's published vectors and the bus against a
+  real local redis-server instead).
+- **Review outcome**: a five-specialist adversarial review + judge confirmed **12 defects
+  (D1–D12), all fixed pre-ship**. The two headliners: **D1 (CRITICAL)** — aws-ops.yml's
+  `/assets/*` CloudFront behavior attached CachingOptimized with NO OriginRequestPolicyId, so
+  the https-only ALB origin got no viewer Host, its your-chat.io cert matched nothing, and
+  every hashed JS/CSS chunk would 502 after DNS cutover (blank app; the assets jq now passes
+  AllViewer like every other behavior — origin-request-only, cache key unchanged); and **D2
+  (MAJOR, a live-`.org` regression)** — the new storage-proxy `..` guard was a SUBSTRING check,
+  permanently 400ing legal keys whose filenames contain ".." runs ("photo..2020.png", 307 such
+  rows already live at HEAD) — now segment-wise (`key.split("/").some(s => s===".."||s===".")`),
+  matching sanitizeS3Key, with the same form in v2upload's thumbKey check, pinned by a new
+  `storageProxy.test.ts` driving raw HTTP paths (legal `a..b_hash.png` → 307; `../` and `%2e%2e`
+  segments → 400). The rest: **D3** boot-time SUBSCRIBE failure was permanent (channel latched
+  before settle; ioredis only auto-resubscribes ACKed channels) — now latch-on-resolve/unlatch-
+  on-reject, a sub-connection "ready" resubscribe sweep, and `maxRetriesPerRequest:null` on the
+  sub connection; **D4** busy-state reads could hang 7–120s during a Redis outage — now
+  `commandTimeout:1500` in makeRedis plus a 1.5s Promise.race to safe defaults in both read
+  helpers; **D5** the printed CloudFront go/no-go check ("test https://dXXXX.cloudfront.net
+  directly") could never pass — replaced with the Host-override curl
+  (`curl -si https://<cf>/api/health -H "Host: your-chat.io"`) in the workflow AND the runbook;
+  **D6** the demoted signaling node's "one final clearing sync" wiped keys the NEW node had just
+  written — clearing grant dropped, single-writer guard is now strictly `hasClients`, residue
+  ages out via the 90s TTL; **D7** merging a SOLO held party line missed the busy-state mirror
+  (movers empty ⇒ no funnel ran) — `touchBusyState()` added in the merge handler; **D8** the
+  runbook's §1→§3 hand-off broke on the console path (replication group, not cache cluster) —
+  documented `describe-replication-groups … PrimaryEndpoint` + REDIS_URL-must-be-PRIMARY;
+  **D9** alb-tune now deletes any leftover `:80` `/api/relay/*` forward rule once a 443 listener
+  exists (was a silent plaintext exemption); **D10** managed-policy lookups tolerate
+  AccessDenied (`|| echo None`) so the documented fallback ids actually engage, and the ops
+  key's required IAM actions are enumerated in the workflow header; **D11** dead ACM certs
+  (VALIDATION_TIMED_OUT/FAILED) are swept + re-requested and the false "(idempotent)" claim is
+  gone; **D12** the throwaway `.smoke-tmp/` scripts are gone from the tree (verified absent —
+  nothing rides `git add -A`). Tests 965 → **982 passing / 1 skipped** (+17: 4
+  `storageProxy.test.ts`, +5 `redisBus.test.ts` — subscribe lifecycle ×3, bounded hung-read,
+  D7 merge sync — +7 `awsOps.test.ts` D-pins incl. the runbook contracts, +1 live outage-
+  recovery test in `redisBusLive.test.ts` proving D3+D4 against a real killed-and-restarted
+  redis-server); the stale one-clearing-sync and substring-thumbKey pins were updated in place
+  with review references. `pnpm check` + full suite + `pnpm build` green.

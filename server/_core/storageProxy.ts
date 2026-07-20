@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { ENV } from "./env";
+import { s3Config, s3PresignGetUrl } from "../s3";
 
 /* In-process signed-URL cache (v2.88). Every /manus-storage view used to pay a
  * presign round-trip to Forge and told the browser `no-store`, so a chat
@@ -53,8 +54,16 @@ export function registerStorageProxy(app: Express) {
       return;
     }
 
-    if (!ENV.forgeApiUrl || !ENV.forgeApiKey) {
-      res.status(500).send("Storage proxy not configured");
+    // Traversal guard: keys are flat storage identifiers minted by storagePut;
+    // a ".." SEGMENT is never legitimate and could confuse prefix-scoped
+    // ownership checks upstream of a signed URL. Segment-wise on purpose
+    // (v2.91 review D2, matching sanitizeS3Key): filenames legitimately
+    // contain ".." runs ("photo..2020.png" → key "…_photo..2020.png") and a
+    // substring check 400'd those keys forever — including pre-v2.91 rows.
+    // Express percent-decodes before req.params, so an encoded traversal
+    // ("%2e%2e") still arrives here as a real ".." segment and is caught.
+    if (key.split("/").some((s) => s === ".." || s === ".")) {
+      res.status(400).send("Bad storage key");
       return;
     }
 
@@ -63,6 +72,28 @@ export function registerStorageProxy(app: Express) {
     if (cached) {
       res.set("Cache-Control", "private, max-age=60");
       res.redirect(307, cached);
+      return;
+    }
+
+    // ── Native S3 branch (v2.91) — presign locally, no network round-trip.
+    // Same 60s cache + 307 semantics as the Forge branch below; the presigned
+    // GET's 300s expiry comfortably outlives the cache window.
+    const s3 = s3Config();
+    if (s3) {
+      try {
+        const url = s3PresignGetUrl(s3, key, 300);
+        cacheSet(key, url, now);
+        res.set("Cache-Control", "private, max-age=60");
+        res.redirect(307, url);
+      } catch (err) {
+        console.error("[StorageProxy] s3 presign failed:", err);
+        res.status(502).send("Storage proxy error");
+      }
+      return;
+    }
+
+    if (!ENV.forgeApiUrl || !ENV.forgeApiKey) {
+      res.status(500).send("Storage proxy not configured");
       return;
     }
 

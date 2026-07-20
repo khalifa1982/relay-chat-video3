@@ -30,6 +30,7 @@
 import type { Express, Request, Response } from "express";
 import crypto from "crypto";
 import { storagePut } from "./storage";
+import { s3Config } from "./s3";
 import { createContext } from "./_core/context";
 import { recordAttachment } from "./v2db";
 
@@ -117,13 +118,27 @@ export function registerV2Upload(app: Express) {
         // Optional thumbnail reference minted by a prior `?thumb=1` upload.
         // Must live in the CALLER'S OWN storage namespace — anything else could
         // graft a stranger's (or an arbitrary) object into a message bubble.
+        // v2.91: the native S3 driver may bake a bucket-level prefix into
+        // stored keys. With the DEFAULT prefix ("relay-chat/") the shape is
+        // unchanged (ensure-style, no double-prefix); with a CUSTOM prefix the
+        // key is `${prefix}relay-chat/<identityId>/…` — strip exactly one
+        // configured prefix before the ownership check.
         const rawThumbKey = req.query.thumbKey;
         if (typeof rawThumbKey === "string" && rawThumbKey.length > 0) {
-          if (
-            rawThumbKey.length <= 256 &&
-            rawThumbKey.startsWith(`relay-chat/${identityId}/`) &&
-            !rawThumbKey.includes("..")
-          ) {
+          const ownerNs = `relay-chat/${identityId}/`;
+          const s3Prefix = s3Config()?.prefix ?? "";
+          const inOwnerNs =
+            rawThumbKey.startsWith(ownerNs) ||
+            (!!s3Prefix &&
+              rawThumbKey.startsWith(s3Prefix) &&
+              rawThumbKey.slice(s3Prefix.length).startsWith(ownerNs));
+          // Segment-wise traversal check (v2.91 review D2, same form as
+          // storageProxy + sanitizeS3Key): a thumb filename may legally
+          // contain ".." runs; only a full "."/".." path segment is hostile.
+          const hasTraversalSegment = rawThumbKey
+            .split("/")
+            .some((s) => s === ".." || s === ".");
+          if (rawThumbKey.length <= 256 && inOwnerNs && !hasTraversalSegment) {
             thumbKey = rawThumbKey;
           } else {
             return res.status(400).json({ error: "Invalid thumbKey" });

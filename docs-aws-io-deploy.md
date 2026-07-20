@@ -11,6 +11,12 @@ environment — so `.io` is set entirely by **env vars + DNS**, never a code edi
 > break your live app. Env-driven is the only correct mechanism, and it's fully
 > reversible.
 
+> **Growing past one box?** This doc provisions the SINGLE-instance `.io`.
+> For 2+ instances — ALB with the pinned `/api/relay/*` signaling node,
+> ElastiCache Redis event bus (`REDIS_URL`), native S3 storage (`S3_*`), and
+> the CloudFront edge — follow **`docs-aws-scale-out.md`** (v2.91) and the
+> `.github/workflows/aws-ops.yml` ops workflow.
+
 ---
 
 ## 0 · The two decisions that matter most (read first)
@@ -88,14 +94,14 @@ sudo -u relay bash -lc 'cd /home/relay/app && pnpm db:push'
 ## 3 · First deploy
 
 1. Confirm all of §1 exists (esp. the OIDC role trusting this repo).
-2. GitHub → **Actions → "Deploy to AWS (your-chat.io)" → Run workflow** (it's
-   **manual-only** on purpose). It builds `main`, pushes the artifact to S3, and
-   SSM-deploys to every `relay-app` instance one at a time, gated on
-   `GET /api/health` returning 200.
+2. GitHub → **Actions → "Deploy to AWS (your-chat.io)" → Run workflow**. It
+   builds `main`, pushes the artifact to S3, and SSM-deploys to every
+   `relay-app` instance one at a time, gated on `GET /api/health` returning 200.
 3. Browse `https://your-chat.io` — it identifies as `.io` automatically.
-4. **To make it continuous:** once a manual run is green, uncomment the `push:`
-   block in `.github/workflows/deploy.yml` — then every merge to `main`
-   deploys `.io` while Manus independently keeps `.org` current.
+4. **Continuous deploys are ON** (owner go-ahead 2026-07-20): the `push: main`
+   trigger in `.github/workflows/deploy.yml` is active — every merge to `main`
+   deploys `.io` while Manus independently keeps `.org` current. Remove the
+   `push:` block to go back to manual-only.
 
 ## 4 · Rollback / safety
 

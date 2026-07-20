@@ -65,7 +65,8 @@ describe("dial + directory wiring", () => {
     const identIdx = lookup.indexOf("getIdentityByNumber");
     expect(lineIdx).toBeGreaterThan(-1);
     expect(identIdx).toBeGreaterThan(lineIdx);
-    expect(lookup.slice(0, 1200)).toMatch(/partyLineLiveCounts\(\[line\.number\]\)/);
+    // v2.91: tiered read — Redis mirror on API-tier instances, local otherwise.
+    expect(lookup.slice(0, 1200)).toMatch(/await partyLineLiveCountsAsync\(\[line\.number\]\)/);
     expect(lookup.slice(0, 1200)).toMatch(/displayName: line\.title/);
   });
   it("the partyLines router (create/list/remove) is rate-limited, guest-allowed, and mounted", () => {

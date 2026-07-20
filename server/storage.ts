@@ -1,8 +1,18 @@
 // Preconfigured storage helpers for Manus WebDev templates
 // Uploads via Forge Server presigned URL to S3 (PUT direct).
 // Downloads return /manus-storage/{key} paths served via 307 redirect.
+//
+// v2.91: TWO drivers behind one API. When S3_* env is present (the
+// self-hosted `.io` deploy), `storagePut` signs + PUTs straight to the
+// operator's bucket via the zero-dep SigV4 driver (server/s3.ts) and signed
+// GETs are presigned locally. When absent (`.org` on Manus), the original
+// Forge flow runs byte-identical to before. Either way the returned URL is
+// the SAME `/manus-storage/{key}` shape, so DB rows, absUrl, and every
+// client stay storage-agnostic — the storage proxy resolves the actual
+// backend per-request.
 
 import { ENV } from "./_core/env";
+import { s3Config, s3ObjectKey, s3Put, s3PresignGetUrl } from "./s3";
 
 function getForgeConfig() {
   const forgeUrl = ENV.forgeApiUrl;
@@ -33,6 +43,14 @@ export async function storagePut(
   data: Buffer | Uint8Array | string,
   contentType = "application/octet-stream",
 ): Promise<{ key: string; url: string }> {
+  // Native S3 driver (v2.91) — takes precedence when configured.
+  const s3 = s3Config();
+  if (s3) {
+    const key = s3ObjectKey(s3, appendHashSuffix(normalizeKey(relKey)));
+    await s3Put(s3, key, data, contentType);
+    return { key, url: `/manus-storage/${key}` };
+  }
+
   const { forgeUrl, forgeKey } = getForgeConfig();
   const key = appendHashSuffix(normalizeKey(relKey));
 
@@ -74,6 +92,11 @@ export async function storageGet(relKey: string): Promise<{ key: string; url: st
 }
 
 export async function storageGetSignedUrl(relKey: string): Promise<string> {
+  // Native S3 driver (v2.91): keys are stored WITH their prefix, so a read
+  // path never re-prefixes — presign exactly what the DB row says.
+  const s3 = s3Config();
+  if (s3) return s3PresignGetUrl(s3, normalizeKey(relKey), 300);
+
   const { forgeUrl, forgeKey } = getForgeConfig();
   const key = normalizeKey(relKey);
 

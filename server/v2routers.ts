@@ -98,7 +98,11 @@ import { createRateLimiter, clientIpOf } from "./rateLimit";
 // ("is this pin in a room right now?"). Single-instance by design — the same
 // instance serves the SSE signaling, so the read is authoritative here.
 // partyLineLiveCounts (v2.89) reads the same registry for "N on the line".
-import { pinsInCall, partyLineLiveCounts } from "./relay";
+// v2.91: the tiered Async variants read the local registry when this process
+// serves signaling, and the Redis mirror (`relay:busypins`/`relay:plcounts`)
+// when it's an API-tier instance behind the scale-out ALB (REDIS_URL set, no
+// local relay clients). Single-instance deploys are byte-identical.
+import { pinsInCallAsync, partyLineLiveCountsAsync } from "./relay";
 
 export const NumberSchema = z
   .string()
@@ -444,7 +448,8 @@ export const v2DirectoryRouter = router({
     .query(async ({ input }) => {
       const line = await getPartyLineByNumber(input.number).catch(() => null);
       if (line) {
-        const memberCount = partyLineLiveCounts([line.number]).get(line.number) ?? 0;
+        const memberCount =
+          (await partyLineLiveCountsAsync([line.number])).get(line.number) ?? 0;
         return {
           id: line.id,
           number: line.number,
@@ -480,7 +485,7 @@ export const v2DirectoryRouter = router({
         presenceHidden: hidden,
         verified: id.verified,
         // Carrier-style busy line (v2.88): they're ON A CALL right now.
-        inCall: hidden ? false : pinsInCall([id.number]).has(id.number),
+        inCall: hidden ? false : (await pinsInCallAsync([id.number])).has(id.number),
         partyLine: false,
         memberCount: 0,
       };
@@ -568,8 +573,8 @@ export const v2DirectoryRouter = router({
       if (idents.length === 0) return [];
       const presList = await getPresenceForIds(idents.map((i) => i.id));
       const presById = new Map(presList.map((p) => [p.identityId, p]));
-      // Busy line (v2.88): one in-memory read for the whole batch.
-      const inCallSet = pinsInCall(idents.map((i) => i.number));
+      // Busy line (v2.88): one registry/Redis read for the whole batch.
+      const inCallSet = await pinsInCallAsync(idents.map((i) => i.number));
       return idents.map((i) => {
         const pres = presById.get(i.id);
         const hidden = isGuestPresenceHidden({
@@ -680,7 +685,7 @@ export const v2ContactsRouter = router({
     const presList = await getPresenceForIds(ids);
     const presByIdentity = new Map(presList.map((p) => [p.identityId, p]));
     // Busy line (v2.88): which saved numbers are on a call right now.
-    const inCallSet = pinsInCall(idents.map((i) => i.number));
+    const inCallSet = await pinsInCallAsync(idents.map((i) => i.number));
     return rows.map((r) => {
       const ident = idByNumber.get(r.number);
       const pres = ident != null ? presByIdentity.get(ident) : undefined;
@@ -1715,7 +1720,7 @@ export const v2PartyLinesRouter = router({
   list: publicProcedure.query(async ({ ctx }) => {
     const me = requireIdentity(ctx);
     const rows = await listPartyLines(me.id);
-    const counts = partyLineLiveCounts(rows.map((r) => r.number));
+    const counts = await partyLineLiveCountsAsync(rows.map((r) => r.number));
     return rows.map((r) => ({
       id: r.id,
       number: r.number,

@@ -83,9 +83,15 @@ describe("busy-line presence field surface (shape pins)", () => {
   it("directory.lookup, directory.presenceMany, and contacts.list all return inCall", () => {
     // lookup + presenceMany + contacts.list each fold the registry read in,
     // hidden-guest privacy still wins (a hidden guest is never shown busy).
+    // v2.91: the read is the TIERED async variant — local registry on the
+    // signaling node, the Redis mirror on API-tier instances (REDIS_URL set,
+    // no local relay clients). Same verdict semantics either way.
     const inCallFields = ROUTERS.match(/inCall: hidden \? false : /g) || [];
     expect(inCallFields.length).toBeGreaterThanOrEqual(3);
-    expect(ROUTERS).toMatch(/pinsInCall\(\[id\.number\]\)/); // lookup (single)
-    expect(ROUTERS).toMatch(/pinsInCall\(idents\.map\(\(i\) => i\.number\)\)/); // batches
+    expect(ROUTERS).toMatch(/await pinsInCallAsync\(\[id\.number\]\)/); // lookup (single)
+    expect(ROUTERS).toMatch(/await pinsInCallAsync\(idents\.map\(\(i\) => i\.number\)\)/); // batches
+    // The sync single-instance read must NOT sneak back into the routers —
+    // it lies on the API tier of a scaled-out deploy.
+    expect(ROUTERS).not.toMatch(/[^\w]pinsInCall\(/);
   });
 });

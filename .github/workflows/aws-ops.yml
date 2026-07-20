@@ -1,0 +1,505 @@
+# .github/workflows/aws-ops.yml — RELAY AWS ops for the your-chat.io fleet (v2.91)
+#
+# MANUAL ONLY (workflow_dispatch — deliberately no `push:` trigger): these are
+# infrastructure mutations, not deploys. Run one `action` at a time:
+#
+#   verify     — read-only status: caller identity, relay-app instances, target
+#                groups, ALB, ACM certs in ap-south-1 AND us-east-1. No mutations.
+#   cloudfront — ensure the us-east-1 ACM cert for the domain (+www), then
+#                create-or-update the CloudFront distribution in front of the
+#                ALB. Prints the DNS records YOU must add — never touches DNS.
+#   alb-tune   — ALB idle timeout 300s (SSE), the `relay-signaling` target
+#                group (instance A only), and the /api/relay/* listener rule
+#                that pins ALL signaling to that one node (the in-memory relay
+#                registry is single-process — see docs-aws-scale-out.md).
+#
+# Auth: plain IAM access keys in GitHub secrets AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY (this is the ops path for a human-scoped key; the
+# deploy pipeline itself uses OIDC in deploy.yml). Missing secrets fail fast
+# with instructions instead of a cryptic SDK error.
+#
+# Required IAM actions for the ops key (least privilege, per action):
+#   verify     — sts:GetCallerIdentity, ec2:DescribeInstances,
+#                elasticloadbalancing:DescribeLoadBalancers,
+#                elasticloadbalancing:DescribeTargetGroups,
+#                elasticloadbalancing:DescribeTargetHealth,
+#                acm:ListCertificates, cloudfront:ListDistributions
+#   cloudfront — the verify set, plus acm:RequestCertificate,
+#                acm:DescribeCertificate, acm:DeleteCertificate,
+#                cloudfront:CreateDistribution, cloudfront:UpdateDistribution,
+#                cloudfront:GetDistributionConfig; OPTIONAL:
+#                cloudfront:ListCachePolicies,
+#                cloudfront:ListOriginRequestPolicies (lookup failures fall
+#                back to the well-known managed-policy ids)
+#   alb-tune   — the verify set, plus
+#                elasticloadbalancing:DescribeLoadBalancerAttributes,
+#                elasticloadbalancing:ModifyLoadBalancerAttributes,
+#                elasticloadbalancing:CreateTargetGroup,
+#                elasticloadbalancing:RegisterTargets,
+#                elasticloadbalancing:DeregisterTargets,
+#                elasticloadbalancing:DescribeListeners,
+#                elasticloadbalancing:DescribeRules,
+#                elasticloadbalancing:CreateRule,
+#                elasticloadbalancing:ModifyRule,
+#                elasticloadbalancing:DeleteRule
+#
+# Every step is idempotent and PRINTS what it found / changed / skipped.
+
+name: AWS ops (your-chat.io)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to run
+        type: choice
+        required: true
+        default: verify
+        options: [verify, cloudfront, alb-tune]
+      region:
+        description: Fleet region (EC2/ALB/regional ACM)
+        type: string
+        required: true
+        default: ap-south-1
+      domain:
+        description: Apex domain served by the fleet
+        type: string
+        required: true
+        default: your-chat.io
+
+permissions:
+  contents: read
+
+jobs:
+  ops:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ inputs.region }}
+      DOMAIN: ${{ inputs.domain }}
+    steps:
+      - name: Gate — AWS credentials must be configured
+        env:
+          KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          KEY_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          if [ -z "$KEY_ID" ] || [ -z "$KEY_SECRET" ]; then
+            echo "::error::AWS credentials are not configured for this repo. Add AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY under Settings → Secrets and variables → Actions, then re-run this workflow."
+            exit 1
+          fi
+          echo "AWS credentials present — proceeding."
+
+      - name: AWS auth (access keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      # ────────────────────────────────────────────────────────────────
+      - name: verify — read-only fleet status
+        if: inputs.action == 'verify'
+        run: |
+          set -euo pipefail
+          echo "=================================================================="
+          echo "WHOAMI"
+          echo "=================================================================="
+          aws sts get-caller-identity --output table
+
+          echo "=================================================================="
+          echo "EC2 — instances tagged Name=relay-app ($AWS_REGION)"
+          echo "=================================================================="
+          aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=relay-app" \
+            --query 'Reservations[].Instances[].{Id:InstanceId,State:State.Name,Type:InstanceType,AZ:Placement.AvailabilityZone,PrivateIp:PrivateIpAddress,PublicIp:PublicIpAddress,Launched:LaunchTime}' \
+            --output table
+
+          echo "=================================================================="
+          echo "ALB + target groups ($AWS_REGION)"
+          echo "=================================================================="
+          aws elbv2 describe-load-balancers \
+            --query 'LoadBalancers[?Type==`application`].{Name:LoadBalancerName,DNS:DNSName,State:State.Code,Scheme:Scheme}' \
+            --output table || echo "(no ALBs)"
+          aws elbv2 describe-target-groups \
+            --query 'TargetGroups[].{Name:TargetGroupName,Port:Port,HealthPath:HealthCheckPath,VPC:VpcId}' \
+            --output table || echo "(no target groups)"
+          for TG in $(aws elbv2 describe-target-groups --query 'TargetGroups[].TargetGroupArn' --output text 2>/dev/null); do
+            NAME=$(aws elbv2 describe-target-groups --target-group-arns "$TG" --query 'TargetGroups[0].TargetGroupName' --output text)
+            echo "-- targets of $NAME:"
+            aws elbv2 describe-target-health --target-group-arn "$TG" \
+              --query 'TargetHealthDescriptions[].{Id:Target.Id,Port:Target.Port,Health:TargetHealth.State,Reason:TargetHealth.Reason}' \
+              --output table || true
+          done
+
+          echo "=================================================================="
+          echo "ACM certificates — $AWS_REGION (for the ALB) AND us-east-1 (for CloudFront)"
+          echo "=================================================================="
+          for R in "$AWS_REGION" us-east-1; do
+            echo "-- region $R:"
+            aws acm list-certificates --region "$R" \
+              --query 'CertificateSummaryList[].{Domain:DomainName,Status:Status,Arn:CertificateArn}' \
+              --output table || echo "   (none)"
+          done
+
+          echo "=================================================================="
+          echo "CloudFront distributions aliased to $DOMAIN"
+          echo "=================================================================="
+          aws cloudfront list-distributions \
+            --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, '$DOMAIN')].{Id:Id,Domain:DomainName,Status:Status,Enabled:Enabled}" \
+            --output table 2>/dev/null || echo "(none)"
+          echo "verify done — no mutations were made."
+
+      # ────────────────────────────────────────────────────────────────
+      - name: cloudfront — ACM cert (us-east-1) + distribution in front of the ALB
+        if: inputs.action == 'cloudfront'
+        run: |
+          set -euo pipefail
+          WWW="www.$DOMAIN"
+
+          echo "=================================================================="
+          echo "STEP 1/3 — ACM certificate for $DOMAIN + $WWW in us-east-1"
+          echo "          (CloudFront only accepts certificates from us-east-1)"
+          echo "=================================================================="
+          CERT_ARN=$(aws acm list-certificates --region us-east-1 \
+            --certificate-statuses ISSUED PENDING_VALIDATION \
+            --query "CertificateSummaryList[?DomainName=='$DOMAIN'].CertificateArn | [0]" --output text)
+          if [ -z "$CERT_ARN" ] || [ "$CERT_ARN" = "None" ]; then
+            # No LIVE cert. Sweep DEAD ones first (v2.91 review D11):
+            # request-certificate is NOT idempotent (no idempotency token, and
+            # ACM's token window is only 1h anyway), so after a cert flips to
+            # VALIDATION_TIMED_OUT (72h without the CNAMEs) or FAILED, each
+            # run would otherwise mint yet another duplicate —
+            # delete-then-re-request instead.
+            for DEAD in $(aws acm list-certificates --region us-east-1 \
+              --certificate-statuses VALIDATION_TIMED_OUT FAILED \
+              --query "CertificateSummaryList[?DomainName=='$DOMAIN'].CertificateArn" --output text); do
+              [ "$DEAD" = "None" ] && continue
+              echo "Deleting dead certificate ($DEAD) before re-requesting…"
+              aws acm delete-certificate --region us-east-1 --certificate-arn "$DEAD" || true
+            done
+            echo "No usable certificate found — requesting a DNS-validated one now…"
+            CERT_ARN=$(aws acm request-certificate --region us-east-1 \
+              --domain-name "$DOMAIN" \
+              --subject-alternative-names "$WWW" \
+              --validation-method DNS \
+              --query CertificateArn --output text)
+            echo "Requested: $CERT_ARN"
+            sleep 10 # ACM needs a beat before validation records materialize
+          else
+            echo "Found existing certificate: $CERT_ARN"
+          fi
+
+          echo ""
+          echo "##################################################################"
+          echo "#  DNS VALIDATION RECORDS — add these CNAMEs at your DNS panel  #"
+          echo "##################################################################"
+          aws acm describe-certificate --region us-east-1 --certificate-arn "$CERT_ARN" \
+            --query 'Certificate.DomainValidationOptions[].{Add_CNAME_Name:ResourceRecord.Name,Pointing_To:ResourceRecord.Value,For:DomainName,Status:ValidationStatus}' \
+            --output table
+          echo "##################################################################"
+
+          echo "Polling for ISSUED (up to ~5 min)…"
+          STATUS=PENDING_VALIDATION
+          for i in $(seq 1 30); do
+            STATUS=$(aws acm describe-certificate --region us-east-1 --certificate-arn "$CERT_ARN" \
+              --query 'Certificate.Status' --output text)
+            echo "  [$i/30] status: $STATUS"
+            [ "$STATUS" = "ISSUED" ] && break
+            sleep 10
+          done
+          if [ "$STATUS" != "ISSUED" ]; then
+            echo "::error::Certificate is still $STATUS. This is EXPECTED on the first run: add the validation CNAMEs printed above at your DNS panel, wait for ACM to flip the cert to ISSUED (minutes after the DNS propagates), then RE-RUN this workflow with action=cloudfront. Nothing else was changed."
+            exit 1
+          fi
+          echo "Certificate ISSUED: $CERT_ARN"
+
+          echo "=================================================================="
+          echo "STEP 2/3 — create-or-update the CloudFront distribution"
+          echo "=================================================================="
+          # Origin = the fleet ALB, found by name (relay-alb / relay*) or as the
+          # only ALB in the region.
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --query "LoadBalancers[?Type=='application' && (LoadBalancerName=='relay-alb' || starts_with(LoadBalancerName, 'relay'))].DNSName | [0]" --output text)
+          if [ -z "$ALB_DNS" ] || [ "$ALB_DNS" = "None" ]; then
+            COUNT=$(aws elbv2 describe-load-balancers --query 'length(LoadBalancers[?Type==`application`])' --output text)
+            if [ "$COUNT" = "1" ]; then
+              ALB_DNS=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[0].DNSName' --output text)
+              echo "No relay-named ALB; using the region's single ALB: $ALB_DNS"
+            else
+              echo "::error::Could not identify the fleet ALB (looked for name relay-alb/relay*, found $COUNT ALBs). Create/name the ALB per docs-aws-scale-out.md and re-run."
+              exit 1
+            fi
+          fi
+          echo "Origin ALB: $ALB_DNS (protocol to origin: https-only; the AllViewer policy forwards the viewer Host header, which the ALB's $DOMAIN certificate matches)"
+
+          # Managed policy ids — resolved by name with documented fallbacks.
+          # The lookups tolerate failure (v2.91 review D10): under `set -e` an
+          # AccessDeniedException from a least-privilege ops key (the List*
+          # actions are optional — see the header) would otherwise abort the
+          # step BEFORE the fallbacks could engage. The fallback ids are AWS's
+          # global well-known managed-policy ids.
+          CP_DISABLED=$(aws cloudfront list-cache-policies --type managed \
+            --query "CachePolicyList.Items[?CachePolicy.CachePolicyConfig.Name=='Managed-CachingDisabled'].CachePolicy.Id | [0]" --output text 2>/dev/null || echo None)
+          if [ -z "$CP_DISABLED" ] || [ "$CP_DISABLED" = "None" ]; then CP_DISABLED=4135ea2d-6df8-44a3-9df3-4b5a84be39ad; fi
+          CP_OPTIMIZED=$(aws cloudfront list-cache-policies --type managed \
+            --query "CachePolicyList.Items[?CachePolicy.CachePolicyConfig.Name=='Managed-CachingOptimized'].CachePolicy.Id | [0]" --output text 2>/dev/null || echo None)
+          if [ -z "$CP_OPTIMIZED" ] || [ "$CP_OPTIMIZED" = "None" ]; then CP_OPTIMIZED=658327ea-f89d-4fab-a63d-7e88639e58f6; fi
+          ORP_ALLVIEWER=$(aws cloudfront list-origin-request-policies --type managed \
+            --query "OriginRequestPolicyList.Items[?OriginRequestPolicy.OriginRequestPolicyConfig.Name=='Managed-AllViewer'].OriginRequestPolicy.Id | [0]" --output text 2>/dev/null || echo None)
+          if [ -z "$ORP_ALLVIEWER" ] || [ "$ORP_ALLVIEWER" = "None" ]; then ORP_ALLVIEWER=216adef6-5c7f-47e4-b989-5492eafa07d3; fi
+          echo "Cache policies — CachingDisabled: $CP_DISABLED, CachingOptimized: $CP_OPTIMIZED, AllViewer: $ORP_ALLVIEWER"
+
+          EXISTING_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, '$DOMAIN')].Id | [0]" --output text 2>/dev/null || true)
+          if [ -n "$EXISTING_ID" ] && [ "$EXISTING_ID" != "None" ]; then
+            aws cloudfront get-distribution-config --id "$EXISTING_ID" > /tmp/existing.json
+            ETAG=$(jq -r .ETag /tmp/existing.json)
+            CALLER_REF=$(jq -r .DistributionConfig.CallerReference /tmp/existing.json)
+            echo "Updating existing distribution $EXISTING_ID (ETag $ETAG)"
+          else
+            ETAG=""
+            CALLER_REF="relay-io-$(date +%s)"
+            echo "No distribution aliased to $DOMAIN — creating one."
+          fi
+
+          # A dedicated cache behavior per SSE endpoint keeps them explicitly
+          # CachingDisabled; the 60s origin response timeout lives on the ORIGIN
+          # (CloudFront has no per-behavior read timeout) — safe because both
+          # SSE streams heartbeat every 25s.
+          sse_behavior() { # $1 = path pattern
+            jq -n --arg p "$1" --arg cp "$CP_DISABLED" --arg orp "$ORP_ALLVIEWER" '{
+              PathPattern: $p, TargetOriginId: "relay-alb",
+              ViewerProtocolPolicy: "redirect-to-https", Compress: true,
+              CachePolicyId: $cp, OriginRequestPolicyId: $orp,
+              AllowedMethods: { Quantity: 7, Items: ["GET","HEAD","OPTIONS","PUT","POST","PATCH","DELETE"],
+                CachedMethods: { Quantity: 2, Items: ["GET","HEAD"] } },
+              SmoothStreaming: false, FieldLevelEncryptionId: "",
+              LambdaFunctionAssociations: { Quantity: 0 }, FunctionAssociations: { Quantity: 0 }
+            }'
+          }
+          # AllViewer on /assets/* too (v2.91 review D1): the origin is the ALB
+          # addressed by its *.elb.amazonaws.com name over https-only, so the
+          # FORWARDED VIEWER HOST is what matches the ALB's $DOMAIN cert —
+          # without it every hashed JS/CSS chunk 502s ("SSL negotiation
+          # failed") and the app is blank after cutover. AllViewer shapes the
+          # ORIGIN request only, never the cache key: CachingOptimized still
+          # owns caching, unchanged.
+          ASSETS_BEHAVIOR=$(jq -n --arg cp "$CP_OPTIMIZED" --arg orp "$ORP_ALLVIEWER" '{
+            PathPattern: "/assets/*", TargetOriginId: "relay-alb",
+            ViewerProtocolPolicy: "redirect-to-https", Compress: true,
+            CachePolicyId: $cp, OriginRequestPolicyId: $orp,
+            AllowedMethods: { Quantity: 2, Items: ["GET","HEAD"],
+              CachedMethods: { Quantity: 2, Items: ["GET","HEAD"] } },
+            SmoothStreaming: false, FieldLevelEncryptionId: "",
+            LambdaFunctionAssociations: { Quantity: 0 }, FunctionAssociations: { Quantity: 0 }
+          }')
+
+          jq -n \
+            --arg ref "$CALLER_REF" --arg domain "$DOMAIN" --arg www "$WWW" \
+            --arg alb "$ALB_DNS" --arg cert "$CERT_ARN" \
+            --arg cp "$CP_DISABLED" --arg orp "$ORP_ALLVIEWER" \
+            --argjson assets "$ASSETS_BEHAVIOR" \
+            --argjson sse1 "$(sse_behavior '/api/relay/stream*')" \
+            --argjson sse2 "$(sse_behavior '/api/v2/events*')" \
+            '{
+              CallerReference: $ref,
+              Comment: "RELAY your-chat.io edge (managed by aws-ops.yml)",
+              Enabled: true,
+              HttpVersion: "http2and3",
+              IsIPV6Enabled: true,
+              PriceClass: "PriceClass_All",
+              DefaultRootObject: "",
+              Aliases: { Quantity: 2, Items: [$domain, $www] },
+              Origins: { Quantity: 1, Items: [{
+                Id: "relay-alb", DomainName: $alb,
+                OriginPath: "", CustomHeaders: { Quantity: 0 },
+                CustomOriginConfig: {
+                  HTTPPort: 80, HTTPSPort: 443,
+                  OriginProtocolPolicy: "https-only",
+                  OriginSslProtocols: { Quantity: 1, Items: ["TLSv1.2"] },
+                  OriginReadTimeout: 60, OriginKeepaliveTimeout: 5
+                },
+                ConnectionAttempts: 3, ConnectionTimeout: 10,
+                OriginShield: { Enabled: false }
+              }]},
+              OriginGroups: { Quantity: 0 },
+              DefaultCacheBehavior: {
+                TargetOriginId: "relay-alb",
+                ViewerProtocolPolicy: "redirect-to-https", Compress: true,
+                CachePolicyId: $cp, OriginRequestPolicyId: $orp,
+                AllowedMethods: { Quantity: 7, Items: ["GET","HEAD","OPTIONS","PUT","POST","PATCH","DELETE"],
+                  CachedMethods: { Quantity: 2, Items: ["GET","HEAD"] } },
+                SmoothStreaming: false, FieldLevelEncryptionId: "",
+                LambdaFunctionAssociations: { Quantity: 0 }, FunctionAssociations: { Quantity: 0 }
+              },
+              CacheBehaviors: { Quantity: 3, Items: [$assets, $sse1, $sse2] },
+              CustomErrorResponses: { Quantity: 0 },
+              ViewerCertificate: {
+                ACMCertificateArn: $cert,
+                SSLSupportMethod: "sni-only",
+                MinimumProtocolVersion: "TLSv1.2_2021"
+              },
+              Restrictions: { GeoRestriction: { RestrictionType: "none", Quantity: 0 } },
+              WebACLId: "",
+              Logging: { Enabled: false, IncludeCookies: false, Bucket: "", Prefix: "" }
+            }' > /tmp/distconfig.json
+          echo "Distribution config assembled:"
+          jq '{Aliases, Origins: .Origins.Items[0].CustomOriginConfig, Behaviors: [.DefaultCacheBehavior.CachePolicyId, (.CacheBehaviors.Items[] | {PathPattern, CachePolicyId})]}' /tmp/distconfig.json
+
+          if [ -n "$ETAG" ]; then
+            aws cloudfront update-distribution --id "$EXISTING_ID" --if-match "$ETAG" \
+              --distribution-config file:///tmp/distconfig.json > /tmp/dist-out.json
+            echo "UPDATED distribution $EXISTING_ID"
+          else
+            aws cloudfront create-distribution \
+              --distribution-config file:///tmp/distconfig.json > /tmp/dist-out.json
+            echo "CREATED distribution $(jq -r .Distribution.Id /tmp/dist-out.json)"
+          fi
+          CF_DOMAIN=$(jq -r .Distribution.DomainName /tmp/dist-out.json)
+
+          echo "=================================================================="
+          echo "STEP 3/3 — YOUR DNS CHANGE (this workflow never touches DNS)"
+          echo "=================================================================="
+          echo ""
+          echo "  CloudFront domain:  $CF_DOMAIN"
+          echo ""
+          echo "  At your DNS panel, point the site at CloudFront:"
+          echo "    $DOMAIN    →  ALIAS/ANAME (or A-ALIAS)  →  $CF_DOMAIN"
+          echo "    $WWW       →  CNAME                     →  $CF_DOMAIN"
+          echo ""
+          echo "  (If your DNS host doesn't support ALIAS at the apex, use its"
+          echo "   CNAME-flattening feature.)"
+          echo ""
+          echo "  GO/NO-GO before changing DNS: wait for distribution status"
+          echo "  Deployed, then verify with a Host override — plain"
+          echo "  https://$CF_DOMAIN can NEVER work (it forwards the"
+          echo "  cloudfront.net Host, which the ALB's certificate doesn't"
+          echo "  match, so it always 502s even when everything is healthy):"
+          echo ""
+          echo "    curl -si https://$CF_DOMAIN/api/health -H \"Host: $DOMAIN\""
+          echo ""
+          echo "  Expect HTTP 200. Only then change DNS; do NOT delete the old"
+          echo "  A records until after the cutover is verified end-to-end."
+          echo "=================================================================="
+
+      # ────────────────────────────────────────────────────────────────
+      - name: alb-tune — idle timeout 300s + relay-signaling target group + /api/relay/* rule
+        if: inputs.action == 'alb-tune'
+        run: |
+          set -euo pipefail
+          echo "=================================================================="
+          echo "STEP 1/4 — locate the fleet ALB"
+          echo "=================================================================="
+          ALB_ARN=$(aws elbv2 describe-load-balancers \
+            --query "LoadBalancers[?Type=='application' && (LoadBalancerName=='relay-alb' || starts_with(LoadBalancerName, 'relay'))].LoadBalancerArn | [0]" --output text)
+          if [ -z "$ALB_ARN" ] || [ "$ALB_ARN" = "None" ]; then
+            COUNT=$(aws elbv2 describe-load-balancers --query 'length(LoadBalancers[?Type==`application`])' --output text)
+            if [ "$COUNT" = "1" ]; then
+              ALB_ARN=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+            else
+              echo "::error::Could not identify the fleet ALB (looked for relay-alb/relay*, found $COUNT ALBs). Create it per docs-aws-scale-out.md §2 and re-run."
+              exit 1
+            fi
+          fi
+          VPC_ID=$(aws elbv2 describe-load-balancers --load-balancer-arns "$ALB_ARN" --query 'LoadBalancers[0].VpcId' --output text)
+          echo "ALB: $ALB_ARN (VPC $VPC_ID)"
+
+          echo "=================================================================="
+          echo "STEP 2/4 — idle timeout 300s (SSE streams heartbeat every 25s;"
+          echo "           the default 60s idle timeout would sever them)"
+          echo "=================================================================="
+          BEFORE=$(aws elbv2 describe-load-balancer-attributes --load-balancer-arn "$ALB_ARN" \
+            --query "Attributes[?Key=='idle_timeout.timeout_seconds'].Value | [0]" --output text)
+          aws elbv2 modify-load-balancer-attributes --load-balancer-arn "$ALB_ARN" \
+            --attributes Key=idle_timeout.timeout_seconds,Value=300 > /dev/null
+          echo "idle_timeout.timeout_seconds: $BEFORE → 300"
+
+          echo "=================================================================="
+          echo "STEP 3/4 — target group relay-signaling (instance A ONLY)"
+          echo "=================================================================="
+          TG_ARN=$(aws elbv2 describe-target-groups --names relay-signaling \
+            --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true)
+          if [ -z "$TG_ARN" ] || [ "$TG_ARN" = "None" ]; then
+            TG_ARN=$(aws elbv2 create-target-group \
+              --name relay-signaling --protocol HTTP --port 3000 --vpc-id "$VPC_ID" \
+              --target-type instance \
+              --health-check-protocol HTTP --health-check-path /api/health \
+              --health-check-interval-seconds 15 --healthy-threshold-count 2 --unhealthy-threshold-count 3 \
+              --query 'TargetGroups[0].TargetGroupArn' --output text)
+            echo "CREATED target group relay-signaling: $TG_ARN"
+          else
+            echo "Target group relay-signaling already exists: $TG_ARN"
+          fi
+
+          FIRST_INSTANCE=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=relay-app" "Name=instance-state-name,Values=running" \
+            --query 'sort_by(Reservations[].Instances[], &LaunchTime)[0].InstanceId' --output text)
+          if [ -z "$FIRST_INSTANCE" ] || [ "$FIRST_INSTANCE" = "None" ]; then
+            echo "::error::No running instance tagged Name=relay-app found — is the fleet up?"
+            exit 1
+          fi
+          # ONE deterministic signaling node: the oldest-launched instance. The
+          # in-memory relay registry is single-process; two nodes would split
+          # call state (see docs-aws-scale-out.md).
+          CURRENT_TARGETS=$(aws elbv2 describe-target-health --target-group-arn "$TG_ARN" \
+            --query 'TargetHealthDescriptions[].Target.Id' --output text)
+          echo "Signaling node (oldest relay-app instance): $FIRST_INSTANCE"
+          echo "Currently registered in relay-signaling:    ${CURRENT_TARGETS:-<none>}"
+          for T in $CURRENT_TARGETS; do
+            if [ "$T" != "$FIRST_INSTANCE" ]; then
+              aws elbv2 deregister-targets --target-group-arn "$TG_ARN" --targets "Id=$T"
+              echo "DEREGISTERED extra target $T (relay-signaling must hold exactly one instance)"
+            fi
+          done
+          aws elbv2 register-targets --target-group-arn "$TG_ARN" --targets "Id=$FIRST_INSTANCE,Port=3000"
+          echo "REGISTERED $FIRST_INSTANCE:3000 in relay-signaling"
+
+          echo "=================================================================="
+          echo "STEP 4/4 — listener rule: /api/relay/* → relay-signaling (priority 10)"
+          echo "=================================================================="
+          LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" \
+            --query 'Listeners[?Port==`443`].ListenerArn | [0]' --output text)
+          if [ -z "$LISTENER_ARN" ] || [ "$LISTENER_ARN" = "None" ]; then
+            LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" \
+              --query 'Listeners[?Port==`80`].ListenerArn | [0]' --output text)
+            if [ -z "$LISTENER_ARN" ] || [ "$LISTENER_ARN" = "None" ]; then
+              echo "::error::The ALB has neither a 443 nor an 80 listener. Add the HTTPS:443 listener (ap-south-1 ACM cert for $DOMAIN — see docs-aws-scale-out.md §2) and re-run."
+              exit 1
+            fi
+            echo "::warning::No 443 listener yet (needs the ap-south-1 ACM cert — docs-aws-scale-out.md §2). Applying the rule to the :80 listener so tiering works now; RE-RUN after adding the 443 listener."
+          else
+            # 443 exists (v2.91 review D9): the :80 listener must be a PURE
+            # 301 redirect again. An earlier fallback run may have left a
+            # /api/relay/* FORWARD rule there — listener rules evaluate BEFORE
+            # the default redirect action, so that rule would silently serve
+            # all signaling over plaintext HTTP forever. Delete it.
+            HTTP_LISTENER=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" \
+              --query 'Listeners[?Port==`80`].ListenerArn | [0]' --output text)
+            if [ -n "$HTTP_LISTENER" ] && [ "$HTTP_LISTENER" != "None" ]; then
+              OLD_HTTP_RULE=$(aws elbv2 describe-rules --listener-arn "$HTTP_LISTENER" \
+                --query "Rules[?Conditions[?Field=='path-pattern' && contains(Values, '/api/relay/*')]].RuleArn | [0]" --output text)
+              if [ -n "$OLD_HTTP_RULE" ] && [ "$OLD_HTTP_RULE" != "None" ]; then
+                aws elbv2 delete-rule --rule-arn "$OLD_HTTP_RULE"
+                echo "DELETED leftover :80 fallback rule $OLD_HTTP_RULE (plaintext /api/relay/* exemption — :80 is a pure 301 redirect again)"
+              else
+                echo ":80 listener carries no /api/relay/* forward rule — nothing to clean up."
+              fi
+            fi
+          fi
+          echo "Listener: $LISTENER_ARN"
+
+          RULE_ARN=$(aws elbv2 describe-rules --listener-arn "$LISTENER_ARN" \
+            --query "Rules[?Conditions[?Field=='path-pattern' && contains(Values, '/api/relay/*')]].RuleArn | [0]" --output text)
+          if [ -n "$RULE_ARN" ] && [ "$RULE_ARN" != "None" ]; then
+            aws elbv2 modify-rule --rule-arn "$RULE_ARN" \
+              --actions "Type=forward,TargetGroupArn=$TG_ARN" > /dev/null
+            echo "REFRESHED existing rule $RULE_ARN → relay-signaling"
+          else
+            aws elbv2 create-rule --listener-arn "$LISTENER_ARN" --priority 10 \
+              --conditions "Field=path-pattern,Values=/api/relay/*" \
+              --actions "Type=forward,TargetGroupArn=$TG_ARN" > /dev/null
+            echo "CREATED rule priority 10: path /api/relay/* → relay-signaling"
+          fi
+          echo "Default rule (both instances) untouched. Final rule set:"
+          aws elbv2 describe-rules --listener-arn "$LISTENER_ARN" \
+            --query 'Rules[].{Priority:Priority,Paths:Conditions[0].Values,Target:Actions[0].TargetGroupArn}' \
+            --output table
