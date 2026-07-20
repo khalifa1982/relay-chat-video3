@@ -71,6 +71,22 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 
 async function startServer() {
   const app = express();
+  // Self-hosted deploys (.io) have no compressing edge in front of them —
+  // gzip everything EXCEPT the SSE streams (compression buffers them, which
+  // would hold back signaling/presence events). Manus's own gateway already
+  // compresses, so this is effectively a no-op double there.
+  if (process.env.NODE_ENV === "production") {
+    const { default: compression } = await import("compression");
+    app.use(
+      compression({
+        filter: (req, res) => {
+          if (req.path.startsWith("/api/relay/stream")) return false;
+          if (req.path.startsWith("/api/v2/events")) return false;
+          return compression.filter(req, res);
+        },
+      })
+    );
+  }
   const server = createServer(app);
   // Security headers on every response. Kept deliberately CONSERVATIVE so they
   // can't break the inline-style/script-heavy SPA, the WebRTC media stack, or the

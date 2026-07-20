@@ -47,6 +47,8 @@ jobs:
         env:
           VITE_FRONTEND_FORGE_API_URL: https://forge.manus.ai
           VITE_APP_ID: LDUyWQ6Lzxde96UDvwdvU2
+      - name: Strip Manus host runtime (self-host page is 372KB -> 5KB)
+        run: node scripts/strip-manus-runtime.mjs dist/public/index.html
       - name: Package artifact
         # Client + server both build into dist/ (vite → dist, esbuild → dist/index.js).
         # ecosystem.config.cjs MUST ship (the deploy copies it over the server's
