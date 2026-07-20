@@ -19,7 +19,6 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import { LayoutDashboard, LogOut, PanelLeft, Users } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
@@ -65,12 +64,17 @@ export default function DashboardLayout({
               Sign in to continue
             </h1>
             <p className="text-sm text-muted-foreground text-center max-w-sm">
-              Access to this dashboard requires authentication. Continue to launch the login flow.
+              Access to this dashboard requires authentication. Continue to the
+              app to sign in with your email.
             </p>
           </div>
+          {/* v2.92 (R3): this template component is currently unused, but its
+              Sign in button used to launch the Manus OAuth portal. The native
+              AuthPanel (email code + PIN) is now the only sign-in, and it
+              lives in the app shell — so route there. */}
           <Button
             onClick={() => {
-              window.location.href = getLoginUrl();
+              window.location.href = "/app";
             }}
             size="lg"
             className="w-full shadow-lg hover:shadow-xl transition-all"

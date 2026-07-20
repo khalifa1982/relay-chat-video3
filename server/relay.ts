@@ -499,7 +499,11 @@ export function iceServers(userId: string, ttlSecOverride?: number): IceServer[]
   const TURN_TLS = process.env.TURN_TLS === "1"; // only advertise turns: when a cert is configured
   // `ttlSecOverride` lets the anonymous /api/relay/ice probe endpoint mint
   // SHORT-lived creds (300s) instead of full call-length ones (v2.88).
-  const TURN_TTL = ttlSecOverride ?? parseInt(process.env.TURN_TTL || "3600", 10);
+  // v2.92 (R4C): TURN_TTL (credential lifetime, seconds) is operator-tunable;
+  // a missing/garbage/non-positive value falls back to the historical 3600 so
+  // a typo can never mint already-expired (or "NaN:") usernames.
+  const envTtl = parseInt(process.env.TURN_TTL || "3600", 10);
+  const TURN_TTL = ttlSecOverride ?? (Number.isFinite(envTtl) && envTtl > 0 ? envTtl : 3600);
   if (TURN_SECRET && TURN_HOST) {
     // Operator-supplied TURN (recommended for production). coturn runs in
     // use-auth-secret mode: username = "<expiry-unix>:<userId>",

@@ -105,4 +105,30 @@ describe("built-in SMTP mailer (v2.87)", () => {
       else process.env[k] = saved[k];
     }
   });
+
+  it("v2.92 R4A: EMAIL_FROM is an alias for SMTP_FROM (SES envs), SMTP_FROM still wins", () => {
+    const KEYS = ["SMTP_HOST", "SMTP_PORT", "SMTP_SECURE", "SMTP_USER", "SMTP_PASS", "SMTP_FROM", "EMAIL_FROM"];
+    const saved = Object.fromEntries(KEYS.map(k => [k, process.env[k]]));
+    for (const k of KEYS) delete process.env[k];
+    process.env.SMTP_HOST = "email-smtp.ap-south-1.amazonaws.com";
+    process.env.SMTP_USER = "AKIAEXAMPLEKEYID"; // SES SMTP username — NOT a valid From
+    process.env.SMTP_PASS = "p";
+    try {
+      // EMAIL_FROM alone fills From (the whole point: never fall back to the AKIA user).
+      process.env.EMAIL_FROM = "RELAY <no-reply@example.com>";
+      expect(smtpConfig()?.from).toBe("RELAY <no-reply@example.com>");
+      // An explicit SMTP_FROM outranks the alias.
+      process.env.SMTP_FROM = "RELAY <smtp-from@example.com>";
+      expect(smtpConfig()?.from).toBe("RELAY <smtp-from@example.com>");
+      // Neither set → last-resort SMTP_USER (historical behavior, unchanged).
+      delete process.env.SMTP_FROM;
+      delete process.env.EMAIL_FROM;
+      expect(smtpConfig()?.from).toBe("AKIAEXAMPLEKEYID");
+    } finally {
+      for (const k of KEYS) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k] as string;
+      }
+    }
+  });
 });

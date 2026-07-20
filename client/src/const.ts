@@ -1,24 +1,12 @@
 export { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 
-// Generate login URL at runtime so redirect URI reflects the current origin.
-// Returns "" when OAuth isn't configured (e.g. local dev) or the URL can't be
-// built, so callers can hide the sign-in path instead of throwing during render.
-export const getLoginUrl = () => {
-  try {
-    const oauthPortalUrl = import.meta.env.VITE_OAUTH_PORTAL_URL;
-    const appId = import.meta.env.VITE_APP_ID;
-    if (!oauthPortalUrl) return "";
-    const redirectUri = `${window.location.origin}/api/oauth/callback`;
-    const state = btoa(redirectUri);
-
-    const url = new URL(`${oauthPortalUrl}/app-auth`);
-    if (appId) url.searchParams.set("appId", appId);
-    url.searchParams.set("redirectUri", redirectUri);
-    url.searchParams.set("state", state);
-    url.searchParams.set("type", "signIn");
-
-    return url.toString();
-  } catch {
-    return "";
-  }
-};
+// v2.92 (R3, owner decision): the Manus OAuth sign-in UI is REMOVED. The native
+// AuthPanel (email one-time code + optional 4-digit PIN, v2.87) is the only
+// sign-in. The old login-URL builder — which assembled the Manus portal URL
+// from the OAuth portal env var — was deleted along with every call site
+// (main.tsx 401 redirect, useAuth's default redirectPath, DashboardLayout's
+// Sign in button, ManusDialog). The SERVER'S /api/oauth/callback route is
+// intentionally kept so pre-existing OAuth sessions/cookies stay valid; it is
+// simply unreachable from the UI. Existing Manus-OAuth users sign in via email
+// code at the same address (server/authOtp.ts findUserByEmailAny falls back to
+// any user row with that email).

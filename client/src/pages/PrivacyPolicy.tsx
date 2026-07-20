@@ -1,4 +1,5 @@
 import { APP_VERSION } from "@shared/version";
+import { siteHost } from "@/lib/siteHost";
 
 const ACCENT = "oklch(0.55 0.22 268)";
 const PAGE_BG = "oklch(0.985 0.006 250)";
@@ -46,7 +47,7 @@ export default function PrivacyPolicy() {
           <div className="space-y-8 text-[0.92rem] leading-[1.75] text-slate-600">
             <Section title="1. Introduction">
               <p>
-                RELAY ("we", "us", or "our") operates the website at your-chat.org and the RELAY web application
+                RELAY ("we", "us", or "our") operates the website at {siteHost()} and the RELAY web application
                 (collectively, the "Service"). This Privacy Policy explains how we collect, use, and protect your
                 information when you use our Service.
               </p>
@@ -158,8 +159,8 @@ export default function PrivacyPolicy() {
               <p>
                 If you have questions about this Privacy Policy or our privacy practices, you can reach us
                 through the RELAY application or by visiting our website at{" "}
-                <a href="https://your-chat.org" className="font-semibold no-underline hover:underline" style={{ color: ACCENT }}>
-                  your-chat.org
+                <a href="/" className="font-semibold no-underline hover:underline" style={{ color: ACCENT }}>
+                  {siteHost()}
                 </a>.
               </p>
             </Section>

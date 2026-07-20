@@ -3879,3 +3879,143 @@ to v2.90.
   recovery test in `redisBusLive.test.ts` proving D3+D4 against a real killed-and-restarted
   redis-server); the stale one-clearing-sync and substring-thumbKey pins were updated in place
   with review references. `pnpm check` + full suite + `pnpm build` green.
+
+## v2.92.0 — OAuth UI removal (native auth only), SES mailer compat, zero hardcoded domains, TURN env pins (2026-07-20)
+Owner-mandated "Round 3 + Round 4" batch. Nothing here changes the wire protocols; the server's
+OAuth callback stays live for existing sessions. Same build still serves both deployments —
+identity now comes ONLY from env + Host, never from source literals.
+
+### R3 — Manus OAuth sign-in removed from the UI entirely (owner decision)
+The native AuthPanel (email one-time code + optional 4-digit PIN, v2.87) is now the ONLY
+sign-in. Earlier versions had already moved the visible CTAs (AppShell header, OnboardingGate
+"Continue with email", Profile "Register with email") onto AuthPanel; v2.92 removes the last
+reachable OAuth paths and the builder itself:
+- [x] `client/src/main.tsx` — the global 401 handler HARD-NAVIGATED the whole tab to the Manus
+      OAuth portal on any UNAUTHED tRPC error (a real, reachable path on production). Now it
+      only logs; RELAY is guest-first and AuthPanel is in-app.
+- [x] `client/src/_core/hooks/useAuth.ts` — the default `redirectPath` was the OAuth portal
+      URL; now `/` (the guest-first landing). No current caller passes
+      `redirectOnUnauthenticated`, so this is a belt-and-braces neutralization.
+- [x] `client/src/components/DashboardLayout.tsx` — the (currently unused) template's
+      "Sign in" button launched the portal; now routes to `/app` where the native auth lives.
+- [x] `client/src/components/ManusDialog.tsx` — DELETED. A zero-import "Login with Manus"
+      modal with no purpose post-removal.
+- [x] `client/src/const.ts` — `getLoginUrl` (the portal-URL builder reading the OAuth portal
+      env var) deleted outright; `COOKIE_NAME`/`ONE_YEAR_MS` re-exports remain. Stale Manus-
+      OAuth doc comment in `Profile.tsx` rewritten.
+- [x] Server: `GET /api/oauth/callback` (server/_core/oauth.ts) deliberately KEPT — smallest
+      diff per the owner's instruction; it is simply unreachable from the UI. Existing OAuth
+      cookies keep working until natural expiry.
+- [x] **Migration note for existing Manus-OAuth users**: accounts are untouched; they sign in
+      via the email-code flow at the SAME email address. Verified in `server/authOtp.ts`:
+      `findUserByEmailAny` selects all user rows for the email and prefers `loginMethod`
+      "otp", then "local", then falls back to ANY row — i.e. an OAuth-created user row is
+      found and signed into (and `markUserEmailVerified` flags it verified). They keep their
+      number: the OTP verify path upgrades in place rather than minting a new identity.
+- [x] Pinned: new test in `verifiedBadge.test.ts` walks EVERY non-test file under client/src
+      and asserts zero `getLoginUrl`/OAuth-portal-env references (the R3 sanity gate,
+      mechanized). The old OnboardingGate pin stays.
+
+### R4A — mailer compatibility for the owner's SES env
+- [x] `EMAIL_FROM` accepted as an ALIAS for `SMTP_FROM` (`server/smtp.ts` smtpConfig). The
+      owner's `.io` .env uses `EMAIL_FROM`; previously the From fell back to `SMTP_USER`,
+      which on SES is an `AKIA…` access-key id that SES rejects as a sender. Order:
+      `SMTP_FROM` > `EMAIL_FROM` > `SMTP_USER`.
+- [x] `MAIL_PROVIDER` explicit switch (`server/email.ts` mailProvider): `"smtp"` forces the
+      built-in SMTP client (Resend NEVER used — not even as a failure fallback: a forced-smtp
+      failure is reported, not silently rerouted through a third party the operator opted out
+      of); `"resend"` forces Resend (SMTP skipped even when configured); unset/other = auto,
+      the historical priority (SMTP first, Resend fallback). `emailEnabled()` counts only the
+      forced side when forced.
+- [x] Tests: +1 in `authPinSmtp.test.ts` (alias ordering incl. the AKIA-user last resort),
+      +4 in `email.test.ts` (provider parsing, forced-side gating, forced-smtp never touches
+      fetch/Resend even on a REAL failed send to a dead loopback port, forced-resend skips a
+      configured-but-dead SMTP host).
+- [x] **Credential-rotation reminder** (no values here, none in the repo — `.env*` stays
+      gitignored): if SMTP/SES or any other credentials were ever pasted into chat/tickets
+      while setting the `.io` box up, rotate them at the provider (IAM → SES SMTP creds) and
+      update `/home/relay/.env` on the box. This repo never contains secret values.
+
+### R4B — ZERO hardcoded deployment domains in runtime source (owner requirement)
+One derivation helper, `server/appUrl.ts` `appBaseUrl(req?)`: `APP_URL` (origin, slash-
+stripped) → `DOMAIN` (bare-hostname convenience, scheme/slash tolerated) → the request's
+`x-forwarded-proto`/`-host`/Host (same trust-proxy reading authLocal always used) →
+`null` (caller degrades). SECURITY (final fix round, D1): an earlier draft of this batch
+had a 4th step — the origin MOST-OBSERVED on real traffic, recorded by a request
+middleware — so request-free contexts could derive a URL with no env set. DELETED before
+ship: the ledger was poisonable by anyone able to send requests (`x-forwarded-host`
+bursts at cold start could fill the 50-entry cap and lock the real origin out, majority
+pumping, LB health-check hostnames) and its output became ABSOLUTE LINKS in missed-call
+emails — a link-hijack primitive. Request-free contexts now REQUIRE `APP_URL`/`DOMAIN`
+and degrade gracefully without them. Former literal sites, all converted:
+- [x] `server/_core/index.ts` missed-call email links — request-free context; uses
+      `appBaseUrl()` and when it is null (no `APP_URL`/`DOMAIN`) the "Open RELAY" button
+      is OMITTED from the email — it still sends, and its copy ("Open RELAY to call them
+      back") stands alone. Never a relative or traffic-derived href.
+- [x] `server/authLocal.ts` `baseUrl(req)` — now `appBaseUrl(req) ?? ""` (request always in
+      hand; "" only on a Host-less request).
+- [x] `server/webPush.ts` VAPID subject — `VAPID_SUBJECT` env → the app's ENV-derived https
+      origin (`APP_URL`/`DOMAIN`; RFC 8292 allows an https: contact URI) → neutral
+      `mailto:admin@localhost`. Subject is computed per-call (keys stay cached) so env
+      added without a restart is picked up.
+- [x] Client marketing/legal pages — new `client/src/lib/siteHost.ts` (`siteHost()`/
+      `siteEmail()` from `window.location.hostname`, www-stripped): `Technology.tsx` eyebrow,
+      contact mailto + link, © footer (was UPPERCASE "YOUR-CHAT.ORG" — caught by the
+      case-insensitive audit); `PrivacyPolicy.tsx` intro + contact link (now href="/").
+      `Home.tsx`/`smtp.ts`/`emailInbound.ts` comments de-domained.
+- [x] Deliberate EXCEPTIONS (unchanged, per owner scope): `mobile/**` (shipped APK pinned to
+      .org), `scripts/latency.mjs` (CLI default), docs/changelogs/workflows, and `*.test.*`
+      fixtures.
+- [x] Pinned: `server/noHardcodedDomains.test.ts` walks server/ + client/src/ +
+      client/public/ + shared/ plus client/index.html (`.html` scanned; final fix round
+      P3) and forbids `your-chat.(org|io)` case-insensitively — root `ecosystem.config.cjs`
+      is scanned too but EXPLICITLY allowlisted (pm2 deploy config for the .io fleet; names
+      its own target on purpose) — plus asserts the helper is wired at each former site and
+      that the deleted origin ledger STAYS deleted. `server/appUrl.test.ts` (5) covers the
+      priority chain, trust-proxy parsing, and the pinned null-when-no-env-no-request
+      degrade; `webPush.test.ts` +4 for the subject chain.
+
+### R4C — TURN env extras, pinned
+`iceServers()` already honored `TURN_TTL` (default 3600s) and `TURN_TCP_HOST` (tcp
+candidates on :443-alt and :3478 with the same HMAC creds) — shipped untested in the old
+TURN-relay batch. v2.92 makes them contractual:
+- [x] Hardening: a missing/garbage/non-positive `TURN_TTL` now falls back to 3600 instead of
+      minting `"NaN:user"` usernames (parseInt was unguarded).
+- [x] Tests (+2 in `relay.test.ts`): TTL default / env-tuned expiry windows / the 300s
+      `/api/relay/ice` probe override beating env / garbage fallback; and
+      `turn:<TURN_TCP_HOST>:3478?transport=tcp` present with byte-identical username+
+      credential across entries, credential re-derived as base64(HMAC-SHA1(secret,username)).
+- [x] Both vars (plus `DOMAIN`, `EMAIL_FROM`, `MAIL_PROVIDER`) documented in CLAUDE.md's env
+      section.
+
+### Final fix round (security review outcomes, folded into this same batch)
+- [x] **D1 (CONFIRMED, security)** — the observed-traffic-origin ledger
+      (`observeRequestOrigin`/`mostObservedOrigin` in `server/appUrl.ts` + the recording
+      middleware in `server/_core/index.ts`) DELETED entirely; see the R4B note above for
+      the attack shapes. `appBaseUrl(req?)` is now strictly `APP_URL` → `DOMAIN` →
+      request-derived origin → null; consumers degrade (missed-call email omits the
+      absolute button; VAPID subject: env-derived https origin else the neutral mailto —
+      keys stay cached). `noHardcodedDomains.test.ts` pins that the ledger stays deleted.
+- [x] **P2** — `server/email.ts` `emailFrom()` is now `RESEND_FROM` → `EMAIL_FROM` →
+      `onboarding@resend.dev`, so the SES-style `EMAIL_FROM` var is honored under Resend
+      too (+1 test).
+- [x] **P3** — `server/noHardcodedDomains.test.ts` broadened: scans client/public/** and
+      client/index.html too (`.html` added to the extension set); root
+      `ecosystem.config.cjs` scanned + explicitly allowlisted with rationale (deploy
+      config for the .io fleet — intentional).
+- [x] **Operator note (APP_URL)** — operators SHOULD set `APP_URL` on BOTH deployments
+      (org: the canonical https origin; io already has `DOMAIN`). Absolute links in
+      missed-call emails now REQUIRE `APP_URL`/`DOMAIN`; without them the email sends
+      without its "Open RELAY" button and the VAPID subject stays the neutral mailto.
+- [x] **Edge case (sign-out, R3 interaction)** — a Manus-OAuth-era account with NO email
+      on file has no sign-in path after signing out (the email-code flow needs a matching
+      email and the OAuth UI is gone). Such users should add an email in Profile BEFORE
+      signing out.
+
+### Housekeeping
+- [x] Version 2.92.0 (`shared/version.ts`; updateChecker pin moved). CLAUDE.md TL;DR + env
+      section updated (incl. the APP_URL-on-both-deployments guidance).
+- [x] Tests: 982 → **1003 passing / 1 skipped** (+21: 1 smtp EMAIL_FROM alias, 5
+      mail-provider, 1 emailFrom-under-Resend, 1 R3 client-wide OAuth sweep, 5 appUrl,
+      2 noHardcodedDomains, 4 vapidSubject, 2 TURN env pins). `pnpm check` + full suite +
+      `pnpm build` green.

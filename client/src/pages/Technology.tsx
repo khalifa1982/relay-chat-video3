@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { siteEmail, siteHost } from "@/lib/siteHost";
 
 /**
  * "The technology behind RELAY" — a standalone, public marketing/info page.
@@ -510,7 +511,7 @@ export default function Technology() {
         <div className="tech-hero-glow g2" aria-hidden="true" />
         <div className="tech-wrap">
           <div className="tech-hero-copy">
-            <p className="tech-eyebrow tech-reveal">The technology behind RELAY · your-chat.org</p>
+            <p className="tech-eyebrow tech-reveal">The technology behind RELAY · {siteHost()}</p>
             <h1 className="tech-h-display tech-reveal d1">
               Zero <em className="tech-em-grad">latency</em>.<br />
               Zero <em className="tech-em-grad">listeners</em>.
@@ -953,12 +954,12 @@ export default function Technology() {
             </div>
             <div className="tech-foot-col">
               <h4>Contact</h4>
-              <a href="mailto:hello@your-chat.org">hello@your-chat.org</a>
-              <a href="/">your-chat.org</a>
+              <a href={`mailto:${siteEmail("hello")}`}>{siteEmail("hello")}</a>
+              <a href="/">{siteHost()}</a>
             </div>
           </div>
           <div className="tech-foot-bottom">
-            <span>© 2026 RELAY — YOUR-CHAT.ORG</span>
+            <span>© 2026 RELAY — {siteHost().toUpperCase()}</span>
             <a href="/" className="tech-back-home">
               ← Back to home
             </a>

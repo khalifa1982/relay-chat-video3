@@ -21,6 +21,7 @@
 import crypto from "crypto";
 import { listPushSubscriptions, deletePushSubscription } from "./v2db";
 import { sendFcmData } from "./fcm";
+import { appBaseUrl } from "./appUrl";
 
 export interface PushPayload {
   kind: "incoming-call" | "missed-call" | "voicemail" | "contact-online";
@@ -58,22 +59,37 @@ export function deriveVapidKeys(secret: string): { publicKey: string; privateKey
   }
 }
 
-let cached: { publicKey: string; privateKey: string; subject: string } | null = null;
+let cachedKeys: { publicKey: string; privateKey: string } | null = null;
+
+/**
+ * VAPID subject (RFC 8292 §2.1: a mailto: or https: contact URI). v2.92
+ * (R4B/D1): no hardcoded deployment domain — VAPID_SUBJECT wins; otherwise the
+ * app's ENV-derived https origin (APP_URL / DOMAIN — never anything learned
+ * from traffic, which is spoofable) is the contact URI; with no env the
+ * neutral placeholder stands. Computed per-call (unlike the keys, which stay
+ * cached) so env added without a restart is picked up.
+ */
+export function vapidSubject(): string {
+  if (process.env.VAPID_SUBJECT) return process.env.VAPID_SUBJECT;
+  const base = appBaseUrl();
+  if (base && base.startsWith("https://")) return base;
+  return "mailto:admin@localhost";
+}
 
 /** Resolved VAPID config, or null when push can't be enabled (no secret at all). */
 export function vapidConfig(): { publicKey: string; privateKey: string; subject: string } | null {
-  if (cached) return cached;
-  const subject = process.env.VAPID_SUBJECT || "mailto:notifications@your-chat.org";
+  const subject = vapidSubject();
+  if (cachedKeys) return { ...cachedKeys, subject };
   const envPub = process.env.VAPID_PUBLIC_KEY;
   const envPriv = process.env.VAPID_PRIVATE_KEY;
   if (envPub && envPriv) {
-    cached = { publicKey: envPub, privateKey: envPriv, subject };
-    return cached;
+    cachedKeys = { publicKey: envPub, privateKey: envPriv };
+    return { ...cachedKeys, subject };
   }
   const secret = process.env.JWT_SECRET;
   if (!secret) return null;
-  cached = { ...deriveVapidKeys(secret), subject };
-  return cached;
+  cachedKeys = deriveVapidKeys(secret);
+  return { ...cachedKeys, subject };
 }
 
 /**

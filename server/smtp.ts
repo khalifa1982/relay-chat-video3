@@ -15,13 +15,20 @@
  * API), pointed at a mailbox you own.
  *
  * Env (add via Manus Settings → Secrets; read per-call like TURN_*):
- *   SMTP_HOST     — e.g. mail.your-chat.org / smtp.gmail.com  (enables SMTP)
+ *   SMTP_HOST     — e.g. mail.example.com / email-smtp.<region>.amazonaws.com /
+ *                   smtp.gmail.com  (enables SMTP)
  *   SMTP_PORT     — default 587 (STARTTLS); use 465 with SMTP_SECURE=1
  *   SMTP_SECURE   — "1" = implicit TLS from byte one (port 465 style)
  *   SMTP_USER     — mailbox login
  *   SMTP_PASS     — mailbox password / app password
- *   SMTP_FROM     — sender, e.g. "RELAY <no-reply@your-chat.org>"
- *                   (defaults to SMTP_USER)
+ *   SMTP_FROM     — sender, e.g. "RELAY <no-reply@example.com>"
+ *   EMAIL_FROM    — v2.92: accepted as an ALIAS for SMTP_FROM (checked second).
+ *                   AWS SES .envs commonly use this name; without either, From
+ *                   falls back to SMTP_USER — which on SES is an AKIA… key id
+ *                   that SES rejects as a sender, so set one of the two.
+ *   MAIL_PROVIDER — v2.92, lives in server/email.ts: "smtp" forces this SMTP
+ *                   path (Resend never used), "resend" forces Resend (SMTP
+ *                   ignored), unset/other = auto (SMTP first, Resend fallback).
  */
 import net from "net";
 import tls from "tls";
@@ -50,7 +57,11 @@ export function smtpConfig(): SmtpConfig | null {
     secure,
     user,
     pass,
-    from: process.env.SMTP_FROM || user,
+    // v2.92 (R4A): EMAIL_FROM is an accepted alias for SMTP_FROM — the owner's
+    // SES .env uses it. Order matters: an explicit SMTP_FROM still wins; the
+    // SMTP_USER fallback stays last (it's an AKIA… access-key id on SES, which
+    // SES rejects as a From — the alias exists precisely to avoid that).
+    from: process.env.SMTP_FROM || process.env.EMAIL_FROM || user,
   };
 }
 

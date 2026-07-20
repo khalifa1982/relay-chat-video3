@@ -24,6 +24,7 @@ import { getUserById } from "../db";
 import { sendEmail } from "../email";
 import { createRateLimiter, clientIpOf } from "../rateLimit";
 import { registerLocalAuth } from "../authLocal";
+import { appBaseUrl } from "../appUrl";
 
 function escapeHtml(s: string): string {
   return s.replace(
@@ -32,13 +33,20 @@ function escapeHtml(s: string): string {
   );
 }
 
-function missedCallHtml(opts: { callerLabel: string; appUrl: string }): string {
+function missedCallHtml(opts: { callerLabel: string; appUrl: string | null }): string {
   const safe = escapeHtml(opts.callerLabel);
+  // v2.92 (D1): appUrl is env-derived (APP_URL/DOMAIN) or null — this is a
+  // request-free context and Host-derived origins are spoofable, so with no
+  // env we OMIT the button entirely rather than emit a relative (dead-in-an-
+  // email-client) or attacker-steerable href. The copy above the button
+  // already tells the recipient what to do.
+  const button = opts.appUrl
+    ? `\n    <a href="${opts.appUrl}/app" style="display:inline-block;background:#3FE0C5;color:#04201B;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:12px">Open RELAY</a>`
+    : "";
   return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0E1014">
     <div style="font-size:20px;font-weight:800;letter-spacing:-0.02em">RELAY</div>
     <p style="font-size:16px;line-height:1.5;margin:18px 0 6px">You missed a call from <b>${safe}</b>.</p>
-    <p style="font-size:14px;color:#5A6271;margin:0 0 22px">Open RELAY to call them back.</p>
-    <a href="${opts.appUrl}/app" style="display:inline-block;background:#3FE0C5;color:#04201B;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:12px">Open RELAY</a>
+    <p style="font-size:14px;color:#5A6271;margin:0 0 22px">Open RELAY to call them back.</p>${button}
     <p style="font-size:12px;color:#8A93A2;margin-top:28px">You're receiving this because you have a RELAY account.</p>
   </div>`;
 }
@@ -217,7 +225,12 @@ async function startServer() {
         const callerLabel = info.callerName
           ? `${info.callerName} (${info.callerPin})`
           : info.callerPin;
-        const appUrl = process.env.APP_URL || "https://www.your-chat.org";
+        // v2.92 (R4B/D1): request-free context — the public origin comes ONLY
+        // from env (APP_URL / DOMAIN); there is deliberately no traffic-derived
+        // fallback (spoofable x-forwarded-host must never steer email links).
+        // null degrades gracefully: the email still sends, minus the absolute
+        // "Open RELAY" button.
+        const appUrl = appBaseUrl();
         // When inbound email is configured, set a signed Reply-To so the callee
         // can reply straight from their inbox and it posts into their thread
         // with the caller.

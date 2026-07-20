@@ -43,6 +43,30 @@ describe("passwordless auth — no third-party sign-in buttons remain", () => {
     expect(src).toMatch(/Continue with email/);
     expect(src).toMatch(/AuthPanel/);
   });
+  it("v2.92 R3: ZERO Manus-OAuth call sites anywhere in client/src (owner decision)", () => {
+    // The owner removed the Manus OAuth sign-in from the UI entirely — the
+    // native AuthPanel is the ONLY sign-in. This walks every non-test source
+    // file under client/src and asserts the portal-URL builder and its env var
+    // are gone (the server's /api/oauth/callback deliberately remains, but no
+    // UI path can start the flow). If this fails, someone re-introduced an
+    // OAuth sign-in affordance — see todo.md v2.92.0 before doing that.
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          walk(p);
+          continue;
+        }
+        if (!/\.(tsx?|css|json)$/.test(e.name)) continue;
+        if (/\.test\.(tsx?)$/.test(e.name)) continue; // tests may cite the old names
+        const src = fs.readFileSync(p, "utf8");
+        if (/getLoginUrl|VITE_OAUTH_PORTAL_URL/.test(src)) offenders.push(p);
+      }
+    };
+    walk(path.join(ROOT, "client/src"));
+    expect(offenders).toEqual([]);
+  });
   it("AuthPanel is the passwordless email→code flow (no password field)", () => {
     const src = read("client/src/app/AuthPanel.tsx");
     expect(src).toMatch(/otpAuth\.requestOtp/);

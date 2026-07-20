@@ -37,6 +37,7 @@ import {
   verifySession,
 } from "./authCrypto";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
+import { appBaseUrl } from "./appUrl";
 
 export const LOCAL_SESSION_COOKIE = "relay_session";
 const SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 1 year, mirrors the OAuth cookie
@@ -48,10 +49,11 @@ function sessionSecret(): string {
 }
 
 function baseUrl(req: Request): string {
-  if (process.env.APP_URL) return process.env.APP_URL.replace(/\/+$/, "");
-  const proto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
-  const host = (req.headers["x-forwarded-host"] || req.headers.host || "").toString();
-  return host ? `${proto}://${host}` : "https://www.your-chat.org";
+  // v2.92 (R4B): single shared derivation (APP_URL → DOMAIN → this request's
+  // proto/host → most-observed origin), no hardcoded deployment domain. The
+  // null case can only happen on a request with NO Host header before any
+  // other traffic — degenerate; the emailed link degrades to relative.
+  return appBaseUrl(req) ?? "";
 }
 
 /* ── DB helpers (self-contained) ──────────────────────────────────────────── */

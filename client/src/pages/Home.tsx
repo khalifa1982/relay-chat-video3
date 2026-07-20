@@ -21,8 +21,8 @@ import { toast } from "sonner";
 
 type Lang = LangCode;
 
-/* Real screenshots captured directly from the live RELAY app at
-   your-chat.org/app. Asset URLs are tied to the project lifecycle and never
+/* Real screenshots captured directly from the live RELAY app (/app on the
+   production deploy). Asset URLs are tied to the project lifecycle and never
    expire. */
 const IMG = {
   call: "/manus-storage/relay-v2-call_7d2eafdd.jpg",

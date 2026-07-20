@@ -52,9 +52,11 @@ import { useTheme } from "@/contexts/ThemeContext";
  * Profile page (`/app/profile`).
  *
  * Lets a registered or guest user edit their display name and upload an
- * avatar. For guests, also offers the "Keep my number forever" CTA that
- * triggers Manus OAuth so the server can migrate the guest identity into
- * a permanent user row on callback.
+ * avatar. For guests, also offers a "Register with email" CTA that opens the
+ * native AuthPanel (email one-time code + optional PIN, v2.87) so the server
+ * can migrate the guest identity into a permanent user row on verify.
+ * v2.92 (R3): the old Manus-OAuth "Keep my number forever" path is gone —
+ * AuthPanel is the ONLY sign-in.
  */
 export default function ProfilePage() {
   const { me, refresh } = useIdentity();

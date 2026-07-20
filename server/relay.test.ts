@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import crypto from "crypto";
 import {
   createRegistry,
   handleMessage,
@@ -543,6 +544,82 @@ describe("relay signaling", () => {
       process.env.TURN_SECRET = prev.s ?? ""; if (prev.s === undefined) delete process.env.TURN_SECRET;
       process.env.TURN_HOST = prev.h ?? ""; if (prev.h === undefined) delete process.env.TURN_HOST;
       if (prev.tls !== undefined) process.env.TURN_TLS = prev.tls; else delete process.env.TURN_TLS;
+    }
+  });
+
+  // ---- v2.92 R4C — TURN_TTL / TURN_TCP_HOST env extras, pinned ----
+
+  /** Expiry (unix seconds) embedded in a coturn use-auth-secret username. */
+  const usernameExpiry = (username?: string) => Number(String(username).split(":")[0]);
+
+  it("v2.92 R4C: TURN_TTL sets the credential lifetime; default stays 3600", () => {
+    const KEYS = ["TURN_SECRET", "TURN_HOST", "TURN_TCP_HOST", "TURN_TTL"] as const;
+    const prev = Object.fromEntries(KEYS.map(k => [k, process.env[k]]));
+    for (const k of KEYS) delete process.env[k];
+    process.env.TURN_SECRET = "test-secret";
+    process.env.TURN_HOST = "turn.example.com";
+    try {
+      // Default (unset): 3600s — the historical value.
+      let now = Math.floor(Date.now() / 1000);
+      let turn = iceServers("user-ttl").find(s => s.urls.startsWith("turn:"));
+      expect(usernameExpiry(turn?.username)).toBeGreaterThanOrEqual(now + 3600 - 2);
+      expect(usernameExpiry(turn?.username)).toBeLessThanOrEqual(now + 3600 + 2);
+
+      // Operator-tuned lifetime.
+      process.env.TURN_TTL = "600";
+      now = Math.floor(Date.now() / 1000);
+      turn = iceServers("user-ttl").find(s => s.urls.startsWith("turn:"));
+      expect(usernameExpiry(turn?.username)).toBeGreaterThanOrEqual(now + 600 - 2);
+      expect(usernameExpiry(turn?.username)).toBeLessThanOrEqual(now + 600 + 2);
+
+      // The explicit override (the /api/relay/ice 300s probe) beats the env.
+      turn = iceServers("user-ttl", 300).find(s => s.urls.startsWith("turn:"));
+      expect(usernameExpiry(turn?.username)).toBeLessThanOrEqual(now + 300 + 2);
+
+      // Garbage / non-positive values fall back to 3600 — never "NaN:" or
+      // already-expired usernames.
+      for (const bad of ["banana", "-5", "0"]) {
+        process.env.TURN_TTL = bad;
+        now = Math.floor(Date.now() / 1000);
+        turn = iceServers("user-ttl").find(s => s.urls.startsWith("turn:"));
+        expect(Number.isFinite(usernameExpiry(turn?.username))).toBe(true);
+        expect(usernameExpiry(turn?.username)).toBeGreaterThanOrEqual(now + 3600 - 2);
+      }
+    } finally {
+      for (const k of KEYS) {
+        if (prev[k] === undefined) delete process.env[k];
+        else process.env[k] = prev[k] as string;
+      }
+    }
+  });
+
+  it("v2.92 R4C: TURN_TCP_HOST adds turn:<host>:3478?transport=tcp with the SAME HMAC credentials", () => {
+    const KEYS = ["TURN_SECRET", "TURN_HOST", "TURN_TCP_HOST", "TURN_TTL", "TURN_PORT"] as const;
+    const prev = Object.fromEntries(KEYS.map(k => [k, process.env[k]]));
+    for (const k of KEYS) delete process.env[k];
+    process.env.TURN_SECRET = "test-secret";
+    process.env.TURN_HOST = "1.1.1.1";
+    process.env.TURN_TCP_HOST = "2.2.2.2";
+    try {
+      const list = iceServers("user-tcp");
+      const tcp3478 = list.find(s => s.urls === "turn:2.2.2.2:3478?transport=tcp");
+      const udp = list.find(s => s.urls === "turn:1.1.1.1:3478?transport=udp");
+      expect(tcp3478).toBeDefined();
+      expect(udp).toBeDefined();
+      // Same minted username+credential on every operator entry, and the
+      // credential really is base64(HMAC-SHA1(secret, username)).
+      expect(tcp3478?.username).toBe(udp?.username);
+      expect(tcp3478?.credential).toBe(udp?.credential);
+      const expected = crypto
+        .createHmac("sha1", "test-secret")
+        .update(String(tcp3478?.username))
+        .digest("base64");
+      expect(tcp3478?.credential).toBe(expected);
+    } finally {
+      for (const k of KEYS) {
+        if (prev[k] === undefined) delete process.env[k];
+        else process.env[k] = prev[k] as string;
+      }
     }
   });
 

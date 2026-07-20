@@ -32,16 +32,38 @@ export interface SendEmailResult {
   error?: string;
 }
 
+/**
+ * v2.92 (R4A): explicit MAIL_PROVIDER switch (read per-call, like everything
+ * else here):
+ *   "smtp"       → force the built-in SMTP client, even if RESEND_API_KEY is
+ *                  set. Resend is NEVER used — not even as a failure fallback.
+ *   "resend"     → force Resend, even if SMTP_HOST is set. SMTP is skipped.
+ *   unset/other  → "auto", the historical behavior: SMTP first when configured,
+ *                  Resend as the fallback.
+ */
+export function mailProvider(): "smtp" | "resend" | "auto" {
+  const v = (process.env.MAIL_PROVIDER || "").trim().toLowerCase();
+  if (v === "smtp" || v === "resend") return v;
+  return "auto";
+}
+
 /** Read per-call (like iceServers/TURN) so the key can be added via Manus
  *  Secrets without a restart. v2.87: the BUILT-IN SMTP client (server/smtp.ts,
  *  SMTP_HOST et al.) takes priority — no third-party API; Resend remains a
- *  fallback for deploys that still use it. */
+ *  fallback for deploys that still use it. v2.92: MAIL_PROVIDER can force
+ *  either side, in which case only that side counts as "enabled". */
 export function emailEnabled(): boolean {
+  const provider = mailProvider();
+  if (provider === "smtp") return Boolean(smtpConfig());
+  if (provider === "resend") return Boolean(process.env.RESEND_API_KEY);
   return Boolean(smtpConfig()) || Boolean(process.env.RESEND_API_KEY);
 }
 
 export function emailFrom(): string {
-  return process.env.RESEND_FROM || "onboarding@resend.dev";
+  // v2.92 (P2): EMAIL_FROM (the SES-style var, already the SMTP_FROM alias in
+  // server/smtp.ts) is honored under Resend too, so one From var covers both
+  // providers. An explicit RESEND_FROM still wins.
+  return process.env.RESEND_FROM || process.env.EMAIL_FROM || "onboarding@resend.dev";
 }
 
 /** Best-effort plain-text fallback from HTML (strip tags + unescape entities). */
@@ -61,8 +83,10 @@ export function stripHtml(html: string): string {
 }
 
 export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
+  const provider = mailProvider();
   // v2.87: built-in SMTP first — the operator's own mailbox, no third party.
-  if (smtpConfig()) {
+  // v2.92: MAIL_PROVIDER=resend skips this branch even when SMTP_HOST is set.
+  if (provider !== "resend" && smtpConfig()) {
     const to = Array.isArray(input.to) ? input.to : [input.to];
     const replyTo = Array.isArray(input.replyTo) ? input.replyTo[0] : input.replyTo;
     const r = await smtpSend({
@@ -73,8 +97,23 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
       replyTo,
     });
     if (r.ok) return { ok: true };
+    // v2.92: MAIL_PROVIDER=smtp means SMTP is authoritative — a failure is a
+    // failure, never silently rerouted through a third party the operator
+    // explicitly opted out of.
+    if (provider === "smtp") {
+      console.warn(`[email] smtp send failed (${r.error}) — MAIL_PROVIDER=smtp, no Resend fallback`);
+      return { ok: false, error: r.error };
+    }
     console.warn(`[email] smtp send failed (${r.error}) — trying Resend fallback if configured`);
     // fall through to Resend when it's also configured
+  }
+  if (provider === "smtp") {
+    // Forced SMTP but SMTP_HOST isn't set — honest no-op, mirrors the
+    // no-RESEND_API_KEY gate below.
+    console.log(
+      `[email] disabled (MAIL_PROVIDER=smtp but no SMTP_HOST) — would send to ${JSON.stringify(input.to)} subject="${input.subject}"`
+    );
+    return { ok: false, skippedReason: "disabled" };
   }
   const apiKey = process.env.RESEND_API_KEY || "";
   if (!apiKey) {

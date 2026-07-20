@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import crypto from "crypto";
-import { deriveVapidKeys, vapidConfig } from "./webPush";
+import { deriveVapidKeys, vapidConfig, vapidSubject } from "./webPush";
 
 /** v2.83 — Web Push VAPID key handling. */
 
@@ -30,6 +30,44 @@ describe("deriveVapidKeys", () => {
     expect(ecdh.getPublicKey().equals(pub)).toBe(true);
     // base64url alphabet only (no +, /, =) — push services reject anything else.
     for (const k of [publicKey, privateKey]) expect(k).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+});
+
+describe("vapidSubject (v2.92 R4B — no hardcoded deployment domain)", () => {
+  const KEYS = ["VAPID_SUBJECT", "APP_URL", "DOMAIN"] as const;
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => {
+    saved = Object.fromEntries(KEYS.map(k => [k, process.env[k]]));
+    for (const k of KEYS) delete process.env[k];
+  });
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k] as string;
+    }
+  });
+
+  it("VAPID_SUBJECT wins outright", () => {
+    process.env.VAPID_SUBJECT = "mailto:ops@example.org";
+    process.env.APP_URL = "https://calls.example.io";
+    expect(vapidSubject()).toBe("mailto:ops@example.org");
+  });
+
+  it("falls back to the app's https origin (RFC 8292 allows an https: contact URI)", () => {
+    process.env.APP_URL = "https://calls.example.io";
+    expect(vapidSubject()).toBe("https://calls.example.io");
+    delete process.env.APP_URL;
+    process.env.DOMAIN = "calls.example.io";
+    expect(vapidSubject()).toBe("https://calls.example.io");
+  });
+
+  it("with no env, stays on the NEUTRAL placeholder — no traffic-derived origin exists (D1)", () => {
+    expect(vapidSubject()).toBe("mailto:admin@localhost");
+  });
+
+  it("never emits a non-https derived origin as the subject (http dev → placeholder)", () => {
+    process.env.APP_URL = "http://localhost:3000";
+    expect(vapidSubject()).toBe("mailto:admin@localhost");
   });
 });
 

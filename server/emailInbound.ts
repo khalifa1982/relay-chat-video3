@@ -15,7 +15,7 @@
  * FROM that identity into that conversation.
  *
  * Env:
- *   INBOUND_EMAIL_DOMAIN          enables the feature (e.g. "inbound.your-chat.org")
+ *   INBOUND_EMAIL_DOMAIN          enables the feature (e.g. "inbound.example.org")
  *   INBOUND_EMAIL_LOCALPART       optional, default "relay"
  *   INBOUND_EMAIL_SECRET          optional; HMAC key (falls back to JWT_SECRET)
  *   INBOUND_EMAIL_WEBHOOK_SECRET  optional; Svix signing secret ("whsec_…") to

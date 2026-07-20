@@ -1,4 +1,3 @@
-import { getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { TRPCClientError } from "@trpc/client";
 import { useCallback, useEffect, useMemo } from "react";
@@ -9,7 +8,11 @@ type UseAuthOptions = {
 };
 
 export function useAuth(options?: UseAuthOptions) {
-  const { redirectOnUnauthenticated = false, redirectPath = getLoginUrl() } =
+  // v2.92 (R3): the default unauthenticated redirect used to be the Manus OAuth
+  // portal. The OAuth UI is removed — sign-in happens in-app via AuthPanel — so
+  // an unauthenticated redirect now lands on the guest-first landing page
+  // instead. (No current caller passes redirectOnUnauthenticated.)
+  const { redirectOnUnauthenticated = false, redirectPath = "/" } =
     options ?? {};
   const utils = trpc.useUtils();
 
