@@ -336,6 +336,12 @@ async function startServer() {
       version: APP_VERSION,
       instance: INSTANCE_ID,
       redisBus: Boolean(process.env.REDIS_URL),
+      // Operators who HAVE pinned all /api/relay/* to one instance (per
+      // docs-aws-scale-out.md) set RELAY_SIGNALING_PINNED=1 on every instance
+      // to silence the in-app "calling misconfigured" banner. Default false:
+      // a multi-instance deploy is assumed unpinned (calls broken) until the
+      // operator asserts otherwise.
+      signalingPinned: process.env.RELAY_SIGNALING_PINNED === "1",
     });
   });
   // v2.0 attachment upload (multipart-friendly JSON body)

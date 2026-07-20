@@ -30,10 +30,10 @@ describe("AppShell — docked in-flow bottom nav (no gap above, nothing hidden u
   it("the scroll container carries NO clearance padding and is a flex column so pages fill it with flex-1 (height:100% does not resolve against flex-derived heights)", () => {
     expect(SHELL).not.toMatch(/pb-28/);
     // v2.83: the scroll container also hosts the one-time PushBanner ABOVE
-    // {children}; the layout contract (flex column, no clearance padding) is
-    // unchanged.
+    // {children} (v2.93.2 adds the CallHealthBanner beside it); the layout
+    // contract (flex column, no clearance padding) is unchanged.
     expect(SHELL).toMatch(/className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">/);
-    expect(SHELL).toMatch(/<PushBanner \/>\s*\n\s*\{children\}/);
+    expect(SHELL).toMatch(/<PushBanner \/>\s*\n(?:\s*(?:\{\/\*[\s\S]*?\*\/\}|<CallHealthBanner \/>)\s*\n)*\s*\{children\}/);
     // MEASURED height (NOT a bare CSS viewport unit): dvh (v2.76) reported
     // the toolbar-collapsed height on a real iPhone while the scroll lock
     // keeps the toolbar visible — the tab bar + composer sat below the fold

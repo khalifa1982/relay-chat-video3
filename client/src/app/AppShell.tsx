@@ -16,6 +16,7 @@ import { useDnd } from "./dnd";
 import { useTheme } from "@/contexts/ThemeContext";
 import { MissedCallToast, NotificationBell } from "./MissedCalls";
 import { PushBanner } from "./PushBanner";
+import { CallHealthBanner } from "./CallHealthBanner";
 import { unlockAudio } from "./notifications";
 
 /**
@@ -538,6 +539,10 @@ function Inner({ children }: { children: React.ReactNode }) {
           {/* One-time "get call alerts" opt-in (Web Push) + iOS install tip.
               Renders nothing once granted / denied / dismissed. */}
           <PushBanner />
+          {/* Warns when the deploy is multi-instance with call signaling not
+              pinned — the silent-missed-call misconfiguration. Self-hides on
+              single-instance deploys. */}
+          <CallHealthBanner />
           {children}
         </div>
 

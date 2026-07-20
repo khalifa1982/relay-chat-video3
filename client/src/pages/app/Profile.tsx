@@ -20,6 +20,7 @@ import { useIdentity } from "@/app/useIdentity";
 import { useSignOut } from "@/app/useSignOut";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
 import { CountryFlag } from "@/app/CountryFlag";
+import { QRCodeSVG } from "qrcode.react";
 import {
   Drawer,
   DrawerClose,
@@ -409,44 +410,23 @@ function selfStatus(override: string | null | undefined): { label: string; color
 }
 
 /* ============================================================
-   QrGlyph — the prototype's decorative QR artwork (a scannable
-   generator is a follow-up; no QR dependency ships today). It is
-   intentionally dark modules on a light plate in BOTH themes —
-   that's how a code stays legible — so the two colours are fixed
-   graphic values, not theme surfaces.
+   QrGlyph — a REAL, scannable QR code (qrcode.react, bundled — no
+   third-party service) encoding `value` (the /i/<number> invite
+   link). Dark modules on a light plate in BOTH themes — that's how
+   a code stays scannable — so the two colours are FIXED graphic
+   values, not theme surfaces. `level="M"` tolerates ~15% occlusion.
    ============================================================ */
-function QrGlyph({ className }: { className?: string }) {
-  const M = "#12161b"; // module colour (fixed; a QR is always dark-on-light)
+function QrGlyph({ value, className }: { value: string; className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 29 29" width="100%" height="100%" aria-hidden="true">
-      <rect x="1" y="1" width="7" height="7" fill="none" stroke={M} strokeWidth="2" />
-      <rect x="3.5" y="3.5" width="2" height="2" fill={M} />
-      <rect x="21" y="1" width="7" height="7" fill="none" stroke={M} strokeWidth="2" />
-      <rect x="23.5" y="3.5" width="2" height="2" fill={M} />
-      <rect x="1" y="21" width="7" height="7" fill="none" stroke={M} strokeWidth="2" />
-      <rect x="3.5" y="23.5" width="2" height="2" fill={M} />
-      <rect x="11" y="2" width="2" height="2" fill={M} />
-      <rect x="15" y="1" width="2" height="3" fill={M} />
-      <rect x="12" y="6" width="3" height="2" fill={M} />
-      <rect x="17" y="5" width="2" height="2" fill={M} />
-      <rect x="2" y="11" width="2" height="2" fill={M} />
-      <rect x="6" y="12" width="2" height="3" fill={M} />
-      <rect x="10" y="11" width="3" height="2" fill={M} />
-      <rect x="15" y="10" width="2" height="4" fill={M} />
-      <rect x="19" y="12" width="3" height="2" fill={M} />
-      <rect x="24" y="11" width="2" height="2" fill={M} />
-      <rect x="27" y="14" width="1" height="3" fill={M} />
-      <rect x="11" y="15" width="2" height="3" fill={M} />
-      <rect x="14" y="17" width="3" height="2" fill={M} />
-      <rect x="19" y="16" width="2" height="2" fill={M} />
-      <rect x="23" y="17" width="3" height="2" fill={M} />
-      <rect x="10" y="21" width="2" height="2" fill={M} />
-      <rect x="13" y="23" width="2" height="3" fill={M} />
-      <rect x="17" y="21" width="3" height="2" fill={M} />
-      <rect x="21" y="24" width="2" height="2" fill={M} />
-      <rect x="25" y="22" width="2" height="3" fill={M} />
-      <rect x="16" y="26" width="2" height="2" fill={M} />
-    </svg>
+    <QRCodeSVG
+      value={value}
+      level="M"
+      marginSize={2}
+      bgColor="#eff2f5"
+      fgColor="#12161b"
+      className={className}
+      style={{ width: "100%", height: "100%" }}
+    />
   );
 }
 
@@ -499,7 +479,7 @@ function ShareNumberSheet({
           <DrawerTitle className="text-base font-extrabold">Share your RELAY number</DrawerTitle>
           {/* QR plate: fixed light plate + dark modules (legibility), themed frame */}
           <div className="grid size-44 place-items-center rounded-2xl border border-border bg-[#eff2f5] p-3.5">
-            <QrGlyph className="size-full" />
+            <QrGlyph value={inviteUrl} className="size-full" />
           </div>
           <div className="flex items-center gap-2">
             <CountryFlag
@@ -573,6 +553,10 @@ function NumberAndFlag({
       .then(() => toast.success("Number copied"))
       .catch(() => toast.error("Couldn't copy the number"));
   };
+  // Same /i/<pin> invite link the share sheet + Dialer use, so the launcher
+  // button's QR is itself a real, scannable code (not just an icon).
+  const inviteUrl =
+    typeof window !== "undefined" ? `${window.location.origin}/i/${number}` : `/i/${number}`;
 
   return (
     <section className="space-y-3">
@@ -607,7 +591,7 @@ function NumberAndFlag({
             aria-label="Show QR code to share your number"
             className="grid size-[70px] shrink-0 place-items-center rounded-xl border border-border bg-[#eff2f5] p-2 transition hover:brightness-95"
           >
-            <QrGlyph className="size-full" />
+            <QrGlyph value={inviteUrl} className="size-full" />
           </button>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border/60 pt-3">
