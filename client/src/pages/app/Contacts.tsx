@@ -20,6 +20,8 @@ import {
   Users as UsersIcon,
   Home,
   Heart,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -104,6 +106,16 @@ export default function ContactsPage() {
   });
 
   const [search, setSearch] = useState("");
+  // Collapsible section state (the prototype's chevron headers). Presentational
+  // only — a set of collapsed section keys; every section is expanded by default.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const toggleSection = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   // Contact pending delete confirmation (AlertDialog, replacing window.confirm()).
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const deletingContact = (contacts.data ?? []).find((c) => c.id === deleteId) ?? null;
@@ -173,27 +185,32 @@ export default function ContactsPage() {
 
   return (
     <div className="flex-1 min-h-0 md:p-6 flex flex-col gap-4">
-      <header className="px-4 md:px-0 flex items-center justify-between gap-2">
-        <h2 className="text-xl font-semibold">Contacts</h2>
-        <Button
-          onClick={() =>
-            setEditing({ id: undefined, number: "", displayName: "", notes: "" })
-          }
-          size="sm"
-        >
-          <UserPlus className="size-4 mr-1.5" /> Add
-        </Button>
-      </header>
-      <div className="px-4 md:px-0">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+      {/* Top row: search field + violet "add by PIN" (opens the same Add dialog). */}
+      <div className="px-4 md:px-0 pt-1 flex items-center gap-2.5">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
           <Input
             placeholder="Search by name or number"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="h-11 pl-10"
+            className="h-11 pl-10 rounded-xl bg-secondary/60"
           />
         </div>
+        <button
+          type="button"
+          aria-label="Add by PIN"
+          title="Add by PIN"
+          onClick={() =>
+            setEditing({ id: undefined, number: "", displayName: "", notes: "" })
+          }
+          className="grid place-items-center size-11 shrink-0 rounded-xl text-white transition hover:brightness-110"
+          style={{
+            background: "linear-gradient(135deg, #a78bfa, #7c3aed)",
+            boxShadow: "0 6px 16px -6px rgba(124,58,237,.6)",
+          }}
+        >
+          <UserPlus className="size-[19px]" />
+        </button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto md:rounded-2xl md:glass-surface-md">
         {contacts.isLoading ? (
@@ -241,37 +258,60 @@ export default function ContactsPage() {
           <div>
             {sections.map((section) => {
               const SIcon = section.icon;
+              const isCollapsed = collapsed.has(section.key);
+              // "any member active" → the online pip on the sticky header.
+              const anyActive = section.rows.some(
+                (r) => !r.presenceHidden && (r.isOnline || r.inCall)
+              );
               return (
                 <section key={section.key}>
-                  <div className="sticky top-0 z-10 flex items-center gap-2 px-4 md:px-5 py-2 bg-card/85 backdrop-blur-md border-b border-border/60">
-                    <SIcon className={"size-3.5 " + section.tint} />
-                    <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                  <button
+                    type="button"
+                    onClick={() => toggleSection(section.key)}
+                    className="sticky top-0 z-10 w-full flex items-center gap-2 px-4 md:px-5 py-2 bg-card/85 backdrop-blur-md border-b border-border/60 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {isCollapsed ? (
+                      <ChevronRight className="size-3 shrink-0" strokeWidth={2.4} />
+                    ) : (
+                      <ChevronDown className="size-3 shrink-0" strokeWidth={2.4} />
+                    )}
+                    <SIcon className={"size-3.5 shrink-0 " + section.tint} />
+                    <span className="flex-1 text-left text-[11px] font-semibold uppercase tracking-widest">
                       {section.label}
                     </span>
                     <span className="text-[11px] text-muted-foreground/70">{section.rows.length}</span>
-                  </div>
-                  <ul>
-                    {section.rows.map((c) => (
-                      <ContactRow
-                        key={c.id}
-                        c={c}
-                        onVoice={() => setLocation(`/app/dialer?to=${encodeURIComponent(c.number)}&voice=1`)}
-                        onVideo={() => setLocation(`/app/dialer?to=${encodeURIComponent(c.number)}&video=1`)}
-                        onMessage={() => openThread.mutate({ number: c.number })}
-                        onEdit={() => openEdit(c)}
-                        onDelete={() => setDeleteId(c.id)}
-                        onToggleFavorite={() =>
-                          upsert.mutate({ number: c.number, favourite: !c.favourite })
-                        }
-                        onToggleBlock={() =>
-                          upsert.mutate({ number: c.number, blocked: !c.blocked })
-                        }
-                        onSetCategory={(category) =>
-                          upsert.mutate({ number: c.number, category: c.category === category ? null : category })
-                        }
+                    {anyActive && (
+                      <span
+                        aria-hidden
+                        className="size-2 rounded-full shrink-0"
+                        style={{ background: "#06d6a0" }}
                       />
-                    ))}
-                  </ul>
+                    )}
+                  </button>
+                  {!isCollapsed && (
+                    <ul>
+                      {section.rows.map((c) => (
+                        <ContactRow
+                          key={c.id}
+                          c={c}
+                          onVoice={() => setLocation(`/app/dialer?to=${encodeURIComponent(c.number)}&voice=1`)}
+                          onVideo={() => setLocation(`/app/dialer?to=${encodeURIComponent(c.number)}&video=1`)}
+                          onMessage={() => openThread.mutate({ number: c.number })}
+                          onEdit={() => openEdit(c)}
+                          onDelete={() => setDeleteId(c.id)}
+                          onToggleFavorite={() =>
+                            upsert.mutate({ number: c.number, favourite: !c.favourite })
+                          }
+                          onToggleBlock={() =>
+                            upsert.mutate({ number: c.number, blocked: !c.blocked })
+                          }
+                          onSetCategory={(category) =>
+                            upsert.mutate({ number: c.number, category: c.category === category ? null : category })
+                          }
+                        />
+                      ))}
+                    </ul>
+                  )}
                 </section>
               );
             })}
@@ -366,7 +406,7 @@ function ContactRow({
   return (
     <li
       className={
-        "flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border last:border-b-0 hover:bg-muted/30 transition-colors " +
+        "flex items-center gap-3 px-4 md:px-5 py-2.5 border-b border-border/60 last:border-b-0 hover:bg-muted/30 transition-colors " +
         (c.blocked ? "opacity-60" : "")
       }
     >
@@ -379,7 +419,7 @@ function ContactRow({
         aria-label={`Call ${c.displayName || c.number}`}
       >
         <div className="relative shrink-0">
-          <div className="size-11 rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
+          <div className="size-[42px] rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
             {initialsFrom(c.displayName || c.number)}
           </div>
           {/* Presence LED — amber "on a call" (v2.88 busy line) / green online /
@@ -400,16 +440,16 @@ function ContactRow({
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-medium truncate flex items-center gap-1.5">
-            {c.favourite && <Star className="size-3.5 text-amber-400 fill-amber-400 shrink-0" />}
-            {c.blocked && <Ban className="size-3.5 text-red-500 shrink-0" />}
-            <span className="truncate">{c.displayName || c.number}</span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="font-semibold truncate">{c.displayName || c.number}</span>
+            {c.favourite && <Star className="size-3 shrink-0 text-amber-400 fill-amber-400" />}
             {c.verified && <VerifiedBadge size={14} />}
+            {c.blocked && <Ban className="size-3.5 shrink-0 text-[#ff8d84]" />}
           </div>
-          <div className="text-xs text-muted-foreground font-mono">
+          <div className="text-xs text-muted-foreground font-mono mt-0.5">
             {c.number.length === 6 ? c.number.slice(0, 3) + "-" + c.number.slice(3) : c.number}
             {c.blocked ? (
-              <> · <span className="text-red-500">blocked</span></>
+              <> · <span className="text-[#ff8d84]">blocked</span></>
             ) : c.presenceHidden ? null : c.inCall ? (
               <> · <span className="text-amber-500">on a call</span></>
             ) : c.isOnline ? (
@@ -419,29 +459,69 @@ function ContactRow({
             )}
           </div>
           {(c.company || c.jobTitle) && (
-            <div className="text-xs text-muted-foreground truncate mt-0.5">
+            <div className="text-[11px] text-muted-foreground/80 truncate mt-0.5">
               {[c.jobTitle, c.company].filter(Boolean).join(" · ")}
             </div>
           )}
         </div>
       </button>
 
-      {/* Inline actions: Voice / Video / Message + overflow menu. */}
-      <div className="flex items-center gap-0.5 shrink-0">
-        <Button size="icon" variant="ghost" aria-label="Voice call" title="Voice call" onClick={onVoice} disabled={c.blocked}>
-          <PhoneCall className="size-[18px] text-[color:var(--relay-online,#06d6a0)]" />
-        </Button>
-        <Button size="icon" variant="ghost" aria-label="Video call" title="Video call" onClick={onVideo} disabled={c.blocked} className="hidden xs:inline-flex">
-          <Video className="size-[18px]" />
-        </Button>
-        <Button size="icon" variant="ghost" aria-label="Message" title="Message" onClick={onMessage}>
-          <MessageSquare className="size-[18px]" />
-        </Button>
+      {/* Inline actions: Message / Video / Voice + overflow menu — circular
+          gradient tap targets (message orange, video blue, call green). */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        <button
+          type="button"
+          aria-label="Message"
+          title="Message"
+          onClick={onMessage}
+          className="grid place-items-center size-[34px] rounded-full shrink-0 transition hover:brightness-110"
+          style={{
+            background: "linear-gradient(160deg, rgba(251,146,60,.26), rgba(251,146,60,.08))",
+            color: "#fb923c",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,.15)",
+          }}
+        >
+          <MessageSquare className="size-[15px]" />
+        </button>
+        <button
+          type="button"
+          aria-label="Video call"
+          title="Video call"
+          onClick={onVideo}
+          disabled={c.blocked}
+          className="hidden xs:grid place-items-center size-[34px] rounded-full shrink-0 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
+          style={{
+            background: "linear-gradient(160deg, rgba(56,189,248,.26), rgba(56,189,248,.08))",
+            color: "#38bdf8",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,.15)",
+          }}
+        >
+          <Video className="size-[15px]" />
+        </button>
+        <button
+          type="button"
+          aria-label="Voice call"
+          title="Voice call"
+          onClick={onVoice}
+          disabled={c.blocked}
+          className="grid place-items-center size-[34px] rounded-full shrink-0 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
+          style={{
+            background: "linear-gradient(160deg, rgba(34,197,94,.26), rgba(34,197,94,.08))",
+            color: "#22c55e",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,.15)",
+          }}
+        >
+          <PhoneCall className="size-[15px]" />
+        </button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button size="icon" variant="ghost" aria-label="More options">
-              <MoreVertical className="size-[18px]" />
-            </Button>
+            <button
+              type="button"
+              aria-label="More options"
+              className="grid place-items-center size-[34px] rounded-full shrink-0 text-muted-foreground bg-secondary/60 hover:bg-secondary transition-colors"
+            >
+              <MoreVertical className="size-4" />
+            </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52">
             <DropdownMenuItem onClick={onVideo} className="xs:hidden">
