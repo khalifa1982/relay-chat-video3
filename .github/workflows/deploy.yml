@@ -53,7 +53,7 @@ jobs:
         # stale one — its old path pointed at a nonexistent entry file), and
         # patches/ must ship or `pnpm install` ENOENTs on the lockfile's
         # patched-dependency reference (both found via per-server SSM output).
-        run: tar -czf relay.tar.gz dist package.json pnpm-lock.yaml ecosystem.config.cjs $( [ -d patches ] && echo patches ) $( [ -d public ] && echo public )
+        run: tar -czf relay.tar.gz dist package.json pnpm-lock.yaml ecosystem.config.cjs $( [ -d patches ] && echo patches ) $( [ -d public ] && echo public ) drizzle.config.ts drizzle shared tsconfig.json
       - name: AWS auth (OIDC — no stored keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -74,7 +74,8 @@ jobs:
               "mkdir -p /home/relay/app && tar -xzf /tmp/relay.tar.gz -C /home/relay/app && rm -f /tmp/relay.tar.gz",
               "chown -R relay:relay /home/relay/app",
               "[ -f /home/relay/app/ecosystem.config.cjs ] && cp /home/relay/app/ecosystem.config.cjs /home/relay/ecosystem.config.cjs && chown relay:relay /home/relay/ecosystem.config.cjs || true",
-              "sudo -u relay bash -lc \"cd /home/relay/app && pnpm install --prod --frozen-lockfile\"",
+              "sudo -u relay bash -lc \"cd /home/relay/app && pnpm install --frozen-lockfile\"",
+              "sudo -u relay bash -lc \"cd /home/relay/app && set -a && . /home/relay/.env && set +a && (pnpm run db:push && echo DB_MIGRATED) || echo DB_MIGRATION_FAILED_SEE_ABOVE\"",
               "sudo -u relay bash -lc \"pm2 reload relay 2>/dev/null || pm2 start /home/relay/ecosystem.config.cjs\"",
               "for i in 1 2 3 4 5 6 7 8 9 10; do sleep 3; curl -sf http://localhost:3000/api/health && echo HEALTH_OK && exit 0; done; echo HEALTH_FAILED; pm2 logs relay --lines 40 --nostream; exit 1"
             ]' \
