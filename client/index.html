@@ -11,7 +11,19 @@
     <meta name="keywords" content="browser calls, video call in browser, peer-to-peer calling, WebRTC phone, free video chat, voice call online" />
     <meta name="author" content="RELAY" />
     <meta name="robots" content="index, follow" />
-    <link rel="canonical" href="https://relaychat-lduywq6l.manus.space/" />
+    <!-- Self-canonical at runtime: one build serves every deployment domain
+         (v2.92 R4B — no hardcoded origins), so the canonical URL is only
+         knowable from location. og:url is deliberately absent for the same
+         reason: scrapers fall back to the fetched URL, which is correct on
+         every domain. -->
+    <script>
+      (function () {
+        var l = document.createElement("link");
+        l.setAttribute("rel", "canonical");
+        l.setAttribute("href", location.origin + location.pathname);
+        document.head.appendChild(l);
+      })();
+    </script>
     <meta name="theme-color" content="#0a0d10" />
     <!-- PWA: installable, standalone, home-screen icon -->
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -23,7 +35,6 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="RELAY" />
-    <meta property="og:url" content="https://relaychat-lduywq6l.manus.space/" />
     <meta property="og:title" content="RELAY — Free Browser Voice, Video & Chat Calls" />
     <meta property="og:description" content="Pick a name. Get a number. Dial anyone. RELAY is free peer-to-peer voice, video, and chat in the browser — no installs, no accounts." />
     <meta name="twitter:card" content="summary_large_image" />
@@ -35,7 +46,6 @@
         "@type": "WebApplication",
         "name": "RELAY",
         "description": "Free, self-hosted, peer-to-peer browser phone for voice calls, video calls, and chat. No installs, no accounts.",
-        "url": "https://relaychat-lduywq6l.manus.space/",
         "applicationCategory": "CommunicationApplication",
         "operatingSystem": "Web",
         "browserRequirements": "Requires a modern browser with WebRTC support",

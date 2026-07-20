@@ -18,6 +18,7 @@ import { registerV2Offline } from "../v2offline";
 import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation } from "../v2db";
 import { sendPushToIdentity } from "../webPush";
 import { registerWellKnown } from "../wellKnown";
+import { registerSeo } from "../seo";
 import { sweepExpiredOtps } from "../authOtp";
 import { inboundConfig, inboundAddress, registerEmailInbound } from "../emailInbound";
 import { getUserById } from "../db";
@@ -108,8 +109,8 @@ async function startServer() {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     res.setHeader("X-DNS-Prefetch-Control", "off");
-    // HTTPS-only (Manus serves over TLS). No includeSubDomains/preload so sibling
-    // *.manus.space hosts are unaffected.
+    // HTTPS-only (Manus serves over TLS). No includeSubDomains/preload so
+    // sibling Manus-platform preview hosts are unaffected.
     res.setHeader("Strict-Transport-Security", "max-age=15552000");
     next();
   });
@@ -171,6 +172,7 @@ async function startServer() {
   // origin share an owner, unlocking the app's full-screen mode. Env-driven
   // (TWA_SHA256_FINGERPRINTS); 404s harmlessly until configured.
   registerWellKnown(app);
+  registerSeo(app);
   // RELAY signaling — SSE + POST on /api/relay/{stream,send}. We use
   // plain HTTP because the production gateway downgrades raw WebSocket
   // upgrades on arbitrary paths.

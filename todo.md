@@ -4019,3 +4019,33 @@ TURN-relay batch. v2.92 makes them contractual:
       mail-provider, 1 emailFrom-under-Resend, 1 R3 client-wide OAuth sweep, 5 appUrl,
       2 noHardcodedDomains, 4 vapidSubject, 2 TURN env pins). `pnpm check` + full suite +
       `pnpm build` green.
+
+## v2.92.1 — Last hardcoded deployment domain removed: SEO self-references now derive from the request origin (2026-07-20)
+Owner cross-check of the ROUND 1–4 instruction sheet surfaced the one survivor of R4B's
+"zero hardcoded domains" rule: the SEO layer still pinned the Manus space URL
+(`relaychat-lduywq6l.manus.space`) into `client/index.html` (canonical, `og:url`, JSON-LD
+`url`) and the static `client/public/sitemap.xml` + `robots.txt` — so the AWS `.io`
+deployment was telling crawlers its canonical home is a manus.space host.
+
+- [x] `client/index.html`: static `canonical` replaced by a tiny inline script that injects
+      `location.origin + location.pathname` at runtime (one build serves every domain);
+      `og:url` deleted outright (scrapers fall back to the fetched URL — correct on every
+      deployment); JSON-LD `url` property dropped (optional in schema.org).
+- [x] NEW `server/seo.ts`: `/sitemap.xml` + `/robots.txt` are now DYNAMIC Express routes
+      (registered beside `registerWellKnown`, ahead of static/Vite) built per-request from
+      `appBaseUrl(req)` (`APP_URL` → `DOMAIN` → forwarded Host) — pure builders
+      `sitemapXml(base)` / `robotsTxt(base|null)` (robots omits the Sitemap line when no
+      origin can be derived; sitemap 404s — absolute URLs are spec-required). Sitemap now
+      lists all five public routes (`/`, `/docs`, `/technology`, `/privacy-policy`,
+      `/turn-test`). Static `client/public/sitemap.xml` + `robots.txt` deleted.
+- [x] `server/noHardcodedDomains.test.ts` hardened: forbidden set now also matches
+      `manus.space` + the `relaychat-lduywq6l` slug; scan extensions widened to
+      `xml|txt|webmanifest`; new pin asserts the static files STAY deleted, `server/seo.ts`
+      derives from `appBaseUrl(req)`, and the SPA shell carries no absolute canonical/og:url.
+      (The one legit `*.manus.space` comment in `server/_core/index.ts` reworded.)
+- [x] Verified end-to-end: prod build booted locally — `curl -H "Host: a.example"
+      /robots.txt` → `Sitemap: http://a.example/sitemap.xml`; `Host: b.example`
+      /sitemap.xml → `<loc>http://b.example/…` (behind the real gateways
+      x-forwarded-proto makes these https; on .io `DOMAIN` wins outright).
+- [x] Tests: 1003 → **1008 passing / 1 skipped** (+4 `server/seo.test.ts`, +1
+      noHardcodedDomains dynamic-SEO pin). `pnpm check` + full suite + `pnpm build` green.

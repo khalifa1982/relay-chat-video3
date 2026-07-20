@@ -35,9 +35,12 @@ const EXTRA_FILES = ["client/index.html", "ecosystem.config.cjs"];
 // EXPLICIT allowlist — scanned, but allowed to contain a deployment domain
 // (rationale in the header comment). Keep this list tiny and justified.
 const ALLOWLIST = new Set(["ecosystem.config.cjs"]);
-const SOURCE_EXT = /\.(ts|tsx|js|mjs|cjs|css|json|html)$/;
+const SOURCE_EXT = /\.(ts|tsx|js|mjs|cjs|css|json|html|xml|txt|webmanifest)$/;
 const TEST_FILE = /\.test\.(ts|tsx)$/;
-const FORBIDDEN = /your-chat\.(org|io)/i;
+// Deployment-identity literals: the two public domains, the Manus space host
+// (any *.manus.space — the old canonical/sitemap/og:url leak), and the space
+// slug itself so a re-introduction under another TLD still trips the scan.
+const FORBIDDEN = /your-chat\.(org|io)|manus\.space|relaychat-lduywq6l/i;
 
 function walk(dir: string, out: string[]): void {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -54,7 +57,7 @@ function walk(dir: string, out: string[]): void {
 }
 
 describe("no hardcoded deployment domains (v2.92 R4B)", () => {
-  it("server/, client/src/, client/public/, shared/ + the SPA shell contain NO your-chat.org / your-chat.io literals outside tests and the explicit allowlist", () => {
+  it("server/, client/src/, client/public/, shared/ + the SPA shell contain NO your-chat.org / your-chat.io / manus.space literals outside tests and the explicit allowlist", () => {
     const files: string[] = [];
     for (const root of SCAN_ROOTS) walk(path.join(ROOT, root), files);
     for (const f of EXTRA_FILES) {
@@ -71,6 +74,19 @@ describe("no hardcoded deployment domains (v2.92 R4B)", () => {
       .filter(f => FORBIDDEN.test(fs.readFileSync(f, "utf8")))
       .map(f => path.relative(ROOT, f));
     expect(offenders).toEqual([]);
+  });
+
+  it("sitemap.xml / robots.txt are DYNAMIC routes, not static files (they need per-deployment absolute URLs)", () => {
+    expect(fs.existsSync(path.join(ROOT, "client/public/sitemap.xml"))).toBe(false);
+    expect(fs.existsSync(path.join(ROOT, "client/public/robots.txt"))).toBe(false);
+    const seo = fs.readFileSync(path.join(ROOT, "server/seo.ts"), "utf8");
+    expect(seo).toMatch(/appBaseUrl\(req\)/);
+    expect(fs.readFileSync(path.join(ROOT, "server/_core/index.ts"), "utf8")).toMatch(/registerSeo\(app\)/);
+    // The SPA shell must not pin a canonical/og:url origin either — canonical
+    // is injected at runtime from location.
+    const shell = fs.readFileSync(path.join(ROOT, "client/index.html"), "utf8");
+    expect(shell).not.toMatch(/rel="canonical" href="http/);
+    expect(shell).not.toMatch(/property="og:url"/);
   });
 
   it("the derivation helper exists and the known former literal sites now use it", () => {
