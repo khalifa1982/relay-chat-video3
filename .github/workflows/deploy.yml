@@ -1,0 +1,79 @@
+# .github/workflows/deploy.yml — RELAY deploy to self-hosted AWS (your-chat.io)
+#
+# This deploys the SAME main branch that Manus serves as your-chat.org to a
+# self-hosted AWS fleet serving your-chat.io — for latency/perf testing. The
+# app is domain-agnostic (it serves whatever Host it runs under + APP_URL env),
+# so NOTHING in the source is domain-specific: your-chat.org on Manus is
+# untouched. The .io identity is set purely by env vars on the AWS servers
+# (APP_URL=https://your-chat.io) + DNS.
+#
+# ── DORMANT UNTIL THE AWS SIDE EXISTS ────────────────────────────────────────
+# Trigger is workflow_dispatch (manual) ONLY, so merging this file does NOT
+# fire a deploy. Before it can succeed, the target AWS account must have:
+#   • a GitHub OIDC identity provider + IAM role `relay-github-deploy` whose
+#     trust policy allows THIS repo (khalifa1982/relay-chat-video3),
+#   • the S3 bucket below,
+#   • EC2 instance(s) tagged Name=relay-app with the SSM agent, a `relay` user,
+#     Node 22 + pnpm + pm2, /home/relay/ecosystem.config.cjs, and a
+#     /home/relay/.env carrying PORT, DATABASE_URL, JWT_SECRET, APP_URL,
+#     TURN_HOST/TURN_SECRET, etc. (see docs-aws-io-deploy.md).
+# Once that exists and a manual run is green, uncomment the `push:` block to
+# make every merge to main auto-deploy to .io.
+name: Deploy to AWS (your-chat.io)
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1 # Mumbai
+  BUCKET: relay-deploy-342494841476
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+        env:
+          VITE_FRONTEND_FORGE_API_URL: https://forge.manus.ai
+          VITE_APP_ID: LDUyWQ6Lzxde96UDvwdvU2
+      - name: Package artifact
+        # Client + server both build into dist/ (vite → dist, esbuild → dist/index.js).
+        run: tar -czf relay.tar.gz dist package.json pnpm-lock.yaml $( [ -d public ] && echo public )
+      - name: AWS auth (OIDC — no stored keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::342494841476:role/relay-github-deploy
+          aws-region: ap-south-1
+      - name: Upload artifact
+        run: |
+          aws s3 cp relay.tar.gz s3://$BUCKET/releases/${GITHUB_SHA}.tar.gz
+          aws s3 cp relay.tar.gz s3://$BUCKET/releases/latest.tar.gz
+      - name: Rolling deploy via SSM (one server at a time)
+        run: |
+          CMD=$(aws ssm send-command \
+            --targets "Key=tag:Name,Values=relay-app" \
+            --document-name AWS-RunShellScript \
+            --max-concurrency 1 --max-errors 0 \
+            --parameters 'commands=[
+              "aws s3 cp s3://relay-deploy-342494841476/releases/latest.tar.gz /tmp/relay.tar.gz --only-show-errors",
+              "mkdir -p /home/relay/app && tar -xzf /tmp/relay.tar.gz -C /home/relay/app && rm -f /tmp/relay.tar.gz",
+              "chown -R relay:relay /home/relay/app",
+              "[ -f /home/relay/app/ecosystem.config.cjs ] && cp /home/relay/app/ecosystem.config.cjs /home/relay/ecosystem.config.cjs && chown relay:relay /home/relay/ecosystem.config.cjs || true",
+              "sudo -u relay bash -lc \"cd /home/relay/app && pnpm install --prod --frozen-lockfile\"",
+              "sudo -u relay bash -lc \"pm2 reload relay 2>/dev/null || pm2 start /home/relay/ecosystem.config.cjs\"",
+              "sleep 3 && curl -sf http://localhost:3000/api/health && echo HEALTH_OK"
+            ]' \
+            --query 'Command.CommandId' --output text)
+          echo "Deploy command: $CMD"
+          aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status'

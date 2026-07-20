@@ -279,6 +279,15 @@ async function startServer() {
     res.setHeader("Cache-Control", "no-store");
     res.json({ version: APP_VERSION });
   });
+  // Liveness probe (v2.90) — the process is up and serving. No auth, no DB
+  // touch (a transient DB blip during a rolling deploy must not fail the
+  // gate), no cache. Used by the AWS rolling-deploy health check and any
+  // load-balancer target group. The host it answers on is whatever domain
+  // this instance is deployed under — the app is domain-agnostic.
+  app.get("/api/health", (_req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ status: "ok", version: APP_VERSION });
+  });
   // v2.0 attachment upload (multipart-friendly JSON body)
   registerV2Upload(app);
   // v2.0 push channel — SSE that routes message/presence/read events

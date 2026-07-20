@@ -3725,3 +3725,30 @@ group-burst siblings all ring, re-register-takeover, timeout-fallback + late-res
 ignored, lone-occupant survives decline + normal-dial cleanup preserved, mid-dial line
 join cancels cleanly) and 1 client source pin in partyLines.test.ts. `pnpm check` + full
 `pnpm build` green.
+
+## v2.90.0 — AWS/.io deploy scaffolding (repo-side only) (2026-07-16)
+Parallel self-hosted deployment prep for `your-chat.io` on AWS Mumbai (ap-south-1), serving the
+SAME `main` branch Manus serves as `your-chat.org` — for latency/perf testing. `.org` on Manus
+and the Android APK (`.org`) are UNTOUCHED.
+- **No domain find-replace** (deliberately NOT done): the app is already domain-agnostic —
+  `server/_core/index.ts` uses `APP_URL` env (‖ `.org` fallback), `authLocal.ts` derives the
+  origin from the Host header, the client uses `window.location.origin`. Both domains build from
+  one `main`, so hardcoding `.io` would poison Manus's `.org` build. The `.io` identity is set by
+  env (`APP_URL=https://your-chat.io`) + DNS only.
+- **`GET /api/health`** liveness endpoint (no auth, no DB touch, no-cache) for the rolling-deploy
+  gate + any LB target group.
+- **`.github/workflows/deploy.yml`** — build `main` → S3 → SSM rolling deploy to EC2 tagged
+  `relay-app`, gated on `/api/health`. **`workflow_dispatch`-only (dormant)** until the AWS side
+  is provisioned (OIDC role trusting this repo, bucket, fleet); flip the commented `push: main`
+  on after a green manual run to go continuous. Targets ap-south-1 / account 342494841476 /
+  bucket relay-deploy-342494841476 as provided.
+- **`ecosystem.config.cjs`** (repo root, copied onto servers by the pipeline): corrects the
+  supplied instruction's wrong entry path — the real esbuild output is **`dist/index.js`**, not
+  `dist/server/_core/index.js` (pm2 would crash-loop). `instances: 1` is REQUIRED — the signaling
+  registry is in-memory per-process (no Redis adapter); cluster mode would break calls.
+- **`docs-aws-io-deploy.md`** — full Mumbai provisioning runbook (VPC/SG, EC2+Elastic IP, RDS
+  MySQL, S3, GitHub-OIDC role, DNS/TLS, env, first-deploy, rollback). Flags the two latency-test
+  gotchas: put the DB in ap-south-1 (else you measure cross-region DB latency, not hosting), and
+  the JWT_SECRET shared-vs-isolated decision.
+- BLOCKED on the owner: no AWS credentials/CLI in this environment. To provision AWS-side, add a
+  SCOPED IAM key (user `relay-infra`, not root) to the session; delete it after build-out.
