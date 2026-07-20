@@ -8,6 +8,7 @@ import { useIdentity } from "./useIdentity";
 import { useSignOut } from "./useSignOut";
 import { AuthPanel } from "./AuthPanel";
 import { VerifiedBadge } from "./VerifiedBadge";
+import { CountryFlag } from "./CountryFlag";
 import { OnboardingGate } from "./OnboardingGate";
 import { PasscodeGate } from "./PasscodeGate";
 import { useRealtime } from "./useRealtime";
@@ -291,14 +292,10 @@ function Inner({ children }: { children: React.ReactNode }) {
               </div>
               <div className="font-mono text-sm text-muted-foreground flex items-center gap-1.5 flex-wrap">
                 {formatNumber(me.number)}
-                {geo.data?.flagEmoji && (
-                  <span
-                    className="text-base leading-none"
-                    title={geo.data.countryName ?? geo.data.country ?? ""}
-                  >
-                    {geo.data.flagEmoji}
-                  </span>
-                )}
+                <CountryFlag
+                  code={geo.data?.country}
+                  title={geo.data?.countryName ?? geo.data?.country ?? ""}
+                />
                 <DeviceChip />
               </div>
             </div>
@@ -427,7 +424,14 @@ function Inner({ children }: { children: React.ReactNode }) {
           fold, and killed every inner scroll area. flex-none makes the
           explicit height authoritative on mobile; md+ keeps flex-1, where
           the root is a ROW and it governs width, not height. */}
-      <main className="flex-1 max-md:flex-none flex flex-col min-w-0 min-h-svh max-md:h-[var(--relay-vh,100svh)]">
+      {/* Desktop height must be DEFINITE (md:h-svh), not just min-h-svh: a tall
+          page (a long conversation with images/video) grew `main` past the
+          viewport, so the inner overflow-y-auto never bounded and the Messages
+          composer fell below the fold (you had to scroll the whole column to
+          reach it). h-svh caps main at the viewport so every inner list scrolls
+          within it and the composer stays pinned. Mobile keeps the measured
+          --relay-vh height (flex-none) as before. */}
+      <main className="flex-1 max-md:flex-none flex flex-col min-w-0 min-h-svh md:h-svh md:overflow-hidden max-md:h-[var(--relay-vh,100svh)]">
         {/* mobile header */}
         <header
           className={
@@ -470,15 +474,12 @@ function Inner({ children }: { children: React.ReactNode }) {
               dnd={dnd}
               onDndChange={setDnd}
             />
-            {geo.data?.flagEmoji && (
-              <span
-                className="hidden xs:inline text-sm leading-none shrink-0"
-                title={geo.data.countryName ?? geo.data.country ?? ""}
-              >
-                {geo.data.flagEmoji}
-              </span>
-            )}
-            <span className="hidden xs:inline font-mono text-xs text-muted-foreground shrink-0">
+            <CountryFlag
+              code={geo.data?.country}
+              title={geo.data?.countryName ?? geo.data?.country ?? ""}
+              className="shrink-0"
+            />
+            <span className="font-mono text-xs text-muted-foreground shrink-0">
               {formatNumber(me.number)}
             </span>
             {/* Avatar → Profile, with a self status LED (amber on Do-Not-Disturb,

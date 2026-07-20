@@ -26,6 +26,7 @@ import { sendEmail, wrapEmailDocument } from "../email";
 import { createRateLimiter, clientIpOf } from "../rateLimit";
 import { registerLocalAuth } from "../authLocal";
 import { appBaseUrl } from "../appUrl";
+import { INSTANCE_ID } from "../redisBus";
 
 function escapeHtml(s: string): string {
   return s.replace(
@@ -322,7 +323,20 @@ async function startServer() {
   // this instance is deployed under — the app is domain-agnostic.
   app.get("/api/health", (_req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json({ status: "ok", version: APP_VERSION });
+    // `instance` is a per-boot random id (server/redisBus.ts). Behind a
+    // multi-instance load balancer this VARIES across repeated /api/health
+    // hits — that's how you confirm you're running >1 app instance. RELAY's
+    // call signaling (/api/relay/*) is in-memory per-instance, so a
+    // multi-instance deploy MUST pin ALL /api/relay/* to one instance (see
+    // docs-aws-scale-out.md) or two callers on different instances can't
+    // ring each other. `redisBus` reports whether the cross-instance event
+    // bus is active (required before running >1 instance).
+    res.json({
+      status: "ok",
+      version: APP_VERSION,
+      instance: INSTANCE_ID,
+      redisBus: Boolean(process.env.REDIS_URL),
+    });
   });
   // v2.0 attachment upload (multipart-friendly JSON body)
   registerV2Upload(app);

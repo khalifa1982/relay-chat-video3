@@ -19,6 +19,7 @@ import { uploadAttachment } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
 import { useSignOut } from "@/app/useSignOut";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
+import { CountryFlag } from "@/app/CountryFlag";
 import {
   Drawer,
   DrawerClose,
@@ -501,14 +502,11 @@ function ShareNumberSheet({
             <QrGlyph className="size-full" />
           </div>
           <div className="flex items-center gap-2">
-            {geo.data?.flagEmoji && (
-              <span
-                className="text-lg leading-none"
-                title={geo.data.countryName ?? geo.data.country ?? ""}
-              >
-                {geo.data.flagEmoji}
-              </span>
-            )}
+            <CountryFlag
+              code={geo.data?.country}
+              title={geo.data?.countryName ?? geo.data?.country ?? ""}
+              className="text-lg"
+            />
             <span className="font-mono text-lg font-bold tracking-[0.12em]">{pretty}</span>
           </div>
           <DrawerDescription className="text-center text-xs">
@@ -588,23 +586,11 @@ function NumberAndFlag({
               <span className="font-mono text-3xl font-bold tracking-[0.08em]">
                 {number.slice(0, 3)} {number.slice(3)}
               </span>
-              {geo.data?.flagEmoji && (
-                <span
-                  className="text-xl leading-none"
-                  title={
-                    geo.data.countryName
-                      ? `Connecting from ${geo.data.countryName}`
-                      : undefined
-                  }
-                  aria-label={
-                    geo.data.countryName
-                      ? `Connecting from ${geo.data.countryName}`
-                      : `Country ${geo.data.country}`
-                  }
-                >
-                  {geo.data.flagEmoji}
-                </span>
-              )}
+              <CountryFlag
+                code={geo.data?.country}
+                title={geo.data?.countryName ? `Connecting from ${geo.data.countryName}` : geo.data?.country ?? ""}
+                className="text-xl"
+              />
             </div>
             <button
               type="button"
