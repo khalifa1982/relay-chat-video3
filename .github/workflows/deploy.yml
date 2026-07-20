@@ -49,7 +49,11 @@ jobs:
           VITE_APP_ID: LDUyWQ6Lzxde96UDvwdvU2
       - name: Package artifact
         # Client + server both build into dist/ (vite → dist, esbuild → dist/index.js).
-        run: tar -czf relay.tar.gz dist package.json pnpm-lock.yaml $( [ -d public ] && echo public )
+        # ecosystem.config.cjs MUST ship (the deploy copies it over the server's
+        # stale one — its old path pointed at a nonexistent entry file), and
+        # patches/ must ship or `pnpm install` ENOENTs on the lockfile's
+        # patched-dependency reference (both found via per-server SSM output).
+        run: tar -czf relay.tar.gz dist package.json pnpm-lock.yaml ecosystem.config.cjs $( [ -d patches ] && echo patches ) $( [ -d public ] && echo public )
       - name: AWS auth (OIDC — no stored keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -87,7 +91,7 @@ jobs:
             esac
           done
           aws ssm list-command-invocations --command-id "$CMD" --details \
-            --query 'CommandInvocations[].{Instance:InstanceId,Status:Status,Output:CommandPlugins[0].Output}' \
+            --query 'CommandInvocations[].{Instance:InstanceId,Status:Status,Code:CommandPlugins[0].ResponseCode,Output:CommandPlugins[0].Output}' \
             --output json | head -c 6000
           FINAL=$(aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status' --output text)
           echo "final: $FINAL"
