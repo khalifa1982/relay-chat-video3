@@ -22,7 +22,7 @@ import { registerSeo } from "../seo";
 import { sweepExpiredOtps } from "../authOtp";
 import { inboundConfig, inboundAddress, registerEmailInbound } from "../emailInbound";
 import { getUserById } from "../db";
-import { sendEmail } from "../email";
+import { sendEmail, wrapEmailDocument } from "../email";
 import { createRateLimiter, clientIpOf } from "../rateLimit";
 import { registerLocalAuth } from "../authLocal";
 import { appBaseUrl } from "../appUrl";
@@ -44,12 +44,17 @@ function missedCallHtml(opts: { callerLabel: string; appUrl: string | null }): s
   const button = opts.appUrl
     ? `\n    <a href="${opts.appUrl}/app" style="display:inline-block;background:#3FE0C5;color:#04201B;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:12px">Open RELAY</a>`
     : "";
-  return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0E1014">
+  // Title is a STATIC string on purpose — callerLabel is user-controlled and
+  // must never reach the (unescaped) <title>; the escaped name stays in-body.
+  return wrapEmailDocument(
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0E1014">
     <div style="font-size:20px;font-weight:800;letter-spacing:-0.02em">RELAY</div>
     <p style="font-size:16px;line-height:1.5;margin:18px 0 6px">You missed a call from <b>${safe}</b>.</p>
     <p style="font-size:14px;color:#5A6271;margin:0 0 22px">Open RELAY to call them back.</p>${button}
     <p style="font-size:12px;color:#8A93A2;margin-top:28px">You're receiving this because you have a RELAY account.</p>
-  </div>`;
+  </div>`,
+    "Missed call · RELAY"
+  );
 }
 
 // The RELAY calling UI is rendered by the React SPA at /app (see

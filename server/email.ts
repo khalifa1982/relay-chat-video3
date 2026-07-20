@@ -66,9 +66,45 @@ export function emailFrom(): string {
   return process.env.RESEND_FROM || process.env.EMAIL_FROM || "onboarding@resend.dev";
 }
 
+/**
+ * Wrap a transactional email's inner HTML fragment in a complete, standards-
+ * compliant HTML document (ROUND 5 / v2.92.2).
+ *
+ * Every RELAY email template used to return a bare `<div>`. Mail clients handle
+ * that inconsistently — Gmail and Outlook reflow or re-style a fragment that
+ * lacks a `<!doctype>`/`<head>`, and with no `charset` non-ASCII copy can
+ * mojibake. This adds the envelope every transactional email should carry:
+ * doctype, `<html lang>`, UTF-8 charset, a mobile viewport, and a `<title>`.
+ *
+ * The body stays LIGHT on purpose. All RELAY fragments are light-themed
+ * (near-black text on light inner cards) and the inner HTML is emitted VERBATIM,
+ * so a light body preserves each email's exact existing appearance — the
+ * instruction's skeleton showed a dark `#0b0c10` body (copied from the
+ * verified-account browser page), which would render our dark copy unreadable.
+ * `color-scheme:light` also stops dark-mode clients from auto-inverting the
+ * palette and washing the text out.
+ *
+ * `title` is a TRUSTED static string at every call site and is NOT escaped
+ * here — never pass user-controlled text as the title.
+ */
+export function wrapEmailDocument(inner: string, title: string): string {
+  return (
+    `<!doctype html><html lang="en"><head>` +
+    `<meta charset="utf-8">` +
+    `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<meta name="color-scheme" content="light">` +
+    `<title>${title}</title></head>` +
+    `<body style="margin:0;padding:0;background:#ffffff;color:#0E1014">${inner}</body></html>`
+  );
+}
+
 /** Best-effort plain-text fallback from HTML (strip tags + unescape entities). */
 export function stripHtml(html: string): string {
   return html
+    // Drop the document head (title + metas) so the ROUND-5 envelope's <title>
+    // never leaks into the text/plain fallback — the body copy stays identical.
+    // \b so this never matches the start of a <header> element.
+    .replace(/<head\b[\s\S]*?<\/head>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<[^>]+>/g, " ")

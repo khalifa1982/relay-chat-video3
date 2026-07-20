@@ -25,7 +25,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import { getDb, getUserById } from "./db";
 import { users, emailVerifications } from "../drizzle/schema";
 import { ensureUserIdentity } from "./v2db";
-import { sendEmail, emailEnabled } from "./email";
+import { sendEmail, emailEnabled, wrapEmailDocument } from "./email";
 import {
   hashPassword,
   verifyPassword,
@@ -151,14 +151,17 @@ export function userIdFromLocalSession(req: { cookies?: Record<string, unknown> 
 
 /* ── verification email + pages ───────────────────────────────────────────── */
 
-function verifyHtml(opts: { link: string; email: string }): string {
-  return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0E1014">
+export function verifyHtml(opts: { link: string; email: string }): string {
+  return wrapEmailDocument(
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0E1014">
     <div style="font-size:20px;font-weight:800;letter-spacing:-0.02em">RELAY</div>
     <p style="font-size:16px;line-height:1.5;margin:18px 0 6px">Confirm your email to finish creating your RELAY account.</p>
     <p style="font-size:14px;color:#5A6271;margin:0 0 22px">This link expires in 24 hours.</p>
     <a href="${opts.link}" style="display:inline-block;background:#3FE0C5;color:#04201B;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:12px">Verify my email</a>
     <p style="font-size:12px;color:#8A93A2;margin-top:28px;word-break:break-all">Or paste this link: ${opts.link}</p>
-  </div>`;
+  </div>`,
+    "Verify your email · RELAY"
+  );
 }
 
 function verifiedPage(ok: boolean): string {

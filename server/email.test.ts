@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { sendEmail, emailEnabled, emailFrom, mailProvider, stripHtml } from "./email";
+import { sendEmail, emailEnabled, emailFrom, mailProvider, stripHtml, wrapEmailDocument } from "./email";
 
 describe("email (Resend) — feature gate + helpers", () => {
   const SAVE_KEY = process.env.RESEND_API_KEY;
@@ -46,6 +46,49 @@ describe("email (Resend) — feature gate + helpers", () => {
   it("stripHtml() produces a readable plain-text fallback", () => {
     expect(stripHtml("<p>Hello <b>world</b> &amp; more</p>")).toBe("Hello world & more");
     expect(stripHtml("<style>x{}</style><div>Hi&nbsp;there</div>")).toBe("Hi there");
+  });
+
+  it("stripHtml() drops the document <head> so the ROUND-5 <title> never leaks into text/plain", () => {
+    const doc = wrapEmailDocument("<p>Body copy only</p>", "Secret Title · RELAY");
+    const text = stripHtml(doc);
+    expect(text).toBe("Body copy only");
+    expect(text).not.toContain("Secret Title");
+  });
+});
+
+describe("ROUND 5 — wrapEmailDocument() (standards-compliant email envelope)", () => {
+  it("wraps a bare fragment in a complete HTML document", () => {
+    const out = wrapEmailDocument(`<div>hello</div>`, "Verify your email · RELAY");
+    expect(out.startsWith("<!doctype html>")).toBe(true);
+    expect(out.trimEnd().endsWith("</html>")).toBe(true);
+    for (const must of [
+      `<html lang="en">`,
+      "<head>",
+      `<meta charset="utf-8">`,
+      `name="viewport"`,
+      `content="width=device-width,initial-scale=1"`,
+      `<title>Verify your email · RELAY</title>`,
+      "<body",
+      "</body>",
+    ]) {
+      expect(out).toContain(must);
+    }
+  });
+
+  it("emits the inner fragment VERBATIM, exactly once (content unchanged)", () => {
+    const inner = `<div style="color:#0E1014">unique-marker-42 <a href="https://x/y?z=1&q=2">link</a></div>`;
+    const out = wrapEmailDocument(inner, "T · RELAY");
+    expect(out).toContain(inner);
+    expect(out.split("unique-marker-42").length - 1).toBe(1);
+  });
+
+  it("keeps a LIGHT body — a dark background would make the light-themed copy unreadable", () => {
+    const out = wrapEmailDocument(`<div>x</div>`, "T");
+    // The instruction's skeleton showed background:#0b0c10; we deliberately did
+    // NOT use it (dark body + dark copy = invisible). Pin that decision.
+    expect(out).not.toContain("#0b0c10");
+    expect(out).toContain("background:#ffffff");
+    expect(out).toContain(`content="light"`); // color-scheme: no auto dark invert
   });
 });
 

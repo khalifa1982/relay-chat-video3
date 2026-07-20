@@ -22,7 +22,7 @@ import { and, desc, eq, isNull, lt } from "drizzle-orm";
 import { getDb } from "./db";
 import { users, emailOtps } from "../drizzle/schema";
 import { hashPassword, verifyPassword, genToken } from "./authCrypto";
-import { sendEmail, emailEnabled } from "./email";
+import { sendEmail, emailEnabled, wrapEmailDocument } from "./email";
 
 export const OTP_TTL_MS = 10 * 60 * 1000; // codes valid 10 minutes
 export const OTP_MAX_ATTEMPTS = 5; // wrong tries before the code is burned
@@ -189,13 +189,16 @@ export async function markUserEmailVerified(userId: number): Promise<void> {
 
 /* ── email dispatch ───────────────────────────────────────────────────────── */
 
-function otpHtml(code: string): string {
-  return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0E1014">
+export function otpHtml(code: string): string {
+  return wrapEmailDocument(
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0E1014">
     <div style="font-size:20px;font-weight:800;letter-spacing:-0.02em">RELAY</div>
     <p style="font-size:16px;line-height:1.5;margin:18px 0 10px">Your sign-in code is:</p>
     <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:34px;font-weight:800;letter-spacing:10px;background:#f2f5f7;border-radius:14px;padding:18px 12px;text-align:center;color:#0E1014">${code}</div>
     <p style="font-size:14px;color:#5A6271;margin:14px 0 0">This code expires in 10 minutes. If you didn't request it, you can ignore this email.</p>
-  </div>`;
+  </div>`,
+    "Your RELAY sign-in code"
+  );
 }
 
 /**

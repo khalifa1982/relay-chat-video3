@@ -16,7 +16,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "./db";
 import { users } from "../drizzle/schema";
 import { hashPassword, verifyPassword } from "./authCrypto";
-import { sendEmail } from "./email";
+import { sendEmail, wrapEmailDocument } from "./email";
 
 /** Wrong entries allowed before the NEXT one locks (spec: 3 tries, 4th locks). */
 export const PIN_MAX_ATTEMPTS = 3;
@@ -96,13 +96,16 @@ export function judgePinAttempt(row: {
   // the lock (after the 3rd wrong entry it reads 1: the next one locks).
 }
 
-function lockEmailHtml(): string {
-  return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0E1014">
+export function lockEmailHtml(): string {
+  return wrapEmailDocument(
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0E1014">
     <div style="font-size:20px;font-weight:800;letter-spacing:-0.02em">RELAY</div>
     <p style="font-size:16px;line-height:1.5;margin:18px 0 10px"><b>Your account has been locked.</b></p>
     <p style="font-size:14px;line-height:1.6;color:#39414d">Someone entered a wrong 4-digit sign-in code four times in a row. To protect the account, PIN sign-in is disabled until you sign in with an email code — doing so unlocks it automatically.</p>
     <p style="font-size:14px;color:#5A6271;margin:14px 0 0">If this wasn't you, signing in with an email code and choosing a new PIN is all you need to do.</p>
-  </div>`;
+  </div>`,
+    "Your RELAY account was locked"
+  );
 }
 
 /**

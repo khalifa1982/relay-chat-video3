@@ -4049,3 +4049,33 @@ deployment was telling crawlers its canonical home is a manus.space host.
       x-forwarded-proto makes these https; on .io `DOMAIN` wins outright).
 - [x] Tests: 1003 → **1008 passing / 1 skipped** (+4 `server/seo.test.ts`, +1
       noHardcodedDomains dynamic-SEO pin). `pnpm check` + full suite + `pnpm build` green.
+
+## v2.92.2 — ROUND 5: transactional emails wrapped in a complete HTML document (2026-07-20)
+Owner's ROUND 5 instruction: the email templates returned bare `<div>` fragments with no
+document wrapper. Bare fragments render inconsistently across mail clients (Gmail/Outlook
+reflow or re-style them) and, lacking a `charset`, can mojibake the em-dashes/middot in the
+copy. Wrap every transactional email in a proper `<!doctype html>` envelope; keep all
+existing copy/styling/buttons exactly as-is.
+
+- [x] NEW `wrapEmailDocument(inner, title)` in `server/email.ts` — one shared envelope:
+      `<!doctype html><html lang="en">` + `<head>` (UTF-8 charset, mobile viewport,
+      `color-scheme:light`, `<title>`) + a `<body>` that emits the inner fragment VERBATIM.
+- [x] All FOUR templates now delegate to it: `verifyHtml` (`server/authLocal.ts`), `otpHtml`
+      (`server/authOtp.ts`), `missedCallHtml` (`server/_core/index.ts`), `lockEmailHtml`
+      (`server/authPin.ts`). (Grepped every `sendEmail(` call site — these are the only four;
+      `verifiedPage()` is a browser page, not an email, and already a full doc — left as-is.)
+- [x] Deliberate deviation from the spec's skeleton: body background stays LIGHT (`#ffffff`),
+      NOT the shown `#0b0c10`. Every RELAY email is light-themed (near-black `#0E1014` copy on
+      light cards); a dark body would make the copy unreadable. "Keep styling exactly as-is"
+      ⇒ light body + `color-scheme:light` (stops dark-mode clients from auto-inverting).
+- [x] Security: `title` is interpolated UNescaped (documented), so `missedCallHtml` uses a
+      STATIC title — the user-controlled `callerLabel` never reaches `${title}`; it stays
+      `escapeHtml`'d in the body. Other three titles are static literals.
+- [x] `stripHtml` (the text/plain fallback builder) now strips `<head>` (`<head\b…</head>`,
+      `\b` so it never eats a `<header>`) so the new `<title>` doesn't leak into plain text —
+      recipient plain-text body is byte-identical to before ROUND 5.
+- [x] Tests: NEW `server/emailTemplates.test.ts` (the three importable templates verified
+      behaviorally — full-doc shape + copy/link/code preserved; `missedCallHtml` via
+      source-read since `_core/index.ts` self-starts) + `wrapEmailDocument`/`stripHtml`
+      coverage added to `email.test.ts`. 1008 → **1016 passing / 1 skipped**. `tsc --noEmit`
+      + full suite green.
