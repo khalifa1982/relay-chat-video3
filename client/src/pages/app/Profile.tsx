@@ -1,10 +1,33 @@
 import { useState, useRef, useEffect } from "react";
-import { Bell, BellOff, Check, Lock, Moon, ScanFace, ShieldCheck, Sun, Volume2 } from "lucide-react";
+import {
+  Bell,
+  BellOff,
+  Camera,
+  Check,
+  Copy,
+  LogOut,
+  Lock,
+  Moon,
+  ScanFace,
+  Share2,
+  ShieldCheck,
+  Sun,
+  Volume2,
+} from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
 import { useSignOut } from "@/app/useSignOut";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
+import {
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerDescription,
+  DrawerTitle,
+} from "@/components/ui/drawer";
+import { toast } from "sonner";
+import { APP_VERSION } from "@shared/version";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -65,6 +88,7 @@ export default function ProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [showAuth, setShowAuth] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -147,19 +171,18 @@ export default function ProfilePage() {
     .map((p) => p[0]?.toUpperCase() || "")
     .join("") || "?";
 
+  // Presence pill colour/label derived from the saved status override.
+  const st = selfStatus(me.statusOverride);
+
   return (
     // Flow within the AppShell's scroll container (which ends exactly at the
     // in-flow bottom tab bar) instead of creating a competing scroll area —
-    // otherwise the last controls get clipped with no way to reach them.
+    // otherwise the last controls get clipped with no way to reach them. The
+    // slide-up + fade echoes the prototype's full-screen Profile panel without
+    // an absolute overlay that would fight the shell's scroll. The chrome's
+    // Back button + brand already frame the page, so the hero avatar leads.
     <div className="min-h-full">
-      <div className="max-w-xl mx-auto p-6 space-y-8">
-        <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Profile</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Your display name and avatar are shown to people you call and chat with.
-          </p>
-        </header>
-
+      <div className="max-w-xl mx-auto p-5 pb-10 space-y-6 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-300">
         {error && (
           <div className="rounded-lg border border-destructive/40 bg-destructive/10 text-destructive-foreground px-4 py-3 text-sm">
             {error}
@@ -188,94 +211,116 @@ export default function ProfilePage() {
           </div>
         )}
 
-        {/* avatar */}
-        <section className="space-y-4">
-          <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-            Avatar
-          </Label>
-          <div className="flex items-center gap-5">
-            <div className="relative">
-              {me.avatarUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={me.avatarUrl}
-                  alt={me.displayName}
-                  className="w-20 h-20 rounded-full object-cover border border-border"
-                />
-              ) : (
-                <div className="w-20 h-20 rounded-full bg-gradient-to-br from-primary to-accent grid place-items-center text-2xl font-bold text-primary-foreground border border-border">
-                  {initials}
-                </div>
-              )}
-            </div>
-            <div className="flex flex-col gap-2">
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                className="hidden"
-                onChange={onAvatarPick}
-              />
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => fileRef.current?.click()}
-                disabled={uploading || updateProfile.isPending}
-              >
-                {uploading ? "Uploading…" : me.avatarUrl ? "Replace photo" : "Upload photo"}
-              </Button>
-              {me.avatarUrl && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={clearAvatar}
-                  disabled={updateProfile.isPending}
-                  className="text-destructive hover:text-destructive"
-                >
-                  Remove
-                </Button>
-              )}
-            </div>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            PNG, JPG, WebP or GIF up to 4 MB.
-          </p>
-        </section>
-
-        {/* display name */}
-        <section className="space-y-3">
-          <Label htmlFor="displayName" className="text-xs uppercase tracking-wider text-muted-foreground">
-            Display name
-          </Label>
-          <div className="flex gap-3">
-            <Input
-              id="displayName"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              maxLength={64}
-              autoComplete="off"
-              className="flex-1"
-            />
-            <Button
+        {/* ── identity hero: avatar (tap to set photo) + name + status ── */}
+        <section className="flex flex-col items-center gap-3 pt-1 text-center">
+          <div className="relative">
+            {/* The avatar IS the upload control (camera badge) — mirrors the
+                prototype. The same hidden <input> + onAvatarPick handler drive
+                it; the cyan ring is the shared logo gradient. */}
+            <button
               type="button"
-              onClick={saveName}
-              disabled={updateProfile.isPending || !name.trim() || name.trim() === me.displayName}
+              onClick={() => fileRef.current?.click()}
+              disabled={uploading || updateProfile.isPending}
+              title="Tap to set your photo"
+              aria-label={me.avatarUrl ? "Replace profile photo" : "Add profile photo"}
+              className="relative grid size-24 place-items-center rounded-full outline-none transition active:scale-95 focus-visible:ring-2 focus-visible:ring-primary/60 disabled:opacity-70"
+              style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)" }}
             >
-              Save
-            </Button>
+              <span className="grid size-[86px] place-items-center overflow-hidden rounded-full">
+                {me.avatarUrl ? (
+                  <img
+                    src={me.avatarUrl}
+                    alt={me.displayName}
+                    className="size-full rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="text-3xl font-extrabold" style={{ color: "#08211d" }}>
+                    {initials}
+                  </span>
+                )}
+              </span>
+              <span className="absolute -bottom-0.5 -right-0.5 grid size-8 place-items-center rounded-full border-[3px] border-background bg-secondary text-primary">
+                {uploading ? (
+                  <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                ) : (
+                  <Camera className="size-4" />
+                )}
+              </span>
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              className="hidden"
+              onChange={onAvatarPick}
+            />
           </div>
-          {me.verified && (
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-[#2f7bff]/10 px-2.5 py-1 text-xs font-medium text-[#2f7bff] dark:text-[#4c9bff]">
-              <VerifiedBadge size={14} /> Verified account
-            </div>
-          )}
+
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-extrabold tracking-tight">{me.displayName || "You"}</h1>
+            {me.verified && <VerifiedBadge size={18} />}
+          </div>
+
+          {/* presence pill — LED colour reflects the saved status override */}
+          <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-3 py-1 text-xs font-medium text-muted-foreground">
+            <span
+              className="size-2 rounded-full"
+              style={{ background: st.color, boxShadow: `0 0 8px ${st.color}` }}
+            />
+            {st.label}
+            {me.verified && <span className="text-muted-foreground/70">· verified</span>}
+          </span>
+
+          <div className="flex items-center gap-3 text-xs">
+            {me.avatarUrl && (
+              <button
+                type="button"
+                onClick={clearAvatar}
+                disabled={updateProfile.isPending}
+                className="font-medium text-muted-foreground transition hover:text-destructive disabled:opacity-60"
+              >
+                Remove photo
+              </button>
+            )}
+            <span className="text-muted-foreground/70">PNG, JPG, WebP or GIF up to 4 MB</span>
+          </div>
         </section>
 
-        {/* number */}
+        {/* your RELAY number — copy + QR share, directly under the identity */}
         <NumberAndFlag
           number={me.number}
           onRegenerated={refresh}
+          onShowQr={() => setQrOpen(true)}
         />
+
+        {/* display name — kept fully functional, restyled as a settings card */}
+        <section className="space-y-2">
+          <Label htmlFor="displayName" className="text-xs uppercase tracking-wider text-muted-foreground">
+            Display name
+          </Label>
+          <div className="rounded-2xl border border-border bg-card/50 p-4">
+            <div className="flex gap-2">
+              <Input
+                id="displayName"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={64}
+                autoComplete="off"
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                onClick={saveName}
+                disabled={updateProfile.isPending || !name.trim() || name.trim() === me.displayName}
+              >
+                Save
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Shown to people you call and chat with.
+            </p>
+          </div>
+        </section>
 
         {/* status (auto / away / travelling) */}
         <StatusSection me={me} onSaved={refresh} />
@@ -324,23 +369,172 @@ export default function ProfilePage() {
         )}
         {showAuth && <AuthPanel onClose={() => setShowAuth(false)} />}
 
-        {/* sign out */}
-        {/* (the upgrade CTA above stays in place — sign-out is the
-           final action on this page) */}
-        <section className="pt-4 border-t border-border">
-          <Button
+        {/* sign out — the final, destructive action; styled as a danger card */}
+        <section className="pt-2">
+          <button
             type="button"
-            variant="ghost"
-            className="text-destructive hover:text-destructive"
             disabled={signOutPending}
             onClick={requestSignOut}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm font-semibold text-destructive transition hover:bg-destructive/10 disabled:opacity-60"
           >
-            Sign out
-          </Button>
+            <LogOut className="size-4" /> Sign out
+          </button>
         </section>
         {signOutDialog}
+
+        {/* build stamp — mirrors the prototype's mono footer line */}
+        <div className="pt-1 text-center">
+          <span className="font-mono text-[11px] text-muted-foreground/70">
+            RELAY v{APP_VERSION} · auto-updates on publish
+          </span>
+        </div>
       </div>
+
+      {/* QR / share bottom sheet (slides up from the bottom of the screen) */}
+      <ShareNumberSheet open={qrOpen} onOpenChange={setQrOpen} number={me.number} />
     </div>
+  );
+}
+
+/* ============================================================
+   selfStatus — maps the saved status override to a presence
+   label + LED colour for the identity pill. Colours are fixed
+   status LEDs (available/away/travelling), theme-independent.
+   ============================================================ */
+function selfStatus(override: string | null | undefined): { label: string; color: string } {
+  if (override === "away") return { label: "Away", color: "#f5a623" };
+  if (override === "travel") return { label: "Travelling", color: "#38bdf8" };
+  return { label: "Available", color: "#06d6a0" };
+}
+
+/* ============================================================
+   QrGlyph — the prototype's decorative QR artwork (a scannable
+   generator is a follow-up; no QR dependency ships today). It is
+   intentionally dark modules on a light plate in BOTH themes —
+   that's how a code stays legible — so the two colours are fixed
+   graphic values, not theme surfaces.
+   ============================================================ */
+function QrGlyph({ className }: { className?: string }) {
+  const M = "#12161b"; // module colour (fixed; a QR is always dark-on-light)
+  return (
+    <svg className={className} viewBox="0 0 29 29" width="100%" height="100%" aria-hidden="true">
+      <rect x="1" y="1" width="7" height="7" fill="none" stroke={M} strokeWidth="2" />
+      <rect x="3.5" y="3.5" width="2" height="2" fill={M} />
+      <rect x="21" y="1" width="7" height="7" fill="none" stroke={M} strokeWidth="2" />
+      <rect x="23.5" y="3.5" width="2" height="2" fill={M} />
+      <rect x="1" y="21" width="7" height="7" fill="none" stroke={M} strokeWidth="2" />
+      <rect x="3.5" y="23.5" width="2" height="2" fill={M} />
+      <rect x="11" y="2" width="2" height="2" fill={M} />
+      <rect x="15" y="1" width="2" height="3" fill={M} />
+      <rect x="12" y="6" width="3" height="2" fill={M} />
+      <rect x="17" y="5" width="2" height="2" fill={M} />
+      <rect x="2" y="11" width="2" height="2" fill={M} />
+      <rect x="6" y="12" width="2" height="3" fill={M} />
+      <rect x="10" y="11" width="3" height="2" fill={M} />
+      <rect x="15" y="10" width="2" height="4" fill={M} />
+      <rect x="19" y="12" width="3" height="2" fill={M} />
+      <rect x="24" y="11" width="2" height="2" fill={M} />
+      <rect x="27" y="14" width="1" height="3" fill={M} />
+      <rect x="11" y="15" width="2" height="3" fill={M} />
+      <rect x="14" y="17" width="3" height="2" fill={M} />
+      <rect x="19" y="16" width="2" height="2" fill={M} />
+      <rect x="23" y="17" width="3" height="2" fill={M} />
+      <rect x="10" y="21" width="2" height="2" fill={M} />
+      <rect x="13" y="23" width="2" height="3" fill={M} />
+      <rect x="17" y="21" width="3" height="2" fill={M} />
+      <rect x="21" y="24" width="2" height="2" fill={M} />
+      <rect x="25" y="22" width="2" height="3" fill={M} />
+      <rect x="16" y="26" width="2" height="2" fill={M} />
+    </svg>
+  );
+}
+
+/* ============================================================
+   ShareNumberSheet — the QR-share bottom sheet (prototype 423–433):
+   a rounded-top sheet that slides up with the QR artwork, the
+   RELAY number + flag, and real Copy / Share actions (the invite
+   link reuses the app-wide /i/<pin> pattern). Uses the shared vaul
+   Drawer so surfaces stay theme-aware.
+   ============================================================ */
+function ShareNumberSheet({
+  open,
+  onOpenChange,
+  number,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  number: string;
+}) {
+  const geo = trpc.directory.geoSelf.useQuery(undefined, {
+    staleTime: 60 * 60 * 1000,
+    retry: false,
+  });
+  const pretty = `${number.slice(0, 3)} ${number.slice(3)}`;
+  const inviteUrl =
+    typeof window !== "undefined" ? `${window.location.origin}/i/${number}` : `/i/${number}`;
+
+  const copyNumber = () => {
+    navigator.clipboard
+      ?.writeText(number)
+      .then(() => toast.success("Number copied"))
+      .catch(() => toast.error("Couldn't copy the number"));
+  };
+  const share = () => {
+    const title = "Reach me on RELAY";
+    if (typeof navigator !== "undefined" && navigator.share) {
+      navigator.share({ title, text: `${title} — ${pretty}`, url: inviteUrl }).catch(() => {});
+    } else {
+      navigator.clipboard
+        ?.writeText(`${title}\n${inviteUrl}`)
+        .then(() => toast.success("Invite link copied"))
+        .catch(() => toast.error("Couldn't copy the link"));
+    }
+  };
+
+  return (
+    <Drawer open={open} onOpenChange={onOpenChange}>
+      <DrawerContent className="border-border">
+        <div className="mx-auto flex w-full max-w-md flex-col items-center gap-4 px-6 pb-8 pt-3">
+          <DrawerTitle className="text-base font-extrabold">Share your RELAY number</DrawerTitle>
+          {/* QR plate: fixed light plate + dark modules (legibility), themed frame */}
+          <div className="grid size-44 place-items-center rounded-2xl border border-border bg-[#eff2f5] p-3.5">
+            <QrGlyph className="size-full" />
+          </div>
+          <div className="flex items-center gap-2">
+            {geo.data?.flagEmoji && (
+              <span
+                className="text-lg leading-none"
+                title={geo.data.countryName ?? geo.data.country ?? ""}
+              >
+                {geo.data.flagEmoji}
+              </span>
+            )}
+            <span className="font-mono text-lg font-bold tracking-[0.12em]">{pretty}</span>
+          </div>
+          <DrawerDescription className="text-center text-xs">
+            Share your number so friends can call or message you on RELAY.
+          </DrawerDescription>
+          <div className="grid w-full grid-cols-2 gap-2 pt-1">
+            <Button type="button" variant="secondary" onClick={copyNumber} className="gap-2">
+              <Copy className="size-4" /> Copy number
+            </Button>
+            <Button
+              type="button"
+              onClick={share}
+              className="gap-2 border-0 text-[#08211d] hover:brightness-95"
+              style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)" }}
+            >
+              <Share2 className="size-4" /> Share
+            </Button>
+          </div>
+          <DrawerClose asChild>
+            <Button type="button" variant="ghost" className="w-full">
+              Done
+            </Button>
+          </DrawerClose>
+        </div>
+      </DrawerContent>
+    </Drawer>
   );
 }
 
@@ -350,7 +544,15 @@ export default function ProfilePage() {
    is purely informational; if the geo lookup fails (e.g. private
    IP, network error) we silently render the number alone.
    ============================================================ */
-function NumberAndFlag({ number, onRegenerated }: { number: string; onRegenerated: () => void }) {
+function NumberAndFlag({
+  number,
+  onRegenerated,
+  onShowQr,
+}: {
+  number: string;
+  onRegenerated: () => void;
+  onShowQr: () => void;
+}) {
   const geo = trpc.directory.geoSelf.useQuery(undefined, {
     staleTime: 60 * 60 * 1000, // 1h — country doesn't change often
     retry: false,
@@ -367,57 +569,82 @@ function NumberAndFlag({ number, onRegenerated }: { number: string; onRegenerate
       window.setTimeout(() => setRegenNotice(null), 6000);
     },
   });
+  const copyNumber = () => {
+    navigator.clipboard
+      ?.writeText(number)
+      .then(() => toast.success("Number copied"))
+      .catch(() => toast.error("Couldn't copy the number"));
+  };
 
   return (
-    <section className="space-y-2">
-      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-        Your number
-      </Label>
-      <div className="flex items-center gap-3">
-        <div className="text-2xl font-mono tracking-widest">
-          {number.slice(0, 3)} {number.slice(3)}
-        </div>
-        {geo.data?.flagEmoji && (
-          <span
-            className="inline-flex items-center gap-1.5 rounded-full bg-muted/40 border border-border px-2.5 py-1 text-sm"
-            title={
-              geo.data.countryName
-                ? `Connecting from ${geo.data.countryName}`
-                : undefined
-            }
-            aria-label={
-              geo.data.countryName
-                ? `Connecting from ${geo.data.countryName}`
-                : `Country ${geo.data.country}`
-            }
+    <section className="space-y-3">
+      <div className="rounded-2xl border border-border bg-card/60 p-5">
+        <div className="flex items-start gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+              Your RELAY number
+            </div>
+            <div className="mt-1.5 flex items-center gap-2">
+              <span className="font-mono text-3xl font-bold tracking-[0.08em]">
+                {number.slice(0, 3)} {number.slice(3)}
+              </span>
+              {geo.data?.flagEmoji && (
+                <span
+                  className="text-xl leading-none"
+                  title={
+                    geo.data.countryName
+                      ? `Connecting from ${geo.data.countryName}`
+                      : undefined
+                  }
+                  aria-label={
+                    geo.data.countryName
+                      ? `Connecting from ${geo.data.countryName}`
+                      : `Country ${geo.data.country}`
+                  }
+                >
+                  {geo.data.flagEmoji}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={copyNumber}
+              className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary/20"
+            >
+              <Copy className="size-3.5" /> Copy number
+            </button>
+          </div>
+          {/* QR launcher → share sheet (white plate mirrors the prototype) */}
+          <button
+            type="button"
+            onClick={onShowQr}
+            aria-label="Show QR code to share your number"
+            className="grid size-[70px] shrink-0 place-items-center rounded-xl border border-border bg-[#eff2f5] p-2 transition hover:brightness-95"
           >
-            <span className="text-base leading-none">{geo.data.flagEmoji}</span>
-            <span className="text-xs font-medium text-muted-foreground">
-              {geo.data.country}
-            </span>
-          </span>
-        )}
+            <QrGlyph className="size-full" />
+          </button>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border/60 pt-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setConfirmRegen(true)}
+            disabled={regen.isPending}
+          >
+            {regen.isPending ? "Generating…" : "Regenerate number"}
+          </Button>
+          {regenNotice && (
+            <span className="text-xs text-[color:var(--relay-online,#06d6a0)]">{regenNotice}</span>
+          )}
+          {regen.isError && (
+            <span className="text-xs text-destructive">Couldn't regenerate — try again.</span>
+          )}
+        </div>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="px-1 text-xs text-muted-foreground">
         Share this 6-digit number for people to call or message you.
       </p>
-      <div className="flex flex-wrap items-center gap-3 pt-1">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => setConfirmRegen(true)}
-          disabled={regen.isPending}
-        >
-          {regen.isPending ? "Generating…" : "Regenerate number"}
-        </Button>
-        {regenNotice && (
-          <span className="text-xs text-[color:var(--relay-online,#06d6a0)]">{regenNotice}</span>
-        )}
-        {regen.isError && (
-          <span className="text-xs text-destructive">Couldn't regenerate — try again.</span>
-        )}
-      </div>
       <AlertDialog open={confirmRegen} onOpenChange={(open) => !open && setConfirmRegen(false)}>
         <AlertDialogContent>
           <AlertDialogHeader>
