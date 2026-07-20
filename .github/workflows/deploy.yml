@@ -7,9 +7,8 @@
 # untouched. The .io identity is set purely by env vars on the AWS servers
 # (APP_URL=https://your-chat.io) + DNS.
 #
-# ── DORMANT UNTIL THE AWS SIDE EXISTS ────────────────────────────────────────
-# Trigger is workflow_dispatch (manual) ONLY, so merging this file does NOT
-# fire a deploy. Before it can succeed, the target AWS account must have:
+# ── AWS-side prerequisites (see docs-aws-io-deploy.md) ──────────────────────
+# For a run to go green, the target AWS account must have:
 #   • a GitHub OIDC identity provider + IAM role `relay-github-deploy` whose
 #     trust policy allows THIS repo (khalifa1982/relay-chat-video3),
 #   • the S3 bucket below,
@@ -17,13 +16,13 @@
 #     Node 22 + pnpm + pm2, /home/relay/ecosystem.config.cjs, and a
 #     /home/relay/.env carrying PORT, DATABASE_URL, JWT_SECRET, APP_URL,
 #     TURN_HOST/TURN_SECRET, etc. (see docs-aws-io-deploy.md).
-# Once that exists and a manual run is green, uncomment the `push:` block to
-# make every merge to main auto-deploy to .io.
+# ACTIVATED (owner go-ahead, 2026-07-20): every merge to main auto-deploys to
+# the .io fleet. Rolling (one server at a time), max-errors 0, /api/health gate.
 name: Deploy to AWS (your-chat.io)
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [main]
+  push:
+    branches: [main]
 
 permissions:
   id-token: write
