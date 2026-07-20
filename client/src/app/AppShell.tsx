@@ -441,46 +441,27 @@ function Inner({ children }: { children: React.ReactNode }) {
               type="button"
               onClick={goBack}
               aria-label="Back"
-              className="mr-1 grid size-9 shrink-0 place-items-center rounded-xl text-foreground hover:bg-muted/50 active:scale-95 transition outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+              className="mr-0.5 grid size-9 shrink-0 place-items-center rounded-xl text-foreground hover:bg-muted/50 active:scale-95 transition outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
             >
               <ArrowLeft className="size-5" />
             </button>
           )}
+          {/* Brand — the prototype leads the header with a cyan logo dot + the
+              RELAY wordmark on the left; identity (flag · number · avatar) sits
+              on the right. */}
           <Link
-            href="/app/profile"
-            className="flex items-center gap-3 min-w-0 active:opacity-70 transition-opacity rounded-xl outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+            href="/app/dialer"
+            aria-label="RELAY"
+            className="flex items-center gap-2 shrink-0 active:opacity-70 transition-opacity rounded-lg outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
           >
-            {me.avatarUrl ? (
-              <img
-                src={me.avatarUrl}
-                alt={me.displayName}
-                className="size-9 rounded-xl object-cover border border-border"
-              />
-            ) : (
-              <div className="size-9 rounded-xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
-                {initialsFrom(me.displayName)}
-              </div>
-            )}
-            <div className="min-w-0">
-              <div className="text-sm font-semibold truncate flex items-center gap-1">
-                <span className="truncate">{me.displayName}</span>
-                {me.verified && <VerifiedBadge size={14} />}
-              </div>
-              <div className="font-mono text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
-                {formatNumber(me.number)}
-                {geo.data?.flagEmoji && (
-                  <span
-                    className="text-sm leading-none"
-                    title={geo.data.countryName ?? geo.data.country ?? ""}
-                  >
-                    {geo.data.flagEmoji}
-                  </span>
-                )}
-                <DeviceChip />
-              </div>
-            </div>
+            <span
+              className="size-2.5 rounded-full shrink-0"
+              style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)", boxShadow: "0 0 10px rgba(63,224,197,.8)" }}
+            />
+            <span className="text-sm font-extrabold tracking-[0.22em] text-foreground">RELAY</span>
           </Link>
-          <div className="flex items-center gap-1">
+          <span className="flex-1" />
+          <div className="flex items-center gap-2 min-w-0">
             <NotificationBell
               missedCount={missedCount}
               unreadCount={unreadTotal}
@@ -489,23 +470,57 @@ function Inner({ children }: { children: React.ReactNode }) {
               dnd={dnd}
               onDndChange={setDnd}
             />
-            {me.isGuest ? (
+            {geo.data?.flagEmoji && (
+              <span
+                className="hidden xs:inline text-sm leading-none shrink-0"
+                title={geo.data.countryName ?? geo.data.country ?? ""}
+              >
+                {geo.data.flagEmoji}
+              </span>
+            )}
+            <span className="hidden xs:inline font-mono text-xs text-muted-foreground shrink-0">
+              {formatNumber(me.number)}
+            </span>
+            {/* Avatar → Profile, with a self status LED (amber on Do-Not-Disturb,
+                online-green otherwise) matching the prototype. */}
+            <Link
+              href="/app/profile"
+              aria-label="Profile"
+              title={me.displayName}
+              className="relative shrink-0 active:scale-95 transition-transform rounded-full outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+            >
+              {me.avatarUrl ? (
+                <img
+                  src={me.avatarUrl}
+                  alt={me.displayName}
+                  className="size-9 rounded-full object-cover border border-border"
+                />
+              ) : (
+                <span
+                  className="size-9 rounded-full grid place-items-center font-bold text-sm"
+                  style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)", color: "#08211d" }}
+                >
+                  {initialsFrom(me.displayName)}
+                </span>
+              )}
+              <span
+                className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-card"
+                style={{ background: dnd ? "#fbbf24" : "#06d6a0" }}
+              />
+              {me.verified && (
+                <span className="absolute -left-1 -top-1">
+                  <VerifiedBadge size={14} />
+                </span>
+              )}
+            </Link>
+            {me.isGuest && (
               <button
                 type="button"
                 onClick={() => setAuthOpen(true)}
-                className="text-xs font-semibold text-primary"
+                className="shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold text-primary bg-primary/10 active:scale-95 transition-transform"
               >
                 Register
               </button>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-muted-foreground"
-                onClick={requestSignOut}
-              >
-                <LogOut className="size-4" />
-              </Button>
             )}
           </div>
         </header>
