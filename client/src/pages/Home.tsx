@@ -22,30 +22,35 @@ import { toast } from "sonner";
 type Lang = LangCode;
 
 /* Real screenshots captured directly from the live RELAY app (/app on the
-   production deploy). Asset URLs are tied to the project lifecycle and never
-   expire. */
+   production deploy). BUNDLED as static assets under client/public/marketing/
+   (served at /marketing/*) — NOT object storage. They were previously loaded
+   from /manus-storage/* (Manus Forge), which only exists on the .org deploy;
+   on the self-hosted .io deploy that proxy points at an S3 bucket the marketing
+   images were never uploaded to, so every landing image 404'd. Marketing images
+   are identical for every visitor and ship with the frontend — keep them here,
+   don't move them back to per-request storage. */
 const IMG = {
-  call: "/manus-storage/relay-v2-call_7d2eafdd.jpg",
-  dialer: "/manus-storage/relay-v2-dialer_299ac1a9.jpg",
-  messages: "/manus-storage/relay-v2-messages_a863d696.jpg",
-  contacts: "/manus-storage/relay-v2-contacts_bc1018a3.jpg",
-  mobile: "/manus-storage/relay-v2-mobile_b0ee18b9.jpg",
+  call: "/marketing/relay-v2-call_7d2eafdd.jpg",
+  dialer: "/marketing/relay-v2-dialer_299ac1a9.jpg",
+  messages: "/marketing/relay-v2-messages_a863d696.jpg",
+  contacts: "/marketing/relay-v2-contacts_bc1018a3.jpg",
+  mobile: "/marketing/relay-v2-mobile_b0ee18b9.jpg",
 };
 
 /* Realistic webcam-style participant tiles for the "up to 10 people" group-call
    showcase. AI-generated and cropped to clean 4:5 feeds. Purely illustrative of
    RELAY's real 10-person room. */
 const PEOPLE = [
-  { src: "/manus-storage/p01_48b37f0c.jpg", name: "Maya", muted: false },
-  { src: "/manus-storage/p04_fc1bd253.jpg", name: "Arjun", muted: false },
-  { src: "/manus-storage/p09_fb2b3bc4.jpg", name: "Layla", muted: false },
-  { src: "/manus-storage/p02_25ef8366.jpg", name: "Tom", muted: true },
-  { src: "/manus-storage/p03_20c4e74c.jpg", name: "Hana", muted: true },
-  { src: "/manus-storage/p06_b6c856de.jpg", name: "Ruth", muted: false },
-  { src: "/manus-storage/p07_0bb4a935.jpg", name: "Leo", muted: true },
-  { src: "/manus-storage/p08_d54aaacd.jpg", name: "Marcus", muted: true },
-  { src: "/manus-storage/p05_a63e3fa7.jpg", name: "Sofia", muted: false },
-  { src: "/manus-storage/p10_6d299c17.jpg", name: "Ben", muted: true },
+  { src: "/marketing/p01_48b37f0c.jpg", name: "Maya", muted: false },
+  { src: "/marketing/p04_fc1bd253.jpg", name: "Arjun", muted: false },
+  { src: "/marketing/p09_fb2b3bc4.jpg", name: "Layla", muted: false },
+  { src: "/marketing/p02_25ef8366.jpg", name: "Tom", muted: true },
+  { src: "/marketing/p03_20c4e74c.jpg", name: "Hana", muted: true },
+  { src: "/marketing/p06_b6c856de.jpg", name: "Ruth", muted: false },
+  { src: "/marketing/p07_0bb4a935.jpg", name: "Leo", muted: true },
+  { src: "/marketing/p08_d54aaacd.jpg", name: "Marcus", muted: true },
+  { src: "/marketing/p05_a63e3fa7.jpg", name: "Sofia", muted: false },
+  { src: "/marketing/p10_6d299c17.jpg", name: "Ben", muted: true },
 ];
 
 /* Languages that render right-to-left. */

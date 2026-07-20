@@ -4079,3 +4079,28 @@ existing copy/styling/buttons exactly as-is.
       source-read since `_core/index.ts` self-starts) + `wrapEmailDocument`/`stripHtml`
       coverage added to `email.test.ts`. 1008 → **1016 passing / 1 skipped**. `tsc --noEmit`
       + full suite green.
+
+## v2.92.3 — Landing-page images bundled into the build (were 404'ing on .io) (2026-07-20)
+Owner report: "the images in the landing page are not showing on .io." Root cause: the
+marketing landing page (`client/src/pages/Home.tsx`) loaded all 15 images — 5 real app
+screenshots (call/dialer/messages/contacts/mobile) + 10 group-call avatar tiles (p01–p10) —
+from `/manus-storage/*` (Manus Forge object storage). Forge only exists on the `.org`
+(Manus) deploy. On `.io`, `/manus-storage/*` now presigns against the operator's S3 bucket
+(the S3 env went live between checks — the proxy went 500→307), but these images were never
+uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
+`/manus-storage/relay-v2-call_…jpg` → 307 → final **404**; `.org` same key → 200.
+
+- [x] Downloaded the 15 JPEGs from `.org` Forge (still serving them) into
+      `client/public/marketing/` (≈1.3 MB total; validated as real JPEGs — screenshots
+      1600×1000, mobile 780×1688, avatars 480×600).
+- [x] `Home.tsx`: the `IMG` map + `PEOPLE` avatar array now reference `/marketing/*` instead
+      of `/manus-storage/*` (filenames preserved). A code comment explains WHY they're bundled
+      (identical for every visitor; must not go back to per-request storage).
+- [x] These are now STATIC build assets: vite copies `client/public` → `dist/public`
+      (`publicDir`/`outDir` in vite.config.ts), served by `serveStatic` from `dist/public` on
+      EVERY deploy (same path that already serves `/icon.svg`, confirmed 200 on .io). No
+      dependency on Forge OR S3 — works on .org, .io, and any future self-host.
+- [x] User-uploaded attachments are UNAFFECTED — they correctly still use S3 (.io) / Forge
+      (.org) via `storagePut`/the storage proxy. This change is marketing images only.
+- [x] Build-verified: `pnpm build` green, all 15 present in `dist/public/marketing/`. Version
+      → 2.92.3 (updateChecker pin bumped). `tsc --noEmit` + version/domain-scan tests green.
