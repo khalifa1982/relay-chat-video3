@@ -545,7 +545,7 @@ function RoundAction({
       title={title}
       onClick={onClick}
       disabled={disabled}
-      className="grid size-[34px] shrink-0 place-items-center rounded-full transition hover:brightness-125 disabled:pointer-events-none disabled:opacity-40"
+      className="grid size-11 shrink-0 place-items-center rounded-full transition hover:brightness-125 disabled:pointer-events-none disabled:opacity-40"
       style={{
         background: `linear-gradient(160deg, rgba(${rgb},${hi}), rgba(${rgb},${lo}))`,
         color: accent,

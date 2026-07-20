@@ -83,11 +83,15 @@ describe("UI/UX improvements", () => {
   });
 
   it("History action buttons meet the 44px touch-target minimum", () => {
-    expect(HISTORY).toMatch(/className="size-11"/);
+    // size-11 = 2.75rem = 44px. The mobile-redesign row action discs (RoundAction)
+    // keep the 44px touch target even though the prototype mock drew 34px.
+    expect(HISTORY).toMatch(/\bsize-11\b/);
   });
 
   it("the Contacts search field has a leading search icon", () => {
-    expect(CONTACTS).toMatch(/<Search className="absolute left-3 top-1\/2 -translate-y-1\/2 size-4 text-muted-foreground" \/>\s*\n\s*<Input\s*\n\s*placeholder="Search by name or number"/);
+    // Tolerate trailing utility classes (the redesign added pointer-events-none
+    // so the icon never intercepts a tap on the field).
+    expect(CONTACTS).toMatch(/<Search className="absolute left-3 top-1\/2 -translate-y-1\/2 size-4 text-muted-foreground[^"]*" \/>\s*\n\s*<Input\s*\n\s*placeholder="Search by name or number"/);
   });
 
   it("the empty Contacts state uses the shared Empty component with a CTA", () => {

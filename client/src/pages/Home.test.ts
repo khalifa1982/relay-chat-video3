@@ -174,11 +174,14 @@ describe("Home.tsx — visual assets", () => {
     }
   });
 
-  it("serves images from the project storage path (real captured screenshots)", () => {
-    // The landing visuals are real screenshots captured from the live app and
-    // served via the persistent /manus-storage path.
-    const storageRefs = HOME_TSX.match(/\/manus-storage\/relay-v2-[^"'\s]+/g) ?? [];
-    expect(storageRefs.length).toBeGreaterThanOrEqual(4);
+  it("serves images from the bundled marketing path (real captured screenshots)", () => {
+    // v2.92.3: the landing visuals are real screenshots bundled as STATIC build
+    // assets under client/public/marketing/ (served at /marketing/*), NOT object
+    // storage — Manus Forge's /manus-storage/* only resolves on .org, so on the
+    // self-hosted .io deploy every landing image 404'd. They ship with the
+    // frontend now, identical for every visitor and independent of any storage.
+    const marketingRefs = HOME_TSX.match(/\/marketing\/relay-v2-[^"'\s]+/g) ?? [];
+    expect(marketingRefs.length).toBeGreaterThanOrEqual(4);
   });
 
   it("does not import images from the local filesystem", () => {
