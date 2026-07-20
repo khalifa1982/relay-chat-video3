@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type ReactNode } from "react";
 import { useLocation, useSearch } from "wouter";
 import { toast } from "sonner";
 import {
-  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   Send,
   Smile,
   Paperclip,
@@ -10,7 +11,9 @@ import {
   StopCircle,
   Image as ImageIcon,
   Phone,
+  Video,
   Search,
+  MessageSquare,
   MessageSquarePlus,
   X,
   StickyNote,
@@ -57,6 +60,14 @@ const EMOJI_QUICK = [
   "😢","😭","😡","😴","🥳","🤝","💪","👀",
   "📞","📱","💬","📩","✅","❌","⏰","🎵",
 ];
+
+/** Own (outgoing) message bubble — the brand "message" orange gradient with
+ *  white copy. Received bubbles keep the neutral token surface (theme-safe). */
+const OWN_BUBBLE_STYLE: CSSProperties = {
+  background: "linear-gradient(135deg,#fb923c,#c2410c)",
+  color: "#fff",
+  borderColor: "rgba(255,255,255,.18)",
+};
 
 function initialsFrom(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
@@ -135,6 +146,51 @@ export default function MessagesPage() {
   // Live "typing…" state per thread row (one subscription for the whole list).
   const typingConvos = useTypingConversations();
 
+  // Collapsible, PRESENTATIONAL grouping of the flat thread list into DIRECT /
+  // GROUPS / NOTES sections. Derived purely from the existing threads query
+  // (no new request, no data-flow change); collapse state is UI-only.
+  const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>({});
+  const threadCategories = useMemo(() => {
+    const list = threads.data ?? [];
+    const meId = me?.id;
+    const isNotes = (t: (typeof list)[number]) =>
+      meId != null && t.kind !== "group" && t.peerIdentityId === meId;
+    const cats: {
+      key: string;
+      label: string;
+      rgb: string;
+      hex: string;
+      icon: ReactNode;
+      rows: typeof list;
+    }[] = [
+      {
+        key: "direct",
+        label: "Direct",
+        rgb: "251,146,60",
+        hex: "#fb923c",
+        icon: <MessageSquare className="size-3.5" />,
+        rows: list.filter((t) => t.kind !== "group" && !isNotes(t)),
+      },
+      {
+        key: "groups",
+        label: "Groups",
+        rgb: "167,139,250",
+        hex: "#a78bfa",
+        icon: <Users className="size-3.5" />,
+        rows: list.filter((t) => t.kind === "group"),
+      },
+      {
+        key: "notes",
+        label: "Notes",
+        rgb: "251,191,36",
+        hex: "#fbbf24",
+        icon: <StickyNote className="size-3.5" />,
+        rows: list.filter(isNotes),
+      },
+    ];
+    return cats.filter((c) => c.rows.length > 0);
+  }, [threads.data, me]);
+
   // While a conversation is open on MOBILE, hide the app's top bar so the chat
   // has ONE compact header (name + status) instead of two stacked headers
   // eating a third of the screen. The bottom tab bar stays.
@@ -164,7 +220,7 @@ export default function MessagesPage() {
         }
       >
         <header className="flex items-center justify-between px-4 md:px-5 py-4 border-b border-border">
-          <h2 className="font-semibold">Messages</h2>
+          <h2 className="text-base font-extrabold tracking-tight">Messages</h2>
           <NewMessageDialog />
         </header>
         <div className="flex-1 overflow-y-auto">
@@ -188,90 +244,162 @@ export default function MessagesPage() {
               <p className="mt-1">Tap the + above to start a conversation.</p>
             </div>
           ) : (
-            <ul>
-              {threads.data?.map((t) => {
-                const isActive = activeConvoId === t.conversationId;
+            <div>
+              {threadCategories.map((cat) => {
+                const open = !collapsedCats[cat.key];
+                const catUnread = cat.rows.some((t) => t.unreadCount > 0);
                 return (
-                  <li key={t.conversationId}>
+                  <section key={cat.key}>
+                    {/* Collapsible category header: chevron + colored icon +
+                        UPPERCASE label + count + unread dot. */}
                     <button
                       type="button"
-                      onClick={() => setLocation(`/app/messages?c=${t.conversationId}`)}
-                      className={
-                        "w-full text-left flex items-start gap-3 px-4 md:px-5 py-3 border-b border-border last:border-b-0 hover:bg-muted/30 transition-colors " +
-                        (isActive ? "bg-muted/40" : "")
-                      }
+                      onClick={() => setCollapsedCats((c) => ({ ...c, [cat.key]: !c[cat.key] }))}
+                      className="w-full flex items-center gap-2 px-4 md:px-5 pt-3 pb-1.5 text-muted-foreground hover:text-foreground transition-colors"
                     >
-                      <div className="relative">
-                        {t.kind === "group" ? (
-                          <div
-                            className="size-12 rounded-full bg-accent/15 grid place-items-center text-accent"
-                            aria-label="Group conversation"
-                          >
-                            <Users className="size-5" />
-                          </div>
-                        ) : me && t.peerIdentityId === me.id ? (
-                          <div
-                            className="size-12 rounded-full bg-amber-500/15 grid place-items-center text-amber-400"
-                            aria-label="Notes to yourself"
-                          >
-                            <StickyNote className="size-5" />
-                          </div>
-                        ) : (
-                          <>
-                            <div className="size-12 rounded-full bg-primary/15 grid place-items-center text-primary font-bold text-sm">
-                              {initialsFrom(t.peerDisplayName || t.peerNumber)}
-                            </div>
-                            {/* Presence LED: green = online, grey = offline
-                                (red used to read as "busy/error" — v2.88). */}
-                            <span
-                              aria-label={t.peerIsOnline ? "Online" : "Offline"}
-                              className={
-                                "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
-                                (t.peerIsOnline
-                                  ? "bg-[color:var(--relay-online)]"
-                                  : "bg-[color:var(--relay-offline)]")
-                              }
-                            />
-                          </>
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="font-medium truncate flex items-center gap-1.5">
-                            {isThreadMuted(t.conversationId) && (
-                              <BellOff className="size-3.5 shrink-0 text-muted-foreground" />
-                            )}
-                            <span className="truncate">{t.peerDisplayName || t.peerNumber}</span>
-                            {t.peerVerified && <VerifiedBadge size={14} />}
-                          </div>
-                          {t.lastMessageAt && (
-                            <div className="text-xs text-muted-foreground shrink-0">
-                              {timeAgo(t.lastMessageAt)}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex items-center justify-between gap-2 mt-0.5">
-                          {typingConvos.includes(t.conversationId) ? (
-                            <div className="text-xs font-medium text-[color:var(--relay-online)] truncate animate-pulse">
-                              typing…
-                            </div>
-                          ) : (
-                            <div className="text-xs text-muted-foreground truncate">
-                              {t.lastMessageAt ? previewOf(t.lastMessageKind ?? "text", t.lastMessageBody) : "No messages yet"}
-                            </div>
-                          )}
-                          {t.unreadCount > 0 && (
-                            <span className="inline-flex min-w-5 h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-xs items-center justify-center font-bold shrink-0">
-                              {t.unreadCount > 99 ? "99+" : t.unreadCount}
-                            </span>
-                          )}
-                        </div>
-                      </div>
+                      {open ? (
+                        <ChevronDown className="size-3.5 shrink-0" />
+                      ) : (
+                        <ChevronRight className="size-3.5 shrink-0" />
+                      )}
+                      <span className="grid place-items-center" style={{ color: cat.hex }}>
+                        {cat.icon}
+                      </span>
+                      <span className="flex-1 text-left text-[11px] font-bold uppercase tracking-[0.12em]">
+                        {cat.label}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">{cat.rows.length}</span>
+                      {catUnread && (
+                        <span className="size-2 rounded-full" style={{ background: "#fb923c" }} />
+                      )}
                     </button>
-                  </li>
+                    {open &&
+                      cat.rows.map((t) => {
+                        const isActive = activeConvoId === t.conversationId;
+                        const isDm = t.kind !== "group" && !(me && t.peerIdentityId === me.id);
+                        return (
+                          <div
+                            key={t.conversationId}
+                            className={
+                              "flex items-center gap-2.5 px-4 md:px-5 py-2 border-b border-border last:border-b-0 transition-colors " +
+                              (isActive ? "bg-muted/40" : "hover:bg-muted/30")
+                            }
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setLocation(`/app/messages?c=${t.conversationId}`)}
+                              className="flex-1 min-w-0 flex items-center gap-3 text-left"
+                            >
+                              <div className="relative shrink-0">
+                                {t.kind === "group" ? (
+                                  <div
+                                    className="size-[42px] rounded-full grid place-items-center"
+                                    style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
+                                    aria-label="Group conversation"
+                                  >
+                                    <Users className="size-5" />
+                                  </div>
+                                ) : me && t.peerIdentityId === me.id ? (
+                                  <div
+                                    className="size-[42px] rounded-full grid place-items-center"
+                                    style={{ background: "rgba(251,191,36,.16)", color: "#fbbf24" }}
+                                    aria-label="Notes to yourself"
+                                  >
+                                    <StickyNote className="size-5" />
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div className="size-[42px] rounded-full bg-primary/15 grid place-items-center text-primary font-bold text-sm">
+                                      {initialsFrom(t.peerDisplayName || t.peerNumber)}
+                                    </div>
+                                    {/* Presence LED: green = online, grey = offline
+                                        (red used to read as "busy/error" — v2.88). */}
+                                    <span
+                                      aria-label={t.peerIsOnline ? "Online" : "Offline"}
+                                      className={
+                                        "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
+                                        (t.peerIsOnline
+                                          ? "bg-[color:var(--relay-online)]"
+                                          : "bg-[color:var(--relay-offline)]")
+                                      }
+                                    />
+                                  </>
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="font-semibold text-[14.5px] truncate flex items-center gap-1.5">
+                                    {isThreadMuted(t.conversationId) && (
+                                      <BellOff className="size-3.5 shrink-0 text-muted-foreground" />
+                                    )}
+                                    <span className="truncate">{t.peerDisplayName || t.peerNumber}</span>
+                                    {t.peerVerified && <VerifiedBadge size={14} />}
+                                  </div>
+                                  {t.lastMessageAt && (
+                                    <div className="text-[10.5px] font-mono text-muted-foreground shrink-0">
+                                      {timeAgo(t.lastMessageAt)}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="mt-0.5">
+                                  {typingConvos.includes(t.conversationId) ? (
+                                    <div className="text-xs font-medium text-[color:var(--relay-online)] truncate animate-pulse">
+                                      typing…
+                                    </div>
+                                  ) : (
+                                    <div className="text-[12.5px] text-muted-foreground truncate">
+                                      {t.lastMessageAt ? previewOf(t.lastMessageKind ?? "text", t.lastMessageBody) : "No messages yet"}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </button>
+                            {/* Quick actions: message (orange) + DM voice (green) / video (blue). */}
+                            <div className="flex items-center gap-1 shrink-0">
+                              {t.unreadCount > 0 && (
+                                <span
+                                  className="inline-flex min-w-[18px] h-[18px] px-1.5 rounded-full text-white text-[10px] items-center justify-center font-extrabold"
+                                  style={{ background: "linear-gradient(135deg,#fb923c,#c2410c)" }}
+                                >
+                                  {t.unreadCount > 99 ? "99+" : t.unreadCount}
+                                </span>
+                              )}
+                              <AccentCircle
+                                rgb="251,146,60"
+                                hex="#fb923c"
+                                title="Message"
+                                onClick={() => setLocation(`/app/messages?c=${t.conversationId}`)}
+                              >
+                                <MessageSquare className="size-3.5" />
+                              </AccentCircle>
+                              {isDm && (
+                                <>
+                                  <AccentCircle
+                                    rgb="34,197,94"
+                                    hex="#22c55e"
+                                    title="Voice call"
+                                    onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(t.peerNumber)}&voice=1`)}
+                                  >
+                                    <Phone className="size-3.5" />
+                                  </AccentCircle>
+                                  <AccentCircle
+                                    rgb="56,189,248"
+                                    hex="#38bdf8"
+                                    title="Video call"
+                                    onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(t.peerNumber)}&video=1`)}
+                                  >
+                                    <Video className="size-3.5" />
+                                  </AccentCircle>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </section>
                 );
               })}
-            </ul>
+            </div>
           )}
         </div>
       </aside>
@@ -710,18 +838,22 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       {/* conversation header — ONE compact bar (the app's top bar is hidden on
           mobile while a chat is open): back, avatar + presence LED, name +
           verified badge, and a live status line (typing… > online > last seen). */}
-      <header className="flex items-center gap-2.5 px-2 md:px-4 py-2 border-b border-border/70 bg-card/90 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur-md md:rounded-t-2xl">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="md:hidden size-8"
+      <header className="flex items-center gap-2 px-2 md:px-4 py-2 border-b border-border/70 bg-card/90 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur-md md:rounded-t-2xl">
+        <button
+          type="button"
+          aria-label="Back"
+          className="md:hidden grid place-items-center size-8 shrink-0 hover:brightness-110"
+          style={{ color: "#52e3d0" }}
           onClick={() => setLocation("/app/messages")}
         >
-          <ArrowLeft className="size-5" />
-        </Button>
+          <ChevronLeft className="size-6" />
+        </button>
         <div className="relative shrink-0">
           {isGroup ? (
-            <div className="size-9 rounded-full bg-accent/15 grid place-items-center text-accent">
+            <div
+              className="size-9 rounded-full grid place-items-center"
+              style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
+            >
               <Users className="size-4.5" />
             </div>
           ) : (
@@ -768,7 +900,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           onClick={() => setMuted(!muted)}
           aria-label={muted ? "Unmute conversation" : "Mute conversation"}
           title={muted ? "Muted — tap to unmute" : "Mute notifications"}
-          className={muted ? "text-muted-foreground" : ""}
+          className={"size-8 shrink-0 " + (muted ? "text-muted-foreground" : "")}
         >
           {muted ? <BellOff className="size-5" /> : <Bell className="size-5" />}
         </Button>
@@ -778,19 +910,31 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
           aria-label={searchOpen ? "Close search" : "Search this conversation"}
           title={searchOpen ? "Close search" : "Search messages"}
-          className={searchOpen ? "text-primary" : ""}
+          className={"size-8 shrink-0 " + (searchOpen ? "text-primary" : "")}
         >
           {searchOpen ? <X className="size-5" /> : <Search className="size-5" />}
         </Button>
         {!isGroup && thread?.peerNumber && (
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(thread.peerNumber)}&voice=1`)}
-            aria-label="Call"
-          >
-            <Phone className="size-5" />
-          </Button>
+          <>
+            <AccentCircle
+              rgb="34,197,94"
+              hex="#22c55e"
+              title="Voice call"
+              size={34}
+              onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(thread.peerNumber)}&voice=1`)}
+            >
+              <Phone className="size-4" />
+            </AccentCircle>
+            <AccentCircle
+              rgb="56,189,248"
+              hex="#38bdf8"
+              title="Video call"
+              size={34}
+              onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(thread.peerNumber)}&video=1`)}
+            >
+              <Video className="size-4" />
+            </AccentCircle>
+          </>
         )}
       </header>
 
@@ -839,11 +983,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   return (
                     <div key={m.id} className={"flex " + (mine ? "justify-end" : "justify-start")}>
                       <div
+                        style={mine ? OWN_BUBBLE_STYLE : undefined}
                         className={
                           "max-w-[85%] rounded-2xl px-3.5 py-2 text-sm break-words shadow-sm border " +
-                          (mine
-                            ? "bg-[color:var(--relay-online,#06d6a0)]/85 text-[#04201b] border-white/20"
-                            : "bg-muted/70 text-foreground border-white/10")
+                          (mine ? "" : "bg-muted/70 text-foreground border-white/10")
                         }
                       >
                         {isGroup && !mine && (
@@ -865,7 +1008,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         {m.body && (
                           <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body)}</div>
                         )}
-                        <div className={"text-[10px] mt-1 " + (mine ? "text-[#04201b]/60" : "text-muted-foreground")}>
+                        <div className={"text-[10px] mt-1 " + (mine ? "text-white/70" : "text-muted-foreground")}>
                           {formatTime(m.createdAt)}
                         </div>
                       </div>
@@ -954,14 +1097,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   }
                   return (
                 <div
+                  style={mine ? OWN_BUBBLE_STYLE : undefined}
                   className={
                     "max-w-[75%] rounded-2xl px-3 py-1.5 text-sm break-words shadow-sm border " +
-                    // Elegant, slightly glassy frames: yours = translucent brand
-                    // green; theirs = neutral translucent surface (iMessage-style
-                    // gray) instead of the old hard-coded loud blue.
-                    (mine
-                      ? "bg-[color:var(--relay-online,#06d6a0)]/85 text-[#04201b] border-white/20 "
-                      : "bg-muted/70 text-foreground border-white/10 ") + tail
+                    // Own bubbles carry the brand "message" orange gradient (see
+                    // OWN_BUBBLE_STYLE); received bubbles keep the neutral
+                    // translucent token surface (iMessage-style gray) instead of
+                    // the old hard-coded loud blue.
+                    (mine ? "" : "bg-muted/70 text-foreground border-white/10 ") + tail
                   }
                 >
                   {isGroup && !mine && !sameAsPrev && (
@@ -974,7 +1117,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       className={
                         "mb-1 rounded-lg border-l-2 pl-2 py-0.5 text-[11px] leading-tight " +
                         (mine
-                          ? "border-[#04201b]/40 bg-[#04201b]/10 text-[#04201b]/80"
+                          ? "border-white/50 bg-white/15 text-white/90"
                           : "border-foreground/30 bg-foreground/10 text-foreground/80")
                       }
                     >
@@ -988,7 +1131,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     <div
                       className={
                         "mb-0.5 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide " +
-                        (mine ? "text-[#04201b]/70" : "text-primary")
+                        (mine ? "text-white/80" : "text-primary")
                       }
                     >
                       <Voicemail className="size-3.5" /> Voicemail
@@ -1012,7 +1155,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   <div
                     className={
                       "flex justify-end items-center gap-1 text-[10px] leading-none mt-0.5 -mb-0.5 " +
-                      (mine ? "text-[#04201b]/60" : "text-muted-foreground")
+                      (mine ? "text-white/70" : "text-muted-foreground")
                     }
                   >
                     {formatTime(m.createdAt)}
@@ -1074,10 +1217,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       {/* composer */}
       <div className="px-3 md:px-5 py-3 border-t border-border bg-card md:rounded-b-2xl">
         {replyingTo && (
-          <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-muted/60 border-l-2 border-accent text-sm">
-            <Reply className="size-4 shrink-0 text-accent" />
+          <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-muted/60 border-l-2 border-[#fb923c] text-sm">
+            <Reply className="size-4 shrink-0 text-[#fb923c]" />
             <div className="flex-1 min-w-0">
-              <div className="text-[11px] font-semibold text-accent">
+              <div className="text-[11px] font-semibold text-[#fb923c]">
                 Replying to {senderLabel(replyingTo.senderIdentityId)}
               </div>
               <div className="truncate text-xs text-muted-foreground">{previewOf(replyingTo)}</div>
@@ -1171,7 +1314,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             onPaste={handlePaste}
             placeholder={uploading ? "Uploading…" : "Type a message"}
             disabled={uploading || recording}
-            className="flex-1 h-11"
+            className="flex-1 h-11 rounded-full px-4"
           />
           {text.trim() || pendingUpload ? (
             <Button
@@ -1179,7 +1322,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               onClick={send}
               disabled={sendMutation.isPending || uploading}
               size="icon"
-              className="h-11 w-11 rounded-full"
+              className="h-11 w-11 rounded-full border-0"
+              style={{ background: "linear-gradient(135deg,#fb923c,#c2410c)", color: "#fff" }}
               aria-label="Send"
             >
               <Send className="size-4" />
@@ -1190,7 +1334,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               onClick={recording ? stopRecording : startRecording}
               variant={recording ? "destructive" : "default"}
               size="icon"
-              className="h-11 w-11 rounded-full"
+              className="h-11 w-11 rounded-full border-0"
+              style={recording ? undefined : { background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)", color: "#08211d" }}
               aria-label={recording ? "Stop" : "Record"}
               disabled={!recorderSupported()}
               title={
@@ -1235,6 +1380,44 @@ function ConversationView({ conversationId }: { conversationId: number }) {
 }
 
 /* ────────────────────────────────────────────────────────────── */
+
+/** Small circular gradient action button used by thread rows + the conversation
+ *  header. The accent is passed as an "r,g,b" tint plus its solid hex so the
+ *  brand colours stay consistent (message=orange, voice=green, video=blue). */
+function AccentCircle({
+  rgb,
+  hex,
+  title,
+  onClick,
+  size = 32,
+  children,
+}: {
+  rgb: string;
+  hex: string;
+  title: string;
+  onClick: () => void;
+  size?: number;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className="grid place-items-center rounded-full shrink-0 transition-[filter] hover:brightness-110"
+      style={{
+        width: size,
+        height: size,
+        background: `linear-gradient(160deg, rgba(${rgb},.26), rgba(${rgb},.08))`,
+        color: hex,
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,.15)",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
 
 /** Three-dot context menu for a message (Reply / Copy / Delete). Always tappable
  *  on mobile (the old hover-only buttons were invisible on touch). */
@@ -1472,9 +1655,20 @@ function NewMessageDialog() {
 
   return (
     <>
-      <Button size="icon" variant="ghost" onClick={() => setOpen(true)} aria-label="New message">
-        <MessageSquarePlus className="size-5" />
-      </Button>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label="New message"
+        title="New message"
+        className="grid place-items-center w-[34px] h-[34px] rounded-[10px] shrink-0 hover:brightness-110"
+        style={{
+          background: "linear-gradient(160deg,rgba(251,146,60,.3),rgba(251,146,60,.1))",
+          color: "#fb923c",
+          boxShadow: "inset 0 1px 0 rgba(255,255,255,.15)",
+        }}
+      >
+        <MessageSquarePlus className="size-[18px]" />
+      </button>
       {open && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={resetAll}>
           <div
