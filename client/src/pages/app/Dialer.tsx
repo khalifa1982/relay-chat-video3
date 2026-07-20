@@ -533,33 +533,33 @@ export default function DialerPage() {
                   type="button"
                   onClick={() => tap(k.d)}
                   className="
-                    relative rounded-[22px]
+                    relay-key relative rounded-[22px]
                     bg-secondary/70 dark:bg-secondary/40
                     backdrop-blur-md
                     text-secondary-foreground
                     border border-border/40
-                    flex flex-col items-center justify-center
+                    flex items-center justify-center
                     select-none
                     transition-[transform,background-color] duration-150
                     active:scale-[0.94]
                     hover:bg-secondary/90 dark:hover:bg-secondary/60
                   "
-                  style={{ transitionTimingFunction: "var(--ease-out)" }}
+                  style={{
+                    transitionTimingFunction: "var(--ease-out)",
+                    // Prototype's raised-glass key: a hairline top-light + soft
+                    // drop for depth. Theme-safe (white inset reads on both).
+                    boxShadow:
+                      "inset 0 1px 0 rgba(255,255,255,.14), 0 4px 12px rgba(0,0,0,.22)",
+                  }}
                 >
+                  {/* RELAY numbers are 6-digit numeric — the prototype drops the
+                      T9 letter sublabels for a cleaner, number-first keypad. */}
                   <span
-                    className="font-mono font-semibold leading-none"
-                    style={{ fontSize: "clamp(1.15rem, 4.2vw, 1.6rem)" }}
+                    className="font-mono font-medium leading-none"
+                    style={{ fontSize: "clamp(1.3rem, 5vw, 1.85rem)" }}
                   >
                     {k.d}
                   </span>
-                  {k.sub ? (
-                    <span
-                      className="text-muted-foreground tracking-[0.18em] mt-0.5 uppercase"
-                      style={{ fontSize: "clamp(0.5rem, 1.3vw, 0.62rem)" }}
-                    >
-                      {k.sub}
-                    </span>
-                  ) : null}
                 </button>
               ))}
             </div>
@@ -585,10 +585,12 @@ export default function DialerPage() {
                       active:scale-[0.94] transition-transform duration-150
                     "
                     style={{
-                      width: "clamp(54px, 13vw, 64px)",
-                      height: "clamp(54px, 13vw, 64px)",
-                      background: "#2563eb",
-                      boxShadow: "0 10px 28px -8px color-mix(in oklab, #2563eb 70%, transparent)",
+                      width: "clamp(56px, 14vw, 66px)",
+                      height: "clamp(56px, 14vw, 66px)",
+                      // Prototype convention: voice/call = green (primary action).
+                      background: "linear-gradient(135deg,#22c55e,#15803d)",
+                      boxShadow:
+                        "0 10px 26px -8px color-mix(in oklab, #22c55e 65%, transparent), inset 0 2px 0 rgba(255,255,255,.3)",
                       transitionTimingFunction: "var(--ease-out)",
                     }}
                     aria-label={previewIsLine ? "Join the party line" : "Voice call"}
@@ -612,10 +614,12 @@ export default function DialerPage() {
                       active:scale-[0.94] transition-transform duration-150
                     "
                     style={{
-                      width: "clamp(54px, 13vw, 64px)",
-                      height: "clamp(54px, 13vw, 64px)",
-                      background: "var(--relay-online, #06d6a0)",
-                      boxShadow: "0 10px 28px -8px color-mix(in oklab, var(--relay-online,#06d6a0) 70%, transparent)",
+                      width: "clamp(56px, 14vw, 66px)",
+                      height: "clamp(56px, 14vw, 66px)",
+                      // Prototype convention: video = blue/sky.
+                      background: "linear-gradient(135deg,#38bdf8,#0369a1)",
+                      boxShadow:
+                        "0 10px 26px -8px color-mix(in oklab, #38bdf8 60%, transparent), inset 0 2px 0 rgba(255,255,255,.3)",
                       transitionTimingFunction: "var(--ease-out)",
                     }}
                     aria-label="Video call"
@@ -635,10 +639,12 @@ export default function DialerPage() {
                       active:scale-[0.94] transition-transform duration-150
                     "
                     style={{
-                      width: "clamp(54px, 13vw, 64px)",
-                      height: "clamp(54px, 13vw, 64px)",
-                      background: "#8b5cf6",
-                      boxShadow: "0 10px 28px -8px color-mix(in oklab, #8b5cf6 70%, transparent)",
+                      width: "clamp(56px, 14vw, 66px)",
+                      height: "clamp(56px, 14vw, 66px)",
+                      // Prototype convention: group/contacts = violet.
+                      background: "linear-gradient(135deg,#a78bfa,#7c3aed)",
+                      boxShadow:
+                        "0 10px 26px -8px color-mix(in oklab, #7c3aed 60%, transparent), inset 0 2px 0 rgba(255,255,255,.3)",
                       transitionTimingFunction: "var(--ease-out)",
                     }}
                     aria-label="Group call"
