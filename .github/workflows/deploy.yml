@@ -72,8 +72,24 @@ jobs:
               "[ -f /home/relay/app/ecosystem.config.cjs ] && cp /home/relay/app/ecosystem.config.cjs /home/relay/ecosystem.config.cjs && chown relay:relay /home/relay/ecosystem.config.cjs || true",
               "sudo -u relay bash -lc \"cd /home/relay/app && pnpm install --prod --frozen-lockfile\"",
               "sudo -u relay bash -lc \"pm2 reload relay 2>/dev/null || pm2 start /home/relay/ecosystem.config.cjs\"",
-              "sleep 3 && curl -sf http://localhost:3000/api/health && echo HEALTH_OK"
+              "for i in 1 2 3 4 5 6 7 8 9 10; do sleep 3; curl -sf http://localhost:3000/api/health && echo HEALTH_OK && exit 0; done; echo HEALTH_FAILED; pm2 logs relay --lines 40 --nostream; exit 1"
             ]' \
             --query 'Command.CommandId' --output text)
           echo "Deploy command: $CMD"
-          aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status'
+          # WAIT for every server and surface its output — a dispatched-but-
+          # failed deploy must fail THIS job, not report green (502 debugging).
+          for i in $(seq 1 60); do
+            STATUSES=$(aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status' --output text)
+            echo "[$i] $STATUSES"
+            case "$STATUSES" in
+              *InProgress*|*Pending*|"") sleep 10 ;;
+              *) break ;;
+            esac
+          done
+          aws ssm list-command-invocations --command-id "$CMD" --details \
+            --query 'CommandInvocations[].{Instance:InstanceId,Status:Status,Output:CommandPlugins[0].Output}' \
+            --output json | head -c 6000
+          FINAL=$(aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status' --output text)
+          echo "final: $FINAL"
+          [ -n "$FINAL" ] || { echo "no instances ran the command — check the relay-app tag + SSM agent"; exit 1; }
+          case "$FINAL" in *Failed*|*TimedOut*|*Cancelled*) exit 1 ;; esac
