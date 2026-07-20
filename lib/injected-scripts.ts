@@ -71,6 +71,15 @@ export const CALL_WATCH_JS = `(() => {
     var wasRinging = false;
     // Track whether we already forced speaker for this call session
     var speakerForced = false;
+    // Startup grace period: suppress ring detection for the first 4 seconds
+    // after script injection to avoid false positives during initial page render.
+    var startupTime = Date.now();
+    var STARTUP_GRACE_MS = 4000;
+    // Debounce: require ringing to be detected on 2 consecutive cycles before
+    // actually firing the notification. This prevents transient DOM states from
+    // triggering false alarms.
+    var ringDebounceCount = 0;
+    var RING_DEBOUNCE_THRESHOLD = 2;
 
     var post = function () {
       try {
@@ -132,37 +141,94 @@ export const CALL_WATCH_JS = `(() => {
     };
 
     // --- Incoming-call (ringing) detection ---
+    // FIXED: The old logic was too broad — it matched "is calling" or "incoming call"
+    // text anywhere on the page (including the normal dialer UI labels like
+    // "Voice Call", "Video Call"). Now we require STRONG evidence:
+    //  1. A dedicated incoming-call DOM element (accept/decline buttons, modal overlay)
+    //  2. OR specific "X is calling you" / "incoming call from X" text patterns
+    //     that are distinct from static UI labels.
+    // Additionally, we suppress detection during the startup grace period and
+    // require 2 consecutive positive detections (debounce) before firing.
     var detectRinging = function () {
       try {
-        var text = (document.body && document.body.innerText || '').toLowerCase();
-        var hasIncoming =
-          /incoming call|is calling|incoming voice|incoming video/.test(text);
-        var hasAccept = !!document.querySelector(
-          '[data-incoming-call], [data-call-accept], .incoming-call, .call-incoming'
+        // Startup grace: don't detect ringing in the first few seconds after load
+        if (Date.now() - startupTime < STARTUP_GRACE_MS) return;
+
+        // If a call is already active, there's no "incoming" ring.
+        if (state.active) {
+          if (state.ringing) setRinging(false, null);
+          ringDebounceCount = 0;
+          return;
+        }
+
+        // STRONG signal: dedicated incoming-call DOM elements with accept/decline actions.
+        // These are specific modal/overlay elements that ONLY appear during a real incoming call.
+        var hasCallModal = !!document.querySelector(
+          '[data-incoming-call], [data-call-accept], [data-call-decline], ' +
+          '.incoming-call-overlay, .incoming-call-modal, ' +
+          '.call-incoming[data-ringing], .ringing-overlay, ' +
+          'button[data-action="accept-call"], button[data-action="decline-call"]'
         );
-        var ringing = hasIncoming || hasAccept;
-        if (state.active) ringing = false;
+
+        // MEDIUM signal: text patterns that are specific to an active ringing state
+        // (not generic UI labels like "Voice Call" or "Video Call").
+        var body = (document.body && document.body.innerText || '');
+        // Only match dynamic text like "John is calling..." or "Incoming call from John"
+        // Exclude static labels by requiring a name before "is calling" or after "from"
+        var hasRingingText = /\bis calling\.{0,3}$|\bis calling you|incoming call from\s+\S/im.test(body);
+
+        // We need the call modal OR very specific ringing text.
+        // The text-only signal requires an additional check: there must be
+        // accept/decline-like buttons visible (not just static page text).
+        var hasActionButtons = !!document.querySelector(
+          'button[class*="accept"], button[class*="answer"], ' +
+          'button[class*="decline"], button[class*="reject"], ' +
+          '[role="button"][class*="accept"], [role="button"][class*="answer"], ' +
+          '[data-call-accept], [data-call-decline], ' +
+          '.accept-btn, .answer-btn, .decline-btn, .reject-btn'
+        );
+
+        var ringing = hasCallModal || (hasRingingText && hasActionButtons);
+
+        // Debounce: require multiple consecutive positive detections
+        if (ringing) {
+          ringDebounceCount++;
+          if (ringDebounceCount < RING_DEBOUNCE_THRESHOLD) return;
+        } else {
+          ringDebounceCount = 0;
+          if (state.ringing) setRinging(false, null);
+          return;
+        }
+
+        // Extract caller name from dedicated elements or text patterns
         var caller = null;
         var nameEl = document.querySelector(
-          '[data-caller-name], [data-incoming-call] .caller-name, .incoming-call .caller-name, .call-incoming .caller'
+          '[data-caller-name], [data-incoming-call] .caller-name, ' +
+          '.incoming-call-overlay .caller-name, .incoming-call-modal .caller-name, ' +
+          '.call-incoming .caller, .ringing-overlay .caller-name'
         );
         if (nameEl) {
           caller = (nameEl.getAttribute('data-caller-name') || nameEl.textContent || '').trim() || null;
         }
         if (!caller) {
-          var body = (document.body && document.body.innerText || '');
           var patterns = [
-            /([\u0600-\u06FF\\w .'+-]{1,40})\\s+is calling/i,
-            /incoming (?:voice |video )?call from\\s+([\u0600-\u06FF\\w .'+-]{1,40})/i,
-            /call from\\s+([\u0600-\u06FF\\w .'+-]{1,40})/i,
-            /([\u0600-\u06FF\\w .'+-]{1,40})\\s+wants to (?:talk|call)/i,
+            /([\u0600-\u06FF\w .'+-]{2,40})\s+is calling/i,
+            /incoming (?:voice |video )?call from\s+([\u0600-\u06FF\w .'+-]{2,40})/i,
+            /call from\s+([\u0600-\u06FF\w .'+-]{2,40})/i,
           ];
           for (var pi = 0; pi < patterns.length; pi++) {
             var mm = body.match(patterns[pi]);
-            if (mm && mm[1]) { caller = mm[1].trim(); break; }
+            if (mm && mm[1]) {
+              var candidate = mm[1].trim();
+              // Filter out false matches from static UI ("Voice", "Video", "Group")
+              if (!/^(voice|video|group|incoming|relay)$/i.test(candidate)) {
+                caller = candidate;
+                break;
+              }
+            }
           }
         }
-        setRinging(ringing, caller);
+        setRinging(true, caller);
       } catch (e) {}
     };
 

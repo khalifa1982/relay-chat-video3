@@ -166,3 +166,11 @@
 - [x] Updated NSCameraUsageDescription with detailed explanation + specific example of video call usage
 - [x] Updated expo-audio plugin microphonePermission string with full explanation + example
 - [x] tsc clean + 65 tests pass; checkpoint and deliver
+
+## Round 17 — Fix false "Incoming RELAY call" notification on iOS app open
+- [x] Root cause: detectRinging() regex was too broad — matched "is calling" in static UI labels like "Voice Call" button text
+- [x] Fix: Now requires BOTH specific ringing text patterns AND accept/decline DOM elements (buttons/modals) to be present
+- [x] Added 4-second startup grace period: suppresses ring detection during initial page render
+- [x] Added debounce: requires 2 consecutive positive detection cycles before firing the notification
+- [x] Added caller name filtering to exclude false matches ("Voice", "Video", "Group", "Incoming", "RELAY")
+- [x] tsc clean + 65 tests pass; checkpoint and deliver
