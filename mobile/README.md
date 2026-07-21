@@ -115,7 +115,7 @@ mobile/
 ├── native/             ★ THE NATIVE REWRITE (React Native, M1) — compiled
 │                         UI, typed client to the existing API, no webview
 ├── app/                The shared Capacitor project (one config, two platforms)
-│   ├── capacitor.config.json   (loads https://www.your-chat.org/app)
+│   ├── capacitor.config.json   (loads https://your-chat.io/app)
 │   ├── android/        ★ NATIVE Android app (v2.86) — Capacitor + native call
 │   │                     layer: full-screen incoming ring, OS speakerphone,
 │   │                     ongoing-call foreground service, FCM push
@@ -203,13 +203,13 @@ In Manus **Settings → Secrets** add:
 TWA_SHA256_FINGERPRINTS = AA:BB:...:11, CC:DD:...:22   ← both, comma-separated
 ```
 (`TWA_PACKAGE_NAME` only if you changed the package id.) Publish the app from
-Manus, then verify `https://www.your-chat.org/.well-known/assetlinks.json`
+Manus, then verify `https://your-chat.io/.well-known/assetlinks.json`
 returns them. Until then the Android app works but shows Chrome's URL bar.
 
 ### 3.4 **[YOU]** Store listing
 - Screenshots: phone 1080×1920+ (Dialer, in-call, Messages, Contacts, History).
 - Feature graphic 1024×500, icon 512×512 (export `client/public/icon.svg`).
-- Privacy policy URL: `https://www.your-chat.org/privacy-policy` (already live).
+- Privacy policy URL: `https://your-chat.io/privacy-policy` (already live).
 - Data-safety form: collects display name, optional email; camera/mic used for
   calls, not recorded server-side by default; messages stored to deliver them.
 - Content rating questionnaire → communication app.

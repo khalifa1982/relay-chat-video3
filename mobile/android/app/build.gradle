@@ -1,5 +1,5 @@
 // RELAY — Trusted Web Activity (TWA): the store-grade Android shell around the
-// live web app. It launches https://www.your-chat.org/app inside REAL Chrome
+// live web app. It launches https://your-chat.io/app inside REAL Chrome
 // (full WebRTC, Web Push, autoplay + permission behavior identical to the
 // browser) with no browser UI once Digital Asset Links verify — see
 // server/wellKnown.ts and mobile/README.md. This is Google's recommended way
@@ -25,8 +25,8 @@ android {
         // The origin this app is bound to. Change here AND in strings.xml
         // (asset_statements) if the canonical domain ever moves.
         manifestPlaceholders = [
-            hostName: "www.your-chat.org",
-            defaultUrl: "https://www.your-chat.org/app",
+            hostName: "your-chat.io",
+            defaultUrl: "https://your-chat.io/app",
         ]
     }
 

@@ -10,11 +10,11 @@ import superjson from "superjson";
 import { getDeviceId } from "./deviceId";
 
 /** The live backend. Point at a preview deployment for testing if needed. */
-// APEX host, deliberately: www.your-chat.org answers 301 → your-chat.org,
-// and tRPC mutations are POSTs — they don't survive a redirect (the field
-// bug behind "Couldn't reach RELAY" on a phone with working internet).
-// Verified live: startGuest/whoami/relay-SSE/v2-events all 200 on the apex.
-export const BASE_URL = "https://your-chat.org";
+// APEX host of the PRIMARY deployment. .org (Manus) was emptied by the owner
+// (2026-07-21) — .io (AWS) is now the only backend. Use the apex: a www 301
+// would break tRPC POSTs (the old "Couldn't reach RELAY" field bug).
+// Everything (tRPC, SSE signaling, v2 events, uploads) derives from this.
+export const BASE_URL = "https://your-chat.io";
 
 const client = createTRPCUntypedClient({
   links: [

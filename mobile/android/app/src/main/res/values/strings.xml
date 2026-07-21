@@ -7,7 +7,7 @@
             \"relation\": [\"delegate_permission/common.handle_all_urls\"],
             \"target\": {
                 \"namespace\": \"web\",
-                \"site\": \"https://www.your-chat.org\"
+                \"site\": \"https://your-chat.io\"
             }
         }]
     </string>

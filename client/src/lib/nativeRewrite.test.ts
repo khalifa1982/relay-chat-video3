@@ -25,8 +25,8 @@ describe("native rewrite — M1 foundation", () => {
     expect(api).toContain("/api/trpc");
     // APEX host only — the www subdomain 301s and POST mutations die on the
     // redirect ("Couldn't reach RELAY" in the field with working internet).
-    expect(api).toContain('BASE_URL = "https://your-chat.org"');
-    expect(api).not.toContain('"https://www.your-chat.org"');
+    expect(api).toContain('BASE_URL = "https://your-chat.io"'); // .org retired 2026-07-21 — .io is the only backend
+    expect(api).not.toContain('"https://www.your-chat.io"');
     expect(api).toMatch(/transformer: superjson/);
     expect(api).toMatch(/x-relay-device-id/);
     expect(api).toMatch(/identity\.startGuest|"identity\.whoami"/);

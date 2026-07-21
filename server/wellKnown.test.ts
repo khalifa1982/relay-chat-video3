@@ -47,13 +47,13 @@ describe("mobile shells — repo wiring", () => {
     expect(read("server/_core/index.ts")).toMatch(/registerWellKnown\(app\)/);
     const gradle = read("mobile/android/app/build.gradle");
     expect(gradle).toContain(`applicationId "${DEFAULT_TWA_PACKAGE}"`);
-    expect(gradle).toContain("https://www.your-chat.org/app");
-    expect(read("mobile/android/app/src/main/res/values/strings.xml")).toContain("https://www.your-chat.org");
+    expect(gradle).toContain("https://your-chat.io/app");
+    expect(read("mobile/android/app/src/main/res/values/strings.xml")).toContain("https://your-chat.io");
   });
 
   it("the iOS shell loads the live app and carries the call-critical Info.plist keys", () => {
     const cap = read("mobile/app/capacitor.config.json");
-    expect(cap).toContain('"url": "https://www.your-chat.org/app"');
+    expect(cap).toContain('"url": "https://your-chat.io/app"');
     const plist = read("mobile/app/ios/App/App/Info.plist");
     expect(plist).toContain("NSCameraUsageDescription");
     expect(plist).toContain("NSMicrophoneUsageDescription");

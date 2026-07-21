@@ -9,14 +9,14 @@
  *   6. signaling round-trip: POST /api/relay/send `register` (the RTT that
  *      paces call setup)
  *
- * Usage:  node scripts/latency.mjs https://your-chat.org [runs=8]
+ * Usage:  node scripts/latency.mjs https://your-chat.io [runs=8]
  * Same harness against both domains = the .org (Manus) vs .io (AWS Mumbai)
  * comparison. Results are per-vantage-point — run it from where users are.
  */
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 
-const BASE = (process.argv[2] || "https://your-chat.org").replace(/\/$/, "");
+const BASE = (process.argv[2] || "https://your-chat.io").replace(/\/$/, "");
 const RUNS = Number(process.argv[3] || 8);
 
 const ms = (s) => Math.round(Number(s) * 1000);

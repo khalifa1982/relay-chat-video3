@@ -4160,3 +4160,21 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       the status endpoints to answer; the code is ready + typechecked.
 - [ ] Not mirrored to RN (needs native deps + device build): the canvas glyph-rain matrix backdrop
       (needs Skia), in-app video/audio status playback (needs react-native-video). Deferred, documented.
+
+## v2.95.4 — .org RETIRED, .io is the ONLY deployment (owner decision, 2026-07-21)
+- [x] Owner emptied the Manus/.org server entirely — your-chat.io (AWS) is now the primary and
+      ONLY backend. Repointed every live .org reference:
+      • mobile/native BASE_URL → https://your-chat.io (repoints tRPC + SSE signaling + v2 events +
+        uploads together — the whole RN app derives from it). RN tsc clean; CI rebuilds the APK.
+      • mobile/app Capacitor config (source + android/ios synced copies) → your-chat.io/app;
+        dropped the manus.space allowNavigation entry.
+      • mobile/android TWA hostName/defaultUrl/strings/deep-links → your-chat.io.
+      • scripts/latency.mjs default target → .io.
+      • CLAUDE.md (TL;DR + Deploying) + deploy.yml comments: .io auto-deploy is THE deploy flow;
+        the Manus Publish flow is retired — never target .org/manus.space again.
+- [x] Web app itself needed ZERO code changes (env/Host-driven since v2.92 R4B — the retirement
+      validates that design). Remaining .org strings are test fixtures only.
+- [ ] [YOU] Store note: previously-shipped APKs/TWAs point at the dead .org — users need the
+      rebuilt versionCode-3 artifacts (CI: RELAY-RN + TWA workflows) uploaded to Play.
+      [YOU] .io .env: set TWA_SHA256_FINGERPRINTS (assetlinks now served from .io) and confirm
+      INBOUND_EMAIL_* / RESEND_FROM / SMTP_FROM use a domain you still control.

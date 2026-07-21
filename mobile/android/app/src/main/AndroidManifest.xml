@@ -47,7 +47,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Deep links: opening https://www.your-chat.org/* lands in the app
+            <!-- Deep links: opening https://your-chat.io/* lands in the app
                  once assetlinks verify. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />

@@ -1,10 +1,10 @@
 # .github/workflows/deploy.yml — RELAY deploy to self-hosted AWS (your-chat.io)
 #
-# This deploys the SAME main branch that Manus serves as your-chat.org to a
-# self-hosted AWS fleet serving your-chat.io — for latency/perf testing. The
+# This deploys main to the PRIMARY (and only) deployment: the self-hosted AWS
+# fleet serving your-chat.io. (The former Manus/.org deploy was retired.) The
 # app is domain-agnostic (it serves whatever Host it runs under + APP_URL env),
-# so NOTHING in the source is domain-specific: your-chat.org on Manus is
-# untouched. The .io identity is set purely by env vars on the AWS servers
+# so NOTHING in the source is domain-specific; the .io identity is set purely
+# by env vars on the AWS servers
 # (APP_URL=https://your-chat.io) + DNS.
 #
 # ── AWS-side prerequisites (see docs-aws-io-deploy.md) ──────────────────────
