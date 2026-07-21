@@ -23,8 +23,14 @@
  * ────────────────────────────────────────────────────────────────────────── */
 import crypto from "crypto";
 import { type Express } from "express";
-import { getConversationParticipantIds, sendMessage, getIdentityById } from "./v2db";
-import { getUserById } from "./db";
+import {
+  getConversationParticipantIds,
+  sendMessage,
+  getIdentityById,
+  getIdentityByUserId,
+  getOrCreateDmConversation,
+} from "./v2db";
+import { getUserById, getUserByOpenId } from "./db";
 import { publishToIdentity } from "./v2events";
 import { stripHtml } from "./email";
 
@@ -182,6 +188,40 @@ export function extractFrom(payload: unknown): string {
   return normalizeEmail(root.from ?? data.from ?? "");
 }
 
+/** The subject line of the inbound email (top-level or under data). */
+export function extractSubject(payload: unknown): string {
+  const root = (payload || {}) as Record<string, unknown>;
+  const data = (root.data as Record<string, unknown>) || {};
+  const s = root.subject ?? data.subject;
+  return typeof s === "string" ? s.trim() : "";
+}
+
+/**
+ * ROUND 6 — support routing. True when any recipient is
+ * support[+tag]@INBOUND_EMAIL_DOMAIN (case-insensitive; the +tag is ignored).
+ * Pure + exported for tests.
+ */
+export function isSupportRecipient(recipients: string[], domain: string): boolean {
+  const d = (domain || "").trim().toLowerCase();
+  if (!d) return false;
+  for (const r of recipients) {
+    const addr = normalizeEmail(r);
+    const at = addr.lastIndexOf("@");
+    if (at < 0 || addr.slice(at + 1) !== d) continue;
+    const local = addr.slice(0, at);
+    const bare = local.includes("+") ? local.slice(0, local.indexOf("+")) : local;
+    if (bare === "support") return true;
+  }
+  return false;
+}
+
+/** The message body a routed support email produces in the owner's thread. */
+export function formatSupportBody(from: string, subject: string, text: string): string {
+  const subj = subject || "(no subject)";
+  const body = (text || "").trim();
+  return `📧 ${from || "(unknown sender)"}\nSubject: ${subj}\n\n${body}`.slice(0, 8000);
+}
+
 /**
  * Verify a Svix-style webhook signature (the scheme Resend uses). Returns true
  * when no secret is configured (verification is opt-in hardening) OR when the
@@ -269,12 +309,56 @@ export function registerEmailInbound(app: Express): void {
         }
         // Find OUR signed address among the recipients (bounded — don't HMAC an
         // unbounded recipient list).
+        const recipients = collectRecipients(payload).slice(0, 50);
         let parsed: ParsedInbound | null = null;
-        for (const r of collectRecipients(payload).slice(0, 50)) {
+        for (const r of recipients) {
           parsed = parseInboundAddress(r);
           if (parsed) break;
         }
         if (!parsed) {
+          // ROUND 6 — support@ routing. Mail to support@<domain> has no signed
+          // address by design (it comes from strangers), so it lands here.
+          // Deliver it to the APP OWNER as a message in their self ("Notes")
+          // conversation. The from-mismatch check is deliberately SKIPPED for
+          // this branch — it exists only to bind conversation REPLIES to their
+          // mailbox owner; support mail is unauthenticated by nature (and the
+          // webhook signature above already proves it came via our provider).
+          if (isSupportRecipient(recipients, inboundConfig().domain)) {
+            const openId = (process.env.OWNER_OPEN_ID || "").trim();
+            const owner = openId ? await getUserByOpenId(openId).catch(() => null) : null;
+            const ownerIdent = owner ? await getIdentityByUserId(owner.id).catch(() => null) : null;
+            if (!ownerIdent) {
+              console.warn("[inbound] support email but no owner identity (OWNER_OPEN_ID)");
+              res.status(200).json({ ok: false, reason: "support-no-owner" });
+              return;
+            }
+            const { text, html } = extractBody(payload);
+            const bodyText = (text || stripHtml(html)).trim();
+            const supportBody = formatSupportBody(extractFrom(payload), extractSubject(payload), bodyText);
+            try {
+              const convo = await getOrCreateDmConversation(ownerIdent.id, ownerIdent.id);
+              const row = await sendMessage({
+                conversationId: convo.id,
+                senderIdentityId: ownerIdent.id,
+                kind: "text",
+                body: supportBody,
+                meta: { viaEmail: true, support: true },
+              });
+              try {
+                publishToIdentity(ownerIdent.id, {
+                  kind: "message",
+                  conversationId: convo.id,
+                  from: ownerIdent.id,
+                });
+              } catch { /* best-effort */ }
+              res.status(200).json({ ok: true, routed: "support", id: row?.id });
+            } catch (dbErr) {
+              // 5xx so the provider retries — a support mail must not be lost.
+              console.warn("[inbound] support store failed:", dbErr);
+              res.status(503).json({ ok: false, reason: "store-failed" });
+            }
+            return;
+          }
           res.status(200).json({ ok: false, reason: "no-match" });
           return;
         }

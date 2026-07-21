@@ -4200,3 +4200,16 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       footer kept (© 2026 RELAY · vX). Old bilingual (AR) landing retired with the design swap —
       the new design is EN-only (revisit if the owner wants AR back).
 - [x] Home.test.ts fully re-pinned to the new page (12 pins). Suite 1072 passed / 1 skipped.
+
+## v2.95.6 — ROUND 6: route support@ inbound email to the owner (2026-07-21)
+- [x] Owner's instructions file (Rounds 1–5 previously verified shipped) added ROUND 6:
+      registerEmailInbound now routes mail addressed to support[+tag]@INBOUND_EMAIL_DOMAIN
+      (case-insensitive) to the APP OWNER before the no-match return — resolved via
+      OWNER_OPEN_ID → getUserByOpenId → getIdentityByUserId, delivered into the owner's SELF
+      ("Notes") conversation as "📧 <from>\nSubject: <subj>\n\n<body>" with
+      meta {viaEmail, support}; SSE event published; response { ok:true, routed:"support" }.
+      From-mismatch is deliberately SKIPPED for this branch (support mail comes from strangers;
+      the Svix signature already authenticates the provider). Store failure → 503 so the
+      provider retries (a support mail is never silently lost). New pure helpers
+      isSupportRecipient/formatSupportBody/extractSubject + 9 tests (emailInbound.test.ts → 28).
+      Lights up support@<domain> on .io the moment it deploys — AWS side needs zero changes.

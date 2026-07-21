@@ -170,3 +170,64 @@ describe("verifyWebhookSignature (Svix scheme)", () => {
     expect(verifyWebhookSignature("{}", {})).toBe(false);
   });
 });
+
+/* ── ROUND 6 — support@ routing to the owner ─────────────────────────────── */
+import { isSupportRecipient, formatSupportBody, extractSubject } from "./emailInbound";
+import { readFileSync } from "node:fs";
+
+describe("isSupportRecipient — support[+tag]@domain matcher", () => {
+  it("matches support@ at the inbound domain, case-insensitively", () => {
+    expect(isSupportRecipient(["support@in.example.org"], "in.example.org")).toBe(true);
+    expect(isSupportRecipient(["SUPPORT@IN.EXAMPLE.ORG"], "in.example.org")).toBe(true);
+    expect(isSupportRecipient(["Help Desk <support@in.example.org>"], "in.example.org")).toBe(true);
+  });
+  it("ignores a +tag on the localpart", () => {
+    expect(isSupportRecipient(["support+billing@in.example.org"], "in.example.org")).toBe(true);
+  });
+  it("REJECTS other localparts, other domains, and an unset domain", () => {
+    expect(isSupportRecipient(["relay@in.example.org"], "in.example.org")).toBe(false);
+    expect(isSupportRecipient(["support@elsewhere.org"], "in.example.org")).toBe(false);
+    expect(isSupportRecipient(["notsupport@in.example.org"], "in.example.org")).toBe(false);
+    expect(isSupportRecipient(["support@in.example.org"], "")).toBe(false);
+  });
+});
+
+describe("formatSupportBody — the owner-visible message", () => {
+  it("formats sender + subject + body per the spec", () => {
+    expect(formatSupportBody("a@b.c", "Hi", "Need help")).toBe("📧 a@b.c\nSubject: Hi\n\nNeed help");
+  });
+  it("degrades gracefully on missing fields and caps at 8000 chars", () => {
+    expect(formatSupportBody("", "", "")).toBe("📧 (unknown sender)\nSubject: (no subject)\n\n");
+    expect(formatSupportBody("a@b.c", "s", "x".repeat(9000)).length).toBe(8000);
+  });
+});
+
+describe("extractSubject", () => {
+  it("reads subject from the root or under data", () => {
+    expect(extractSubject({ subject: " Hello " })).toBe("Hello");
+    expect(extractSubject({ data: { subject: "Nested" } })).toBe("Nested");
+    expect(extractSubject({})).toBe("");
+  });
+});
+
+describe("support routing — handler wiring (source pins)", () => {
+  const src = readFileSync("server/emailInbound.ts", "utf8");
+  it("routes support mail to the OWNER's self conversation before no-match", () => {
+    const supportIdx = src.indexOf("isSupportRecipient(recipients");
+    const noMatchIdx = src.indexOf('reason: "no-match"');
+    expect(supportIdx).toBeGreaterThan(-1);
+    expect(supportIdx).toBeLessThan(noMatchIdx);
+    expect(src).toMatch(/OWNER_OPEN_ID/);
+    expect(src).toMatch(/getOrCreateDmConversation\(ownerIdent\.id, ownerIdent\.id\)/);
+    expect(src).toMatch(/routed: "support"/);
+  });
+  it("skips the from-mismatch check for support mail (strangers by design)", () => {
+    // the support branch returns before the from-mismatch block runs
+    const supportIdx = src.indexOf("isSupportRecipient(recipients");
+    const mismatchIdx = src.indexOf("from-mismatch");
+    expect(supportIdx).toBeLessThan(mismatchIdx);
+  });
+  it("a failed store returns 5xx so the provider retries (mail never lost)", () => {
+    expect(src).toMatch(/support store failed/);
+  });
+});
