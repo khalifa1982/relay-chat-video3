@@ -15,11 +15,22 @@
    resolve dot segments client-side, which would hide the exact
    path shape a hostile client (curl --path-as-is) can send.
    ============================================================ */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import express from "express";
 import http from "http";
 import { AddressInfo } from "net";
 import { registerStorageProxy, _clearStorageProxyCache } from "./_core/storageProxy";
+
+// This suite exercises the TRAVERSAL GUARD (segment-wise), which runs BEFORE the
+// participant-only authorization added later. Stub the auth to pass so a legal
+// key reaches the presign/307 — the authorization decision table itself is
+// covered by server/_core/storageProxy.test.ts.
+vi.mock("./_core/context", () => ({
+  createContext: async () => ({ identity: { id: 5 } }),
+}));
+vi.mock("./v2db", () => ({
+  authorizeStorageKey: async () => ({ kind: "attachment", authorized: true }),
+}));
 
 // Drive the native-S3 branch: presigning is pure local crypto (no network),
 // so a passing key deterministically yields a 307 redirect.

@@ -1643,6 +1643,52 @@ export async function getAttachmentById(id: number) {
 }
 
 /**
+ * Look up an attachment by its STORAGE KEY (the full-size key) or its THUMBNAIL
+ * key — the two `/manus-storage/{key}` shapes a browser can request. Used by the
+ * storage proxy to authorize file access by conversation participation. Returns
+ * null when no attachment owns this key (an avatar or other object).
+ */
+export async function getAttachmentByStorageKey(storageKey: string) {
+  const db = await getDb();
+  if (!db || !storageKey) return null;
+  const rows = await db
+    .select()
+    .from(attachments)
+    .where(or(eq(attachments.storageKey, storageKey), eq(attachments.thumbKey, storageKey)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export type StorageKeyAuthz =
+  | { kind: "attachment"; authorized: boolean }
+  | { kind: "unknown" };
+
+/**
+ * Authorize a `/manus-storage/{key}` fetch (participant-only file access).
+ *
+ *  - If the key belongs to a MESSAGE ATTACHMENT (a shared file / voice-note /
+ *    image / video): readable ONLY by the uploader, or by a participant in a
+ *    conversation that references it (identical rule to getAttachmentForIdentity,
+ *    keyed by storageKey/thumbKey). A raw URL alone — held by a non-participant,
+ *    or nobody logged in — is refused.
+ *  - If the key is NOT a message attachment (an avatar / other object): the
+ *    caller returns `unknown`; the proxy then requires any authenticated
+ *    identity (avatars are shown across the signed-in app but never to anonymous
+ *    URL holders).
+ */
+export async function authorizeStorageKey(
+  storageKey: string,
+  identityId: number | null
+): Promise<StorageKeyAuthz> {
+  const att = await getAttachmentByStorageKey(storageKey);
+  if (!att) return { kind: "unknown" };
+  if (identityId == null) return { kind: "attachment", authorized: false };
+  if (att.uploadedByIdentityId === identityId) return { kind: "attachment", authorized: true };
+  const authed = await getAttachmentForIdentity(att.id, identityId);
+  return { kind: "attachment", authorized: Boolean(authed) };
+}
+
+/**
  * Authorization-scoped attachment fetch. Returns the attachment ONLY if the
  * caller is allowed to see it: either they uploaded it, or it is referenced by
  * a message in a conversation they participate in. Returns null otherwise, so a

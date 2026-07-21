@@ -1,6 +1,8 @@
 import type { Express } from "express";
 import { ENV } from "./env";
 import { s3Config, s3PresignGetUrl } from "../s3";
+import { createContext } from "./context";
+import { authorizeStorageKey } from "../v2db";
 
 /* In-process signed-URL cache (v2.88). Every /manus-storage view used to pay a
  * presign round-trip to Forge and told the browser `no-store`, so a chat
@@ -64,6 +66,43 @@ export function registerStorageProxy(app: Express) {
     // ("%2e%2e") still arrives here as a real ".." segment and is caught.
     if (key.split("/").some((s) => s === ".." || s === ".")) {
       res.status(400).send("Bad storage key");
+      return;
+    }
+
+    // ── Participant-only file access ─────────────────────────────────────────
+    // A raw /manus-storage URL must NOT open a file on its own (the whole point:
+    // a leaked/guessed URL is useless to a non-participant). Resolve the
+    // requester's identity (READ-ONLY — createContext never mints a guest) and
+    // authorize BEFORE any presign/cache:
+    //   • message attachments (files / voice-notes / images / video) → uploader
+    //     or a participant in a conversation that references them;
+    //   • other keys (avatars) → any authenticated identity, never anonymous.
+    // This runs on cache hits too (the signed-URL cache is keyed by object, so it
+    // must never be served without an auth check). Fail CLOSED on any error so a
+    // DB blip can never leak a file.
+    let identityId: number | null = null;
+    try {
+      const ctx = await createContext({ req, res } as Parameters<typeof createContext>[0]);
+      identityId = ctx.identity?.id ?? null;
+    } catch {
+      identityId = null;
+    }
+    try {
+      const authz = await authorizeStorageKey(key, identityId);
+      if (authz.kind === "attachment") {
+        if (!authz.authorized) {
+          res.status(403).send("Forbidden");
+          return;
+        }
+      } else if (identityId == null) {
+        // Not a known message attachment (an avatar / other object) — require a
+        // signed-in user; never serve it to an anonymous URL holder.
+        res.status(403).send("Forbidden");
+        return;
+      }
+    } catch (e) {
+      console.error("[StorageProxy] authz error:", e);
+      res.status(503).send("Storage temporarily unavailable");
       return;
     }
 
