@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from "react";
-import { Phone, Video, MessageSquare, ArrowRight, User2 } from "lucide-react";
+import { Phone, Video, MessageSquare, ArrowRight, User2, PhoneCall, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { trpc } from "@/lib/trpc";
 import { useIdentity } from "./useIdentity";
 import { AuthPanel } from "./AuthPanel";
 
@@ -11,6 +12,26 @@ interface OnboardingGateProps {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Format a 6-digit RELAY number as `NNN-NNN`; pass anything else through. */
+function fmtNumber(n: string): string {
+  return /^\d{6}$/.test(n) ? `${n.slice(0, 3)}-${n.slice(3)}` : n;
+}
+
+/**
+ * A shared call/invite link (`/i/<pin>` → `/app/dialer?to=<pin>`) carries the
+ * number to dial in the URL. Pull it out so a not-yet-identified clicker can be
+ * shown a FOCUSED "join this call" screen instead of the generic login. Returns
+ * the 6-digit target or null. Pure + exported for tests.
+ */
+export function inviteTargetFromSearch(search: string): string | null {
+  try {
+    const to = (new URLSearchParams(search || "").get("to") || "").replace(/\D+/g, "").slice(0, 6);
+    return /^\d{6}$/.test(to) ? to : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Entry / login screen. Shows the app once an identity exists; otherwise a
  * fast, glassy screen whose PRIMARY path is GUEST entry: type a display name →
@@ -19,6 +40,14 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * there's no password to forget) is the secondary path behind a "Login /
  * Register" button. No third-party sign-in. Forced dark for a consistent
  * striking look; the animated backdrop is pure CSS, reduced-motion gated.
+ *
+ * CALL-LINK DIRECT-JOIN (owner: "paramount"): when the URL carries a call
+ * target (a shared `/i/<pin>` invite → `/app/dialer?to=<pin>`) and the visitor
+ * has NO identity, the gate does NOT show the marketing/login clutter — it
+ * shows a single "you're calling <name> · enter your name to connect" card so
+ * the clicker types one field and lands straight in the dial (the Dialer's
+ * existing `?to=` auto-dial handles the rest). Registered users / active guests
+ * skip this entirely (identity present ⇒ children render ⇒ auto-dial).
  */
 export function OnboardingGate({ children }: OnboardingGateProps) {
   const { me, loading, startGuest, startGuestPending, startGuestError, refresh } = useIdentity();
@@ -26,6 +55,16 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
   const [email, setEmail] = useState("");
   const [emailMode, setEmailMode] = useState(false); // guest-first: email is the secondary path
   const [authEmail, setAuthEmail] = useState<string | null>(null);
+
+  // A call/invite link puts the callee's number in the URL. Resolve it (public
+  // query, no identity needed) so the join card can name who you're calling.
+  const [callTarget] = useState<string | null>(() =>
+    inviteTargetFromSearch(typeof window !== "undefined" ? window.location.search : "")
+  );
+  const invite = trpc.directory.lookup.useQuery(
+    { number: callTarget ?? "" },
+    { enabled: !!callTarget && !me && !loading, retry: false, staleTime: 60_000 }
+  );
 
   if (loading) {
     return (
@@ -53,6 +92,13 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
     setAuthEmail(clean); // opens the passwordless panel, prefilled + auto-send
   }
 
+  // ── Call-link direct-join: a focused "enter your name to connect" card. ──
+  // Shown when a call target is in the URL and we're not in the email path.
+  const showJoin = !!callTarget && !emailMode;
+  const invitee = invite.data;
+  const isPartyLine = !!invitee?.partyLine;
+  const inviteeName = invitee?.displayName?.trim() || "";
+
   return (
     <div className="dark relay-login relative min-h-svh overflow-hidden grid place-items-center bg-[#08090C] text-foreground p-5">
       {/* Lightweight animated backdrop (CSS only, reduced-motion gated) */}
@@ -60,37 +106,62 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
       <div aria-hidden className="login-grid pointer-events-none absolute inset-0" />
 
       <div className="login-card relative w-full max-w-[400px]">
-        {/* Brand */}
-        <div className="mb-7 text-center">
-          <div className="inline-flex items-center gap-2.5">
-            <span className="login-dot inline-block size-3 rounded-full" />
-            <span className="text-[1.6rem] font-bold tracking-tight">RELAY</span>
-          </div>
-          <p className="mx-auto mt-2.5 max-w-[19rem] text-sm leading-relaxed text-muted-foreground">
-            {emailMode
-              ? "Login or register with your email — no password, we send you a one-time code."
-              : "Pick a name and jump straight in — no account needed."}
-          </p>
-        </div>
+        {showJoin ? (
+          <>
+            {/* ── CALL-LINK JOIN ── */}
+            <div className="mb-6 text-center">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-[color:var(--relay-online,#06d6a0)]/30 bg-[color:var(--relay-online,#06d6a0)]/10 px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[color:var(--relay-online,#06d6a0)]">
+                {isPartyLine ? <Users className="size-3.5" /> : <PhoneCall className="size-3.5" />}
+                {isPartyLine ? "Party line" : "Incoming call link"}
+              </span>
+            </div>
 
-        {/* Card */}
-        <div className="rounded-3xl border border-border/60 bg-card/60 p-6 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150">
-          {!emailMode ? (
-            <>
-              {/* PRIMARY: guest entry */}
+            <div className="rounded-3xl border border-border/60 bg-card/60 p-6 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150">
+              {/* Callee card */}
+              <div className="mb-5 flex flex-col items-center text-center">
+                <div className="relative mb-3">
+                  <div className="grid size-16 place-items-center rounded-full bg-gradient-to-br from-[#3FE0C5] to-[#6EE7FF] text-2xl font-bold text-[#04201b]">
+                    {(inviteeName || "?").slice(0, 1).toUpperCase()}
+                  </div>
+                  {invitee?.isOnline && (
+                    <span className="absolute bottom-0.5 right-0.5 size-3.5 rounded-full border-2 border-[#0b0f14] bg-[color:var(--relay-online,#06d6a0)]" />
+                  )}
+                </div>
+                <div className="text-lg font-semibold leading-tight">
+                  {isPartyLine
+                    ? inviteeName || "Party line"
+                    : inviteeName
+                      ? `Call ${inviteeName}`
+                      : "Call this number"}
+                </div>
+                <div className="mt-1 font-mono text-sm text-muted-foreground">
+                  {fmtNumber(callTarget!)}
+                  {isPartyLine
+                    ? ` · ${invitee?.memberCount ?? 0} on the line`
+                    : invitee
+                      ? invitee.isOnline
+                        ? " · online now"
+                        : " · offline — we'll try to reach them"
+                      : invite.isFetched
+                        ? " · number not found"
+                        : ""}
+                </div>
+              </div>
+
+              {/* One field: your name, then join. */}
               <form onSubmit={onGuestSubmit}>
                 <label
-                  htmlFor="relay-name"
+                  htmlFor="relay-join-name"
                   className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
                 >
-                  Your display name
+                  Enter your name to connect
                 </label>
                 <Input
-                  id="relay-name"
+                  id="relay-join-name"
                   autoFocus
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. Alex"
+                  placeholder="Your name"
                   maxLength={64}
                   className="h-12 rounded-xl text-base"
                 />
@@ -102,88 +173,158 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                   disabled={!name.trim() || startGuestPending}
                   className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
                 >
-                  {startGuestPending ? "Setting up…" : (<><User2 className="size-4" /> Enter as guest</>)}
+                  {startGuestPending ? (
+                    "Connecting…"
+                  ) : (
+                    <>
+                      {isPartyLine ? <Users className="size-4" /> : <PhoneCall className="size-4" />}
+                      {isPartyLine ? "Join the line" : "Join call"}
+                    </>
+                  )}
                 </Button>
               </form>
 
-              <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground/70">
-                <span className="h-px flex-1 bg-border/60" /> or{" "}
-                <span className="h-px flex-1 bg-border/60" />
-              </div>
-
-              {/* SECONDARY: registered account (passwordless email code) */}
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setEmailMode(true)}
-                className="h-12 w-full gap-2 rounded-xl border-border/60 text-base"
-              >
-                Login / Register with email <ArrowRight className="size-4" />
-              </Button>
-              <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
-                Guests stay on this device for 30 days. Registering keeps your number
-                forever and earns a verified badge.
-              </p>
-            </>
-          ) : (
-            <>
-              {/* Registered sign-in / registration — passwordless email code */}
-              <form onSubmit={onEmailSubmit}>
-                <label
-                  htmlFor="relay-email"
-                  className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
-                >
-                  Your email
-                </label>
-                <Input
-                  id="relay-email"
-                  type="email"
-                  inputMode="email"
-                  autoComplete="email"
-                  autoFocus
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="h-12 rounded-xl text-base"
-                />
-                <Button
-                  type="submit"
-                  disabled={!EMAIL_RE.test(email.trim().toLowerCase())}
-                  className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
-                >
-                  Continue with email <ArrowRight className="size-4" />
-                </Button>
-              </form>
-              <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
-                Login and registration are the same step — the code we email you does both.
-                No password, so there's nothing to forget.
-              </p>
               <button
                 type="button"
-                onClick={() => setEmailMode(false)}
+                onClick={() => setEmailMode(true)}
                 className="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground"
               >
-                ← Continue as guest instead
+                Have a RELAY account? Sign in first
               </button>
-            </>
-          )}
-        </div>
+            </div>
+            <p className="mx-auto mt-4 max-w-[19rem] text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
+              No account needed — your name is just for this call. Registering later
+              keeps your number and history.
+            </p>
+          </>
+        ) : (
+          <>
+            {/* Brand */}
+            <div className="mb-7 text-center">
+              <div className="inline-flex items-center gap-2.5">
+                <span className="login-dot inline-block size-3 rounded-full" />
+                <span className="text-[1.6rem] font-bold tracking-tight">RELAY</span>
+              </div>
+              <p className="mx-auto mt-2.5 max-w-[19rem] text-sm leading-relaxed text-muted-foreground">
+                {emailMode
+                  ? "Login or register with your email — no password, we send you a one-time code."
+                  : "Pick a name and jump straight in — no account needed."}
+              </p>
+            </div>
 
-        {/* Feature chips */}
-        <div className="mt-6 flex items-center justify-center gap-2">
-          {[
-            { icon: Phone, label: "Voice" },
-            { icon: Video, label: "Video" },
-            { icon: MessageSquare, label: "Chat" },
-          ].map(({ icon: Icon, label }) => (
-            <span
-              key={label}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-card/50 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur-md"
-            >
-              <Icon className="size-3.5" /> {label}
-            </span>
-          ))}
-        </div>
+            {/* Card */}
+            <div className="rounded-3xl border border-border/60 bg-card/60 p-6 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150">
+              {!emailMode ? (
+                <>
+                  {/* PRIMARY: guest entry */}
+                  <form onSubmit={onGuestSubmit}>
+                    <label
+                      htmlFor="relay-name"
+                      className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
+                    >
+                      Your display name
+                    </label>
+                    <Input
+                      id="relay-name"
+                      autoFocus
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="e.g. Alex"
+                      maxLength={64}
+                      className="h-12 rounded-xl text-base"
+                    />
+                    {startGuestError && (
+                      <p className="mt-2.5 text-sm text-destructive">{startGuestError.message}</p>
+                    )}
+                    <Button
+                      type="submit"
+                      disabled={!name.trim() || startGuestPending}
+                      className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
+                    >
+                      {startGuestPending ? "Setting up…" : (<><User2 className="size-4" /> Enter as guest</>)}
+                    </Button>
+                  </form>
+
+                  <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground/70">
+                    <span className="h-px flex-1 bg-border/60" /> or{" "}
+                    <span className="h-px flex-1 bg-border/60" />
+                  </div>
+
+                  {/* SECONDARY: registered account (passwordless email code) */}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setEmailMode(true)}
+                    className="h-12 w-full gap-2 rounded-xl border-border/60 text-base"
+                  >
+                    Login / Register with email <ArrowRight className="size-4" />
+                  </Button>
+                  <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
+                    Guests stay on this device for 30 days. Registering keeps your number
+                    forever and earns a verified badge.
+                  </p>
+                </>
+              ) : (
+                <>
+                  {/* Registered sign-in / registration — passwordless email code */}
+                  <form onSubmit={onEmailSubmit}>
+                    <label
+                      htmlFor="relay-email"
+                      className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
+                    >
+                      Your email
+                    </label>
+                    <Input
+                      id="relay-email"
+                      type="email"
+                      inputMode="email"
+                      autoComplete="email"
+                      autoFocus
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      className="h-12 rounded-xl text-base"
+                    />
+                    <Button
+                      type="submit"
+                      disabled={!EMAIL_RE.test(email.trim().toLowerCase())}
+                      className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
+                    >
+                      Continue with email <ArrowRight className="size-4" />
+                    </Button>
+                  </form>
+                  <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
+                    Login and registration are the same step — the code we email you does both.
+                    No password, so there's nothing to forget.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setEmailMode(false)}
+                    className="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    {callTarget ? "← Back to joining the call" : "← Continue as guest instead"}
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* Feature chips */}
+            <div className="mt-6 flex items-center justify-center gap-2">
+              {[
+                { icon: Phone, label: "Voice" },
+                { icon: Video, label: "Video" },
+                { icon: MessageSquare, label: "Chat" },
+              ].map(({ icon: Icon, label }) => (
+                <span
+                  key={label}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-card/50 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur-md"
+                >
+                  <Icon className="size-3.5" /> {label}
+                </span>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       {authEmail !== null && (
