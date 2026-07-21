@@ -11,6 +11,7 @@ import {
   Phone,
   PhoneMissed,
   PhoneOutgoing,
+  Search,
   Trash2,
   Users,
   Video,
@@ -103,6 +104,20 @@ function isSoloRow(c: CallRow): boolean {
 
 function isMissedItem(it: Item): boolean {
   return it.kind === "solo" && it.direction === "in";
+}
+
+/** Everything a History row can be matched on: contact name, number/PIN, and
+ *  (for conferences) every participant + the party-line title. */
+function searchTextOf(it: Item): string {
+  if (it.kind === "solo") {
+    return `${it.call.other?.displayName ?? ""} ${it.call.other?.number ?? ""}`;
+  }
+  const c = it.conf;
+  return [
+    c.dialedNumber ?? "",
+    c.partyLineTitle ?? "",
+    ...c.participants.map((p) => `${p.name} ${p.number}`),
+  ].join(" ");
 }
 
 /** First letter of a display name for the avatar disc (empty ⇒ icon fallback). */
@@ -216,11 +231,26 @@ export default function HistoryPage() {
     [items]
   );
 
+  // Search across the log by contact name / number / PIN (v2.95). Local filter
+  // over the already-loaded items — instant, no new request.
+  const [historySearch, setHistorySearch] = useState("");
   const visible = useMemo(() => {
-    if (filter === "dialed") return items.filter((it) => it.direction === "out");
-    if (filter === "missed") return items.filter(isMissedItem);
-    return items;
-  }, [items, filter]);
+    let v =
+      filter === "dialed"
+        ? items.filter((it) => it.direction === "out")
+        : filter === "missed"
+          ? items.filter(isMissedItem)
+          : items;
+    const q = historySearch.trim().toLowerCase();
+    if (q) {
+      const qDigits = q.replace(/\D/g, "");
+      v = v.filter((it) => {
+        const hay = searchTextOf(it).toLowerCase();
+        return hay.includes(q) || (qDigits.length > 0 && hay.replace(/\D/g, "").includes(qDigits));
+      });
+    }
+    return v;
+  }, [items, filter, historySearch]);
 
   // Group the (already filtered + newest-first) rows into collapsible day
   // sections. Purely presentational: the item objects — and every prop the row
@@ -321,6 +351,19 @@ export default function HistoryPage() {
         <h1 className="text-lg font-semibold tracking-tight">Call history</h1>
       </header>
 
+      {/* Search across the log by name / number / PIN. */}
+      {items.length > 0 && (
+        <div className="mb-2.5 relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+          <input
+            value={historySearch}
+            onChange={(e) => setHistorySearch(e.target.value)}
+            placeholder="Search calls by name or number"
+            aria-label="Search calls"
+            className="h-9 w-full rounded-lg border border-border/60 bg-muted/40 pl-9 pr-3 text-sm outline-none focus:border-primary/50"
+          />
+        </div>
+      )}
       {/* Filter bar: All / Dialed / Missed segmented control + Clear History
           on the right. Sits ABOVE the scrolling list, so it (and the bottom
           tab bar below the page) stay put while the log scrolls. */}
@@ -429,11 +472,13 @@ export default function HistoryPage() {
             <div className="p-6 text-sm text-muted-foreground">Loading…</div>
           ) : visible.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
-              {filter === "missed"
-                ? "No missed calls. 🎉"
-                : filter === "dialed"
-                  ? "No dialed calls yet — call someone from the keypad."
-                  : "No calls yet. Your conference and call history will appear here — who you dialed, how many people joined, their names and numbers, and how long the call lasted."}
+              {historySearch.trim()
+                ? `No calls match “${historySearch.trim()}”.`
+                : filter === "missed"
+                  ? "No missed calls. 🎉"
+                  : filter === "dialed"
+                    ? "No dialed calls yet — call someone from the keypad."
+                    : "No calls yet. Your conference and call history will appear here — who you dialed, how many people joined, their names and numbers, and how long the call lasted."}
             </div>
           ) : (
             <div>

@@ -151,8 +151,20 @@ export default function MessagesPage() {
   // GROUPS / NOTES sections. Derived purely from the existing threads query
   // (no new request, no data-flow change); collapse state is UI-only.
   const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>({});
+  // Thread-list search (v2.95): filter conversations by peer name/number. Pure
+  // client filter over the already-loaded list — instant, no new request.
+  const [threadSearch, setThreadSearch] = useState("");
   const threadCategories = useMemo(() => {
-    const list = threads.data ?? [];
+    const q = threadSearch.trim().toLowerCase();
+    const qDigits = q.replace(/\D/g, "");
+    const all = threads.data ?? [];
+    const list = q
+      ? all.filter(
+          (t) =>
+            (t.peerDisplayName || "").toLowerCase().includes(q) ||
+            (qDigits.length > 0 && (t.peerNumber || "").includes(qDigits)),
+        )
+      : all;
     const meId = me?.id;
     const isNotes = (t: (typeof list)[number]) =>
       meId != null && t.kind !== "group" && t.peerIdentityId === meId;
@@ -224,6 +236,20 @@ export default function MessagesPage() {
           <h2 className="text-base font-extrabold tracking-tight">Messages</h2>
           <NewMessageDialog />
         </header>
+        {(threads.data?.length ?? 0) > 0 && (
+          <div className="px-3 py-2 border-b border-border/60">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+              <input
+                value={threadSearch}
+                onChange={(e) => setThreadSearch(e.target.value)}
+                placeholder="Search conversations"
+                aria-label="Search conversations"
+                className="h-9 w-full rounded-lg border border-border/60 bg-muted/40 pl-9 pr-3 text-sm outline-none focus:border-primary/50"
+              />
+            </div>
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto">
           {/* Rich user status (story-style) — rings for me + contacts, above the threads. */}
           <StatusStrip />
@@ -245,6 +271,10 @@ export default function MessagesPage() {
               <MessageSquarePlus className="size-8 mx-auto mb-2 opacity-50" />
               <p>No messages yet.</p>
               <p className="mt-1">Tap the + above to start a conversation.</p>
+            </div>
+          ) : threadCategories.length === 0 ? (
+            <div className="p-10 text-center text-sm text-muted-foreground">
+              No conversations match “{threadSearch.trim()}”.
             </div>
           ) : (
             <div>

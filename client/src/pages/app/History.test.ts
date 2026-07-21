@@ -39,8 +39,9 @@ describe("History page — filter tabs + Clear History", () => {
   });
 
   it("filters actually narrow the list (dialed = outgoing, missed = incoming missed/declined)", () => {
-    expect(PAGE).toMatch(/if \(filter === "dialed"\) return items\.filter\(\(it\) => it\.direction === "out"\)/);
-    expect(PAGE).toMatch(/if \(filter === "missed"\) return items\.filter\(isMissedItem\)/);
+    // The filter is a ternary inside `visible` (v2.95: search now composes with it).
+    expect(PAGE).toMatch(/filter === "dialed"\s*\?\s*items\.filter\(\(it\) => it\.direction === "out"\)/);
+    expect(PAGE).toMatch(/filter === "missed"\s*\?\s*items\.filter\(isMissedItem\)/);
   });
 });
 
