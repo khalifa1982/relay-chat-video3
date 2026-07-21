@@ -4182,3 +4182,21 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       noHardcodedDomains guard — extracted into server/domainMigration.ts (behavior identical,
       behaviorally tested incl. Host-port/case variants + pass-through) and consciously
       allowlisted like ecosystem.config.cjs. Guard header updated: .org retired, guard stays.
+
+## v2.95.5 — NEW LANDING PAGE from Claude Design "RELAY Landing" (2026-07-21)
+- [x] Full port of the owner's new landing design (project 2cf1060d, RELAY Landing.dc.html) into
+      client/src/pages/Home.tsx: cinematic DTLS-SRTP boot loader, WORKING hero dialer (real DTMF
+      Web-Audio tones, 6-digit gate, demo dial; CALL plays the encrypt-handshake cinematic then
+      lands on /i/<n> — the app's call-link direct-join), marquee, scroll-driven three.js
+      fly-through (5 depth zones: p2p net → waveform rings → orbs → globe arcs → starfield + dust),
+      scroll-velocity matrix rain + text scramble, hue-shifting chrome, tilting keypad card,
+      how-it-works demo cards, live-call + 10-person group-call showcases, privacy, FAQ, footer.
+- [x] LIVE NETWORK stats carried over from the old landing (owner ask mid-build): registered
+      users / guests served / call parties / online now via trpc.stats.public, restyled to match.
+- [x] Deliberate adaptations: relative CTAs (/app, /i/<n>) + siteHost() chrome labels (domain
+      guard compliant); three.js as an npm dep DYNAMICALLY imported (own 190KB-gzip chunk, loads
+      after first paint; landing chunk itself 17.8KB gzip); no-WebGL + reduced-motion fallbacks;
+      portraits reuse the ALREADY-BUNDLED /marketing/p01–p10 tiles (no new binaries); version
+      footer kept (© 2026 RELAY · vX). Old bilingual (AR) landing retired with the design swap —
+      the new design is EN-only (revisit if the owner wants AR back).
+- [x] Home.test.ts fully re-pinned to the new page (12 pins). Suite 1072 passed / 1 skipped.
