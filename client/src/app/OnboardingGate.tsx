@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { useIdentity } from "./useIdentity";
 import { AuthPanel } from "./AuthPanel";
+import { MatrixReveal } from "./MatrixReveal";
 
 interface OnboardingGateProps {
   children: React.ReactNode;
@@ -66,11 +67,29 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
     { enabled: !!callTarget && !me && !loading, retry: false, staleTime: 60_000 }
   );
 
+  // Guest ID-reveal ("matrix" animation) state — plays after a standard guest
+  // picks a name, holding the gate on screen while the session is minted.
+  const [revealing, setRevealing] = useState(false);
+  const [revealNumber, setRevealNumber] = useState<string | null>(null);
+
   if (loading) {
     return (
       <div className="dark min-h-svh grid place-items-center bg-[#08090C] text-foreground">
         <div className="size-9 rounded-full border-2 border-primary/25 border-t-primary animate-spin" />
       </div>
+    );
+  }
+
+  // The matrix reveal must outlast the moment `me` flips truthy (startGuest
+  // invalidates whoami on success), so it's checked BEFORE the identity gate —
+  // it stays until its own onDone, then children render underneath.
+  if (revealing) {
+    return (
+      <MatrixReveal
+        number={revealNumber}
+        name={name}
+        onDone={() => setRevealing(false)}
+      />
     );
   }
 
@@ -80,9 +99,16 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) return;
-    await startGuest(trimmed).catch(() => {
-      /* error surfaces via startGuestError */
-    });
+    // Standard guest entry plays the ID-reveal; a call-link join skips it and
+    // goes straight into the dial (owner: "land directly in the call").
+    if (!callTarget) setRevealing(true);
+    try {
+      const res = await startGuest(trimmed);
+      if (!callTarget) setRevealNumber(res?.number ?? null);
+    } catch {
+      // Error surfaces via startGuestError; drop the reveal so the form shows it.
+      setRevealing(false);
+    }
   }
 
   function onEmailSubmit(e: FormEvent) {
