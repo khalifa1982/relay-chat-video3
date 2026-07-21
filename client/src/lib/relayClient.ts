@@ -3928,9 +3928,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (facingMode === "environment") t.classList.add("back-cam");
     const v = document.createElement("video");
     v.autoplay = true; v.muted = true; v.playsInline = true;
+    // iOS Safari reads the ATTRIBUTE form of playsinline (and older iOS the
+    // webkit- one); without it the self-preview goes fullscreen-or-blank instead
+    // of rendering inline — the reported "self-mirror doesn't show on iPhone".
+    v.setAttribute("playsinline", "");
+    v.setAttribute("webkit-playsinline", "");
     // Show the PROCESSED stream in the self-tile so the user sees their filter
     // exactly as the remote peer will see it.
     v.srcObject = processedStream || localStream;
+    // iOS: autoplay of a freshly-attached MediaStream is unreliable — kick it
+    // explicitly (muted + inline, so the autoplay policy allows it). Harmless
+    // where autoplay already works.
+    void v.play().catch(() => {});
     t.appendChild(v);
     // Avatar (from the user's name) + "You" label + device chip. The avatar
     // shows whenever the camera is off so the tile is never a blank black box.

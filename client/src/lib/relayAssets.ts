@@ -579,11 +579,14 @@ export const RELAY_CSS = `
 
 /* Self-tile camera handling: front cam mirrored locally so user feels natural,
    back cam not mirrored, and outgoing stream NEVER mirrored. */
-.relay-root .relay-tile.you video{transform:scaleX(-1)}
-.relay-root .relay-tile.you.back-cam video{transform:none}
+/* -webkit-transform is REQUIRED alongside the unprefixed form: iOS Safari can
+   drop an unprefixed CSS transform on a <video> playing a MediaStream, leaving
+   the self-preview unmirrored (or, with object-fit, blank). */
+.relay-root .relay-tile.you video{-webkit-transform:scaleX(-1);transform:scaleX(-1)}
+.relay-root .relay-tile.you.back-cam video{-webkit-transform:none;transform:none}
 /* Screen share: the shared screen must never be mirrored, and should be shown
    in full (letterboxed) rather than cropped like a camera tile. */
-.relay-root .relay-tile.you.screen video{transform:none;object-fit:contain;background:#000}
+.relay-root .relay-tile.you.screen video{-webkit-transform:none;transform:none;object-fit:contain;background:#000}
 /* Active control state (e.g. screen-share on) — accent-tinted like .off is red. */
 .relay-root .ctrl.on{background:rgba(63,224,197,.18);border-color:rgba(63,224,197,.4);color:var(--accent)}
 /* Mic VU feedback: a soft accent ring pulses on #micBtn while YOUR mic is picking
