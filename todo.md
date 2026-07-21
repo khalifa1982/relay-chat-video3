@@ -4143,3 +4143,20 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       rate-limit + 30-active per-user cap + 10-min reaper. Media key ownership-gated on post.
 - [ ] Deferred (noted): physical S3/Forge object GC on status delete/expiry (access is already revoked
       by the proxy gate; only storage cost lingers). No storageDelete helper exists yet.
+
+## v2.95.1–v2.95.3 — session-only guests, search, RN mirror (2026-07-21)
+- [x] v2.95.1 — Session-only guests: guest cookie is a SESSION cookie + device id in sessionStorage,
+      so a browser close mints a fresh guest; within a session the number is stable (either half
+      resolves it). Registered users unaffected (persistent relay_session). Completes #28 + #30.
+- [x] v2.95.2 — Messaging + History SEARCH: local filters over the loaded lists (thread list by
+      name/number; call log by name/number/PIN + conference participants). Search-aware empty states.
+- [x] v2.95.3 / RN — React Native MIRROR (#20): Onboarding reskinned + a guest "matrix"-style number
+      reveal (Animated digit-decode, no canvas dep); SEARCH added to MessagesList + ContactsList;
+      RICH USER STATUS ported (src/screens/Status.tsx — strip + composer[text/photo] + full-screen
+      viewer with progress bars + delete; api.status.* + uploadStatusMedia; server base64 `bare:true`
+      upload twin for the native base64 client). Video/audio status shows caption + "watch on web"
+      (RN has no video-player dep). RN typecheck (tsc --noEmit) clean; verified via CI native-rn.yml.
+      versionCode 3 / versionName 3.1.0. NOTE: the RN app targets .org, which must be republished for
+      the status endpoints to answer; the code is ready + typechecked.
+- [ ] Not mirrored to RN (needs native deps + device build): the canvas glyph-rain matrix backdrop
+      (needs Skia), in-app video/audio status playback (needs react-native-video). Deferred, documented.

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FlatList, Modal, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
@@ -6,6 +6,7 @@ import { api, type ThreadRow } from "../lib/api";
 import { onEvent } from "../lib/events";
 import { isMuted, toggleMute } from "../lib/mute";
 import { colors, spacing } from "../lib/theme";
+import { StatusStrip } from "./Status";
 
 const fmtPin = (n: string | null) => (n && n.length === 6 ? `${n.slice(0, 3)}-${n.slice(3)}` : n ?? "");
 const threadTitle = (t: ThreadRow) =>
@@ -16,6 +17,7 @@ export function MessagesList({ navigation }: { navigation: { navigate: (s: strin
   const [threads, setThreads] = useState<ThreadRow[]>([]);
   const [muted, setMuted] = useState<Set<number>>(new Set());
   const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeNum, setComposeNum] = useState("");
   const [composeErr, setComposeErr] = useState<string | null>(null);
@@ -47,6 +49,18 @@ export function MessagesList({ navigation }: { navigation: { navigate: (s: strin
     const focusOff = nav.addListener?.("focus", refresh);
     return () => { off(); focusOff?.(); };
   }, [refresh]);
+
+  // Search conversations by title / peer name / number (local filter).
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return threads;
+    const qDigits = q.replace(/\D/g, "");
+    return threads.filter(
+      t =>
+        threadTitle(t).toLowerCase().includes(q) ||
+        (qDigits.length > 0 && (t.peerNumber || "").includes(qDigits)),
+    );
+  }, [threads, search]);
 
   const open = (t: ThreadRow) =>
     navigation.navigate("Conversation", { conversationId: t.conversationId, title: threadTitle(t), kind: t.kind });
@@ -95,11 +109,28 @@ export function MessagesList({ navigation }: { navigation: { navigate: (s: strin
 
   return (
     <View style={s.root}>
+      {threads.length > 0 ? (
+        <View style={s.searchWrap}>
+          <TextInput
+            style={s.searchInput}
+            placeholder="Search conversations"
+            placeholderTextColor={colors.textMuted}
+            value={search}
+            onChangeText={setSearch}
+            autoCapitalize="none"
+          />
+        </View>
+      ) : null}
       <FlatList
-        data={threads}
+        data={filtered}
         keyExtractor={t => String(t.conversationId)}
+        ListHeaderComponent={search.trim() ? null : <StatusStrip />}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.accent} />}
-        ListEmptyComponent={<Text style={s.empty}>No conversations yet — tap ✚ to start one.</Text>}
+        ListEmptyComponent={
+          <Text style={s.empty}>
+            {search.trim() ? `No conversations match "${search.trim()}".` : "No conversations yet — tap ✚ to start one."}
+          </Text>
+        }
         renderItem={({ item: t }) => (
           <TouchableOpacity
             style={s.row}
@@ -199,6 +230,8 @@ const s = StyleSheet.create({
   segOn: { backgroundColor: colors.tabMessages },
   groupChips: { color: colors.text, fontSize: 13, fontWeight: "700", marginTop: 8, fontVariant: ["tabular-nums"] },
   root: { flex: 1, backgroundColor: colors.bg },
+  searchWrap: { paddingHorizontal: spacing(4), paddingVertical: spacing(2.5), borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  searchInput: { backgroundColor: colors.surfaceRaised, borderRadius: 12, color: colors.text, fontSize: 15, paddingHorizontal: spacing(3.5), paddingVertical: spacing(2.5) },
   row: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: spacing(4), paddingVertical: spacing(3), borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   avatar: { width: 46, height: 46, borderRadius: 23, borderWidth: 2, borderColor: colors.tabMessages, backgroundColor: colors.surfaceRaised, alignItems: "center", justifyContent: "center" },
   avatarText: { color: colors.text, fontWeight: "700" },

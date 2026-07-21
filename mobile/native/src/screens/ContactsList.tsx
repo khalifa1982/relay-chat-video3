@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Alert, FlatList, Modal, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Alert, FlatList, Modal, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { api, type ContactRow } from "../lib/api";
 import { useCall } from "../call/engine";
 import { onEvent } from "../lib/events";
@@ -15,6 +15,7 @@ export function ContactsList({ navigation }: { navigation: { navigate: (s: strin
   const call = useCall();
   const [rows, setRows] = useState<ContactRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch] = useState("");
 
   const refresh = useCallback(() => {
     setRefreshing(true);
@@ -31,15 +32,26 @@ export function ContactsList({ navigation }: { navigation: { navigate: (s: strin
     return () => { off(); focusOff?.(); };
   }, [refresh]);
 
+  // Search contacts by name or number (local filter over the loaded rows).
+  const q = search.trim().toLowerCase();
+  const qDigits = q.replace(/\D/g, "");
+  const view = q
+    ? rows.filter(
+        r =>
+          (r.displayName ?? "").toLowerCase().includes(q) ||
+          (qDigits.length > 0 && r.number.includes(qDigits)),
+      )
+    : rows;
+
   type Section = { label: string; items: ContactRow[] };
   const sections: Section[] = [];
-  const favs = rows.filter(r => r.favourite);
+  const favs = view.filter(r => r.favourite);
   if (favs.length) sections.push({ label: "Favorites", items: favs });
   for (const c of CATEGORY_ORDER) {
-    const items = rows.filter(r => !r.favourite && r.category === c);
+    const items = view.filter(r => !r.favourite && r.category === c);
     if (items.length) sections.push({ label: CATEGORY_LABEL[c], items });
   }
-  const rest = rows.filter(r => !r.favourite && !r.category);
+  const rest = view.filter(r => !r.favourite && !r.category);
   if (rest.length) sections.push({ label: "All contacts", items: rest });
   const flat: Array<{ type: "h"; label: string } | { type: "c"; c: ContactRow }> = [];
   for (const sct of sections) {
@@ -63,11 +75,27 @@ export function ContactsList({ navigation }: { navigation: { navigate: (s: strin
 
   return (
     <View style={s.root}>
+      {rows.length > 0 ? (
+        <View style={s.searchWrap}>
+          <TextInput
+            style={s.searchInput}
+            placeholder="Search contacts"
+            placeholderTextColor={colors.textMuted}
+            value={search}
+            onChangeText={setSearch}
+            autoCapitalize="none"
+          />
+        </View>
+      ) : null}
       <FlatList
         data={flat}
         keyExtractor={(i, idx) => (i.type === "h" ? `h-${i.label}` : `c-${i.c.id}-${idx}`)}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.accent} />}
-        ListEmptyComponent={<Text style={s.empty}>No contacts yet — tap ✚ to add one.</Text>}
+        ListEmptyComponent={
+          <Text style={s.empty}>
+            {search.trim() ? `No contacts match "${search.trim()}".` : "No contacts yet — tap ✚ to add one."}
+          </Text>
+        }
         renderItem={({ item }) =>
           item.type === "h" ? (
             <Text style={s.header}>{item.label}</Text>
@@ -140,6 +168,8 @@ export function ContactsList({ navigation }: { navigation: { navigate: (s: strin
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
+  searchWrap: { paddingHorizontal: spacing(4), paddingVertical: spacing(2.5), borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  searchInput: { backgroundColor: colors.surfaceRaised, borderRadius: 12, color: colors.text, fontSize: 15, paddingHorizontal: spacing(3.5), paddingVertical: spacing(2.5) },
   header: { color: colors.textMuted, fontSize: 12, fontWeight: "800", textTransform: "uppercase", letterSpacing: 1, paddingHorizontal: spacing(4), paddingTop: spacing(4), paddingBottom: spacing(1) },
   row: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: spacing(4), paddingVertical: spacing(3), borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   avatar: { width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: colors.tabContacts, backgroundColor: colors.surfaceRaised, alignItems: "center", justifyContent: "center" },

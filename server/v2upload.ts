@@ -188,6 +188,21 @@ export function registerV2Upload(app: Express) {
             error: `Base64 uploads are capped at ${Math.floor(MAX_BASE64_BYTES / 1024 / 1024)} MB — send larger files as application/octet-stream`,
           });
         }
+        // BARE (no attachment row) for rich STATUS media — the base64 twin of the
+        // raw `?bare=1` path, used by the native app (which uploads base64 JSON).
+        // Same rules: image/video/audio only, owner-namespaced key, no row (so the
+        // storage proxy gates it as a status object, not a public attachment).
+        if (body.bare === true) {
+          if (BLOCKED_MIME.test(mimeType) || !/^(image|video|audio)\//i.test(mimeType)) {
+            return res.status(400).json({ error: "Status media must be an image, video, or audio file" });
+          }
+          if (buf.length === 0) return res.status(400).json({ error: "Empty payload" });
+          const bext = (mimeType.split("/")[1] || "bin").split(/[+;]/)[0].slice(0, 8);
+          const bhash = crypto.randomBytes(6).toString("hex");
+          const bkey = `relay-chat/${identityId}/status_${Date.now()}_${bhash}.${bext}`;
+          const stored = await storagePut(bkey, buf, mimeType);
+          return res.json({ bare: true, storageKey: stored.key, url: stored.url });
+        }
       }
       if (!ALLOWED_MIME.test(mimeType) || BLOCKED_MIME.test(mimeType)) {
         return res.status(400).json({ error: "Unsupported mime type" });

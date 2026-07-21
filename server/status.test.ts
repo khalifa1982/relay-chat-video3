@@ -120,7 +120,8 @@ describe("status privacy hardening (review §3/§4/§5)", () => {
 describe("status media upload (no-row `?bare=1`)", () => {
   it("stores image/video/audio WITHOUT an attachment row (public-servable to contacts)", () => {
     const up = read("server/v2upload.ts");
-    expect(up).toMatch(/req\.query\.bare === "1"/);
+    expect(up).toMatch(/req\.query\.bare === "1"/); // raw binary path (web)
+    expect(up).toMatch(/body\.bare === true/); // base64 path (native app)
     expect(up).toMatch(/\^\(image\|video\|audio\)\\\//);
     // Key lands in the owner's namespace so status.post's ownership check passes.
     expect(up).toMatch(/relay-chat\/\$\{identityId\}\/status_/);

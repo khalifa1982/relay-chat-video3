@@ -127,6 +127,31 @@ export interface ConversationInfo {
   members: Array<{ id: number; number: string; displayName: string; avatarUrl: string | null; isMe: boolean }>;
 }
 
+/** Rich user status (v2.95) — story-style. Shapes mirror server/v2routers.ts. */
+export interface StatusItem {
+  id: number;
+  kind: string; // "text" | "image" | "video" | "audio"
+  text: string | null;
+  bgColor: string | null;
+  mediaUrl: string | null;
+  mimeType: string | null;
+  durationMs: number | null;
+  createdAt: string | Date;
+  expiresAt: string | Date;
+}
+export interface StatusGroup {
+  owner: { id: number; number: string; displayName: string; avatarUrl: string | null; isMe: boolean };
+  items: StatusItem[];
+  hasUnseen: boolean;
+  latestAt: string | Date;
+}
+export interface StatusViewer {
+  id: number;
+  displayName: string;
+  number: string;
+  avatarUrl: string | null;
+}
+
 export const api = {
   // identity / presence
   whoami: () => client.query("identity.whoami") as Promise<Whoami | null>,
@@ -205,6 +230,24 @@ export const api = {
     client.mutation("push.subscribe", { endpoint: token, kind: "fcm" }) as Promise<unknown>,
   pushUnsubscribe: (token: string) =>
     client.mutation("push.unsubscribe", { endpoint: token }) as Promise<unknown>,
+
+  // rich user status (v2.95, story-style)
+  status: {
+    feed: () => client.query("status.feed") as Promise<{ groups: StatusGroup[] }>,
+    mine: () => client.query("status.mine") as Promise<{ items: (StatusItem & { viewCount: number })[] }>,
+    post: (input: {
+      kind: "text" | "image" | "video" | "audio";
+      text?: string;
+      bgColor?: string;
+      mediaKey?: string;
+      mimeType?: string;
+      durationMs?: number;
+    }) => client.mutation("status.post", input) as Promise<{ id: number; expiresAt: string | Date }>,
+    remove: (id: number) => client.mutation("status.remove", { id }) as Promise<{ ok: boolean }>,
+    markViewed: (id: number) => client.mutation("status.markViewed", { id }) as Promise<{ ok: boolean }>,
+    viewers: (id: number) =>
+      client.query("status.viewers", { id }) as Promise<{ viewers: StatusViewer[] }>,
+  },
 };
 
 /**
@@ -239,4 +282,30 @@ export async function uploadAttachment(input: {
     throw new Error(j?.error || `Upload failed (${res.status})`);
   }
   return (await res.json()) as Attachment;
+}
+
+/**
+ * Upload rich-STATUS media (base64 `bare:true`) — stores the bytes with NO
+ * attachment row and returns {storageKey,url}, so the storage proxy serves it as
+ * a status object (gated to contacts) rather than a public attachment. The key
+ * is then passed to api.status.post({ mediaKey }).
+ */
+export async function uploadStatusMedia(input: {
+  dataBase64: string;
+  mimeType: string;
+}): Promise<{ storageKey: string; url: string }> {
+  const res = await fetch(`${BASE_URL}/api/v2/upload`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      "x-relay-device-id": await getDeviceId(),
+    },
+    body: JSON.stringify({ ...input, bare: true }),
+  });
+  if (!res.ok) {
+    const j = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(j?.error || `Upload failed (${res.status})`);
+  }
+  return (await res.json()) as { storageKey: string; url: string };
 }
