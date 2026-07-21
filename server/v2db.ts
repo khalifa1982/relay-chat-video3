@@ -42,6 +42,8 @@ import {
   partyLines,
   presence,
   pushSubscriptions,
+  statuses,
+  statusViews,
   users,
 } from "../drizzle/schema";
 import { getDb } from "./db";
@@ -846,6 +848,38 @@ export async function ensureSchemaExtensions(): Promise<void> {
         \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY \`watch_pair_unique\` (\`watcherId\`, \`targetId\`),
         KEY \`watch_target_idx\` (\`targetId\`)
+      )`,
+    },
+    {
+      // Rich user status (story-style, ephemeral). Media referenced by key/url
+      // (uploaded via /api/v2/upload); reads filter expiresAt > now.
+      name: "statuses",
+      ddl: `CREATE TABLE IF NOT EXISTS \`statuses\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`identityId\` int NOT NULL,
+        \`kind\` varchar(16) NOT NULL,
+        \`text\` text,
+        \`bgColor\` varchar(64),
+        \`mediaKey\` varchar(256),
+        \`mediaUrl\` text,
+        \`mimeType\` varchar(128),
+        \`durationMs\` int,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`expiresAt\` timestamp NOT NULL,
+        KEY \`statuses_owner_idx\` (\`identityId\`),
+        KEY \`statuses_expires_idx\` (\`expiresAt\`)
+      )`,
+    },
+    {
+      // "Seen by" — one row per (status, viewer).
+      name: "status_views",
+      ddl: `CREATE TABLE IF NOT EXISTS \`status_views\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`statusId\` int NOT NULL,
+        \`viewerId\` int NOT NULL,
+        \`viewedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY \`status_view_pair_unique\` (\`statusId\`, \`viewerId\`),
+        KEY \`status_views_status_idx\` (\`statusId\`)
       )`,
     },
   ];
@@ -1763,6 +1797,157 @@ export async function getIdentitiesByNumbers(numbers: string[]) {
   const db = await getDb();
   if (!db || numbers.length === 0) return [];
   return db.select().from(identities).where(inArray(identities.number, numbers));
+}
+
+/* ── rich user status (story-style, ephemeral) ────────────────── */
+
+export interface StatusRow {
+  id: number;
+  identityId: number;
+  kind: string;
+  text: string | null;
+  bgColor: string | null;
+  mediaKey: string | null;
+  mediaUrl: string | null;
+  mimeType: string | null;
+  durationMs: number | null;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+export async function insertStatus(input: {
+  identityId: number;
+  kind: string;
+  text: string | null;
+  bgColor: string | null;
+  mediaKey: string | null;
+  mediaUrl: string | null;
+  mimeType: string | null;
+  durationMs: number | null;
+  ttlMs: number;
+}): Promise<StatusRow | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const expiresAt = new Date(Date.now() + input.ttlMs);
+  await db.insert(statuses).values({
+    identityId: input.identityId,
+    kind: input.kind,
+    text: input.text,
+    bgColor: input.bgColor,
+    mediaKey: input.mediaKey,
+    mediaUrl: input.mediaUrl,
+    mimeType: input.mimeType,
+    durationMs: input.durationMs ?? null,
+    expiresAt,
+  });
+  const [row] = await db
+    .select()
+    .from(statuses)
+    .where(eq(statuses.identityId, input.identityId))
+    .orderBy(desc(statuses.id))
+    .limit(1);
+  return (row as StatusRow) ?? null;
+}
+
+/** Active (unexpired) statuses for a set of owners, oldest→newest. */
+export async function getActiveStatusesForOwners(ownerIds: number[]): Promise<StatusRow[]> {
+  const db = await getDb();
+  if (!db || ownerIds.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(statuses)
+    .where(and(inArray(statuses.identityId, ownerIds), gt(statuses.expiresAt, new Date())))
+    .orderBy(statuses.createdAt);
+  return rows as StatusRow[];
+}
+
+/** A single active status (or null if missing/expired). */
+export async function getActiveStatusById(id: number): Promise<StatusRow | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select()
+    .from(statuses)
+    .where(and(eq(statuses.id, id), gt(statuses.expiresAt, new Date())))
+    .limit(1);
+  return (row as StatusRow) ?? null;
+}
+
+/** Delete a status (owner-scoped) + its view rows. Returns true if it was ours. */
+export async function deleteStatus(id: number, ownerId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [own] = await db
+    .select({ id: statuses.id })
+    .from(statuses)
+    .where(and(eq(statuses.id, id), eq(statuses.identityId, ownerId)))
+    .limit(1);
+  if (!own) return false;
+  await db.delete(statuses).where(and(eq(statuses.id, id), eq(statuses.identityId, ownerId)));
+  await db.delete(statusViews).where(eq(statusViews.statusId, id)).catch(() => {});
+  return true;
+}
+
+/** Record that `viewerId` saw `statusId` (idempotent on the unique pair). */
+export async function recordStatusView(statusId: number, viewerId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.insert(statusViews).values({ statusId, viewerId });
+  } catch {
+    /* duplicate (already viewed) — the unique key rejected it; that's fine */
+  }
+}
+
+/** Which of `statusIds` has `viewerId` already seen (drives unseen ring styling). */
+export async function getViewedStatusIds(
+  viewerId: number,
+  statusIds: number[],
+): Promise<Set<number>> {
+  const db = await getDb();
+  if (!db || statusIds.length === 0) return new Set();
+  const rows = await db
+    .select({ statusId: statusViews.statusId })
+    .from(statusViews)
+    .where(and(eq(statusViews.viewerId, viewerId), inArray(statusViews.statusId, statusIds)));
+  return new Set(rows.map((r) => r.statusId));
+}
+
+/** Viewer identity-ids for a status, newest-seen first (owner-gated at router). */
+export async function getStatusViewerIds(statusId: number): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ viewerId: statusViews.viewerId })
+    .from(statusViews)
+    .where(eq(statusViews.statusId, statusId))
+    .orderBy(desc(statusViews.viewedAt));
+  return rows.map((r) => r.viewerId);
+}
+
+/** viewer counts per status (for the owner's "seen by N"). */
+export async function getStatusViewCounts(statusIds: number[]): Promise<Map<number, number>> {
+  const db = await getDb();
+  const out = new Map<number, number>();
+  if (!db || statusIds.length === 0) return out;
+  const rows = await db
+    .select({ statusId: statusViews.statusId, c: sql<number>`count(*)` })
+    .from(statusViews)
+    .where(inArray(statusViews.statusId, statusIds))
+    .groupBy(statusViews.statusId);
+  for (const r of rows) out.set(r.statusId, Number(r.c));
+  return out;
+}
+
+/** My saved contacts' numbers (to fan a status feed out to people I know). */
+export async function getContactNumbersForOwner(ownerId: number): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ number: contacts.number })
+    .from(contacts)
+    .where(eq(contacts.ownerId, ownerId));
+  return rows.map((r) => r.number);
 }
 
 export async function getAttachmentsByIds(ids: number[]) {

@@ -377,6 +377,59 @@ export type Attachment = typeof attachments.$inferSelect;
 export type InsertAttachment = typeof attachments.$inferInsert;
 
 /* ──────────────────────────────────────────────────────────────────────────
+ * statuses — WhatsApp/story-style ephemeral updates (rich user status).
+ * A status is text, image+caption, video+caption, or audio; it auto-expires
+ * (default 24h) and is visible to the owner + their contacts. Media is uploaded
+ * via /api/v2/upload (same as attachments) and referenced by mediaKey/mediaUrl.
+ * Created by ensureSchemaExtensions (additive; no destructive migration).
+ * ────────────────────────────────────────────────────────────────────────── */
+export const statuses = mysqlTable(
+  "statuses",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    identityId: int("identityId").notNull(), // owner
+    /** "text" | "image" | "video" | "audio". */
+    kind: varchar("kind", { length: 16 }).notNull(),
+    /** The text body (kind=text) OR the caption (image/video/audio). */
+    text: text("text"),
+    /** Background style for a text status (a CSS gradient/color token). */
+    bgColor: varchar("bgColor", { length: 64 }),
+    /** Storage key of the media (in the owner's upload namespace); null for text. */
+    mediaKey: varchar("mediaKey", { length: 256 }),
+    /** Servable media URL (`/manus-storage/{mediaKey}`). */
+    mediaUrl: text("mediaUrl"),
+    mimeType: varchar("mimeType", { length: 128 }),
+    /** Audio/video duration in ms (drives the story auto-advance timer). */
+    durationMs: int("durationMs"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    /** createdAt + TTL (default 24h). Reads filter `expiresAt > now`. */
+    expiresAt: timestamp("expiresAt").notNull(),
+  },
+  (t) => ({
+    ownerIdx: index("statuses_owner_idx").on(t.identityId),
+    expiresIdx: index("statuses_expires_idx").on(t.expiresAt),
+  }),
+);
+export type Status = typeof statuses.$inferSelect;
+export type InsertStatus = typeof statuses.$inferInsert;
+
+/* status_views — one row per (status, viewer) so the owner sees "seen by". */
+export const statusViews = mysqlTable(
+  "status_views",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    statusId: int("statusId").notNull(),
+    viewerId: int("viewerId").notNull(),
+    viewedAt: timestamp("viewedAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    pair: uniqueIndex("status_view_pair_unique").on(t.statusId, t.viewerId),
+    statusIdx: index("status_views_status_idx").on(t.statusId),
+  }),
+);
+export type StatusView = typeof statusViews.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
  * call_history — every call attempt between two identities.
  * `status` covers initiated, answered, missed, declined, ended.
  * ────────────────────────────────────────────────────────────────────────── */

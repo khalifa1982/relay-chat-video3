@@ -45,6 +45,7 @@ import { trpc } from "@/lib/trpc";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
 import { previewOf } from "@/app/messagePreview";
 import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
+import { StatusStrip } from "./Status";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
 import { linkify } from "@/lib/linkify";
@@ -224,6 +225,8 @@ export default function MessagesPage() {
           <NewMessageDialog />
         </header>
         <div className="flex-1 overflow-y-auto">
+          {/* Rich user status (story-style) — rings for me + contacts, above the threads. */}
+          <StatusStrip />
           {threads.isError ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
               <p>Couldn't load your conversations.</p>

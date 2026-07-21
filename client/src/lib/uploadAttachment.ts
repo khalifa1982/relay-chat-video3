@@ -110,3 +110,29 @@ export async function uploadThumbnail(
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<{ storageKey: string; url: string }>;
 }
+
+/**
+ * Upload rich-STATUS media (image/video/audio) via `?bare=1` (v2.95): stores
+ * the bytes in the caller's own namespace and returns {storageKey,url} with NO
+ * attachment row — so the storage proxy serves it publicly (like avatars) and a
+ * contact viewing the status isn't blocked by the participant-only attachment
+ * gate. The returned storageKey is then passed to `status.post`.
+ */
+export async function uploadStatusMedia(
+  blob: Blob,
+  opts: { mimeType?: string },
+): Promise<{ storageKey: string; url: string }> {
+  const mime = opts.mimeType || blob.type || "application/octet-stream";
+  const qs = new URLSearchParams({ bare: "1", mime });
+  const headers: Record<string, string> = { "Content-Type": "application/octet-stream" };
+  const deviceId = getDeviceId();
+  if (deviceId) headers[DEVICE_ID_HEADER] = deviceId;
+  const res = await fetch(`/api/v2/upload?${qs.toString()}`, {
+    method: "POST",
+    credentials: "include",
+    headers,
+    body: blob,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<{ storageKey: string; url: string }>;
+}

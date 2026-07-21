@@ -24,6 +24,16 @@ import {
   keyInOwnerNamespace,
   getIdentitiesByIds,
   getIdentitiesByNumbers,
+  insertStatus,
+  getActiveStatusesForOwners,
+  getActiveStatusById,
+  deleteStatus,
+  recordStatusView,
+  getViewedStatusIds,
+  getStatusViewerIds,
+  getStatusViewCounts,
+  getContactNumbersForOwner,
+  type StatusRow,
   getIdentityByDeviceId,
   getIdentityById,
   getIdentityByNumber,
@@ -1769,5 +1779,165 @@ export const v2PartyLinesRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "That party line isn't yours (or is already gone)." });
       }
       return { ok: true };
+    }),
+});
+
+/* ── rich user status (story-style, ephemeral) ─────────────────────────────
+   text / image+caption / video+caption / audio, visible to the owner + their
+   contacts, auto-expiring (24h). Media is uploaded via /api/v2/upload (same as
+   attachments) and referenced by mediaKey; the URL is derived server-side after
+   an ownership-namespace check (identical gate to attachments.register). */
+
+const StatusKindSchema = z.enum(["text", "image", "video", "audio"]);
+const STATUS_TTL_MS = 24 * 60 * 60 * 1000; // 24h, story-style
+const STATUS_MAX_TEXT = 700;
+
+function publicStatus(r: StatusRow) {
+  return {
+    id: r.id,
+    kind: r.kind,
+    text: r.text,
+    bgColor: r.bgColor,
+    mediaUrl: r.mediaUrl,
+    mimeType: r.mimeType,
+    durationMs: r.durationMs,
+    createdAt: r.createdAt,
+    expiresAt: r.expiresAt,
+  };
+}
+
+export const v2StatusRouter = router({
+  /** Post a status. Text kind needs text; media kinds need an owned mediaKey. */
+  post: publicProcedure
+    .input(
+      z.object({
+        kind: StatusKindSchema,
+        text: z.string().max(STATUS_MAX_TEXT).optional(),
+        bgColor: z.string().max(64).optional(),
+        mediaKey: z.string().max(256).optional(),
+        mimeType: z.string().max(128).optional(),
+        durationMs: z.number().int().min(0).max(10 * 60_000).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const text = (input.text ?? "").trim();
+      if (input.kind === "text") {
+        if (!text) throw new TRPCError({ code: "BAD_REQUEST", message: "A text status needs some text." });
+      } else {
+        if (!input.mediaKey) throw new TRPCError({ code: "BAD_REQUEST", message: "Missing media for this status." });
+        // Ownership gate (same as attachments.register): a client-supplied key
+        // may only be claimed within the caller's OWN upload namespace.
+        if (!keyInOwnerNamespace(input.mediaKey, me.id, s3Config()?.prefix ?? "")) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "That upload isn't yours." });
+        }
+      }
+      const mediaUrl = input.mediaKey ? `/manus-storage/${input.mediaKey}` : null;
+      const row = await insertStatus({
+        identityId: me.id,
+        kind: input.kind,
+        text: text || null,
+        bgColor: input.bgColor ?? null,
+        mediaKey: input.mediaKey ?? null,
+        mediaUrl,
+        mimeType: input.mimeType ?? null,
+        durationMs: input.durationMs ?? null,
+        ttlMs: STATUS_TTL_MS,
+      });
+      if (!row) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't post your status." });
+      return { id: row.id, expiresAt: row.expiresAt };
+    }),
+
+  /** The story feed: my active statuses + my contacts', grouped by owner. */
+  feed: publicProcedure.query(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    const contactNumbers = await getContactNumbersForOwner(me.id);
+    const contactIdents = contactNumbers.length ? await getIdentitiesByNumbers(contactNumbers) : [];
+    const ownerIds = Array.from(new Set<number>([me.id, ...contactIdents.map((i) => i.id)]));
+    const rows = await getActiveStatusesForOwners(ownerIds);
+    const owners = await getIdentitiesByIds(Array.from(new Set(rows.map((r) => r.identityId))));
+    const ownerById = new Map(owners.map((o) => [o.id, o]));
+    const viewed = await getViewedStatusIds(me.id, rows.map((r) => r.id));
+
+    const byOwner = new Map<number, StatusRow[]>();
+    for (const r of rows) {
+      const arr = byOwner.get(r.identityId) ?? [];
+      arr.push(r);
+      byOwner.set(r.identityId, arr);
+    }
+    const groups = Array.from(byOwner.entries()).map(([oid, items]) => {
+      const o = ownerById.get(oid);
+      const latest = items[items.length - 1];
+      return {
+        owner: {
+          id: oid,
+          number: o?.number ?? "",
+          displayName: o?.displayName ?? "Someone",
+          avatarUrl: o?.avatarUrl ?? null,
+          isMe: oid === me.id,
+        },
+        items: items.map(publicStatus),
+        hasUnseen: oid !== me.id && items.some((it) => !viewed.has(it.id)),
+        latestAt: latest.createdAt,
+      };
+    });
+    // Order: me first, then owners with unseen updates, then most-recent.
+    groups.sort((a, b) => {
+      if (a.owner.isMe !== b.owner.isMe) return a.owner.isMe ? -1 : 1;
+      if (a.hasUnseen !== b.hasUnseen) return a.hasUnseen ? -1 : 1;
+      return new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime();
+    });
+    return { groups };
+  }),
+
+  /** My own active statuses with a "seen by N" count each. */
+  mine: publicProcedure.query(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    const rows = await getActiveStatusesForOwners([me.id]);
+    const counts = await getStatusViewCounts(rows.map((r) => r.id));
+    return { items: rows.map((r) => ({ ...publicStatus(r), viewCount: counts.get(r.id) ?? 0 })) };
+  }),
+
+  /** Delete one of my statuses. */
+  remove: publicProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      return { ok: await deleteStatus(input.id, me.id) };
+    }),
+
+  /** Record that I viewed a status (idempotent; self-views aren't recorded). */
+  markViewed: publicProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const st = await getActiveStatusById(input.id);
+      if (!st) return { ok: false };
+      if (st.identityId === me.id) return { ok: true };
+      await recordStatusView(input.id, me.id);
+      return { ok: true };
+    }),
+
+  /** Who saw my status (owner-only; empty for anyone else). */
+  viewers: publicProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const st = await getActiveStatusById(input.id);
+      if (!st || st.identityId !== me.id) return { viewers: [] };
+      const ids = await getStatusViewerIds(input.id);
+      const idents = ids.length ? await getIdentitiesByIds(ids) : [];
+      const byId = new Map(idents.map((i) => [i.id, i]));
+      return {
+        viewers: ids.map((id) => {
+          const i = byId.get(id);
+          return {
+            id,
+            displayName: i?.displayName ?? "Someone",
+            number: i?.number ?? "",
+            avatarUrl: i?.avatarUrl ?? null,
+          };
+        }),
+      };
     }),
 });

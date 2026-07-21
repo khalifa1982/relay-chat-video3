@@ -15,6 +15,7 @@ import {
   v2OtpAuthRouter,
   v2PushRouter,
   v2PartyLinesRouter,
+  v2StatusRouter,
 } from "./v2routers";
 
 export const appRouter = router({
@@ -45,6 +46,7 @@ export const appRouter = router({
   stats: v2StatsRouter,
   push: v2PushRouter,
   partyLines: v2PartyLinesRouter,
+  status: v2StatusRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -115,6 +115,26 @@ export function registerV2Upload(app: Express) {
           const stored = await storagePut(tkey, buf, mimeType);
           return res.json({ thumb: true, storageKey: stored.key, url: stored.url });
         }
+        // ── BARE mode (v2.95): `?bare=1` stores image/video/audio bytes and
+        // returns {storageKey,url} WITHOUT an attachment row — for rich STATUS
+        // media. No row ⇒ the storage proxy serves it publicly (like avatars),
+        // so a CONTACT viewing a status isn't blocked by the participant-only
+        // attachment gate. The key lands in the owner's namespace so
+        // status.post's keyInOwnerNamespace ownership check passes.
+        if (req.query.bare === "1") {
+          if (BLOCKED_MIME.test(mimeType) || !/^(image|video|audio)\//i.test(mimeType)) {
+            return res.status(400).json({ error: "Status media must be an image, video, or audio file" });
+          }
+          if (buf.length === 0) return res.status(400).json({ error: "Empty payload" });
+          if (buf.length > MAX_BYTES) {
+            return res.status(413).json({ error: "File exceeds the 40 MB limit" });
+          }
+          const bext = (mimeType.split("/")[1] || "bin").split(/[+;]/)[0].slice(0, 8);
+          const bhash = crypto.randomBytes(6).toString("hex");
+          const bkey = `relay-chat/${identityId}/status_${Date.now()}_${bhash}.${bext}`;
+          const stored = await storagePut(bkey, buf, mimeType);
+          return res.json({ bare: true, storageKey: stored.key, url: stored.url });
+        }
         // Optional thumbnail reference minted by a prior `?thumb=1` upload.
         // Must live in the CALLER'S OWN storage namespace — anything else could
         // graft a stranger's (or an arbitrary) object into a message bubble.
