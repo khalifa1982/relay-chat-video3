@@ -20,7 +20,7 @@
  * session cookie (HMAC, see authCrypto), per-IP + per-email rate limits, single-
  * use time-limited verification tokens.
  */
-import type { Express, Request, Response } from "express";
+import type { CookieOptions, Express, Request, Response } from "express";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { getDb, getUserById } from "./db";
 import { users, emailVerifications } from "../drizzle/schema";
@@ -130,15 +130,41 @@ async function consumeToken(token: string, nowMs: number): Promise<number | null
 
 /* ── session cookie ───────────────────────────────────────────────────────── */
 
-export function setSessionCookie(res: Response, userId: number): void {
-  const token = signSession(userId, sessionSecret(), SESSION_TTL_MS, Date.now());
-  res.cookie(LOCAL_SESSION_COOKIE, token, {
+/**
+ * Set the local session cookie.
+ *
+ * `ttlMs` powers the login-overhaul "remember me" control:
+ *   - undefined → the historical 1-year persistent session (back-compat: every
+ *     pre-existing caller keeps its exact behavior).
+ *   - a positive number → a persistent cookie of that lifetime (30/60/90 days).
+ *   - 0 → a SESSION cookie: no `maxAge`/`expires`, so the browser drops it on
+ *     close (the signed token still carries a 90-day safety expiry so a
+ *     long-lived tab can't outlive the signature).
+ */
+export function setSessionCookie(res: Response, userId: number, ttlMs?: number): void {
+  const isSession = ttlMs === 0;
+  const tokenTtl = isSession ? 90 * 24 * 60 * 60 * 1000 : (ttlMs ?? SESSION_TTL_MS);
+  const token = signSession(userId, sessionSecret(), tokenTtl, Date.now());
+  const opts: CookieOptions = {
     httpOnly: true,
     secure: true,
     sameSite: "lax",
-    maxAge: SESSION_TTL_MS,
     path: "/",
-  });
+  };
+  // A session cookie is one with NO maxAge/expires — omit it in that case.
+  if (!isSession) opts.maxAge = tokenTtl;
+  res.cookie(LOCAL_SESSION_COOKIE, token, opts);
+}
+
+/** Map the client's "remember me" choice to a `setSessionCookie` ttl.
+ *  0 = this browser session only; 30/60/90 = that many days; anything else
+ *  (incl. undefined) = the default 1-year persistent session. */
+export function rememberToTtlMs(remember?: number | null): number | undefined {
+  if (remember === 0) return 0;
+  if (remember === 30 || remember === 60 || remember === 90) {
+    return remember * 24 * 60 * 60 * 1000;
+  }
+  return undefined;
 }
 
 /** Resolve the userId from a local session cookie, or null. Used by the tRPC

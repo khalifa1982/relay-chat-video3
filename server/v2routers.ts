@@ -71,7 +71,7 @@ import {
 import { vapidConfig, sendPushToIdentity } from "./webPush";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
-import { setSessionCookie, LOCAL_SESSION_COOKIE } from "./authLocal";
+import { setSessionCookie, rememberToTtlMs, LOCAL_SESSION_COOKIE } from "./authLocal";
 import { COOKIE_NAME } from "@shared/const";
 import { normalizeEmail, isValidEmail } from "./authCrypto";
 import {
@@ -1475,7 +1475,15 @@ export const v2OtpAuthRouter = router({
 
   /** Verify a code → resolve/create the user, upgrade the guest identity, sign in. */
   verifyOtp: publicProcedure
-    .input(z.object({ email: EmailSchema, code: CodeSchema }))
+    .input(
+      z.object({
+        email: EmailSchema,
+        code: CodeSchema,
+        // "Remember me" (login overhaul): 0 = this browser session only,
+        // 30/60/90 = days, omitted = the default 1-year session.
+        remember: z.union([z.literal(0), z.literal(30), z.literal(60), z.literal(90)]).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       otpGate(ctx);
       const email = normalizeEmail(input.email);
@@ -1503,7 +1511,7 @@ export const v2OtpAuthRouter = router({
         `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || email.split("@")[0];
       const identity = await ensureUserIdentity({ userId, displayName, guestToken });
       await markIdentityVerified(identity.id, { firstName: row.firstName, lastName: row.lastName });
-      setSessionCookie(ctx.res, userId);
+      setSessionCookie(ctx.res, userId, rememberToTtlMs(input.remember));
       return { ok: true, verified: true };
     }),
 
@@ -1563,7 +1571,13 @@ export const v2OtpAuthRouter = router({
 
   /** Sign in with the 4-digit PIN (the email-code alternative). */
   loginWithPin: publicProcedure
-    .input(z.object({ email: EmailSchema, pin: z.string().regex(/^\d{4}$/, { message: "Enter the 4-digit code" }) }))
+    .input(
+      z.object({
+        email: EmailSchema,
+        pin: z.string().regex(/^\d{4}$/, { message: "Enter the 4-digit code" }),
+        remember: z.union([z.literal(0), z.literal(30), z.literal(60), z.literal(90)]).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       otpGate(ctx);
       const email = normalizeEmail(input.email);
@@ -1589,7 +1603,7 @@ export const v2OtpAuthRouter = router({
           // identity so number/contacts/messages survive.
           const guestToken = (ctx.req.cookies?.[GUEST_COOKIE] as string | undefined) ?? null;
           await ensureUserIdentity({ userId: user.id, displayName: user.name ?? email.split("@")[0], guestToken });
-          setSessionCookie(ctx.res, user.id);
+          setSessionCookie(ctx.res, user.id, rememberToTtlMs(input.remember));
           return { ok: true };
         }
         case "no-pin":
