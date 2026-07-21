@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { APP_VERSION } from "@shared/version";
 import { siteHost } from "@/lib/siteHost";
@@ -51,6 +51,135 @@ const KEYS: Array<[string, string]> = [
   ["1", ""], ["2", "ABC"], ["3", "DEF"], ["4", "GHI"], ["5", "JKL"], ["6", "MNO"],
   ["7", "PQRS"], ["8", "TUV"], ["9", "WXYZ"], ["*", ""], ["0", "+"], ["#", ""],
 ];
+
+/* ── bilingual copy (owner ask: bring Arabic back to the new design). RELAY
+   and pure-technical mono chrome (DTLS-SRTP, key caps) stay Latin; all
+   user-facing copy translates. AR renders the page dir="rtl" with LTR islands
+   for numbers/keypads. Choice persists in localStorage("relay_lang"). ── */
+export type Lang = "en" | "ar";
+const COPY = {
+  en: {
+    langBtn: "عربي",
+    navHow: "HOW IT WORKS", navFeatures: "FEATURES", navPrivacy: "PRIVACY", navFaq: "FAQ",
+    openApp: "OPEN APP ↗",
+    loaderTagline: "the same encryption standard that armors bank traffic — applied to your voice",
+    heroBadge: "LIVE — PEER-TO-PEER CALLS IN YOUR BROWSER",
+    h1a: "Pick a name.", h1b: "Get a number.", h1c: "Dial anyone.",
+    heroP: "RELAY is free voice, video and chat that runs entirely in your browser. No installs. No accounts. No servers in the middle of your call.",
+    ctaLaunch: "Launch RELAY →", ctaHow: "How it works",
+    worksIn: "WORKS IN CHROME · SAFARI · FIREFOX · EDGE",
+    dialerTitle: "RELAY DIALER", dialerOnline: "ONLINE",
+    dialEnter: "ENTER ANY 6-DIGIT NUMBER", dialMore: (n: number) => `${n} MORE DIGIT${n > 1 ? "S" : ""}`,
+    dialReady: "LINE READY — PRESS CALL", call: "CALL", clear: "CLEAR", demo: "DIAL A DEMO NUMBER",
+    marquee: "PEER-TO-PEER ✦ NO ACCOUNTS ✦ NO INSTALLS ✦ FREE FOREVER ✦ ENCRYPTED IN TRANSIT ✦ BROWSER-NATIVE ✦ 6-DIGIT NUMBERS ✦ PEER-TO-PEER ✦ NO ACCOUNTS ✦ NO INSTALLS ✦ FREE FOREVER ✦",
+    statsEyebrow: "LIVE NETWORK — REAL NUMBERS",
+    statUsers: "REGISTERED USERS", statGuests: "GUESTS SERVED", statParties: "CALL PARTIES", statOnline: "ONLINE NOW",
+    howEyebrow: "01 — HOW IT WORKS", howH2: "On a call in less time than a signup form.",
+    step1T: "Pick a name", step1B: "No signup, no email, no password. Type whatever you want to be called today and you're on the network.",
+    step2T: "Get your number", step2B: "You're handed a 6-digit RELAY number instantly — short enough to read out loud, easy enough to remember.",
+    step3T: "Dial anyone", step3B: "Punch in a friend's number for voice, video or chat — straight from the browser, on any device.",
+    featEyebrow: "02 — FEATURES", featH2: "Everything a call needs. Nothing it doesn't.",
+    f1T: "Voice calls", f1B: "Low-latency audio that streams browser-to-browser — from your mic to their speakers, nothing in between.",
+    f2T: "Video calls", f2B: "Face-to-face in one click. Crisp video that stays strictly between the people on the call.",
+    f3T: "Text chat", f3B: "A channel that runs alongside the call — paste links, drop notes, keep talking.",
+    f4T: "No installs", f4B: "If it runs a browser, it runs RELAY. Desktop, laptop, phone, tablet.",
+    f5T: "No accounts", f5B: "A display name is the only identity you need. Leave whenever you like.",
+    f6T: "Free forever", f6B: "No plans, no meters, no premium tier. Calling is free, full stop.",
+    liveFrom: "LIVE FROM THE APP",
+    privEyebrow: "03 — PRIVACY", privH2: "Your call is nobody's business.",
+    privP1: "RELAY is peer-to-peer. Voice and video stream directly between browsers over WebRTC, encrypted in transit with DTLS-SRTP.",
+    privP2: "Our server does one job: introductions. It helps two browsers find each other, then steps out of the way. Your media never passes through it.",
+    privL1: "NO CALL RECORDING, EVER", privL2: "NO ACCOUNT DATABASE", privL3: "NOTHING STORED, NOTHING TO BREACH",
+    faqEyebrow: "04 — FAQ", faqH2: "Quick answers.",
+    q1: "Is RELAY really free?", a1: "Yes. Calls run peer-to-peer between browsers, so there's no expensive media infrastructure to pay for — and no reason to charge you.",
+    q2: "Do I need an account?", a2: "No. Pick a display name when you arrive and you're on the network. No email, no password, no verification.",
+    q3: "How do the 6-digit numbers work?", a3: "Every visitor gets a short RELAY number. Read it out, text it, write it on a napkin — anyone who dials it from their browser reaches you directly.",
+    q4: "Does it work on my phone?", a4: "Yes — RELAY runs in any modern browser: Chrome, Safari, Firefox and Edge, on desktop or mobile. Nothing to install.",
+    q5: "Who can see or hear my calls?", a5: "Just the people on them. Media streams directly between browsers, encrypted in transit. RELAY's server only handles the handshake — it never touches your audio or video.",
+    ctaNumber: "Get your number →", ctaFine: "FREE · NO SIGNUP · ~10 SECONDS",
+    footTag: "PEER-TO-PEER. BROWSER-NATIVE. FREE.", footPolicy: "POLICY", footTop: "TOP ↑",
+    bootMsgs: [
+      [0, "WAKING THE NETWORK…", "Spinning up a direct line between your browsers…"],
+      [0.22, "RESOLVING PEERS…", "Finding the shortest path — no relay servers in the middle."],
+      [0.45, "EXCHANGING KEYS…", "Both devices invent a secret code that only they two know."],
+      [0.72, "LINE ENCRYPTED", "Every packet of voice & video is scrambled with that secret."],
+      [0.97, "CONNECTED", "Locked end-to-end. Nobody can listen in — not even RELAY."],
+    ] as Array<[number, string, string]>,
+    callMsgs: (fmt: string) => [
+      [0, `DIALING ${fmt}…`, `Reaching ${fmt} directly — browser to browser.`],
+      [0.3, "RINGING…", "No phone network involved. Just the open web."],
+      [0.55, "EXCHANGING KEYS…", "Your devices invent a secret code that only they two know."],
+      [0.78, "LINE ENCRYPTED", "From here on, every word is scrambled end-to-end."],
+      [0.97, "CONNECTING…", "Locked. Nobody can listen in — not even RELAY."],
+    ] as Array<[number, string, string]>,
+  },
+  ar: {
+    langBtn: "EN",
+    navHow: "كيف يعمل", navFeatures: "المزايا", navPrivacy: "الخصوصية", navFaq: "الأسئلة",
+    openApp: "افتح التطبيق ↗",
+    loaderTagline: "نفس معيار التشفير الذي يحمي معاملات البنوك — مطبَّق على صوتك",
+    heroBadge: "مباشر — مكالمات ند-لِند داخل متصفحك",
+    h1a: "اختر اسمًا.", h1b: "احصل على رقم.", h1c: "اتصل بأي شخص.",
+    heroP: "RELAY مكالمات صوت وفيديو ودردشة مجانية تعمل بالكامل داخل متصفحك. بلا تثبيت. بلا حسابات. ولا خوادم تتوسط مكالمتك.",
+    ctaLaunch: "شغِّل RELAY ←", ctaHow: "كيف يعمل",
+    worksIn: "يعمل على كروم · سفاري · فايرفوكس · إيدج",
+    dialerTitle: "لوحة اتصال RELAY", dialerOnline: "متصل",
+    dialEnter: "أدخل أي رقم من 6 خانات", dialMore: (n: number) => `تبقّى ${n} ${n > 1 ? "خانات" : "خانة"}`,
+    dialReady: "الخط جاهز — اضغط اتصال", call: "اتصال", clear: "مسح", demo: "جرِّب رقمًا تجريبيًا",
+    marquee: "ند-لِند ✦ بلا حسابات ✦ بلا تثبيت ✦ مجاني للأبد ✦ مشفَّر أثناء النقل ✦ داخل المتصفح ✦ أرقام من 6 خانات ✦ ند-لِند ✦ بلا حسابات ✦ بلا تثبيت ✦ مجاني للأبد ✦",
+    statsEyebrow: "الشبكة الآن — أرقام حقيقية",
+    statUsers: "مستخدمون مسجّلون", statGuests: "ضيوف تمّت خدمتهم", statParties: "أطراف المكالمات", statOnline: "متصلون الآن",
+    howEyebrow: "01 — كيف يعمل", howH2: "تدخل مكالمة في وقت أقل من تعبئة نموذج تسجيل.",
+    step1T: "اختر اسمًا", step1B: "لا تسجيل، لا بريد إلكتروني، لا كلمة مرور. اكتب أي اسم يعجبك اليوم وستكون على الشبكة.",
+    step2T: "احصل على رقمك", step2B: "تحصل فورًا على رقم RELAY من 6 خانات — قصير يُقرأ بصوت عالٍ ويسهل حفظه.",
+    step3T: "اتصل بأي شخص", step3B: "اطلب رقم صديقك صوتًا أو فيديو أو دردشة — مباشرة من المتصفح وعلى أي جهاز.",
+    featEyebrow: "02 — المزايا", featH2: "كل ما تحتاجه المكالمة. ولا شيء زائد.",
+    f1T: "مكالمات صوتية", f1B: "صوت بزمن استجابة منخفض يتدفق من متصفح إلى متصفح — من مايكروفونك إلى سماعاتهم، لا شيء بينهما.",
+    f2T: "مكالمات فيديو", f2B: "وجهًا لوجه بنقرة واحدة. فيديو نقي يبقى حصريًا بين أطراف المكالمة.",
+    f3T: "دردشة نصية", f3B: "قناة تعمل بموازاة المكالمة — الصق روابط، دوّن ملاحظات، وواصل الحديث.",
+    f4T: "بلا تثبيت", f4B: "إن كان جهازك يشغّل متصفحًا فهو يشغّل RELAY. حاسوب، لابتوب، هاتف، لوحي.",
+    f5T: "بلا حسابات", f5B: "اسم العرض هو كل الهوية التي تحتاجها. وغادر متى شئت.",
+    f6T: "مجاني للأبد", f6B: "لا باقات ولا عدّادات ولا فئة مدفوعة. الاتصال مجاني، نقطة.",
+    liveFrom: "مباشرة من التطبيق",
+    privEyebrow: "03 — الخصوصية", privH2: "مكالمتك لا تخص أحدًا سواك.",
+    privP1: "RELAY يعمل ند-لِند: الصوت والفيديو يتدفقان مباشرة بين المتصفحات عبر WebRTC، مشفَّرين أثناء النقل بمعيار DTLS-SRTP.",
+    privP2: "خادمنا يقوم بمهمة واحدة: التعارف. يساعد المتصفحين على إيجاد بعضهما ثم يتنحّى جانبًا. وسائطك لا تمر عبره أبدًا.",
+    privL1: "لا تسجيل للمكالمات، أبدًا", privL2: "لا قاعدة بيانات حسابات", privL3: "لا شيء يُخزَّن، لا شيء يُخترق",
+    faqEyebrow: "04 — الأسئلة الشائعة", faqH2: "إجابات سريعة.",
+    q1: "هل RELAY مجاني فعلًا؟", a1: "نعم. المكالمات تعمل ند-لِند بين المتصفحات، فلا بنية وسائط مكلفة ندفع ثمنها — ولا سبب لنحاسبك.",
+    q2: "هل أحتاج إلى حساب؟", a2: "لا. اختر اسم عرض عند وصولك وستكون على الشبكة. لا بريد ولا كلمة مرور ولا تحقق.",
+    q3: "كيف تعمل الأرقام ذات 6 خانات؟", a3: "كل زائر يحصل على رقم RELAY قصير. اقرأه بصوت عالٍ أو أرسله برسالة — وكل من يطلبه من متصفحه يصل إليك مباشرة.",
+    q4: "هل يعمل على هاتفي؟", a4: "نعم — RELAY يعمل على أي متصفح حديث: كروم وسفاري وفايرفوكس وإيدج، على الحاسوب أو الجوال. لا شيء يُثبَّت.",
+    q5: "من يستطيع رؤية أو سماع مكالماتي؟", a5: "أطراف المكالمة فقط. الوسائط تتدفق مباشرة بين المتصفحات مشفَّرة أثناء النقل. خادم RELAY يتولى المصافحة فقط — ولا يلمس صوتك أو فيديوك أبدًا.",
+    ctaNumber: "احصل على رقمك ←", ctaFine: "مجاني · بلا تسجيل · ~10 ثوانٍ",
+    footTag: "ند-لِند. داخل المتصفح. مجاني.", footPolicy: "سياسة الخصوصية", footTop: "الأعلى ↑",
+    bootMsgs: [
+      [0, "إيقاظ الشبكة…", "نفتح خطًا مباشرًا بين المتصفحات…"],
+      [0.22, "تحديد الأطراف…", "نبحث عن أقصر مسار — بلا خوادم وسيطة."],
+      [0.45, "تبادل المفاتيح…", "جهازاكما يبتكران سرًا لا يعرفه سواهما."],
+      [0.72, "الخط مُشفَّر", "كل حزمة صوت وفيديو تُبعثر بذلك السر."],
+      [0.97, "تم الاتصال", "مقفل طرف-لِطرف. لا أحد يستطيع التنصّت — ولا حتى RELAY."],
+    ] as Array<[number, string, string]>,
+    callMsgs: (fmt: string) => [
+      [0, `جارٍ طلب ${fmt}…`, `نصل إلى ${fmt} مباشرة — متصفح إلى متصفح.`],
+      [0.3, "يرن…", "بلا شبكة هاتف. فقط الويب المفتوح."],
+      [0.55, "تبادل المفاتيح…", "جهازاكما يبتكران سرًا لا يعرفه سواهما."],
+      [0.78, "الخط مُشفَّر", "من هنا فصاعدًا كل كلمة مبعثرة طرف-لِطرف."],
+      [0.97, "جارٍ الاتصال…", "مقفل. لا أحد يستطيع التنصّت — ولا حتى RELAY."],
+    ] as Array<[number, string, string]>,
+  },
+};
+type Copy = (typeof COPY)["en"];
+
+function initialLang(): Lang {
+  try {
+    const saved = localStorage.getItem("relay_lang");
+    if (saved === "ar" || saved === "en") return saved;
+    return (navigator.language || "").toLowerCase().startsWith("ar") ? "ar" : "en";
+  } catch {
+    return "en";
+  }
+}
 
 const CSS = `
 .lp-root{position:relative;min-height:100vh;background:#0a0d10;color:#e9f0f2;font-family:'Space Grotesk',Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;overflow-x:hidden}
@@ -149,25 +278,25 @@ const chromeBar = (host: string, label = "") =>
 
 /** LIVE NETWORK stats strip (carried over from the previous landing). Values
  *  are written imperatively from the trpc.stats.public query. */
-function statsStrip(): string {
+function statsStrip(t: Copy): string {
   const tile = (key: string, label: string, extra = "") =>
-    `<div style="flex:1 1 180px;min-width:150px;text-align:center"><div style="display:flex;align-items:center;justify-content:center;gap:8px"><span data-lp="stat-${key}" style="font:700 clamp(26px,3.4vw,40px) 'Space Grotesk',sans-serif;color:#e9f0f2">—</span>${extra}</div><div style="margin-top:6px;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.26em;color:rgba(148,162,172,.75)">${label}</div></div>`;
+    `<div style="flex:1 1 180px;min-width:150px;text-align:center"><div dir="ltr" style="display:flex;align-items:center;justify-content:center;gap:8px"><span data-lp="stat-${key}" style="font:700 clamp(26px,3.4vw,40px) 'Space Grotesk',sans-serif;color:#e9f0f2">—</span>${extra}</div><div style="margin-top:6px;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.26em;color:rgba(148,162,172,.75)">${label}</div></div>`;
   return `
   <section class="lp-section" data-screen-label="Live stats" style="padding:56px 40px 8px">
     <div style="max-width:1140px;margin:0 auto">
-      <div style="display:flex;align-items:center;gap:16px;margin-bottom:26px"><span data-scramble="1" style="font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#6ff2ae">LIVE NETWORK — REAL NUMBERS</span><span style="flex:1;height:1px;background:linear-gradient(90deg,rgba(111,242,174,.35),transparent)"></span></div>
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:26px"><span data-scramble="1" style="font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#6ff2ae">${t.statsEyebrow}</span><span style="flex:1;height:1px;background:linear-gradient(90deg,rgba(111,242,174,.35),transparent)"></span></div>
       <div style="display:flex;flex-wrap:wrap;gap:26px;border:1px solid rgba(233,240,242,.09);border-radius:20px;background:rgba(255,255,255,.025);padding:30px 24px">
-        ${tile("users", "REGISTERED USERS")}
-        ${tile("guests", "GUESTS SERVED")}
-        ${tile("parties", "CALL PARTIES")}
-        ${tile("online", "ONLINE NOW", `<span style="width:8px;height:8px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 12px rgba(111,242,174,.9);animation:lpBlink 1.6s infinite;display:block"></span>`)}
+        ${tile("users", t.statUsers)}
+        ${tile("guests", t.statGuests)}
+        ${tile("parties", t.statParties)}
+        ${tile("online", t.statOnline, `<span style="width:8px;height:8px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 12px rgba(111,242,174,.9);animation:lpBlink 1.6s infinite;display:block"></span>`)}
       </div>
     </div>
   </section>`;
 }
 
-function markup(host: string): string {
-  const mq = `PEER-TO-PEER ✦ NO ACCOUNTS ✦ NO INSTALLS ✦ FREE FOREVER ✦ ENCRYPTED IN TRANSIT ✦ BROWSER-NATIVE ✦ 6-DIGIT NUMBERS ✦ PEER-TO-PEER ✦ NO ACCOUNTS ✦ NO INSTALLS ✦ FREE FOREVER ✦`;
+function markup(host: string, t: Copy, ar: boolean): string {
+  const mq = t.marquee;
   const step = (n: string, title: string, body: string, demo: string) =>
     `<div data-reveal="${n === "01" ? 1 : n === "02" ? 2 : 3}"><div class="lp-card" style="background:rgba(255,255,255,.035);border:1px solid rgba(233,240,242,.09);border-radius:20px;padding:34px;min-height:220px;box-sizing:border-box"><div style="display:flex;align-items:center;gap:16px"><span style="font:600 13px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#6ff2ae">STEP ${n}</span><span style="flex:1;height:1px;background:linear-gradient(90deg,rgba(111,242,174,.45),transparent)"></span></div><h3 data-scramble="1" style="margin:22px 0 12px;font:600 22px 'Space Grotesk',sans-serif">${title}</h3><p style="margin:0;font:400 15px/1.65 'Space Grotesk',sans-serif;color:#94a2ac">${body}</p><div style="margin-top:22px;border:1px solid rgba(233,240,242,.1);border-radius:12px;overflow:hidden;background:rgba(10,13,16,.6)">${chromeBar(host)}<div style="height:170px;overflow:hidden;position:relative;background:radial-gradient(130% 110% at 50% 0%,#0f171b,#0a0d10);display:flex;align-items:center;justify-content:center">${demo}</div></div></div></div>`;
 
@@ -179,7 +308,7 @@ function markup(host: string): string {
     `<details style="border-bottom:1px solid rgba(233,240,242,.1)"><summary style="display:flex;justify-content:space-between;align-items:center;gap:24px;padding:24px 0;cursor:pointer;list-style:none;font:500 18px 'Space Grotesk',sans-serif">${q}<span style="font:400 22px 'IBM Plex Mono',monospace;color:#6ff2ae">+</span></summary><p style="margin:0;padding:0 0 26px;font:400 15px/1.7 'Space Grotesk',sans-serif;color:#94a2ac;max-width:640px">${a}</p></details>`;
 
   return `
-<div data-lp="root" id="top" style="position:relative;min-height:100vh">
+<div data-lp="root" id="top" dir="${ar ? "rtl" : "ltr"}" style="position:relative;min-height:100vh">
 <div data-lp="hue" style="position:fixed;inset:0;z-index:0;pointer-events:none"></div>
 <canvas data-lp="matrix" style="position:fixed;inset:0;width:100vw;height:100vh;display:block;z-index:0;pointer-events:none;opacity:.75"></canvas>
 <canvas data-lp="canvas" style="position:fixed;inset:0;width:100vw;height:100vh;display:block;z-index:0;pointer-events:none"></canvas>
@@ -190,7 +319,7 @@ function markup(host: string): string {
     <div style="display:flex;align-items:center;gap:10px"><span style="width:8px;height:8px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 12px rgba(111,242,174,.9);animation:lpBlink 1.4s infinite"></span><span style="font:700 16px 'Space Grotesk',sans-serif;letter-spacing:.24em;color:#e9f0f2">RELAY</span></div>
     <div style="width:100%">
       <div style="text-align:center;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.3em;color:#6ff2ae;margin-bottom:8px">DTLS-SRTP · END-TO-END HANDSHAKE</div>
-      <div style="text-align:center;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.08em;color:rgba(148,162,172,.75);margin-bottom:22px">the same encryption standard that armors bank traffic — applied to your voice</div>
+      <div style="text-align:center;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.08em;color:rgba(148,162,172,.75);margin-bottom:22px">${t.loaderTagline}</div>
       <div style="display:flex;align-items:center;gap:14px">
         <span style="position:relative;flex:none;width:60px;height:60px;border-radius:50%;border:1px solid rgba(111,242,174,.6);background:rgba(111,242,174,.07);display:flex;align-items:center;justify-content:center;font:600 10px 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#e9f0f2">YOU<span style="position:absolute;inset:0;border-radius:50%;border:1px solid rgba(111,242,174,.5);animation:lpPing 2s ease-out infinite"></span></span>
         <span style="position:relative;flex:1;height:16px;display:block">
@@ -209,8 +338,8 @@ function markup(host: string): string {
     </div>
     <div style="width:100%">
       <div style="width:100%;height:3px;border-radius:3px;background:rgba(233,240,242,.08);overflow:hidden"><div data-lp="loadBar" style="width:0%;height:100%;border-radius:3px;background:#6ff2ae;box-shadow:0 0 14px rgba(111,242,174,.8)"></div></div>
-      <div style="display:flex;justify-content:space-between;margin-top:12px"><span data-lp="loadMsg" style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#6ff2ae">WAKING THE NETWORK…</span><span data-lp="loadPct" style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.18em;color:rgba(148,162,172,.8)">0%</span></div>
-      <div data-lp="loadSub" style="margin-top:9px;font:400 11px/1.5 'Space Grotesk',sans-serif;color:rgba(148,162,172,.85);min-height:17px">Spinning up a direct line between your browsers…</div>
+      <div style="display:flex;justify-content:space-between;margin-top:12px"><span data-lp="loadMsg" style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#6ff2ae">${t.bootMsgs[0][1]}</span><span data-lp="loadPct" style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.18em;color:rgba(148,162,172,.8)">0%</span></div>
+      <div data-lp="loadSub" style="margin-top:9px;font:400 11px/1.5 'Space Grotesk',sans-serif;color:rgba(148,162,172,.85);min-height:17px">${t.bootMsgs[0][2]}</div>
     </div>
   </div>
 </div>
@@ -218,41 +347,41 @@ function markup(host: string): string {
 <nav data-lp="nav" style="position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:16px 40px;background:rgba(10,13,16,.45);backdrop-filter:blur(18px) saturate(1.5);-webkit-backdrop-filter:blur(18px) saturate(1.5);border-bottom:1px solid rgba(111,242,174,.18);box-shadow:0 8px 40px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.06)">
   <a href="#top" style="display:flex;align-items:center;gap:10px;color:#e9f0f2"><span data-lp="dockDot" style="width:8px;height:8px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 12px rgba(111,242,174,.9);display:block"></span><span style="font:700 17px 'Space Grotesk',sans-serif;letter-spacing:.22em">RELAY</span></a>
   <div class="lp-navlinks" style="display:flex;align-items:center;gap:28px;font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.18em">
-    <a class="lp-navlink" href="#how">HOW IT WORKS</a>
-    <a class="lp-navlink" href="#features">FEATURES</a>
-    <a class="lp-navlink" href="#privacy">PRIVACY</a>
-    <a class="lp-navlink" href="#faq">FAQ</a>
+    <a class="lp-navlink" href="#how">${t.navHow}</a>
+    <a class="lp-navlink" href="#features">${t.navFeatures}</a>
+    <a class="lp-navlink" href="#privacy">${t.navPrivacy}</a>
+    <a class="lp-navlink" href="#faq">${t.navFaq}</a>
   </div>
-  <a data-lp="dock" class="lp-dock" href="/app" style="font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.16em;color:#6ff2ae;border:1px solid rgba(111,242,174,.4);border-radius:999px;padding:10px 20px;background:rgba(111,242,174,.06);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)">OPEN APP ↗</a>
+  <div style="display:flex;align-items:center;gap:10px"><button type="button" data-lp="langBtn" style="cursor:pointer;font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#e9f0f2;border:1px solid rgba(233,240,242,.25);border-radius:999px;padding:9px 14px;background:rgba(255,255,255,.04)">${t.langBtn}</button><a data-lp="dock" class="lp-dock" href="/app" style="font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.16em;color:#6ff2ae;border:1px solid rgba(111,242,174,.4);border-radius:999px;padding:10px 20px;background:rgba(111,242,174,.06);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)">${t.openApp}</a></div>
 </nav>
 
 <main style="position:relative;z-index:2">
   <section class="lp-hero" data-screen-label="Hero" style="min-height:100vh;display:flex;align-items:center;padding:150px 40px 90px;box-sizing:border-box">
     <div style="max-width:1240px;margin:0 auto;display:flex;flex-wrap:wrap;gap:70px;align-items:center;justify-content:space-between;width:100%">
       <div style="flex:1 1 520px;min-width:320px">
-        <div style="display:flex;align-items:center;gap:10px;font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.24em;color:#6ff2ae;animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) both"><span style="width:6px;height:6px;border-radius:50%;background:#6ff2ae;animation:lpBlink 1.6s infinite"></span><span data-scramble="1">LIVE — PEER-TO-PEER CALLS IN YOUR BROWSER</span></div>
+        <div style="display:flex;align-items:center;gap:10px;font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.24em;color:#6ff2ae;animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) both"><span style="width:6px;height:6px;border-radius:50%;background:#6ff2ae;animation:lpBlink 1.6s infinite"></span><span data-scramble="1">${t.heroBadge}</span></div>
         <h1 style="margin:26px 0 0;font:700 clamp(48px,7vw,94px)/0.99 'Space Grotesk',sans-serif;letter-spacing:-.025em">
-          <span style="display:block;animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) .08s both" data-scramble="1">Pick a name.</span>
-          <span style="display:block;animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) .18s both" data-scramble="1">Get a number.</span>
-          <span style="display:block;color:#6ff2ae;text-shadow:0 0 44px rgba(111,242,174,.35);animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) .28s both" data-scramble="1">Dial anyone.</span>
+          <span style="display:block;animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) .08s both" data-scramble="1">${t.h1a}</span>
+          <span style="display:block;animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) .18s both" data-scramble="1">${t.h1b}</span>
+          <span style="display:block;color:#6ff2ae;text-shadow:0 0 44px rgba(111,242,174,.35);animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) .28s both" data-scramble="1">${t.h1c}</span>
         </h1>
-        <p style="margin:28px 0 0;max-width:470px;font:400 17px/1.65 'Space Grotesk',sans-serif;color:#94a2ac;animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) .4s both">RELAY is free voice, video and chat that runs entirely in your browser. No installs. No accounts. No servers in the middle of your call.</p>
+        <p style="margin:28px 0 0;max-width:470px;font:400 17px/1.65 'Space Grotesk',sans-serif;color:#94a2ac;animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) .4s both">${t.heroP}</p>
         <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:38px;animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) .5s both">
-          <a class="lp-cta" href="/app" style="background:#6ff2ae;color:#06120b;font:600 16px 'Space Grotesk',sans-serif;padding:16px 30px;border-radius:999px;box-shadow:0 0 36px rgba(111,242,174,.35)">Launch RELAY →</a>
-          <a class="lp-ghost" href="#how" style="color:#e9f0f2;font:500 16px 'Space Grotesk',sans-serif;padding:16px 28px;border-radius:999px;border:1px solid rgba(233,240,242,.18)">How it works</a>
+          <a class="lp-cta" href="/app" style="background:#6ff2ae;color:#06120b;font:600 16px 'Space Grotesk',sans-serif;padding:16px 30px;border-radius:999px;box-shadow:0 0 36px rgba(111,242,174,.35)">${t.ctaLaunch}</a>
+          <a class="lp-ghost" href="#how" style="color:#e9f0f2;font:500 16px 'Space Grotesk',sans-serif;padding:16px 28px;border-radius:999px;border:1px solid rgba(233,240,242,.18)">${t.ctaHow}</a>
         </div>
-        <div style="margin-top:34px;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.26em;color:rgba(148,162,172,.6);animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) .6s both">WORKS IN CHROME · SAFARI · FIREFOX · EDGE</div>
+        <div style="margin-top:34px;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.26em;color:rgba(148,162,172,.6);animation:lpRiseIn .9s cubic-bezier(.22,1,.36,1) .6s both">${t.worksIn}</div>
       </div>
       <div style="flex:0 1 375px;min-width:320px;animation:lpRiseIn 1s cubic-bezier(.22,1,.36,1) .55s both">
         <div data-lp="padTilt" style="background:rgba(255,255,255,.035);border:1px solid rgba(233,240,242,.1);border-radius:26px;padding:26px;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:0 30px 80px rgba(0,0,0,.5);transition:transform .25s ease-out;transform:perspective(900px)">
-          <div style="display:flex;align-items:center;justify-content:space-between;font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.22em"><span style="color:rgba(148,162,172,.9)">RELAY DIALER</span><span style="display:flex;align-items:center;gap:6px;color:#6ff2ae"><span style="width:5px;height:5px;border-radius:50%;background:#6ff2ae;animation:lpBlink 1.6s infinite"></span>ONLINE</span></div>
-          <div data-lp="dialDisplay" style="margin:22px 0 8px;text-align:center;font:500 30px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#e9f0f2;min-height:38px">· · · · · ·</div>
-          <div data-lp="dialStatus" style="text-align:center;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:rgba(148,162,172,.9);margin-bottom:20px">ENTER ANY 6-DIGIT NUMBER</div>
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">${keypad()}</div>
-          <a data-lp="callBtn" href="/app" style="display:block;margin-top:14px;text-align:center;padding:15px;border-radius:14px;background:rgba(111,242,174,.12);border:1px solid rgba(111,242,174,.35);color:#6ff2ae;font:600 12px 'IBM Plex Mono',monospace;letter-spacing:.22em;opacity:.4;pointer-events:none;transition:all .3s">CALL</a>
+          <div style="display:flex;align-items:center;justify-content:space-between;font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.22em"><span style="color:rgba(148,162,172,.9)">${t.dialerTitle}</span><span style="display:flex;align-items:center;gap:6px;color:#6ff2ae"><span style="width:5px;height:5px;border-radius:50%;background:#6ff2ae;animation:lpBlink 1.6s infinite"></span>${t.dialerOnline}</span></div>
+          <div data-lp="dialDisplay" dir="ltr" style="margin:22px 0 8px;text-align:center;font:500 30px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#e9f0f2;min-height:38px">· · · · · ·</div>
+          <div data-lp="dialStatus" style="text-align:center;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:rgba(148,162,172,.9);margin-bottom:20px">${t.dialEnter}</div>
+          <div dir="ltr" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">${keypad()}</div>
+          <a data-lp="callBtn" href="/app" style="display:block;margin-top:14px;text-align:center;padding:15px;border-radius:14px;background:rgba(111,242,174,.12);border:1px solid rgba(111,242,174,.35);color:#6ff2ae;font:600 12px 'IBM Plex Mono',monospace;letter-spacing:.22em;opacity:.4;pointer-events:none;transition:all .3s">${t.call}</a>
           <div style="display:flex;justify-content:space-between;margin-top:14px;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.16em">
-            <button type="button" data-lp="clearBtn" style="background:none;border:none;cursor:pointer;color:rgba(148,162,172,.7);font:inherit;letter-spacing:inherit;padding:0">CLEAR</button>
-            <button type="button" data-lp="demoBtn" style="background:none;border:none;cursor:pointer;color:rgba(111,242,174,.8);font:inherit;letter-spacing:inherit;padding:0;border-bottom:1px dotted rgba(111,242,174,.5)">DIAL A DEMO NUMBER</button>
+            <button type="button" data-lp="clearBtn" style="background:none;border:none;cursor:pointer;color:rgba(148,162,172,.7);font:inherit;letter-spacing:inherit;padding:0">${t.clear}</button>
+            <button type="button" data-lp="demoBtn" style="background:none;border:none;cursor:pointer;color:rgba(111,242,174,.8);font:inherit;letter-spacing:inherit;padding:0;border-bottom:1px dotted rgba(111,242,174,.5)">${t.demo}</button>
           </div>
         </div>
       </div>
@@ -266,35 +395,35 @@ function markup(host: string): string {
     </div>
   </div>
 
-  ${statsStrip()}
+  ${statsStrip(t)}
 
   <section id="how" class="lp-section" data-screen-label="How it works" style="padding:150px 40px 120px">
     <div style="max-width:1140px;margin:0 auto">
-      <div data-reveal="0" data-scramble="1" style="font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#6ff2ae">01 — HOW IT WORKS</div>
-      <h2 data-reveal="1" data-scramble="1" style="margin:18px 0 0;font:700 clamp(34px,4.4vw,58px)/1.05 'Space Grotesk',sans-serif;letter-spacing:-.02em;max-width:640px">On a call in less time than a signup form.</h2>
+      <div data-reveal="0" data-scramble="1" style="font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#6ff2ae">${t.howEyebrow}</div>
+      <h2 data-reveal="1" data-scramble="1" style="margin:18px 0 0;font:700 clamp(34px,4.4vw,58px)/1.05 'Space Grotesk',sans-serif;letter-spacing:-.02em;max-width:640px">${t.howH2}</h2>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:26px;margin-top:64px">
-        ${step("01", "Pick a name", "No signup, no email, no password. Type whatever you want to be called today and you're on the network.", `<div style="animation:lpFloat3d 7s ease-in-out infinite alternate;display:flex;flex-direction:column;align-items:center;gap:11px"><div style="font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:rgba(111,242,174,.75)">CHOOSE A NAME</div><div style="display:flex;align-items:center;padding:9px 18px;border:1px solid rgba(111,242,174,.35);border-radius:10px;background:rgba(255,255,255,.03);box-shadow:0 0 24px rgba(111,242,174,.1);font:600 17px 'IBM Plex Mono',monospace;color:#e9f0f2"><span style="opacity:0;animation:lpTch 6s infinite .2s">S</span><span style="opacity:0;animation:lpTch 6s infinite .5s">a</span><span style="opacity:0;animation:lpTch 6s infinite .8s">r</span><span style="opacity:0;animation:lpTch 6s infinite 1.1s">a</span><span style="width:2px;height:16px;margin-left:3px;background:#6ff2ae;animation:lpCaretB 1s steps(1) infinite;display:block"></span></div><div style="font:600 9px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#0a0d10;background:#6ff2ae;padding:7px 16px;border-radius:999px;animation:lpGlowP 3s ease-in-out infinite">ENTER RELAY →</div></div><span style="position:absolute;left:10px;bottom:9px;display:flex;align-items:center;gap:6px;font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:rgba(111,242,174,.85)"><span style="width:5px;height:5px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 8px rgba(111,242,174,.9);display:block"></span>GUEST MODE</span>`)}
-        ${step("02", "Get your number", "You're handed a 6-digit RELAY number instantly — short enough to read out loud, easy enough to remember.", `<div style="animation:lpFloat3d 7s ease-in-out infinite alternate reverse;display:flex;flex-direction:column;align-items:center;gap:12px"><div style="font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:rgba(111,242,174,.75)">YOUR RELAY NUMBER</div><div style="display:flex;gap:6px;font:700 32px 'IBM Plex Mono',monospace;color:#6ff2ae;text-shadow:0 0 22px rgba(111,242,174,.55)"><span style="opacity:0;animation:lpDgt 5.5s infinite .2s">2</span><span style="opacity:0;animation:lpDgt 5.5s infinite .4s">3</span><span style="opacity:0;animation:lpDgt 5.5s infinite .6s">5</span><span style="opacity:0;animation:lpDgt 5.5s infinite .7s;color:rgba(111,242,174,.45)">-</span><span style="opacity:0;animation:lpDgt 5.5s infinite .8s">5</span><span style="opacity:0;animation:lpDgt 5.5s infinite 1s">3</span><span style="opacity:0;animation:lpDgt 5.5s infinite 1.2s">1</span></div><div style="display:flex;align-items:center;gap:7px;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#94a2ac;border:1px solid rgba(233,240,242,.15);border-radius:999px;padding:6px 14px"><span style="color:#6ff2ae">⤴</span>SHARE INVITE LINK</div></div><span style="position:absolute;left:10px;bottom:9px;display:flex;align-items:center;gap:6px;font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:rgba(111,242,174,.85)"><span style="width:5px;height:5px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 8px rgba(111,242,174,.9);display:block"></span>YOUR NUMBER</span>`)}
-        ${step("03", "Dial anyone", "Punch in a friend's number for voice, video or chat — straight from the browser, on any device.", `<div style="animation:lpFloat3d 8s ease-in-out infinite alternate;display:flex;align-items:center;gap:18px"><div style="display:grid;grid-template-columns:repeat(3,42px);gap:5px"><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0">1</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0;animation:lpKpress 6s infinite .3s">2</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0;animation:lpKpress 6s infinite .8s">3</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0">4</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0;animation:lpKpress 6s infinite 1.3s">5</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0">6</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0">7</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0">8</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0;animation:lpKpress 6s infinite 1.8s">9</div></div><div style="display:flex;flex-direction:column;align-items:center;gap:9px"><div style="font:700 15px 'IBM Plex Mono',monospace;color:#6ff2ae;text-shadow:0 0 14px rgba(111,242,174,.5)">235-91_</div><div style="width:38px;height:38px;border-radius:50%;background:#6ff2ae;display:flex;align-items:center;justify-content:center;animation:lpCallPulse 6s infinite"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0a0d10" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3A19.5 19.5 0 0 1 5 12.7 19.8 19.8 0 0 1 2 4.1 2 2 0 0 1 4 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c1 .3 2 .6 2.9.7a2 2 0 0 1 1.8 2z"></path></svg></div><div style="font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#94a2ac">CALLING…</div></div></div><span style="position:absolute;left:10px;bottom:9px;display:flex;align-items:center;gap:6px;font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:rgba(111,242,174,.85)"><span style="width:5px;height:5px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 8px rgba(111,242,174,.9);display:block"></span>DIAL PAD</span>`)}
+        ${step("01", t.step1T, t.step1B, `<div style="animation:lpFloat3d 7s ease-in-out infinite alternate;display:flex;flex-direction:column;align-items:center;gap:11px"><div style="font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:rgba(111,242,174,.75)">CHOOSE A NAME</div><div style="display:flex;align-items:center;padding:9px 18px;border:1px solid rgba(111,242,174,.35);border-radius:10px;background:rgba(255,255,255,.03);box-shadow:0 0 24px rgba(111,242,174,.1);font:600 17px 'IBM Plex Mono',monospace;color:#e9f0f2"><span style="opacity:0;animation:lpTch 6s infinite .2s">S</span><span style="opacity:0;animation:lpTch 6s infinite .5s">a</span><span style="opacity:0;animation:lpTch 6s infinite .8s">r</span><span style="opacity:0;animation:lpTch 6s infinite 1.1s">a</span><span style="width:2px;height:16px;margin-left:3px;background:#6ff2ae;animation:lpCaretB 1s steps(1) infinite;display:block"></span></div><div style="font:600 9px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#0a0d10;background:#6ff2ae;padding:7px 16px;border-radius:999px;animation:lpGlowP 3s ease-in-out infinite">ENTER RELAY →</div></div><span style="position:absolute;left:10px;bottom:9px;display:flex;align-items:center;gap:6px;font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:rgba(111,242,174,.85)"><span style="width:5px;height:5px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 8px rgba(111,242,174,.9);display:block"></span>GUEST MODE</span>`)}
+        ${step("02", t.step2T, t.step2B, `<div style="animation:lpFloat3d 7s ease-in-out infinite alternate reverse;display:flex;flex-direction:column;align-items:center;gap:12px"><div style="font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:rgba(111,242,174,.75)">YOUR RELAY NUMBER</div><div style="display:flex;gap:6px;font:700 32px 'IBM Plex Mono',monospace;color:#6ff2ae;text-shadow:0 0 22px rgba(111,242,174,.55)"><span style="opacity:0;animation:lpDgt 5.5s infinite .2s">2</span><span style="opacity:0;animation:lpDgt 5.5s infinite .4s">3</span><span style="opacity:0;animation:lpDgt 5.5s infinite .6s">5</span><span style="opacity:0;animation:lpDgt 5.5s infinite .7s;color:rgba(111,242,174,.45)">-</span><span style="opacity:0;animation:lpDgt 5.5s infinite .8s">5</span><span style="opacity:0;animation:lpDgt 5.5s infinite 1s">3</span><span style="opacity:0;animation:lpDgt 5.5s infinite 1.2s">1</span></div><div style="display:flex;align-items:center;gap:7px;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#94a2ac;border:1px solid rgba(233,240,242,.15);border-radius:999px;padding:6px 14px"><span style="color:#6ff2ae">⤴</span>SHARE INVITE LINK</div></div><span style="position:absolute;left:10px;bottom:9px;display:flex;align-items:center;gap:6px;font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:rgba(111,242,174,.85)"><span style="width:5px;height:5px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 8px rgba(111,242,174,.9);display:block"></span>YOUR NUMBER</span>`)}
+        ${step("03", t.step3T, t.step3B, `<div style="animation:lpFloat3d 8s ease-in-out infinite alternate;display:flex;align-items:center;gap:18px"><div style="display:grid;grid-template-columns:repeat(3,42px);gap:5px"><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0">1</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0;animation:lpKpress 6s infinite .3s">2</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0;animation:lpKpress 6s infinite .8s">3</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0">4</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0;animation:lpKpress 6s infinite 1.3s">5</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0">6</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0">7</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0">8</div><div style="border-radius:8px;background:rgba(255,255,255,.045);color:#94a2ac;font:600 11px 'IBM Plex Mono',monospace;text-align:center;padding:6px 0;animation:lpKpress 6s infinite 1.8s">9</div></div><div style="display:flex;flex-direction:column;align-items:center;gap:9px"><div style="font:700 15px 'IBM Plex Mono',monospace;color:#6ff2ae;text-shadow:0 0 14px rgba(111,242,174,.5)">235-91_</div><div style="width:38px;height:38px;border-radius:50%;background:#6ff2ae;display:flex;align-items:center;justify-content:center;animation:lpCallPulse 6s infinite"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0a0d10" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3A19.5 19.5 0 0 1 5 12.7 19.8 19.8 0 0 1 2 4.1 2 2 0 0 1 4 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c1 .3 2 .6 2.9.7a2 2 0 0 1 1.8 2z"></path></svg></div><div style="font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#94a2ac">CALLING…</div></div></div><span style="position:absolute;left:10px;bottom:9px;display:flex;align-items:center;gap:6px;font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:rgba(111,242,174,.85)"><span style="width:5px;height:5px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 8px rgba(111,242,174,.9);display:block"></span>DIAL PAD</span>`)}
       </div>
     </div>
   </section>
 
   <section id="features" class="lp-section" data-screen-label="Features" style="padding:120px 40px">
     <div style="max-width:1140px;margin:0 auto">
-      <div data-reveal="0" data-scramble="1" style="font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#6ff2ae">02 — FEATURES</div>
-      <h2 data-reveal="1" data-scramble="1" style="margin:18px 0 0;font:700 clamp(34px,4.4vw,58px)/1.05 'Space Grotesk',sans-serif;letter-spacing:-.02em;max-width:700px">Everything a call needs. Nothing it doesn't.</h2>
+      <div data-reveal="0" data-scramble="1" style="font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#6ff2ae">${t.featEyebrow}</div>
+      <h2 data-reveal="1" data-scramble="1" style="margin:18px 0 0;font:700 clamp(34px,4.4vw,58px)/1.05 'Space Grotesk',sans-serif;letter-spacing:-.02em;max-width:700px">${t.featH2}</h2>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:24px;margin-top:64px">
-        ${feat(`<span style="display:flex;align-items:flex-end;gap:4px;height:40px"><span style="width:4px;height:12px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out infinite"></span><span style="width:4px;height:22px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out .13s infinite"></span><span style="width:4px;height:32px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out .26s infinite"></span><span style="width:4px;height:18px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out .39s infinite"></span><span style="width:4px;height:9px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out .52s infinite"></span></span>`, "Voice calls", "Low-latency audio that streams browser-to-browser — from your mic to their speakers, nothing in between.", 1)}
-        ${feat(`<span style="position:relative;width:40px;height:27px;border:2px solid #6ff2ae;border-radius:7px;display:block"><span style="position:absolute;right:-13px;top:5px;width:10px;height:13px;background:#6ff2ae;clip-path:polygon(100% 0,0 50%,100% 100%);display:block"></span></span>`, "Video calls", "Face-to-face in one click. Crisp video that stays strictly between the people on the call.", 2)}
-        ${feat(`<span style="width:40px;height:27px;border:2px solid #6ff2ae;border-radius:7px;display:flex;align-items:center;justify-content:center;gap:4px"><span style="width:4px;height:4px;border-radius:50%;background:#6ff2ae;animation:lpDots 1.3s infinite"></span><span style="width:4px;height:4px;border-radius:50%;background:#6ff2ae;animation:lpDots 1.3s .18s infinite"></span><span style="width:4px;height:4px;border-radius:50%;background:#6ff2ae;animation:lpDots 1.3s .36s infinite"></span></span>`, "Text chat", "A channel that runs alongside the call — paste links, drop notes, keep talking.", 3)}
-        ${feat2("04", "No installs", "If it runs a browser, it runs RELAY. Desktop, laptop, phone, tablet.", 2)}
-        ${feat2("05", "No accounts", "A display name is the only identity you need. Leave whenever you like.", 3)}
-        ${feat2("06", "Free forever", "No plans, no meters, no premium tier. Calling is free, full stop.", 4)}
+        ${feat(`<span style="display:flex;align-items:flex-end;gap:4px;height:40px"><span style="width:4px;height:12px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out infinite"></span><span style="width:4px;height:22px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out .13s infinite"></span><span style="width:4px;height:32px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out .26s infinite"></span><span style="width:4px;height:18px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out .39s infinite"></span><span style="width:4px;height:9px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out .52s infinite"></span></span>`, t.f1T, t.f1B, 1)}
+        ${feat(`<span style="position:relative;width:40px;height:27px;border:2px solid #6ff2ae;border-radius:7px;display:block"><span style="position:absolute;right:-13px;top:5px;width:10px;height:13px;background:#6ff2ae;clip-path:polygon(100% 0,0 50%,100% 100%);display:block"></span></span>`, t.f2T, t.f2B, 2)}
+        ${feat(`<span style="width:40px;height:27px;border:2px solid #6ff2ae;border-radius:7px;display:flex;align-items:center;justify-content:center;gap:4px"><span style="width:4px;height:4px;border-radius:50%;background:#6ff2ae;animation:lpDots 1.3s infinite"></span><span style="width:4px;height:4px;border-radius:50%;background:#6ff2ae;animation:lpDots 1.3s .18s infinite"></span><span style="width:4px;height:4px;border-radius:50%;background:#6ff2ae;animation:lpDots 1.3s .36s infinite"></span></span>`, t.f3T, t.f3B, 3)}
+        ${feat2("04", t.f4T, t.f4B, 2)}
+        ${feat2("05", t.f5T, t.f5B, 3)}
+        ${feat2("06", t.f6T, t.f6B, 4)}
       </div>
 
       <div data-reveal="2" style="margin-top:60px">
-        <div style="display:flex;align-items:center;gap:16px;margin-bottom:22px"><span data-scramble="1" style="font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#6ff2ae">LIVE FROM THE APP</span><span style="flex:1;height:1px;background:linear-gradient(90deg,rgba(111,242,174,.35),transparent)"></span></div>
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:22px"><span data-scramble="1" style="font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#6ff2ae">${t.liveFrom}</span><span style="flex:1;height:1px;background:linear-gradient(90deg,rgba(111,242,174,.35),transparent)"></span></div>
         <div style="border:1px solid rgba(233,240,242,.12);border-radius:20px;overflow:hidden;background:rgba(10,13,16,.65);box-shadow:0 30px 80px rgba(0,0,0,.5)">
           ${chromeBar(host, " — live call")}
           <div style="display:grid;grid-template-columns:2fr 1fr;gap:1px;background:rgba(233,240,242,.08);height:clamp(260px,42vw,480px)">
@@ -342,14 +471,14 @@ function markup(host: string): string {
   <section id="privacy" class="lp-section" data-screen-label="Privacy" style="padding:120px 40px">
     <div style="max-width:1140px;margin:0 auto;display:flex;flex-wrap:wrap;gap:70px;align-items:center">
       <div style="flex:1 1 440px;min-width:320px">
-        <div data-reveal="0" data-scramble="1" style="font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#6ff2ae">03 — PRIVACY</div>
-        <h2 data-reveal="1" data-scramble="1" style="margin:18px 0 0;font:700 clamp(34px,4.4vw,58px)/1.05 'Space Grotesk',sans-serif;letter-spacing:-.02em">Your call is nobody's business.</h2>
-        <p data-reveal="2" style="margin:26px 0 0;font:400 16px/1.7 'Space Grotesk',sans-serif;color:#94a2ac;max-width:480px">RELAY is peer-to-peer. Voice and video stream directly between browsers over WebRTC, encrypted in transit with DTLS-SRTP.</p>
-        <p data-reveal="3" style="margin:18px 0 0;font:400 16px/1.7 'Space Grotesk',sans-serif;color:#94a2ac;max-width:480px">Our server does one job: introductions. It helps two browsers find each other, then steps out of the way. Your media never passes through it.</p>
+        <div data-reveal="0" data-scramble="1" style="font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#6ff2ae">${t.privEyebrow}</div>
+        <h2 data-reveal="1" data-scramble="1" style="margin:18px 0 0;font:700 clamp(34px,4.4vw,58px)/1.05 'Space Grotesk',sans-serif;letter-spacing:-.02em">${t.privH2}</h2>
+        <p data-reveal="2" style="margin:26px 0 0;font:400 16px/1.7 'Space Grotesk',sans-serif;color:#94a2ac;max-width:480px">${t.privP1}</p>
+        <p data-reveal="3" style="margin:18px 0 0;font:400 16px/1.7 'Space Grotesk',sans-serif;color:#94a2ac;max-width:480px">${t.privP2}</p>
         <div data-reveal="4" style="margin-top:30px;display:flex;flex-direction:column;gap:12px;font:500 12px 'IBM Plex Mono',monospace;letter-spacing:.14em;color:rgba(233,240,242,.85)">
-          <span><span style="color:#6ff2ae">—</span> NO CALL RECORDING, EVER</span>
-          <span><span style="color:#6ff2ae">—</span> NO ACCOUNT DATABASE</span>
-          <span><span style="color:#6ff2ae">—</span> NOTHING STORED, NOTHING TO BREACH</span>
+          <span><span style="color:#6ff2ae">—</span> ${t.privL1}</span>
+          <span><span style="color:#6ff2ae">—</span> ${t.privL2}</span>
+          <span><span style="color:#6ff2ae">—</span> ${t.privL3}</span>
         </div>
       </div>
       <div data-reveal="2" style="flex:1 1 420px;min-width:320px">
@@ -369,18 +498,18 @@ function markup(host: string): string {
 
   <section id="faq" class="lp-section lp-faq" data-screen-label="FAQ" style="padding:120px 40px 140px">
     <div style="max-width:760px;margin:0 auto">
-      <div data-reveal="0" data-scramble="1" style="font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#6ff2ae">04 — FAQ</div>
-      <h2 data-reveal="1" data-scramble="1" style="margin:18px 0 40px;font:700 clamp(34px,4.4vw,54px)/1.05 'Space Grotesk',sans-serif;letter-spacing:-.02em">Quick answers.</h2>
+      <div data-reveal="0" data-scramble="1" style="font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#6ff2ae">${t.faqEyebrow}</div>
+      <h2 data-reveal="1" data-scramble="1" style="margin:18px 0 40px;font:700 clamp(34px,4.4vw,54px)/1.05 'Space Grotesk',sans-serif;letter-spacing:-.02em">${t.faqH2}</h2>
       <div data-reveal="2">
-        ${faq("Is RELAY really free?", "Yes. Calls run peer-to-peer between browsers, so there's no expensive media infrastructure to pay for — and no reason to charge you.")}
-        ${faq("Do I need an account?", "No. Pick a display name when you arrive and you're on the network. No email, no password, no verification.")}
-        ${faq("How do the 6-digit numbers work?", "Every visitor gets a short RELAY number. Read it out, text it, write it on a napkin — anyone who dials it from their browser reaches you directly.")}
-        ${faq("Does it work on my phone?", "Yes — RELAY runs in any modern browser: Chrome, Safari, Firefox and Edge, on desktop or mobile. Nothing to install.")}
-        ${faq("Who can see or hear my calls?", "Just the people on them. Media streams directly between browsers, encrypted in transit. RELAY's server only handles the handshake — it never touches your audio or video.")}
+        ${faq(t.q1, t.a1)}
+        ${faq(t.q2, t.a2)}
+        ${faq(t.q3, t.a3)}
+        ${faq(t.q4, t.a4)}
+        ${faq(t.q5, t.a5)}
       </div>
       <div data-reveal="3" style="margin-top:70px;text-align:center">
-        <a class="lp-cta" href="/app" style="display:inline-block;background:#6ff2ae;color:#06120b;font:600 17px 'Space Grotesk',sans-serif;padding:18px 40px;border-radius:999px;box-shadow:0 0 40px rgba(111,242,174,.35)">Get your number →</a>
-        <div style="margin-top:16px;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.24em;color:rgba(148,162,172,.6)">FREE · NO SIGNUP · ~10 SECONDS</div>
+        <a class="lp-cta" href="/app" style="display:inline-block;background:#6ff2ae;color:#06120b;font:600 17px 'Space Grotesk',sans-serif;padding:18px 40px;border-radius:999px;box-shadow:0 0 40px rgba(111,242,174,.35)">${t.ctaNumber}</a>
+        <div style="margin-top:16px;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.24em;color:rgba(148,162,172,.6)">${t.ctaFine}</div>
       </div>
     </div>
   </section>
@@ -389,15 +518,15 @@ function markup(host: string): string {
     <div style="max-width:1240px;margin:0 auto">
       <div style="font:700 clamp(90px,15vw,220px)/0.9 'Space Grotesk',sans-serif;letter-spacing:.03em;color:rgba(233,240,242,.06);text-align:center;user-select:none" data-scramble="1">RELAY</div>
       <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:24px;margin-top:60px">
-        <div style="font:400 11px 'IBM Plex Mono',monospace;letter-spacing:.18em;color:rgba(148,162,172,.7)">PEER-TO-PEER. BROWSER-NATIVE. FREE. © 2026 RELAY · v${APP_VERSION}</div>
+        <div style="font:400 11px 'IBM Plex Mono',monospace;letter-spacing:.18em;color:rgba(148,162,172,.7)"><span>${t.footTag}</span> <span dir="ltr">© 2026 RELAY · v${APP_VERSION}</span></div>
         <div style="display:flex;flex-wrap:wrap;gap:26px;font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.16em">
-          <a href="/app">OPEN APP ↗</a>
-          <a class="lp-footlink" href="#how">HOW IT WORKS</a>
-          <a class="lp-footlink" href="#features">FEATURES</a>
-          <a class="lp-footlink" href="#privacy">PRIVACY</a>
-          <a class="lp-footlink" href="#faq">FAQ</a>
-          <a class="lp-footlink" href="/privacy-policy">POLICY</a>
-          <a class="lp-footlink" href="#top">TOP ↑</a>
+          <a href="/app">${t.openApp}</a>
+          <a class="lp-footlink" href="#how">${t.navHow}</a>
+          <a class="lp-footlink" href="#features">${t.navFeatures}</a>
+          <a class="lp-footlink" href="#privacy">${t.navPrivacy}</a>
+          <a class="lp-footlink" href="#faq">${t.navFaq}</a>
+          <a class="lp-footlink" href="/privacy-policy">${t.footPolicy}</a>
+          <a class="lp-footlink" href="#top">${t.footTop}</a>
         </div>
       </div>
     </div>
@@ -417,7 +546,7 @@ const DTMF: Record<string, [number, number]> = {
 
 type LoaderMsg = [number, string, string];
 
-function startLanding(host: HTMLElement): () => void {
+function startLanding(host: HTMLElement, t: Copy, opts: { skipBoot: boolean; onToggleLang: () => void }): () => void {
   const $ = (k: string) => host.querySelector<HTMLElement>(`[data-lp="${k}"]`);
   const reduced =
     typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -444,13 +573,11 @@ function startLanding(host: HTMLElement): () => void {
     if (el) el.textContent = chars.join(" ");
     const len = num.length, full = len === 6;
     if (st) {
-      st.textContent = full
-        ? "LINE READY — PRESS CALL"
-        : len ? `${6 - len} MORE DIGIT${6 - len > 1 ? "S" : ""}` : "ENTER ANY 6-DIGIT NUMBER";
+      st.textContent = full ? t.dialReady : len ? t.dialMore(6 - len) : t.dialEnter;
       st.style.color = full ? "#6ff2ae" : "rgba(148,162,172,.9)";
     }
     if (cb) {
-      cb.textContent = full ? `CALL ${num.slice(0, 3)}-${num.slice(3)} ↗` : "CALL";
+      cb.textContent = full ? `${t.call} ${num.slice(0, 3)}-${num.slice(3)} ↗` : t.call;
       cb.style.opacity = full ? "1" : ".4";
       cb.style.pointerEvents = full ? "auto" : "none";
       cb.style.background = full ? "#6ff2ae" : "rgba(111,242,174,.12)";
@@ -502,6 +629,14 @@ function startLanding(host: HTMLElement): () => void {
   };
 
   /* ── loader ── */
+  // FAILSAFE (v2.95.7 — owner-reported "loading page not moving" on .io): the
+  // overlay covers the whole page, so it must NEVER be able to strand the
+  // visitor. Three belts: (1) the 3D scene now boots AFTER the loader finishes
+  // (a slow/software-WebGL machine compiling shaders used to stall rAF — the
+  // bar visibly froze); (2) a setTimeout watchdog force-clears the overlay at
+  // dur+1.6s even if rAF never ticks (background tab) or stalls; (3) any
+  // exception inside a step force-clears it too.
+  let loaderDone = false;
   const runLoader = (dur: number, msgs: LoaderMsg[], onDone?: () => void) => {
     const ov = $("loader");
     if (!ov || reduced) {
@@ -510,43 +645,53 @@ function startLanding(host: HTMLElement): () => void {
       return;
     }
     if (ldT) cancelAnimationFrame(ldT);
+    loaderDone = false;
     let lockOn: boolean | null = null;
+    const finish = (instant: boolean) => {
+      if (loaderDone) return;
+      loaderDone = true;
+      clearTimeout(watchdog);
+      ov.style.opacity = "0";
+      ov.style.pointerEvents = "none";
+      if (instant) ov.style.display = "none";
+      else setTimeout(() => { ov.style.display = "none"; }, 650);
+      onDone?.();
+    };
+    // Watchdog fires even when rAF is throttled to zero (hidden tab) — timers
+    // still tick there. dur+1600 leaves room for the normal fade path.
+    const watchdog = setTimeout(() => finish(true), dur + 1600);
     ov.style.display = "flex";
     ov.style.pointerEvents = "auto";
     requestAnimationFrame(() => { ov.style.opacity = "1"; });
     const bar = $("loadBar"), pct = $("loadPct"), msg = $("loadMsg"), sub = $("loadSub");
     const t0 = performance.now();
     const step = () => {
-      if (!alive) return;
-      const p = Math.min(1, (performance.now() - t0) / dur);
-      const e = 1 - Math.pow(1 - p, 2.1);
-      if (bar) bar.style.width = (e * 100).toFixed(1) + "%";
-      if (pct) pct.textContent = Math.round(e * 100) + "%";
-      let mm = msgs[0][1], ss = msgs[0][2];
-      for (const m of msgs) if (e >= m[0]) { mm = m[1]; ss = m[2]; }
-      if (msg && msg.textContent !== mm) msg.textContent = mm;
-      if (sub && sub.textContent !== ss) sub.textContent = ss;
-      const lk = $("lock"), lo = $("lockOpen"), lc = $("lockClosed");
-      if (lk && lo && lc) {
-        const locked = e >= 0.72;
-        if (locked !== lockOn) {
-          lockOn = locked;
-          lo.style.display = locked ? "none" : "flex";
-          lc.style.display = locked ? "flex" : "none";
-          lk.style.borderColor = locked ? "rgba(111,242,174,.8)" : "rgba(148,162,172,.45)";
-          lk.style.boxShadow = locked ? "0 0 22px rgba(111,242,174,.55)" : "none";
-          lk.style.animation = locked ? "lpLockPop .45s cubic-bezier(.22,1,.36,1)" : "none";
+      if (!alive) { clearTimeout(watchdog); return; }
+      try {
+        const p = Math.min(1, (performance.now() - t0) / dur);
+        const e = 1 - Math.pow(1 - p, 2.1);
+        if (bar) bar.style.width = (e * 100).toFixed(1) + "%";
+        if (pct) pct.textContent = Math.round(e * 100) + "%";
+        let mm = msgs[0][1], ss = msgs[0][2];
+        for (const m of msgs) if (e >= m[0]) { mm = m[1]; ss = m[2]; }
+        if (msg && msg.textContent !== mm) msg.textContent = mm;
+        if (sub && sub.textContent !== ss) sub.textContent = ss;
+        const lk = $("lock"), lo = $("lockOpen"), lc = $("lockClosed");
+        if (lk && lo && lc) {
+          const locked = e >= 0.72;
+          if (locked !== lockOn) {
+            lockOn = locked;
+            lo.style.display = locked ? "none" : "flex";
+            lc.style.display = locked ? "flex" : "none";
+            lk.style.borderColor = locked ? "rgba(111,242,174,.8)" : "rgba(148,162,172,.45)";
+            lk.style.boxShadow = locked ? "0 0 22px rgba(111,242,174,.55)" : "none";
+            lk.style.animation = locked ? "lpLockPop .45s cubic-bezier(.22,1,.36,1)" : "none";
+          }
         }
-      }
-      if (p < 1) { ldT = requestAnimationFrame(step); }
-      else {
-        setTimeout(() => {
-          if (!alive) return;
-          ov.style.opacity = "0";
-          ov.style.pointerEvents = "none";
-          setTimeout(() => { ov.style.display = "none"; }, 650);
-          onDone?.();
-        }, 260);
+        if (p < 1) { ldT = requestAnimationFrame(step); }
+        else { setTimeout(() => { if (alive) finish(false); }, 260); }
+      } catch {
+        finish(true); // never strand the visitor behind the overlay
       }
     };
     step();
@@ -569,13 +714,7 @@ function startLanding(host: HTMLElement): () => void {
     const n = num, fmt = `${n.slice(0, 3)}-${n.slice(3)}`;
     const nb = $("nodeB");
     if (nb?.firstChild) nb.firstChild.nodeValue = fmt;
-    runLoader(3000, [
-      [0, `DIALING ${fmt}…`, `Reaching ${fmt} directly — browser to browser.`],
-      [0.3, "RINGING…", "No phone network involved. Just the open web."],
-      [0.55, "EXCHANGING KEYS…", "Your devices invent a secret code that only they two know."],
-      [0.78, "LINE ENCRYPTED", "From here on, every word is scrambled end-to-end."],
-      [0.97, "CONNECTING…", "Locked. Nobody can listen in — not even RELAY."],
-    ], () => {
+    runLoader(3000, t.callMsgs(fmt) as LoaderMsg[], () => {
       calling = false;
       // Same-origin: land in the app's call-link direct-join flow.
       window.location.href = `/i/${n}`;
@@ -757,9 +896,14 @@ function startLanding(host: HTMLElement): () => void {
     onResizeThree?.();
   };
 
-  /* ── three.js scene (dynamic import; page fully works without it) ── */
+  /* ── three.js scene (dynamic import; page fully works without it) ──
+     Booted AFTER the boot loader completes (v2.95.7): shader compilation +
+     scene build on a slow GPU used to stall the main thread mid-loader. */
+  let threeStarted = false;
+  const lpDpr = () => Math.min(devicePixelRatio, innerWidth > 820 ? 1.8 : 1.25);
   const bootThree = async () => {
-    if (reduced) return;
+    if (reduced || threeStarted) return;
+    threeStarted = true;
     let T: typeof import("three");
     try {
       T = await import("three");
@@ -769,17 +913,17 @@ function startLanding(host: HTMLElement): () => void {
     if (!c) return;
     let rn: import("three").WebGLRenderer;
     try {
-      rn = new T.WebGLRenderer({ canvas: c, antialias: true, alpha: true });
+      rn = new T.WebGLRenderer({ canvas: c, antialias: innerWidth > 820, alpha: true });
     } catch { return; } // no WebGL — 2D fx still run
     renderer = rn;
-    rn.setPixelRatio(Math.min(devicePixelRatio, 1.8));
+    rn.setPixelRatio(lpDpr());
     rn.setSize(innerWidth, innerHeight, false);
     rn.setClearColor(0x000000, 0);
     const scene = new T.Scene();
     scene.fog = new T.FogExp2(0x0a0d10, 0.0085);
     const cam = new T.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 500);
     onResizeThree = () => {
-      rn.setPixelRatio(Math.min(devicePixelRatio, 1.8));
+      rn.setPixelRatio(lpDpr());
       rn.setSize(innerWidth, innerHeight, false);
       cam.aspect = innerWidth / innerHeight;
       cam.updateProjectionMatrix();
@@ -1069,19 +1213,23 @@ function startLanding(host: HTMLElement): () => void {
   initReveals();
   initScramble();
   initMatrix();
-  if (reduced) {
+  $("langBtn")?.addEventListener("click", opts.onToggleLang);
+  if (reduced || opts.skipBoot) {
+    // Reduced motion, or a LANGUAGE SWITCH re-init (the boot cinematic only
+    // plays once per visit): clear the overlay and go straight to content.
     const ov = $("loader");
     if (ov) ov.style.display = "none";
+    if (!reduced) {
+      raf = requestAnimationFrame(fxLoop);
+      void bootThree();
+    }
   } else {
     raf = requestAnimationFrame(fxLoop);
-    void bootThree();
-    runLoader(3400, [
-      [0, "WAKING THE NETWORK…", "Spinning up a direct line between your browsers…"],
-      [0.22, "RESOLVING PEERS…", "Finding the shortest path — no relay servers in the middle."],
-      [0.45, "EXCHANGING KEYS…", "Both devices invent a secret code that only they two know."],
-      [0.72, "LINE ENCRYPTED", "Every packet of voice & video is scrambled with that secret."],
-      [0.97, "CONNECTED", "Locked end-to-end. Nobody can listen in — not even RELAY."],
-    ], replayHero);
+    runLoader(3400, t.bootMsgs as LoaderMsg[], () => {
+      replayHero();
+      // Boot the 3D scene only now — its shader compile can't stall the loader.
+      void bootThree();
+    });
   }
   syncDial();
 
@@ -1107,7 +1255,10 @@ const FONTS_HREF =
 
 export default function Home() {
   const rootRef = useRef<HTMLDivElement>(null);
-  const html = useMemo(() => markup(siteHost()), []);
+  const [lang, setLang] = useState<Lang>(() => initialLang());
+  const bootedOnceRef = useRef(false);
+  const t = COPY[lang];
+  const html = useMemo(() => markup(siteHost(), t, lang === "ar"), [lang]);
 
   // LIVE NETWORK stats (carried from the previous landing, owner ask): written
   // imperatively into the design's strip so the static markup stays one string.
@@ -1141,12 +1292,26 @@ export default function Home() {
     // Smooth in-page anchor scrolling while the landing is mounted.
     const prevBehavior = document.documentElement.style.scrollBehavior;
     document.documentElement.style.scrollBehavior = "smooth";
-    const stop = rootRef.current ? startLanding(rootRef.current) : undefined;
+    const stop = rootRef.current
+      ? startLanding(rootRef.current, COPY[lang], {
+          // The boot cinematic plays once per visit — not again on a language
+          // switch (the engine re-inits over the freshly-rendered markup).
+          skipBoot: bootedOnceRef.current,
+          onToggleLang: () => {
+            setLang((prev) => {
+              const next: Lang = prev === "en" ? "ar" : "en";
+              try { localStorage.setItem("relay_lang", next); } catch { /* private mode */ }
+              return next;
+            });
+          },
+        })
+      : undefined;
+    bootedOnceRef.current = true;
     return () => {
       document.documentElement.style.scrollBehavior = prevBehavior;
       stop?.();
     };
-  }, []);
+  }, [lang]);
 
   return (
     <div className="lp-root">

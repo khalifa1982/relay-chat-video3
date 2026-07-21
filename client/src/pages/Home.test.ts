@@ -100,6 +100,32 @@ describe("Home.tsx — RELAY Landing (design port)", () => {
     expect(HOME_TSX).toMatch(/© 2026 RELAY · v\$\{APP_VERSION\}/);
   });
 
+  it("is bilingual again (owner ask): EN/AR copy tables + RTL + persisted toggle", () => {
+    expect(HOME_TSX).toMatch(/\ben:\s*\{/);
+    expect(HOME_TSX).toMatch(/\bar:\s*\{/);
+    // real Arabic copy, not placeholders
+    expect(HOME_TSX).toMatch(/مكالمات/);
+    expect(HOME_TSX).toMatch(/متصفحك/);
+    expect(HOME_TSX).toMatch(/الخصوصية/);
+    // the page flips direction and persists the choice
+    expect(HOME_TSX).toMatch(/dir="\$\{ar \? "rtl" : "ltr"\}"/);
+    expect(HOME_TSX).toMatch(/localStorage\.setItem\("relay_lang"/);
+    expect(HOME_TSX).toMatch(/data-lp="langBtn"/);
+    // numbers/keypad stay LTR islands inside the RTL page
+    expect(HOME_TSX).toMatch(/<div data-lp="dialDisplay" dir="ltr"/);
+  });
+
+  it("the boot loader can NEVER strand the page (v2.95.7 failsafes)", () => {
+    // watchdog force-clear fires even when rAF is throttled (hidden tab)
+    expect(HOME_TSX).toMatch(/const watchdog = setTimeout\(\(\) => finish\(true\), dur \+ 1600\)/);
+    // a throwing step also clears the overlay
+    expect(HOME_TSX).toMatch(/never strand the visitor behind the overlay/);
+    // the heavy 3D boot is DEFERRED until the loader completes
+    expect(HOME_TSX).toMatch(/replayHero\(\);\s*\n\s*\/\/ Boot the 3D scene only now/);
+    // language switches skip the boot cinematic (plays once per visit)
+    expect(HOME_TSX).toMatch(/skipBoot: bootedOnceRef\.current/);
+  });
+
   it("links the privacy policy and keeps anchor navigation", () => {
     expect(HOME_TSX).toMatch(/href="\/privacy-policy"/);
     for (const a of ["#how", "#features", "#privacy", "#faq", "#top"]) {

@@ -4213,3 +4213,22 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       provider retries (a support mail is never silently lost). New pure helpers
       isSupportRecipient/formatSupportBody/extractSubject + 9 tests (emailInbound.test.ts → 28).
       Lights up support@<domain> on .io the moment it deploys — AWS side needs zero changes.
+
+## v2.95.7 — landing loader failsafes (owner: "loading page is not moving") + ARABIC back (2026-07-21)
+- [x] LOADER CAN NEVER STRAND THE PAGE. Reproduced + fixed with headless-Chromium verification
+      (local static serve of the real build): (1) the three.js scene now boots AFTER the boot
+      loader completes — its shader compile/scene build on a slow or software-WebGL machine used
+      to stall rAF and visibly freeze the bar; (2) a setTimeout watchdog force-clears the overlay
+      at dur+1.6s even when rAF never ticks (hidden/background tab); (3) any exception inside a
+      loader step force-clears it too. Mobile GPU tuning: DPR cap 1.25 + no antialias under 820px.
+- [x] Killed the "%VITE_ANALYTICS_ENDPOINT%/umami" ghost request: the built index.html kept the
+      literal placeholder when analytics env is unset (the .io CI build) → every load fetched a
+      garbage URL, got SPA-fallback HTML, threw "SyntaxError: Unexpected token '<'".
+      strip-manus-runtime.mjs (already in the deploy) now also strips unsubstituted %VITE_*% tags.
+- [x] ARABIC IS BACK (owner: "Yes, AR"): full EN/AR copy tables for the new design (nav, hero,
+      dialer incl. status strings, marquee, stats, how/features/privacy/faq, footer, loader
+      narration + call cinematic), an ع/EN toggle in the nav, dir="rtl" page flip with LTR islands
+      (dial display, keypad, stat figures, © line), choice persisted in localStorage("relay_lang"),
+      default from navigator.language. Language switch re-renders WITHOUT replaying the boot
+      cinematic. Browser-verified: EN→AR→EN flip, RTL Arabic hero, no page errors.
+- [x] Home.test.ts +2 pin groups (bilingual + failsafes) → 14 pins. Suite 1083 passed / 1 skipped.
