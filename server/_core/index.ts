@@ -104,6 +104,16 @@ async function startServer() {
     );
   }
   const server = createServer(app);
+
+  // 301 redirect: your-chat.org → your-chat.io (domain migration)
+  app.use((req, res, next) => {
+    const host = (req.headers.host || "").replace(/:.*$/, "").toLowerCase();
+    if (host === "your-chat.org" || host === "www.your-chat.org") {
+      return res.redirect(301, `https://your-chat.io${req.originalUrl}`);
+    }
+    next();
+  });
+
   // Security headers on every response. Kept deliberately CONSERVATIVE so they
   // can't break the inline-style/script-heavy SPA, the WebRTC media stack, or the
   // Manus editor embed:
