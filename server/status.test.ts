@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { statuses, statusViews } from "../drizzle/schema";
+import { sanitizeStatusBg } from "./v2routers";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 
@@ -54,6 +55,65 @@ describe("status router", () => {
   it("is mounted on appRouter as `status`", () => {
     const routers = read("server/routers.ts");
     expect(routers).toMatch(/status: v2StatusRouter/);
+  });
+});
+
+describe("sanitizeStatusBg — kill the CSS url() tracking beacon (review §8)", () => {
+  it("accepts a solid hex color and the safe gradient palette", () => {
+    expect(sanitizeStatusBg("#0ea5e9")).toBe("#0ea5e9");
+    expect(sanitizeStatusBg("linear-gradient(135deg,#0ea5e9,#2563eb)")).toBe(
+      "linear-gradient(135deg,#0ea5e9,#2563eb)",
+    );
+    expect(sanitizeStatusBg("radial-gradient(circle, #fff, #000)")).toBe("radial-gradient(circle, #fff, #000)");
+  });
+  it("REJECTS url() beacons and CSS-injection attempts", () => {
+    expect(sanitizeStatusBg("url(//evil.tld/x)")).toBe(null);
+    expect(sanitizeStatusBg("linear-gradient(#fff), url(//evil.tld/x)")).toBe(null);
+    expect(sanitizeStatusBg("#fff;background-image:url(//evil.tld)")).toBe(null);
+    expect(sanitizeStatusBg("red}html{display:none")).toBe(null);
+    expect(sanitizeStatusBg("image-set('//evil')")).toBe(null);
+  });
+  it("returns null for empty / oversized / garbage", () => {
+    expect(sanitizeStatusBg(null)).toBe(null);
+    expect(sanitizeStatusBg("")).toBe(null);
+    expect(sanitizeStatusBg("not-a-color")).toBe(null);
+  });
+});
+
+describe("status privacy hardening (review §3/§4/§5)", () => {
+  const db = read("server/v2db.ts");
+  const router = read("server/v2routers.ts");
+  const proxy = read("server/_core/storageProxy.ts");
+
+  it("status media is gated by an ACTIVE status row + audience (not public)", () => {
+    // authorizeStorageKey recognises status keys and resolves the live row.
+    expect(db).toMatch(/\/\\\/status_\/\.test\(storageKey\)/);
+    expect(db).toMatch(/getActiveStatusByMediaKey/);
+    expect(db).toMatch(/statusAudienceAuthorized/);
+    // the proxy 403s an unauthorized status key (anonymous / expired / non-contact)
+    expect(proxy).toMatch(/authz\.kind === "status" && !authz\.authorized/);
+  });
+
+  it("audience honors blocks both ways", () => {
+    // requester must have saved (non-blocked) the owner AND owner must not block them
+    expect(db).toMatch(/saved\.blocked === true\) return false/);
+    expect(db).toMatch(/isNumberBlockedBy\(ownerId, requester\.number\)/);
+    // feed drops owners who blocked me
+    expect(router).toMatch(/ownersWhoBlockedNumber/);
+  });
+
+  it("markViewed is audience-gated + rate-limited", () => {
+    expect(router).toMatch(/statusAudienceAuthorized\(me\.id, st\.identityId\)\)\) return \{ ok: false \}/);
+    expect(router).toMatch(/statusGate\(ctx\)/);
+  });
+
+  it("post is capped per user + rate-limited", () => {
+    expect(router).toMatch(/countActiveStatuses\(me\.id\)\) >= STATUS_MAX_ACTIVE/);
+  });
+
+  it("expired rows are reaped", () => {
+    expect(db).toMatch(/export async function reapExpiredStatuses/);
+    expect(read("server/_core/index.ts")).toMatch(/reapExpiredStatuses\(\)/);
   });
 });
 

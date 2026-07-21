@@ -33,6 +33,9 @@ import {
   getStatusViewerIds,
   getStatusViewCounts,
   getContactNumbersForOwner,
+  statusAudienceAuthorized,
+  countActiveStatuses,
+  ownersWhoBlockedNumber,
   type StatusRow,
   getIdentityByDeviceId,
   getIdentityById,
@@ -1791,6 +1794,34 @@ export const v2PartyLinesRouter = router({
 const StatusKindSchema = z.enum(["text", "image", "video", "audio"]);
 const STATUS_TTL_MS = 24 * 60 * 60 * 1000; // 24h, story-style
 const STATUS_MAX_TEXT = 700;
+const STATUS_MAX_ACTIVE = 30; // per-user cap on concurrent active statuses
+
+// Rate gate (mirrors otp/party-line): caps status POSTs + view-records per IP so
+// a client can't spray fake views across every status id (adversarial review §5).
+const statusIpLimiter = createRateLimiter({ capacity: 60, refillPerSec: 60 / 60 });
+setInterval(() => statusIpLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
+function statusGate(ctx: { req: unknown }) {
+  if (process.env.RELAY_RATELIMIT_OFF === "1") return;
+  if (!statusIpLimiter.allow(clientIpOf(ctx.req as Parameters<typeof clientIpOf>[0]), Date.now())) {
+    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many status actions. Try again shortly." });
+  }
+}
+
+/**
+ * A text status's background is author-controlled and injected into a CSS
+ * `background` shorthand on the viewer's device. Restrict it to a solid hex
+ * color or a linear/radial-gradient built ONLY from safe tokens — no `url(...)`,
+ * so an author can't turn a status into a tracking beacon that phones home from
+ * every viewer's browser (adversarial review §8). Anything else → null (default).
+ */
+export function sanitizeStatusBg(v: string | undefined | null): string | null {
+  if (!v) return null;
+  const s = v.trim().slice(0, 64);
+  if (/url\(|@|;|\{|\}|expression|image-set|<|>/i.test(s)) return null;
+  const hex = /^#[0-9a-fA-F]{3,8}$/;
+  const grad = /^(linear|radial)-gradient\([#0-9a-zA-Z.,%()\s-]+\)$/;
+  return hex.test(s) || grad.test(s) ? s : null;
+}
 
 function publicStatus(r: StatusRow) {
   return {
@@ -1821,6 +1852,7 @@ export const v2StatusRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
+      statusGate(ctx);
       const text = (input.text ?? "").trim();
       if (input.kind === "text") {
         if (!text) throw new TRPCError({ code: "BAD_REQUEST", message: "A text status needs some text." });
@@ -1832,12 +1864,17 @@ export const v2StatusRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: "That upload isn't yours." });
         }
       }
+      // Per-user cap so posting isn't an unbounded DB/storage cost vector.
+      if ((await countActiveStatuses(me.id)) >= STATUS_MAX_ACTIVE) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: `You can have up to ${STATUS_MAX_ACTIVE} active statuses.` });
+      }
       const mediaUrl = input.mediaKey ? `/manus-storage/${input.mediaKey}` : null;
       const row = await insertStatus({
         identityId: me.id,
         kind: input.kind,
         text: text || null,
-        bgColor: input.bgColor ?? null,
+        // Author-controlled bg is restricted to safe color/gradient tokens.
+        bgColor: sanitizeStatusBg(input.bgColor),
         mediaKey: input.mediaKey ?? null,
         mediaUrl,
         mimeType: input.mimeType ?? null,
@@ -1851,9 +1888,13 @@ export const v2StatusRouter = router({
   /** The story feed: my active statuses + my contacts', grouped by owner. */
   feed: publicProcedure.query(async ({ ctx }) => {
     const me = requireIdentity(ctx);
+    // `getContactNumbersForOwner` already drops contacts I blocked. Then drop any
+    // owner who has blocked ME, so a block hides statuses BOTH ways.
     const contactNumbers = await getContactNumbersForOwner(me.id);
     const contactIdents = contactNumbers.length ? await getIdentitiesByNumbers(contactNumbers) : [];
-    const ownerIds = Array.from(new Set<number>([me.id, ...contactIdents.map((i) => i.id)]));
+    const candidateIds = Array.from(new Set<number>([me.id, ...contactIdents.map((i) => i.id)]));
+    const blockedMe = await ownersWhoBlockedNumber(candidateIds.filter((id) => id !== me.id), me.number);
+    const ownerIds = candidateIds.filter((id) => id === me.id || !blockedMe.has(id));
     const rows = await getActiveStatusesForOwners(ownerIds);
     const owners = await getIdentitiesByIds(Array.from(new Set(rows.map((r) => r.identityId))));
     const ownerById = new Map(owners.map((o) => [o.id, o]));
@@ -1911,9 +1952,14 @@ export const v2StatusRouter = router({
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
+      statusGate(ctx);
       const st = await getActiveStatusById(input.id);
       if (!st) return { ok: false };
       if (st.identityId === me.id) return { ok: true };
+      // Only someone in the status's audience can register a view — otherwise a
+      // stranger (even a guest with an attacker-chosen name) could enumerate
+      // status ids and inject themselves into the owner's "Seen by" (review §5).
+      if (!(await statusAudienceAuthorized(me.id, st.identityId))) return { ok: false };
       await recordStatusView(input.id, me.id);
       return { ok: true };
     }),

@@ -15,7 +15,7 @@ import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
 import { registerV2Events, publishToIdentity } from "../v2events";
 import { registerV2Offline } from "../v2offline";
-import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation } from "../v2db";
+import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation } from "../v2db";
 import { sendPushToIdentity } from "../webPush";
 import { registerWellKnown } from "../wellKnown";
 import { registerSeo } from "../seo";
@@ -383,6 +383,11 @@ async function startServer() {
   setInterval(() => {
     sweepExpiredOtps().catch((err) => console.warn("[otp sweep]", err));
   }, 5 * 60_000).unref();
+  // Reap expired rich-status rows + their views every 10 minutes (24h TTL). Reads
+  // already filter expiresAt > now, so this is purely to keep the tables bounded.
+  setInterval(() => {
+    reapExpiredStatuses().catch((err) => console.warn("[status reaper]", err));
+  }, 10 * 60_000).unref();
   // tRPC API
   app.use(
     "/api/trpc",

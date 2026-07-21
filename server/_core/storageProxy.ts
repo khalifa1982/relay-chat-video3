@@ -99,6 +99,15 @@ export function registerStorageProxy(app: Express) {
         res.status(403).send("Forbidden");
         return;
       }
+      // Rich-status media (v2.95) is likewise gated: served ONLY to the owner
+      // or their audience (a non-blocked contact) while the status is still
+      // ACTIVE. A deleted/expired status, an anonymous request, or a non-contact
+      // is refused — status media is ephemeral + contacts-only, not a public
+      // avatar. (authorizeStorageKey resolves this from the live `statuses` row.)
+      if (authz.kind === "status" && !authz.authorized) {
+        res.status(403).send("Forbidden");
+        return;
+      }
     } catch (e) {
       console.error("[StorageProxy] authz error:", e);
       res.status(503).send("Storage temporarily unavailable");

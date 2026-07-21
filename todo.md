@@ -4126,3 +4126,20 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
 - [ ] DEFERRED — fully session-only guests (wiped on browser CLOSE, not just logout). Reverses a
       deliberate anti-"random number change" design (guest loses number/contacts/history on close).
       Logout already wipes everything today. Awaiting owner steer (task #30).
+
+## v2.94.8 — multi-call fixes (conference audit) + v2.95.0 — rich user status (2026-07-21)
+- [x] v2.94.8 — audit of add/swap/hold/conference-10 found + fixed 4 client bugs: held-call
+      resumed (not dropped) on remote-left; onRingCancel clears waitingRing (stale Switch popup
+      no longer kills a live call); error{full}/forbidden fatal to a peerless joiner (no dead-screen
+      strand); group picker uses engine.maxParticipants (mesh 6 / SFU 10) + programmaticGroupDial
+      clamps. NEW relayStandardCap.test.ts (standard cap at invite + accept). Server was already correct.
+- [x] v2.95.0 — RICH USER STATUS (story-style, task #27): text/image+caption/video+caption/audio,
+      contacts-only, 24h. statuses + status_views tables; status router (post/feed/mine/remove/
+      markViewed/viewers); ?bare=1 no-row media upload; Status.tsx strip + composer + full-screen viewer.
+- [x] v2.95.0 SECURITY (adversarial-review-gated before ship, all FIX-FIRST items resolved):
+      status media authorized in authorizeStorageKey on an ACTIVE row + audience (anon/non-contact/
+      expired → 403; ephemeral at the access layer); statusAudienceAuthorized shared by feed/markViewed/
+      media, honors blocks both ways; sanitizeStatusBg allowlist kills the CSS url() beacon; statusGate
+      rate-limit + 30-active per-user cap + 10-min reaper. Media key ownership-gated on post.
+- [ ] Deferred (noted): physical S3/Forge object GC on status delete/expiry (access is already revoked
+      by the proxy gate; only storage cost lingers). No storageDelete helper exists yet.

@@ -1718,6 +1718,7 @@ export async function getAttachmentByStorageKey(storageKey: string) {
 
 export type StorageKeyAuthz =
   | { kind: "attachment"; authorized: boolean }
+  | { kind: "status"; authorized: boolean }
   | { kind: "unknown" };
 
 /**
@@ -1739,6 +1740,21 @@ export async function authorizeStorageKey(
   storageKey: string,
   identityId: number | null
 ): Promise<StorageKeyAuthz> {
+  // Rich-status media (v2.95): no attachment row, so it would otherwise fall to
+  // the public "unknown" path. Gate it on an ACTIVE status row + audience:
+  //  - a deleted/expired status → no active row → 403 (media is truly ephemeral,
+  //    even though the object lingers in the bucket).
+  //  - anonymous / non-contact → 403 (not the world-readable avatar path).
+  // Only status keys pay the extra query (`/status_` marker), so avatars and
+  // thumbnails are unaffected.
+  if (/\/status_/.test(storageKey)) {
+    const st = await getActiveStatusByMediaKey(storageKey);
+    if (!st) return { kind: "status", authorized: false };
+    if (identityId == null) return { kind: "status", authorized: false };
+    if (st.identityId === identityId) return { kind: "status", authorized: true };
+    const ok = await statusAudienceAuthorized(identityId, st.identityId);
+    return { kind: "status", authorized: ok };
+  }
   const att = await getAttachmentByStorageKey(storageKey);
   if (!att) return { kind: "unknown" };
   if (identityId == null) return { kind: "attachment", authorized: false };
@@ -1939,15 +1955,100 @@ export async function getStatusViewCounts(statusIds: number[]): Promise<Map<numb
   return out;
 }
 
-/** My saved contacts' numbers (to fan a status feed out to people I know). */
+/** My saved contacts' numbers (to fan a status feed out to people I know),
+ *  EXCLUDING anyone I've blocked. */
 export async function getContactNumbersForOwner(ownerId: number): Promise<string[]> {
   const db = await getDb();
   if (!db) return [];
   const rows = await db
-    .select({ number: contacts.number })
+    .select({ number: contacts.number, blocked: contacts.blocked })
     .from(contacts)
     .where(eq(contacts.ownerId, ownerId));
-  return rows.map((r) => r.number);
+  return rows.filter((r) => r.blocked !== true).map((r) => r.number);
+}
+
+/** A single ACTIVE status by its media key (drives storage-proxy authorization). */
+export async function getActiveStatusByMediaKey(
+  mediaKey: string,
+): Promise<{ id: number; identityId: number } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select({ id: statuses.id, identityId: statuses.identityId })
+    .from(statuses)
+    .where(and(eq(statuses.mediaKey, mediaKey), gt(statuses.expiresAt, new Date())))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Can `requesterId` view statuses owned by `ownerId`? The owner always can;
+ * otherwise the requester must have SAVED the owner (a non-blocked contact for
+ * the owner's number) AND the owner must not have blocked the requester. This is
+ * the single audience rule shared by the feed, markViewed, and media access.
+ */
+export async function statusAudienceAuthorized(
+  requesterId: number,
+  ownerId: number,
+): Promise<boolean> {
+  if (requesterId === ownerId) return true;
+  const db = await getDb();
+  if (!db) return false;
+  const owner = await getIdentityById(ownerId);
+  if (!owner) return false;
+  const [saved] = await db
+    .select({ blocked: contacts.blocked })
+    .from(contacts)
+    .where(and(eq(contacts.ownerId, requesterId), eq(contacts.number, owner.number)))
+    .limit(1);
+  if (!saved || saved.blocked === true) return false; // must have saved (not blocked) them
+  const requester = await getIdentityById(requesterId);
+  if (!requester) return false;
+  if (await isNumberBlockedBy(ownerId, requester.number)) return false; // owner blocked me
+  return true;
+}
+
+/** Count of a user's currently-active statuses (for the per-user cap). */
+export async function countActiveStatuses(ownerId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [row] = await db
+    .select({ c: sql<number>`count(*)` })
+    .from(statuses)
+    .where(and(eq(statuses.identityId, ownerId), gt(statuses.expiresAt, new Date())));
+  return Number(row?.c ?? 0);
+}
+
+/** Of `ownerIds`, which have BLOCKED `number` (so hide their statuses from it). */
+export async function ownersWhoBlockedNumber(
+  ownerIds: number[],
+  number: string,
+): Promise<Set<number>> {
+  const db = await getDb();
+  if (!db || ownerIds.length === 0) return new Set();
+  const rows = await db
+    .select({ ownerId: contacts.ownerId })
+    .from(contacts)
+    .where(
+      and(inArray(contacts.ownerId, ownerIds), eq(contacts.number, number), eq(contacts.blocked, true)),
+    );
+  return new Set(rows.map((r) => r.ownerId));
+}
+
+/** Reap expired statuses + their view rows (bounded per sweep). */
+export async function reapExpiredStatuses(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const dead = await db
+    .select({ id: statuses.id })
+    .from(statuses)
+    .where(lt(statuses.expiresAt, new Date()))
+    .limit(500);
+  if (dead.length === 0) return 0;
+  const ids = dead.map((d) => d.id);
+  await db.delete(statusViews).where(inArray(statusViews.statusId, ids)).catch(() => {});
+  await db.delete(statuses).where(inArray(statuses.id, ids));
+  return ids.length;
 }
 
 export async function getAttachmentsByIds(ids: number[]) {
