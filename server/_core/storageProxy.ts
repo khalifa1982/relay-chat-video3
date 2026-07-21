@@ -89,14 +89,13 @@ export function registerStorageProxy(app: Express) {
     }
     try {
       const authz = await authorizeStorageKey(key, identityId);
-      if (authz.kind === "attachment") {
-        if (!authz.authorized) {
-          res.status(403).send("Forbidden");
-          return;
-        }
-      } else if (identityId == null) {
-        // Not a known message attachment (an avatar / other object) — require a
-        // signed-in user; never serve it to an anonymous URL holder.
+      // Only MESSAGE ATTACHMENTS (the shared files/voice-notes/images/video this
+      // feature protects) are participant-gated — a non-participant, or nobody
+      // logged in, is refused. Other keys (avatars) are served as before: they're
+      // semi-public (already shown in directory previews) and NOT the sensitive
+      // "shared files", so gating them would only break profile images (e.g. a
+      // pre-onboarding invite preview) with no security benefit.
+      if (authz.kind === "attachment" && !authz.authorized) {
         res.status(403).send("Forbidden");
         return;
       }

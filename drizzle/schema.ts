@@ -366,6 +366,11 @@ export const attachments = mysqlTable(
   },
   (t) => ({
     ownerIdx: index("attachments_owner_idx").on(t.uploadedByIdentityId),
+    /* Participant-only file access (v2.94.2): the storage proxy resolves an
+       attachment by storageKey/thumbKey on every /manus-storage request. Added
+       to the live DB by ensureSchemaExtensions (ADD INDEX, idempotent). */
+    keyIdx: index("attachments_key_idx").on(t.storageKey),
+    thumbKeyIdx: index("attachments_thumbkey_idx").on(t.thumbKey),
   }),
 );
 export type Attachment = typeof attachments.$inferSelect;

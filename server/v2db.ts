@@ -723,6 +723,11 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // the thumb and tap through to the full-size url.
     { table: "attachments", column: "thumbKey", ddl: "ADD COLUMN `thumbKey` varchar(256)" },
     { table: "attachments", column: "thumbUrl", ddl: "ADD COLUMN `thumbUrl` text" },
+    // Participant-only file access (v2.94.2): the storage proxy resolves an
+    // attachment by storageKey/thumbKey on EVERY /manus-storage request (ahead
+    // of the signed-url cache). Without these it was a full table scan.
+    { table: "attachments", column: "attachments_key_idx", ddl: "ADD INDEX `attachments_key_idx` (`storageKey`)" },
+    { table: "attachments", column: "attachments_thumbkey_idx", ddl: "ADD INDEX `attachments_thumbkey_idx` (`thumbKey`)" },
   ];
   for (const a of adds) {
     try {
@@ -1648,6 +1653,24 @@ export async function getAttachmentById(id: number) {
  * storage proxy to authorize file access by conversation participation. Returns
  * null when no attachment owns this key (an avatar or other object).
  */
+/**
+ * True iff a CLIENT-SUPPLIED storage key lives in the identity's OWN upload
+ * namespace (`relay-chat/{id}/…`, allowing one optional S3 bucket prefix) and
+ * carries no traversal segment. Guards `attachments.register` (and mirrors
+ * /api/v2/upload's thumbKey check) so a client can never forge ownership of a
+ * stranger's key — which the storage proxy's participant check trusts via
+ * uploadedByIdentityId. Pure — unit-tested.
+ */
+export function keyInOwnerNamespace(key: string, identityId: number, s3Prefix = ""): boolean {
+  if (!key) return false;
+  const ownerNs = `relay-chat/${identityId}/`;
+  const inNs =
+    key.startsWith(ownerNs) ||
+    (!!s3Prefix && key.startsWith(s3Prefix) && key.slice(s3Prefix.length).startsWith(ownerNs));
+  const hasTraversal = key.split("/").some((s) => s === ".." || s === ".");
+  return inNs && !hasTraversal;
+}
+
 export async function getAttachmentByStorageKey(storageKey: string) {
   const db = await getDb();
   if (!db || !storageKey) return null;
@@ -1671,10 +1694,12 @@ export type StorageKeyAuthz =
  *    conversation that references it (identical rule to getAttachmentForIdentity,
  *    keyed by storageKey/thumbKey). A raw URL alone — held by a non-participant,
  *    or nobody logged in — is refused.
- *  - If the key is NOT a message attachment (an avatar / other object): the
- *    caller returns `unknown`; the proxy then requires any authenticated
- *    identity (avatars are shown across the signed-in app but never to anonymous
- *    URL holders).
+ *  - If the key is NOT a message attachment (an avatar / other object): returns
+ *    `unknown`; the proxy serves those as before (avatars are semi-public — they
+ *    already appear in directory previews — and are NOT the shared FILES this
+ *    protects). Real attachment bytes always classify as `attachment` (MySQL's
+ *    match set is a case-insensitive SUPERSET of the S3 exact-byte key), so a
+ *    file can never slip through the `unknown` branch.
  */
 export async function authorizeStorageKey(
   storageKey: string,

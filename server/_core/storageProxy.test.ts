@@ -65,15 +65,15 @@ describe("storage proxy — participant-only file access", () => {
     expect(r.statusCode).not.toBe(403);
   });
 
-  it("DENIES an unknown key (avatar/other) to anonymous (403)", async () => {
+  it("SERVES an unknown key (avatar/other) to anonymous — avatars are semi-public, not 403", async () => {
     asIdentity(null);
     mockAuthorize.mockResolvedValue({ kind: "unknown" });
     const r = mkRes();
     await handler()(mkReq("relay-chat/3/avatar_zz99.jpg"), r);
-    expect(r.statusCode).toBe(403);
+    expect(r.statusCode).not.toBe(403);
   });
 
-  it("ALLOWS an unknown key (avatar) to any authenticated identity (not 403)", async () => {
+  it("SERVES an unknown key (avatar) to an authenticated identity (not 403)", async () => {
     asIdentity(7);
     mockAuthorize.mockResolvedValue({ kind: "unknown" });
     const r = mkRes();

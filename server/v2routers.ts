@@ -7,6 +7,7 @@
    ============================================================ */
 
 import { TRPCError } from "@trpc/server";
+import { s3Config } from "./s3";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb, getUserById } from "./db";
@@ -20,6 +21,7 @@ import {
   deleteContact,
   getAttachmentForIdentity,
   getAttachmentsByIds,
+  keyInOwnerNamespace,
   getIdentitiesByIds,
   getIdentitiesByNumbers,
   getIdentityByDeviceId,
@@ -1231,6 +1233,16 @@ export const v2AttachmentsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
+      // SECURITY (v2.94.2): storageKey is CLIENT-SUPPLIED. It MUST live in the
+      // caller's own upload namespace — otherwise a client could forge OWNERSHIP
+      // of a stranger's key, which the storage proxy's participant check trusts
+      // via uploadedByIdentityId. (`register` is client-unused today; defensive.)
+      if (!keyInOwnerNamespace(input.storageKey, me.id, s3Config()?.prefix ?? "")) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "storageKey must be in your own upload namespace",
+        });
+      }
       const row = await recordAttachment({
         ...input,
         uploadedByIdentityId: me.id,
