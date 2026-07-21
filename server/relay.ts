@@ -36,6 +36,13 @@ import {
   readPlCountsFromRedis,
   type BusySnapshot,
 } from "./redisBus";
+import {
+  clusterEnabled,
+  startClusterRuntime,
+  clusterForwardInbound,
+  clusterDeliverOutbound,
+  makeRemoteSocket,
+} from "./relayCluster";
 
 // TURN credentials are read on every call so the operator can add them via
 // `webdev_request_secrets` without restarting the server, and so unit tests
@@ -2046,6 +2053,115 @@ export async function partyLineLiveCountsAsync(
 }
 
 /**
+ * Reconnect re-binding, extracted verbatim from the SSE stream handler so BOTH
+ * the local (non-clustered) path and the cross-instance LEADER (which runs the
+ * registry on virtual sockets, see server/relayCluster.ts) can reuse it. If this
+ * cid already owns a number whose client record survives (within the disconnect
+ * grace window), re-attach the fresh socket so the user keeps number/room/call.
+ * Behavior-preserving: the local path calls it right after connections.set(cid).
+ */
+function bindReconnect(reg: RelayRegistry, cid: string, socket: RelaySocket): void {
+  const conn = reg.connections.get(cid);
+  if (!conn) return;
+  const ownedPin = reg.cidToPin.get(cid);
+  if (ownedPin) {
+    const client = reg.clients.get(ownedPin);
+    if (client) {
+      // Multi-device: a reconnecting SECONDARY device must not hijack the
+      // in-call primary's socket — NOR cancel the PRIMARY's disconnect-grace
+      // timer. Only the primary's own reconnect touches its socket+grace.
+      const isPrimaryReconnect =
+        !multiDeviceEnabled() || client.cid === cid || client.cid === null;
+      if (isPrimaryReconnect) {
+        if (client.graceT) { clearTimeout(client.graceT); client.graceT = null; }
+        client.socket = socket;
+      }
+      conn.pin = ownedPin;
+      deviceAdd(reg, ownedPin, cid, socket); // track this device for ringing
+    }
+  }
+}
+
+/**
+ * The REGISTRY-side teardown of a dropped SSE channel, extracted verbatim from
+ * the stream handler's `cleanup` (the transport bits — hb/uncountStream/res.end
+ * — stay at the call site). Deletes the connection, drops the device socket, and
+ * arms the disconnect-grace timer that (on expiry with no reconnect) reaps the
+ * client / promotes a surviving device / cancels pending rings / releases held
+ * rooms / leaves or keeps the room for auto-rejoin. Reused by the cross-instance
+ * LEADER on a `__disconnect` from a home instance.
+ */
+function cleanupRegistryConn(
+  reg: RelayRegistry,
+  cid: string,
+  conn: RelayConnection,
+  onMissedCall?: MissedCallHook
+): void {
+  const existing = reg.connections.get(cid);
+  if (existing === conn) reg.connections.delete(cid);
+  // Drop this device socket from the ring set — a dead socket can't receive a
+  // ring, and a reconnecting cid re-adds itself.
+  if (conn.pin) deviceRemove(reg, conn.pin, cid);
+  // Do NOT remove the client immediately — SSE channels are routinely cut by
+  // proxies; start a grace timer. A reconnect within the window re-binds and
+  // clears it, so the user keeps their number, room, and active call.
+  if (conn.pin) {
+    const pin = conn.pin;
+    const client = reg.clients.get(pin);
+    if (client && (client.cid === cid || client.cid === null)) {
+      if (client.graceT) clearTimeout(client.graceT);
+      client.graceT = setTimeout(() => {
+        const c = reg.clients.get(pin);
+        // Only reap if it wasn't re-bound to a newer live connection.
+        if (c && c.graceT) {
+          // Multi-device: promote a surviving device to primary instead of
+          // marking the number offline (keeps it reachable for NEW calls).
+          if (multiDeviceEnabled()) {
+            const devs = reg.devices.get(pin);
+            const survivor = devs && Array.from(devs.entries()).find(([dcid]) => dcid !== cid);
+            if (survivor) {
+              if (reg.cidToPin.get(cid) === pin) reg.cidToPin.delete(cid);
+              c.graceT = null;
+              c.socket = survivor[1];
+              c.cid = survivor[0];
+              return; // keep the number alive on the surviving device
+            }
+          }
+          // A vanished caller's pending callees missed the call.
+          const callerName = c.name;
+          const missed = cancelPendingRings(reg, pin);
+          for (const calleePin of missed) {
+            try {
+              onMissedCall?.({ calleePin, callerPin: pin, callerName, reason: "cancelled" });
+            } catch { /* never let a notification hook break reaping */ }
+          }
+          // A call held by this (now gone) member can't be auto-rejoined.
+          releaseHeldRoom(reg, pin);
+          const rid = reg.pinRoom.get(pin) ?? null;
+          if (rid) {
+            // In an ACTIVE call: KEEP the persistent membership (reg.pinRoom + the
+            // pin in reg.rooms) AND cidToPin so a reconnect auto-rejoins the same
+            // call. Drop only the dead connection, then arm the abandonment reaper.
+            roomActivityTouch(reg, rid);
+            broadcastToRoom(reg, rid, { type: "peer-left", pin }, pin);
+            reg.clients.delete(pin);
+            reg.devices.delete(pin);
+            maybeScheduleRoomReap(reg, rid);
+            touchBusyState();
+          } else {
+            // Not in a call — full teardown (original behaviour).
+            leaveRoom(reg, pin);
+            reg.clients.delete(pin);
+            reg.devices.delete(pin);
+            if (reg.cidToPin.get(cid) === pin) reg.cidToPin.delete(cid);
+          }
+        }
+      }, RELAY_DISCONNECT_GRACE_MS);
+    }
+  }
+}
+
+/**
  * Mount the HTTP signaling endpoints on an Express app.
  *
  * Returns the underlying registry so tests can poke at internal state.
@@ -2065,6 +2181,63 @@ export function attachRelay(
   // REDIS_URL. The provider closes over THIS registry, matching
   // activeRegistry's last-attach-wins semantics.
   initBusyStateSync(() => computeBusySnapshot(reg));
+
+  // ── Cross-instance signaling (phase 2), gated on clusterEnabled()
+  //    (RELAY_CLUSTER=1 + REDIS_URL). OFF ⇒ everything here is dormant and the
+  //    endpoints take the unchanged single-process path. ON ⇒ the elected leader
+  //    runs THIS reg on virtual sockets, every instance keeps its live SSE
+  //    sockets in localDelivery and proxies to/from the leader over Redis. See
+  //    docs-cross-instance-signaling.md. ──
+  const clustered = clusterEnabled();
+  // cid -> this instance's live SSE socket (home role: deliver leader-routed
+  // objects to the actual browser).
+  const localDelivery = new Map<string, RelaySocket>();
+  // cid -> home instance id (leader role: route a virtual socket's sends back to
+  // the instance the peer is connected to).
+  const homeOf = new Map<string, string>();
+
+  // Leader-side processing of a forwarded frame. Runs the SAME registry +
+  // handleMessage as the local path, but on a VIRTUAL socket per remote peer.
+  function leaderProcess(cid: string, home: string, raw: unknown): void {
+    homeOf.set(cid, home);
+    let conn = reg.connections.get(cid);
+    if (!conn) {
+      const vsock = makeRemoteSocket(
+        cid,
+        (c, obj) => clusterDeliverOutbound(homeOf.get(c) ?? home, c, obj),
+        () => { /* leader-side teardown is driven by __disconnect below */ }
+      );
+      conn = { cid, socket: vsock, pin: null };
+      reg.connections.set(cid, conn);
+    }
+    const c = conn;
+    const t = (raw as { type?: unknown } | null)?.type;
+    if (t === "__connect") {
+      // Re-bind to an existing (grace-window) client so a reconnect keeps its
+      // number/room/call — the leader owns that state.
+      bindReconnect(reg, cid, c.socket);
+    } else if (t === "__disconnect") {
+      cleanupRegistryConn(reg, cid, c, onMissedCall);
+      homeOf.delete(cid);
+    } else {
+      handleMessage(
+        reg,
+        { socket: c.socket, pin: c.pin, cid, setPin: (p: string) => { c.pin = p; } },
+        raw as RelayMessage,
+        onInvite,
+        onMissedCall,
+        onPageCallee,
+        onResolveDial
+      );
+    }
+  }
+
+  if (clustered) {
+    startClusterRuntime({
+      onInbound: leaderProcess,
+      onOutbound: (cid, obj) => { localDelivery.get(cid)?.send(obj); },
+    });
+  }
 
   // ── Abuse hardening for the UNAUTHENTICATED endpoints (v2.88) ──
   // Both gates honor RELAY_RATELIMIT_OFF like the /send limiter. Limits are
@@ -2134,12 +2307,23 @@ export function attachRelay(
       else streamsPerIp.set(ip, n);
     };
     // If the same cid reconnects (e.g. tab refresh), close the old channel.
-    const prev = reg.connections.get(cid);
-    if (prev) {
-      try {
-        prev.socket.close();
-      } catch {
-        /* noop */
+    // Clustered: the home tracks its live socket in localDelivery (the leader
+    // owns reg.connections); closing the OLD local socket sets its `closed`
+    // flag, which no-ops the old cleanup — so no spurious __disconnect races the
+    // reconnect's __connect (mirrors the single-process identity+closed guard).
+    if (clustered) {
+      const prevLocal = localDelivery.get(cid);
+      if (prevLocal) {
+        try { prevLocal.close(); } catch { /* noop */ }
+      }
+    } else {
+      const prev = reg.connections.get(cid);
+      if (prev) {
+        try {
+          prev.socket.close();
+        } catch {
+          /* noop */
+        }
       }
     }
 
@@ -2183,30 +2367,16 @@ export function attachRelay(
     };
 
     const conn: RelayConnection = { cid, socket, pin: null };
-    reg.connections.set(cid, conn);
-
-    // Reconnect re-binding: if this cid already owns a number whose client
-    // record still exists (within the disconnect grace window), re-attach the
-    // fresh SSE socket to it immediately so the user keeps their number, room,
-    // and any active call instead of being assigned a new number.
-    const ownedPin = reg.cidToPin.get(cid);
-    if (ownedPin) {
-      const client = reg.clients.get(ownedPin);
-      if (client) {
-        // Multi-device: a reconnecting SECONDARY device must not hijack the
-        // in-call primary's socket — NOR cancel the PRIMARY's disconnect-grace
-        // timer (doing so would strand a dead primary and never promote the
-        // survivor). Only the primary's own reconnect touches its socket+grace.
-        // Flag-off → always (identical to before).
-        const isPrimaryReconnect =
-          !multiDeviceEnabled() || client.cid === cid || client.cid === null;
-        if (isPrimaryReconnect) {
-          if (client.graceT) { clearTimeout(client.graceT); client.graceT = null; }
-          client.socket = socket;
-        }
-        conn.pin = ownedPin;
-        deviceAdd(reg, ownedPin, cid, socket); // track this device for ringing
-      }
+    if (clustered) {
+      // Home role: register the live socket for delivery; the LEADER does the
+      // registry re-bind via the forwarded __connect.
+      localDelivery.set(cid, socket);
+      clusterForwardInbound(cid, { type: "__connect" });
+    } else {
+      reg.connections.set(cid, conn);
+      // Reconnect re-binding: keep number/room/call across a proxy-cut SSE.
+      // Extracted so the cross-instance leader reuses it on a __connect.
+      bindReconnect(reg, cid, socket);
     }
 
     // Send a ready event so the client can flip state.
@@ -2228,95 +2398,19 @@ export function attachRelay(
       closed = true;
       if (hb) { clearInterval(hb); hb = null; }
       uncountStream();
-      const existing = reg.connections.get(cid);
-      if (existing === conn) reg.connections.delete(cid);
-      // Drop this device socket from the ring set — a dead socket can't receive
-      // a ring, and a reconnecting cid re-adds itself. (Bookkeeping only; the
-      // grace-window client teardown below is unchanged.)
-      if (conn.pin) deviceRemove(reg, conn.pin, cid);
-      // Do NOT remove the client immediately. SSE channels are routinely cut by
-      // proxies; instead start a grace timer. If the same cid reconnects within
-      // the window, the stream handler re-binds and clears this timer, so the
-      // user keeps their number, room, and active call. Only after the window
-      // expires with no reconnect do we actually tear the client down.
-      if (conn.pin) {
-        const pin = conn.pin;
-        const client = reg.clients.get(pin);
-        if (client && (client.cid === cid || client.cid === null)) {
-          if (client.graceT) clearTimeout(client.graceT);
-          client.graceT = setTimeout(() => {
-            const c = reg.clients.get(pin);
-            // Only reap if it wasn't re-bound to a newer live connection.
-            if (c && c.graceT) {
-              // Multi-device: if the primary device vanished but ANOTHER device
-              // for this number is still connected, promote it to primary
-              // instead of marking the number offline (keeps it reachable for
-              // NEW calls). KNOWN GAP: if the primary dropped mid-call, the
-              // promoted idle device has no RTCPeerConnection/LiveKit session for
-              // that room, so the in-progress call is effectively over on this
-              // side — the number stays reachable but that call doesn't migrate.
-              if (multiDeviceEnabled()) {
-                const devs = reg.devices.get(pin);
-                const survivor = devs && Array.from(devs.entries()).find(([dcid]) => dcid !== cid);
-                if (survivor) {
-                  // Drop the dead primary's stale cid→pin mapping before handing
-                  // the number to the survivor.
-                  if (reg.cidToPin.get(cid) === pin) reg.cidToPin.delete(cid);
-                  c.graceT = null;
-                  c.socket = survivor[1];
-                  c.cid = survivor[0];
-                  return; // keep the number alive on the surviving device
-                }
-              }
-              // A vanished caller's pending callees missed the call.
-              const callerName = c.name;
-              const missed = cancelPendingRings(reg, pin);
-              for (const calleePin of missed) {
-                try {
-                  onMissedCall?.({ calleePin, callerPin: pin, callerName, reason: "cancelled" });
-                } catch { /* never let a notification hook break reaping */ }
-              }
-              // A call held by this (now gone) member can't be auto-rejoined — only
-              // the ACTIVE room is restored on reconnect — so drop it instead of
-              // leaking a ghost member into it.
-              releaseHeldRoom(reg, pin);
-              const rid = reg.pinRoom.get(pin) ?? null;
-              if (rid) {
-                // In an ACTIVE call: do NOT leave the room. Keep the persistent
-                // membership (reg.pinRoom + the pin in reg.rooms) AND keep
-                // cidToPin, so when this device reconnects/refreshes it
-                // auto-rejoins the same call without a fresh invite. Drop only
-                // the dead connection, then arm the abandonment reaper in case
-                // this was the last connected member.
-                // This member was connected until now; stamp the room so an
-                // eventual abandonment reap logs the real end, not reap time.
-                roomActivityTouch(reg, rid);
-                // Tell the SURVIVORS this member has gone (their 30s grace elapsed
-                // with no reconnect) so their grids reflow immediately and they see
-                // a "left the call" notice — the authoritative exit signal for a
-                // silent drop (tab-close / network-loss / crash), where the client
-                // can't otherwise tell a vanished remote peer from a local blip.
-                // Membership (reg.pinRoom + the pin in reg.rooms) is intentionally
-                // KEPT, so if this device reconnects it still auto-rejoins and the
-                // survivors rebuild the tile from the fresh offer.
-                broadcastToRoom(reg, rid, { type: "peer-left", pin }, pin);
-                reg.clients.delete(pin);
-                reg.devices.delete(pin);
-                maybeScheduleRoomReap(reg, rid);
-                // Busy-line mirror (v2.91): the client record is gone (no
-                // longer "on a call" / no longer a CONNECTED line member) but
-                // no join/leave funnel ran on this path — sync explicitly.
-                touchBusyState();
-              } else {
-                // Not in a call — full teardown (original behaviour).
-                leaveRoom(reg, pin);
-                reg.clients.delete(pin);
-                reg.devices.delete(pin);
-                if (reg.cidToPin.get(cid) === pin) reg.cidToPin.delete(cid);
-              }
-            }
-          }, RELAY_DISCONNECT_GRACE_MS);
+      if (clustered) {
+        // Home role: tear down + forward __disconnect ONLY if THIS socket is
+        // still the current one (a reconnect that replaced it already forwarded
+        // its own __connect; the `closed` flag also no-ops a server-initiated
+        // close). Mirrors the single-process identity guard.
+        if (localDelivery.get(cid) === socket) {
+          localDelivery.delete(cid);
+          clusterForwardInbound(cid, { type: "__disconnect" });
         }
+      } else {
+        // Registry teardown (delete conn, drop device, arm the grace/reap timer),
+        // extracted so the cross-instance leader reuses it on a __disconnect.
+        cleanupRegistryConn(reg, cid, conn, onMissedCall);
       }
       try {
         res.end();
@@ -2346,6 +2440,17 @@ export function attachRelay(
     try { approxLen = JSON.stringify(message).length; } catch { approxLen = Infinity; }
     if (approxLen > 256_000) {
       res.status(413).json({ error: "payload_too_large" });
+      return;
+    }
+    if (clustered) {
+      // Home role: the browser is homed here (localDelivery), but the registry
+      // runs on the leader — forward the message; any reply comes back over SSE.
+      if (!localDelivery.has(cid)) {
+        res.status(404).json({ error: "channel not found" });
+        return;
+      }
+      clusterForwardInbound(cid, message);
+      res.json({ ok: true });
       return;
     }
     const conn = reg.connections.get(cid);

@@ -27,6 +27,7 @@ import { createRateLimiter, clientIpOf } from "../rateLimit";
 import { registerLocalAuth } from "../authLocal";
 import { appBaseUrl } from "../appUrl";
 import { INSTANCE_ID } from "../redisBus";
+import { clusterEnabled } from "../relayCluster";
 
 function escapeHtml(s: string): string {
   return s.replace(
@@ -342,6 +343,10 @@ async function startServer() {
       // a multi-instance deploy is assumed unpinned (calls broken) until the
       // operator asserts otherwise.
       signalingPinned: process.env.RELAY_SIGNALING_PINNED === "1",
+      // Cross-instance signaling (phase-2). When on (RELAY_CLUSTER=1 + REDIS_URL),
+      // calls ring + connect across instances via the elected leader — so NO ALB
+      // pin is needed and the "misconfigured" banner suppresses itself.
+      cluster: clusterEnabled(),
     });
   });
   // v2.0 attachment upload (multipart-friendly JSON body)

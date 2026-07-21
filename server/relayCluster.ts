@@ -16,8 +16,9 @@
  * socket. The Redis election LOOP and the server/relay.ts wiring land in
  * phase 2 (guarded the same way), so nothing here is live yet.
  */
+import Redis from "ioredis";
 import type { RelaySocket } from "./relay";
-import { INSTANCE_ID } from "./redisBus";
+import { INSTANCE_ID, publishBus, subscribeBus } from "./redisBus";
 
 export { INSTANCE_ID };
 
@@ -125,4 +126,153 @@ export function makeRemoteSocket(
     send: (obj: unknown) => deliver(cid, obj),
     close: () => onClose(cid),
   };
+}
+
+/* ── Redis runtime (leader election + channel routing) ────────────────────────
+   Kept below the pure section so the unit tests stay Redis-free. Reuses
+   redisBus's publish/subscribe (envelope + self-drop) for the directed
+   channels — safe because the same-instance case is ALWAYS short-circuited
+   below, so a published frame's publisher is never also its recipient. A
+   dedicated ioredis connection runs the leader lease. */
+
+let leaseClient: Redis | null = null;
+function getLeaseClient(): Redis | null {
+  if (leaseClient) return leaseClient;
+  if (!clusterEnabled()) return null;
+  const r = new Redis(process.env.REDIS_URL as string, {
+    retryStrategy: (times) => Math.min(30_000, 500 * 2 ** Math.min(times, 6)),
+    maxRetriesPerRequest: 2,
+    commandTimeout: 1500,
+  });
+  r.on("error", (e: unknown) =>
+    console.warn("[relayCluster] lease:", e instanceof Error ? e.message : e)
+  );
+  leaseClient = r;
+  return leaseClient;
+}
+
+let _isLeader = false;
+let _leaderId: string | null = null;
+let electionTimer: ReturnType<typeof setInterval> | null = null;
+
+/** True when THIS instance currently holds the signaling leadership lease. */
+export function isLeader(): boolean {
+  return _isLeader;
+}
+/** Instance id believed to hold leadership (self, another, or null during a
+ *  brief election gap). */
+export function leaderId(): string | null {
+  return _leaderId;
+}
+
+// Renew ONLY if we still hold the lease (never PEXPIRE a key we no longer own —
+// that would let a split-brain second holder keep resetting the real leader's
+// TTL). Atomic compare-and-pexpire.
+const RENEW_LUA =
+  "if redis.call('get',KEYS[1])==ARGV[1] then return redis.call('pexpire',KEYS[1],ARGV[2]) else return 0 end";
+
+async function electTick(): Promise<void> {
+  const c = getLeaseClient();
+  if (!c) return;
+  try {
+    if (_isLeader) {
+      const ok = await c.eval(RENEW_LUA, 1, LEADER_KEY, INSTANCE_ID, String(LEADER_TTL_MS));
+      if (ok === 1) {
+        _leaderId = INSTANCE_ID;
+        return;
+      }
+      _isLeader = false; // lost the lease (expired / taken over)
+    }
+    const won = await c.set(LEADER_KEY, INSTANCE_ID, "PX", LEADER_TTL_MS, "NX");
+    if (won === "OK") {
+      _isLeader = true;
+      _leaderId = INSTANCE_ID;
+      return;
+    }
+    _leaderId = (await c.get(LEADER_KEY)) ?? null;
+  } catch {
+    /* transient Redis error — retry next tick; never throw to callers */
+  }
+}
+
+let started = false;
+let _onInbound: ((cid: string, home: string, raw: unknown) => void) | null = null;
+let _onOutbound: ((cid: string, obj: unknown) => void) | null = null;
+
+/**
+ * Start the cluster runtime (idempotent). `onInbound` runs a forwarded signaling
+ * frame on the LEADER (server/relay.ts wires it to leaderProcess); `onOutbound`
+ * writes a leader-routed object to THIS home's local SSE socket. No-op unless
+ * clusterEnabled().
+ */
+export function startClusterRuntime(deps: {
+  onInbound: (cid: string, home: string, raw: unknown) => void;
+  onOutbound: (cid: string, obj: unknown) => void;
+}): void {
+  if (!clusterEnabled() || started) return;
+  started = true;
+  _onInbound = deps.onInbound;
+  _onOutbound = deps.onOutbound;
+
+  // As a HOME: deliver frames the leader routed to us.
+  subscribeBus(sigOutChannel(INSTANCE_ID), (payload) => {
+    const f = payload as OutboundFrame | null;
+    if (f && typeof f.cid === "string") _onOutbound?.(f.cid, f.obj);
+  });
+  // As the LEADER: process frames homes forwarded to us. Guarded on _isLeader so
+  // a former leader (lease lost, mid-transition) can't mutate registry state.
+  subscribeBus(sigInChannel(INSTANCE_ID), (payload) => {
+    if (!_isLeader) return;
+    const f = payload as InboundFrame | null;
+    if (f && typeof f.cid === "string" && typeof f.home === "string")
+      _onInbound?.(f.cid, f.home, f.raw);
+  });
+
+  void electTick();
+  electionTimer = setInterval(() => void electTick(), LEADER_RENEW_MS);
+  electionTimer.unref?.();
+}
+
+/** Test/shutdown hook — stop the election loop and reset state. */
+export function stopClusterRuntime(): void {
+  if (electionTimer) {
+    clearInterval(electionTimer);
+    electionTimer = null;
+  }
+  started = false;
+  _isLeader = false;
+  _leaderId = null;
+  _onInbound = null;
+  _onOutbound = null;
+}
+
+/** HOME → LEADER. A raw signaling message (or synthetic __connect/__disconnect)
+ *  from a browser homed on THIS instance, routed to the current leader. When we
+ *  ARE the leader, dispatched locally (no Redis hop). */
+export function clusterForwardInbound(cid: string, raw: unknown): void {
+  if (_isLeader) {
+    _onInbound?.(cid, INSTANCE_ID, raw);
+    return;
+  }
+  const lid = _leaderId;
+  if (!lid) return; // no leader known yet — the client resends on its next beat
+  publishBus(sigInChannel(lid), { cid, home: INSTANCE_ID, raw } as InboundFrame);
+}
+
+/** LEADER → HOME. An object the leader's registry produced for a peer, routed to
+ *  the instance that peer is homed on. When the home IS the leader, delivered
+ *  locally (no Redis hop). */
+export function clusterDeliverOutbound(home: string, cid: string, obj: unknown): void {
+  if (home === INSTANCE_ID) {
+    _onOutbound?.(cid, obj);
+    return;
+  }
+  publishBus(sigOutChannel(home), { cid, obj } as OutboundFrame);
+}
+
+/** Test seam: force leadership state (used by the in-process integration test to
+ *  drive two registries without a real Redis election). NOT used in production. */
+export function _setLeaderForTest(isLeaderNow: boolean, leader: string | null): void {
+  _isLeader = isLeaderNow;
+  _leaderId = leader;
 }

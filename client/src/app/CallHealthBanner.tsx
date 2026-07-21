@@ -30,9 +30,15 @@ export function CallHealthBanner() {
       for (let i = 0; i < 5; i++) {
         try {
           const r = await fetch("/api/health", { credentials: "omit", cache: "no-store" });
-          const j = (await r.json()) as { instance?: string; signalingPinned?: boolean };
+          const j = (await r.json()) as {
+            instance?: string;
+            signalingPinned?: boolean;
+            cluster?: boolean;
+          };
           if (j?.instance) seen.add(String(j.instance));
-          if (j?.signalingPinned) pinned = true;
+          // `cluster` (RELAY_CLUSTER) makes calls work across instances via the
+          // elected leader, so no pin is needed — treat it as healthy too.
+          if (j?.signalingPinned || j?.cluster) pinned = true;
           if (pinned || seen.size >= 2) break; // enough to decide
         } catch {
           /* ignore transient probe errors */

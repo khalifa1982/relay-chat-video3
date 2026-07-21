@@ -5,8 +5,27 @@ each is connected to — with NO ALB pinning of `/api/relay/*`. This replaces th
 "pin signaling to one instance" workaround (docs-aws-scale-out.md) with an
 in-app solution so the fleet can scale horizontally and still place calls.
 
-**Status:** design + scaffold. Flag-gated, OFF by default. When off (or single
-instance / no Redis), behavior is byte-identical to today.
+**Status:** IMPLEMENTED + tested (phases 1–3 done). Flag-gated, OFF by default.
+When off (or single instance / no Redis), behavior is byte-identical to today —
+verified: the 67 single-process signaling tests pass unchanged, and a
+2-"instance" integration test (`server/relayCluster.integration.test.ts`) proves
+a call rings + connects + relays SDP across instances.
+
+## Best `.io` configuration (turn it on)
+
+`.io` runs 2 EC2 instances behind the ALB with ElastiCache Redis. To make calls
+work across both without pinning:
+
+1. In `/home/relay/.env` on **BOTH** instances add: `RELAY_CLUSTER=1`
+   (`REDIS_URL` is already set). Reload: `pm2 startOrReload ecosystem.config.cjs --update-env`.
+2. That's it — the two instances elect a leader over Redis; calls ring + connect
+   regardless of which instance each user hit. `/api/health` returns
+   `"cluster": true` and the in-app "calls misconfigured" banner suppresses itself.
+3. You do NOT need the ALB `/api/relay/*` pin (`aws-ops.yml alb-tune`); if you
+   applied it, you can leave it (harmless) or remove the priority-10 rule. SSE
+   connections stay load-balanced across both instances either way.
+
+Leave `.org` (single Manus instance) unset — it never clusters.
 
 ---
 
