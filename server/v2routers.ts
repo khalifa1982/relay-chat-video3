@@ -150,11 +150,20 @@ const AvatarUrlSchema = z
     { message: "Invalid avatar URL" }
   );
 
-const GUEST_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const GUEST_DAYS_MS = 30 * 24 * 60 * 60 * 1000; // DB-side guest row TTL (not the cookie)
 
+/**
+ * Guest cookie options. v2.95 (owner spec: guests are "session-only, wiped on
+ * logout/close"): the guest cookie is now a SESSION cookie — NO `maxAge`/
+ * `expires`, so the browser drops it on close. Paired with the sessionStorage
+ * device-id (client/src/lib/deviceId.ts), BOTH halves of the guest-survival
+ * mechanism die on browser close, so a fresh session mints a brand-new guest.
+ * Within a session the cookie is shared across tabs and survives reloads, so the
+ * number stays stable while the browser is open. The DB row keeps a 30-day TTL
+ * as a backstop reaper bound; the cookie, not the row, gates access.
+ */
 function guestCookieOptions(req: Parameters<typeof getSessionCookieOptions>[0]) {
-  const base = getSessionCookieOptions(req);
-  return { ...base, maxAge: GUEST_DAYS_MS };
+  return getSessionCookieOptions(req);
 }
 
 /**

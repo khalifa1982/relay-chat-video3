@@ -1,29 +1,28 @@
 /**
- * Per-browser device id used to make the guest session sticky across
- * cookie loss, IP changes, and network swaps.
+ * Per-browser-SESSION device id that keeps a guest's identity (its 6-digit
+ * number, contacts, history) stable for the life of a browser session, and NO
+ * longer.
  *
- * Why this exists:
- *   Cookies are the only thing the server natively trusts, but they
- *   are aggressively dropped on many browsers (Safari ITP, Brave
- *   Shields, Firefox ETP, iOS Private Browsing, third-party-cookie
- *   blockers). When the cookie is gone, the user looks signed-out
- *   and the OnboardingGate would happily mint them a fresh identity
- *   with a different number \u2014 the exact bug reported as "I get
- *   disconnected and my number changes randomly".
- *
- *   localStorage is a much more durable surface. By generating a
- *   16-byte random id on first load and sending it as an HTTP header
- *   on every API call, the server can re-bind the browser to its
- *   existing identity even if the cookie is gone.
+ * Why sessionStorage, not localStorage (v2.95 \u2014 owner spec: guest data is
+ * "session-only, wiped on logout/close"):
+ *   - WITHIN a session it makes the guest sticky across cookie loss (Safari ITP,
+ *     Brave Shields, Firefox ETP, iOS Private Browsing) \u2014 the exact bug reported
+ *     as "I get disconnected and my number changes randomly" is still fixed,
+ *     because the id survives a mid-session cookie drop AND is shared with the
+ *     server on every API call so it re-binds the same identity.
+ *   - It clears on BROWSER CLOSE, so a fresh session mints a NEW guest \u2014 guest
+ *     identities are ephemeral, exactly as specified. (The guest cookie is now a
+ *     SESSION cookie too, so both halves of the survival pair die on close.)
+ *   - Multi-tab still works: a new tab has no sessionStorage id, but the shared
+ *     session GUEST COOKIE resolves the same guest and the server re-binds this
+ *     tab's fresh id to it.
+ *   - Registered users are unaffected \u2014 they resolve via their own persistent
+ *     `relay_session` cookie, not this id.
  *
  * Properties:
- *   - 16 bytes of crypto-grade randomness (32 hex chars), enough to
- *     make collisions astronomically unlikely (~1 in 2^128).
- *   - Stored under the key `relay_device_id` so it shows up in dev
- *     tools and the user can reset it by clearing site data.
- *   - SSR-safe: returns null when window/localStorage are unavailable,
- *     so importing this module won't throw on the server.
- *   - Side-effect free import \u2014 the id is minted on first call.
+ *   - 16 bytes of crypto-grade randomness (32 hex chars) \u2014 collisions ~1 in 2^128.
+ *   - Key `relay_device_id`; SSR-safe (null when window/sessionStorage absent);
+ *     side-effect-free import (minted on first call).
  */
 
 const STORAGE_KEY = "relay_device_id";
@@ -57,8 +56,8 @@ function randomHex16(): string {
 
 function readStored(): string | null {
   try {
-    if (typeof window === "undefined" || !window.localStorage) return null;
-    const v = window.localStorage.getItem(STORAGE_KEY);
+    if (typeof window === "undefined" || !window.sessionStorage) return null;
+    const v = window.sessionStorage.getItem(STORAGE_KEY);
     if (typeof v === "string" && HEX_RE.test(v)) return v.toLowerCase();
     return null;
   } catch {
@@ -68,8 +67,8 @@ function readStored(): string | null {
 
 function writeStored(value: string): void {
   try {
-    if (typeof window === "undefined" || !window.localStorage) return;
-    window.localStorage.setItem(STORAGE_KEY, value);
+    if (typeof window === "undefined" || !window.sessionStorage) return;
+    window.sessionStorage.setItem(STORAGE_KEY, value);
   } catch {
     /* storage may be disabled (Safari private mode) \u2014 we still keep
        the in-memory cache so the session at least survives the page

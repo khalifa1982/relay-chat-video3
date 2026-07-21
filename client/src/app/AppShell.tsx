@@ -307,7 +307,7 @@ function Inner({ children }: { children: React.ReactNode }) {
                 <Sparkles className="size-3.5" /> Guest mode
               </div>
               <p className="text-muted-foreground">
-                Cookied to this browser for 30 days. Register to keep this number forever.
+                This guest number lasts for this browser session. Register to keep it forever.
               </p>
               <button
                 type="button"

@@ -36,7 +36,7 @@ export function inviteTargetFromSearch(search: string): string | null {
 /**
  * Entry / login screen. Shows the app once an identity exists; otherwise a
  * fast, glassy screen whose PRIMARY path is GUEST entry: type a display name →
- * straight in (cookied to this device for 30 days). Registered sign-in
+ * straight in (a SESSION-only guest — wiped when the browser closes). Registered sign-in
  * (passwordless email code — login and registration are the same flow, so
  * there's no password to forget) is the secondary path behind a "Login /
  * Register" button. No third-party sign-in. Forced dark for a consistent
@@ -286,8 +286,8 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                     Login / Register with email <ArrowRight className="size-4" />
                   </Button>
                   <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
-                    Guests stay on this device for 30 days. Registering keeps your number
-                    forever and earns a verified badge.
+                    Guest sessions last until you close your browser. Registering keeps your
+                    number forever and earns a verified badge.
                   </p>
                 </>
               ) : (

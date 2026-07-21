@@ -1,18 +1,19 @@
 /*
- * Tests for client/src/lib/deviceId.ts \u2014 the localStorage-backed
- * sticky-session device id introduced in v2.1.0.
+ * Tests for client/src/lib/deviceId.ts \u2014 the SESSION-scoped sticky device id.
+ *
+ * v2.95 (owner spec: guests are session-only): the id moved from localStorage to
+ * sessionStorage so it dies on browser close (a fresh session \u21d2 a fresh guest),
+ * while still surviving reloads + mid-session cookie loss WITHIN a session.
  *
  * The contract this code guards:
- *   - Same browser, same id forever (until explicit reset or storage
- *     cleared by the user).
- *   - Different browsers, different ids (no shared global state).
+ *   - Same browser SESSION, same id (until explicit reset or the session ends).
+ *   - Different sessions/browsers, different ids (no shared global state).
  *   - 16\u201364 hex characters so it matches the server validator.
  *   - SSR-safe (importing the module on Node must not throw).
  *
- * We polyfill `window` + `localStorage` in this test because vitest's
- * default env is `node`, and the deviceId module deliberately checks
- * for `window` to stay SSR-safe. Re-importing per-test via dynamic
- * `import()` resets the module-level cache.
+ * We polyfill `window` with BOTH sessionStorage (the device id) and localStorage
+ * (relay_cid/relay_pin, cleared by clearRelayChannel). Re-importing per-test via
+ * dynamic `import()` resets the module-level cache.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,12 +40,16 @@ class FakeStorage implements Storage {
   }
 }
 
+/** Polyfill window with BOTH storages. Returns the sessionStorage (device id);
+ *  the localStorage (relay_cid/pin) is reachable via `window.localStorage`. */
 function installWindow(storage?: FakeStorage) {
-  const ls = storage ?? new FakeStorage();
-  (globalThis as { window?: { localStorage: Storage } }).window = {
-    localStorage: ls,
+  const session = storage ?? new FakeStorage();
+  const local = new FakeStorage();
+  (globalThis as { window?: { localStorage: Storage; sessionStorage: Storage } }).window = {
+    localStorage: local,
+    sessionStorage: session,
   };
-  return ls;
+  return session;
 }
 
 function clearWindow() {
@@ -83,16 +88,26 @@ describe("getDeviceId — sticky per-browser identity", () => {
     expect(a).toBe(b);
   });
 
-  it("persists across a module reload via localStorage", async () => {
-    const ls = installWindow();
+  it("persists across a module reload WITHIN a session via sessionStorage", async () => {
+    const ss = installWindow();
     const mod1 = await freshImport();
     const first = mod1.getDeviceId();
 
-    // Simulate a fresh page load: keep storage, drop module cache.
+    // Simulate a reload within the same session: keep storage, drop module cache.
     const mod2 = await freshImport();
-    // localStorage must still hold the value.
-    expect(ls.getItem("relay_device_id")).toBe(first);
+    // sessionStorage must still hold the value.
+    expect(ss.getItem("relay_device_id")).toBe(first);
     expect(mod2.getDeviceId()).toBe(first);
+  });
+
+  it("does NOT survive a new browser session (sessionStorage is empty ⇒ new id)", async () => {
+    installWindow();
+    const first = (await freshImport()).getDeviceId();
+    // A browser close/reopen = fresh sessionStorage. Re-polyfill empty storage.
+    installWindow();
+    const second = (await freshImport()).getDeviceId();
+    expect(second).toMatch(HEX_RE);
+    expect(second).not.toBe(first); // session-only: a new session ⇒ a new guest
   });
 
   it("returns null when window is not available (SSR)", async () => {
@@ -136,16 +151,19 @@ describe("getDeviceId — sticky per-browser identity", () => {
   });
 
   it("clearRelayChannel removes the relay cid + cached pin (logout severs the call channel)", async () => {
-    const ls = installWindow();
-    ls.setItem("relay_cid", "abc123def456abc1");
-    ls.setItem("relay_pin", "123456");
-    ls.setItem("relay_device_id", "0123456789abcdef"); // must be left intact
+    const ss = installWindow();
+    // relay_cid/relay_pin live in localStorage (the call channel); the device id
+    // lives in sessionStorage. clearRelayChannel touches only the former.
+    const local = (globalThis as { window: { localStorage: Storage } }).window.localStorage;
+    local.setItem("relay_cid", "abc123def456abc1");
+    local.setItem("relay_pin", "123456");
+    ss.setItem("relay_device_id", "0123456789abcdef"); // must be left intact
     const { clearRelayChannel } = await freshImport();
     clearRelayChannel();
-    expect(ls.getItem("relay_cid")).toBeNull();
-    expect(ls.getItem("relay_pin")).toBeNull();
+    expect(local.getItem("relay_cid")).toBeNull();
+    expect(local.getItem("relay_pin")).toBeNull();
     // The device id is a SEPARATE concern (handled by resetDeviceId) — untouched.
-    expect(ls.getItem("relay_device_id")).toBe("0123456789abcdef");
+    expect(ss.getItem("relay_device_id")).toBe("0123456789abcdef");
   });
 
   it("clearRelayChannel is a no-op (no throw) when localStorage is unavailable", async () => {

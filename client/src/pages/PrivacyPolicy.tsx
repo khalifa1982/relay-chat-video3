@@ -106,7 +106,7 @@ export default function PrivacyPolicy() {
                 <li>All connections use TLS encryption (HTTPS)</li>
                 <li>WebRTC media streams are encrypted end-to-end using DTLS-SRTP</li>
                 <li>Session cookies are HttpOnly and Secure</li>
-                <li>Guest sessions expire automatically after 30 days of inactivity</li>
+                <li>Guest sessions are session-only — wiped when you close your browser (a 30-day row TTL is the server-side backstop)</li>
                 <li>We do not sell, rent, or share your data with advertisers or data brokers</li>
               </ul>
             </Section>

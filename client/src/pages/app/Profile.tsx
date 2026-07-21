@@ -356,7 +356,7 @@ export default function ProfilePage() {
           <section className="rounded-xl border border-primary/30 bg-primary/5 p-5 space-y-3">
             <h2 className="text-lg font-semibold">Keep this number forever</h2>
             <p className="text-sm text-muted-foreground">
-              Guests are kept on this device for 30 days. Create an account to save your
+              Guest sessions are wiped when you close your browser. Create an account to save your
               number, contacts, and profile permanently across all your devices.
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
