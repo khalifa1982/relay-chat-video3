@@ -21,8 +21,12 @@ interface RelayEngineValue {
   /** Programmatic dial. Returns true if the engine accepted the request.
    *  `opts.voice` starts a voice call (camera off). */
   dial: (number: string, opts?: { voice?: boolean; displayName?: string }) => boolean;
-  /** Start a GROUP call — ring up to 10 numbers into one room. */
+  /** Start a GROUP call — ring up to `maxParticipants` numbers into one room. */
   dialGroup: (numbers: string[], opts?: { voice?: boolean }) => boolean;
+  /** Max participants the active transport supports (SFU 10 / mesh 6). The
+   *  group-call picker caps selection to this so it never rings more than can
+   *  connect. Defaults to 10 until the engine registers. */
+  maxParticipants: number;
   /** End/leave the current call (or cancel an outgoing one). */
   hangup: () => void;
   /** idle | dialing | ringing | in-call. */
@@ -40,6 +44,7 @@ const RelayEngineContext = createContext<RelayEngineValue>({
   phase: "idle",
   pin: null,
   ready: false,
+  maxParticipants: 10,
 });
 
 export const useRelayEngine = () => useContext(RelayEngineContext);
@@ -245,6 +250,9 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     phase,
     pin,
     ready,
+    // Re-read on every render; once `ready` flips (a state change → re-render)
+    // this reflects the registered transport's real cap (mesh 6 / SFU 10).
+    maxParticipants: handleRef.current?.maxParticipants() ?? 10,
   };
 
   return (

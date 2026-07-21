@@ -6,21 +6,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useRelayEngine } from "@/app/RelayEngine";
 
-const MAX_PARTICIPANTS = 10;
-
 function initials(name: string): string {
   const p = name.trim().split(/\s+/).slice(0, 2);
   return p.map((s) => s[0]?.toUpperCase() ?? "").join("").slice(0, 2) || "?";
 }
 
 /**
- * Create-group-call picker. Select up to 10 participants from contacts or add
- * numbers manually, then start the call — the engine rings everyone into one
- * room (first to accept joins; the rest keep ringing). Dismissible via the X,
- * a backdrop click, or Cancel.
+ * Create-group-call picker. Select up to the transport's cap (mesh 6 / SFU 10)
+ * participants from contacts or add numbers manually, then start the call — the
+ * engine rings everyone into one room (first to accept joins; the rest keep
+ * ringing). Dismissible via the X, a backdrop click, or Cancel.
  */
 export function GroupCallScreen({ onClose }: { onClose: () => void }) {
   const engine = useRelayEngine();
+  // Cap selection to what the ACTIVE transport can actually connect (mesh 6 /
+  // SFU 10) — over-selecting would ring people who then strand in a full room.
+  const MAX_PARTICIPANTS = engine.maxParticipants;
   const contacts = trpc.contacts.list.useQuery(undefined, { staleTime: 15_000 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [manual, setManual] = useState("");

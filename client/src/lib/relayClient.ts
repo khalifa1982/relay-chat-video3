@@ -138,9 +138,13 @@ export interface RelayHandle {
    *  is a "Dial by Video": the session connects with the camera already live).
    *  `opts.displayName` labels the dial-progress card with the callee's name. */
   dial: (number: string, opts?: { voice?: boolean; displayName?: string }) => boolean;
-  /** Start a GROUP call — ring up to 10 numbers into one room. Returns true if
-   *  at least one valid number was accepted. */
+  /** Start a GROUP call — ring up to `maxParticipants()` numbers into one room.
+   *  Returns true if at least one valid number was accepted. */
   dialGroup: (numbers: string[], opts?: { voice?: boolean }) => boolean;
+  /** Max participants the ACTIVE transport supports: 10 on the SFU, 6 on the
+   *  mesh. Lets the group-call picker cap selection to what can actually
+   *  connect (over-selecting strands the overflow in a full-room accept). */
+  maxParticipants: () => number;
   /** Set/replace the engine-state callback. Fired whenever phase changes. */
   setOnStateChange: (cb: ((phase: RelayPhase) => void) | null) => void;
   /** Best-effort: cancel an in-flight call/leave the room. */
@@ -692,7 +696,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "ice":          onIceServers(m); break;
       case "error": {
         toast(m.message || "Something went wrong.", true);
-        const fatalCode = m.code === "offline" || m.code === "self" || m.code === "gone";
+        // full/forbidden = a rejected JOIN → fatal to a peerless joiner (7th mesh
+        // /11th SFU accept, or a full-party-line dial) so it exits cleanly; the
+        // aloneInCall() guard below spares any LIVE call (host-only forbidden).
+        const fatalCode = m.code === "offline" || m.code === "self" || m.code === "gone" ||
+          m.code === "full" || m.code === "forbidden";
         if (addInviteOfflineGuard && m.code === "offline") {
           // Offline error for an add-to-call invite — don't tear down our call.
           addInviteOfflineGuard = false;
@@ -1800,13 +1808,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // fresh group dial can't race into two rooms.
   async function programmaticGroupDial(targets: string[], opts?: { voice?: boolean }): Promise<boolean> {
     if (!me.pin) return false;
-    const clean = Array.from(
+    const deduped = Array.from(
       new Set(
         targets
           .map(t => String(t).replace(/\D/g, "").slice(0, 6))
           .filter(t => /^\d{6}$/.test(t) && t !== me.pin)
       )
-    ).slice(0, 10);
+    );
+    // Clamp to the ACTIVE transport's cap: the SFU holds 10, the mesh only 6.
+    // Ringing more than the room can hold strands the overflow in a dead
+    // accept-into-full — so ring only what can connect, and say so (no silent drop).
+    const cap = livekitEnabled ? 10 : 6;
+    const clean = deduped.slice(0, cap);
+    if (deduped.length > cap) {
+      toast(`This server supports up to ${cap} on a call — ringing the first ${cap}.`, true);
+    }
     if (clean.length === 0) return false;
     try { await ensureMedia(); } catch { return false; }
     if (opts?.voice && localStream && localStream.getVideoTracks().length > 0) setCam(false);
@@ -2317,6 +2333,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // The caller hung up before we answered — clear the incoming-ring UI without
   // sending a reject back (they're already gone).
   function onRingCancel(m: Msg) {
+    // A cancelled CALL-WAITING ring must also dismiss the "Switch" popup. It was
+    // only clearing `pendingRing`, so a stale waiting popup survived a cancel —
+    // and tapping it later parked your LIVE call then died on the server's
+    // `gone`, dropping the good call. Clear the matching waitingRing here.
+    if (waitingRing && (!m.from || waitingRing.from === m.from)) {
+      waitingRing = null;
+      hideCallWaiting();
+      toast("Caller cancelled the call");
+    }
     if (!pendingRing) return;
     if (m.from && pendingRing.from !== m.from) return;
     pendingRing = null;
@@ -3495,8 +3520,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // a dead solo call swallowed the next incoming ring as call-waiting.
     // Groups keep the room open (the host may ring more people in).
     if (inCall && !quiet && !callIsGroup && callAnswered && aloneInCall()) {
-      toast("Call ended.");
-      hangUp("remote-left");
+      // If a call is HELD, the far side leaving the ACTIVE 1:1 must RESUME the
+      // held call — not tear everything down. `hangUp` would `dropHeld()` a
+      // perfectly live parked call; `endActiveLine()` promotes the held one
+      // (server `end-active` → `resumed`). Only a true no-held case hangs up.
+      if (heldRoomId) {
+        toast("Call ended — resuming your held call…");
+        endActiveLine();
+      } else {
+        toast("Call ended.");
+        hangUp("remote-left");
+      }
     }
   }
 
@@ -5428,6 +5462,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       void programmaticGroupDial(targets, opts);
       return true;
     },
+    maxParticipants() { return livekitEnabled ? 10 : 6; },
     setOnStateChange(cb) { onPhaseChange = cb; },
     getPin() { return me.pin; },
     setPreferredPin(pin) {
