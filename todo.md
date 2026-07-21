@@ -4232,3 +4232,9 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       default from navigator.language. Language switch re-renders WITHOUT replaying the boot
       cinematic. Browser-verified: EN→AR→EN flip, RTL Arabic hero, no page errors.
 - [x] Home.test.ts +2 pin groups (bilingual + failsafes) → 14 pins. Suite 1083 passed / 1 skipped.
+
+## v2.95.8 — support email placed on the landing (2026-07-21)
+- [x] support@<host> (derived via the host — no domain literal, guard-compliant) is now visible:
+      a mailto link in the footer (LTR island) + a sixth FAQ entry "How do I reach support?" /
+      "كيف أتواصل مع الدعم؟" in BOTH languages, noting replies come from inside RELAY (the
+      v2.95.6 Round-6 inbound routing). Pinned in Home.test.ts (15 pins).

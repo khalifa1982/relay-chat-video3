@@ -96,6 +96,7 @@ const COPY = {
     q3: "How do the 6-digit numbers work?", a3: "Every visitor gets a short RELAY number. Read it out, text it, write it on a napkin — anyone who dials it from their browser reaches you directly.",
     q4: "Does it work on my phone?", a4: "Yes — RELAY runs in any modern browser: Chrome, Safari, Firefox and Edge, on desktop or mobile. Nothing to install.",
     q5: "Who can see or hear my calls?", a5: "Just the people on them. Media streams directly between browsers, encrypted in transit. RELAY's server only handles the handshake — it never touches your audio or video.",
+    q6: "How do I reach support?", a6: (email: string) => `Email us any time at ${email}. Your message lands directly inside RELAY for the team, and we reply from there.`,
     ctaNumber: "Get your number →", ctaFine: "FREE · NO SIGNUP · ~10 SECONDS",
     footTag: "PEER-TO-PEER. BROWSER-NATIVE. FREE.", footPolicy: "POLICY", footTop: "TOP ↑",
     bootMsgs: [
@@ -151,6 +152,7 @@ const COPY = {
     q3: "كيف تعمل الأرقام ذات 6 خانات؟", a3: "كل زائر يحصل على رقم RELAY قصير. اقرأه بصوت عالٍ أو أرسله برسالة — وكل من يطلبه من متصفحه يصل إليك مباشرة.",
     q4: "هل يعمل على هاتفي؟", a4: "نعم — RELAY يعمل على أي متصفح حديث: كروم وسفاري وفايرفوكس وإيدج، على الحاسوب أو الجوال. لا شيء يُثبَّت.",
     q5: "من يستطيع رؤية أو سماع مكالماتي؟", a5: "أطراف المكالمة فقط. الوسائط تتدفق مباشرة بين المتصفحات مشفَّرة أثناء النقل. خادم RELAY يتولى المصافحة فقط — ولا يلمس صوتك أو فيديوك أبدًا.",
+    q6: "كيف أتواصل مع الدعم؟", a6: (email: string) => `راسلنا في أي وقت على ${email}. تصل رسالتك مباشرة إلى فريقنا داخل RELAY ونرد عليك من هناك.`,
     ctaNumber: "احصل على رقمك ←", ctaFine: "مجاني · بلا تسجيل · ~10 ثوانٍ",
     footTag: "ند-لِند. داخل المتصفح. مجاني.", footPolicy: "سياسة الخصوصية", footTop: "الأعلى ↑",
     bootMsgs: [
@@ -297,6 +299,7 @@ function statsStrip(t: Copy): string {
 
 function markup(host: string, t: Copy, ar: boolean): string {
   const mq = t.marquee;
+  const supportEmail = `support@${host}`;
   const step = (n: string, title: string, body: string, demo: string) =>
     `<div data-reveal="${n === "01" ? 1 : n === "02" ? 2 : 3}"><div class="lp-card" style="background:rgba(255,255,255,.035);border:1px solid rgba(233,240,242,.09);border-radius:20px;padding:34px;min-height:220px;box-sizing:border-box"><div style="display:flex;align-items:center;gap:16px"><span style="font:600 13px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#6ff2ae">STEP ${n}</span><span style="flex:1;height:1px;background:linear-gradient(90deg,rgba(111,242,174,.45),transparent)"></span></div><h3 data-scramble="1" style="margin:22px 0 12px;font:600 22px 'Space Grotesk',sans-serif">${title}</h3><p style="margin:0;font:400 15px/1.65 'Space Grotesk',sans-serif;color:#94a2ac">${body}</p><div style="margin-top:22px;border:1px solid rgba(233,240,242,.1);border-radius:12px;overflow:hidden;background:rgba(10,13,16,.6)">${chromeBar(host)}<div style="height:170px;overflow:hidden;position:relative;background:radial-gradient(130% 110% at 50% 0%,#0f171b,#0a0d10);display:flex;align-items:center;justify-content:center">${demo}</div></div></div></div>`;
 
@@ -506,6 +509,7 @@ function markup(host: string, t: Copy, ar: boolean): string {
         ${faq(t.q3, t.a3)}
         ${faq(t.q4, t.a4)}
         ${faq(t.q5, t.a5)}
+        ${faq(t.q6, t.a6(supportEmail))}
       </div>
       <div data-reveal="3" style="margin-top:70px;text-align:center">
         <a class="lp-cta" href="/app" style="display:inline-block;background:#6ff2ae;color:#06120b;font:600 17px 'Space Grotesk',sans-serif;padding:18px 40px;border-radius:999px;box-shadow:0 0 40px rgba(111,242,174,.35)">${t.ctaNumber}</a>
@@ -525,6 +529,7 @@ function markup(host: string, t: Copy, ar: boolean): string {
           <a class="lp-footlink" href="#features">${t.navFeatures}</a>
           <a class="lp-footlink" href="#privacy">${t.navPrivacy}</a>
           <a class="lp-footlink" href="#faq">${t.navFaq}</a>
+          <a class="lp-footlink" href="mailto:${supportEmail}" dir="ltr">${supportEmail}</a>
           <a class="lp-footlink" href="/privacy-policy">${t.footPolicy}</a>
           <a class="lp-footlink" href="#top">${t.footTop}</a>
         </div>

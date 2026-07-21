@@ -126,6 +126,14 @@ describe("Home.tsx — RELAY Landing (design port)", () => {
     expect(HOME_TSX).toMatch(/skipBoot: bootedOnceRef\.current/);
   });
 
+  it("shows the support email (derived from the host — no domain literal)", () => {
+    expect(HOME_TSX).toMatch(/const supportEmail = `support@\$\{host\}`/);
+    expect(HOME_TSX).toMatch(/href="mailto:\$\{supportEmail\}"/);
+    // FAQ contact entry in BOTH languages
+    expect(HOME_TSX).toMatch(/How do I reach support\?/);
+    expect(HOME_TSX).toMatch(/كيف أتواصل مع الدعم؟/);
+  });
+
   it("links the privacy policy and keeps anchor navigation", () => {
     expect(HOME_TSX).toMatch(/href="\/privacy-policy"/);
     for (const a of ["#how", "#features", "#privacy", "#faq", "#top"]) {
