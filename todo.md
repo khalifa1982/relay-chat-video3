@@ -4238,3 +4238,15 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       a mailto link in the footer (LTR island) + a sixth FAQ entry "How do I reach support?" /
       "كيف أتواصل مع الدعم؟" in BOTH languages, noting replies come from inside RELAY (the
       v2.95.6 Round-6 inbound routing). Pinned in Home.test.ts (15 pins).
+
+## v2.95.9 — ZERO-JS loader failsafe (owner: "still not moving") (2026-07-21)
+- [x] Verified the EXACT live v2.95.8 artifact (mirrored from .io, served locally, headless
+      Chromium desktop + 6x-throttled mobile emulation): the bar progresses and clears with zero
+      errors — the shipped JS is sound in everything emulable. The remaining report is almost
+      certainly a held-over pre-fix bundle on the owner's device (close/reopen or hard-refresh)
+      or an engine we can't emulate. Closed permanently with a PURE-CSS belt:
+      • a CSS watchdog (`[data-lp="loader"]:not(.lp-js-ok)`) fades the overlay + drops
+        hit-testing at ~5.6s unless the engine's FIRST action (adding .lp-js-ok) disarms it —
+        works with zero working JavaScript (verified by dead-JS simulation in the browser);
+      • the progress TRACK carries a CSS-only light sweep (loadTrack::after shimmer), so the
+        loader visibly MOVES even if JS width/percent updates stall.

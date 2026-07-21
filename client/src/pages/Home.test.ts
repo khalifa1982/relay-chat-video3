@@ -124,6 +124,11 @@ describe("Home.tsx — RELAY Landing (design port)", () => {
     expect(HOME_TSX).toMatch(/replayHero\(\);\s*\n\s*\/\/ Boot the 3D scene only now/);
     // language switches skip the boot cinematic (plays once per visit)
     expect(HOME_TSX).toMatch(/skipBoot: bootedOnceRef\.current/);
+    // v2.95.9 ZERO-JS belt: a pure-CSS watchdog clears the overlay unless the
+    // engine proves it's alive, and the track shimmer moves without any JS.
+    expect(HOME_TSX).toMatch(/\[data-lp="loader"\]:not\(\.lp-js-ok\)\{animation:lpAutoClear/);
+    expect(HOME_TSX).toMatch(/classList\.add\("lp-js-ok"\)/);
+    expect(HOME_TSX).toMatch(/\[data-lp="loadTrack"\]::after/);
   });
 
   it("shows the support email (derived from the host — no domain literal)", () => {

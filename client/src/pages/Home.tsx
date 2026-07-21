@@ -233,6 +233,18 @@ const CSS = `
 @keyframes lpKb3{0%{transform:scale(1.06) translate(.9%,1.3%)}100%{transform:scale(1.13) translate(-1%,-1.2%)}}
 @keyframes lpSpkA2{0%,21%{box-shadow:0 0 0 2px rgba(111,242,174,.7),0 0 24px rgba(111,242,174,.25)}27%,96%{box-shadow:0 0 0 1px rgba(233,240,242,.09)}100%{box-shadow:0 0 0 2px rgba(111,242,174,.7),0 0 24px rgba(111,242,174,.25)}}
 @keyframes lpSpkO2{0%,21%{opacity:1}27%,96%{opacity:.12}100%{opacity:1}}
+/* ZERO-JS loader failsafes (v2.95.9). The engine's FIRST action is adding
+   .lp-js-ok to the overlay, which disarms this CSS watchdog (the JS watchdogs
+   take over). If the engine never runs or dies before that, pure CSS fades the
+   overlay out at ~5.6s and drops it from hit-testing — a frozen loading screen
+   is impossible even with zero working JavaScript. */
+@keyframes lpAutoClear{to{opacity:0;visibility:hidden;pointer-events:none}}
+[data-lp="loader"]:not(.lp-js-ok){animation:lpAutoClear .5s ease 5.6s forwards}
+/* The progress TRACK carries a CSS-only light sweep, so the loader visibly
+   MOVES even if the JS width/percent updates stall. */
+@keyframes lpShimmer{from{transform:translateX(-120%)}to{transform:translateX(520%)}}
+[data-lp="loadTrack"]{position:relative}
+[data-lp="loadTrack"]::after{content:"";position:absolute;top:0;bottom:0;left:0;width:22%;border-radius:3px;background:linear-gradient(90deg,transparent,rgba(111,242,174,.55),transparent);animation:lpShimmer 1.3s linear infinite}
 @media (max-width:760px){
   .lp-navlinks{display:none}
   .lp-hero{padding:120px 22px 70px!important}
@@ -340,7 +352,7 @@ function markup(host: string, t: Copy, ar: boolean): string {
       </div>
     </div>
     <div style="width:100%">
-      <div style="width:100%;height:3px;border-radius:3px;background:rgba(233,240,242,.08);overflow:hidden"><div data-lp="loadBar" style="width:0%;height:100%;border-radius:3px;background:#6ff2ae;box-shadow:0 0 14px rgba(111,242,174,.8)"></div></div>
+      <div data-lp="loadTrack" style="width:100%;height:3px;border-radius:3px;background:rgba(233,240,242,.08);overflow:hidden"><div data-lp="loadBar" style="width:0%;height:100%;border-radius:3px;background:#6ff2ae;box-shadow:0 0 14px rgba(111,242,174,.8)"></div></div>
       <div style="display:flex;justify-content:space-between;margin-top:12px"><span data-lp="loadMsg" style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#6ff2ae">${t.bootMsgs[0][1]}</span><span data-lp="loadPct" style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.18em;color:rgba(148,162,172,.8)">0%</span></div>
       <div data-lp="loadSub" style="margin-top:9px;font:400 11px/1.5 'Space Grotesk',sans-serif;color:rgba(148,162,172,.85);min-height:17px">${t.bootMsgs[0][2]}</div>
     </div>
@@ -553,6 +565,9 @@ type LoaderMsg = [number, string, string];
 
 function startLanding(host: HTMLElement, t: Copy, opts: { skipBoot: boolean; onToggleLang: () => void }): () => void {
   const $ = (k: string) => host.querySelector<HTMLElement>(`[data-lp="${k}"]`);
+  // FIRST action: prove JS is alive — this disarms the pure-CSS auto-clear
+  // watchdog on the overlay (the JS watchdogs in runLoader take over from here).
+  $("loader")?.classList.add("lp-js-ok");
   const reduced =
     typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
