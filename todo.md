@@ -4104,3 +4104,25 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       (.org) via `storagePut`/the storage proxy. This change is marketing images only.
 - [x] Build-verified: `pnpm build` green, all 15 present in `dist/public/marketing/`. Version
       → 2.92.3 (updateChecker pin bumped). `tsc --noEmit` + version/domain-scan tests green.
+
+## v2.94.4–v2.94.7 — cross-instance activation, call-link direct-join, login overhaul (2026-07-21)
+- [x] v2.94.4 — Activated cross-instance calling on `.io`: baked `RELAY_CLUSTER=1` into
+      `ecosystem.config.cjs` (the `.io`-only pm2 config), before the `.env` spread so it's
+      overridable. Diagnosed live: `/api/health` showed two instance ids + `redisBus:true` but
+      `cluster:false`. After deploy `cluster:true` on both boxes → the "calls may not connect"
+      banner suppresses itself and calls ring across instances (no ALB pin). `.org` untouched.
+- [x] v2.94.5 — Call-link direct-join (owner: "paramount"): `/i/<pin>` clicker with no identity
+      now sees a focused "you're calling <name> — enter your name to connect" card (callee
+      resolved via public `directory.lookup`), then straight into the dial. `callLinkJoin.test.ts`.
+- [x] v2.94.6 — Login overhaul pt.1 (guest): full-screen "matrix" ID-reveal on guest entry
+      (`MatrixReveal.tsx` — green glyph rain + digit-by-digit number decode). Call-link joins skip it.
+- [x] v2.94.7 — Login overhaul pt.2 (registered): glassy `AuthPanel`, "secure lock engaging"
+      animation on PIN entry, and "keep me signed in" 30/60/90 (OFF = session cookie), wired via
+      `verifyOtp`/`loginWithPin` `remember` → `setSessionCookie(ttlMs)`. `rememberMe.test.ts` +
+      `authPanelRemember.test.ts`.
+- [x] Confirmed the spec's "regenerate PIN + auto-sync to contacts" ALREADY exists:
+      `identity.regenerateNumber` → `planRenumber` propagates the new number to all contacts;
+      Profile's confirm dialog says "Everyone who saved you as a contact is updated automatically."
+- [ ] DEFERRED — fully session-only guests (wiped on browser CLOSE, not just logout). Reverses a
+      deliberate anti-"random number change" design (guest loses number/contacts/history on close).
+      Logout already wipes everything today. Awaiting owner steer (task #30).
