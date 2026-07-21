@@ -13,19 +13,24 @@ a call rings + connects + relays SDP across instances.
 
 ## Best `.io` configuration (turn it on)
 
-`.io` runs 2 EC2 instances behind the ALB with ElastiCache Redis. To make calls
-work across both without pinning:
+`.io` runs 2 EC2 instances behind the ALB with ElastiCache Redis. Cross-instance
+signaling is now **on by default on `.io`**: `RELAY_CLUSTER=1` is baked into
+`ecosystem.config.cjs` (the pm2 config the deploy copies onto every `.io`
+server), so the next `main` deploy activates it fleet-wide with no manual server
+edit. `REDIS_URL` is already set (verified live: `/api/health` → `redisBus:true`),
+which is the other half of the `clusterEnabled()` gate.
 
-1. In `/home/relay/.env` on **BOTH** instances add: `RELAY_CLUSTER=1`
-   (`REDIS_URL` is already set). Reload: `pm2 startOrReload ecosystem.config.cjs --update-env`.
-2. That's it — the two instances elect a leader over Redis; calls ring + connect
-   regardless of which instance each user hit. `/api/health` returns
-   `"cluster": true` and the in-app "calls misconfigured" banner suppresses itself.
-3. You do NOT need the ALB `/api/relay/*` pin (`aws-ops.yml alb-tune`); if you
-   applied it, you can leave it (harmless) or remove the priority-10 rule. SSE
-   connections stay load-balanced across both instances either way.
+- After the deploy, the two instances elect a leader over Redis; calls ring +
+  connect regardless of which instance each user hit. `/api/health` returns
+  `"cluster": true` and the in-app "calls misconfigured" banner suppresses itself.
+- You do NOT need the ALB `/api/relay/*` pin (`aws-ops.yml alb-tune`); if you
+  applied it, you can leave it (harmless) or remove the priority-10 rule. SSE
+  connections stay load-balanced across both instances either way.
+- To DISABLE on a given server, set `RELAY_CLUSTER=0` in `/home/relay/.env` (the
+  `.env` spread overrides the baked-in default) and `pm2 startOrReload … --update-env`.
 
-Leave `.org` (single Manus instance) unset — it never clusters.
+`ecosystem.config.cjs` is copied ONLY onto the AWS `.io` servers; `.org` (single
+Manus instance) never uses it, so `.org` stays unclustered.
 
 ---
 
