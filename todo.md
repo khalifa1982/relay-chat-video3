@@ -4178,3 +4178,7 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       rebuilt versionCode-3 artifacts (CI: RELAY-RN + TWA workflows) uploaded to Play.
       [YOU] .io .env: set TWA_SHA256_FINGERPRINTS (assetlinks now served from .io) and confirm
       INBOUND_EMAIL_* / RESEND_FROM / SMTP_FROM use a domain you still control.
+- [x] Follow-up: the owner's 301 middleware (.org→.io, commit 43ff0f5) tripped the
+      noHardcodedDomains guard — extracted into server/domainMigration.ts (behavior identical,
+      behaviorally tested incl. Host-port/case variants + pass-through) and consciously
+      allowlisted like ecosystem.config.cjs. Guard header updated: .org retired, guard stays.

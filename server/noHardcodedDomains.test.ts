@@ -5,12 +5,13 @@ import path from "node:path";
 /**
  * v2.92 (R4B, owner requirement) — ZERO hardcoded deployment domains.
  *
- * The same source tree serves BOTH production deployments (the Manus-hosted
- * .org and the AWS-Mumbai self-hosted .io); which domain an instance answers
- * as is decided entirely by env (APP_URL / DOMAIN) and the request Host header
- * via server/appUrl.ts (client side: window.location). A "your-chat" literal
- * in runtime source would silently pin one deployment's identity into the
- * other's build — this walks every runtime source file and forbids it.
+ * Which domain an instance answers as is decided entirely by env (APP_URL /
+ * DOMAIN) and the request Host header via server/appUrl.ts (client side:
+ * window.location) — never by a literal in runtime source. This kept ONE tree
+ * serving both .org (Manus) and .io (AWS) until the owner retired .org
+ * entirely (2026-07-21, v2.95.4); the guard REMAINS so the app stays
+ * domain-agnostic (a future rename/move is an env change, not a code hunt).
+ * This walks every runtime source file and forbids deployment literals.
  *
  * Scanned: server/, client/src/, client/public/, shared/ (final fix round P3
  * added client/public — sw.js and friends ship to the browser too), plus the
@@ -26,6 +27,11 @@ import path from "node:path";
  *     for the self-hosted .io fleet; it names its own deployment target on
  *     purpose (comments/paths), and it is deploy config, not app runtime
  *     source. Scanned so the entry is a conscious exemption, not a blind spot.
+ *   - server/domainMigration.ts — EXPLICIT allowlist entry: the 301 shim from
+ *     the RETIRED your-chat.org to your-chat.io (owner's domain migration,
+ *     2026-07-21). A cross-domain redirect is domain-specific BY DEFINITION;
+ *     env-deriving it would silently drop the redirect on a misconfigured box.
+ *     The ONLY runtime module allowed to name the domains.
  */
 
 const ROOT = path.resolve(__dirname, "..");
@@ -34,7 +40,7 @@ const SCAN_ROOTS = ["server", "client/src", "client/public", "shared"];
 const EXTRA_FILES = ["client/index.html", "ecosystem.config.cjs"];
 // EXPLICIT allowlist — scanned, but allowed to contain a deployment domain
 // (rationale in the header comment). Keep this list tiny and justified.
-const ALLOWLIST = new Set(["ecosystem.config.cjs"]);
+const ALLOWLIST = new Set(["ecosystem.config.cjs", path.join("server", "domainMigration.ts")]);
 const SOURCE_EXT = /\.(ts|tsx|js|mjs|cjs|css|json|html|xml|txt|webmanifest)$/;
 const TEST_FILE = /\.test\.(ts|tsx)$/;
 // Deployment-identity literals: the two public domains, the Manus space host

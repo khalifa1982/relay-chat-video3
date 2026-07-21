@@ -28,6 +28,7 @@ import { registerLocalAuth } from "../authLocal";
 import { appBaseUrl } from "../appUrl";
 import { INSTANCE_ID } from "../redisBus";
 import { clusterEnabled } from "../relayCluster";
+import { registerDomainMigration } from "../domainMigration";
 
 function escapeHtml(s: string): string {
   return s.replace(
@@ -105,14 +106,10 @@ async function startServer() {
   }
   const server = createServer(app);
 
-  // 301 redirect: your-chat.org → your-chat.io (domain migration)
-  app.use((req, res, next) => {
-    const host = (req.headers.host || "").replace(/:.*$/, "").toLowerCase();
-    if (host === "your-chat.org" || host === "www.your-chat.org") {
-      return res.redirect(301, `https://your-chat.io${req.originalUrl}`);
-    }
-    next();
-  });
+  // 301 the retired .org domain to .io (owner's domain migration, 2026-07-21).
+  // Lives in its own consciously-allowlisted module — the domain guard forbids
+  // deployment literals everywhere else (see server/domainMigration.ts).
+  registerDomainMigration(app);
 
   // Security headers on every response. Kept deliberately CONSERVATIVE so they
   // can't break the inline-style/script-heavy SPA, the WebRTC media stack, or the
