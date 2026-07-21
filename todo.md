@@ -174,3 +174,10 @@
 - [x] Added debounce: requires 2 consecutive positive detection cycles before firing the notification
 - [x] Added caller name filtering to exclude false matches ("Voice", "Video", "Group", "Incoming", "RELAY")
 - [x] tsc clean + 65 tests pass; checkpoint and deliver
+
+## Round 18 — Change app URL from your-chat.org to your-chat.io
+- [x] Updated DEFAULT_BASE_URL in lib/relay-config.ts from your-chat.org to your-chat.io
+- [x] Updated test references in tests/apk-update.test.ts
+- [x] Verified no remaining references to your-chat.org in the project
+- [x] relay-config.test.ts live endpoint test passes against your-chat.io/app
+- [x] tsc clean + 65 tests pass

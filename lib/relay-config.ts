@@ -8,7 +8,7 @@
  * web app automatically changes what the mobile app shows.
  */
 
-const DEFAULT_BASE_URL = "https://your-chat.org";
+const DEFAULT_BASE_URL = "https://your-chat.io";
 
 /** Trim a trailing slash so we can safely append paths. */
 function normalizeBaseUrl(raw: string | undefined): string {
