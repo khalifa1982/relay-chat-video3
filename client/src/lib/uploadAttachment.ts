@@ -111,18 +111,9 @@ export async function uploadThumbnail(
   return res.json() as Promise<{ storageKey: string; url: string }>;
 }
 
-/**
- * Upload rich-STATUS media (image/video/audio) via `?bare=1` (v2.95): stores
- * the bytes in the caller's own namespace and returns {storageKey,url} with NO
- * attachment row — so the storage proxy serves it publicly (like avatars) and a
- * contact viewing the status isn't blocked by the participant-only attachment
- * gate. The returned storageKey is then passed to `status.post`.
- */
-export async function uploadStatusMedia(
-  blob: Blob,
-  opts: { mimeType?: string },
-): Promise<{ storageKey: string; url: string }> {
-  const mime = opts.mimeType || blob.type || "application/octet-stream";
+/** Shared `?bare=1` upload: bytes into the caller's own namespace, NO
+ *  attachment row — so the storage proxy's participant gate never applies. */
+async function uploadBare(blob: Blob, mime: string): Promise<{ storageKey: string; url: string }> {
   const qs = new URLSearchParams({ bare: "1", mime });
   const headers: Record<string, string> = { "Content-Type": "application/octet-stream" };
   const deviceId = getDeviceId();
@@ -135,4 +126,33 @@ export async function uploadStatusMedia(
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<{ storageKey: string; url: string }>;
+}
+
+/**
+ * Upload rich-STATUS media (image/video/audio) via `?bare=1` (v2.95): stores
+ * the bytes in the caller's own namespace and returns {storageKey,url} with NO
+ * attachment row — so the storage proxy serves it publicly (like avatars) and a
+ * contact viewing the status isn't blocked by the participant-only attachment
+ * gate. The returned storageKey is then passed to `status.post`.
+ */
+export async function uploadStatusMedia(
+  blob: Blob,
+  opts: { mimeType?: string },
+): Promise<{ storageKey: string; url: string }> {
+  return uploadBare(blob, opts.mimeType || blob.type || "application/octet-stream");
+}
+
+/**
+ * Upload a PROFILE PHOTO (v2.96.1) — also `?bare=1`, and that is the FIX for
+ * "my photo shows broken to everyone else": the old path went through
+ * uploadAttachment, whose attachments ROW made the storage proxy treat the
+ * avatar as a participant-only shared file — the owner could see it (uploader
+ * rule) while every other user got 403. Bare uploads have no row, so the
+ * proxy serves them like the semi-public avatar it is.
+ */
+export async function uploadAvatarImage(
+  blob: Blob,
+  opts: { mimeType?: string },
+): Promise<{ storageKey: string; url: string }> {
+  return uploadBare(blob, opts.mimeType || blob.type || "image/jpeg");
 }

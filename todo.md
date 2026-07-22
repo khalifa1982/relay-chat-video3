@@ -4316,3 +4316,44 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
 - [x] `server/peerIdentityBatch.test.ts` (30 pins across all four legs) + Contacts.test.ts pin
       updated to the new row-tap behavior. Suite 1114 passed / 1 skipped; `pnpm check` + build
       green.
+
+## v2.96.1 — owner feedback on v2.96.0 (4 points + call-screen extras, 4 screenshots) (2026-07-22)
+- [x] BROKEN AVATARS (profile + call history showed broken-image icons to OTHER users) — real
+      root cause found: profile photos were uploaded through the ATTACHMENT path, so the v2.95
+      participant-only storage gate authorized ONLY the uploader (your own photo worked; everyone
+      else got 403 → the browser's broken-image glyph — v2.96.0 rendering avatars everywhere made
+      it visible). Fixed at every layer: (a) new uploads use `uploadAvatarImage` → `?bare=1`
+      (no attachments row → the proxy's semi-public avatar path); (b) LEGACY keys are rescued in
+      `authorizeStorageKey` — on the would-be-403 path, a key that is some identity's CURRENT
+      avatar (`isIdentityAvatarKey`, relative + legacy absolute URL shapes, LIKE-escaped) serves
+      as `kind:"avatar"`; (c) `PeerAvatar` falls back to the initials disc on img error (keyed by
+      URL) so a truly dead object can never render as a broken glyph.
+- [x] AUTO-REFRESH ON UPDATE (owner: "no need to click Refresh") — UpdateChecker now reloads
+      silently when IDLE as well as in-call (dialing/ringing still defer — a reload there drops
+      the pre-answer call). The "Refresh now" card remains only as the loop-guard fallback when a
+      silent reload ran <60s ago and the bundle is STILL stale (CDN edge mid-rollout).
+- [x] IN-CALL CAMERA/MIC CLARITY — both controls now carry TWO glyphs (feather video/video-off,
+      mic/mic-off) swapped by the `.off` class, so the state reads from the icon itself, not just
+      the red tint. Proper aria-labels/titles.
+- [x] IN-CALL SAVE-CONTACT CHIP → ICON-ONLY (owner: "just show the button, don't show the text"):
+      one round UserPlus button top-left, tooltip carries the name; disappears once everyone on
+      the call is saved (dismissed-set dropped).
+- [x] CALL-SCREEN FOOTER GONE — `body.relay-call-active .version-tag{display:none}`: the
+      "© 2026 RELAY · vX · date" line no longer collides with the chat composer.
+- [x] IN-CALL CHAT REDESIGN (owner screenshot: overlay sat on the copyright + End button, no
+      sender identity): on phones the chat is now a BOTTOM SHEET (72dvh, rounded top, opaque
+      surface, shadow; the End pill's corner stays clear; composer clears the iOS home bar via
+      safe-area padding), and every message renders as an avatar-disc row with NAME + TIME —
+      mine on the RIGHT, the other party on the LEFT (`.mrow me|them`, addChatMsg rewrite).
+- [x] CAMERA FLIP HANG ("close/open several times before it works") — stop-the-old-camera-first
+      is now UNIVERSAL (was iOS-only; several Android WebViews also single-capture), acquisition
+      retries with backoff (0/300/700ms — a just-released camera transiently NotReadableErrors),
+      failure recovery re-grabs the original facing on every platform, and a fresh-but-muted
+      track rebinds the self tile on `unmute` instead of sitting black.
+- [x] PiP NOT WORKING (iPhone) — two honest bugs: `webkitSetPresentationMode` was called before
+      the fresh stream had ANY decoded frame (iOS silently ignores it) and the code toasted
+      "Picture-in-Picture on" regardless. Now: voice-only calls get a clear "needs video" message,
+      entry waits for `loadeddata` (≤900ms cap), and the mode is VERIFIED after the call — a
+      refusal surfaces as "Couldn't start Picture-in-Picture" instead of a false success.
+- [x] `server/v2961Fixes.test.ts` (15 pins) + updated pins in updateChecker / androidAudioCamera /
+      peerIdentityBatch / Contacts tests. Suite 1129 passed / 1 skipped; check + build green.

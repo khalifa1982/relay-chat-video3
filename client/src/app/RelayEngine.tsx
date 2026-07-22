@@ -266,6 +266,9 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
         .relay-root.relay-embedded #lobby { display: none !important; }
         body.relay-call-active .relay-appshell-chrome { display: none !important; }
         body.relay-call-active .relay-root.relay-embedded { z-index: 60 !important; }
+        /* v2.96.1 (owner): the copyright/version footer has no place on the
+           call screen — it collided with the chat composer on phones. */
+        body.relay-call-active .relay-root .version-tag { display: none !important; }
       `}</style>
       {/* The engine host: parked off-screen when idle, promoted to a fullscreen
           overlay (above all app chrome) during a call or incoming ring. */}
@@ -335,11 +338,12 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
 }
 
 /**
- * In-call one-tap contact conversion (v2.96): while a call is live, offer to
- * save the first on-call peer who isn't in your contacts yet — a small chip
- * top-left (the End button owns top-right), dismissible for the rest of the
- * call. The roster comes from the engine's read-only `getRoster()` snapshot,
- * polled every few seconds (peers can join/leave mid-call).
+ * In-call one-tap contact conversion (v2.96; v2.96.1 owner note: "just show
+ * the button, don't show the text") — while a call is live, a single ROUND
+ * icon button top-left (the End pill owns top-right) saves the first on-call
+ * peer who isn't in your contacts yet. It disappears once everyone on the
+ * call is saved. The roster comes from the engine's read-only `getRoster()`
+ * snapshot, polled every few seconds (peers can join/leave mid-call).
  */
 function InCallSaveContacts({
   handleRef,
@@ -348,7 +352,6 @@ function InCallSaveContacts({
 }) {
   const utils = trpc.useUtils();
   const [roster, setRoster] = useState<Array<{ pin: string; name: string }>>([]);
-  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => {
     const read = () => setRoster(handleRef.current?.getRoster() ?? []);
     read();
@@ -361,28 +364,18 @@ function InCallSaveContacts({
   });
   if (!contacts.data) return null;
   const saved = new Set(contacts.data.map((c) => c.number));
-  const candidate = roster.find((r) => !saved.has(r.pin) && !dismissed.has(r.pin));
+  const candidate = roster.find((r) => !saved.has(r.pin));
   if (!candidate) return null;
   return (
-    <div className="fixed top-3 left-3 z-[70] flex items-center gap-1">
-      <button
-        type="button"
-        disabled={upsert.isPending}
-        onClick={() => upsert.mutate({ number: candidate.pin, displayName: candidate.name || undefined })}
-        className="inline-flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white shadow-lg backdrop-blur-md hover:bg-black/75 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
-        aria-label={`Save ${candidate.name || candidate.pin} to contacts`}
-      >
-        <UserPlus className="size-3.5 text-[color:var(--relay-online,#06d6a0)]" />
-        {upsert.isPending ? "Saving…" : `Save ${candidate.name || candidate.pin}`}
-      </button>
-      <button
-        type="button"
-        onClick={() => setDismissed(new Set(dismissed).add(candidate.pin))}
-        aria-label="Dismiss"
-        className="grid size-6 place-items-center rounded-full bg-black/50 text-white/70 shadow backdrop-blur-md hover:text-white"
-      >
-        <X className="size-3" />
-      </button>
-    </div>
+    <button
+      type="button"
+      disabled={upsert.isPending}
+      onClick={() => upsert.mutate({ number: candidate.pin, displayName: candidate.name || undefined })}
+      className="fixed top-3 left-3 z-[70] grid size-10 place-items-center rounded-full bg-black/60 text-[color:var(--relay-online,#06d6a0)] shadow-lg backdrop-blur-md hover:bg-black/75 active:scale-95 transition-transform outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+      aria-label={`Save ${candidate.name || candidate.pin} to contacts`}
+      title={`Save ${candidate.name || candidate.pin} to contacts`}
+    >
+      <UserPlus className="size-[18px]" />
+    </button>
   );
 }

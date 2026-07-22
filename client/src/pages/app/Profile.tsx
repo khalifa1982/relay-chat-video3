@@ -15,7 +15,7 @@ import {
   Volume2,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
-import { uploadAttachment } from "@/lib/uploadAttachment";
+import { uploadAvatarImage } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
 import { useSignOut } from "@/app/useSignOut";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
@@ -143,7 +143,10 @@ export default function ProfilePage() {
     setUploading(true);
     setError(null);
     try {
-      const json = await uploadAttachment(file, { filename: file.name, mimeType: file.type });
+      // BARE upload (v2.96.1) — an attachments-row upload made the storage
+      // proxy participant-gate the photo: fine for YOU (uploader), broken
+      // image for EVERYONE else. Avatars are semi-public; no row.
+      const json = await uploadAvatarImage(file, { mimeType: file.type });
       updateProfile.mutate({ avatarUrl: json.url });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Avatar upload failed");

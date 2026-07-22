@@ -200,10 +200,16 @@ describe("v2.70.1 — dial disconnect hotfix (verified)", () => {
 });
 
 describe("v2.72 — mobile call QA fixes (verified)", () => {
-  it("#1 iOS camera flip stops the old camera BEFORE acquiring the new one", () => {
-    // iOS holds only one camera at a time — acquiring while the old is live froze
-    // the page. On iOS: stop old video, then acquire, with recovery on failure.
-    expect(CLIENT).toMatch(/if \(IS_IOS\) oldVideo\.forEach\(t => t\.stop\(\)\);\s*\n\s*const nuVideo = await acquireFlippedCamera\(next\)/);
+  it("#1 camera flip stops the old camera BEFORE acquiring the new one (v2.96.1: every platform, with retries)", () => {
+    // Many phones hold only one camera at a time — acquiring while the old is
+    // live froze the page (iOS always; some Android WebViews too). v2.96.1:
+    // stop-first EVERYWHERE, then acquire with retry+backoff (a just-released
+    // camera can transiently NotReadableError), with recovery on failure.
+    expect(CLIENT).toMatch(/oldVideo\.forEach\(t => t\.stop\(\)\);\s*\n\s*const nuVideo = await acquireFlippedCameraWithRetry\(next\)/);
+    expect(CLIENT).toMatch(/async function acquireFlippedCameraWithRetry\(/);
+    expect(CLIENT).toMatch(/const delays = \[0, 300, 700\];/);
+    // Failure recovery re-grabs the ORIGINAL facing so the tile never dies.
+    expect(CLIENT).toMatch(/await acquireFlippedCameraWithRetry\(facingMode\)/);
   });
 
   it("#3 SFU camera toggle unpublishes WITHOUT stopping the track (re-enable works)", () => {

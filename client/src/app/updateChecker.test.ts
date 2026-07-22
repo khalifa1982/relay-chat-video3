@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.96.0)", () => {
-    expect(APP_VERSION).toBe("2.96.0");
+  it("is the current release (2.96.1)", () => {
+    expect(APP_VERSION).toBe("2.96.1");
   });
 });
 
@@ -88,10 +88,11 @@ describe("UpdateChecker component", () => {
     expect(UPDATE_CHECKER).toMatch(/isNewer\(serverV,\s*APP_VERSION\)/);
     expect(UPDATE_CHECKER).not.toMatch(/serverV\s*===\s*APP_VERSION/);
   });
-  it("reloads SILENTLY only for an ESTABLISHED call (phase === in-call), never dialing/ringing", () => {
-    // dialing/ringing have no server membership to auto-rejoin, so a reload there
-    // would silently drop the outgoing call — gate strictly on "in-call".
-    expect(UPDATE_CHECKER).toMatch(/phaseRef\.current\s*===\s*["']in-call["']/);
+  it("reloads SILENTLY when idle OR in an established call, never dialing/ringing (v2.96.1)", () => {
+    // Owner: updates should apply with no Refresh click. dialing/ringing have
+    // no server membership to auto-rejoin, so a reload there would silently
+    // drop the outgoing call — those phases defer to the next poll.
+    expect(UPDATE_CHECKER).toMatch(/p\s*===\s*["']in-call["']\s*\|\|\s*p\s*===\s*["']idle["']/);
     expect(UPDATE_CHECKER).toMatch(/reloadingRef\.current/);
     expect(UPDATE_CHECKER).toMatch(/window\.location\.reload\(\)/);
   });

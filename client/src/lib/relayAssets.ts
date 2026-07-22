@@ -162,11 +162,16 @@ export const RELAY_MARKUP = `
         <div class="host-list" id="hostList"></div>
       </div>
       <div class="ctrl-bar">
-        <button class="ctrl" id="micBtn" title="Mute">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/><path d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.9V21a1 1 0 1 0 2 0v-3.1A7 7 0 0 0 19 11z"/></svg>
+        <!-- Mic + camera carry TWO icons each (v2.96.1): the normal glyph and a
+             SLASHED "off" glyph swapped by the .off class — the state is
+             readable from the icon itself, not just a tint. -->
+        <button class="ctrl" id="micBtn" title="Mute microphone" aria-label="Mute microphone">
+          <svg class="ic-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          <svg class="ic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
         </button>
-        <button class="ctrl" id="camBtn" title="Camera">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+        <button class="ctrl" id="camBtn" title="Turn camera on or off" aria-label="Turn camera on or off">
+          <svg class="ic-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+          <svg class="ic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
         </button>
         <button class="ctrl" id="screenBtn" title="Share screen" style="display:none">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
@@ -529,11 +534,17 @@ export const RELAY_CSS = `
 
 .relay-root .chat{width:320px;border-left:1px solid var(--border);display:none;flex-direction:column;background:var(--bg2)}
 .relay-root .chat.open{display:flex}
-@media (max-width:680px){.relay-root .chat{position:fixed;inset:0;width:100%;z-index:40}
-  .relay-root .chat-head{padding-top:max(15px,env(safe-area-inset-top));justify-content:flex-start;gap:12px}
-  /* Close X moves to the LEFT on mobile so it never sits under the top-right
-     End-call button (which floats above the chat at a higher z-index). */
-  .relay-root .chat-head .chat-close-btn{order:-1}}
+/* Mobile chat (v2.96.1 redesign): a BOTTOM SHEET, not a full-screen sheet —
+   the top strip of the call (and the floating End button) stays visible and
+   untouched, the sheet has a real opaque surface + rounded top, and the
+   composer clears the iOS home-bar via safe-area padding. */
+@media (max-width:680px){.relay-root .chat{position:fixed;left:0;right:0;bottom:0;top:auto;width:100%;height:min(72dvh,560px);z-index:60;
+  border-left:none;border-top:1px solid var(--border2);border-radius:22px 22px 0 0;background:var(--bg2);
+  box-shadow:0 -18px 60px -18px rgba(0,0,0,.85)}
+  .relay-root .chat-head{padding:13px 16px;justify-content:flex-start;gap:12px}
+  /* Close X on the LEFT so it can never collide with the top-right End pill. */
+  .relay-root .chat-head .chat-close-btn{order:-1}
+  .relay-root .chat-input{padding:11px 12px max(11px,env(safe-area-inset-bottom))}}
 .relay-root .chat-head{padding:15px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;
   font-family:"Bricolage Grotesque",sans-serif;font-weight:600;font-size:15px}
 .relay-root .chat-head .chat-title{display:flex;align-items:center;gap:8px}
@@ -545,7 +556,21 @@ export const RELAY_CSS = `
 .relay-root .chat-close-btn:hover,.relay-root .chat-close-btn:active{background:var(--accent);color:#04201B;border-color:var(--accent)}
 @media (max-width:680px){.relay-root .chat-close-btn{width:44px;height:44px}.relay-root .chat-close-btn svg{width:21px;height:21px}}
 .relay-root .chat-log{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:11px}
-.relay-root .relay-msg{max-width:80%;padding:9px 13px;border-radius:13px;font-size:14px;line-height:1.4;word-break:break-word}
+/* Chat rows (v2.96.1): avatar disc + name + time above each bubble — MINE on
+   the right, THEIRS on the left (owner spec). */
+.relay-root .mrow{display:flex;gap:8px;align-items:flex-end;max-width:88%}
+.relay-root .mrow.them{align-self:flex-start}
+.relay-root .mrow.me{align-self:flex-end;flex-direction:row-reverse}
+.relay-root .mrow .mav{width:28px;height:28px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);
+  display:grid;place-items:center;font-size:11px;font-weight:700;color:var(--accent);flex-shrink:0}
+.relay-root .mrow.me .mav{color:#04201B;background:var(--grad);border:none}
+.relay-root .mrow .mbody{display:flex;flex-direction:column;min-width:0}
+.relay-root .mrow.me .mbody{align-items:flex-end}
+.relay-root .mrow .mmeta{display:flex;gap:7px;align-items:baseline;margin:0 2px 3px}
+.relay-root .mrow .mname{font-size:11px;font-weight:600;color:var(--accent)}
+.relay-root .mrow.me .mname{color:var(--faint)}
+.relay-root .mrow .mtime{font-size:10px;color:var(--faint);font-family:"JetBrains Mono",monospace}
+.relay-root .relay-msg{max-width:100%;padding:9px 13px;border-radius:13px;font-size:14px;line-height:1.4;word-break:break-word}
 .relay-root .relay-msg .au{font-size:11px;color:var(--accent);font-weight:600;margin-bottom:2px}
 .relay-root .relay-msg.them{background:var(--surface);border:1px solid var(--border);align-self:flex-start;border-bottom-left-radius:4px}
 .relay-root .relay-msg.me{background:rgba(63,224,197,.16);align-self:flex-end;border-bottom-right-radius:4px}
@@ -571,6 +596,10 @@ export const RELAY_CSS = `
 .relay-root .ctrl-text{font-family:"JetBrains Mono",monospace;font-weight:800;font-size:13px;letter-spacing:.04em}
 .relay-root .ctrl-text.on{background:rgba(63,224,197,.16);border-color:rgba(63,224,197,.34);color:var(--accent)}
 .relay-root .ctrl svg{width:20px;height:20px}
+/* Dual-icon controls (v2.96.1): mic/cam swap to a SLASHED glyph when off. */
+.relay-root .ctrl .ic-off{display:none}
+.relay-root .ctrl.off .ic-on{display:none}
+.relay-root .ctrl.off .ic-off{display:block}
 .relay-root .ctrl .badge{position:absolute;top:-4px;right:-4px;background:var(--accent);color:#04201B;font-size:10px;font-weight:700;
   min-width:17px;height:17px;border-radius:9px;display:grid;place-items:center;padding:0 4px;border:2px solid var(--bg)}
 .relay-root .ctrl.hangup{width:66px;border-radius:26px;background:linear-gradient(135deg,#FF5C72,#FF3B5C);border-color:transparent;color:#fff;box-shadow:0 6px 22px -6px rgba(255,92,114,.6)}

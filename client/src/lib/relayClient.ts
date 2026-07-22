@@ -1531,6 +1531,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
       return await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...q, facingMode: next } });
     } catch { return null; }
   }
+  // getUserMedia right after stopping a camera can fail TRANSIENTLY
+  // (NotReadableError) while the OS releases the hardware — seen on iPhones
+  // and several Android WebViews. Retry a couple of times with a short
+  // breather instead of giving up on the first attempt (the reported "flip
+  // hangs until I toggle the camera a few times").
+  async function acquireFlippedCameraWithRetry(next: "user" | "environment"): Promise<MediaStream | null> {
+    const delays = [0, 300, 700];
+    for (const wait of delays) {
+      if (wait) await new Promise(r => setTimeout(r, wait));
+      const s = await acquireFlippedCamera(next);
+      if (s && s.getVideoTracks().length > 0) return s;
+    }
+    return null;
+  }
   async function flipCamera() {
     if (flipBusy) return;
     if (!localStream) { toast("Camera isn't active yet.", true); return; }
@@ -1540,19 +1554,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const next: "user" | "environment" = facingMode === "user" ? "environment" : "user";
       const audioTracks = localStream.getAudioTracks();
       const oldVideo = localStream.getVideoTracks();
-      // iOS Safari can hold only ONE camera capture at a time — calling
+      // Many phones can hold only ONE camera capture at a time — calling
       // getUserMedia for the new camera while the old one is STILL LIVE hangs /
-      // freezes the whole page (works fine on Android, which allows the brief
-      // overlap). So on iOS we STOP the old video first, then acquire; if that
-      // acquisition then fails we recover by re-grabbing the original camera.
-      if (IS_IOS) oldVideo.forEach(t => t.stop());
-      const nuVideo = await acquireFlippedCamera(next);
+      // freezes the page (iOS always; some Android WebViews too). Since
+      // v2.96.1 we stop-first on EVERY platform — the retry + recovery below
+      // covers the failure case that used to be Android's reason to overlap.
+      oldVideo.forEach(t => t.stop());
+      const nuVideo = await acquireFlippedCameraWithRetry(next);
       if (!nuVideo || nuVideo.getVideoTracks().length === 0) {
         toast("Couldn't switch camera — this device may only have one.", true);
-        if (IS_IOS) {
+        {
           // We already stopped the old camera — bring the original facing back so
           // the user isn't left with a dead tile.
-          const recover = await acquireFlippedCamera(facingMode);
+          const recover = await acquireFlippedCameraWithRetry(facingMode);
           const rv = recover?.getVideoTracks()[0];
           if (rv) {
             localStream = new MediaStream([...audioTracks, rv]);
@@ -1596,6 +1610,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
         selfV.srcObject = null;
         selfV.srcObject = processedStream || nu;
         void selfV.play().catch(() => {});
+      }
+      // iOS sometimes delivers the fresh camera track MUTED for a beat — the
+      // tile sits black until the first frame. Rebind + replay on unmute so
+      // the flip visibly completes without the user toggling the camera.
+      const freshTrack = nu.getVideoTracks()[0];
+      if (freshTrack && freshTrack.muted) {
+        freshTrack.addEventListener("unmute", () => {
+          const v = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
+          if (v) { v.srcObject = null; v.srcObject = processedStream || localStream; void v.play().catch(() => {}); }
+        }, { once: true });
       }
       // back camera shouldn't be mirrored on self preview
       const selfTile = $("tile-self");
@@ -4433,7 +4457,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const v = pipVideo as WebkitVideo & { requestPictureInPicture?: () => Promise<unknown> };
     if (IS_IOS && typeof v.webkitSetPresentationMode === "function") {
       pipRefreshIosSource();
+      // v2.96.1: calling setPresentationMode on a video with NO decoded frame
+      // yet is silently IGNORED by iOS (the old code did exactly that right
+      // after swapping srcObject, then toasted "on" — the reported "PiP not
+      // working"). Give the fresh stream a beat to produce a frame first…
+      if (v.readyState < 2) {
+        await new Promise<void>((resolve) => {
+          const done = () => { v.removeEventListener("loadeddata", done); resolve(); };
+          v.addEventListener("loadeddata", done, { once: true });
+          setTimeout(done, 900); // cap the wait — worst case we still try
+        });
+      }
       v.webkitSetPresentationMode("picture-in-picture"); // synchronous; no promise
+      // …then VERIFY the mode actually flipped so the caller can report
+      // honestly instead of claiming success into the void.
+      await new Promise(r => setTimeout(r, 250));
+      if (v.webkitPresentationMode !== "picture-in-picture") {
+        throw new Error("ios-pip-refused");
+      }
       return;
     }
     if (typeof v.requestPictureInPicture === "function") await v.requestPictureInPicture();
@@ -4450,6 +4491,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
   async function enterPip() {
     if (!pipSupported() || !inCall) { toast("Picture-in-Picture isn't available here.", true); return; }
     ensurePipCompositor();
+    // iOS shows a REAL remote stream in PiP — on a voice-only call there is
+    // none, so say that instead of pretending it worked (v2.96.1).
+    if (IS_IOS && !iosPipStream()) {
+      toast("Picture-in-Picture needs video — ask them to turn a camera on.", true);
+      return;
+    }
     pipActive = true;
     startPipLoop();
     // Request PiP SYNCHRONOUSLY within the click's transient activation — don't
@@ -4677,10 +4724,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function addChatMsg(name: string, text: string, mine: boolean) {
     const log = $("chatLog"); if (!log) return;
-    const d = document.createElement("div");
-    d.className = "relay-msg " + (mine ? "me" : "them");
-    d.innerHTML = (mine ? "" : '<div class="au">' + escapeHtml(name) + "</div>") + linkifyEscaped(escapeHtml(text));
-    log.appendChild(d); log.scrollTop = log.scrollHeight;
+    // v2.96.1 (owner spec): every message shows the sender's avatar disc,
+    // name, and TIME — mine on the RIGHT, everyone else on the LEFT.
+    const who = mine ? (me.name || "You") : (name || "Guest");
+    const time = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const row = document.createElement("div");
+    row.className = "mrow " + (mine ? "me" : "them");
+    row.innerHTML =
+      '<div class="mav">' + initials(who) + "</div>" +
+      '<div class="mbody"><div class="mmeta"><span class="mname">' + escapeHtml(mine ? "You" : who) + "</span>" +
+      '<span class="mtime">' + time + "</span></div>" +
+      '<div class="relay-msg ' + (mine ? "me" : "them") + '">' + linkifyEscaped(escapeHtml(text)) + "</div></div>";
+    log.appendChild(row); log.scrollTop = log.scrollHeight;
     if (!mine && !$("chatPanel")?.classList.contains("open")) {
       unread++;
       const b = $("chatBadge");

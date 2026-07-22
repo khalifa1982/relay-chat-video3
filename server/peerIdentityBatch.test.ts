@@ -121,8 +121,9 @@ describe("quick-add contacts (v2.96)", () => {
   it("in-call: the engine exposes a read-only roster and the host renders the save chip", () => {
     expect(RELAY_CLIENT).toMatch(/getRoster: \(\) => Array<\{ pin: string; name: string \}>/);
     expect(RELAY_ENGINE).toMatch(/phase === "in-call" \? <InCallSaveContacts/);
-    // The chip must never render for peers already saved.
-    expect(RELAY_ENGINE).toMatch(/!saved\.has\(r\.pin\) && !dismissed\.has\(r\.pin\)/);
+    // The chip must never render for peers already saved (v2.96.1: icon-only,
+    // no dismissed-set — it simply vanishes once everyone is saved).
+    expect(RELAY_ENGINE).toMatch(/!saved\.has\(r\.pin\)/);
   });
 });
 

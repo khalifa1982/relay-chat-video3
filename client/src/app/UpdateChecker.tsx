@@ -7,14 +7,17 @@ import { isNewer } from "./updateVersion";
 /**
  * Auto-update checker. Polls `GET /api/version` every 30s and compares the
  * version the SERVER is running with the version baked into THIS loaded bundle
- * (`APP_VERSION`). When they differ a newer deploy is live:
+ * (`APP_VERSION`). When a strictly-newer deploy is live:
  *
- *   • In a call (engine phase !== "idle") → reload SILENTLY. Persistent call
- *     membership + auto-rejoin re-enter the same room on the fresh bundle (a page
- *     refresh keeps the server-side membership — see relayClient `onUnload`), so
- *     the swap is seamless and the user keeps talking without noticing.
- *   • Idle → show a CENTERED, clickable card. Dismissing it ("Later") only hides
- *     it briefly; it REAPPEARS so an update can't be permanently ignored.
+ *   • Idle OR in an established call → reload SILENTLY (v2.96.1, owner: "no
+ *     need to click Refresh"). In-call, persistent membership + auto-rejoin
+ *     re-enter the same room on the fresh bundle, so the swap is seamless.
+ *   • Dialing / ringing → defer (a reload there would drop the pre-answer
+ *     call); the next poll reloads once the phase resolves.
+ *   • The centered "Refresh now" card is now only the LOOP-GUARD FALLBACK: it
+ *     appears when a silent reload already ran within the last minute and the
+ *     bundle is STILL outdated (a stale CDN/asset edge mid-rollout) — never as
+ *     the primary flow.
  *
  * Mounted once at the app root, inside RelayEngineProvider (it reads the call
  * phase via useRelayEngine()).
@@ -73,22 +76,24 @@ export function UpdateChecker() {
           return;
         }
         // A strictly-newer deploy is live.
-        if (phaseRef.current === "in-call") {
-          // ESTABLISHED call → refresh silently; auto-rejoin re-enters the same
-          // room (server keeps membership across a reload). We deliberately do
-          // NOT reload during "dialing"/"ringing": that pre-answer window has no
-          // server membership to rejoin, so a reload would silently drop the
-          // outgoing call. Those phases fall through to the flag below and just
-          // defer — the next poll reloads once connected, or shows the card once
-          // the user is idle. Skip if we reloaded very recently and are STILL
-          // outdated (stale asset edge), so we never loop.
+        const p = phaseRef.current;
+        if (p === "in-call" || p === "idle") {
+          // Established call OR idle → refresh silently (in-call, auto-rejoin
+          // re-enters the same room; server keeps membership across a reload).
+          // We deliberately do NOT reload during "dialing"/"ringing": that
+          // pre-answer window has no server membership to rejoin, so a reload
+          // would silently drop the outgoing call — those phases defer to the
+          // next poll. Skip if we reloaded very recently and are STILL outdated
+          // (stale asset edge) — the card below takes over instead of looping.
           if (!reloadingRef.current && !recentlyReloaded()) {
             reloadingRef.current = true;
             reloadNow();
+            return;
           }
+          setOutdated(true);
         } else {
-          // idle / dialing / ringing — flag it. The card is gated to render only
-          // when idle (below), so dialing/ringing stay quiet until they resolve.
+          // dialing / ringing — flag it; the card renders only when idle, so
+          // these phases stay quiet until they resolve.
           setOutdated(true);
         }
       } catch {

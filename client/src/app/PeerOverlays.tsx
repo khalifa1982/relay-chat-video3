@@ -86,13 +86,19 @@ export function PeerAvatar({
   const statusMap = usePeerStatusMap();
   const st = number ? statusMap.get(number) : undefined;
   const label = name || number || "?";
+  // A photo that 403s/404s (deleted object, legacy URL) must degrade to the
+  // initials disc — never the browser's broken-image glyph. Keyed by URL so a
+  // NEW photo after a failure gets its chance to load.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const showPhoto = !!avatarUrl && failedUrl !== avatarUrl;
 
-  const disc = avatarUrl ? (
+  const disc = showPhoto ? (
     <img
-      src={avatarUrl}
+      src={avatarUrl!}
       alt={label}
       style={{ width: size, height: size }}
-      className={`${rounded} object-cover border border-border/60`}
+      className={`${rounded} object-cover border border-border/60 bg-muted/40`}
+      onError={() => setFailedUrl(avatarUrl!)}
     />
   ) : (
     <span

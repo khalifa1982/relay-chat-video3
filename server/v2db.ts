@@ -1777,7 +1777,34 @@ export async function getAttachmentByStorageKey(storageKey: string) {
 export type StorageKeyAuthz =
   | { kind: "attachment"; authorized: boolean }
   | { kind: "status"; authorized: boolean }
+  /** The key is some identity's CURRENT profile photo — semi-public. */
+  | { kind: "avatar"; authorized: true }
   | { kind: "unknown" };
+
+/**
+ * Is this storage key some identity's CURRENT profile photo? Matches both the
+ * relative `/manus-storage/<key>` shape our uploads mint and legacy rows that
+ * stored an absolute origin in front of the same path. LIKE wildcards in the
+ * key are escaped so the suffix match stays literal.
+ */
+export async function isIdentityAvatarKey(storageKey: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const exact = `/manus-storage/${storageKey}`;
+  const [hit] = await db
+    .select({ id: identities.id })
+    .from(identities)
+    .where(eq(identities.avatarUrl, exact))
+    .limit(1);
+  if (hit) return true;
+  const escaped = storageKey.replace(/([\\%_])/g, "\\$1");
+  const [suffixHit] = await db
+    .select({ id: identities.id })
+    .from(identities)
+    .where(like(identities.avatarUrl, `%/manus-storage/${escaped}`))
+    .limit(1);
+  return Boolean(suffixHit);
+}
 
 /**
  * Authorize a `/manus-storage/{key}` fetch (participant-only file access).
@@ -1815,10 +1842,20 @@ export async function authorizeStorageKey(
   }
   const att = await getAttachmentByStorageKey(storageKey);
   if (!att) return { kind: "unknown" };
-  if (identityId == null) return { kind: "attachment", authorized: false };
-  if (att.uploadedByIdentityId === identityId) return { kind: "attachment", authorized: true };
-  const authed = await getAttachmentForIdentity(att.id, identityId);
-  return { kind: "attachment", authorized: Boolean(authed) };
+  if (identityId != null) {
+    if (att.uploadedByIdentityId === identityId) return { kind: "attachment", authorized: true };
+    const authed = await getAttachmentForIdentity(att.id, identityId);
+    if (authed) return { kind: "attachment", authorized: true };
+  }
+  // LEGACY-AVATAR RESCUE (v2.96.1): pre-v2.96.1 profile photos were uploaded
+  // through the ATTACHMENT path (a row exists but no message references it),
+  // so the v2.95 participant gate blocked EVERYONE except the uploader — the
+  // reported "my photo shows as a broken image to other people". A key that is
+  // some identity's CURRENT avatar is semi-public by design (directory
+  // previews already show it), so serve it. Runs only on the would-be-403
+  // path — two indexed lookups, never on the normal attachment flow.
+  if (await isIdentityAvatarKey(storageKey)) return { kind: "avatar", authorized: true };
+  return { kind: "attachment", authorized: false };
 }
 
 /**
