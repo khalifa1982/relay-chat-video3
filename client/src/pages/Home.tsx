@@ -174,10 +174,13 @@ const COPY = {
 type Copy = (typeof COPY)["en"];
 
 function initialLang(): Lang {
+  // ENGLISH is the default for every first-time visitor (owner directive,
+  // 2026-07-22) — the page no longer auto-picks Arabic from the device
+  // locale; Arabic is one tap away on the ع toggle and the choice persists.
   try {
     const saved = localStorage.getItem("relay_lang");
     if (saved === "ar" || saved === "en") return saved;
-    return (navigator.language || "").toLowerCase().startsWith("ar") ? "ar" : "en";
+    return "en";
   } catch {
     return "en";
   }
@@ -255,6 +258,13 @@ const CSS = `
 @keyframes lpFill{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 [data-lp="loadBar"]{transform-origin:left;transform:scaleX(0);animation:lpFill 3.4s cubic-bezier(.25,.46,.45,.94) forwards}
 [dir="rtl"] [data-lp="loadBar"]{transform-origin:right}
+/* v2.98.2: the percent COUNTER is compositor-driven too (owner: the number
+   under the bar stayed at 0% while the bar filled) — an odometer strip of
+   0%–100% lines swept by transform:translateY with the SAME duration/easing
+   as the bar, so bar and counter move together even on a saturated main
+   thread. -100% + 14px = stop exactly on the last (100%) 14px line. */
+@keyframes lpPct{from{transform:translateY(0)}to{transform:translateY(calc(-100% + 14px))}}
+[data-lp="pctStrip"]{animation:lpPct 3.4s cubic-bezier(.25,.46,.45,.94) forwards}
 @media (max-width:760px){
   /* !important is REQUIRED against the markup's inline styles: the plain
      .lp-navlinks{display:none} silently lost to the inline display:flex, so
@@ -300,6 +310,17 @@ function groupTiles(): string {
     const anim = g.spk ? `;animation:${g.spk}` : "";
     return `<div style="position:relative;border-radius:12px;overflow:hidden;background:linear-gradient(150deg,#101820,#0b1016);border:1px solid rgba(233,240,242,.08);aspect-ratio:4/3${anim}"><img src="${P[i]}" alt="${g.n}" loading="lazy" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;animation:${g.kb}"><span style="position:absolute;left:8px;bottom:7px;padding:3px 8px;border-radius:999px;background:rgba(10,13,16,.7);font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#e9f0f2">${g.n}</span>${g.muted ? MUTE_SVG : g.eq ? eqBars(g.eq) : ""}</div>`;
   }).join("");
+}
+
+/** 0%–100% odometer lines for the boot loader's percent counter (v2.98.2).
+ *  The strip is swept by the compositor (lpPct translateY, same clock as the
+ *  bar's lpFill), so the counter keeps moving on main-thread-saturated devices
+ *  where rAF textContent writes sat frozen at "0%". Latin digits in both
+ *  languages — the counter is an LTR island like the dial display. */
+function pctStripLines(): string {
+  let lines = "";
+  for (let i = 0; i <= 100; i++) lines += `<span style="display:block;height:14px;line-height:14px">${i}%</span>`;
+  return lines;
 }
 
 function keypad(): string {
@@ -375,7 +396,7 @@ function markup(host: string, t: Copy, ar: boolean): string {
     </div>
     <div style="width:100%">
       <div data-lp="loadTrack" style="width:100%;height:3px;border-radius:3px;background:rgba(233,240,242,.08);overflow:hidden"><div data-lp="loadBar" style="width:100%;height:100%;border-radius:3px;background:#6ff2ae;box-shadow:0 0 14px rgba(111,242,174,.8)"></div></div>
-      <div style="display:flex;justify-content:space-between;margin-top:12px"><span data-lp="loadMsg" style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#6ff2ae">${t.bootMsgs[0][1]}</span><span data-lp="loadPct" style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.18em;color:rgba(148,162,172,.8)">0%</span></div>
+      <div style="display:flex;justify-content:space-between;margin-top:12px"><span data-lp="loadMsg" style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#6ff2ae">${t.bootMsgs[0][1]}</span><span data-lp="loadPct" dir="ltr" style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.18em;color:rgba(148,162,172,.8);display:block;height:14px;overflow:hidden;text-align:right"><span data-lp="pctStrip" style="display:block">${pctStripLines()}</span></span></div>
       <div data-lp="loadSub" style="margin-top:9px;font:400 11px/1.5 'Space Grotesk',sans-serif;color:rgba(148,162,172,.85);min-height:17px">${t.bootMsgs[0][2]}</div>
     </div>
   </div>
@@ -708,15 +729,21 @@ function startLanding(host: HTMLElement, t: Copy, opts: { skipBoot: boolean; onT
     ov.style.display = "flex";
     ov.style.pointerEvents = "auto";
     requestAnimationFrame(() => { ov.style.opacity = "1"; });
-    const bar = $("loadBar"), pct = $("loadPct"), msg = $("loadMsg"), sub = $("loadSub");
-    // Re-time the compositor-driven fill for THIS run (boot 3400 / call 3000).
-    // ONE synchronous write, then the compositor animates it even if the main
-    // thread never yields another frame (the v2.98.1 frozen-at-0% fix); the
-    // none→reflow→set dance restarts the animation for the call cinematic.
+    const bar = $("loadBar"), strip = $("pctStrip"), msg = $("loadMsg"), sub = $("loadSub");
+    // Re-time the compositor-driven fill + percent counter for THIS run (boot
+    // 3400 / call 3000). ONE synchronous write each, then the compositor
+    // animates them even if the main thread never yields another frame (the
+    // v2.98.1/.2 frozen-at-0% fixes); the none→reflow→set dance restarts the
+    // animations for the call cinematic.
     if (bar) {
       bar.style.animation = "none";
       void bar.offsetWidth;
       bar.style.animation = `lpFill ${dur}ms cubic-bezier(.25,.46,.45,.94) forwards`;
+    }
+    if (strip) {
+      strip.style.animation = "none";
+      void strip.offsetWidth;
+      strip.style.animation = `lpPct ${dur}ms cubic-bezier(.25,.46,.45,.94) forwards`;
     }
     const t0 = performance.now();
     const step = () => {
@@ -724,9 +751,8 @@ function startLanding(host: HTMLElement, t: Copy, opts: { skipBoot: boolean; onT
       try {
         const p = Math.min(1, (performance.now() - t0) / dur);
         const e = 1 - Math.pow(1 - p, 2.1);
-        // The bar itself is CSS-animated (see lpFill above) — rAF only keeps
-        // the percent/messages/lock in sync when frames are available.
-        if (pct) pct.textContent = Math.round(e * 100) + "%";
+        // Bar + percent counter are CSS-animated (lpFill/lpPct above) — rAF
+        // only keeps the staged messages and the lock in sync.
         let mm = msgs[0][1], ss = msgs[0][2];
         for (const m of msgs) if (e >= m[0]) { mm = m[1]; ss = m[2]; }
         if (msg && msg.textContent !== mm) msg.textContent = mm;

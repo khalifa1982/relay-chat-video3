@@ -111,6 +111,10 @@ describe("Home.tsx — RELAY Landing (design port)", () => {
     expect(HOME_TSX).toMatch(/dir="\$\{ar \? "rtl" : "ltr"\}"/);
     expect(HOME_TSX).toMatch(/localStorage\.setItem\("relay_lang"/);
     expect(HOME_TSX).toMatch(/data-lp="langBtn"/);
+    // ENGLISH is the default for first-time visitors (owner directive,
+    // v2.98.2) — no locale auto-detect; the saved toggle choice still wins.
+    expect(HOME_TSX).not.toMatch(/navigator\.language/);
+    expect(HOME_TSX).toMatch(/ENGLISH is the default for every first-time visitor/);
     // numbers/keypad stay LTR islands inside the RTL page
     expect(HOME_TSX).toMatch(/<div data-lp="dialDisplay" dir="ltr"/);
   });
@@ -144,6 +148,14 @@ describe("Home.tsx — RELAY Landing (design port)", () => {
     // …and NEVER driven by rAF width writes again (rAF starvation on slow
     // devices is exactly what froze the old width-based bar at 0%).
     expect(HOME_TSX).not.toMatch(/bar\.style\.width/);
+    // v2.98.2: the percent COUNTER is compositor-driven too — an odometer
+    // strip of 0%–100% lines swept by translateY on the same clock as the bar
+    // (the rAF textContent writes sat frozen at "0%" on the same devices).
+    expect(HOME_TSX).toMatch(/@keyframes lpPct\{from\{transform:translateY\(0\)\}to\{transform:translateY\(calc\(-100% \+ 14px\)\)\}\}/);
+    expect(HOME_TSX).toMatch(/\[data-lp="pctStrip"\]\{animation:lpPct 3\.4s/);
+    expect(HOME_TSX).toContain("strip.style.animation = `lpPct ${dur}ms");
+    expect(HOME_TSX).toMatch(/function pctStripLines\(\)/);
+    expect(HOME_TSX).not.toMatch(/pct\.textContent/);
     // reduced-motion kills animations but must NOT kill the zero-JS overlay
     // watchdog (that combination would strand the visitor behind the loader).
     expect(HOME_TSX).toMatch(
