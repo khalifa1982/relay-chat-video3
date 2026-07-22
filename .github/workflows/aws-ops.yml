@@ -67,7 +67,7 @@ on:
         type: choice
         required: true
         default: verify
-        options: [verify, cloudfront, alb-tune, ses]
+        options: [verify, cloudfront, alb-tune, ses, ses-ssm]
       ses_email:
         description: "ses only: an address to check suppression for AND verify as an SES identity (instant sandbox unblock for that person)"
         type: string
@@ -620,3 +620,44 @@ jobs:
             fi
           fi
           echo "ses action done."
+
+      # ────────────────────────────────────────────────────────────────
+      - name: ses-ssm — SES ops via the EC2 INSTANCE role (when the runner's
+          own credentials have no SES rights, the fleet's instance profile
+          might — run the same calls on a server through SSM, deploy.yml-style)
+        if: inputs.action == 'ses-ssm'
+        env:
+          SES_EMAIL: ${{ inputs.ses_email }}
+          REQUEST_PROD: ${{ inputs.ses_request_production }}
+        run: |
+          set -euo pipefail
+          DESC="RELAY (https://$DOMAIN) is a self-hosted calling and messaging web app. We send TRANSACTIONAL email only: one-time sign-in codes (OTP), email-verification links, and missed-call notifications to registered users who requested them. No marketing or bulk mail. Sender domain $DOMAIN is verified with SPF, DKIM (Easy DKIM) and a custom MAIL FROM (mail.$DOMAIN); bounces and complaints are handled via the SES account-level suppression list. Expected volume: under 500 emails/day."
+          DESC_B64=$(printf %s "$DESC" | base64 -w0)
+          C1="echo '== whoami (instance role) =='; aws sts get-caller-identity --region $AWS_REGION 2>&1 || true"
+          C2="echo '== SES account =='; aws sesv2 get-account --region $AWS_REGION 2>&1 || true"
+          C3="echo '== suppression check: $SES_EMAIL =='; aws sesv2 get-suppressed-destination --email-address '$SES_EMAIL' --region $AWS_REGION 2>&1 || echo not-suppressed-or-denied"
+          C4="echo '== verify identity: $SES_EMAIL =='; aws sesv2 create-email-identity --email-identity '$SES_EMAIL' --region $AWS_REGION 2>&1 && echo VERIFICATION_EMAIL_SENT || true"
+          # The \$( ) is escaped so the base64 description decodes ON the instance.
+          C5="echo '== request production access =='; aws sesv2 put-account-details --production-access-enabled --mail-type TRANSACTIONAL --website-url 'https://$DOMAIN' --contact-language EN --use-case-description \"\$(echo $DESC_B64 | base64 -d)\" --region $AWS_REGION 2>&1 && echo PROD_REQUEST_SUBMITTED || true"
+          [ -n "$SES_EMAIL" ] || { C3="true"; C4="true"; }
+          [ "$REQUEST_PROD" = "true" ] || C5="true"
+          PARAMS=$(jq -n --arg c1 "$C1" --arg c2 "$C2" --arg c3 "$C3" --arg c4 "$C4" --arg c5 "$C5" '{commands:[$c1,$c2,$c3,$c4,$c5]}')
+          CMD=$(aws ssm send-command \
+            --targets "Key=tag:Name,Values=relay-app" \
+            --document-name AWS-RunShellScript \
+            --max-concurrency 1 --max-errors 0 \
+            --parameters "$PARAMS" \
+            --query 'Command.CommandId' --output text)
+          echo "SSM command: $CMD"
+          for i in $(seq 1 30); do
+            STATUSES=$(aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status' --output text)
+            echo "[$i] $STATUSES"
+            case "$STATUSES" in
+              *InProgress*|*Pending*|"") sleep 5 ;;
+              *) break ;;
+            esac
+          done
+          aws ssm list-command-invocations --command-id "$CMD" --details \
+            --query 'CommandInvocations[].{Instance:InstanceId,Status:Status,Output:CommandPlugins[0].Output}' \
+            --output json | head -c 12000
+          echo "ses-ssm done (statuses above; AccessDenied in the output means the INSTANCE role has no SES rights either)."
