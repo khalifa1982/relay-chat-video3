@@ -30,8 +30,23 @@ describe("incoming-call overlay — rich caller card", () => {
     expect(CLIENT).toMatch(/ringFlag\.textContent = m\.flag \|\| ""/);
   });
 
-  it("the avatar is CIRCULAR (contemporary ring-screen look)", () => {
-    expect(ASSETS).toMatch(/\.ring-card \.av\{[^}]*border-radius:50%/);
+  it("the avatar is CIRCULAR — real photo with initials fallback (v2.97)", () => {
+    expect(ASSETS).toMatch(/\.ring-av-wrap \.av,\.relay-root \.ring-av-img\{[^}]*border-radius:50%/);
+    expect(ASSETS).toContain('id="ringAvImg"');
+    // Profile enrichment is async + guarded against a stale (previous) caller.
+    expect(CLIENT).toMatch(/function presentRingProfile\(pin: string\)/);
+    expect(CLIENT).toMatch(/if \(!pendingRing \|\| pendingRing\.from !== pin\) return; \/\/ stale caller/);
+  });
+
+  it("the card is animated + glossy (v2.97, motion-gated): rotating orbit, halos, glossy buttons", () => {
+    expect(ASSETS).toMatch(/\.ring-orbit\{[^}]*conic-gradient/);
+    expect(ASSETS).toMatch(/@keyframes relayOrbit\{to\{transform:rotate\(360deg\)\}\}/);
+    expect(ASSETS).toMatch(/@keyframes relayHalo/);
+    expect(ASSETS).toMatch(/\.rc::before\{[^}]*rgba\(255,255,255,\.38\)/); // gloss highlight
+    // EVERY ring animation sits behind prefers-reduced-motion.
+    const gate = ASSETS.slice(ASSETS.indexOf(".ring-orbit{animation"));
+    expect(ASSETS).toMatch(/@media \(prefers-reduced-motion:no-preference\)\{\s*\n\s*\.relay-root \.ring-orbit\{animation:relayOrbit/);
+    void gate;
   });
 
   it("offers a split answer — Voice (mic icon, camera stays off) and Video (camera icon)", () => {
@@ -43,16 +58,27 @@ describe("incoming-call overlay — rich caller card", () => {
     expect(CLIENT).toMatch(/if \(opts\?\.voice && localStream && localStream\.getVideoTracks\(\)\.length > 0\) \{\s*\n\s*setCam\(false\);\s*\n\s*\}/);
   });
 
-  it("Decline stays prominent and full-width (red)", () => {
-    expect(ASSETS).toMatch(/r-decline r-decline-wide" id="declineBtn"/);
+  it("Decline is a round red glossy button with its own animation (v2.97)", () => {
+    expect(ASSETS).toMatch(/rc rc-decline" id="declineBtn"/);
+    expect(ASSETS).toMatch(/\.rc-decline\{background:linear-gradient\(145deg,#FF5C72,#E62E4D\)/);
+    expect(ASSETS).toMatch(/@keyframes relayNudge/);
   });
 
-  it("quick replies: fold-out canned responses that message the caller and decline", () => {
-    expect(ASSETS).toContain('id="quickReplyBtn"');
+  it("Send-to-voicemail declines (the caller then gets the existing voicemail offer)", () => {
+    expect(ASSETS).toContain('id="toVoicemailBtn"');
+    expect(CLIENT).toMatch(/toast\("Sent to voicemail — they can leave you a message\."\);\s*\n\s*declineInvite\(\);/);
+  });
+
+  it("quick replies: canned responses AND a type-your-own box that messages the caller and declines (v2.97)", () => {
+    expect(ASSETS).toContain('id="typeReplyBtn"');
     expect(ASSETS).toContain('id="quickReplies"');
+    expect(ASSETS).toContain('id="customReplyInput"');
+    expect(ASSETS).toContain('id="customReplySend"');
     expect(ASSETS).toMatch(/data-msg="I'll call you back shortly\."/);
     expect(CLIENT).toMatch(/onQuickReply\?\.\(r\.from, text\); toast\("Reply sent — call declined"\)/);
-    expect(CLIENT).toMatch(/declineInvite\(\);\s*\n\s*\}\);\s*\n\s*\}\);/);
+    expect(CLIENT).toMatch(/onQuickReply\?\.\(r\.from, text\); toast\("Message sent — call declined"\)/);
+    // A fresh ring clears any leftover typed draft.
+    expect(CLIENT).toMatch(/if \(crInput\) crInput\.value = "";/);
   });
 
   it("the quick reply is delivered through the v2 messaging stack (engine → host hook → openThread + send)", () => {

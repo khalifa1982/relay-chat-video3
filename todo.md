@@ -4397,3 +4397,22 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       rounded-rect shell was the reported "ugly" blob).
 - [x] `server/v2963Fixes.test.ts` (4 pins) + vvtu focus-ring pin updated to the surviving
       Exit-the-call control. Suite 1144 passed / 1 skipped; check + build green.
+
+## v2.97.0 — FLASHY incoming-call card + glossy animated call buttons (owner spec, 2 screenshots) (2026-07-22)
+- [x] RING CARD REDESIGN (headless-browser previewed before ship): glossy glass card; the
+      caller's REAL PHOTO (async public directory.lookup, guarded against stale/previous
+      callers; initials fallback) inside a ROTATING conic-gradient ORBIT ("ring line going round
+      and round") + two radiating halo pulses; name + VERIFIED badge + flag + formatted PIN +
+      live presence/status line ("Online now" / "Away" / "Traveling").
+- [x] THREE ROUND GLOSSY ANIMATED BUTTONS with labels: Voice (green gradient, bobbing + outward
+      ripple), Video (teal, offset bob/ripple; wrapper hides on voice dials per the consent
+      protocol), Decline (red, periodic nudge/shake). Gloss = top highlight ::before on every
+      circle. ALL motion behind prefers-reduced-motion (house rule).
+- [x] BELOW THE BUTTONS: "Send to voicemail" (declines — the caller then gets the existing
+      voicemail offer, which lands in your Messages as audio) and "Message…" which folds out the
+      3 canned quick replies PLUS a TYPE-YOUR-OWN box (Enter or ↑ sends via the quick-reply
+      bridge → real chat message → declines). Fresh rings clear the draft + fold the panel.
+- [x] OUTGOING dial screen: the round hang-up gains the same gloss highlight and, while
+      ringing, a breathing bob + red ripple ring (motion-gated).
+- [x] Pins updated in incomingRing.test.ts (photo/orbit/gloss/voicemail/type-a-message) +
+      videoConsent (vWrap). Suite 1146 passed / 1 skipped; check + build green.

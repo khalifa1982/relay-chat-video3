@@ -2246,6 +2246,48 @@ export function startRelay(root: HTMLElement): RelayHandle {
     layoutGrid();
   }
 
+  /* v2.97: enrich the ring card with the caller's PROFILE — real photo,
+     verified badge, presence/status line — via the public directory (the
+     signaling ring payload only carries name + flag). Async and DECORATIVE:
+     the ring never waits on it, and a slow response for a PREVIOUS caller is
+     dropped (guarded on pendingRing.from) so it can never stamp the wrong
+     identity onto the current ring. */
+  function presentRingProfile(pin: string) {
+    const img = $("ringAvImg") as HTMLImageElement | null;
+    const initialsEl = $("ringAv");
+    const ver = $("ringVerified");
+    const pres = $("ringPresence");
+    if (img) { img.style.display = "none"; img.removeAttribute("src"); }
+    if (initialsEl) initialsEl.style.display = "";
+    if (ver) ver.style.display = "none";
+    if (pres) pres.textContent = "";
+    if (!/^\d{6}$/.test(pin)) return;
+    const input = encodeURIComponent(JSON.stringify({ json: { number: pin } }));
+    fetch("/api/trpc/directory.lookup?input=" + input, { credentials: "include" })
+      .then(r => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!pendingRing || pendingRing.from !== pin) return; // stale caller
+        const d = (j as { result?: { data?: { json?: { avatarUrl?: string | null; verified?: boolean; isOnline?: boolean; statusOverride?: string } | null } } } | null)
+          ?.result?.data?.json;
+        if (!d) return;
+        if (d.avatarUrl && img && initialsEl) {
+          img.onload = () => {
+            if (pendingRing && pendingRing.from === pin) { img.style.display = ""; initialsEl.style.display = "none"; }
+          };
+          img.onerror = () => { img.style.display = "none"; if (initialsEl) initialsEl.style.display = ""; };
+          img.src = d.avatarUrl;
+        }
+        if (d.verified && ver) ver.style.display = "";
+        if (pres) {
+          pres.textContent =
+            d.statusOverride === "away" ? "Away" :
+            d.statusOverride === "travel" ? "Traveling" :
+            d.isOnline ? "Online now" : "";
+        }
+      })
+      .catch(() => { /* decoration only — the ring works without it */ });
+  }
+
   function onRing(m: Msg) {
     // Do Not Disturb: silently auto-decline (no ring overlay, no chime/notify).
     // The caller sees a normal "declined" and the miss is still recorded.
@@ -2282,8 +2324,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, video: !!m.video, at: Date.now() };
     // Mutual-consent protocol: a VOICE call is answered as voice — the Video
     // answer button only appears when the CALLER dialed this as a video call
-    // (answering with it is the callee's consent).
-    const vBtn = $("acceptBtn"); if (vBtn) vBtn.style.display = m.video ? "" : "none";
+    // (answering with it is the callee's consent). v2.97: the buttons carry
+    // labels in a wrapper, so the WRAPPER is what hides.
+    const vWrap = $("acceptVideoWrap"); if (vWrap) vWrap.style.display = m.video ? "" : "none";
     const ringAv = $("ringAv"); if (ringAv) ringAv.textContent = initials(m.fromName!);
     const ringWho = $("ringWho"); if (ringWho) ringWho.textContent = m.fromName!;
     // Caller identity verification: their PIN (mono, formatted) + country flag.
@@ -2292,6 +2335,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const ringFlag = $("ringFlag"); if (ringFlag) ringFlag.textContent = m.flag || "";
     const ringSub = $("ringSub"); if (ringSub) ringSub.textContent = m.video ? "Video call…" : "Voice call…";
     $("quickReplies")?.classList.remove("open"); // fresh ring → replies folded
+    const crInput = $("customReplyInput") as HTMLInputElement | null; if (crInput) crInput.value = "";
+    presentRingProfile(m.from!); // photo + verified + presence (async, guarded)
     $("ringOverlay")?.classList.add("active");
     playRingtone("incoming");
     // Out-of-tab alerting: flash the tab title, and (when the page is hidden
@@ -5254,6 +5299,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const ringAv = $("ringAv"); if (ringAv) ringAv.textContent = initials(promotedRing.fromName || "?");
       const ringWho = $("ringWho"); if (ringWho) ringWho.textContent = promotedRing.fromName || "Someone";
       const ringSub = $("ringSub"); if (ringSub) ringSub.textContent = "is calling you…";
+      const ringPin2 = $("ringPin");
+      if (ringPin2) ringPin2.textContent = promotedRing.from.length === 6 ? promotedRing.from.slice(0, 3) + "-" + promotedRing.from.slice(3) : promotedRing.from;
+      presentRingProfile(promotedRing.from);
       $("ringOverlay")?.classList.add("active");
       playRingtone("incoming");
       emitPhase("ringing");
@@ -5320,10 +5368,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("acceptBtn") as HTMLElement | null)?.addEventListener("click", () => void acceptInvite());
   ($("acceptVoiceBtn") as HTMLElement | null)?.addEventListener("click", () => void acceptInvite({ voice: true }));
   ($("declineBtn") as HTMLElement | null)?.addEventListener("click", declineInvite);
-  // Quick reply: fold-out canned responses; picking one messages the caller
-  // (via the host app's messaging stack) and declines the ring.
-  ($("quickReplyBtn") as HTMLElement | null)?.addEventListener("click", () => {
-    $("quickReplies")?.classList.toggle("open");
+  // Send-to-voicemail (v2.97): a decline — RELAY then offers the CALLER the
+  // existing voicemail flow (record → lands in your Messages as audio).
+  ($("toVoicemailBtn") as HTMLElement | null)?.addEventListener("click", () => {
+    toast("Sent to voicemail — they can leave you a message.");
+    declineInvite();
+  });
+  // Message…: fold out the canned replies + the type-your-own box (v2.97).
+  ($("typeReplyBtn") as HTMLElement | null)?.addEventListener("click", () => {
+    const qr = $("quickReplies");
+    qr?.classList.toggle("open");
+    if (qr?.classList.contains("open")) ($("customReplyInput") as HTMLInputElement | null)?.focus();
   });
   root.querySelectorAll<HTMLButtonElement>(".qr-opt").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -5334,6 +5389,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
       catch { toast("Couldn't send the reply.", true); }
       declineInvite();
     });
+  });
+  // Type-your-own reply (v2.97): sending messages the caller AND declines.
+  const sendCustomReply = () => {
+    const inp = $("customReplyInput") as HTMLInputElement | null;
+    const r = pendingRing;
+    const text = (inp?.value || "").trim();
+    if (!r || !text) return;
+    try { onQuickReply?.(r.from, text); toast("Message sent — call declined"); }
+    catch { toast("Couldn't send the message.", true); }
+    if (inp) inp.value = "";
+    declineInvite();
+  };
+  ($("customReplySend") as HTMLElement | null)?.addEventListener("click", sendCustomReply);
+  ($("customReplyInput") as HTMLInputElement | null)?.addEventListener("keydown", (e) => {
+    if ((e as KeyboardEvent).key === "Enter") { e.preventDefault(); sendCustomReply(); }
   });
   ($("cwSwitch") as HTMLElement | null)?.addEventListener("click", switchCall);
   ($("vaAccept") as HTMLElement | null)?.addEventListener("click", () => {

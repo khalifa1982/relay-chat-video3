@@ -233,27 +233,60 @@ export const RELAY_MARKUP = `
 </div>
 
 <div class="overlay" id="ringOverlay">
+  <!-- Incoming-call card (v2.97 redesign, owner spec): caller PHOTO inside a
+       rotating gradient orbit + radiating halos, THREE round glossy animated
+       buttons (Voice / Video / Decline), a Send-to-voicemail + Message… row,
+       and the caller's verified badge + live presence line. -->
   <div class="ring-card">
-    <div class="av" id="ringAv">?</div>
-    <div class="who"><span id="ringWho">Someone</span><span class="ring-flag" id="ringFlag"></span></div>
+    <div class="ring-av-wrap">
+      <span class="ring-orbit" aria-hidden="true"></span>
+      <span class="ring-halo" aria-hidden="true"></span>
+      <span class="ring-halo h2" aria-hidden="true"></span>
+      <div class="av" id="ringAv">?</div>
+      <img class="ring-av-img" id="ringAvImg" alt="" style="display:none">
+    </div>
+    <div class="who"><span id="ringWho">Someone</span><span class="ring-verified" id="ringVerified" style="display:none" title="Verified account"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.7l2.6 2.5 3.6-.5 1.1 3.4 3.2 1.7-1.3 3.2 1.3 3.2-3.2 1.7-1.1 3.4-3.6-.5-2.6 2.5-2.6-2.5-3.6.5-1.1-3.4-3.2-1.7L2.8 12 1.5 8.8l3.2-1.7 1.1-3.4 3.6.5z"/><path d="M10.7 15.3l-2.9-2.9 1.3-1.3 1.6 1.6 4.6-4.6 1.3 1.3z" fill="#04201B"/></svg></span><span class="ring-flag" id="ringFlag"></span></div>
     <div class="ring-pin" id="ringPin"></div>
+    <div class="ring-presence" id="ringPresence"></div>
     <div class="sub" id="ringSub">is calling you&hellip;</div>
     <div class="ring-actions">
-      <button class="r-btn r-accept-voice" id="acceptVoiceBtn" title="Answer with microphone only (camera off)">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/><path d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.9V21a1 1 0 1 0 2 0v-3.1A7 7 0 0 0 19 11z"/></svg>
-        Voice
+      <div class="ra">
+        <button class="rc rc-voice" id="acceptVoiceBtn" title="Answer with microphone only (camera off)">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/><path d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.9V21a1 1 0 1 0 2 0v-3.1A7 7 0 0 0 19 11z"/></svg>
+        </button>
+        <span class="ra-lbl">Voice</span>
+      </div>
+      <div class="ra" id="acceptVideoWrap">
+        <button class="rc rc-video" id="acceptBtn" title="Answer with the camera on">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+        </button>
+        <span class="ra-lbl">Video</span>
+      </div>
+      <div class="ra">
+        <button class="rc rc-decline" id="declineBtn" title="Decline the call">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.7l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.1-.7-.28-.79-.73-1.68-1.36-2.66-1.85-.33-.16-.56-.51-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+        </button>
+        <span class="ra-lbl">Decline</span>
+      </div>
+    </div>
+    <div class="ring-extra">
+      <button class="rx" id="toVoicemailBtn" type="button" title="Decline — they'll be offered to leave you a voice message">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6.5" cy="12" r="3.2"/><circle cx="17.5" cy="12" r="3.2"/><path d="M6.5 15.2h11"/></svg>
+        Send to voicemail
       </button>
-      <button class="r-btn r-accept" id="acceptBtn" title="Answer with the camera on">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/></svg>
-        Video
+      <button class="rx" id="typeReplyBtn" type="button" title="Text them instead — sending declines the call">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1z"/></svg>
+        Message&hellip;
       </button>
     </div>
-    <button class="r-btn r-decline r-decline-wide" id="declineBtn">Decline</button>
-    <button class="qr-toggle" id="quickReplyBtn" type="button">Can't talk? Send a quick reply</button>
     <div class="quick-replies" id="quickReplies">
       <button type="button" class="qr-opt" data-msg="I'll call you back shortly.">I'll call you back shortly</button>
       <button type="button" class="qr-opt" data-msg="Can't talk right now — text me.">Can't talk right now — text me</button>
       <button type="button" class="qr-opt" data-msg="On my way.">On my way</button>
+      <div class="custom-reply">
+        <input id="customReplyInput" maxlength="300" placeholder="Or type your own&hellip;">
+        <button id="customReplySend" type="button" aria-label="Send the message and decline the call">&uarr;</button>
+      </div>
     </div>
   </div>
 </div>
@@ -382,37 +415,87 @@ export const RELAY_CSS = `
 .relay-root .overlay{position:fixed;inset:0;z-index:50;background:rgba(4,5,8,.72);backdrop-filter:blur(8px);
   display:none;align-items:center;justify-content:center}
 .relay-root .overlay.active{display:flex;animation:relayFade .25s ease both}
-.relay-root .ring-card{width:min(380px,90vw);background:var(--surface);border:1px solid var(--border2);border-radius:24px;
-  padding:34px;text-align:center;box-shadow:0 30px 80px -20px rgba(0,0,0,.7)}
-.relay-root .ring-card .av{width:96px;height:96px;border-radius:50%;background:var(--grad);margin:0 auto 16px;
+/* ── incoming-call card (v2.97 redesign — flashy/glossy, motion-gated) ── */
+.relay-root .ring-card{width:min(390px,92vw);border-radius:28px;padding:30px 26px 24px;text-align:center;position:relative;
+  background:linear-gradient(175deg,rgba(34,40,52,.96),rgba(14,17,23,.98));
+  border:1px solid rgba(255,255,255,.12);
+  box-shadow:0 40px 110px -24px rgba(0,0,0,.85),0 0 0 1px rgba(63,224,197,.08),inset 0 1px 0 rgba(255,255,255,.12)}
+.relay-root .ring-av-wrap{position:relative;width:126px;height:126px;margin:0 auto 14px}
+.relay-root .ring-av-wrap .av,.relay-root .ring-av-img{position:absolute;inset:13px;width:100px;height:100px;border-radius:50%;
   display:grid;place-items:center;color:#04201B;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:36px;
-  animation:relayRing 1.1s ease-in-out infinite;box-shadow:0 14px 44px -10px rgba(45,212,191,.45)}
-@keyframes relayRing{0%,100%{transform:rotate(0) scale(1)}25%{transform:rotate(-7deg) scale(1.04)}75%{transform:rotate(7deg) scale(1.04)}}
+  background:var(--grad);box-shadow:0 14px 44px -10px rgba(45,212,191,.45)}
+.relay-root .ring-av-img{object-fit:cover;background:#10131a;border:1px solid rgba(255,255,255,.14)}
+/* The rotating gradient ORBIT ("a ring line keeps going round and round"). */
+.relay-root .ring-orbit{position:absolute;inset:0;border-radius:50%;
+  background:conic-gradient(from 0deg,transparent 0deg,transparent 30deg,#3FE0C5 110deg,#6EE7FF 170deg,rgba(110,231,255,.15) 220deg,transparent 300deg);
+  -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 5px),#000 calc(100% - 4px));
+  mask:radial-gradient(farthest-side,transparent calc(100% - 5px),#000 calc(100% - 4px))}
+/* Radiating halo pulses behind the avatar. */
+.relay-root .ring-halo{position:absolute;inset:8px;border-radius:50%;border:2px solid rgba(63,224,197,.5);opacity:0}
+.relay-root .ring-halo.h2{border-color:rgba(110,231,255,.4)}
 .relay-root .ring-card .who{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:27px;margin-bottom:2px;
   display:flex;align-items:center;justify-content:center;gap:8px}
+.relay-root .ring-verified{display:inline-grid;place-items:center;color:#3FE0C5}
+.relay-root .ring-verified svg{width:19px;height:19px}
 .relay-root .ring-card .ring-flag{font-size:22px;line-height:1}
 .relay-root .ring-card .ring-pin{font-family:"JetBrains Mono",monospace;font-size:15px;letter-spacing:.08em;color:var(--accent);margin-bottom:2px}
-.relay-root .ring-card .sub{color:var(--muted);font-size:14px;margin-bottom:22px}
-.relay-root .ring-actions{display:flex;gap:12px}
-.relay-root .ring-actions .r-btn{display:flex;align-items:center;justify-content:center;gap:8px}
-.relay-root .ring-actions .r-btn svg{width:18px;height:18px}
-.relay-root .r-accept-voice{background:rgba(86,140,255,.16);color:#8ab4ff;border:1px solid rgba(86,140,255,.38)}
-.relay-root .r-accept-voice:hover{background:rgba(86,140,255,.28)}
-.relay-root .r-decline-wide{width:100%;margin-top:12px;flex:none}
-.relay-root .qr-toggle{display:block;width:100%;margin-top:16px;background:none;border:none;cursor:pointer;
-  color:var(--muted);font-size:13px;font-family:inherit;text-decoration:underline;text-underline-offset:3px}
-.relay-root .qr-toggle:hover{color:var(--text)}
+.relay-root .ring-presence{min-height:17px;font-size:12.5px;font-weight:600;color:#3ddc84}
+.relay-root .ring-presence:empty{display:none}
+.relay-root .ring-card .sub{color:var(--muted);font-size:14px;margin:2px 0 20px}
+/* THREE round glossy buttons with labels. */
+.relay-root .ring-actions{display:flex;justify-content:center;gap:30px}
+.relay-root .ra{display:flex;flex-direction:column;align-items:center;gap:8px}
+.relay-root .ra-lbl{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.02em}
+.relay-root .rc{position:relative;width:64px;height:64px;border-radius:50%;border:none;cursor:pointer;color:#fff;
+  display:grid;place-items:center;transition:transform .16s cubic-bezier(0.23,1,0.32,1),box-shadow .16s}
+.relay-root .rc svg{width:26px;height:26px;position:relative;z-index:1}
+/* Glossy top highlight on every round button. */
+.relay-root .rc::before{content:"";position:absolute;inset:2px;border-radius:50%;pointer-events:none;
+  background:linear-gradient(180deg,rgba(255,255,255,.38),rgba(255,255,255,.06) 46%,transparent 60%)}
+.relay-root .rc:hover{transform:translateY(-2px) scale(1.04)}
+.relay-root .rc:active{transform:scale(.94)}
+.relay-root .rc-voice{background:linear-gradient(145deg,#34d399,#059669);box-shadow:0 12px 30px -8px rgba(16,185,129,.65),inset 0 1px 0 rgba(255,255,255,.3)}
+.relay-root .rc-video{background:linear-gradient(145deg,#3FE0C5,#0e7490);box-shadow:0 12px 30px -8px rgba(63,224,197,.6),inset 0 1px 0 rgba(255,255,255,.3)}
+.relay-root .rc-decline{background:linear-gradient(145deg,#FF5C72,#E62E4D);box-shadow:0 12px 30px -8px rgba(255,59,92,.65),inset 0 1px 0 rgba(255,255,255,.3)}
+/* Answer-side ripple ring that keeps pulsing outward. */
+.relay-root .rc-voice::after,.relay-root .rc-video::after{content:"";position:absolute;inset:-4px;border-radius:50%;
+  border:2px solid rgba(52,211,153,.55);opacity:0;pointer-events:none}
+.relay-root .rc-video::after{border-color:rgba(63,224,197,.55)}
+/* Voicemail + Message row. */
+.relay-root .ring-extra{display:flex;gap:9px;margin-top:20px}
+.relay-root .rx{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;border-radius:13px;padding:11px 8px;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);color:var(--text);
+  font-size:12.5px;font-weight:600;font-family:inherit;cursor:pointer;transition:.15s}
+.relay-root .rx svg{width:16px;height:16px;flex-shrink:0;color:var(--accent)}
+.relay-root .rx:hover{background:rgba(255,255,255,.1);border-color:rgba(63,224,197,.4)}
 .relay-root .quick-replies{display:none;margin-top:12px;gap:8px;flex-direction:column}
 .relay-root .quick-replies.open{display:flex;animation:relayFade .2s ease both}
 .relay-root .qr-opt{border:1px solid var(--border2);background:var(--surface2);color:var(--text);border-radius:12px;
   padding:11px 14px;font-size:14px;font-family:inherit;cursor:pointer;text-align:left;transition:.15s}
 .relay-root .qr-opt:hover{border-color:var(--accent);color:var(--accent)}
-.relay-root .r-btn{flex:1;border:none;border-radius:16px;padding:16px;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;
-  font-size:15px;cursor:pointer;transition:.15s}
-.relay-root .r-decline{background:rgba(255,92,114,.14);color:var(--danger);border:1px solid rgba(255,92,114,.3)}
-.relay-root .r-decline:hover{background:rgba(255,92,114,.24)}
-.relay-root .r-accept{background:var(--grad);color:#04201B}
-.relay-root .r-accept:hover{transform:translateY(-2px)}
+/* Type-your-own reply (v2.97): sending messages the caller AND declines. */
+.relay-root .custom-reply{display:flex;gap:8px}
+.relay-root .custom-reply input{flex:1;background:var(--surface);border:1px solid var(--border2);border-radius:12px;
+  padding:11px 14px;color:var(--text);font-family:inherit;font-size:14px;outline:none}
+.relay-root .custom-reply input:focus{border-color:var(--accent)}
+.relay-root .custom-reply button{width:46px;border:none;border-radius:12px;background:var(--grad);color:#04201B;
+  font-size:17px;font-weight:700;cursor:pointer}
+/* All ring-card motion is gated (house rule). */
+@media (prefers-reduced-motion:no-preference){
+  .relay-root .ring-orbit{animation:relayOrbit 1.5s linear infinite}
+  .relay-root .ring-halo{animation:relayHalo 1.9s ease-out infinite}
+  .relay-root .ring-halo.h2{animation-delay:.95s}
+  .relay-root .rc-voice{animation:relayBob 1.5s ease-in-out infinite}
+  .relay-root .rc-video{animation:relayBob 1.5s ease-in-out .25s infinite}
+  .relay-root .rc-voice::after,.relay-root .rc-video::after{animation:relayRipple 1.6s ease-out infinite}
+  .relay-root .rc-video::after{animation-delay:.4s}
+  .relay-root .rc-decline{animation:relayNudge 2.6s ease-in-out infinite}
+}
+@keyframes relayOrbit{to{transform:rotate(360deg)}}
+@keyframes relayHalo{0%{transform:scale(1);opacity:.85}100%{transform:scale(1.5);opacity:0}}
+@keyframes relayBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+@keyframes relayRipple{0%{transform:scale(1);opacity:.8}100%{transform:scale(1.45);opacity:0}}
+@keyframes relayNudge{0%,86%,100%{transform:rotate(0)}90%{transform:rotate(-7deg)}94%{transform:rotate(7deg)}98%{transform:rotate(-4deg)}}
 
 .relay-root #call{flex-direction:column}
 .relay-root .call-head{display:flex;align-items:center;justify-content:space-between;padding:13px 20px;border-bottom:1px solid var(--border)}
@@ -611,9 +694,18 @@ export const RELAY_CSS = `
 .relay-root .ctrl.hangup svg{width:26px;height:26px}
 .relay-root .ctrl.hangup:hover{transform:translateY(-1px);box-shadow:0 14px 32px -8px rgba(255,92,114,.75),inset 0 1px 0 rgba(255,255,255,.25)}
 .relay-root .ctrl.hangup:active{transform:scale(.94)}
+/* Glossy top highlight (v2.97 — owner: "flashy and glossy"). */
+.relay-root .ctrl.hangup::before{content:"";position:absolute;inset:2px;border-radius:50%;pointer-events:none;
+  background:linear-gradient(180deg,rgba(255,255,255,.35),rgba(255,255,255,.05) 48%,transparent 60%)}
 .relay-root #call.pre-connect .ctrl.hangup{width:72px;height:72px}
 .relay-root #call.pre-connect .ctrl.hangup svg{width:32px;height:32px}
 .relay-root #call.pre-connect .ctrl-bar{background:none;border:none;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;padding:0}
+/* Dial-screen hang-up breathes + ripples while ringing (motion-gated). */
+@media (prefers-reduced-motion:no-preference){
+  .relay-root #call.pre-connect .ctrl.hangup{animation:relayBob 1.5s ease-in-out infinite}
+  .relay-root #call.pre-connect .ctrl.hangup::after{content:"";position:absolute;inset:-5px;border-radius:50%;
+    border:2px solid rgba(255,92,114,.5);animation:relayRipple 1.6s ease-out infinite;pointer-events:none}
+}
 
 /* Self-tile camera handling: front cam mirrored locally so user feels natural,
    back cam not mirrored, and outgoing stream NEVER mirrored. */
