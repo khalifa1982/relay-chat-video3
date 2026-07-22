@@ -26,23 +26,27 @@ describe("aws-ops.yml — trigger + auth safety", () => {
     expect(OPS).not.toMatch(/\n\s*push:/);
     expect(OPS).not.toMatch(/\n\s*pull_request:/);
   });
-  it("offers exactly the three ops actions with verify as the safe default", () => {
-    expect(OPS).toMatch(/options: \[verify, cloudfront, alb-tune\]/);
+  it("offers the ops actions with verify as the safe default (v2.97.2 adds ses/ses-ssm/iam-grant-ses)", () => {
+    expect(OPS).toMatch(/options: \[verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses\]/);
     expect(OPS).toMatch(/default: verify/);
   });
-  it("region input defaults to ap-south-1; auth is access-key based", () => {
+  it("region input defaults to ap-south-1; auth prefers access keys but falls back to the deploy OIDC role", () => {
     expect(OPS).toMatch(/default: ap-south-1/);
     expect(OPS).toMatch(/aws-actions\/configure-aws-credentials@v4/);
     expect(OPS).toMatch(/aws-access-key-id: \$\{\{ secrets\.AWS_ACCESS_KEY_ID \}\}/);
     expect(OPS).toMatch(/aws-secret-access-key: \$\{\{ secrets\.AWS_SECRET_ACCESS_KEY \}\}/);
+    // v2.97.1: no ops secrets configured ⇒ assume the deploy pipeline's role.
+    expect(OPS).toMatch(/role-to-assume: arn:aws:iam::342494841476:role\/relay-github-deploy/);
   });
-  it("fails gracefully with instructions when the secrets are absent", () => {
-    // The gate runs BEFORE configure-aws-credentials and names the fix.
-    const gateIdx = OPS.indexOf("Gate — AWS credentials must be configured");
+  it("degrades gracefully to OIDC (not a hard failure) when the ops secrets are absent", () => {
+    // v2.97.1 replaced the old hard-fail gate with an auth-method DETECTOR:
+    // keys present → access-key auth; keys absent → warn + fall back to the
+    // deploy role, so the workflow still runs instead of erroring out.
+    const detectIdx = OPS.indexOf("Detect auth method");
     const authIdx = OPS.indexOf("aws-actions/configure-aws-credentials");
-    expect(gateIdx).toBeGreaterThan(-1);
-    expect(gateIdx).toBeLessThan(authIdx);
-    expect(OPS).toMatch(/Settings → Secrets and variables → Actions, then re-run/);
+    expect(detectIdx).toBeGreaterThan(-1);
+    expect(detectIdx).toBeLessThan(authIdx);
+    expect(OPS).toMatch(/falling back to the deploy pipeline's OIDC role/);
   });
 });
 

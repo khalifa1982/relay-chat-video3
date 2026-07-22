@@ -294,6 +294,18 @@ export function AuthPanel({
     setError(null);
     try {
       const r = await register.mutateAsync({ firstName: firstName.trim(), lastName: lastName.trim(), email: cleanEmail });
+      // Email-outage stopgap (RELAY_OTP_REGISTER_BYPASS server-side): the
+      // account is already created and signed in — no code was ever sent, so
+      // skip straight to the same post-registration step a real verify would
+      // land on (choose PIN vs email-code sign-in).
+      if ((r as { bypass?: boolean }).bypass) {
+        await utils.identity.whoami.invalidate();
+        setWasRegistration(true);
+        setSetupPin("");
+        setSetupPin2("");
+        setStage("setup");
+        return;
+      }
       if (!r.ok) {
         setError("We couldn't send your code — email delivery isn't set up yet. Contact the operator.");
         return;

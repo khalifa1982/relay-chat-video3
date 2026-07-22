@@ -1518,6 +1518,24 @@ async function cooldownOk(email: string) {
   return !last || Date.now() - last >= OTP_RESEND_COOLDOWN_MS;
 }
 
+/**
+ * EMAIL-DELIVERY-OUTAGE STOPGAP (v2.97.2, owner directive 2026-07-22): the
+ * operator's SES account is sandboxed pending AWS's production-access review,
+ * so AWS refuses OTP emails to anyone but a pre-verified address — every new
+ * registration failed with "couldn't send your code". While this flag is on,
+ * REGISTRATION skips minting/emailing a code and signs the caller in
+ * immediately (a deliberate, TEMPORARY trust reduction: email ownership is no
+ * longer proven at signup — accepted by the owner to keep registration usable
+ * during the outage). Existing-user LOGIN (requestOtp/verifyOtp/loginWithPin)
+ * is completely UNCHANGED — this affects brand-new accounts only.
+ * Read PER-CALL (no code change to flip back): unset it, or set it to
+ * anything but "1", once SES production access is approved, then restart the
+ * app — full email verification resumes automatically. Default OFF.
+ */
+function otpRegisterBypassEnabled(): boolean {
+  return process.env.RELAY_OTP_REGISTER_BYPASS === "1";
+}
+
 export const v2OtpAuthRouter = router({
   /** Login path: if the email is known, email a code; else tell the UI to register. */
   requestOtp: publicProcedure
@@ -1534,13 +1552,31 @@ export const v2OtpAuthRouter = router({
       return { ok: sent, unregistered: false, sent };
     }),
 
-  /** Registration: capture first/last name + email, email a code (user created on verify). */
+  /** Registration: capture first/last name + email, email a code (user created on verify).
+   *  RELAY_OTP_REGISTER_BYPASS=1 (email-outage stopgap, see the flag's doc
+   *  comment above) skips the code entirely and signs the caller in now. */
   register: publicProcedure
     .input(z.object({ firstName: NameSchema, lastName: NameSchema, email: EmailSchema }))
     .mutation(async ({ ctx, input }) => {
       otpGate(ctx);
       const email = normalizeEmail(input.email);
       if (!isValidEmail(email)) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter a valid email." });
+      if (otpRegisterBypassEnabled()) {
+        // Same account/session outcome as a successful verifyOtp — resolve or
+        // create the user, upgrade the guest identity, sign in — just without
+        // ever proving the email address (see the flag's doc comment above).
+        let userId = (await findUserByEmailAny(email))?.id ?? null;
+        if (!userId) userId = await createOtpUser({ email, firstName: input.firstName, lastName: input.lastName });
+        if (!userId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create your account." });
+        await markUserEmailVerified(userId);
+        await unlockLoginPin(userId);
+        const guestToken = (ctx.req.cookies?.[GUEST_COOKIE] as string | undefined) ?? null;
+        const displayName = `${input.firstName} ${input.lastName}`.trim() || email.split("@")[0];
+        const identity = await ensureUserIdentity({ userId, displayName, guestToken });
+        await markIdentityVerified(identity.id, { firstName: input.firstName, lastName: input.lastName });
+        setSessionCookie(ctx.res, userId, rememberToTtlMs(undefined));
+        return { ok: true, sent: false, bypass: true };
+      }
       if (!(await cooldownOk(email))) return { ok: true, sent: true, cooldown: true };
       const code = await mintOtp({ email, purpose: "register", firstName: input.firstName, lastName: input.lastName });
       const sent = await dispatchOtp(email, code);

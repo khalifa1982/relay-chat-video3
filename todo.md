@@ -4449,3 +4449,31 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
 - [x] BEHAVIORAL server test (relay.test.ts): A↔B live, C rings B, B answers (A held), B sends
       end-held → A gets peer-left, B+C untouched, hold cleared, second end-held → nohold.
       + server/v2971Hold.test.ts (10 pins). Suite 1157 passed / 1 skipped; check + build green.
+
+## v2.97.2 — RELAY_OTP_REGISTER_BYPASS: temporary registration-without-email stopgap (owner directive) (2026-07-22)
+- [x] CONTEXT: AWS SES (ap-south-1) is sandboxed pending the owner's production-access request (confirmed
+      pending via the AWS account API — "ConflictException: already exists"). Until AWS approves it,
+      every registration OTP to a non-pre-verified address is refused by AWS itself — owner screenshot
+      showed "We couldn't send your code — email delivery isn't set up yet." The owner asked to pull the
+      OTP-send step out of registration for now and put it back once SES is approved.
+- [x] NEW env flag `RELAY_OTP_REGISTER_BYPASS` (read per-call, default OFF ⇒ byte-identical to before).
+      When `=1`, `otpAuth.register` skips minting/emailing a code entirely and performs the SAME
+      account/session outcome a real verifyOtp would (resolve-or-create the user, mark email verified,
+      unlock any PIN lock, upgrade the guest identity in place, set the session cookie) — a deliberate,
+      TEMPORARY trust reduction the owner explicitly accepted: email ownership is not proven at signup
+      while this is on. Existing-user LOGIN (`requestOtp`/`verifyOtp`/`loginWithPin`) is completely
+      untouched — only brand-new registrations are affected.
+- [x] Client (`AuthPanel.tsx`): `submitRegister` recognizes the mutation's `bypass:true` response and
+      skips straight to the post-registration "setup" step (choose PIN vs email-code sign-in) — the same
+      screen a normal successful code-verify lands on — instead of showing a code-entry screen for a code
+      that was never sent.
+- [x] TO RESTORE full email verification the moment AWS approves production access: unset
+      `RELAY_OTP_REGISTER_BYPASS` (or set it to anything but `1`) in `/home/relay/.env` on both EC2
+      instances and restart pm2 — no code change, no redeploy needed.
+- [x] `server/otpRegisterBypass.test.ts` (6 tests): default-OFF takes the normal mint/email path (proven
+      by a DIFFERENT DB-unavailable error than the bypass path), any non-"1" value is OFF, ON skips
+      straight to account creation, input validation still runs before the flag is consulted, login is
+      unaffected, and the client-side skip-to-setup branch is source-pinned. Also fixed two stale
+      `awsOps.test.ts` pins left behind by the same-session aws-ops.yml ops-action additions
+      (ses/ses-ssm/iam-grant-ses + the OIDC-fallback auth detector). Suite 1163 passed / 1 skipped;
+      check + build green.
