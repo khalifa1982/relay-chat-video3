@@ -165,12 +165,21 @@ describe("self-destructing messages (v2.96)", () => {
     expect(V2DB).toMatch(/if \(!pids\.includes\(input\.identityId\)\) return null;/);
     expect(V2DB).toMatch(/meta\.consumedAt != null\) return null;/);
   });
-  it("burning deletes the attachment ROW (media access revoked, not just unlinked)", () => {
+  it("burning REVOKES media access by failing closed, not by deleting the row (F3)", () => {
     const fn = V2DB.slice(
       V2DB.indexOf("export async function consumeExpiringMessage"),
       V2DB.indexOf("export async function markThreadRead")
     );
-    expect(fn).toMatch(/db\.delete\(attachments\)/);
+    // The message's attachmentId is nulled (revokes participant access via
+    // getAttachmentForIdentity)…
+    expect(fn).toMatch(/attachmentId: null/);
+    // …but the attachments ROW is deliberately NOT deleted. Deleting it made
+    // getAttachmentByStorageKey return null → authorizeStorageKey classified the
+    // still-present S3 object as `unknown`, which the storage proxy serves to
+    // ANYONE. Keeping the row keeps it classified as `attachment` → 403 for every
+    // non-uploader (fail closed).
+    expect(fn).not.toMatch(/db\.delete\(attachments\)/);
+    expect(fn).toMatch(/fails CLOSED/);
   });
   it("the burn fans a message event out to every participant", () => {
     const proc = V2ROUTERS.slice(V2ROUTERS.indexOf("consumeExpiring:"));

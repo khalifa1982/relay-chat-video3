@@ -52,8 +52,30 @@ describe("createRateLimiter — token bucket", () => {
 });
 
 describe("clientIpOf", () => {
-  it("uses the first X-Forwarded-For hop", () => {
-    expect(clientIpOf({ headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" } })).toBe("1.2.3.4");
+  it("trusts the proxy-appended (rightmost) X-Forwarded-For hop, not the spoofable leftmost", () => {
+    // The ALB appends the real peer IP last; the leftmost value is
+    // client-supplied and must be ignored (F4).
+    expect(clientIpOf({ headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" } })).toBe("5.6.7.8");
+  });
+  it("a rotating spoofed leftmost hop cannot change the keyed IP", () => {
+    const real = clientIpOf({ headers: { "x-forwarded-for": "9.9.9.9, 5.6.7.8" } });
+    const spoofed = clientIpOf({ headers: { "x-forwarded-for": "203.0.113.7, 5.6.7.8" } });
+    expect(real).toBe("5.6.7.8");
+    expect(spoofed).toBe("5.6.7.8");
+    expect(real).toBe(spoofed);
+  });
+  it("honors RELAY_TRUSTED_PROXY_HOPS for a multi-proxy chain", () => {
+    const prev = process.env.RELAY_TRUSTED_PROXY_HOPS;
+    process.env.RELAY_TRUSTED_PROXY_HOPS = "2"; // CloudFront -> ALB
+    try {
+      // client, cloudfront, alb-appended → the client is 2 from the right.
+      expect(
+        clientIpOf({ headers: { "x-forwarded-for": "1.1.1.1, 2.2.2.2, 3.3.3.3" } })
+      ).toBe("2.2.2.2");
+    } finally {
+      if (prev == null) delete process.env.RELAY_TRUSTED_PROXY_HOPS;
+      else process.env.RELAY_TRUSTED_PROXY_HOPS = prev;
+    }
   });
   it("falls back to the socket address", () => {
     expect(clientIpOf({ headers: {}, socket: { remoteAddress: "9.9.9.9" } })).toBe("9.9.9.9");

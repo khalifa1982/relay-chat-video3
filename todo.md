@@ -4477,3 +4477,41 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       `awsOps.test.ts` pins left behind by the same-session aws-ops.yml ops-action additions
       (ses/ses-ssm/iam-grant-ses + the OIDC-fallback auth detector). Suite 1163 passed / 1 skipped;
       check + build green.
+
+## v2.98.0 — SECURITY AUDIT & REMEDIATION (owner-requested full front/back/DB review) (2026-07-22)
+- [x] CONTEXT: owner asked for "a full check of all security everything — all app connections, front and
+      back, and the database" and to fix + report. Ran an automated scan (Claude Security), then
+      independently VERIFIED every candidate against the current source before touching anything. 5
+      findings confirmed (1 High / 2 Medium / 2 Low); all fixed. Full report saved to the repo as
+      `SECURITY-AUDIT-2026-07-22.md`. Owner-accepted designs (SSE-not-WebSocket, kept `/api/oauth/callback`,
+      `RELAY_OTP_REGISTER_BYPASS`) reviewed and NOT flagged as defects.
+- [x] F1 (HIGH) — signaling `register` had no identity binding. The SSE+POST transport was keyed only by a
+      client-minted `cid`, and `register` granted ANY free 6-digit number from the client's `msg.pin`, so an
+      attacker could claim a victim's number while the victim's app was closed and INTERCEPT their inbound
+      calls / SPOOF caller-ID. Fix (`server/relay.ts` + `client/src/lib/relayClient.ts`): for `register`
+      messages `POST /api/relay/send` resolves the caller's OWN identity number via `createContext`
+      (session/guest cookie) and stamps a server-only `__ownedNumber` (client value stripped first); the
+      register handler binds the pin to it — resolved ⇒ own number (self-heals stale clients post-renumber);
+      null ⇒ explicit claim refused + fresh number (fail closed); field absent ⇒ legacy/test behavior. The
+      client now sends `x-relay-device-id` on the signaling POST so cookie-dropped ITP guests still resolve.
+      Only `register` is async now; offer/answer/ICE stay fully synchronous. Residual follow-up: a
+      room-membership check on the `signal` relay.
+- [x] F2 (MEDIUM) — `identity.updateProfile` validated only the SHAPE of `avatarUrl`, letting a user point
+      it at another user's private `/manus-storage` attachment key, which `authorizeStorageKey`'s
+      avatar-rescue then served to anyone (survived unsend). Fix: `keyInOwnerNamespace` gate on write
+      (matches `attachments.register`/`status.post`).
+- [x] F3 (MEDIUM) — burning view-once media made it MORE accessible: `consumeExpiringMessage` deleted the
+      attachments row → `authorizeStorageKey` classified the still-present S3 object as `unknown` → the
+      storage proxy served it with NO auth. Fix: keep the row (message `attachmentId` already nulled ⇒
+      participants lose access) so the key stays `attachment` and fails CLOSED (403) for every non-uploader.
+- [x] F4 (LOW) — per-IP rate limits trusted the LEFTMOST `X-Forwarded-For` hop (client-appendable behind the
+      appending ALB), so rotating the header defeated every limiter. Fix (`server/rateLimit.ts` +
+      `pickClientIp`): trust the proxy-APPENDED hop (`trustedProxyHops()` from the right, default 1; set
+      `RELAY_TRUSTED_PROXY_HOPS=2` for a CloudFront→ALB chain).
+- [x] F5 (LOW) — `directory.lookup`/`presenceMany` were public and unthrottled over the 10^6 number space
+      (free directory scrape). Fix: a generous per-IP `directoryGate` (120 burst / ~60/min, honors
+      `RELAY_RATELIMIT_OFF`); endpoints stay public so the `/i/<pin>` call-link direct-join still works.
+- [x] Tests: new `server/securityAudit.test.ts` (F1 behavioral — bind/attacker-refused/null-refused/reconnect/
+      legacy — plus F2/F3/F5 wiring pins); updated `rateLimit.test.ts`, `geoSelf.test.ts`,
+      `peerIdentityBatch.test.ts` (F3), `relayCluster.integration.test.ts` (async register). Suite 1179
+      passed / 1 skipped; `tsc --noEmit` + production build green.

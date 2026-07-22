@@ -89,7 +89,7 @@ describe("cross-instance signaling (integration)", () => {
     delete process.env.RELAY_RATELIMIT_OFF;
   });
 
-  it("A (leader) calls B (other instance): register → ring → accept all route across the bus", () => {
+  it("A (leader) calls B (other instance): register → ring → accept all route across the bus", async () => {
     // ── Peer A: homed on the leader, via the REAL SSE + POST handlers ──
     const aWrites: string[] = [];
     const aRes: any = {
@@ -107,7 +107,7 @@ describe("cross-instance signaling (integration)", () => {
         { status() { return this; }, json() { return this; } }
       );
 
-    postA({ type: "register", name: "Alice" });
+    await postA({ type: "register", name: "Alice" }); // register resolves identity (async, F1)
     const aReg = sseObjs(aWrites).find((o) => o.type === "registered");
     expect(aReg?.pin).toMatch(/^\d{6}$/);
     const aPin: string = aReg.pin;
@@ -139,7 +139,7 @@ describe("cross-instance signaling (integration)", () => {
     expect(sseObjs(aWrites).some((o) => o.type === "peer-joined")).toBe(true);
   });
 
-  it("B's SDP signal relays back to A across instances", () => {
+  it("B's SDP signal relays back to A across instances", async () => {
     // Register both (A local, B remote) and open a call.
     const aWrites: string[] = [];
     const aRes: any = {
@@ -149,7 +149,7 @@ describe("cross-instance signaling (integration)", () => {
     };
     routes["GET /api/relay/stream"]({ query: { cid: "cid-A" }, headers: {}, socket: { remoteAddress: "1.1.1.1" }, on() {} }, aRes);
     const postA = (m: unknown) => routes["POST /api/relay/send"]({ body: { cid: "cid-A", message: m }, headers: {}, socket: { remoteAddress: "1.1.1.1" } }, { status() { return this; }, json() { return this; } });
-    postA({ type: "register", name: "Alice" });
+    await postA({ type: "register", name: "Alice" }); // register resolves identity (async, F1)
     const aPin = sseObjs(aWrites).find((o) => o.type === "registered").pin;
 
     const bOut: any[] = [];

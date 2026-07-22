@@ -48,12 +48,14 @@ describe("pickClientIp", () => {
     expect(ip).toBe("203.0.113.4");
   });
 
-  it("falls back to the first X-Forwarded-For entry", () => {
+  it("trusts the proxy-appended (rightmost) X-Forwarded-For hop, not the spoofable leftmost (F4)", () => {
+    // The front proxy (ALB) appends the real peer IP as the last hop; the
+    // leftmost value is client-supplied and must not be trusted.
     const ip = pickClientIp({
       headers: { "x-forwarded-for": "  198.51.100.7, 10.0.0.1 " },
       ip: "127.0.0.1",
     });
-    expect(ip).toBe("198.51.100.7");
+    expect(ip).toBe("10.0.0.1");
   });
 
   it("strips ::ffff: IPv6-mapped IPv4 prefix", () => {

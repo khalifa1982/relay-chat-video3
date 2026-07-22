@@ -67,8 +67,29 @@ export function createRateLimiter(opts: RateLimiterOptions): RateLimiter {
 }
 
 /**
- * Best-effort client IP for keying: the first hop in X-Forwarded-For (set by the
- * Cloudflare/Cloud Run front end), else the socket address. Never throws.
+ * How many trusted reverse-proxy hops sit in front of this process. The client
+ * IP is the entry X-Forwarded-For appends `hops` positions from the RIGHT.
+ * Default 1 = a single front proxy (the `.io` AWS ALB, which appends the real
+ * peer IP as the last hop). Set `RELAY_TRUSTED_PROXY_HOPS=2` for a CloudFront →
+ * ALB chain, etc. Garbage / <1 values fall back to 1.
+ */
+export function trustedProxyHops(): number {
+  const raw = process.env.RELAY_TRUSTED_PROXY_HOPS;
+  const n = raw == null ? 1 : Number(raw);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}
+
+/**
+ * Best-effort client IP for keying rate limiters. Never throws.
+ *
+ * SECURITY (F4): X-Forwarded-For is a client-appendable list — a request can
+ * arrive with a forged `X-Forwarded-For: <spoof>` and the trusted front proxy
+ * (ALB) APPENDS the real peer IP to the RIGHT. Trusting the LEFTMOST hop (the
+ * old behavior) therefore let an attacker rotate that header to mint a fresh
+ * rate-limit bucket per request and defeat every per-IP limiter. We instead
+ * trust the hop `trustedProxyHops()` positions from the right — the one the ALB
+ * itself wrote — which a client cannot forge. Falls back to the leftmost real
+ * hop if the list is shorter than expected, then to the socket address.
  */
 export function clientIpOf(req: {
   headers?: Record<string, unknown>;
@@ -78,10 +99,14 @@ export function clientIpOf(req: {
   try {
     const xff = req.headers?.["x-forwarded-for"];
     if (typeof xff === "string" && xff.length) {
-      const first = xff.split(",")[0]?.trim();
-      if (first) return first;
+      const hops = xff.split(",").map((s) => s.trim()).filter(Boolean);
+      if (hops.length) {
+        const idx = Math.max(0, hops.length - trustedProxyHops());
+        const ip = hops[idx];
+        if (ip) return ip.replace(/^::ffff:/i, "");
+      }
     }
-    return req.ip || req.socket?.remoteAddress || "unknown";
+    return (req.ip || req.socket?.remoteAddress || "unknown").replace(/^::ffff:/i, "");
   } catch {
     return "unknown";
   }

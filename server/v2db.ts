@@ -1630,15 +1630,17 @@ export async function consumeExpiringMessage(input: {
       meta: { ...meta, consumedAt: Date.now() },
     })
     .where(eq(messages.id, input.messageId));
-  if (row.attachmentId != null) {
-    // Revoke media access, not just the link — without this the storage key
-    // stays fetchable by participants forever.
-    try {
-      await db.delete(attachments).where(eq(attachments.id, row.attachmentId));
-    } catch {
-      /* content is already nulled; the orphan row is a cost, not a leak */
-    }
-  }
+  // SECURITY (F3): we deliberately do NOT delete the attachments row on consume.
+  // The message's attachmentId was just nulled above, so no conversation
+  // references this file and getAttachmentForIdentity now denies every
+  // participant (including the reader who burned it) — access IS revoked.
+  // Deleting the row instead would make getAttachmentByStorageKey return null,
+  // so authorizeStorageKey classifies the (still-present) S3 object as `unknown`,
+  // which the storage proxy serves to ANYONE, unauthenticated. That is: burning
+  // view-once media would make it MORE accessible, not less. Keeping the row
+  // keeps the key classified as `attachment` and fails CLOSED (403) for every
+  // non-uploader — matching the status-media model (ephemeral at the access
+  // layer even though the object lingers in the bucket).
   return { conversationId: row.conversationId, participantIds: pids };
 }
 

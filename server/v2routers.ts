@@ -110,7 +110,7 @@ import {
   setLoginPin as setLoginPinDb,
   unlockLoginPin,
 } from "./authPin";
-import { createRateLimiter, clientIpOf } from "./rateLimit";
+import { createRateLimiter, clientIpOf, trustedProxyHops } from "./rateLimit";
 // Carrier-style busy line (v2.88): pure read of the relay's in-memory registry
 // ("is this pin in a room right now?"). Single-instance by design — the same
 // instance serves the SSE signaling, so the read is authoritative here.
@@ -367,6 +367,21 @@ export const v2AuthRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
+      // SECURITY (avatar-laundering, F2): a `/manus-storage/` avatar key MUST live
+      // in the caller's OWN upload namespace. Without this a user could point
+      // avatarUrl at ANOTHER user's private attachment key — authorizeStorageKey's
+      // "is this some identity's current avatar?" rescue would then classify that
+      // key as a semi-public avatar and the storage proxy would serve it to
+      // anyone, even unauthenticated (and it survives the sender's unsend). Mirrors
+      // the keyInOwnerNamespace gate already on attachments.register and
+      // status.post. Absolute (https) and data: URIs are untouched — they never
+      // resolve through our storage proxy.
+      if (input.avatarUrl && input.avatarUrl.startsWith("/manus-storage/")) {
+        const key = input.avatarUrl.slice("/manus-storage/".length);
+        if (!keyInOwnerNamespace(key, me.id, s3Config()?.prefix ?? "")) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid avatar image." });
+        }
+      }
       // updateIdentityProfile sanitizes mobiles/socials/status server-side.
       await updateIdentityProfile(me.id, input);
       const fresh = await getIdentityById(me.id);
@@ -430,6 +445,12 @@ export function flagEmojiFromIso2(
  * Best-effort extraction of the caller's public IP from an Express
  * request. Honors `CF-Connecting-IP` and `X-Forwarded-For`, falling
  * back to `req.ip`. Strips IPv6-mapped IPv4 prefixes.
+ *
+ * SECURITY (F4): the `X-Forwarded-For` entry we trust is the one the front
+ * proxy APPENDED (`trustedProxyHops()` positions from the right), NOT the
+ * client-supplied leftmost hop — otherwise a spoofed header defeats per-IP
+ * limits (see clientIpOf). `CF-Connecting-IP` is only meaningful when Cloudflare
+ * is actually the front proxy; it stays first for that deployment.
  */
 export function pickClientIp(req: {
   headers: Record<string, string | string[] | undefined>;
@@ -442,8 +463,11 @@ export function pickClientIp(req: {
   }
   const xff = req.headers["x-forwarded-for"];
   if (typeof xff === "string" && xff.trim()) {
-    const first = xff.split(",")[0]?.trim();
-    if (first) return first.replace(/^::ffff:/i, "");
+    const hops = xff.split(",").map((s) => s.trim()).filter(Boolean);
+    if (hops.length) {
+      const trusted = hops[Math.max(0, hops.length - trustedProxyHops())];
+      if (trusted) return trusted.replace(/^::ffff:/i, "");
+    }
   }
   if (req.ip) return req.ip.replace(/^::ffff:/i, "");
   const sock = req.socket?.remoteAddress;
@@ -465,13 +489,32 @@ export function isPrivateOrLocalIp(ip: string): boolean {
   return false;
 }
 
+// SECURITY (F5): the directory endpoints are intentionally PUBLIC (an
+// unidentified visitor opening an `/i/<pin>` call link resolves the callee via
+// `lookup` before entering a name), but `lookup` reveals a number's existence,
+// display name, avatar, verified badge, and live presence. With no throttle the
+// 10^6 number space is a free scrape of the whole user directory. A generous
+// per-IP token bucket (120 burst, ~60/min sustained) is invisible to any real
+// dialer yet turns a full enumeration into a multi-day, obvious grind. Keyed on
+// the trusted client IP (see clientIpOf) and honoring RELAY_RATELIMIT_OFF like
+// every other gate here.
+const directoryIpLimiter = createRateLimiter({ capacity: 120, refillPerSec: 1 });
+setInterval(() => directoryIpLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
+function directoryGate(ctx: { req: unknown }) {
+  if (process.env.RELAY_RATELIMIT_OFF === "1") return;
+  if (!directoryIpLimiter.allow(clientIpOf(ctx.req as Parameters<typeof clientIpOf>[0]), Date.now())) {
+    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many lookups. Try again shortly." });
+  }
+}
+
 export const v2DirectoryRouter = router({
   /** Look up a single number — returns null when unknown. Party-line numbers
    *  (v2.89) resolve FIRST (same precedence as the dial path) and return the
    *  line's title + live head-count instead of a person. */
   lookup: publicProcedure
     .input(z.object({ number: NumberSchema }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      directoryGate(ctx);
       const line = await getPartyLineByNumber(input.number).catch(() => null);
       if (line) {
         const memberCount =
@@ -592,7 +635,8 @@ export const v2DirectoryRouter = router({
    */
   presenceMany: publicProcedure
     .input(z.object({ numbers: z.array(NumberSchema).max(100) }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      directoryGate(ctx);
       const uniq = Array.from(new Set(input.numbers));
       if (uniq.length === 0) return [];
       const idents = await getIdentitiesByNumbers(uniq);
