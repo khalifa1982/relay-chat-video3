@@ -1751,6 +1751,20 @@ export function handleMessage(
       break;
     }
 
+    case "end-held": {
+      // Phone-style "drop the WAITING line" (v2.97.1, owner: pick which call to
+      // end): release ONLY the held room — its members get a normal peer-left
+      // and the room reaps if empty — while the ACTIVE call stays untouched.
+      // (The client already closed its frozen peer connections.)
+      if (!reg.heldRoom.get(conn.pin)) {
+        safeSend(conn.socket, { type: "error", code: "nohold", message: "No call on hold." });
+        break;
+      }
+      releaseHeldRoom(reg, conn.pin);
+      safeSend(conn.socket, { type: "held-ended" });
+      break;
+    }
+
     case "merge": {
       // Merge the HELD call into the ACTIVE call → one conference. Every other
       // held member is moved into the active room (they get a fresh `joined` so

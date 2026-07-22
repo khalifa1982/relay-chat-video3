@@ -111,7 +111,14 @@ export const RELAY_MARKUP = `
       <div class="held-actions">
         <button id="heldSwap" class="held-btn held-swap" title="Switch to the held call">Swap</button>
         <button id="heldMerge" class="held-btn held-merge" title="Merge both calls into a conference">Merge</button>
+        <button id="heldEnd" class="held-btn held-end" title="Hang up the HELD call — this call stays connected">End held</button>
       </div>
+    </div>
+    <!-- Being HELD (v2.97.1): shown to the party who was parked — with light
+         hold music playing — until the holder swaps back or hangs up. -->
+    <div id="onHoldBar" class="onhold-bar">
+      <span class="oh-pulse"></span>
+      <span class="oh-meta"><b><span id="onHoldName">They</span> put you on hold</b><span class="oh-sub">Hang tight &mdash; you&rsquo;ll hear them the moment they&rsquo;re back</span></span>
     </div>
     <div class="call-main">
       <div id="dialCard" class="dial-card">
@@ -963,6 +970,20 @@ export const RELAY_CSS = `
 .relay-root .held-bar .held-swap:hover{transform:translateY(-1px)}
 .relay-root .held-bar .held-merge{background:rgba(245,180,80,.16);color:#f5b450;border:1px solid rgba(245,180,80,.34)}
 .relay-root .held-bar .held-merge:hover{background:rgba(245,180,80,.26)}
+.relay-root .held-bar .held-end{background:rgba(255,92,114,.14);color:var(--danger);border:1px solid rgba(255,92,114,.3)}
+.relay-root .held-bar .held-end:hover{background:rgba(255,92,114,.26)}
+/* Being HELD (v2.97.1): the parked party's banner — visible, calm, unmissable. */
+.relay-root .onhold-bar{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:35;display:none;align-items:center;gap:12px;
+  background:rgba(16,26,32,.94);border:1px solid rgba(63,224,197,.4);border-radius:16px;padding:11px 18px;
+  box-shadow:0 18px 50px -18px rgba(0,0,0,.7),0 0 24px -8px rgba(63,224,197,.35);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
+.relay-root .onhold-bar.show{display:flex}
+.relay-root .onhold-bar .oh-pulse{width:11px;height:11px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent);flex-shrink:0}
+@media (prefers-reduced-motion:no-preference){.relay-root .onhold-bar .oh-pulse{animation:relayPulse2 1.4s ease-in-out infinite}}
+.relay-root .onhold-bar .oh-meta{display:flex;flex-direction:column;min-width:0}
+.relay-root .onhold-bar .oh-meta b{font-size:14px}
+.relay-root .onhold-bar .oh-sub{font-size:12px;color:var(--muted)}
+/* If we're holding one line WHILE the other line holds us, stack the bars. */
+.relay-root .held-bar.show ~ .onhold-bar.show{top:82px}
 @media (max-width:680px){.relay-root .held-bar{flex-direction:column;gap:10px;top:10px;padding:12px 14px}.relay-root .held-bar .held-actions{width:100%}.relay-root .held-bar .held-btn{flex:1}}
 .relay-root .version-tag{position:fixed;bottom:8px;right:12px;z-index:5;font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.06em;color:var(--text2,#9aa);pointer-events:none;opacity:.92}
 /* Make the VERSION + BUILD numbers pop on the dark call screen: bright white with

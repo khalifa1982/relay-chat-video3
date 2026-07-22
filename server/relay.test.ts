@@ -349,6 +349,58 @@ describe("relay signaling", () => {
     expect(reg.rooms.get(roomA)?.has(aPin)).toBe(true);
   });
 
+  it("'end-held' drops ONLY the waiting line (v2.97.1): held members get peer-left, the active call is untouched", () => {
+    const a = register(reg, "Alice");
+    const b = register(reg, "Bob");
+    const c = register(reg, "Carol");
+    const aPin = (a.last() as { pin: string }).pin;
+    const bPin = (b.last() as { pin: string }).pin;
+    const cPin = (c.last() as { pin: string }).pin;
+    // Room A: Alice + Bob live; Carol rings Bob; Bob answers (A goes on hold).
+    handleMessage(reg, a.asConn(), { type: "invite", to: bPin });
+    const roomA = (a.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "room"
+    ) as { roomId: string }).roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: roomA });
+    handleMessage(reg, c.asConn(), { type: "invite", to: bPin });
+    const roomR = (c.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "room"
+    ) as { roomId: string }).roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: roomR });
+    expect(reg.heldRoom.get(bPin)).toBe(roomA);
+
+    a.outbox.length = 0;
+    b.outbox.length = 0;
+    // Bob hangs up the WAITING line only.
+    handleMessage(reg, b.asConn(), { type: "end-held" });
+    // Alice gets a REAL peer-left (her client ends that call normally)…
+    const left = a.outbox.find(
+      (m): m is { type: string; pin: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "peer-left"
+    );
+    expect(left?.pin).toBe(bPin);
+    // …while Bob's ACTIVE call with Carol is untouched and the hold is gone.
+    expect(reg.heldRoom.get(bPin)).toBeUndefined();
+    expect(reg.pinRoom.get(bPin)).toBe(roomR);
+    expect(reg.rooms.get(roomR)?.has(bPin)).toBe(true);
+    expect(reg.rooms.get(roomR)?.has(cPin)).toBe(true);
+    expect(reg.rooms.get(roomA)?.has(bPin)).toBeFalsy();
+    expect(reg.rooms.get(roomA)?.has(aPin) ?? false).toBe(reg.rooms.has(roomA));
+    expect(
+      b.outbox.some((m) => typeof m === "object" && m !== null && (m as { type: string }).type === "held-ended")
+    ).toBe(true);
+    // A second end-held has nothing to release → explicit nohold error.
+    b.outbox.length = 0;
+    handleMessage(reg, b.asConn(), { type: "end-held" });
+    const err = b.outbox.find(
+      (m): m is { type: string; code: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "error"
+    );
+    expect(err?.code).toBe("nohold");
+  });
+
   it("notifies remaining peers when one leaves the room", () => {
     const a = register(reg, "Alice");
     const b = register(reg, "Bob");

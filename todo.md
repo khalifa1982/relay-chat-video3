@@ -4416,3 +4416,36 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       ringing, a breathing bob + red ripple ring (motion-gated).
 - [x] Pins updated in incomingRing.test.ts (photo/orbit/gloss/voicemail/type-a-message) +
       videoConsent (vWrap). Suite 1146 passed / 1 skipped; check + build green.
+
+## v2.97.1 — call hold overhaul: the held call must NOT drop + hold music + End-held (owner spec) (2026-07-22)
+- [x] ROOT CAUSE of "answering the second call drops the first": on the SFU path (what .io
+      runs), putting a call on hold tears down the HOLDER's LiveKit connection — and the HELD
+      party's client read that disconnect as "they left" → 1:1 auto-end → hangUp("remote-left").
+      The server's peer-hold signal existed but removeLkTile never consulted it, and it can
+      even arrive AFTER the disconnect event (a genuine race).
+- [x] FIX, three layers in relayClient: (1) `peersHoldingUs` — peers who parked us — gates
+      every auto-end path; the holder's tile STAYS on screen marked on-hold instead of being
+      removed; (2) a bare solo-1:1 SFU disconnect now arms a 1.6s GRACE fuse (`armSoloEndGrace`)
+      instead of ending instantly — a late peer-hold (or a rejoin) defuses it, and the fuse
+      re-checks everything (still alone, nobody holding, still 1:1) before ending + honoring
+      the v2.94.8 held-promotion; (3) if peer-hold beat the disconnect but the tile was already
+      gone, onPeerHold restores a placeholder tile. A REAL leave (peer-left — the holder hung
+      up entirely; the server's releaseHeldRoom broadcasts it) clears the hold state first so
+      the call still ends honestly, now routed to the SFU tile too (the old peer-left case only
+      called the mesh removePeer, which no-ops on the SFU path).
+- [x] HOLD MUSIC + BANNER for the parked party: a light looped WebAudio motif (soft C-major
+      add9 arpeggio, ~3.4s bars, quiet gain; queued oscillators stopped on resume — the
+      ringtone suspended-context lesson) + a calm "X put you on hold — hang tight" banner
+      (#onHoldBar; stacks below the held-bar if you're holding one line while the other holds
+      you). 1:1 only — in groups the tile marker suffices. Music/banner clear on resume,
+      real leave, call end, and engine destroy.
+- [x] PICK WHICH CALL TO DROP: the held-bar now offers Swap / Merge / **End held** (red) —
+      endHeldLine() closes the frozen PCs and the NEW server case `end-held` releases only the
+      held room via the existing releaseHeldRoom (members get a normal peer-left; the active
+      call is untouched; a second end-held errors `nohold`). The hang-up button keeps its
+      end-active-and-resume-held behavior, so both directions of "drop one line" exist.
+- [x] `nameOf` now falls back to `peerNamesSeen` (recorded by createPeer + addLkTile) so hold/
+      leave messaging can NAME an SFU peer instead of showing their raw pin.
+- [x] BEHAVIORAL server test (relay.test.ts): A↔B live, C rings B, B answers (A held), B sends
+      end-held → A gets peer-left, B+C untouched, hold cleared, second end-held → nohold.
+      + server/v2971Hold.test.ts (10 pins). Suite 1157 passed / 1 skipped; check + build green.

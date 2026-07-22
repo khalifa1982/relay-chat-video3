@@ -517,7 +517,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     toastT = setTimeout(() => { t.className = "relay-toast"; }, 3400);
   };
   const fmtPin = (p: string | null) => String(p ?? "").replace(/(\d{3})(\d{3})/, "$1 $2");
-  const nameOf = (pin: string) => (peers[pin] ? peers[pin].name : pin);
+  // Last name seen per pin (mesh createPeer + SFU addLkTile both record here) —
+  // so hold/leave messaging can name an SFU peer, whose entry never lives in
+  // the mesh `peers` map (v2.97.1).
+  const peerNamesSeen: Record<string, string> = {};
+  const nameOf = (pin: string) =>
+    peers[pin]?.name || peerNamesSeen[pin] || pin;
 
   // ---------- transport (SSE + POST) ----------
   function connectWS() {
@@ -678,7 +683,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
           else hangUp("peer-busy");
         }
         break;
-      case "peer-left":    removePeer(m.pin!); break;
+      case "peer-left": {
+        // A REAL leave: whoever it was is no longer holding us (a holder that
+        // fully hangs up releases the held room → this very message), so the
+        // hold banner/music clear and the normal end logic applies (v2.97.1).
+        const goneP = m.pin!;
+        peersHoldingUs.delete(goneP);
+        updateOnHoldState();
+        removePeer(goneP);
+        // SFU: the peer lives as an lk tile, not a mesh entry — route the
+        // removal (and its 1:1 auto-end) there too.
+        if (livekitEnabled && lkParticipantTiles[goneP]) removeLkTile(goneP);
+        break;
+      }
       case "force-mute":   onForceMute(m); break;
       case "role":         onRoleChange(m); break;
       case "host-pin":     onHostPin(m); break;
@@ -2047,6 +2064,98 @@ export function startRelay(root: HTMLElement): RelayHandle {
   const heldPeers: Record<string, PeerEntry> = {};
   let heldLabel: string | null = null;
 
+  /* ── being HELD (v2.97.1) ────────────────────────────────────────────
+     Peers who put US on hold (peer-hold on). This set is the guard that keeps
+     a held 1:1 ALIVE on the SFU path: holding tears down the holder's LiveKit
+     connection, which the held side used to read as "they left" → 1:1
+     auto-end — the reported "answering a second call kills the first call".
+     Cleared on peer-hold off, on a REAL leave (peer-left), and at call end. */
+  const peersHoldingUs = new Set<string>();
+  // peer-hold can arrive a beat AFTER the holder's SFU disconnect, so a bare
+  // 1:1 disconnect never ends the call instantly — it arms this short fuse,
+  // and a peer-hold (or the peer coming back) defuses it.
+  let soloEndT: ReturnType<typeof setTimeout> | null = null;
+  function cancelSoloEndGrace() {
+    if (soloEndT) { clearTimeout(soloEndT); soloEndT = null; }
+  }
+  function armSoloEndGrace(nm: string) {
+    cancelSoloEndGrace();
+    soloEndT = setTimeout(() => {
+      soloEndT = null;
+      if (!inCall || callIsGroup || !callAnswered) return;
+      if (peersHoldingUs.size > 0) return; // it WAS a hold — the banner owns the UX
+      if (!aloneInCall()) return; // they reconnected/rejoined meanwhile
+      addSysMsg(nm + " left the call.");
+      if (heldRoomId) {
+        toast("Call ended — resuming your held call…");
+        endActiveLine();
+      } else {
+        toast("Call ended.");
+        hangUp("remote-left");
+      }
+    }, 1600);
+  }
+
+  // Light HOLD MUSIC for the party who was parked (owner spec): a soft looped
+  // two-bar motif — clearly "please hold", nothing like the ring or cues.
+  let holdMusicTimer: ReturnType<typeof setInterval> | null = null;
+  const holdMusicNodes = new Set<AudioScheduledSourceNode>();
+  function holdMusicBar(ctx: AudioContext) {
+    const t0 = ctx.currentTime + 0.05;
+    const notes: Array<[number, number, number]> = [
+      // [freq, offset, dur] — C5 E5 G5 A5 · E5 D5 (gentle add9 lilt)
+      [523.25, 0.0, 0.42], [659.25, 0.45, 0.42], [783.99, 0.9, 0.42],
+      [880.0, 1.35, 0.58], [659.25, 2.0, 0.42], [587.33, 2.45, 0.66],
+    ];
+    for (const [f, at, dur] of notes) {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = f;
+      const s = t0 + at;
+      g.gain.setValueAtTime(0.0001, s);
+      g.gain.exponentialRampToValueAtTime(0.05, s + 0.06);
+      g.gain.exponentialRampToValueAtTime(0.0001, s + dur);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(s); osc.stop(s + dur + 0.05);
+      holdMusicNodes.add(osc);
+      osc.onended = () => holdMusicNodes.delete(osc);
+    }
+  }
+  function startHoldMusic() {
+    if (holdMusicTimer) return;
+    try {
+      const Ctx = (window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext) as typeof AudioContext | undefined;
+      if (!Ctx) return;
+      if (!cueCtx) cueCtx = new Ctx();
+      void cueCtx.resume();
+      holdMusicBar(cueCtx);
+      holdMusicTimer = setInterval(() => { if (cueCtx) holdMusicBar(cueCtx); }, 3400);
+    } catch { /* silent hold is still a hold */ }
+  }
+  function stopHoldMusic() {
+    if (holdMusicTimer) { clearInterval(holdMusicTimer); holdMusicTimer = null; }
+    // Stop queued oscillators too — a suspended context would otherwise replay
+    // them the next time it resumes (the ringtone "peep peep" lesson).
+    holdMusicNodes.forEach(n => { try { n.stop(); } catch { /* */ } });
+    holdMusicNodes.clear();
+  }
+  /** The "you're on hold" banner + music, driven by peersHoldingUs. Group
+   *  calls only mark the holder's tile (the others are still talking). */
+  function updateOnHoldState() {
+    const held = inCall && !callIsGroup && peersHoldingUs.size > 0;
+    const bar = $("onHoldBar");
+    if (bar) {
+      bar.classList.toggle("show", held);
+      if (held) {
+        const nmEl = $("onHoldName");
+        const first = Array.from(peersHoldingUs)[0];
+        if (nmEl) nmEl.textContent = first ? nameOf(first) : "They";
+      }
+    }
+    if (held) startHoldMusic(); else stopHoldMusic();
+  }
+
   function outAudioTrack(): MediaStreamTrack | null {
     // Audio is always the raw mic (the processed stream carries only video).
     return localStream?.getAudioTracks()[0] || outStream().getAudioTracks()[0] || null;
@@ -2180,6 +2289,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
     sendWS({ type: "merge" });
     toast("Calls merged");
     addSysMsg("You merged both calls into one conference.");
+  }
+
+  // Drop ONLY the held line (v2.97.1, owner: "you can select which call to
+  // drop"): close its frozen peers locally and tell the server to release the
+  // held room — its members get a normal peer-left; the ACTIVE call stays up.
+  function endHeldLine() {
+    if (!heldRoomId) { toast("No call on hold.", true); return; }
+    dropHeld();
+    sendWS({ type: "end-held" });
+    toast("Held call ended.");
+    addSysMsg("You ended the held call — this call stays connected.");
   }
 
   // End the ACTIVE line and resume the HELD one (phone-style). With nothing held
@@ -3039,19 +3159,27 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // a brighter rising "toot" when the call resumes).
   function onPeerHold(m: Msg) {
     const pin = m.pin || ""; if (!pin) return;
-    const tile = document.getElementById("tile-" + pin);
     const nm = nameOf(pin);
     if (m.on) {
-      tile?.classList.add("on-hold");
+      peersHoldingUs.add(pin);
+      // The hold arrived — a pending "did they leave?" fuse is defused.
+      cancelSoloEndGrace();
+      // SFU race: the holder's LiveKit disconnect may already have removed
+      // their tile before this signal landed — restore a placeholder so the
+      // held screen still SHOWS who parked us.
+      if (livekitEnabled && !document.getElementById("tile-" + pin)) addLkTile(pin, nm);
+      document.getElementById("tile-" + pin)?.classList.add("on-hold");
       addSysMsg(nm + " put you on hold for another call.");
       toast(nm + " put you on hold.");
       playCue("hold");
     } else {
-      tile?.classList.remove("on-hold");
+      peersHoldingUs.delete(pin);
+      document.getElementById("tile-" + pin)?.classList.remove("on-hold");
       addSysMsg(nm + " is back.");
       toast(nm + " is back.");
       playCue("resume");
     }
+    updateOnHoldState();
   }
   function onRoleChange(m: Msg) {
     const pin = m.pin || "";
@@ -3224,6 +3352,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
 
   function addLkTile(id: string, name: string) {
+    if (name) peerNamesSeen[id] = name;
     if (lkParticipantTiles[id]) return;
     callAnswered = true; // a second party exists — the join watchdog may enforce media
     onCalleeAnswered();  // outgoing dial: "Ringing…" → the real connecting sequence
@@ -3284,8 +3413,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
     el.dataset.state = "connected";
   }
   function removeLkTile(id: string) {
+    // HELD, not gone (v2.97.1): putting us on hold tears the holder's SFU
+    // connection down — that disconnect must NOT read as "they left" (it was
+    // the reported "answering a second call kills the first call"). Keep the
+    // tile, mark it on-hold, and let the hold banner/music own the UX.
+    if (peersHoldingUs.has(id)) {
+      lkParticipantTiles[id]?.classList.add("on-hold");
+      layoutGrid();
+      return;
+    }
     const el = lkParticipantTiles[id];
-    const nm = el?.querySelector(".nm")?.textContent || "Someone";
+    const nm = el?.querySelector(".nm")?.textContent || peerNamesSeen[id] || "Someone";
     el?.remove();
     delete lkParticipantTiles[id];
     // Drop any spotlight/active state pinned to the gone tile.
@@ -3295,14 +3433,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenShareIds.delete(goneId);
     speakerOrder = speakerOrder.filter(s => s !== goneId);
     layoutGrid();
-    // Parity with the mesh path's removePeer, which posts a "left" notice — plus
-    // a visible toast (the chat drawer is closed by default during a call).
-    if (inCall) { addSysMsg(nm + " left the call."); toast(nm + " left the call."); }
-    // 1:1 auto-end (see removePeer): don't linger in a dead solo call.
-    if (inCall && !callIsGroup && callAnswered && aloneInCall()) {
-      toast("Call ended.");
-      hangUp("remote-left");
+    if (!inCall) return;
+    if (callIsGroup || !callAnswered || !aloneInCall()) {
+      // Parity with the mesh path's removePeer — plus a visible toast (the
+      // chat drawer is closed by default during a call).
+      addSysMsg(nm + " left the call.");
+      toast(nm + " left the call.");
+      return;
     }
+    // Solo 1:1 disconnect: it may be the SFU face of a HOLD whose peer-hold
+    // signal is still in flight — give it a short grace window instead of
+    // ending instantly (armSoloEndGrace re-checks everything when it fires).
+    armSoloEndGrace(nm);
   }
   // Tear down the LiveKit room + its tiles. Safe to call when not on the SFU path.
   function teardownLivekit() {
@@ -3348,6 +3490,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
   }
   function createPeer(pin: string, name: string, initiator: boolean): PeerEntry {
+    if (name) peerNamesSeen[pin] = name;
     if (peers[pin]) return peers[pin];
     callAnswered = true; // a second party exists — the join watchdog may enforce media
     onCalleeAnswered();  // outgoing dial: "Ringing…" → the real connecting sequence
@@ -3550,6 +3693,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     });
   }
   function removePeer(pin: string, quiet = false) {
+    // A genuine departure clears any "they put us on hold" state for the pin
+    // (quiet rebuilds — ICE-restart re-offers — keep it; the peer isn't gone).
+    if (!quiet) {
+      peersHoldingUs.delete(pin);
+      updateOnHoldState();
+    }
     // A member of the HELD call left (their hang-up while we're on the other
     // line). Clean it out of the held bucket; if the held call is now empty,
     // clear the hold so the "on hold" bar disappears.
@@ -5270,6 +5419,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const log = $("chatLog"); if (log) log.innerHTML = "";
     $("chatPanel")?.classList.remove("open");
     $("filterDock")?.classList.remove("open");
+    // Being-held state dies with the call (v2.97.1): music off, fuse defused.
+    peersHoldingUs.clear();
+    cancelSoloEndGrace();
+    stopHoldMusic();
+    $("onHoldBar")?.classList.remove("show");
     unread = 0;
     const b = $("chatBadge"); if (b) b.style.display = "none";
     if (screenStream) {
@@ -5418,6 +5572,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   });
   ($("cwDecline") as HTMLElement | null)?.addEventListener("click", declineWaiting);
   ($("heldSwap") as HTMLElement | null)?.addEventListener("click", swapCall);
+  ($("heldEnd") as HTMLElement | null)?.addEventListener("click", endHeldLine);
   ($("heldMerge") as HTMLElement | null)?.addEventListener("click", mergeCall);
   ($("micBtn") as HTMLElement | null)?.addEventListener("click", toggleMic);
   ($("camBtn") as HTMLElement | null)?.addEventListener("click", toggleCam);
@@ -5669,6 +5824,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     },
     destroy() {
       destroyed = true;
+      stopHoldMusic();
+      cancelSoloEndGrace();
       // Logout / engine teardown → don't carry a pending auto-rejoin into the
       // next session, and release the loudspeaker context.
       if (rejoinWatchT) { clearTimeout(rejoinWatchT); rejoinWatchT = null; }
