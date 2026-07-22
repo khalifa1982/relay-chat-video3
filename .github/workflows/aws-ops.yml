@@ -67,7 +67,17 @@ on:
         type: choice
         required: true
         default: verify
-        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses]
+        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set]
+      env_key:
+        description: "env-set only: the /home/relay/.env variable name to upsert (e.g. RELAY_OTP_REGISTER_BYPASS)"
+        type: string
+        required: false
+        default: ""
+      env_value:
+        description: "env-set only: its value (e.g. 1). Empty/omitted REMOVES the key instead of setting it."
+        type: string
+        required: false
+        default: ""
       ses_email:
         description: "ses only: an address to check suppression for AND verify as an SES identity (instant sandbox unblock for that person)"
         type: string
@@ -724,3 +734,51 @@ jobs:
               || echo "put-account-details failed (a review may already be pending — see above)."
           fi
           echo "iam-grant-ses done."
+
+      # ────────────────────────────────────────────────────────────────
+      - name: env-set — idempotently upsert (or remove) one KEY in
+          /home/relay/.env on every relay-app instance, then restart pm2
+          --update-env so the new value takes effect immediately
+        if: inputs.action == 'env-set'
+        env:
+          ENV_KEY: ${{ inputs.env_key }}
+          ENV_VALUE: ${{ inputs.env_value }}
+        run: |
+          set -euo pipefail
+          [ -n "$ENV_KEY" ] || { echo "::error::env_key is required for env-set."; exit 1; }
+          case "$ENV_KEY" in
+            *[!A-Za-z0-9_]*|"") echo "::error::env_key must be a plain UPPER_SNAKE_CASE name (got: $ENV_KEY)"; exit 1 ;;
+          esac
+          if [ -n "$ENV_VALUE" ]; then
+            echo "Upserting $ENV_KEY=$ENV_VALUE in /home/relay/.env on every relay-app instance…"
+            LINE_B64=$(printf '%s=%s' "$ENV_KEY" "$ENV_VALUE" | base64 -w0)
+            UPSERT="grep -v '^${ENV_KEY}=' /home/relay/.env > /home/relay/.env.tmp 2>/dev/null || true; mv /home/relay/.env.tmp /home/relay/.env; echo \"\$(echo $LINE_B64 | base64 -d)\" >> /home/relay/.env"
+          else
+            echo "Removing $ENV_KEY from /home/relay/.env on every relay-app instance…"
+            UPSERT="grep -v '^${ENV_KEY}=' /home/relay/.env > /home/relay/.env.tmp 2>/dev/null || true; mv /home/relay/.env.tmp /home/relay/.env"
+          fi
+          PARAMS=$(jq -n --arg u "sudo -u relay bash -c '$UPSERT'" '{commands:[
+            $u,
+            "sudo -u relay bash -lc \"pm2 startOrReload /home/relay/ecosystem.config.cjs --update-env\"",
+            "for i in 1 2 3 4 5 6 7 8 9 10; do sleep 3; curl -sf http://localhost:3000/api/health && echo HEALTH_OK && exit 0; done; echo HEALTH_FAILED; pm2 logs relay --lines 40 --nostream; exit 1"
+          ]}')
+          CMD=$(aws ssm send-command \
+            --targets "Key=tag:Name,Values=relay-app" \
+            --document-name AWS-RunShellScript \
+            --max-concurrency 1 --max-errors 0 \
+            --parameters "$PARAMS" \
+            --query 'Command.CommandId' --output text)
+          echo "SSM command: $CMD"
+          for i in $(seq 1 60); do
+            STATUSES=$(aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status' --output text)
+            echo "[$i] $STATUSES"
+            case "$STATUSES" in *InProgress*|*Pending*|"") sleep 10 ;; *) break ;; esac
+          done
+          aws ssm list-command-invocations --command-id "$CMD" --details \
+            --query 'CommandInvocations[].{Instance:InstanceId,Status:Status,Output:CommandPlugins[0].Output}' \
+            --output json | head -c 8000
+          FINAL=$(aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status' --output text)
+          echo "final: $FINAL"
+          [ -n "$FINAL" ] || { echo "::error::no instances ran the command — check the relay-app tag + SSM agent"; exit 1; }
+          case "$FINAL" in *Failed*|*TimedOut*|*Cancelled*) exit 1 ;; esac
+          echo "env-set done — both servers restarted with the new value and passed their health check."

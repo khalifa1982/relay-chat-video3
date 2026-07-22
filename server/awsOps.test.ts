@@ -26,8 +26,8 @@ describe("aws-ops.yml — trigger + auth safety", () => {
     expect(OPS).not.toMatch(/\n\s*push:/);
     expect(OPS).not.toMatch(/\n\s*pull_request:/);
   });
-  it("offers the ops actions with verify as the safe default (v2.97.2 adds ses/ses-ssm/iam-grant-ses)", () => {
-    expect(OPS).toMatch(/options: \[verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses\]/);
+  it("offers the ops actions with verify as the safe default (v2.97.2 adds ses/ses-ssm/iam-grant-ses/env-set)", () => {
+    expect(OPS).toMatch(/options: \[verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set\]/);
     expect(OPS).toMatch(/default: verify/);
   });
   it("region input defaults to ap-south-1; auth prefers access keys but falls back to the deploy OIDC role", () => {
