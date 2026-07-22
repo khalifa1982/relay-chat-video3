@@ -91,6 +91,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write # OIDC fallback auth (same role as deploy.yml)
 
 jobs:
   ops:
@@ -99,22 +100,33 @@ jobs:
       AWS_REGION: ${{ inputs.region }}
       DOMAIN: ${{ inputs.domain }}
     steps:
-      - name: Gate — AWS credentials must be configured
+      - name: Detect auth method
+        id: auth
         env:
           KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           KEY_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          if [ -z "$KEY_ID" ] || [ -z "$KEY_SECRET" ]; then
-            echo "::error::AWS credentials are not configured for this repo. Add AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY under Settings → Secrets and variables → Actions, then re-run this workflow."
-            exit 1
+          if [ -n "$KEY_ID" ] && [ -n "$KEY_SECRET" ]; then
+            echo "method=keys" >> "$GITHUB_OUTPUT"
+            echo "Using the ops IAM access keys from repo secrets."
+          else
+            echo "method=oidc" >> "$GITHUB_OUTPUT"
+            echo "::warning::AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets are not set — falling back to the deploy pipeline's OIDC role (relay-github-deploy). Actions that role can't perform will degrade with a clear message; add a scoped ops key to unlock the rest."
           fi
-          echo "AWS credentials present — proceeding."
 
       - name: AWS auth (access keys)
+        if: steps.auth.outputs.method == 'keys'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      - name: AWS auth (OIDC fallback — deploy role)
+        if: steps.auth.outputs.method == 'oidc'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::342494841476:role/relay-github-deploy
           aws-region: ${{ inputs.region }}
 
       # ────────────────────────────────────────────────────────────────
