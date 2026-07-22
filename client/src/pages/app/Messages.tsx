@@ -52,6 +52,8 @@ import { StatusStrip } from "./Status";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
+import { videoRecorderSupported } from "@/lib/videoNote";
+import { VideoRecordSheet } from "@/app/VideoRecordSheet";
 import { linkify } from "@/lib/linkify";
 import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
@@ -704,6 +706,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const imageRef = useRef<HTMLInputElement>(null);
   const [pendingUpload, setPendingUpload] = useState<{ id: number; url: string; mimeType: string; filename?: string } | null>(null);
   const [uploading, setUploading] = useState(false);
+  // In-app video recorder (v2.96.2): iOS blocks the SYSTEM camera's video
+  // recording while on a call, so the image button opens a chooser — record
+  // in-app (works mid-call) or pick from the library.
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [videoRecOpen, setVideoRecOpen] = useState(false);
   // A picked-but-unsent attachment must not follow the user into a DIFFERENT
   // conversation when they switch threads — it would otherwise sit silently
   // staged and get attached to whatever they next send there.
@@ -1469,6 +1476,26 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             ))}
           </div>
         )}
+        {attachMenuOpen && (
+          <div className="mb-2 grid grid-cols-2 gap-2">
+            {/* In-app recorder: works even DURING a call — iOS blocks the
+                system camera's video recording there, ours records in-page. */}
+            <button
+              type="button"
+              onClick={() => { setAttachMenuOpen(false); setVideoRecOpen(true); }}
+              className="flex items-center justify-center gap-2 rounded-xl bg-[#38bdf8]/12 px-3 py-3 text-sm font-semibold text-[#38bdf8] active:scale-95 transition-transform"
+            >
+              <Video className="size-4" /> Record video
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAttachMenuOpen(false); imageRef.current?.click(); }}
+              className="flex items-center justify-center gap-2 rounded-xl bg-muted/60 px-3 py-3 text-sm font-semibold text-foreground active:scale-95 transition-transform"
+            >
+              <ImageIcon className="size-4" /> Photo & video library
+            </button>
+          </div>
+        )}
         {expire !== null && (
           <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-[#a78bfa]/10 border-l-2 border-[#a78bfa] text-sm">
             <Timer className="size-4 shrink-0 text-[#a78bfa]" />
@@ -1501,8 +1528,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => imageRef.current?.click()}
-            aria-label="Image"
+            onClick={() => {
+              // With an in-app recorder available, offer Record vs Library;
+              // otherwise keep the direct library picker.
+              if (videoRecorderSupported()) setAttachMenuOpen((v) => !v);
+              else imageRef.current?.click();
+            }}
+            aria-label="Photo or video"
+            className={attachMenuOpen ? "bg-muted/60" : ""}
           >
             <ImageIcon className="size-5" />
           </Button>
@@ -1604,6 +1637,19 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       </div>
 
       {lightbox && <MediaLightbox media={lightbox} onClose={() => setLightbox(null)} />}
+      {/* In-app video recorder (v2.96.2): the clip lands in the normal
+          attachment flow (pendingUpload), so captions and the disappearing
+          timer apply before Send — and it works even during a call. */}
+      {videoRecOpen && (
+        <VideoRecordSheet
+          maxMs={60_000}
+          onClose={() => setVideoRecOpen(false)}
+          onUse={(r) => {
+            setVideoRecOpen(false);
+            void uploadFile(new File([r.blob], `video-note.${r.ext}`, { type: r.mimeType }));
+          }}
+        />
+      )}
       {/* Unsend confirmation (v2.88 — AlertDialog, not native confirm()). */}
       <AlertDialog open={unsendId !== null} onOpenChange={(open) => !open && setUnsendId(null)}>
         <AlertDialogContent>

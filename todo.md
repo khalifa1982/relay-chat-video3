@@ -4357,3 +4357,28 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       refusal surfaces as "Couldn't start Picture-in-Picture" instead of a false success.
 - [x] `server/v2961Fixes.test.ts` (15 pins) + updated pins in updateChecker / androidAudioCamera /
       peerIdentityBatch / Contacts tests. Suite 1129 passed / 1 skipped; check + build green.
+
+## v2.96.2 — in-app video recorder (owner screenshot: "Recording video is not available while on a call") (2026-07-22)
+- [x] ROOT CAUSE is an iOS OS RESTRICTION, not a RELAY bug: while ANY call is active (RELAY web
+      calls included), iPhone refuses to let the SYSTEM camera record video — photos still work,
+      video is blocked, and the <input capture> path hits the same wall. WhatsApp works around it
+      by recording INSIDE the app; RELAY now does the same.
+- [x] NEW `client/src/lib/videoNote.ts` (mirrors voiceNote.ts): `pickVideoMime` probes what the
+      browser really encodes (video/mp4 FIRST — Safari/iPhone — then vp9/vp8/webm; NO blind ""
+      fallback), `openVideoCapture(facing)` owns acquisition, `recordFromStream` records with a
+      1s timeslice (Safari flushes progressively) at bounded bitrates (2.5Mbps video + 128k
+      audio ⇒ ≈20MB/min, far under the 40MB upload cap) and deliberately leaves the preview
+      stream alive (the sheet owns release, so Retake doesn't re-acquire).
+- [x] NEW `client/src/app/VideoRecordSheet.tsx`: full-screen in-app camera — live preview
+      (front-cam mirrored, recorded clip raw), flip front/back, record with running timer +
+      auto-stop countdown, review with Retake / Use, camera released on EVERY exit path, and an
+      honest message when the camera is held by a video call ("turn the call's camera off
+      first").
+- [x] MESSAGES: the image button now opens a two-option chooser when the recorder is supported —
+      "Record video" (in-app, works mid-call) / "Photo & video library" (native picker,
+      unchanged) — and a recorded clip lands in the NORMAL attachment flow (pendingUpload), so
+      captions and the v2.96 disappearing timer apply before Send. 60s cap.
+- [x] STATUS: a third "Record" tab in the composer (gated on browser support) feeds the same
+      pipeline as a picked file — 30s story cap, caption, bare status upload.
+- [x] `server/v2962VideoRecorder.test.ts` (11 pins). Suite 1140 passed / 1 skipped; check +
+      build green.

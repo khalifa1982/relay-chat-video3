@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, X, Camera, Type, Trash2, Eye, ChevronLeft, ChevronRight, Send } from "lucide-react";
+import { Plus, X, Camera, Type, Trash2, Eye, ChevronLeft, ChevronRight, Send, Video } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { uploadStatusMedia } from "@/lib/uploadAttachment";
+import { videoRecorderSupported } from "@/lib/videoNote";
+import { VideoRecordSheet } from "@/app/VideoRecordSheet";
 
 /**
  * Rich user status (v2.95) — WhatsApp/story-style ephemeral updates: text,
@@ -154,6 +156,9 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
+  // In-app recorder (v2.96.2) — iOS blocks the SYSTEM camera's video
+  // recording while on a call; this records in-page instead.
+  const [recOpen, setRecOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const post = trpc.status.post.useMutation();
 
@@ -224,12 +229,21 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           >
             <Type className="size-4" /> Text
           </button>
+          {videoRecorderSupported() && (
+            <button
+              type="button"
+              onClick={() => setRecOpen(true)}
+              className="flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl py-2 text-sm font-semibold text-muted-foreground"
+            >
+              <Video className="size-4" /> Record
+            </button>
+          )}
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
             className={`flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl py-2 text-sm font-semibold ${mode === "media" ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
           >
-            <Camera className="size-4" /> Photo / Video / Audio
+            <Camera className="size-4" /> Library
           </button>
           <input
             ref={fileRef}
@@ -299,6 +313,17 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           </Button>
         </div>
       </div>
+      {/* In-app recorder → the clip becomes the picked file (30s story cap). */}
+      {recOpen && (
+        <VideoRecordSheet
+          maxMs={30_000}
+          onClose={() => setRecOpen(false)}
+          onUse={(r) => {
+            setRecOpen(false);
+            pickFile(new File([r.blob], `status-video.${r.ext}`, { type: r.mimeType }));
+          }}
+        />
+      )}
     </div>
   );
 }
