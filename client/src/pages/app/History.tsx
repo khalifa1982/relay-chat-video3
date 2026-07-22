@@ -696,7 +696,7 @@ function ConferenceItem({
       className="border-b border-border/60 px-4 py-3 last:border-b-0 transition-colors hover:bg-muted/30"
       aria-label={`${direction === "out" ? "Outgoing" : "Incoming"} call with ${title}, ${formatDuration(conf.durationSec)} duration`}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {isGroup ? (
           // Group → violet-tinted rounded-square Users disc.
           <span
@@ -717,9 +717,9 @@ function ConferenceItem({
             <PresenceLed online={online} inCall={inCall} />
           </span>
         )}
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-48">
           <div className="truncate text-[15px] font-bold text-foreground">{title}</div>
-          <div className="text-xs text-muted-foreground">
+          <div className="truncate text-xs text-muted-foreground">
             <span className={"font-semibold " + tone.label}>
               {direction === "out" ? "Outgoing" : "Incoming"}
             </span>
@@ -738,7 +738,7 @@ function ConferenceItem({
             {formatFullWhen(conf.startedAt)}
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="ml-auto flex items-center gap-1.5">
           <RoundAction
             rgb="251,146,60"
             accent="#fb923c"
@@ -839,17 +839,17 @@ function SoloItem({
       className="border-b border-border/60 px-4 py-3 last:border-b-0 transition-colors hover:bg-muted/30"
       aria-label={`${label} — ${peerName}`}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <span className={"relative grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold " + tone.bubble}>
           {initial || <Phone className="size-[18px]" />}
           <DirectionBadge direction={call.direction} toneName={tone.name} />
           <PresenceLed online={online} inCall={inCall} />
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-48">
           <div className={"truncate text-[15px] font-bold " + (missedIn ? tone.name : "text-foreground")}>
             {peerName}
           </div>
-          <div className="text-xs text-muted-foreground">
+          <div className="truncate text-xs text-muted-foreground">
             <span className={"font-semibold " + tone.label}>{label}</span>
             {call.channel === "voice" ? " · Voice" : call.channel === "video" ? " · Video" : ""}
             {peerNum ? <span className="font-mono"> · PIN {peerNum}</span> : null}
@@ -858,7 +858,7 @@ function SoloItem({
             {formatFullWhen(call.startedAt)}
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="ml-auto flex items-center gap-1.5">
           {/* Offline peer → offer the v2.88 call-back alert right on the row. */}
           {online === false && onWatch && peerNum ? (
             <RoundAction

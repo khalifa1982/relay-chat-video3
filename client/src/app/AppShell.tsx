@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Phone, MessageCircle, UsersRound, History, LogOut, Sparkles, Sun, Moon, Smartphone, Monitor, ArrowLeft } from "lucide-react";
+import { Phone, MessageCircle, UsersRound, History, LogOut, Sparkles, Sun, Moon, Smartphone, Monitor, ArrowLeft, UserRound } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { detectDeviceType } from "@/lib/deviceType";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
@@ -480,50 +488,66 @@ function Inner({ children }: { children: React.ReactNode }) {
               title={geo.data?.countryName ?? geo.data?.country ?? ""}
               className="shrink-0"
             />
-            <span className="font-mono text-xs text-muted-foreground shrink-0">
+            {/* Hidden only on ultra-narrow phones (<360px) so the bar can
+                never overflow; the number is always in the avatar menu too. */}
+            <span className="font-mono text-xs text-muted-foreground shrink-0 max-[359px]:hidden">
               {formatNumber(me.number)}
             </span>
-            {/* Avatar → Profile, with a self status LED (amber on Do-Not-Disturb,
-                online-green otherwise) matching the prototype. */}
-            <Link
-              href="/app/profile"
-              aria-label="Profile"
-              title={me.displayName}
-              className="relative shrink-0 active:scale-95 transition-transform rounded-full outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
-            >
-              {me.avatarUrl ? (
-                <img
-                  src={me.avatarUrl}
-                  alt={me.displayName}
-                  className="size-9 rounded-full object-cover border border-border"
-                />
-              ) : (
-                <span
-                  className="size-9 rounded-full grid place-items-center font-bold text-sm"
-                  style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)", color: "#08211d" }}
-                >
-                  {initialsFrom(me.displayName)}
-                </span>
-              )}
-              <span
-                className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-card"
-                style={{ background: dnd ? "#fbbf24" : "#06d6a0" }}
-              />
-              {me.verified && (
-                <span className="absolute -left-1 -top-1">
-                  <VerifiedBadge size={14} />
-                </span>
-              )}
-            </Link>
-            {me.isGuest && (
-              <button
-                type="button"
-                onClick={() => setAuthOpen(true)}
-                className="shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold text-primary bg-primary/10 active:scale-95 transition-transform"
+            {/* Avatar → ACCOUNT MENU (v2.95.10). The old layout crammed a
+                separate "Register" pill next to the avatar, which overflowed
+                the bar on phones (the pill clipped off-screen). Everything
+                account-related now lives in one dropdown: Profile, Register
+                (guests), Sign out. LED: amber on DND, online-green otherwise. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label="Account menu"
+                title={me.displayName}
+                className="relative shrink-0 active:scale-95 transition-transform rounded-full outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
               >
-                Register
-              </button>
-            )}
+                {me.avatarUrl ? (
+                  <img
+                    src={me.avatarUrl}
+                    alt={me.displayName}
+                    className="size-9 rounded-full object-cover border border-border"
+                  />
+                ) : (
+                  <span
+                    className="size-9 rounded-full grid place-items-center font-bold text-sm"
+                    style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)", color: "#08211d" }}
+                  >
+                    {initialsFrom(me.displayName)}
+                  </span>
+                )}
+                <span
+                  className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-card"
+                  style={{ background: dnd ? "#fbbf24" : "#06d6a0" }}
+                />
+                {me.verified && (
+                  <span className="absolute -left-1 -top-1">
+                    <VerifiedBadge size={14} />
+                  </span>
+                )}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="min-w-0">
+                  <div className="truncate font-semibold">{me.displayName}</div>
+                  <div className="font-mono text-xs text-muted-foreground">{formatNumber(me.number)}</div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate("/app/profile")}>
+                  <UserRound className="size-4" /> Profile
+                </DropdownMenuItem>
+                {me.isGuest && (
+                  <DropdownMenuItem onClick={() => setAuthOpen(true)} className="text-primary focus:text-primary">
+                    <Sparkles className="size-4" /> Register — keep this number
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" onClick={requestSignOut}>
+                  <LogOut className="size-4" /> Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
 

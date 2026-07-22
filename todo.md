@@ -4250,3 +4250,16 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
         works with zero working JavaScript (verified by dead-JS simulation in the browser);
       • the progress TRACK carries a CSS-only light sweep (loadTrack::after shimmer), so the
         loader visibly MOVES even if JS width/percent updates stall.
+
+## v2.95.10 — mobile top-bar overflow + unreadable History rows (owner screenshot) (2026-07-22)
+- [x] MOBILE TOP BAR: the standalone "Register" pill next to the avatar overflowed the bar on
+      phones (clipped off-screen, crowding flag/number). The avatar is now an ACCOUNT MENU
+      (shadcn DropdownMenu): identity header (name + number), Profile, "Register — keep this
+      number" (guests only), and Sign out (destructive) — nothing account-related sits loose in
+      the bar anymore. The number hides only under 360px (it's in the menu regardless).
+- [x] HISTORY ROWS: on phones the 3–4 44px action buttons crushed the text column to ~40px —
+      one word per line, name/PIN/date unreadable (owner screenshot). Both row types
+      (SoloItem + ConferenceItem) are now wrap-aware: the text block claims a real minimum
+      width (flex-1 basis-48, truncating status line), and when the actions don't fit they
+      drop to a second right-aligned line (flex-wrap + ml-auto). Desktop renders exactly as
+      before (single line — plenty of room). 1084 tests green.
