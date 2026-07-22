@@ -147,6 +147,10 @@ export interface RelayHandle {
   maxParticipants: () => number;
   /** Set/replace the engine-state callback. Fired whenever phase changes. */
   setOnStateChange: (cb: ((phase: RelayPhase) => void) | null) => void;
+  /** Read-only snapshot of the CURRENT call roster (pin + name per remote
+   *  peer, both transports) — powers the host's in-call "save to contacts"
+   *  chip (v2.96). Empty outside a call. */
+  getRoster: () => Array<{ pin: string; name: string }>;
   /** Best-effort: cancel an in-flight call/leave the room. */
   hangup: () => void;
   /** The 6-digit number the SIGNALING server actually registered for this
@@ -5464,6 +5468,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
     },
     maxParticipants() { return livekitEnabled ? 10 : 6; },
     setOnStateChange(cb) { onPhaseChange = cb; },
+    getRoster() {
+      // Read-only snapshot of who's on the call RIGHT NOW (both transports) —
+      // drives the host's in-call "save to contacts" chip (v2.96). Never
+      // mutates engine state.
+      const out: Array<{ pin: string; name: string }> = [];
+      for (const id in peers) {
+        if (/^\d{6}$/.test(id)) out.push({ pin: id, name: peers[id].name || "Guest" });
+      }
+      try {
+        lkRoom?.remoteParticipants?.forEach((p) => {
+          const pin = p.identity || "";
+          if (/^\d{6}$/.test(pin) && !out.some((r) => r.pin === pin)) {
+            out.push({ pin, name: p.name || "Guest" });
+          }
+        });
+      } catch { /* roster is best-effort */ }
+      return out;
+    },
     getPin() { return me.pin; },
     setPreferredPin(pin) {
       const next = pin && /^\d{6}$/.test(pin) ? pin : null;

@@ -6,7 +6,9 @@ import path from "node:path";
  * v2.82 — Contacts list redesign (reference screenshot), static pins.
  * Rich rows (avatar + presence + name/PIN/verified), inline Voice/Video/
  * Message + a 3-dot menu (favorite / category / block / edit / delete),
- * row tap → voice call, and category grouping (VIP / Family / Friends / Team).
+ * and category grouping (VIP / Family / Friends / Team).
+ * v2.96 (owner spec): row tap opens the peer PROFILE POPUP (with one-tap
+ * Voice/Video/Message inside); the green circle still voice-dials directly.
  */
 const ROOT = path.resolve(__dirname, "../../../..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -18,9 +20,11 @@ const ENGINE = read("client/src/lib/relayClient.ts");
 const PROVIDER = read("client/src/app/RelayEngine.tsx");
 
 describe("Contacts — rich rows + inline actions", () => {
-  it("each row taps into a VOICE call, and exposes Voice/Video/Message buttons", () => {
+  it("each row taps into the profile popup, and exposes Voice/Video/Message buttons", () => {
     expect(PAGE).toMatch(/function ContactRow/);
-    expect(PAGE).toMatch(/aria-label=\{`Call \$\{c\.displayName \|\| c\.number\}`\}/);
+    // v2.96: the main tap opens the profile popup (avatar + status + actions).
+    expect(PAGE).toMatch(/aria-label=\{`View \$\{c\.displayName \|\| c\.number\}'s profile`\}/);
+    expect(PAGE).toMatch(/onClick=\{\(\) => openPeerProfile\(c\.number\)\}/);
     expect(PAGE).toMatch(/aria-label="Voice call"/);
     expect(PAGE).toMatch(/aria-label="Video call"/);
     expect(PAGE).toMatch(/aria-label="Message"/);

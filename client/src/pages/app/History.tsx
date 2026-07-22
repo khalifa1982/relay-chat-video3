@@ -13,6 +13,7 @@ import {
   PhoneOutgoing,
   Search,
   Trash2,
+  UserPlus,
   Users,
   Video,
 } from "lucide-react";
@@ -32,6 +33,7 @@ import {
 import { formatDuration, formatFullWhen } from "@/lib/formatCall";
 import { useIdentity } from "@/app/useIdentity";
 import { useRelayEngine } from "@/app/RelayEngine";
+import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 
 type ConfRow = {
   id: number;
@@ -45,7 +47,7 @@ type ConfRow = {
   partyLine?: boolean;
   /** The line's title (null when the line has since been deleted). */
   partyLineTitle?: string | null;
-  participants: Array<{ number: string; name: string; isSelf: boolean }>;
+  participants: Array<{ number: string; name: string; avatarUrl?: string | null; isSelf: boolean }>;
 };
 
 type CallRow = {
@@ -55,7 +57,7 @@ type CallRow = {
   channel?: string;
   durationSec?: number | null;
   startedAt: string | Date;
-  other: { number: string; displayName: string } | null;
+  other: { number: string; displayName: string; avatarUrl?: string | null } | null;
 };
 
 type Item =
@@ -118,11 +120,6 @@ function searchTextOf(it: Item): string {
     c.partyLineTitle ?? "",
     ...c.participants.map((p) => `${p.name} ${p.number}`),
   ].join(" ");
-}
-
-/** First letter of a display name for the avatar disc (empty ⇒ icon fallback). */
-function initialOf(name: string): string {
-  return (name || "").trim().charAt(0).toUpperCase();
 }
 
 /** Bucket a call timestamp into a collapsible day-section {key,label}. Pure
@@ -309,6 +306,27 @@ export default function HistoryPage() {
   });
   const watch = (num: string) => {
     if (num) watchOnline.mutate({ number: num });
+  };
+
+  // One-tap contact conversion (v2.96): which history peers are ALREADY saved
+  // (hides the + button), and the add mutation itself.
+  const contactsQ = trpc.contacts.list.useQuery(undefined, {
+    enabled: !!me,
+    staleTime: 30_000,
+  });
+  const savedNumbers = useMemo(
+    () => new Set((contactsQ.data ?? []).map((c) => c.number)),
+    [contactsQ.data]
+  );
+  const addContact = trpc.contacts.upsert.useMutation({
+    onSuccess: () => {
+      utils.contacts.list.invalidate();
+      toast.success("Added to your contacts.");
+    },
+    onError: (err) => toast.error(err.message || "Couldn't add the contact."),
+  });
+  const quickAdd = (num: string, name: string) => {
+    if (num) addContact.mutate({ number: num, displayName: name || undefined });
   };
 
   // Live reachability per number (ONE batched query, refreshed with the log):
@@ -520,6 +538,10 @@ export default function HistoryPage() {
                               onRedialGroup={redialGroup}
                               onMessage={message}
                               onVideo={videoCall}
+                              onAddContact={quickAdd}
+                              saved={savedNumbers.has(
+                                it.conf.participants.find((p) => !p.isSelf)?.number ?? ""
+                              )}
                               online={
                                 presence.data
                                   ? onlineSet.has(it.conf.dialedNumber || it.conf.participants.find((p) => !p.isSelf)?.number || "")
@@ -537,6 +559,8 @@ export default function HistoryPage() {
                               onMessage={message}
                               onVideo={videoCall}
                               onWatch={watch}
+                              onAddContact={quickAdd}
+                              saved={savedNumbers.has(it.call.other?.number ?? "")}
                               online={presence.data ? onlineSet.has(it.call.other?.number ?? "") : undefined}
                               inCall={inCallSet.has(it.call.other?.number ?? "")}
                             />
@@ -653,6 +677,8 @@ function ConferenceItem({
   onRedialGroup,
   onMessage,
   onVideo,
+  onAddContact,
+  saved,
   online,
   inCall,
 }: {
@@ -662,6 +688,9 @@ function ConferenceItem({
   onRedialGroup: (numbers: string[]) => void;
   onMessage: (num: string) => void;
   onVideo: (num: string) => void;
+  /** One-tap contact conversion (v2.96) for the 1:1 peer — hidden when saved. */
+  onAddContact?: (num: string, name: string) => void;
+  saved?: boolean;
   online: boolean | undefined;
   inCall?: boolean;
 }) {
@@ -689,7 +718,8 @@ function ConferenceItem({
     else onRedial(callBack);
   };
   const canCall = isGroup ? otherNumbers.length > 0 : !!callBack;
-  const initial = initialOf(others[0]?.name ?? "");
+  // The 1:1 peer (for the avatar / profile popup / quick-add).
+  const peer = others[0] ?? null;
 
   return (
     <li
@@ -710,15 +740,32 @@ function ConferenceItem({
             <PresenceLed online={online} inCall={inCall} />
           </span>
         ) : (
-          // 1:1 answered call → round tone disc + a direction corner badge.
-          <span className={"relative grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold " + tone.bubble}>
-            {initial || <Phone className="size-[18px]" />}
+          // 1:1 answered call → photo + status ring (v2.96); no-photo
+          // initials keep the direction tone tint.
+          <PeerAvatar
+            number={peer?.number || null}
+            name={peer?.name}
+            avatarUrl={peer?.avatarUrl}
+            size={40}
+            fallbackClassName={tone.bubble + " text-sm"}
+          >
             <DirectionBadge direction={direction} toneName={tone.name} />
             <PresenceLed online={online} inCall={inCall} />
-          </span>
+          </PeerAvatar>
         )}
         <div className="min-w-0 flex-1 basis-48">
-          <div className="truncate text-[15px] font-bold text-foreground">{title}</div>
+          {!isGroup && peer?.number ? (
+            <button
+              type="button"
+              onClick={() => openPeerProfile(peer.number)}
+              className="block max-w-full truncate text-left text-[15px] font-bold text-foreground outline-none focus-visible:underline"
+              aria-label={`View ${peer.name}'s profile`}
+            >
+              {title}
+            </button>
+          ) : (
+            <div className="truncate text-[15px] font-bold text-foreground">{title}</div>
+          )}
           <div className="truncate text-xs text-muted-foreground">
             <span className={"font-semibold " + tone.label}>
               {direction === "out" ? "Outgoing" : "Incoming"}
@@ -739,6 +786,18 @@ function ConferenceItem({
           </div>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
+          {/* Not saved yet → one-tap add-to-contacts (v2.96, 1:1 only). */}
+          {!isGroup && !saved && onAddContact && peer?.number ? (
+            <RoundAction
+              rgb="167,139,250"
+              accent="#a78bfa"
+              label="Add to contacts"
+              title="Add to contacts"
+              onClick={() => onAddContact(peer.number, peer.name ?? "")}
+            >
+              <UserPlus className="size-4" />
+            </RoundAction>
+          ) : null}
           <RoundAction
             rgb="251,146,60"
             accent="#fb923c"
@@ -809,6 +868,8 @@ function SoloItem({
   onMessage,
   onVideo,
   onWatch,
+  onAddContact,
+  saved,
   online,
   inCall,
 }: {
@@ -818,6 +879,9 @@ function SoloItem({
   onVideo: (num: string) => void;
   /** Call-back alert (v2.88): register a "they're back online" watch. */
   onWatch?: (num: string) => void;
+  /** One-tap contact conversion (v2.96) — hidden when already saved. */
+  onAddContact?: (num: string, name: string) => void;
+  saved?: boolean;
   online: boolean | undefined;
   inCall?: boolean;
 }) {
@@ -832,7 +896,6 @@ function SoloItem({
       : call.status === "failed"
         ? "Failed"
         : "No answer";
-  const initial = initialOf(call.other?.displayName ?? "");
 
   return (
     <li
@@ -840,15 +903,29 @@ function SoloItem({
       aria-label={`${label} — ${peerName}`}
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className={"relative grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold " + tone.bubble}>
-          {initial || <Phone className="size-[18px]" />}
+        {/* Photo + status ring (v2.96); no-photo initials keep the tone tint. */}
+        <PeerAvatar
+          number={peerNum || null}
+          name={call.other?.displayName}
+          avatarUrl={call.other?.avatarUrl}
+          size={40}
+          fallbackClassName={tone.bubble + " text-sm"}
+        >
           <DirectionBadge direction={call.direction} toneName={tone.name} />
           <PresenceLed online={online} inCall={inCall} />
-        </span>
+        </PeerAvatar>
         <div className="min-w-0 flex-1 basis-48">
-          <div className={"truncate text-[15px] font-bold " + (missedIn ? tone.name : "text-foreground")}>
+          <button
+            type="button"
+            onClick={() => peerNum && openPeerProfile(peerNum)}
+            className={
+              "block max-w-full truncate text-left text-[15px] font-bold outline-none focus-visible:underline " +
+              (missedIn ? tone.name : "text-foreground")
+            }
+            aria-label={`View ${peerName}'s profile`}
+          >
             {peerName}
-          </div>
+          </button>
           <div className="truncate text-xs text-muted-foreground">
             <span className={"font-semibold " + tone.label}>{label}</span>
             {call.channel === "voice" ? " · Voice" : call.channel === "video" ? " · Video" : ""}
@@ -859,6 +936,18 @@ function SoloItem({
           </div>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
+          {/* Not saved yet → one-tap add-to-contacts (v2.96). */}
+          {!saved && onAddContact && peerNum ? (
+            <RoundAction
+              rgb="167,139,250"
+              accent="#a78bfa"
+              label="Add to contacts"
+              title="Add to contacts"
+              onClick={() => onAddContact(peerNum, call.other?.displayName ?? "")}
+            >
+              <UserPlus className="size-4" />
+            </RoundAction>
+          ) : null}
           {/* Offline peer → offer the v2.88 call-back alert right on the row. */}
           {online === false && onWatch && peerNum ? (
             <RoundAction

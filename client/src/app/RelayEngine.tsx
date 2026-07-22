@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation } from "wouter";
-import { X, Loader2, PhoneOff } from "lucide-react";
+import { X, Loader2, PhoneOff, UserPlus } from "lucide-react";
 // TYPE-ONLY import — erased at build. The call engine (relayClient + its
 // markup/CSS) is DYNAMICALLY imported inside the mount effect below (v2.88):
 // it's several hundred KB that only matters once a signed-in user is inside
@@ -279,6 +279,9 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
         }
         data-relay-engine-root="true"
       />
+      {/* In-call one-tap contact conversion (v2.96): a quiet chip for the
+          first on-call peer who isn't in your contacts yet. */}
+      {phase === "in-call" ? <InCallSaveContacts handleRef={handleRef} /> : null}
       {phase === "dialing" || phase === "in-call" ? (
         <button
           type="button"
@@ -328,5 +331,58 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
         </div>
       ) : null}
     </RelayEngineContext.Provider>
+  );
+}
+
+/**
+ * In-call one-tap contact conversion (v2.96): while a call is live, offer to
+ * save the first on-call peer who isn't in your contacts yet — a small chip
+ * top-left (the End button owns top-right), dismissible for the rest of the
+ * call. The roster comes from the engine's read-only `getRoster()` snapshot,
+ * polled every few seconds (peers can join/leave mid-call).
+ */
+function InCallSaveContacts({
+  handleRef,
+}: {
+  handleRef: React.RefObject<RelayHandle | null>;
+}) {
+  const utils = trpc.useUtils();
+  const [roster, setRoster] = useState<Array<{ pin: string; name: string }>>([]);
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    const read = () => setRoster(handleRef.current?.getRoster() ?? []);
+    read();
+    const t = setInterval(read, 3000);
+    return () => clearInterval(t);
+  }, [handleRef]);
+  const contacts = trpc.contacts.list.useQuery(undefined, { staleTime: 30_000 });
+  const upsert = trpc.contacts.upsert.useMutation({
+    onSuccess: () => utils.contacts.list.invalidate(),
+  });
+  if (!contacts.data) return null;
+  const saved = new Set(contacts.data.map((c) => c.number));
+  const candidate = roster.find((r) => !saved.has(r.pin) && !dismissed.has(r.pin));
+  if (!candidate) return null;
+  return (
+    <div className="fixed top-3 left-3 z-[70] flex items-center gap-1">
+      <button
+        type="button"
+        disabled={upsert.isPending}
+        onClick={() => upsert.mutate({ number: candidate.pin, displayName: candidate.name || undefined })}
+        className="inline-flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white shadow-lg backdrop-blur-md hover:bg-black/75 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+        aria-label={`Save ${candidate.name || candidate.pin} to contacts`}
+      >
+        <UserPlus className="size-3.5 text-[color:var(--relay-online,#06d6a0)]" />
+        {upsert.isPending ? "Saving…" : `Save ${candidate.name || candidate.pin}`}
+      </button>
+      <button
+        type="button"
+        onClick={() => setDismissed(new Set(dismissed).add(candidate.pin))}
+        aria-label="Dismiss"
+        className="grid size-6 place-items-center rounded-full bg-black/50 text-white/70 shadow backdrop-blur-md hover:text-white"
+      >
+        <X className="size-3" />
+      </button>
+    </div>
   );
 }

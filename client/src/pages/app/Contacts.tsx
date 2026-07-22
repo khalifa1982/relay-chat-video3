@@ -55,6 +55,7 @@ import {
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
+import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 
 function initialsFrom(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
@@ -361,11 +362,13 @@ export default function ContactsPage() {
 }
 
 /* ============================================================
-   One contact row: avatar + presence LED, name + PIN + verified,
-   online/last-seen, and inline actions — Voice (default tap target),
-   Video, Message, plus a 3-dot menu (Favorite / category / Block /
-   Edit / Delete). Tapping the row's main area starts a VOICE call, as
-   requested ("make them directly go to the voice").
+   One contact row: avatar (photo + status ring) + presence LED, name +
+   PIN + verified, online/last-seen, and inline actions — Message, Video,
+   Voice, plus a 3-dot menu (Favorite / category / Block / Edit / Delete).
+   v2.96 (owner spec): tapping the row's main area opens the PROFILE POPUP
+   ("click anywhere on the name … see their profile, status, and avatar —
+   in the contacts too"); the popup has one-tap Voice/Video/Message, and
+   the green circle still voice-dials directly.
    ============================================================ */
 function ContactRow({
   c,
@@ -382,6 +385,7 @@ function ContactRow({
     id: number;
     number: string;
     displayName: string | null;
+    avatarUrl: string | null;
     favourite: boolean;
     verified: boolean;
     isOnline: boolean;
@@ -410,35 +414,39 @@ function ContactRow({
         (c.blocked ? "opacity-60" : "")
       }
     >
-      {/* Main area → VOICE call (the requested default). */}
+      {/* Avatar is its own button (status ring → viewer / profile popup);
+          it sits OUTSIDE the main-area button — nested buttons are invalid. */}
+      <PeerAvatar
+        number={c.number}
+        name={c.displayName}
+        avatarUrl={c.avatarUrl}
+        size={42}
+        rounded="rounded-2xl"
+      >
+        {/* Presence LED — amber "on a call" (v2.88 busy line) / green online /
+            grey offline; hidden for a stale guest. */}
+        {!c.presenceHidden && (
+          <span
+            aria-label={c.inCall ? "On a call" : c.isOnline ? "Online" : "Offline"}
+            title={c.inCall ? "On a call right now" : undefined}
+            className={
+              "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
+              (c.inCall
+                ? "bg-amber-400"
+                : c.isOnline
+                  ? "bg-[color:var(--relay-online)]"
+                  : "bg-[color:var(--relay-offline)]")
+            }
+          />
+        )}
+      </PeerAvatar>
+      {/* Main area → the peer PROFILE POPUP (v2.96 owner spec). */}
       <button
         type="button"
-        onClick={onVoice}
-        disabled={c.blocked}
-        className="flex flex-1 min-w-0 items-center gap-3 text-left outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-lg disabled:cursor-not-allowed"
-        aria-label={`Call ${c.displayName || c.number}`}
+        onClick={() => openPeerProfile(c.number)}
+        className="flex flex-1 min-w-0 items-center gap-3 text-left outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-lg"
+        aria-label={`View ${c.displayName || c.number}'s profile`}
       >
-        <div className="relative shrink-0">
-          <div className="size-[42px] rounded-2xl bg-primary/15 grid place-items-center text-primary font-bold text-sm">
-            {initialsFrom(c.displayName || c.number)}
-          </div>
-          {/* Presence LED — amber "on a call" (v2.88 busy line) / green online /
-              grey offline; hidden for a stale guest. */}
-          {!c.presenceHidden && (
-            <span
-              aria-label={c.inCall ? "On a call" : c.isOnline ? "Online" : "Offline"}
-              title={c.inCall ? "On a call right now" : undefined}
-              className={
-                "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
-                (c.inCall
-                  ? "bg-amber-400"
-                  : c.isOnline
-                    ? "bg-[color:var(--relay-online)]"
-                    : "bg-[color:var(--relay-offline)]")
-              }
-            />
-          )}
-        </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="font-semibold truncate">{c.displayName || c.number}</span>

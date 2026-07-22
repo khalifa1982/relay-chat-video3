@@ -26,6 +26,9 @@ import {
   MoreVertical,
   Copy,
   Play,
+  Pause,
+  Download,
+  Timer,
   ChevronDown,
   Voicemail,
 } from "lucide-react";
@@ -46,6 +49,7 @@ import { VerifiedBadge } from "@/app/VerifiedBadge";
 import { previewOf } from "@/app/messagePreview";
 import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
 import { StatusStrip } from "./Status";
+import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
 import { linkify } from "@/lib/linkify";
@@ -318,12 +322,10 @@ export default function MessagesPage() {
                               (isActive ? "bg-muted/40" : "hover:bg-muted/30")
                             }
                           >
-                            <button
-                              type="button"
-                              onClick={() => setLocation(`/app/messages?c=${t.conversationId}`)}
-                              className="flex-1 min-w-0 flex items-center gap-3 text-left"
-                            >
-                              <div className="relative shrink-0">
+                            {/* The avatar sits OUTSIDE the open-thread button —
+                                it's its own button (status/profile) and nested
+                                buttons are invalid HTML. */}
+                            <div className="relative shrink-0">
                                 {t.kind === "group" ? (
                                   <div
                                     className="size-[42px] rounded-full grid place-items-center"
@@ -341,10 +343,14 @@ export default function MessagesPage() {
                                     <StickyNote className="size-5" />
                                   </div>
                                 ) : (
-                                  <>
-                                    <div className="size-[42px] rounded-full bg-primary/15 grid place-items-center text-primary font-bold text-sm">
-                                      {initialsFrom(t.peerDisplayName || t.peerNumber)}
-                                    </div>
+                                  /* Real profile photo + status ring (v2.96);
+                                     tapping opens their status/profile. */
+                                  <PeerAvatar
+                                    number={t.peerNumber}
+                                    name={t.peerDisplayName}
+                                    avatarUrl={t.peerAvatarUrl}
+                                    size={42}
+                                  >
                                     {/* Presence LED: green = online, grey = offline
                                         (red used to read as "busy/error" — v2.88). */}
                                     <span
@@ -356,9 +362,14 @@ export default function MessagesPage() {
                                           : "bg-[color:var(--relay-offline)]")
                                       }
                                     />
-                                  </>
+                                  </PeerAvatar>
                                 )}
                               </div>
+                            <button
+                              type="button"
+                              onClick={() => setLocation(`/app/messages?c=${t.conversationId}`)}
+                              className="flex-1 min-w-0 flex items-center gap-3 text-left"
+                            >
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center justify-between gap-2">
                                   <div className="font-semibold text-[14.5px] truncate flex items-center gap-1.5">
@@ -532,6 +543,65 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       utils.messages.threads.invalidate();
     },
   });
+
+  /* ── self-destructing messages (v2.96) ──────────────────────────
+   * Composer setting: off / view-once / 5s / 10s / 30s → sent as
+   * meta.expire. Opening one as the RECIPIENT burns it server-side for
+   * everyone (messages.consumeExpiring nulls the row + deletes the
+   * attachment); the reader keeps a LOCAL copy on screen for the countdown
+   * (or, for view-once, until they leave the thread). */
+  type Msg = NonNullable<typeof messagesQuery.data>[number];
+  const [expire, setExpire] = useState<null | "once" | 5 | 10 | 30>(null);
+  const [revealed, setRevealed] = useState<
+    Map<number, { body: string | null; attachment: Msg["attachment"]; until: number | null }>
+  >(() => new Map());
+  useEffect(() => {
+    // Reveals are per-thread; switching conversations drops them.
+    setRevealed(new Map());
+    setExpire(null);
+  }, [conversationId]);
+  const consumeExpiring = trpc.messages.consumeExpiring.useMutation({
+    onSuccess: () => {
+      utils.messages.list.invalidate({ conversationId });
+      utils.messages.threads.invalidate();
+    },
+  });
+  // Countdown ticker: refresh the "Disappears in Ns" chip and purge timed
+  // reveals whose window closed (the burned placeholder takes over).
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (!Array.from(revealed.values()).some((r) => r.until != null)) return;
+    const t = setInterval(() => {
+      const now = Date.now();
+      setRevealed((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+        next.forEach((v, k) => {
+          if (v.until != null && v.until <= now) {
+            next.delete(k);
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+      forceTick((x) => x + 1);
+    }, 300);
+    return () => clearInterval(t);
+  }, [revealed]);
+  function revealExpiring(m: Msg) {
+    const exp = m.meta as { expire?: "once" | 5 | 10 | 30 } | null;
+    const mode = exp?.expire;
+    if (mode == null) return;
+    const until = mode === "once" ? null : Date.now() + mode * 1000;
+    setRevealed((prev) => {
+      const next = new Map(prev);
+      next.set(m.id, { body: m.body ?? null, attachment: m.attachment ?? null, until });
+      return next;
+    });
+    // Burn immediately — the content is destroyed for BOTH sides; what the
+    // reader sees from here on is the local copy captured above.
+    consumeExpiring.mutate({ messageId: m.id });
+  }
   const removeMutation = trpc.messages.remove.useMutation({
     // Optimistically drop the message from the visible list the instant the user
     // unsends, so it doesn't linger (or reappear on the next 2s poll) while the
@@ -619,8 +689,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     if (me && identityId === me.id) return "You";
     return nameById.get(identityId) || thread?.peerDisplayName || "Them";
   }
-  function previewOf(msg: { body: string | null; kind: string } | undefined): string {
+  function previewOf(msg: { body: string | null; kind: string; meta?: unknown } | undefined): string {
     if (!msg) return "Message";
+    // Never quote a self-destructing message's content (v2.96).
+    if ((msg.meta as { expire?: unknown } | null)?.expire != null) return "⏱ Disappearing message";
     if (msg.body) return msg.body.length > 80 ? msg.body.slice(0, 80) + "…" : msg.body;
     return msg.kind === "image" ? "📷 Photo"
       : msg.kind === "video" ? "🎬 Video"
@@ -770,6 +842,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             ? "audio"
             : "file"
       : "text";
+    const exp = expire;
     // Clear the composer immediately (snappy), but if the send FAILS restore the
     // text/reply/attachment so the message is never silently lost — the user can
     // just tap send again. (Prevents the "I typed a message and it vanished" bug.)
@@ -777,6 +850,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     setReplyingToState(null);
     setPendingUpload(null);
     setEmojiOpen(false);
+    setExpire(null); // per-send setting — never silently sticks to the next message
     try {
       await sendMutation.mutateAsync({
         conversationId,
@@ -784,11 +858,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         body: body || null,
         attachmentId: upload?.id ?? null,
         replyToId: reply?.id ?? null,
+        meta: exp != null ? { expire: exp } : undefined,
       });
     } catch {
       setText(body);
       if (reply) setReplyingToState(reply);
       if (upload) setPendingUpload(upload);
+      if (exp != null) setExpire(exp);
       toast.error("Message not sent — check your connection and tap send again.");
     }
   }
@@ -853,11 +929,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     setUploading(true);
     try {
       const json = await uploadAttachment(blob, { filename, mimeType: blob.type, durationMs });
+      const exp = expire;
+      setExpire(null);
       sendMutation.mutate({
         conversationId,
         kind: "audio",
         body: null,
         attachmentId: json.id,
+        // Voice notes honor the composer's disappearing setting too (v2.96).
+        meta: exp != null ? { expire: exp } : undefined,
       });
     } finally {
       setUploading(false);
@@ -890,10 +970,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               <Users className="size-4.5" />
             </div>
           ) : (
-            <>
-              <div className="size-9 rounded-full bg-primary/15 grid place-items-center text-primary font-bold text-[13px]">
-                {initialsFrom(thread?.peerDisplayName || thread?.peerNumber || "??")}
-              </div>
+            /* Real profile photo + status ring (v2.96); tap = status/profile. */
+            <PeerAvatar
+              number={thread?.peerNumber}
+              name={thread?.peerDisplayName}
+              avatarUrl={thread?.peerAvatarUrl}
+              size={36}
+            >
               {/* Presence LED: green = online, grey = offline (v2.88 —
                   red used to read as "busy/error"). */}
               <span
@@ -905,10 +988,25 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     : "bg-[color:var(--relay-offline)]")
                 }
               />
-            </>
+            </PeerAvatar>
           )}
         </div>
-        <div className="flex-1 min-w-0 leading-tight">
+        <div
+          className="flex-1 min-w-0 leading-tight"
+          role={!isGroup && thread?.peerNumber ? "button" : undefined}
+          tabIndex={!isGroup && thread?.peerNumber ? 0 : undefined}
+          onClick={() => {
+            // Tapping the NAME opens the peer's profile popup (v2.96 spec:
+            // "click anywhere on the name … see their profile").
+            if (!isGroup && thread?.peerNumber) openPeerProfile(thread.peerNumber);
+          }}
+          onKeyDown={(e) => {
+            if (!isGroup && thread?.peerNumber && (e.key === "Enter" || e.key === " ")) {
+              e.preventDefault();
+              openPeerProfile(thread.peerNumber);
+            }
+          }}
+        >
           <div className="font-semibold text-[15px] truncate flex items-center gap-1.5">
             <span className="truncate">{thread?.peerDisplayName || thread?.peerNumber || "Conversation"}</span>
             {thread?.peerVerified && <VerifiedBadge size={15} />}
@@ -1035,6 +1133,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             thumbUrl={m.attachment.thumbUrl ?? null}
                             width={m.attachment.width ?? null}
                             height={m.attachment.height ?? null}
+                            mine={mine}
                             onOpen={setLightbox}
                           />
                         )}
@@ -1170,20 +1269,94 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       <Voicemail className="size-3.5" /> Voicemail
                     </div>
                   )}
-                  {m.attachment && (
-                    <AttachmentView
-                      mimeType={m.attachment.mimeType}
-                      url={m.attachment.url}
-                      filename={m.attachment.filename ?? undefined}
-                      thumbUrl={m.attachment.thumbUrl ?? null}
-                      width={m.attachment.width ?? null}
-                      height={m.attachment.height ?? null}
-                      onOpen={setLightbox}
-                    />
-                  )}
-                  {m.body && (
-                    <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body)}</div>
-                  )}
+                  {(() => {
+                    /* Self-destruct (v2.96): meta.expire = "once" | 5 | 10 | 30.
+                       Recipient sees a locked card until they tap; opening burns
+                       the row server-side and shows a LOCAL copy for the
+                       countdown (view-once: until they leave the thread). */
+                    const exp = m.meta as { expire?: "once" | 5 | 10 | 30; consumedAt?: number } | null;
+                    const expiring = exp?.expire != null;
+                    const burned = expiring && (exp?.consumedAt != null || (!m.body && !m.attachment));
+                    const copy = expiring ? revealed.get(m.id) : undefined;
+                    const chip = (label: string) => (
+                      <div
+                        className={
+                          "mt-1 flex items-center gap-1 text-[10px] font-semibold " +
+                          (mine ? "text-white/75" : "text-[#a78bfa]")
+                        }
+                      >
+                        <Timer className="size-3" /> {label}
+                      </div>
+                    );
+                    const content = (body: string | null, att: Msg["attachment"]) => (
+                      <>
+                        {att && (
+                          <AttachmentView
+                            mimeType={att.mimeType}
+                            url={att.url}
+                            filename={att.filename ?? undefined}
+                            thumbUrl={att.thumbUrl ?? null}
+                            width={att.width ?? null}
+                            height={att.height ?? null}
+                            mine={mine}
+                            onOpen={setLightbox}
+                          />
+                        )}
+                        {body && <div className="whitespace-pre-wrap leading-relaxed">{linkify(body)}</div>}
+                      </>
+                    );
+                    if (!expiring) return content(m.body, m.attachment);
+                    if (copy) {
+                      const left =
+                        copy.until != null ? Math.max(0, Math.ceil((copy.until - Date.now()) / 1000)) : null;
+                      return (
+                        <>
+                          {content(copy.body, copy.attachment)}
+                          {chip(left != null ? `Disappears in ${left}s` : "View once — gone when you leave")}
+                        </>
+                      );
+                    }
+                    if (burned) {
+                      return (
+                        <div
+                          className={
+                            "flex items-center gap-1.5 py-0.5 text-[12.5px] italic " +
+                            (mine ? "text-white/75" : "text-muted-foreground")
+                          }
+                        >
+                          <Timer className="size-3.5 shrink-0" />
+                          {mine ? "Viewed — this message has disappeared" : "This message has disappeared"}
+                        </div>
+                      );
+                    }
+                    if (mine) {
+                      return (
+                        <>
+                          {content(m.body, m.attachment)}
+                          {chip(exp!.expire === "once" ? "View once" : `Disappears ${exp!.expire}s after opening`)}
+                        </>
+                      );
+                    }
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => revealExpiring(m)}
+                        className="my-0.5 flex w-56 max-w-full items-center gap-2.5 rounded-xl bg-[#a78bfa]/10 px-2.5 py-2 text-left transition hover:bg-[#a78bfa]/20 active:scale-[0.98]"
+                      >
+                        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#a78bfa]/15 text-[#a78bfa]">
+                          <Timer className="size-4" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[13px] font-semibold">Tap to view</span>
+                          <span className="block text-[11px] text-muted-foreground">
+                            {exp!.expire === "once"
+                              ? "Can be viewed once, then it disappears"
+                              : `Disappears ${exp!.expire}s after you open it`}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })()}
                   {/* WhatsApp-style meta: tiny time + ticks, tucked bottom-right. */}
                   <div
                     className={
@@ -1296,6 +1469,24 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             ))}
           </div>
         )}
+        {expire !== null && (
+          <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-[#a78bfa]/10 border-l-2 border-[#a78bfa] text-sm">
+            <Timer className="size-4 shrink-0 text-[#a78bfa]" />
+            <span className="flex-1 text-xs text-muted-foreground">
+              {expire === "once"
+                ? "Disappearing: they can view this ONCE — then it's gone for both of you."
+                : `Disappearing: gone ${expire} seconds after they open it.`}
+            </span>
+            <button
+              type="button"
+              onClick={() => setExpire(null)}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Turn off disappearing"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        )}
         <div className="flex items-end gap-1.5">
           <Button
             type="button"
@@ -1323,6 +1514,33 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             aria-label="Attach"
           >
             <Paperclip className="size-5" />
+          </Button>
+          {/* Self-destruct toggle (v2.96): off → view-once → 5s → 10s → 30s.
+              Applies to the NEXT send (text, media, or voice note). */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() =>
+              setExpire((v) =>
+                v === null ? "once" : v === "once" ? 5 : v === 5 ? 10 : v === 10 ? 30 : null
+              )
+            }
+            aria-label={
+              expire === null
+                ? "Make the next message disappear"
+                : `Disappearing: ${expire === "once" ? "view once" : `${expire} seconds`}`
+            }
+            title="Disappearing message: tap to cycle off · view-once · 5s · 10s · 30s"
+            className={expire !== null ? "bg-[#a78bfa]/15 text-[#a78bfa] hover:text-[#a78bfa]" : ""}
+          >
+            {expire === null ? (
+              <Timer className="size-5" />
+            ) : (
+              <span className="text-[11px] font-extrabold leading-none">
+                {expire === "once" ? "1×" : `${expire}s`}
+              </span>
+            )}
           </Button>
           <input
             ref={imageRef}
@@ -1524,6 +1742,7 @@ function AttachmentView({
   thumbUrl,
   width,
   height,
+  mine = false,
   onOpen,
 }: {
   mimeType: string;
@@ -1535,9 +1754,15 @@ function AttachmentView({
    *  the bubble reserves its box before the bytes arrive (no layout shift). */
   width?: number | null;
   height?: number | null;
+  /** Own-bubble styling (white-on-orange) vs received (theme tokens). */
+  mine?: boolean;
   onOpen?: (m: { url: string; type: "image" | "video"; name?: string }) => void;
 }) {
+  // A thumb/image that 404s/403s used to render as a broken white rectangle —
+  // fall back to the tappable file card instead (v2.96).
+  const [imgBroken, setImgBroken] = useState(false);
   if (mimeType.startsWith("image/")) {
+    if (imgBroken) return <FileCard url={url} filename={filename || "Image"} mine={mine} />;
     // Thumbnail in the bubble (falls back to the full url for legacy/GIF
     // rows) → click opens the FULL-SIZE image in the in-app lightbox.
     const hasDims = typeof width === "number" && width > 0 && typeof height === "number" && height > 0;
@@ -1554,8 +1779,9 @@ function AttachmentView({
           width={hasDims ? width! : undefined}
           height={hasDims ? height! : undefined}
           style={hasDims ? { aspectRatio: `${width} / ${height}` } : undefined}
-          className="rounded-xl max-h-64 w-auto max-w-full object-cover hover:opacity-90 transition-opacity"
+          className="rounded-xl max-h-64 w-auto max-w-full object-cover bg-black/20 hover:opacity-90 transition-opacity"
           loading="lazy"
+          onError={() => setImgBroken(true)}
         />
       </button>
     );
@@ -1568,9 +1794,9 @@ function AttachmentView({
         className="relative block mb-1 group/vid"
         aria-label="Play video"
       >
-        <video src={url} className="rounded-xl max-h-64 w-auto" muted preload="metadata" />
+        <video src={url} className="rounded-xl max-h-64 w-auto bg-black/40" muted preload="metadata" />
         <span className="absolute inset-0 grid place-items-center">
-          <span className="grid size-12 place-items-center rounded-full bg-black/55 text-white">
+          <span className="grid size-12 place-items-center rounded-full bg-black/55 text-white shadow-lg">
             <Play className="size-6 translate-x-0.5" />
           </span>
         </span>
@@ -1578,16 +1804,162 @@ function AttachmentView({
     );
   }
   if (mimeType.startsWith("audio/")) {
-    return <audio src={url} controls className="my-1 w-full max-w-xs" />;
+    return <VoiceNotePlayer url={url} mine={mine} />;
   }
+  return <FileCard url={url} filename={filename} mine={mine} />;
+}
+
+function fmtClock(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) return "0:00";
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/**
+ * Custom voice-note / audio player (v2.96) — replaces the browser's default
+ * `<audio controls>` (a mismatched white pill on our dark bubbles) with an
+ * inline WhatsApp-style player: round play/pause, a seekable progress track
+ * with a live clock, and a download affordance. The HTMLAudioElement is
+ * created lazily on first play so a thread of 50 voice notes costs nothing.
+ */
+function VoiceNotePlayer({ url, mine }: { url: string; mine: boolean }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [dur, setDur] = useState(0);
+  const [cur, setCur] = useState(0);
+
+  // Stop playback when the bubble unmounts (thread switch / unsend).
+  useEffect(() => () => audioRef.current?.pause(), []);
+
+  const ensure = (): HTMLAudioElement => {
+    if (audioRef.current) return audioRef.current;
+    const a = new Audio(url);
+    a.preload = "metadata";
+    a.addEventListener("loadedmetadata", () => {
+      if (a.duration === Infinity) {
+        // MediaRecorder blobs report Infinity until seeked past the end —
+        // the standard workaround: jump far ahead, read the real duration.
+        const fix = () => {
+          a.removeEventListener("timeupdate", fix);
+          setDur(a.duration);
+          a.currentTime = 0;
+        };
+        a.addEventListener("timeupdate", fix);
+        a.currentTime = Number.MAX_SAFE_INTEGER;
+      } else {
+        setDur(a.duration || 0);
+      }
+    });
+    a.addEventListener("timeupdate", () => setCur(a.currentTime || 0));
+    a.addEventListener("ended", () => setCur(0));
+    a.addEventListener("pause", () => setPlaying(false));
+    a.addEventListener("play", () => setPlaying(true));
+    audioRef.current = a;
+    return a;
+  };
+
+  const toggle = () => {
+    const a = ensure();
+    if (a.paused) void a.play().catch(() => {});
+    else a.pause();
+  };
+
+  const seek = (e: React.MouseEvent<HTMLDivElement>) => {
+    const a = ensure();
+    if (!Number.isFinite(dur) || dur <= 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    a.currentTime = frac * dur;
+    setCur(a.currentTime);
+  };
+
+  const frac = dur > 0 && Number.isFinite(dur) ? Math.min(1, cur / dur) : 0;
+  const sub = mine ? "text-white/70" : "text-muted-foreground";
+  const track = mine ? "bg-white/25" : "bg-foreground/15";
+  const fill = mine ? "bg-white" : "bg-[color:var(--relay-online,#06d6a0)]";
+
+  return (
+    <div className={"my-1 flex w-60 max-w-full items-center gap-2.5 " + (mine ? "text-white" : "text-foreground")}>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={playing ? "Pause" : "Play voice note"}
+        className={
+          "grid size-9 shrink-0 place-items-center rounded-full active:scale-95 transition-transform " +
+          (mine
+            ? "bg-white/20 text-white"
+            : "bg-[color:var(--relay-online,#06d6a0)]/15 text-[color:var(--relay-online,#06d6a0)]")
+        }
+      >
+        {playing ? <Pause className="size-4" /> : <Play className="size-4 translate-x-[1px]" />}
+      </button>
+      <div className="min-w-0 flex-1">
+        <div
+          role="slider"
+          aria-label="Seek"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(dur) || 0}
+          aria-valuenow={Math.round(cur)}
+          onClick={seek}
+          className={"relative h-1.5 cursor-pointer rounded-full " + track}
+        >
+          <div className={"absolute inset-y-0 left-0 rounded-full " + fill} style={{ width: `${frac * 100}%` }} />
+          <div
+            className={"absolute top-1/2 size-3 -translate-y-1/2 rounded-full shadow " + fill}
+            style={{ left: `calc(${frac * 100}% - 6px)` }}
+          />
+        </div>
+        <div className={"mt-1 flex items-center justify-between font-mono text-[10px] " + sub}>
+          <span>{fmtClock(cur)}</span>
+          <span>{dur > 0 && Number.isFinite(dur) ? fmtClock(dur) : "· · ·"}</span>
+        </div>
+      </div>
+      <a
+        href={url}
+        download={true}
+        target="_blank"
+        rel="noreferrer"
+        aria-label="Download audio"
+        className={
+          "grid size-7 shrink-0 place-items-center rounded-full transition hover:brightness-110 " +
+          (mine ? "bg-white/15" : "bg-foreground/10")
+        }
+      >
+        <Download className="size-3.5" />
+      </a>
+    </div>
+  );
+}
+
+/** Styled generic-attachment card (v2.96) — replaces the bare underlined
+ *  link: icon tile + filename + an explicit open/download affordance. */
+function FileCard({ url, filename, mine }: { url: string; filename?: string; mine: boolean }) {
   return (
     <a
       href={url}
       target="_blank"
       rel="noreferrer"
-      className="inline-flex items-center gap-2 underline underline-offset-2 mb-1"
+      className={
+        "my-1 flex w-60 max-w-full items-center gap-2.5 rounded-xl px-2.5 py-2 transition hover:brightness-110 " +
+        (mine ? "bg-white/15 text-white" : "bg-foreground/10 text-foreground")
+      }
     >
-      <Paperclip className="size-4" /> {filename || "attachment"}
+      <span
+        className={
+          "grid size-9 shrink-0 place-items-center rounded-lg " +
+          (mine ? "bg-white/20 text-white" : "bg-primary/15 text-primary")
+        }
+      >
+        <Paperclip className="size-4" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-semibold">{filename || "Attachment"}</span>
+        <span className={"block text-[10.5px] " + (mine ? "text-white/70" : "text-muted-foreground")}>
+          Tap to open or download
+        </span>
+      </span>
+      <Download className="size-4 shrink-0 opacity-70" />
     </a>
   );
 }
@@ -1618,6 +1990,18 @@ function MediaLightbox({
       >
         <X className="size-5" />
       </button>
+      {/* Download the full-size original (v2.96). */}
+      <a
+        href={media.url}
+        download={media.name || true}
+        target="_blank"
+        rel="noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        aria-label="Download"
+        className="absolute right-16 top-4 grid size-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
+      >
+        <Download className="size-5" />
+      </a>
       <div className="max-h-[90vh] max-w-[92vw]" onClick={(e) => e.stopPropagation()}>
         {media.type === "image" ? (
           <img src={media.url} alt={media.name || "image"} className="max-h-[90vh] max-w-[92vw] rounded-lg object-contain" />

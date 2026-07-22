@@ -24,6 +24,8 @@ type V2Event =
     }
   /** Call-back alert (v2.88): a number the user watched is back online. */
   | { kind: "watched_online"; number: string; name: string }
+  /** Status realtime (v2.96): someone in your feed posted/removed a status. */
+  | { kind: "status"; number: string; name: string; removed?: boolean }
   | { kind: "ping" };
 
 /* ── SSE-gated poll demotion (v2.88) ─────────────────────────────
@@ -229,6 +231,34 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
             // Their presence LEDs are stale by definition — refresh them.
             utils.contacts.list.invalidate().catch(() => {});
             utils.directory.lookup.invalidate({ number: payload.number }).catch(() => {});
+            break;
+          }
+          case "status": {
+            // Status realtime (v2.96): refresh the feed so rings/strip update
+            // instantly everywhere; a QUIET toast (no sound, no notification)
+            // announces a new post — removal just refreshes.
+            utils.status.feed.invalidate().catch(() => {});
+            if (!payload.removed) {
+              const who = payload.name || payload.number;
+              void import("sonner")
+                .then(({ toast }) =>
+                  toast(`${who} posted a status`, {
+                    description: "Tap to view it now.",
+                    action: {
+                      label: "View",
+                      onClick: () => {
+                        // Deep-open the global status viewer from anywhere.
+                        window.dispatchEvent(
+                          new CustomEvent("relay:open-status", {
+                            detail: { number: payload.number },
+                          })
+                        );
+                      },
+                    },
+                  })
+                )
+                .catch(() => {});
+            }
             break;
           }
         }

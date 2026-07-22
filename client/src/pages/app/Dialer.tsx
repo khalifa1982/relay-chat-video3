@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
+import { openPeerProfile } from "@/app/PeerOverlays";
 import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useRelayEngine } from "@/app/RelayEngine";
@@ -486,9 +487,16 @@ export default function DialerPage() {
                       });
                       return (
                         <span>
-                          <span className="font-semibold text-foreground">
+                          {/* Name → profile popup (v2.96): see who it is BEFORE
+                              dialing — avatar, status, one-tap add-to-contacts. */}
+                          <button
+                            type="button"
+                            onClick={() => openPeerProfile(previewIdentity.number)}
+                            className="font-semibold text-foreground underline-offset-2 hover:underline"
+                            aria-label={`View ${previewIdentity.displayName}'s profile`}
+                          >
                             {previewIdentity.displayName}
-                          </span>
+                          </button>
                           {previewIdentity.verified && <VerifiedBadge size={13} className="ml-1" />}
                           {" · "}
                           <span

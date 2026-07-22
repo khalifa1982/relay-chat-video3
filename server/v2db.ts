@@ -1355,7 +1355,17 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
     latestMessageByConvo: new Map(
       Array.from(latestByConvo.entries()).map(([k, m]) => [
         k,
-        m ? { body: m.body ?? null, kind: m.kind } : null,
+        m
+          ? {
+              // Self-destructing messages (v2.96) must NOT leak their text
+              // into the thread list — the bubble is locked until tapped.
+              body:
+                (m.meta as { expire?: unknown } | null)?.expire != null
+                  ? null
+                  : (m.body ?? null),
+              kind: m.kind,
+            }
+          : null,
       ])
     ),
   });
@@ -1440,7 +1450,9 @@ export async function searchMessages(input: {
     )
     .orderBy(desc(messages.id))
     .limit(limit);
-  return rows;
+  // Self-destructing messages (v2.96) never surface through search — their
+  // content is locked behind the tap-to-view burn.
+  return rows.filter((r) => (r.meta as { expire?: unknown } | null)?.expire == null);
 }
 
 export async function sendMessage(input: {
@@ -1582,6 +1594,52 @@ export async function deleteMessage(input: {
     .set({ deletedAt: new Date(), body: null, attachmentId: null })
     .where(and(eq(messages.id, input.messageId), eq(messages.senderIdentityId, input.identityId)));
   return row.conversationId;
+}
+
+/**
+ * Self-destruct (v2.96): a RECIPIENT opened an expiring message (view-once or
+ * countdown) and it burned — destroy the content FOR EVERYONE. Only a
+ * conversation participant who is NOT the sender can consume, exactly once.
+ * The row keeps its meta (`expire` + a new `consumedAt`) so both sides render
+ * an honest "disappeared" placeholder, and the linked attachment ROW is
+ * deleted so the storage key stops authorizing (same access-layer honesty as
+ * status media). Returns the conversation + roster for the SSE fan-out.
+ */
+export async function consumeExpiringMessage(input: {
+  messageId: number;
+  identityId: number;
+}): Promise<{ conversationId: number; participantIds: number[] } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.id, input.messageId))
+    .limit(1);
+  if (!row || row.deletedAt) return null;
+  const meta = (row.meta ?? null) as { expire?: unknown; consumedAt?: unknown } | null;
+  if (!meta || meta.expire == null || meta.consumedAt != null) return null;
+  if (row.senderIdentityId === input.identityId) return null;
+  const pids = await getConversationParticipantIds(row.conversationId);
+  if (!pids.includes(input.identityId)) return null;
+  await db
+    .update(messages)
+    .set({
+      body: null,
+      attachmentId: null,
+      meta: { ...meta, consumedAt: Date.now() },
+    })
+    .where(eq(messages.id, input.messageId));
+  if (row.attachmentId != null) {
+    // Revoke media access, not just the link — without this the storage key
+    // stays fetchable by participants forever.
+    try {
+      await db.delete(attachments).where(eq(attachments.id, row.attachmentId));
+    } catch {
+      /* content is already nulled; the orphan row is a cost, not a leak */
+    }
+  }
+  return { conversationId: row.conversationId, participantIds: pids };
 }
 
 export async function markThreadRead(input: { conversationId: number; identityId: number }) {
@@ -2017,6 +2075,36 @@ export async function countActiveStatuses(ownerId: number): Promise<number> {
     .from(statuses)
     .where(and(eq(statuses.identityId, ownerId), gt(statuses.expiresAt, new Date())));
   return Number(row?.c ?? 0);
+}
+
+/**
+ * The REVERSE of the feed query: identity ids of everyone whose feed includes
+ * `ownerId`'s statuses — i.e. everyone who SAVED the owner's number (non-blocked)
+ * and whom the owner hasn't blocked back. Used to fan out realtime "status"
+ * events the moment a status is posted or removed.
+ */
+export async function getStatusAudienceIds(
+  ownerId: number,
+  ownerNumber: string,
+): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const savers = await db
+    .select({ ownerId: contacts.ownerId, blocked: contacts.blocked })
+    .from(contacts)
+    .where(eq(contacts.number, ownerNumber));
+  const candidateIds = Array.from(
+    new Set(savers.filter((r) => r.blocked !== true).map((r) => r.ownerId)),
+  ).filter((id) => id !== ownerId);
+  if (candidateIds.length === 0) return [];
+  // A block hides statuses BOTH ways — drop anyone the owner blocked.
+  const ownerBlocks = await db
+    .select({ number: contacts.number })
+    .from(contacts)
+    .where(and(eq(contacts.ownerId, ownerId), eq(contacts.blocked, true)));
+  const blockedNumbers = new Set(ownerBlocks.map((r) => r.number));
+  const idents = await getIdentitiesByIds(candidateIds);
+  return idents.filter((i) => !blockedNumbers.has(i.number)).map((i) => i.id);
 }
 
 /** Of `ownerIds`, which have BLOCKED `number` (so hide their statuses from it). */

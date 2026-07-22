@@ -4263,3 +4263,56 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       width (flex-1 basis-48, truncating status line), and when the actions don't fit they
       drop to a second right-aligned line (flex-wrap + ml-auto). Desktop renders exactly as
       before (single line — plenty of room). 1084 tests green.
+
+## v2.96.0 — Peer identity everywhere + realtime status + media previews + self-destruct (owner spec, 3 screenshots) (2026-07-22)
+- [x] AVATAR PROPAGATION FIX (the reported bug): a changed profile photo never reached anyone.
+      Two causes: contacts.list served the FROZEN save-time avatar copy (now merged with the
+      live identity avatar — `liveAvatarByNumber.get(number) ?? saved`), and the client never
+      rendered `peerAvatarUrl` at all (thread rows / chat header / contacts / history drew
+      initials discs). conferenceHistory participants now carry live avatarUrls too (one
+      batched getIdentitiesByNumbers).
+- [x] NEW `client/src/app/PeerOverlays.tsx` — the batch's core: `PeerAvatar` (photo or initials
+      disc, optional `fallbackClassName` so History keeps its red/green/blue tone tints, STATUS
+      RING around it: bright gradient = unseen story, subtle = seen; click opens the status
+      viewer if they have one, else the profile popup), `openPeerStatus`/`openPeerProfile`
+      window-event openers usable from ANY screen, and `PeerOverlaysHost` (mounted once in
+      AppShell) hosting the global StatusViewer + the PROFILE POPUP (avatar, name + verified,
+      formatted number, presence line, one-tap Message / Voice / Video, Add-to-contacts,
+      View status).
+- [x] Wired everywhere: Messages thread rows + conversation header (name tap → profile),
+      Contacts rows (main tap → profile popup — supersedes the old tap-to-voice; the green
+      circle still dials), History solo + 1:1 conference rows (avatar in the tone disc, name
+      tap → profile), Dialer 6-digit preview (name tap → profile).
+- [x] STATUS REALTIME: new `getStatusAudienceIds` (v2db — the REVERSE of the feed rule: everyone
+      who saved me, non-blocked both ways) feeds a new `"status"` SSE event kind published on
+      status.post AND status.remove (removed:true refreshes silently). useRealtime invalidates
+      status.feed + shows a QUIET toast ("X posted a status" + View action that deep-opens the
+      viewer — no sound, no notification). The Messages tab wears a teal unseen-status dot
+      (desktop sidebar + mobile bar, distinct from the unread-count badge).
+- [x] QUICK-ADD CONTACTS (any guest/user combination — a contact is just a saved number):
+      one-tap UserPlus on History rows (hidden when already saved, savedNumbers from
+      contacts.list), in the profile popup, on the Dialer preview (pre-existing), and IN-CALL:
+      relayClient gains a read-only `getRoster()` (mesh peers + SFU participants) and
+      RelayEngine renders an `InCallSaveContacts` chip (top-left, dismissible per call) for the
+      first on-call peer not in contacts.
+- [x] MEDIA PREVIEW OVERHAUL (Messages bubbles): custom dark `VoiceNotePlayer` (round
+      play/pause, seekable track + live clock, download; lazy HTMLAudioElement; handles the
+      MediaRecorder Infinity-duration quirk) replaces the native white `<audio controls>` blob;
+      `FileCard` (icon tile + filename + "tap to open or download") replaces the bare underline
+      link; broken images fall back to the card instead of a white rectangle (onError), images
+      get a dark loading backdrop; the fullscreen lightbox gains a Download button.
+- [x] SELF-DESTRUCTING MESSAGES: composer Timer toggle cycles off → view-once (1×) → 5s → 10s →
+      30s (per-send, resets after sending; a violet banner explains the active mode; applies to
+      text, media, AND voice notes) → sent as `meta.expire` ("once"|5|10|30 — the meta zod
+      shape stays CLOSED). Recipient sees a locked "Tap to view" card; opening BURNS the row
+      for everyone via `messages.consumeExpiring` → `consumeExpiringMessage` (participant-only,
+      non-sender, exactly once: body nulled, attachment ROW deleted so the storage key stops
+      authorizing — same access-layer honesty as status media) and fans a message event to all
+      participants. The reader keeps a LOCAL copy for the countdown ("Disappears in Ns", 300ms
+      ticker) or, for view-once, until leaving the thread; both sides then render an honest
+      "This message has disappeared" placeholder. Expiring content NEVER leaks: thread-list
+      previews null it server-side, conversation search filters it out, reply quotes show
+      "⏱ Disappearing message".
+- [x] `server/peerIdentityBatch.test.ts` (30 pins across all four legs) + Contacts.test.ts pin
+      updated to the new row-tap behavior. Suite 1114 passed / 1 skipped; `pnpm check` + build
+      green.

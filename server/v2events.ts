@@ -48,6 +48,9 @@ export type V2Event =
     }
   /** Call-back alert (v2.88): a number the user watched is back online. */
   | { kind: "watched_online"; number: string; name: string }
+  /** Status realtime (v2.96): someone in your feed posted (or removed) a
+   *  status — refresh rings/feed instantly; toast only when `removed` unset. */
+  | { kind: "status"; number: string; name: string; removed?: boolean }
   | { kind: "ping" };
 
 function writeEvent(client: SseClient, ev: V2Event) {

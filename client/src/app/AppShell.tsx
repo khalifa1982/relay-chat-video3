@@ -25,6 +25,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { MissedCallToast, NotificationBell } from "./MissedCalls";
 import { PushBanner } from "./PushBanner";
 import { CallHealthBanner } from "./CallHealthBanner";
+import { PeerOverlaysHost } from "./PeerOverlays";
 import { unlockAudio } from "./notifications";
 
 /**
@@ -206,6 +207,19 @@ function Inner({ children }: { children: React.ReactNode }) {
     [threads.data]
   );
 
+  // Unseen-status dot (v2.96): a contact posted a story I haven't seen —
+  // light a quiet teal dot on the Messages tab (the status strip lives at
+  // its top). SSE "status" events invalidate this feed, so it's realtime.
+  const statusFeed = trpc.status.feed.useQuery(undefined, {
+    enabled: !!me,
+    staleTime: 20_000,
+    refetchOnWindowFocus: true,
+  });
+  const hasUnseenStatus = useMemo(
+    () => (statusFeed.data?.groups ?? []).some((g) => !g.owner.isMe && g.hasUnseen),
+    [statusFeed.data]
+  );
+
   // Missed calls that arrived while away (guest or registered). Drives the
   // landing popup + the History / bell badges.
   const missed = trpc.calls.missedSummary.useQuery(undefined, {
@@ -351,6 +365,12 @@ function Inner({ children }: { children: React.ReactNode }) {
               >
                 <Icon className="size-5 shrink-0" strokeWidth={active ? 2.3 : 2} />
                 <span className="flex-1">{tab.label}</span>
+                {tab.key === "messages" && hasUnseenStatus && (
+                  <span
+                    className="size-2 rounded-full bg-gradient-to-tr from-[#06d6a0] to-[#0ea5e9]"
+                    title="New status updates"
+                  />
+                )}
                 {tab.key === "messages" && unreadTotal > 0 && (
                   <span className="inline-flex min-w-5 h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-xs items-center justify-center font-bold">
                     {unreadTotal > 99 ? "99+" : unreadTotal}
@@ -621,6 +641,12 @@ function Inner({ children }: { children: React.ReactNode }) {
                     }
                   >
                     <Icon className="size-[19px]" strokeWidth={active ? 2.4 : 2} />
+                    {tab.key === "messages" && hasUnseenStatus && (
+                      <span
+                        className="absolute -top-0.5 -left-0.5 size-2.5 rounded-full bg-gradient-to-tr from-[#06d6a0] to-[#0ea5e9] ring-2 ring-card"
+                        title="New status updates"
+                      />
+                    )}
                     {tab.key === "messages" && unreadTotal > 0 && (
                       <span className="absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] items-center justify-center font-bold ring-2 ring-card">
                         {unreadTotal > 99 ? "99+" : unreadTotal}
@@ -657,6 +683,9 @@ function Inner({ children }: { children: React.ReactNode }) {
         />
       )}
       {signOutDialog}
+      {/* Global peer overlays (v2.96): the status viewer + profile popup any
+          avatar or name click opens, from ANY screen. Mounted once here. */}
+      <PeerOverlaysHost />
     </div>
   );
 }

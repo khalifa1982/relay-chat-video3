@@ -36,6 +36,7 @@ import {
   statusAudienceAuthorized,
   countActiveStatuses,
   ownersWhoBlockedNumber,
+  getStatusAudienceIds,
   type StatusRow,
   getIdentityByDeviceId,
   getIdentityById,
@@ -43,6 +44,7 @@ import {
   getOrCreateDmConversation,
   createGroupConversation,
   deleteMessage,
+  consumeExpiringMessage,
   getPresenceAudienceIds,
   getPresenceForIds,
   isGuestPresenceHidden,
@@ -705,6 +707,10 @@ export const v2ContactsRouter = router({
     const isGuestById = new Map(idents.map((i) => [i.id, i.userId == null]));
     // Verified (blue badge) per identity.
     const verifiedById = new Map(idents.map((i) => [i.id, i.verified]));
+    // LIVE profile photo per number (v2.96): the contact row's avatarUrl is a
+    // frozen copy from save-time — the peer's CURRENT photo must win, else a
+    // profile-photo change never propagates to anyone who saved them.
+    const liveAvatarByNumber = new Map(idents.map((i) => [i.number, i.avatarUrl]));
     const ids = idents.map((i) => i.id);
     const presList = await getPresenceForIds(ids);
     const presByIdentity = new Map(presList.map((p) => [p.identityId, p]));
@@ -723,7 +729,7 @@ export const v2ContactsRouter = router({
         id: r.id,
         number: r.number,
         displayName: r.displayName,
-        avatarUrl: r.avatarUrl,
+        avatarUrl: liveAvatarByNumber.get(r.number) ?? r.avatarUrl,
         favourite: r.favourite,
         notes: r.notes,
         email: r.email ?? null,
@@ -1033,11 +1039,20 @@ export const v2MessagesRouter = router({
         body: z.string().max(8000).nullable().optional(),
         attachmentId: z.number().int().positive().nullable().optional(),
         replyToId: z.number().int().positive().nullable().optional(),
-        /** Constrained metadata (v2.88). `voicemail: true` marks an audio
-         *  message recorded after a failed dial — rendered with a voicemail
-         *  label and pushed as "Voicemail from X". Deliberately a closed
-         *  shape: clients can't stuff arbitrary JSON into `messages.meta`. */
-        meta: z.object({ voicemail: z.literal(true) }).optional(),
+        /** Constrained metadata (v2.88; still a deliberately CLOSED shape —
+         *  clients can't stuff arbitrary JSON into `messages.meta`).
+         *  `voicemail: true` marks an audio message recorded after a failed
+         *  dial. `expire` (v2.96) makes the message SELF-DESTRUCT once the
+         *  recipient opens it: "once" = view-once, or a 5/10/30-second
+         *  countdown after reveal. */
+        meta: z
+          .object({
+            voicemail: z.literal(true).optional(),
+            expire: z
+              .union([z.literal("once"), z.literal(5), z.literal(10), z.literal(30)])
+              .optional(),
+          })
+          .optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1229,6 +1244,25 @@ export const v2MessagesRouter = router({
       }
       return { ok: true, conversationId };
     }),
+
+  /** Self-destruct burn (v2.96): the recipient opened an expiring message —
+   *  destroy its content for everyone (see consumeExpiringMessage). Idempotent
+   *  from the client's view: an already-burned/foreign id returns ok:false. */
+  consumeExpiring: publicProcedure
+    .input(z.object({ messageId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const res = await consumeExpiringMessage({ messageId: input.messageId, identityId: me.id });
+      if (!res) return { ok: false };
+      try {
+        for (const pid of res.participantIds) {
+          publishToIdentity(pid, { kind: "message", conversationId: res.conversationId, from: me.id });
+        }
+      } catch {
+        /* best-effort */
+      }
+      return { ok: true };
+    }),
 });
 
 /* ── attachments router ───────────────────────────────────────── */
@@ -1341,6 +1375,23 @@ export const v2CallsRouter = router({
     const titleByNumber = new Map(
       (await getPartyLinesByNumbers(lineNumbers).catch(() => [])).map((l) => [l.number, l.title])
     );
+    // Live profile photos for every participant (v2.96) in ONE batched query —
+    // the roster snapshot has only number+name.
+    const allNumbers = Array.from(
+      new Set(
+        rows.flatMap((r) =>
+          Array.isArray(r.participants)
+            ? (r.participants as Array<{ number?: string }>).map((p) => p.number ?? "").filter(Boolean)
+            : []
+        )
+      )
+    );
+    const avatarByNumber = new Map(
+      (allNumbers.length ? await getIdentitiesByNumbers(allNumbers) : []).map((i) => [
+        i.number,
+        i.avatarUrl ?? null,
+      ])
+    );
     return rows.map((r) => {
       const roster = Array.isArray(r.participants)
         ? (r.participants as Array<{ number?: string; name?: string; identityId?: number | null }>)
@@ -1361,6 +1412,7 @@ export const v2CallsRouter = router({
         participants: roster.map((p) => ({
           number: p.number ?? "",
           name: p.name ?? "Guest",
+          avatarUrl: p.number ? (avatarByNumber.get(p.number) ?? null) : null,
           isSelf: p.identityId === me.id,
         })),
       };
@@ -1846,6 +1898,26 @@ function publicStatus(r: StatusRow) {
   };
 }
 
+/** Fan a realtime "status" SSE event out to everyone whose feed includes
+ *  `ownerId` (v2.96). Fire-and-forget from post/remove — never blocks the
+ *  mutation result on the audience query. */
+async function publishStatusEvent(
+  ownerId: number,
+  ownerNumber: string,
+  ownerName: string,
+  removed?: boolean,
+): Promise<void> {
+  const audience = await getStatusAudienceIds(ownerId, ownerNumber);
+  for (const id of audience) {
+    publishToIdentity(id, {
+      kind: "status",
+      number: ownerNumber,
+      name: ownerName,
+      ...(removed ? { removed: true } : {}),
+    });
+  }
+}
+
 export const v2StatusRouter = router({
   /** Post a status. Text kind needs text; media kinds need an owned mediaKey. */
   post: publicProcedure
@@ -1891,6 +1963,9 @@ export const v2StatusRouter = router({
         ttlMs: STATUS_TTL_MS,
       });
       if (!row) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't post your status." });
+      // Realtime (v2.96): tell everyone whose feed includes me — instantly —
+      // so their rings/feed refresh and Messages can show a quiet toast.
+      publishStatusEvent(me.id, me.number, me.displayName).catch(() => {});
       return { id: row.id, expiresAt: row.expiresAt };
     }),
 
@@ -1953,7 +2028,10 @@ export const v2StatusRouter = router({
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
-      return { ok: await deleteStatus(input.id, me.id) };
+      const ok = await deleteStatus(input.id, me.id);
+      // Removal fans out too (no toast client-side) so stale rings clear.
+      if (ok) publishStatusEvent(me.id, me.number, me.displayName, true).catch(() => {});
+      return { ok };
     }),
 
   /** Record that I viewed a status (idempotent; self-views aren't recorded). */
