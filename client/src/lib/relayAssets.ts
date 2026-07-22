@@ -215,6 +215,10 @@ export const RELAY_MARKUP = `
                UNROTATED on some Android WebViews — an ANSWER icon on the End
                button (reported as corrupted/misleading). -->
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.7l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.1-.7-.28-.79-.73-1.68-1.36-2.66-1.85-.33-.16-.56-.51-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+          <!-- Visible on the pre-connect dial screen only (v2.98 redesign) —
+               grounds the lone red circle with a real label, like the ring
+               card's Voice/Video/Decline captions. -->
+          <span class="hangup-lbl">End Call</span>
         </button>
       </div>
     </div>
@@ -704,15 +708,41 @@ export const RELAY_CSS = `
 /* Glossy top highlight (v2.97 — owner: "flashy and glossy"). */
 .relay-root .ctrl.hangup::before{content:"";position:absolute;inset:2px;border-radius:50%;pointer-events:none;
   background:linear-gradient(180deg,rgba(255,255,255,.35),rgba(255,255,255,.05) 48%,transparent 60%)}
-.relay-root #call.pre-connect .ctrl.hangup{width:72px;height:72px}
-.relay-root #call.pre-connect .ctrl.hangup svg{width:32px;height:32px}
-.relay-root #call.pre-connect .ctrl-bar{background:none;border:none;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;padding:0}
+/* Caller-side End Call (v2.98 redesign, owner: "the red one for Hangout…
+   it's not nice"): the pre-connect dial screen is the ONE control on an
+   otherwise near-empty dark screen, so a bare 72px circle read as a lonely
+   dot floating in black. It now sits on its own soft ambient glow (ombré
+   halo, not just a drop shadow), a richer two-tone gradient, and a real
+   "End Call" caption underneath — grounded, not floating. */
+.relay-root .hangup-lbl{display:none}
+.relay-root #call.pre-connect .ctrl.hangup{width:76px;height:76px;
+  background:linear-gradient(155deg,#FF7A8A 0%,#FF3B5C 55%,#D81B42 100%);
+  box-shadow:0 22px 46px -14px rgba(216,27,66,.65),0 0 0 1px rgba(255,255,255,.06) inset}
+.relay-root #call.pre-connect .ctrl.hangup svg{width:33px;height:33px}
+.relay-root #call.pre-connect .ctrl.hangup .hangup-lbl{display:block;position:absolute;top:calc(100% + 12px);left:50%;
+  transform:translateX(-50%);white-space:nowrap;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;
+  font-size:13px;letter-spacing:.02em;color:#ffb9c2}
+.relay-root #call.pre-connect .ctrl-bar{background:none;border:none;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;padding:0;position:relative;
+  /* Undo the mobile "wrap + scroll" override below (max-height/overflow-y:auto)
+     — with just ONE button there's nothing to scroll, and auto-overflow was
+     clipping the halo glow + "End Call" caption that extend past the bar's
+     tight flex box. */
+  max-height:none;overflow:visible}
+/* The ambient halo: a large, soft, blurred glow sitting BEHIND the button —
+   distinct from the tight ripple ring — so the control reads as an
+   intentional focal point instead of a small shape adrift in black. */
+.relay-root #call.pre-connect .ctrl-bar::before{content:"";position:absolute;left:50%;top:50%;
+  width:210px;height:210px;transform:translate(-50%,-50%);border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle,rgba(255,59,92,.32) 0%,rgba(255,59,92,.14) 42%,transparent 72%);
+  filter:blur(2px)}
 /* Dial-screen hang-up breathes + ripples while ringing (motion-gated). */
 @media (prefers-reduced-motion:no-preference){
   .relay-root #call.pre-connect .ctrl.hangup{animation:relayBob 1.5s ease-in-out infinite}
   .relay-root #call.pre-connect .ctrl.hangup::after{content:"";position:absolute;inset:-5px;border-radius:50%;
     border:2px solid rgba(255,92,114,.5);animation:relayRipple 1.6s ease-out infinite;pointer-events:none}
+  .relay-root #call.pre-connect .ctrl-bar::before{animation:relayHaloPulse 2.4s ease-in-out infinite}
 }
+@keyframes relayHaloPulse{0%,100%{opacity:.75;transform:translate(-50%,-50%) scale(1)}50%{opacity:1;transform:translate(-50%,-50%) scale(1.08)}}
 
 /* Self-tile camera handling: front cam mirrored locally so user feels natural,
    back cam not mirrored, and outgoing stream NEVER mirrored. */

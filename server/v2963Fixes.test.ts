@@ -37,7 +37,10 @@ describe("ONE hang-up control (v2.96.3)", () => {
     expect(RELAY_ASSETS).toMatch(/\.ctrl\.hangup svg\{width:26px;height:26px\}/);
   });
   it("the pre-connect dial screen gets the big iPhone-style button on a bare bar", () => {
-    expect(RELAY_ASSETS).toMatch(/#call\.pre-connect \.ctrl\.hangup\{width:72px;height:72px\}/);
+    // The exact button size/gradient was superseded in v2.98.0 (76px + a
+    // richer two-tone red + ambient halo — see v298CallerHangup.test.ts for
+    // that contract); this pin only checks what v2.96.3 actually fixed here.
+    expect(RELAY_ASSETS).toMatch(/#call\.pre-connect \.ctrl\.hangup\{width:76px;height:76px/);
     // The glass ctrl-bar shell is stripped around the lone dial-screen button —
     // that dark rounded-rect shell WAS the reported "ugly" blob.
     expect(RELAY_ASSETS).toMatch(/#call\.pre-connect \.ctrl-bar\{background:none;border:none;box-shadow:none/);

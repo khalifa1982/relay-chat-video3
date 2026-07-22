@@ -4478,7 +4478,58 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       (ses/ses-ssm/iam-grant-ses + the OIDC-fallback auth detector). Suite 1163 passed / 1 skipped;
       check + build green.
 
-## v2.98.0 — SECURITY AUDIT & REMEDIATION (owner-requested full front/back/DB review) (2026-07-22)
+## v2.98.0 — three-part owner batch: profile avatar save race, video-recorder honest labeling, hang-up redesign (2026-07-22)
+- [x] CONTEXT: a single garbled voice report bundled three separate complaints ("problem on the profile
+      when you captured [a photo], it didn't post", "problem on the status/message video record", "the
+      call screen's red hang-up button... not nice, redesign it"). Rather than ask for clarification,
+      each was run down with direct code investigation + live headless-browser testing until a concrete,
+      provable bug was found (or, for #3, a concrete design fix was built and screenshot-verified).
+- [x] (1) PROFILE AVATAR SAVE RACE — `client/src/pages/app/Profile.tsx`'s `onAvatarPick` uploaded the
+      photo, then fired `updateProfile.mutate({avatarUrl})` FIRE-AND-FORGET while the `uploading` spinner
+      cleared in a `finally` that only awaited the upload step. A save failure (session hiccup, dropped
+      request) left a REAL uploaded photo sitting in storage with the profile's `avatarUrl` never actually
+      updated — while the UI had already told the user it was done. Fixed by awaiting
+      `updateProfile.mutateAsync(...)` inside the SAME try block as the upload, so the spinner and the
+      error banner both cover the whole two-step pipeline, not just the first half.
+- [x] (2) VIDEO RECORDER HONEST CONTAINER LABELING — root-caused via a headless Chromium capture with a
+      fake camera device (`--use-fake-device-for-media-stream`), not guesswork: this browser's
+      `MediaRecorder.isTypeSupported("video/mp4")` returns true, but the recorder actually encodes
+      VP9+Opus under that label. Critically, `rec.mimeType` only reveals the true codec (`"video/mp4;
+      codecs=vp9,opus"`) once encoding actually starts — it stays the bare `"video/mp4"` for
+      tens-to-hundreds of ms after construction AND after `start()`, so an initial fix that checked
+      `rec.mimeType` right after `new MediaRecorder(...)` never caught it (proven empirically with a
+      timing probe before committing to the real fix). `client/src/lib/videoNote.ts`'s `recordFromStream`
+      now forces an immediate `requestData()` flush right after `start()`, which reveals the true codec
+      within ~2ms with no meaningful footage recorded yet; if it's mislabeled, the barely-started recorder
+      is swapped for an honest `video/webm` one. Verified end-to-end against the real API: the resulting
+      blob's first four bytes are the genuine WebM/Matroska magic `0x1A 0x45 0xDF 0xA3`, and the resolved
+      `ext`/`mimeType` correctly say "webm", not the stale original mp4 pick.
+- [x] A SECOND bug was found and fixed while building (2), also reproduced headlessly before the fix
+      existed: calling `cancel()` in the same tick as construction — before the mislabel probe had run —
+      used to make the swap logic ignore `cancelled` and start a brand-new LIVE recorder that nobody would
+      ever stop again, leaking the recorder and hanging the `done` promise forever (confirmed: a dedicated
+      race test timed out with `done` never resolving). Fixed with a `cancelled` check inside the swap
+      branch before it commits to starting a new recorder.
+- [x] (3) OUTGOING-CALL HANG-UP REDESIGN (owner: "the red one for Hangout... it's not nice") — the
+      pre-connect dial screen's lone red circle (previously a bare 76×76 circle, no caption) now gets a
+      soft ambient halo (radial glow behind the button, distinct from the existing tight ripple ring), a
+      richer two-tone red gradient, a bigger glyph, and a real "End Call" caption underneath; new motion
+      gated behind `prefers-reduced-motion` like every other ring-card animation. A real bug was found and
+      fixed while building this: the mobile media query that lets a CROWDED in-call control bar scroll
+      (`max-height:40vh;overflow-y:auto`) was silently clipping the new halo + caption on the pre-connect
+      screen, where there's only one button and nothing to scroll — fixed with a higher-specificity
+      `#call.pre-connect .ctrl-bar` override (`max-height:none;overflow:visible`), confirmed via a headless
+      render (screenshot evidence, not just source pins).
+- [x] Tests: `server/v298ProfileAvatarFix.test.ts` (3), `server/v298VideoMislabelFix.test.ts` (6),
+      `server/v298CallerHangup.test.ts` (6). Also fixed two now-stale pre-existing pins:
+      `server/v2962VideoRecorder.test.ts` (its onstop/getTracks check silently degraded to a vacuous
+      always-pass slice once `videoNote.ts` switched from `.onstop =` to `addEventListener("stop", ...)` —
+      re-anchored to scan the whole `recordFromStream` function body) and `server/v2963Fixes.test.ts` (its
+      72px hang-up-button pin was legitimately superseded by this version's 76px redesign — updated to the
+      new dimension, the surrounding "bare bar" assertion it shares the test with is untouched since that
+      part of the v2.96.3 fix still holds). Suite 1178 passed / 1 skipped; check + build green.
+
+## v2.98.1 — SECURITY AUDIT & REMEDIATION (owner-requested full front/back/DB review) (2026-07-22)
 - [x] CONTEXT: owner asked for "a full check of all security everything — all app connections, front and
       back, and the database" and to fix + report. Ran an automated scan (Claude Security), then
       independently VERIFIED every candidate against the current source before touching anything. 5
@@ -4513,5 +4564,5 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       `RELAY_RATELIMIT_OFF`); endpoints stay public so the `/i/<pin>` call-link direct-join still works.
 - [x] Tests: new `server/securityAudit.test.ts` (F1 behavioral — bind/attacker-refused/null-refused/reconnect/
       legacy — plus F2/F3/F5 wiring pins); updated `rateLimit.test.ts`, `geoSelf.test.ts`,
-      `peerIdentityBatch.test.ts` (F3), `relayCluster.integration.test.ts` (async register). Suite 1179
+      `peerIdentityBatch.test.ts` (F3), `relayCluster.integration.test.ts` (async register). Suite 1194
       passed / 1 skipped; `tsc --noEmit` + production build green.
