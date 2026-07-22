@@ -12,6 +12,14 @@
 #                group (instance A only), and the /api/relay/* listener rule
 #                that pins ALL signaling to that one node (the in-memory relay
 #                registry is single-process — see docs-aws-scale-out.md).
+#   ses        — email delivery ops (v2.97.1: OTP emails only reached verified
+#                addresses = the SES SANDBOX signature). Prints account status
+#                (production access? quota? suppression for ses_email), and:
+#                  • ses_email set        → create-email-identity for it (AWS
+#                    mails that person a verification link — an instant
+#                    per-address unblock while still in sandbox)
+#                  • ses_request_production=true → submits the production-
+#                    access request (PutAccountDetails, transactional mail)
 #
 # Auth: plain IAM access keys in GitHub secrets AWS_ACCESS_KEY_ID /
 # AWS_SECRET_ACCESS_KEY (this is the ops path for a human-scoped key; the
@@ -42,6 +50,10 @@
 #                elasticloadbalancing:CreateRule,
 #                elasticloadbalancing:ModifyRule,
 #                elasticloadbalancing:DeleteRule
+#   ses        — ses:GetAccount, ses:ListEmailIdentities,
+#                ses:GetSuppressedDestination, ses:CreateEmailIdentity,
+#                ses:PutAccountDetails (all sesv2 API; each step degrades to a
+#                clear message if the ops key lacks it)
 #
 # Every step is idempotent and PRINTS what it found / changed / skipped.
 
@@ -55,7 +67,17 @@ on:
         type: choice
         required: true
         default: verify
-        options: [verify, cloudfront, alb-tune]
+        options: [verify, cloudfront, alb-tune, ses]
+      ses_email:
+        description: "ses only: an address to check suppression for AND verify as an SES identity (instant sandbox unblock for that person)"
+        type: string
+        required: false
+        default: ""
+      ses_request_production:
+        description: "ses only: submit the SES production-access request (transactional mail)"
+        type: boolean
+        required: false
+        default: false
       region:
         description: Fleet region (EC2/ALB/regional ACM)
         type: string
@@ -503,3 +525,86 @@ jobs:
           aws elbv2 describe-rules --listener-arn "$LISTENER_ARN" \
             --query 'Rules[].{Priority:Priority,Paths:Conditions[0].Values,Target:Actions[0].TargetGroupArn}' \
             --output table
+
+      # ────────────────────────────────────────────────────────────────
+      - name: ses — email delivery status / verify an address / request production
+        if: inputs.action == 'ses'
+        env:
+          SES_EMAIL: ${{ inputs.ses_email }}
+          REQUEST_PROD: ${{ inputs.ses_request_production }}
+        run: |
+          set -uo pipefail  # NOT -e: each probe degrades to a message on AccessDenied
+          echo "=================================================================="
+          echo "SES ACCOUNT STATUS ($AWS_REGION)"
+          echo "=================================================================="
+          if aws sesv2 get-account > /tmp/ses-account.json 2>/tmp/ses-err; then
+            jq '{ProductionAccessEnabled, SendingEnabled, EnforcementStatus, SendQuota}' /tmp/ses-account.json
+            PROD=$(jq -r '.ProductionAccessEnabled' /tmp/ses-account.json)
+            if [ "$PROD" = "false" ]; then
+              echo "::warning::SES is in SANDBOX — OTP emails only reach VERIFIED addresses. This is exactly the reported 'only the owner receives codes' symptom."
+            else
+              echo "SES has PRODUCTION access — sends to any recipient are allowed."
+            fi
+          else
+            echo "::warning::ses:GetAccount denied or failed for the ops key:"; cat /tmp/ses-err
+          fi
+
+          echo "=================================================================="
+          echo "VERIFIED IDENTITIES (who CAN receive while in sandbox / who can send)"
+          echo "=================================================================="
+          aws sesv2 list-email-identities \
+            --query 'EmailIdentities[].{Identity:IdentityName,Type:IdentityType,SendingEnabled:SendingEnabled}' \
+            --output table 2>/dev/null || echo "(ses:ListEmailIdentities denied)"
+
+          if [ -n "$SES_EMAIL" ]; then
+            echo "=================================================================="
+            echo "SUPPRESSION CHECK — $SES_EMAIL"
+            echo "=================================================================="
+            if aws sesv2 get-suppressed-destination --email-address "$SES_EMAIL" > /tmp/ses-sup.json 2>/dev/null; then
+              echo "::warning::$SES_EMAIL IS on the account suppression list (SES accepts then silently drops!):"
+              jq '{Reason: .SuppressedDestination.Reason, Since: .SuppressedDestination.LastUpdateTime}' /tmp/ses-sup.json
+              if aws sesv2 delete-suppressed-destination --email-address "$SES_EMAIL" 2>/tmp/ses-err; then
+                echo "REMOVED $SES_EMAIL from the suppression list — mail to it flows again."
+              else
+                echo "Could not remove it (ses:DeleteSuppressedDestination denied):"; cat /tmp/ses-err
+              fi
+            else
+              echo "$SES_EMAIL is NOT suppressed (or ses:GetSuppressedDestination denied — a 'NotFound' here means not suppressed)."
+            fi
+
+            echo "=================================================================="
+            echo "VERIFY $SES_EMAIL AS AN IDENTITY (instant sandbox unblock for them)"
+            echo "=================================================================="
+            if aws sesv2 create-email-identity --email-identity "$SES_EMAIL" > /dev/null 2>/tmp/ses-err; then
+              echo "Verification email SENT to $SES_EMAIL — once they click AWS's link, OTP emails to them deliver even in sandbox."
+            else
+              if grep -q AlreadyExists /tmp/ses-err; then
+                echo "$SES_EMAIL is already a (pending or verified) identity — nothing to do."
+              else
+                echo "Could not create the identity (ses:CreateEmailIdentity denied?):"; cat /tmp/ses-err
+              fi
+            fi
+          fi
+
+          if [ "$REQUEST_PROD" = "true" ]; then
+            echo "=================================================================="
+            echo "REQUESTING SES PRODUCTION ACCESS (PutAccountDetails)"
+            echo "=================================================================="
+            if aws sesv2 put-account-details \
+              --production-access-enabled \
+              --mail-type TRANSACTIONAL \
+              --website-url "https://$DOMAIN" \
+              --contact-language EN \
+              --use-case-description "RELAY (https://$DOMAIN) is a self-hosted calling and messaging web app. We send TRANSACTIONAL email only: one-time sign-in codes (OTP), email-verification links, and missed-call notifications to registered users who requested them. No marketing or bulk mail. Sender domain $DOMAIN is verified with SPF, DKIM (Easy DKIM) and a custom MAIL FROM (mail.$DOMAIN); bounces and complaints are handled via the SES account-level suppression list. Expected volume: under 500 emails/day." \
+              2>/tmp/ses-err; then
+              echo "PRODUCTION ACCESS REQUEST SUBMITTED. AWS reviews it (typically <24h, often faster) — watch the SES console Account dashboard / the AWS support case for the decision. Nothing app-side needs to change once approved."
+            else
+              if grep -qi "ConflictException\|already" /tmp/ses-err; then
+                echo "A production-access review appears to be already pending:"; cat /tmp/ses-err
+              else
+                echo "::warning::Could not submit (ses:PutAccountDetails denied for the ops key?):"; cat /tmp/ses-err
+                echo "Fallback: SES console ($AWS_REGION) → Account dashboard → Request production access (2-minute form)."
+              fi
+            fi
+          fi
+          echo "ses action done."
