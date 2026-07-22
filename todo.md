@@ -4562,3 +4562,26 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       (localStorage relay_lang), Arabic boot renders dir=rtl with the bar growing from the right.
 - [x] Home.test.ts +2 pin groups (compositor fill / mobile nav fit) incl. a `bar.style.width`
       BAN; updateChecker version pin bumped. Suite 1180 passed / 1 skipped; check + build green.
+
+## v2.98.2 — the percent counter moves with the bar + English is the default language (owner) (2026-07-22)
+- [x] PERCENT COUNTER FROZEN AT 0% (owner follow-up to v2.98.1: "under the bar there is like a 0%…
+      that one is not moving along with the progress bar"): expected — the v2.98.1 fix made the BAR
+      compositor-driven but the number was still rAF-written textContent, which paints nothing on a
+      saturated main thread. Now the counter is compositor-driven too: `pctStripLines()` renders a
+      vertical 0%–100% odometer strip (101 × 14px lines, Latin digits in both languages, LTR
+      island) inside the overflow-hidden `#loadPct`, swept by `@keyframes lpPct` (translateY to
+      `calc(-100% + 14px)`) with the SAME duration/easing as the bar's lpFill — declared in plain
+      CSS (zero-JS default 3.4s) and re-timed per run by runLoader (boot 3400ms / call 3000ms).
+      rAF now only syncs the staged messages and the lock. Headless-verified: counter and bar in
+      exact lockstep (63/63 → 93/93), pctStrip promoted to its own composited layer (threaded-
+      animation signature), full lifecycle trace clean (overlay 0.5s→4.9s), CDP screenshot shows
+      bar at 72% with the counter reading 72%.
+- [x] ENGLISH IS THE DEFAULT LANGUAGE (owner: "the Arabic is currently the default language but the
+      default language is English"): `initialLang()` no longer auto-picks Arabic from
+      `navigator.language` — every first-time visitor gets English; the ع/EN toggle switches both
+      ways and the persisted localStorage("relay_lang") choice still wins on return visits.
+      Headless-verified with an ar-SA locale: first visit renders LTR English; saved "ar" reloads
+      RTL Arabic; toggle flips both directions.
+- [x] Home.test.ts pins extended (lpPct keyframes + strip re-time + `pct.textContent` ban;
+      navigator.language ban + English-default comment pin); updateChecker version pin → 2.98.2.
+      Suite 1180 passed / 1 skipped; check + build green.
