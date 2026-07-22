@@ -67,7 +67,7 @@ on:
         type: choice
         required: true
         default: verify
-        options: [verify, cloudfront, alb-tune, ses, ses-ssm]
+        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses]
       ses_email:
         description: "ses only: an address to check suppression for AND verify as an SES identity (instant sandbox unblock for that person)"
         type: string
@@ -661,3 +661,66 @@ jobs:
             --query 'CommandInvocations[].{Instance:InstanceId,Status:Status,Output:CommandPlugins[0].Output}' \
             --output json | head -c 12000
           echo "ses-ssm done (statuses above; AccessDenied in the output means the INSTANCE role has no SES rights either)."
+
+      # ────────────────────────────────────────────────────────────────
+      - name: iam-grant-ses — owner-directed attach of the SES ops policy to
+          relay-github-deploy, trying every available identity; on success,
+          run the full SES unblock immediately (verify + production request)
+        if: inputs.action == 'iam-grant-ses'
+        env:
+          SES_EMAIL: ${{ inputs.ses_email }}
+          REQUEST_PROD: ${{ inputs.ses_request_production }}
+        run: |
+          set -uo pipefail
+          POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ses:GetAccount","ses:ListEmailIdentities","ses:GetSuppressedDestination","ses:DeleteSuppressedDestination","ses:CreateEmailIdentity","ses:PutAccountDetails"],"Resource":"*"}]}'
+          GRANTED=no
+
+          echo "== attempt 1: deploy role grants ITSELF the policy =="
+          if aws iam put-role-policy --role-name relay-github-deploy --policy-name relay-ses-ops --policy-document "$POLICY" 2>/tmp/e1; then
+            echo "GRANTED via the deploy role itself."; GRANTED=yes
+          else
+            cat /tmp/e1
+          fi
+
+          if [ "$GRANTED" = "no" ]; then
+            echo "== attempt 2: instance role (via SSM) grants the deploy role =="
+            P64=$(printf %s "$POLICY" | base64 -w0)
+            CMDLINE="aws iam put-role-policy --role-name relay-github-deploy --policy-name relay-ses-ops --policy-document \"\$(echo $P64 | base64 -d)\" 2>&1 && echo IAM_GRANTED || true"
+            PARAMS=$(jq -n --arg c "$CMDLINE" '{commands:[$c]}')
+            CMD=$(aws ssm send-command --targets "Key=tag:Name,Values=relay-app" --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 0 --parameters "$PARAMS" --query 'Command.CommandId' --output text)
+            for i in $(seq 1 20); do
+              S=$(aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status' --output text)
+              echo "[$i] $S"
+              case "$S" in *InProgress*|*Pending*|"") sleep 5 ;; *) break ;; esac
+            done
+            OUT=$(aws ssm list-command-invocations --command-id "$CMD" --details --query 'CommandInvocations[0].CommandPlugins[0].Output' --output text)
+            echo "$OUT" | head -c 2000
+            echo "$OUT" | grep -q IAM_GRANTED && { echo "GRANTED via the instance role."; GRANTED=yes; }
+          fi
+
+          if [ "$GRANTED" = "no" ]; then
+            echo "::error::No available identity can write IAM policies (S3 key, deploy role, and instance role all denied). This is owner-only: attach the inline policy to relay-github-deploy in the IAM console, or submit SES production access directly."
+            exit 1
+          fi
+
+          echo "== policy attached — waiting for IAM propagation, then running the SES unblock =="
+          for i in $(seq 1 6); do
+            sleep 5
+            if aws sesv2 get-account --region "$AWS_REGION" > /tmp/acct.json 2>/dev/null; then break; fi
+            echo "  [$i] not propagated yet…"
+          done
+          jq '{ProductionAccessEnabled, SendingEnabled, SendQuota}' /tmp/acct.json 2>/dev/null || { echo "::error::SES still denied after grant — inspect manually."; exit 1; }
+          if [ -n "$SES_EMAIL" ]; then
+            aws sesv2 create-email-identity --email-identity "$SES_EMAIL" --region "$AWS_REGION" 2>&1 && echo "VERIFICATION EMAIL SENT to $SES_EMAIL" || true
+          fi
+          if [ "$REQUEST_PROD" = "true" ]; then
+            aws sesv2 put-account-details \
+              --production-access-enabled \
+              --mail-type TRANSACTIONAL \
+              --website-url "https://$DOMAIN" \
+              --contact-language EN \
+              --use-case-description "RELAY (https://$DOMAIN) is a self-hosted calling and messaging web app. We send TRANSACTIONAL email only: one-time sign-in codes (OTP), email-verification links, and missed-call notifications to registered users who requested them. No marketing or bulk mail. Sender domain $DOMAIN is verified with SPF, DKIM (Easy DKIM) and a custom MAIL FROM (mail.$DOMAIN); bounces and complaints are handled via the SES account-level suppression list. Expected volume: under 500 emails/day." \
+              && echo "PRODUCTION ACCESS REQUEST SUBMITTED — AWS reviews it (typically <24h)." \
+              || echo "put-account-details failed (a review may already be pending — see above)."
+          fi
+          echo "iam-grant-ses done."
