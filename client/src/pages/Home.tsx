@@ -245,13 +245,35 @@ const CSS = `
 @keyframes lpShimmer{from{transform:translateX(-120%)}to{transform:translateX(520%)}}
 [data-lp="loadTrack"]{position:relative}
 [data-lp="loadTrack"]::after{content:"";position:absolute;top:0;bottom:0;left:0;width:22%;border-radius:3px;background:linear-gradient(90deg,transparent,rgba(111,242,174,.55),transparent);animation:lpShimmer 1.3s linear infinite}
+/* v2.98.1: the FILL is compositor-driven (transform:scaleX, full-width bar).
+   The old JS width writes rode requestAnimationFrame, which paints NOTHING on
+   a device whose main thread is saturated during boot — the bar sat visibly
+   at 0% until the watchdog cleared the overlay (owner report, 3rd round).
+   Transform animations keep running on the compositor while the main thread
+   is blocked, so the bar now fills no matter what. The default 3.4s run also
+   starts with ZERO JS (plain CSS at insertion); runLoader only re-times it. */
+@keyframes lpFill{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+[data-lp="loadBar"]{transform-origin:left;transform:scaleX(0);animation:lpFill 3.4s cubic-bezier(.25,.46,.45,.94) forwards}
+[dir="rtl"] [data-lp="loadBar"]{transform-origin:right}
 @media (max-width:760px){
-  .lp-navlinks{display:none}
+  /* !important is REQUIRED against the markup's inline styles: the plain
+     .lp-navlinks{display:none} silently lost to the inline display:flex, so
+     phones kept the desktop nav links — they wrapped to three lines and shoved
+     the ع/EN language toggle and the Open-App pill off the right edge of the
+     screen (owner: "switching the language is not working"). */
+  .lp-navlinks{display:none!important}
+  [data-lp="nav"]{padding:12px 14px!important;gap:12px!important}
+  .lp-logo span:last-child{font-size:15px!important;letter-spacing:.16em!important}
+  [data-lp="langBtn"]{padding:8px 10px!important}
+  .lp-dock{padding:9px 13px!important;letter-spacing:.1em!important}
   .lp-hero{padding:120px 22px 70px!important}
   .lp-section{padding-left:22px!important;padding-right:22px!important}
 }
 @media (prefers-reduced-motion: reduce){
   .lp-root *{animation:none!important}
+  /* ...except the zero-JS overlay watchdog: killing it would strand a
+     reduced-motion visitor behind the loader if the engine never runs. */
+  [data-lp="loader"]:not(.lp-js-ok){animation:lpAutoClear .5s ease 5.6s forwards!important}
 }
 `;
 
@@ -352,7 +374,7 @@ function markup(host: string, t: Copy, ar: boolean): string {
       </div>
     </div>
     <div style="width:100%">
-      <div data-lp="loadTrack" style="width:100%;height:3px;border-radius:3px;background:rgba(233,240,242,.08);overflow:hidden"><div data-lp="loadBar" style="width:0%;height:100%;border-radius:3px;background:#6ff2ae;box-shadow:0 0 14px rgba(111,242,174,.8)"></div></div>
+      <div data-lp="loadTrack" style="width:100%;height:3px;border-radius:3px;background:rgba(233,240,242,.08);overflow:hidden"><div data-lp="loadBar" style="width:100%;height:100%;border-radius:3px;background:#6ff2ae;box-shadow:0 0 14px rgba(111,242,174,.8)"></div></div>
       <div style="display:flex;justify-content:space-between;margin-top:12px"><span data-lp="loadMsg" style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#6ff2ae">${t.bootMsgs[0][1]}</span><span data-lp="loadPct" style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.18em;color:rgba(148,162,172,.8)">0%</span></div>
       <div data-lp="loadSub" style="margin-top:9px;font:400 11px/1.5 'Space Grotesk',sans-serif;color:rgba(148,162,172,.85);min-height:17px">${t.bootMsgs[0][2]}</div>
     </div>
@@ -360,7 +382,7 @@ function markup(host: string, t: Copy, ar: boolean): string {
 </div>
 
 <nav data-lp="nav" style="position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:16px 40px;background:rgba(10,13,16,.45);backdrop-filter:blur(18px) saturate(1.5);-webkit-backdrop-filter:blur(18px) saturate(1.5);border-bottom:1px solid rgba(111,242,174,.18);box-shadow:0 8px 40px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.06)">
-  <a href="#top" style="display:flex;align-items:center;gap:10px;color:#e9f0f2"><span data-lp="dockDot" style="width:8px;height:8px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 12px rgba(111,242,174,.9);display:block"></span><span style="font:700 17px 'Space Grotesk',sans-serif;letter-spacing:.22em">RELAY</span></a>
+  <a href="#top" class="lp-logo" style="display:flex;align-items:center;gap:10px;color:#e9f0f2"><span data-lp="dockDot" style="width:8px;height:8px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 12px rgba(111,242,174,.9);display:block"></span><span style="font:700 17px 'Space Grotesk',sans-serif;letter-spacing:.22em">RELAY</span></a>
   <div class="lp-navlinks" style="display:flex;align-items:center;gap:28px;font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.18em">
     <a class="lp-navlink" href="#how">${t.navHow}</a>
     <a class="lp-navlink" href="#features">${t.navFeatures}</a>
@@ -656,6 +678,9 @@ function startLanding(host: HTMLElement, t: Copy, opts: { skipBoot: boolean; onT
   // bar visibly froze); (2) a setTimeout watchdog force-clears the overlay at
   // dur+1.6s even if rAF never ticks (background tab) or stalls; (3) any
   // exception inside a step force-clears it too.
+  // v2.98.1: the bar FILL is a compositor CSS animation (lpFill, re-timed to
+  // `dur` below) — rAF starvation can no longer pin the visible bar at 0%;
+  // this loop only syncs the percent text, messages, and the lock.
   let loaderDone = false;
   const runLoader = (dur: number, msgs: LoaderMsg[], onDone?: () => void) => {
     const ov = $("loader");
@@ -684,13 +709,23 @@ function startLanding(host: HTMLElement, t: Copy, opts: { skipBoot: boolean; onT
     ov.style.pointerEvents = "auto";
     requestAnimationFrame(() => { ov.style.opacity = "1"; });
     const bar = $("loadBar"), pct = $("loadPct"), msg = $("loadMsg"), sub = $("loadSub");
+    // Re-time the compositor-driven fill for THIS run (boot 3400 / call 3000).
+    // ONE synchronous write, then the compositor animates it even if the main
+    // thread never yields another frame (the v2.98.1 frozen-at-0% fix); the
+    // none→reflow→set dance restarts the animation for the call cinematic.
+    if (bar) {
+      bar.style.animation = "none";
+      void bar.offsetWidth;
+      bar.style.animation = `lpFill ${dur}ms cubic-bezier(.25,.46,.45,.94) forwards`;
+    }
     const t0 = performance.now();
     const step = () => {
       if (!alive) { clearTimeout(watchdog); return; }
       try {
         const p = Math.min(1, (performance.now() - t0) / dur);
         const e = 1 - Math.pow(1 - p, 2.1);
-        if (bar) bar.style.width = (e * 100).toFixed(1) + "%";
+        // The bar itself is CSS-animated (see lpFill above) — rAF only keeps
+        // the percent/messages/lock in sync when frames are available.
         if (pct) pct.textContent = Math.round(e * 100) + "%";
         let mm = msgs[0][1], ss = msgs[0][2];
         for (const m of msgs) if (e >= m[0]) { mm = m[1]; ss = m[2]; }
