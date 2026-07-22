@@ -43,10 +43,11 @@ describe("videoNote lib (v2.96.2)", () => {
     expect(VIDEO_NOTE).toMatch(/opts\?\.maxMs && opts\.maxMs > 0/);
   });
   it("recordFromStream leaves the preview stream alive (the sheet owns release)", () => {
-    // The onstop handler must NOT stop tracks (voiceNote does — video must not,
-    // or Retake would need a full re-acquire and the preview would die).
-    const onstop = VIDEO_NOTE.slice(VIDEO_NOTE.indexOf("rec.onstop"), VIDEO_NOTE.indexOf("rec.start(1000)"));
-    expect(onstop).not.toMatch(/getTracks\(\)\.forEach/);
+    // Nothing in the recording lifecycle (construction, the mislabel-swap, or
+    // finish) may stop the STREAM's tracks — voiceNote does, video must not,
+    // or Retake would need a full re-acquire and the preview would die.
+    const fn = VIDEO_NOTE.slice(VIDEO_NOTE.indexOf("export function recordFromStream"));
+    expect(fn).not.toMatch(/getTracks\(\)\.forEach/);
     expect(VIDEO_NOTE).toMatch(/does NOT stop the stream's tracks/);
   });
 });

@@ -147,7 +147,16 @@ export default function ProfilePage() {
       // proxy participant-gate the photo: fine for YOU (uploader), broken
       // image for EVERYONE else. Avatars are semi-public; no row.
       const json = await uploadAvatarImage(file, { mimeType: file.type });
-      updateProfile.mutate({ avatarUrl: json.url });
+      // AWAIT the save too (v2.98.0 — owner: a captured photo sometimes
+      // didn't post). The upload and the profile save are two separate
+      // network round-trips; a fire-and-forget `.mutate()` here let the
+      // spinner clear — telling the user it was done — the instant the
+      // UPLOAD resolved, regardless of whether the save actually persisted.
+      // A save failure (session hiccup, etc.) then left a real uploaded
+      // photo in storage that the profile never actually points at, with
+      // the UI having already reported success. `mutateAsync` makes the
+      // spinner (and the catch below) cover the whole pipeline.
+      await updateProfile.mutateAsync({ avatarUrl: json.url });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Avatar upload failed");
     } finally {
