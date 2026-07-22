@@ -4528,3 +4528,37 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       72px hang-up-button pin was legitimately superseded by this version's 76px redesign — updated to the
       new dimension, the surrounding "bare bar" assertion it shares the test with is untouched since that
       part of the v2.96.3 fix still holds). Suite 1178 passed / 1 skipped; check + build green.
+
+## v2.98.1 — landing loader bar frozen at 0% (compositor fill) + the mobile nav hid the AR/EN toggle (2026-07-22)
+- [x] LOADER BAR PINNED AT 0% (owner report, 3rd round after v2.95.7/v2.95.9): reproduced the
+      MECHANISM headlessly — the bar's fill/percent rode requestAnimationFrame width writes, so a
+      device whose main thread is saturated during the 3.4s boot cinematic (JS parse, font/image
+      decode, low-end phones) paints ZERO intermediate frames: the bar sits at its first painted
+      value (0%), then the v2.95.7 watchdog clears the overlay and the visitor jumps straight to
+      the page — "bar stays zero but it goes on". Verified the current code animates fine in every
+      emulable environment (prod build, iPhone/Pixel emulation, 8x/20x CPU throttle, slow 3G, RTL);
+      also ruled out stale bundles (SW caches nothing; both EC2 instances took today's deploys —
+      confirmed in the run-50 SSM logs) and reduced-motion (overlay hidden entirely).
+- [x] FIX: the fill is now COMPOSITOR-DRIVEN — `#loadBar` is a full-width bar scaled by
+      `@keyframes lpFill{from{scaleX(0)}to{scaleX(1)}}` (transform-only, per the repo's own
+      animation discipline), declared in plain CSS so it runs even with zero JS, re-timed by
+      runLoader per run (boot 3400ms / call cinematic 3000ms via the none→reflow→set restart).
+      Chromium/WebKit run transform animations on the compositor thread, so a blocked main thread
+      can no longer freeze the visible fill (headless-verified: the animating bar is promoted to
+      its OWN composited layer — the threaded-animation signature; a mid-block screenshot is not
+      capturable in headless, so layer promotion is the proof). rAF now only syncs the percent
+      text, staged messages, and the lock. RTL grows from the right (`[dir="rtl"]` origin).
+      Bonus hardening: the reduced-motion `animation:none!important` block now re-asserts the
+      v2.95.9 zero-JS lpAutoClear watchdog so that combination can never strand the overlay.
+- [x] LANGUAGE SWITCH "NOT WORKING" (owner): root cause was NOT the toggle logic — on phones the
+      desktop nav links were never hidden (`.lp-navlinks{display:none}` silently LOSES to the
+      markup's inline `display:flex`; the neighboring rules in the same media block use
+      !important, this one didn't), so "HOW IT WORKS / FEATURES / PRIVACY" wrapped to three lines
+      and shoved the ع/EN toggle AND the Open-App pill off the right screen edge (nav scrollWidth
+      605px on a 390px viewport; the button hit-tested outside the viewport). Fix: the hide gets
+      !important, and the ≤760px block compacts the nav (`padding:12px 14px`, gap 12px, smaller
+      logo type, tighter ع/EN + Open-App pills) so logo + toggle + CTA fit a 320px viewport.
+      Headless-verified on iPhone emulation: nav fits, toggle on-screen, EN→AR→EN flips + persists
+      (localStorage relay_lang), Arabic boot renders dir=rtl with the bar growing from the right.
+- [x] Home.test.ts +2 pin groups (compositor fill / mobile nav fit) incl. a `bar.style.width`
+      BAN; updateChecker version pin bumped. Suite 1180 passed / 1 skipped; check + build green.
