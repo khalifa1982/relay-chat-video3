@@ -151,7 +151,11 @@ export function NotificationBell({
         )}
       </button>
       {open && (
-        <div className="absolute right-0 mt-2 w-64 rounded-2xl border border-border bg-card shadow-2xl overflow-hidden z-[80]">
+        /* Mobile (v2.96.3): the bell sits mid-bar, so a right-anchored
+           absolute panel ran past the LEFT screen edge on phones — pin it to
+           the viewport instead (fixed, 12px side margins, under the sticky
+           header). Desktop keeps the classic right-aligned dropdown. */
+        <div className="max-md:fixed max-md:inset-x-3 max-md:top-16 md:absolute md:left-0 md:mt-2 md:w-64 rounded-2xl border border-border bg-card shadow-2xl overflow-hidden z-[80]">
           <div className="px-4 py-2.5 border-b border-border text-xs font-semibold text-muted-foreground">
             Notifications
           </div>

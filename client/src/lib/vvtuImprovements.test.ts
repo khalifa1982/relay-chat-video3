@@ -74,8 +74,11 @@ describe("UI/UX improvements", () => {
     expect(APPSHELL).toMatch(/focus-visible:ring-sidebar-ring/);
   });
 
-  it("the End / Exit-the-call buttons carry destructive-themed focus rings", () => {
-    expect(ENGINE).toMatch(/focus-visible:ring-destructive\/20 dark:focus-visible:ring-destructive\/40/);
+  it("the Exit-the-call button carries a destructive-themed focus ring (v2.96.3: the duplicate End pill is gone)", () => {
+    // The floating "X End" pill was removed on owner request (it doubled the
+    // engine's own hang-up); the rejoin overlay's Exit button remains the one
+    // destructive React-layer control.
+    expect(ENGINE).toMatch(/focus-visible:ring-destructive\/30 dark:focus-visible:ring-destructive\/50/);
   });
 
   it("the notification bell and its panel rows are keyboard-focusable", () => {

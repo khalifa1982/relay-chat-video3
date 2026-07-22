@@ -602,9 +602,18 @@ export const RELAY_CSS = `
 .relay-root .ctrl.off .ic-off{display:block}
 .relay-root .ctrl .badge{position:absolute;top:-4px;right:-4px;background:var(--accent);color:#04201B;font-size:10px;font-weight:700;
   min-width:17px;height:17px;border-radius:9px;display:grid;place-items:center;padding:0 4px;border:2px solid var(--bg)}
-.relay-root .ctrl.hangup{width:66px;border-radius:26px;background:linear-gradient(135deg,#FF5C72,#FF3B5C);border-color:transparent;color:#fff;box-shadow:0 6px 22px -6px rgba(255,92,114,.6)}
-.relay-root .ctrl.hangup:hover{transform:translateY(-1px);box-shadow:0 10px 30px -8px rgba(255,92,114,.75)}
-.relay-root .ctrl.hangup:active{transform:scale(.96)}
+/* Hang-up (v2.96.3 redesign): a proper round red phone button — a perfect
+   circle with a larger drawn call-end glyph (the old 66px rounded-rect pill
+   read as a blob). The pre-connect dial screen gets a bigger one, iPhone
+   style, since it's the only control on that screen. */
+.relay-root .ctrl.hangup{width:58px;height:58px;border-radius:50%;background:linear-gradient(145deg,#FF5C72,#E62E4D);border-color:transparent;color:#fff;
+  box-shadow:0 10px 26px -8px rgba(255,59,92,.65),inset 0 1px 0 rgba(255,255,255,.25)}
+.relay-root .ctrl.hangup svg{width:26px;height:26px}
+.relay-root .ctrl.hangup:hover{transform:translateY(-1px);box-shadow:0 14px 32px -8px rgba(255,92,114,.75),inset 0 1px 0 rgba(255,255,255,.25)}
+.relay-root .ctrl.hangup:active{transform:scale(.94)}
+.relay-root #call.pre-connect .ctrl.hangup{width:72px;height:72px}
+.relay-root #call.pre-connect .ctrl.hangup svg{width:32px;height:32px}
+.relay-root #call.pre-connect .ctrl-bar{background:none;border:none;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;padding:0}
 
 /* Self-tile camera handling: front cam mirrored locally so user feels natural,
    back cam not mirrored, and outgoing stream NEVER mirrored. */
@@ -683,7 +692,7 @@ export const RELAY_CSS = `
   /* Keep a comfortable 48px touch target even on the narrowest phones (the wrap
      absorbs the extra width) — 44px was below the Material minimum. */
   .relay-root .ctrl{width:48px;height:48px}
-  .relay-root .ctrl.hangup{width:60px}
+  .relay-root .ctrl.hangup{width:52px;height:52px}
   /* Clear the phone's home indicator so the wrapped 2nd row is never hidden
      behind it (this is why the screen-share button "couldn't be seen"). */
   .relay-root .controls{padding-bottom:max(22px,env(safe-area-inset-bottom))}

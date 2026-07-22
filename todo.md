@@ -4382,3 +4382,18 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       pipeline as a picked file — 30s story cap, caption, bare status upload.
 - [x] `server/v2962VideoRecorder.test.ts` (11 pins). Suite 1140 passed / 1 skipped; check +
       build green.
+
+## v2.96.3 — bell panel off-screen + ONE round hang-up (owner screenshots) (2026-07-22)
+- [x] NOTIFICATION PANEL FIT: the bell sits mid-bar on phones, so its right-anchored absolute
+      w-64 dropdown ran past the LEFT screen edge (title/icons clipped — owner screenshot). On
+      mobile the panel is now FIXED and viewport-clamped (inset-x-3, under the sticky header);
+      the desktop sidebar instance (which had the mirror problem at the left screen edge) now
+      opens RIGHTWARD (left-anchored) into the content area.
+- [x] ONE HANG-UP, PROPERLY ROUND: the floating top-right "X End" pill (React layer) duplicated
+      the engine's own hang-up on BOTH the dial screen and in-call — removed. The engine's
+      `.ctrl.hangup` is redesigned from the 66px rounded-rect pill into a true round red phone
+      button (58px circle, 26px glyph, gradient + ring shadow); the pre-connect dial screen gets
+      the big iPhone-style 72px version and STRIPS the glass ctrl-bar shell around it (that dark
+      rounded-rect shell was the reported "ugly" blob).
+- [x] `server/v2963Fixes.test.ts` (4 pins) + vvtu focus-ring pin updated to the surviving
+      Exit-the-call control. Suite 1144 passed / 1 skipped; check + build green.

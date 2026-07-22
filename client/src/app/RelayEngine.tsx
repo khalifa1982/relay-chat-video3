@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation } from "wouter";
-import { X, Loader2, PhoneOff, UserPlus } from "lucide-react";
+import { Loader2, PhoneOff, UserPlus } from "lucide-react";
 // TYPE-ONLY import — erased at build. The call engine (relayClient + its
 // markup/CSS) is DYNAMICALLY imported inside the mount effect below (v2.88):
 // it's several hundred KB that only matters once a signed-in user is inside
@@ -285,17 +285,9 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
       {/* In-call one-tap contact conversion (v2.96): a quiet chip for the
           first on-call peer who isn't in your contacts yet. */}
       {phase === "in-call" ? <InCallSaveContacts handleRef={handleRef} /> : null}
-      {phase === "dialing" || phase === "in-call" ? (
-        <button
-          type="button"
-          onClick={() => handleRef.current?.hangup()}
-          className="fixed top-3 right-3 z-[70] inline-flex items-center gap-1.5 rounded-full bg-destructive/90 hover:bg-destructive text-destructive-foreground px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur-md outline-none focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 focus-visible:ring-[3px]"
-          aria-label="End call"
-        >
-          <X className="size-3.5" />
-          End
-        </button>
-      ) : null}
+      {/* v2.96.3 (owner): the floating top-right "X End" pill is GONE — it
+          duplicated the engine's own hang-up (dial screen + in-call control
+          bar both have one), showing two End controls at once. */}
       {/* Prominent auto-rejoin prompt: shown while the engine is restoring an
           active call after a reload / accidental close / crash. The call rejoins
           automatically; this gives the user an explicit, unmissable way OUT if
