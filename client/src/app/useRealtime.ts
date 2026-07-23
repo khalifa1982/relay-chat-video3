@@ -199,6 +199,14 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
             // directory.lookup namespace defeated the Add-Contact preview's
             // staleTime and refetched on every stranger's heartbeat.
             utils.directory.lookup.invalidate({ number: payload.number }).catch(() => {});
+            // History LEDs read directory.presenceMany and the profile popup /
+            // batch reads use directory.presence — BOTH were previously left out
+            // of the SSE presence handler, so those surfaces only updated on
+            // their own 30s poll (and History pauses polling in the background).
+            // That made the SAME user show online here and offline there. Fan
+            // the presence event out to them too so every surface agrees (v2.99.3).
+            utils.directory.presenceMany.invalidate().catch(() => {});
+            utils.directory.presence.invalidate().catch(() => {});
             break;
           case "contact":
             utils.contacts.list.invalidate().catch(() => {});

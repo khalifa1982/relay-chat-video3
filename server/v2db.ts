@@ -531,15 +531,37 @@ export async function markOffline(identityId: number) {
  * Stale-presence sweep: anyone marked online but whose heartbeat is older
  * than the threshold gets flipped to offline. Call this periodically.
  */
-export async function reapStalePresence(maxAgeSeconds = 120) {
+/**
+ * Mark stale-heartbeat identities offline and RETURN which ones flipped (id +
+ * number) so the caller can broadcast an offline SSE event for each — without
+ * that, SSE-fed surfaces (Contacts, Messages, the profile popup) kept showing a
+ * crashed/closed user GREEN until their own poll, while poll-fed surfaces
+ * (History) read the freshly-reaped DB and showed grey — the reported
+ * "online here, offline there" inconsistency (v2.99.3).
+ */
+export async function reapStalePresence(
+  maxAgeSeconds = 120,
+): Promise<Array<{ id: number; number: string }>> {
   const db = await getDb();
-  if (!db) return 0;
+  if (!db) return [];
   const cutoff = new Date(Date.now() - maxAgeSeconds * 1000);
-  const res = await db
+  // Capture the soon-to-be-reaped rows first (join identities for the number),
+  // then flip them. Reaping is infrequent (60s) and usually touches few rows.
+  let victims: Array<{ id: number; number: string }> = [];
+  try {
+    victims = await db
+      .select({ id: identities.id, number: identities.number })
+      .from(presence)
+      .innerJoin(identities, eq(identities.id, presence.identityId))
+      .where(and(eq(presence.isOnline, true), lt(presence.lastSeenAt, cutoff)));
+  } catch {
+    victims = [];
+  }
+  await db
     .update(presence)
     .set({ isOnline: false })
     .where(and(eq(presence.isOnline, true), lt(presence.lastSeenAt, cutoff)));
-  return res?.[0]?.affectedRows ?? 0;
+  return victims;
 }
 
 /**

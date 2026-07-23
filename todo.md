@@ -4803,3 +4803,37 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
 - [x] Tests: server/avatarBareKey.test.ts (avatar key naming + status-gate rescue),
       client/src/lib/emojiAvatar.test.ts (collection + palette + render contract); status.test.ts pin
       updated to the by-kind key naming. Suite 1249 passed / 1 skipped; check + build green.
+
+## v2.99.3 — clickable profile avatar → full profile + presence consistency + host-panel polish (owner batch pt.1) (2026-07-23)
+- [x] PROFILE POPUP AVATAR CLICKABLE (owner screenshot: "I cannot click on the image whether there
+      is a status or not… even if there is no status, when I click on it, it should show me his full
+      profile page"). The popup's PeerAvatar computed `clickable` such that inside the SAME user's
+      popup it went inert when they had no status. Now the avatar is always a button: WITH a status →
+      opens the status viewer (unchanged); WITHOUT → opens a NEW full-screen profile view (big 148px
+      avatar — itself opens the status when one exists — name + verified badge, PIN, presence line,
+      Message / Voice / Video actions, Add-to-contacts, back + close). client/src/app/PeerOverlays.tsx.
+- [x] PRESENCE CONSISTENCY (owner: "Maja is sometimes shown as online … sometimes not"). TWO root
+      causes found and fixed:
+      • client/src/app/useRealtime.ts — the SSE `presence` handler invalidated contacts.list /
+        messages.threads / directory.lookup but NOT the batch queries other surfaces read:
+        directory.presenceMany (History LEDs) and directory.presence (profile popup / batch). Those
+        surfaces only refreshed on their own 30s poll (History pauses polling in the background), so
+        the SAME user showed online on one surface and offline on another. Both now invalidated.
+      • server/v2db.ts reapStalePresence + server/_core/index.ts — the 60s reaper flipped
+        stale-heartbeat users offline in the DB but emitted NO SSE event, so SSE-fed surfaces kept a
+        crashed/closed user GREEN until their own poll. reapStalePresence now returns the reaped
+        identities (id + number) and the boot sweep broadcasts an offline presence event to each
+        one's audience via getPresenceAudienceIds + publishPresenceTo (per-user best-effort).
+- [x] HOST CONTROLS (owner screenshot: buttons cramped/clipped; "make sure each feature is working").
+      VERIFIED server-side all actions are real, not stubs (server/relay.ts `case "mod"`: mute /
+      mute-all / unmute-all / pin / cohost / makehost / kick, all isModerator-guarded, fanned to the
+      room). The panel itself was the problem: 280px wide with single-line rows — 5 action buttons
+      overflowed and clipped ("Remove" off the edge). relayAssets.ts CSS: panel 320px (92vw cap),
+      each participant row STACKS (name over actions) on a card, buttons WRAP with per-action color
+      accents (Mute amber / Pin sky / Co-host violet / Make host teal / Remove red). Headless-verified
+      (430px viewport, worst-case 5-button row): 10 buttons, 0 clipped.
+- [x] Tests: server/presenceReaper.test.ts (reaper returns victims + broadcasts offline),
+      useRealtime.test.ts (presence case invalidates presenceMany + presence), relayAssets.test.ts
+      (stacked rows + wrap + per-action accents + panel width). Suite 1262 passed / 1 skipped.
+      Remaining from this owner batch (increment 2): in-call control-bar redesign (labels + colors +
+      sound-output menu) and the full-featured in-call side chat with the glass identity header.

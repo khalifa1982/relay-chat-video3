@@ -19,6 +19,33 @@ describe("useRealtime — the SSE effect re-subscribes when selfId changes", () 
 });
 
 /**
+ * v2.99.3 presence consistency — History LEDs read `directory.presenceMany` and
+ * the profile popup / batch surfaces read `directory.presence`, but the SSE
+ * `presence` handler previously invalidated neither, so those surfaces only
+ * refreshed on their own 30s poll while `contacts.list` / `messages.threads`
+ * updated instantly — the same user showed online on one surface and offline on
+ * another. Pin that the presence case now fans out to BOTH batch queries.
+ */
+describe("presence SSE handler invalidates every presence-reading query (v2.99.3)", () => {
+  // Isolate the `case "presence":` block so a stray match elsewhere can't pass it.
+  const presenceCase = USE_REALTIME_SRC.slice(
+    USE_REALTIME_SRC.indexOf('case "presence":'),
+    USE_REALTIME_SRC.indexOf('case "contact":'),
+  );
+  it("still invalidates the always-rendered surfaces (contacts + threads + lookup)", () => {
+    expect(presenceCase).toMatch(/utils\.contacts\.list\.invalidate\(\)/);
+    expect(presenceCase).toMatch(/utils\.messages\.threads\.invalidate\(\)/);
+    expect(presenceCase).toMatch(/utils\.directory\.lookup\.invalidate\(\{ number: payload\.number \}\)/);
+  });
+  it("now ALSO invalidates directory.presenceMany (History LEDs)", () => {
+    expect(presenceCase).toMatch(/utils\.directory\.presenceMany\.invalidate\(\)/);
+  });
+  it("now ALSO invalidates directory.presence (profile popup / batch)", () => {
+    expect(presenceCase).toMatch(/utils\.directory\.presence\.invalidate\(\)/);
+  });
+});
+
+/**
  * The server fans the `message` SSE event out to EVERY participant, including
  * the sender (so the sender's other tabs stay in sync). The client must not
  * raise a chime / "New message" notification for the user's own outgoing
