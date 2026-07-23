@@ -4714,3 +4714,27 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       storage-proxy fail-closed, client XSS (escapeHtml/linkify; bio/socials never exposed to others),
       signaling authz + moderation, auth/crypto/rate-limits.
 - [x] New `server/enumBlockHardening.test.ts`. Suite 1222 passed / 1 skipped; check + build green.
+
+## v2.99.0 — message menu no longer clips off-screen + registration overhaul (email→name, show number, mandatory photo + passcode) (2026-07-23)
+- [x] MESSAGE ⋮ MENU CLIPPED OFF THE LEFT EDGE (owner screenshot, own voice note): the long-press
+      options menu (Reply / Unsend) opened partly off the left side of the screen. Root cause in
+      `client/src/pages/app/Messages.tsx` `MessageMenu`: own messages are `justify-end`, so the ⋮
+      button renders at the FAR LEFT of the row (before the bubble) — yet the menu used `right-0`,
+      anchoring its 144px width further left, off-screen. The mine/received → right-0/left-0 mapping
+      was simply reversed. Fixed to open toward the screen INTERIOR: `mine ? "left-0" : "right-0"`.
+      Pinned in Messages.test.ts.
+- [x] REGISTRATION OVERHAUL (owner directive) in `client/src/app/AuthPanel.tsx`:
+      • EMAIL FIRST, shown read-only on the name step — the register step now asks only first + last
+        name and displays the already-entered email read-only (a Mail-icon pill), never a second
+        editable email field ("Just your name to finish — we already have your email").
+      • The post-registration SETUP step ("Finish setting up") now shows the freshly-minted 6-digit
+        RELAY number (whoami → `fmtNumber` NNN-NNN, LTR island) so the user sees their number.
+      • MANDATORY profile photo — a tappable avatar circle (the Profile hero pattern) uploads via the
+        bare-avatar path and AWAITS the profile save (v2.98.0 lesson) before marking it set.
+      • MANDATORY 4-digit passcode (+ confirm) — this is the login passcode used to sign in on any
+        device with the same email (existing loginWithPin). The old optional "Skip — email me a code"
+        escape hatch is REMOVED; Finish is disabled until BOTH a photo and a matching 4-digit passcode
+        are set.
+      NOTE: this affects new REGISTRATIONS only; existing users are not retroactively forced to add a
+      photo (that would be a separate, riskier change). Pinned in authPanelRegister.test.ts (4 tests).
+- [x] Suite 1186 passed / 1 skipped locally; rebased onto main (v2.98.6) before ship.
