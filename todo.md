@@ -4909,3 +4909,26 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       survivor promotion keeps the number ringing; mid-ring register rings the new device's own
       socket; ecosystem.config.cjs bake pin). callReachability.test.ts pin updated to the new
       deliverPendingRing(…, conn.socket) shape. Suite 1284 passed / 1 skipped; check + build green.
+
+## v2.99.6 — three-tier account badges: blue Guest / green Registered / yellow Admin (owner spec) (2026-07-23)
+- [x] The single verified-only "blue badge" is superseded by a THREE-TIER RoleBadge shown for EVERY
+      user: blue ✓ = Guest (no registered account), green ✓ = Registered (email-verified), yellow ✓
+      = Admin (the owning user's users.role = "admin" — the enum already existed in the schema; an
+      operator grants it with `UPDATE users SET role='admin' WHERE email=…`). Right under the check
+      mark, the tier name in very small type, first letter capital: "Guest" / "Registered" /
+      "Admin" (owner spec). New `RoleBadge` + `roleFromFlags` in client/src/app/VerifiedBadge.tsx
+      (the old VerifiedBadge export stays for compatibility); `roleFromFlags` lets every surface
+      fall back gracefully — explicit role wins, `null` = no badge (party lines), an OLD cached
+      payload without the field maps verified→Registered / else Guest.
+- [x] SERVER: new `getRolesByIdentityIds()` in v2db.ts (ONE batched identities⟕users query;
+      decoration-only — returns empty on DB hiccup, never throws) + `role` emitted on
+      identity.whoami, directory.lookup (null for party lines), contacts.list, and
+      messages.threads (`peerRole`). All additive fields — no client is broken by them.
+- [x] CLIENT surfaces: AppShell (sidebar name + avatar-corner mini badge, captionless at 14px),
+      Profile hero, Contacts rows, Messages thread rows + chat header, Dialer preview, the
+      profile popup + full-screen profile view (PeerOverlays), and the in-call INCOMING-RING card
+      (presentRingProfile now tints the seal by tier + fills the tiny #ringRoleTxt caption; old
+      servers without `role` keep the verified-only presentation).
+- [x] Tests: verifiedBadge.test.ts rewritten around the three tiers (colors + captions + caption
+      sizing + roleFromFlags rules + every surface wired + server emissions + the v2db tier rule);
+      Contacts.test.ts pin updated. Suite 1290 passed / 1 skipped; check + build green.

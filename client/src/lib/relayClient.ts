@@ -2471,7 +2471,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       .then(r => (r.ok ? r.json() : null))
       .then((j) => {
         if (!pendingRing || pendingRing.from !== pin) return; // stale caller
-        const d = (j as { result?: { data?: { json?: { avatarUrl?: string | null; verified?: boolean; isOnline?: boolean; statusOverride?: string } | null } } } | null)
+        const d = (j as { result?: { data?: { json?: { avatarUrl?: string | null; verified?: boolean; role?: string | null; isOnline?: boolean; statusOverride?: string } | null } } } | null)
           ?.result?.data?.json;
         if (!d) return;
         if (d.avatarUrl && img && initialsEl) {
@@ -2481,7 +2481,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
           img.onerror = () => { img.style.display = "none"; if (initialsEl) initialsEl.style.display = ""; };
           img.src = d.avatarUrl;
         }
-        if (d.verified && ver) ver.style.display = "";
+        // Three-tier badge (v2.99.6): every caller gets the check mark, tinted
+        // by account tier, with the tier name in tiny type under it — blue
+        // Guest / green Registered / yellow Admin. Older servers send only
+        // `verified`; fall back to the old verified-only presentation.
+        const role = d.role === "guest" || d.role === "registered" || d.role === "admin"
+          ? d.role
+          : d.verified ? "registered" : d.role === null ? null : "guest";
+        if (ver && role) {
+          const meta = { guest: ["#4c9bff", "Guest"], registered: ["#22c55e", "Registered"], admin: ["#eab308", "Admin"] }[role];
+          ver.style.display = "";
+          (ver as HTMLElement).style.color = meta[0];
+          ver.setAttribute("title", meta[1] + " account");
+          const txt = $("ringRoleTxt"); if (txt) txt.textContent = meta[1];
+        }
         if (pres) {
           pres.textContent =
             d.statusOverride === "away" ? "Away" :

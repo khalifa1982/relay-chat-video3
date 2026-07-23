@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useRelayEngine } from "./RelayEngine";
-import { VerifiedBadge } from "./VerifiedBadge";
+import { RoleBadge, roleFromFlags } from "./VerifiedBadge";
 import { StatusViewer } from "@/pages/app/Status";
 
 /**
@@ -268,7 +268,7 @@ export function PeerOverlaysHost() {
               </button>
               <DialogTitle className="mt-3 flex items-center gap-1.5 text-lg font-bold">
                 <span className="truncate max-w-[14rem]">{p.displayName || "Guest"}</span>
-                {p.verified && <VerifiedBadge size={16} />}
+                <RoleBadge role={roleFromFlags(p.role, p.verified)} size={16} />
               </DialogTitle>
               <div className="mt-0.5 font-mono text-sm text-muted-foreground" dir="ltr">
                 {p.number.length === 6 ? `${p.number.slice(0, 3)}-${p.number.slice(3)}` : p.number}
@@ -385,7 +385,7 @@ export function PeerOverlaysHost() {
             </button>
             <div className="mt-4 flex items-center gap-2">
               <h1 className="text-2xl font-extrabold tracking-tight">{p.displayName || "Guest"}</h1>
-              {p.verified && <VerifiedBadge size={20} />}
+              <RoleBadge role={roleFromFlags(p.role, p.verified)} size={20} />
             </div>
             <div className="mt-1 font-mono text-base text-muted-foreground" dir="ltr">
               {p.number.length === 6 ? `${p.number.slice(0, 3)}-${p.number.slice(3)}` : p.number}

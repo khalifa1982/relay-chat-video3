@@ -54,7 +54,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
-import { VerifiedBadge } from "@/app/VerifiedBadge";
+import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 
 function initialsFrom(name: string): string {
@@ -388,6 +388,8 @@ function ContactRow({
     avatarUrl: string | null;
     favourite: boolean;
     verified: boolean;
+    /** Three-tier badge (v2.99.6): guest / registered / admin. */
+    role?: "guest" | "registered" | "admin";
     isOnline: boolean;
     /** Busy line (v2.88): in a live call right now. */
     inCall: boolean;
@@ -451,7 +453,7 @@ function ContactRow({
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="font-semibold truncate">{c.displayName || c.number}</span>
             {c.favourite && <Star className="size-3 shrink-0 text-amber-400 fill-amber-400" />}
-            {c.verified && <VerifiedBadge size={14} />}
+            <RoleBadge role={roleFromFlags(c.role, c.verified)} size={14} />
             {c.blocked && <Ban className="size-3.5 shrink-0 text-[#ff8d84]" />}
           </div>
           <div className="text-xs text-muted-foreground font-mono mt-0.5">

@@ -15,7 +15,7 @@ import { trpc } from "@/lib/trpc";
 import { useIdentity } from "./useIdentity";
 import { useSignOut } from "./useSignOut";
 import { AuthPanel } from "./AuthPanel";
-import { VerifiedBadge } from "./VerifiedBadge";
+import { RoleBadge, roleFromFlags } from "./VerifiedBadge";
 import { CountryFlag } from "./CountryFlag";
 import { OnboardingGate } from "./OnboardingGate";
 import { PasscodeGate } from "./PasscodeGate";
@@ -311,7 +311,8 @@ function Inner({ children }: { children: React.ReactNode }) {
             <div className="min-w-0">
               <div className="font-semibold truncate group-hover:text-primary transition-colors flex items-center gap-1">
                 <span className="truncate">{me.displayName}</span>
-                {me.verified && <VerifiedBadge size={15} />}
+                {/* v2.99.6: three-tier badge — Guest (blue) / Registered (green) / Admin (yellow). */}
+                <RoleBadge role={roleFromFlags(me.role, me.verified)} size={15} />
               </div>
               <div className="font-mono text-sm text-muted-foreground flex items-center gap-1.5 flex-wrap">
                 {formatNumber(me.number)}
@@ -542,11 +543,10 @@ function Inner({ children }: { children: React.ReactNode }) {
                   className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-card"
                   style={{ background: dnd ? "#fbbf24" : "#06d6a0" }}
                 />
-                {me.verified && (
-                  <span className="absolute -left-1 -top-1">
-                    <VerifiedBadge size={14} />
-                  </span>
-                )}
+                {/* Tiny avatar-corner tier mark (no caption — the corner is 14px). */}
+                <span className="absolute -left-1 -top-1">
+                  <RoleBadge role={roleFromFlags(me.role, me.verified)} size={14} caption={false} />
+                </span>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuLabel className="min-w-0">

@@ -16,7 +16,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
-import { VerifiedBadge } from "@/app/VerifiedBadge";
+import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { openPeerProfile } from "@/app/PeerOverlays";
 import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
@@ -497,7 +497,7 @@ export default function DialerPage() {
                           >
                             {previewIdentity.displayName}
                           </button>
-                          {previewIdentity.verified && <VerifiedBadge size={13} className="ml-1" />}
+                          <RoleBadge role={roleFromFlags(previewIdentity.role, previewIdentity.verified)} size={13} className="ml-1" />
                           {" · "}
                           <span
                             className={

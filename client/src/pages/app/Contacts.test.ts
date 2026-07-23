@@ -47,7 +47,9 @@ describe("Contacts — rich rows + inline actions", () => {
     expect(PAGE).toMatch(/c\.inCall\s*\?\s*"bg-amber-400"/);
     expect(PAGE).toMatch(/bg-\[color:var\(--relay-online\)\]/);
     expect(PAGE).toMatch(/bg-\[color:var\(--relay-offline\)\]/);
-    expect(PAGE).toMatch(/c\.verified && <VerifiedBadge/);
+    // v2.99.6: the verified-only badge became the three-tier RoleBadge
+    // (Guest/Registered/Admin) rendered for EVERY contact.
+    expect(PAGE).toMatch(/<RoleBadge role=\{roleFromFlags\(c\.role, c\.verified\)\}/);
   });
 });
 

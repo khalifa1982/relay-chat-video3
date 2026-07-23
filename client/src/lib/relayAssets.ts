@@ -286,7 +286,7 @@ export const RELAY_MARKUP = `
       <div class="av" id="ringAv">?</div>
       <img class="ring-av-img" id="ringAvImg" alt="" style="display:none">
     </div>
-    <div class="who"><span id="ringWho">Someone</span><span class="ring-verified" id="ringVerified" style="display:none" title="Verified account"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.7l2.6 2.5 3.6-.5 1.1 3.4 3.2 1.7-1.3 3.2 1.3 3.2-3.2 1.7-1.1 3.4-3.6-.5-2.6 2.5-2.6-2.5-3.6.5-1.1-3.4-3.2-1.7L2.8 12 1.5 8.8l3.2-1.7 1.1-3.4 3.6.5z"/><path d="M10.7 15.3l-2.9-2.9 1.3-1.3 1.6 1.6 4.6-4.6 1.3 1.3z" fill="#04201B"/></svg></span><span class="ring-flag" id="ringFlag"></span></div>
+    <div class="who"><span id="ringWho">Someone</span><span class="ring-verified" id="ringVerified" style="display:none" title="Verified account"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.7l2.6 2.5 3.6-.5 1.1 3.4 3.2 1.7-1.3 3.2 1.3 3.2-3.2 1.7-1.1 3.4-3.6-.5-2.6 2.5-2.6-2.5-3.6.5-1.1-3.4-3.2-1.7L2.8 12 1.5 8.8l3.2-1.7 1.1-3.4 3.6.5z"/><path d="M10.7 15.3l-2.9-2.9 1.3-1.3 1.6 1.6 4.6-4.6 1.3 1.3z" fill="#04201B"/></svg><i class="ring-role-txt" id="ringRoleTxt"></i></span><span class="ring-flag" id="ringFlag"></span></div>
     <div class="ring-pin" id="ringPin"></div>
     <div class="ring-presence" id="ringPresence"></div>
     <div class="sub" id="ringSub">is calling you&hellip;</div>
@@ -476,8 +476,13 @@ export const RELAY_CSS = `
 .relay-root .ring-halo.h2{border-color:rgba(110,231,255,.4)}
 .relay-root .ring-card .who{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:27px;margin-bottom:2px;
   display:flex;align-items:center;justify-content:center;gap:8px}
-.relay-root .ring-verified{display:inline-grid;place-items:center;color:#3FE0C5}
+/* v2.99.6: the caller's badge is TIERED (blue Guest / green Registered /
+   yellow Admin — color set inline by presentRingProfile) with the tier name
+   in tiny type right under the mark (owner spec). */
+.relay-root .ring-verified{display:inline-flex;flex-direction:column;align-items:center;color:#3FE0C5}
 .relay-root .ring-verified svg{width:19px;height:19px}
+.relay-root .ring-role-txt{font-style:normal;font-size:7.5px;font-weight:800;line-height:1;margin-top:1px;letter-spacing:.02em}
+.relay-root .ring-role-txt:empty{display:none}
 .relay-root .ring-card .ring-flag{font-size:22px;line-height:1}
 .relay-root .ring-card .ring-pin{font-family:"JetBrains Mono",monospace;font-size:15px;letter-spacing:.08em;color:var(--accent);margin-bottom:2px}
 .relay-root .ring-presence{min-height:17px;font-size:12.5px;font-weight:600;color:#3ddc84}
