@@ -22,7 +22,7 @@ import { PasscodeGate } from "./PasscodeGate";
 import { useRealtime } from "./useRealtime";
 import { useDnd } from "./dnd";
 import { useTheme } from "@/contexts/ThemeContext";
-import { MissedCallToast, NotificationBell } from "./MissedCalls";
+import { AwaySummaryToast, NotificationBell } from "./MissedCalls";
 import { PushBanner } from "./PushBanner";
 import { CallHealthBanner } from "./CallHealthBanner";
 import { PeerOverlaysHost } from "./PeerOverlays";
@@ -206,6 +206,20 @@ function Inner({ children }: { children: React.ReactNode }) {
       (threads.data ?? []).reduce((acc, t) => acc + (t.unreadCount ?? 0), 0),
     [threads.data]
   );
+  // The most recent conversation with unread messages — powers the "while you
+  // were away" landing card's messages row (v2.99.12). Group threads use their
+  // title; 1:1 threads the peer's display name (falling back to the number).
+  const latestUnread = useMemo(() => {
+    const withUnread = (threads.data ?? [])
+      .filter((t) => (t.unreadCount ?? 0) > 0 && t.lastMessageAt)
+      .sort(
+        (a, b) => new Date(b.lastMessageAt!).getTime() - new Date(a.lastMessageAt!).getTime()
+      );
+    const top = withUnread[0];
+    if (!top) return null;
+    const name = top.title || top.peerDisplayName || top.peerNumber || "New message";
+    return { name, at: top.lastMessageAt! };
+  }, [threads.data]);
 
   // Unseen-status dot (v2.96): a contact posted a story I haven't seen —
   // light a quiet teal dot on the Messages tab (the status strip lives at
@@ -246,39 +260,71 @@ function Inner({ children }: { children: React.ReactNode }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onHistory, missedCount]);
-  // The landing popup is dismissible WITHOUT clearing the History/bell badges
-  // (those stay until the user actually reviews History — dismissing the toast
-  // just says "stop showing me this banner", not "I've seen these calls").
-  // Persisted to localStorage (not just sessionStorage, which only survives a
-  // refresh — not a full close + reopen) and keyed to the dismissed COUNT, so a
-  // brand-new missed call after dismissal still re-surfaces the popup instead
-  // of staying silently suppressed forever.
-  const DISMISS_KEY = "relay_missed_popup_dismissed_count";
-  const [dismissedAtCount, setDismissedAtCount] = useState(() => {
-    try { return Number(localStorage.getItem(DISMISS_KEY) ?? 0); } catch { return 0; }
+  // The landing card is dismissible WITHOUT clearing the History/bell badges
+  // (those stay until the user actually reviews History — dismissing the card
+  // just says "stop showing me this banner", not "I've seen these"). Persisted
+  // to localStorage (survives a full close + reopen, not just a refresh).
+  //
+  // v2.99.12: the card covers BOTH missed calls and unread messages, and the
+  // dismiss watermark keys on the TIMESTAMP of the latest item in each category
+  // — NOT a count. Counts are non-monotonic: they FALL when you review History
+  // (markMissedSeen) or read a thread, so a count high-water mark goes
+  // stale-high and would silently hide genuinely-new activity that lands at or
+  // below it (including a fresh next-day login with fewer-but-new items). A
+  // latest-item timestamp only ever moves forward, so "newer than what I
+  // dismissed" is a sound re-surface test across sessions.
+  const DISMISS_KEY = "relay_away_popup_seen_v2";
+  const [seen, setSeen] = useState<{ missedAt: number; msgAt: number }>(() => {
+    try {
+      const raw = localStorage.getItem(DISMISS_KEY);
+      if (raw) {
+        const p = JSON.parse(raw);
+        return { missedAt: Number(p.missedAt) || 0, msgAt: Number(p.msgAt) || 0 };
+      }
+    } catch { /* */ }
+    return { missedAt: 0, msgAt: 0 };
   });
-  const popupDismissed = missedCount > 0 && missedCount <= dismissedAtCount;
-  const dismissPopup = () => {
-    setDismissedAtCount(missedCount);
-    try { localStorage.setItem(DISMISS_KEY, String(missedCount)); } catch { /* */ }
+  const latestMissedAt = missed.data?.latest?.at ? new Date(missed.data.latest.at).getTime() : 0;
+  const latestMsgAt = latestUnread?.at ? new Date(latestUnread.at).getTime() : 0;
+  // Show a category's alert only when it has items AND its newest item is newer
+  // than what was last dismissed. The card opens if EITHER is new.
+  const showMissedAlert = missedCount > 0 && latestMissedAt > seen.missedAt;
+  const showUnreadAlert = unreadTotal > 0 && latestMsgAt > seen.msgAt;
+  const awayOpen = showMissedAlert || showUnreadAlert;
+  const dismissAway = () => {
+    // Advance both watermarks to the current latest (never backwards) so
+    // everything currently shown stops nagging until something newer arrives.
+    const next = {
+      missedAt: Math.max(latestMissedAt, seen.missedAt),
+      msgAt: Math.max(latestMsgAt, seen.msgAt),
+    };
+    setSeen(next);
+    try { localStorage.setItem(DISMISS_KEY, JSON.stringify(next)); } catch { /* */ }
   };
   const viewMissed = () => {
-    dismissPopup();
+    dismissAway();
     // Straight to the full Missed log (History → Missed filter pre-selected);
     // reviewing it also acknowledges the missed calls (clears the badges).
     navigate("/app/history?filter=missed");
+  };
+  const openMessagesFromToast = () => {
+    dismissAway();
+    navigate("/app/messages");
   };
 
   if (!me) return null;
 
   return (
     <div className="min-h-svh bg-background text-foreground flex flex-col md:flex-row">
-      {/* Landing missed-call popup: prominent but non-intrusive, on app launch. */}
-      {!popupDismissed && missed.data && (
-        <MissedCallToast
-          summary={{ count: missed.data.count, latest: missed.data.latest }}
-          onView={viewMissed}
-          onDismiss={dismissPopup}
+      {/* Landing "while you were away" popup: prominent but non-intrusive, on
+          app launch — surfaces missed calls AND unread messages (v2.99.12). */}
+      {awayOpen && (
+        <AwaySummaryToast
+          missed={{ count: missedCount, latest: missed.data?.latest ?? null }}
+          unread={{ count: unreadTotal, latest: latestUnread }}
+          onViewMissed={viewMissed}
+          onOpenMessages={openMessagesFromToast}
+          onDismiss={dismissAway}
         />
       )}
       {/* ── desktop / tablet sidebar ───────────────────────────── */}
@@ -383,12 +429,12 @@ function Inner({ children }: { children: React.ReactNode }) {
                   />
                 )}
                 {tab.key === "messages" && unreadTotal > 0 && (
-                  <span className="inline-flex min-w-5 h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-xs items-center justify-center font-bold">
+                  <span className="relay-blink inline-flex min-w-5 h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-xs items-center justify-center font-bold">
                     {unreadTotal > 99 ? "99+" : unreadTotal}
                   </span>
                 )}
                 {tab.key === "history" && missedCount > 0 && (
-                  <span className="inline-flex min-w-5 h-5 px-1.5 rounded-full bg-destructive text-white text-xs items-center justify-center font-bold">
+                  <span className="relay-blink inline-flex min-w-5 h-5 px-1.5 rounded-full bg-destructive text-white text-xs items-center justify-center font-bold">
                     {missedCount > 99 ? "99+" : missedCount}
                   </span>
                 )}
@@ -663,12 +709,12 @@ function Inner({ children }: { children: React.ReactNode }) {
                       />
                     )}
                     {tab.key === "messages" && unreadTotal > 0 && (
-                      <span className="absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] items-center justify-center font-bold ring-2 ring-card">
+                      <span className="relay-blink absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] items-center justify-center font-bold ring-2 ring-card">
                         {unreadTotal > 99 ? "99+" : unreadTotal}
                       </span>
                     )}
                     {tab.key === "history" && missedCount > 0 && (
-                      <span className="absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-destructive text-white text-[10px] items-center justify-center font-bold ring-2 ring-card">
+                      <span className="relay-blink absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-destructive text-white text-[10px] items-center justify-center font-bold ring-2 ring-card">
                         {missedCount > 99 ? "99+" : missedCount}
                       </span>
                     )}

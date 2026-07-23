@@ -389,3 +389,37 @@ body.relay-app-lock {
   overflow: hidden;
   overscroll-behavior: none;
 }
+
+/* Blinking attention indicator (v2.99.12, owner: "keep blinking if there is a
+   message or there was a missed call"). Applied to the notification bell badge
+   + the Messages/History tab badges whenever the user has unseen missed calls
+   or unread messages. Motion is gated behind prefers-reduced-motion: the class
+   is inert (no animation) for users who ask for reduced motion, so it's always
+   safe to attach. `relay-blink-glow` adds a soft destructive halo pulse for the
+   bell icon itself. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes relayBlink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.28;
+    }
+  }
+  .relay-blink {
+    animation: relayBlink 1.15s ease-in-out infinite;
+  }
+  @keyframes relayBlinkGlow {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 color-mix(in oklab, var(--destructive) 55%, transparent);
+    }
+    50% {
+      box-shadow: 0 0 0 5px color-mix(in oklab, var(--destructive) 0%, transparent);
+    }
+  }
+  .relay-blink-glow {
+    animation: relayBlinkGlow 1.4s ease-out infinite;
+  }
+}

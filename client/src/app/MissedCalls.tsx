@@ -22,6 +22,129 @@ export interface MissedSummary {
   latest: { name: string; number: string; at: string | Date } | null;
 }
 
+export interface UnreadSummary {
+  count: number;
+  latest: { name: string; at: string | Date } | null;
+}
+
+/**
+ * "While you were away" landing card (v2.99.12). A single non-intrusive banner
+ * that drops in at the top of the app on launch/return and surfaces EVERYTHING
+ * the user missed while offline — missed calls AND unread messages — each as a
+ * tappable row that routes to the right place. Supersedes the calls-only
+ * `MissedCallToast` at the AppShell mount (that component is kept for
+ * backward-compat / any direct callers). Renders nothing when there's nothing
+ * to show.
+ *
+ * Owner directive (offline-return batch): "when he logs in again he will see
+ * the notification on the main page … if there is a message or a missed call."
+ */
+export function AwaySummaryToast({
+  missed,
+  unread,
+  onViewMissed,
+  onOpenMessages,
+  onDismiss,
+}: {
+  missed: MissedSummary;
+  unread: UnreadSummary;
+  onViewMissed: () => void;
+  onOpenMessages: () => void;
+  onDismiss: () => void;
+}) {
+  const hasMissed = missed.count > 0 && !!missed.latest;
+  const hasUnread = unread.count > 0;
+  if (!hasMissed && !hasUnread) return null;
+  const moreCalls = missed.count - 1;
+  return (
+    <div
+      // A passive, non-modal catch-up banner — role="region" (a labelled
+      // landmark), NOT alertdialog: it doesn't trap focus or demand a response,
+      // and its buttons stay tab-reachable. aria-live=polite announces it on
+      // appearance without stealing focus.
+      role="region"
+      aria-live="polite"
+      aria-label="While you were away"
+      // z-75: below RelayEngine's reconnect modal (z-80) — mid-call recovery
+      // takes priority over a catch-up banner.
+      className="fixed inset-x-0 top-0 z-[75] flex justify-center px-3 pt-3 pointer-events-none"
+    >
+      <div
+        className="pointer-events-auto w-full max-w-md rounded-2xl border border-border bg-card/95 shadow-2xl backdrop-blur-xl
+                   supports-[backdrop-filter]:bg-card/80 animate-in slide-in-from-top-3 fade-in duration-300 overflow-hidden"
+      >
+        <div className="flex items-center justify-between gap-2 px-3.5 pt-3 pb-1.5">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            <Bell className="size-3.5" />
+            While you were away
+          </div>
+          <button
+            type="button"
+            onClick={onDismiss}
+            aria-label="Dismiss"
+            className="shrink-0 grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+        {hasMissed && (
+          <button
+            type="button"
+            onClick={onViewMissed}
+            className="flex w-full items-start gap-3 px-3.5 py-2.5 text-left hover:bg-destructive/5 outline-none focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 focus-visible:ring-[3px]"
+          >
+            <span className="mt-0.5 grid size-10 shrink-0 place-items-center rounded-2xl bg-destructive/15 text-destructive">
+              <PhoneMissed className="size-5" />
+            </span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-sm font-semibold text-foreground">
+                {missed.count === 1 ? "Missed call" : `${missed.count} missed calls`}
+              </span>
+              <span className="block text-sm text-muted-foreground truncate">
+                <span className="font-medium text-foreground/90">{missed.latest!.name}</span>
+                {missed.latest!.number ? ` · ${fmtNumber(missed.latest!.number)}` : ""}
+                {moreCalls > 0 ? ` and ${moreCalls} other${moreCalls > 1 ? "s" : ""}` : ""}
+              </span>
+              <span className="block text-xs text-muted-foreground mt-0.5">{ago(missed.latest!.at)}</span>
+            </span>
+            <ChevronRight className="mt-3 size-4 shrink-0 text-muted-foreground" />
+          </button>
+        )}
+        {hasUnread && (
+          <button
+            type="button"
+            onClick={onOpenMessages}
+            className={
+              "flex w-full items-start gap-3 px-3.5 py-2.5 text-left hover:bg-primary/5 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
+              (hasMissed ? "border-t border-border/60" : "")
+            }
+          >
+            <span className="mt-0.5 grid size-10 shrink-0 place-items-center rounded-2xl bg-primary/15 text-primary">
+              <MessageSquare className="size-5" />
+            </span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-sm font-semibold text-foreground">
+                {unread.count === 1 ? "New message" : `${unread.count} new messages`}
+              </span>
+              <span className="block text-sm text-muted-foreground truncate">
+                {unread.latest ? (
+                  <span className="font-medium text-foreground/90">{unread.latest.name}</span>
+                ) : (
+                  "Tap to open Messages"
+                )}
+              </span>
+              {unread.latest && (
+                <span className="block text-xs text-muted-foreground mt-0.5">{ago(unread.latest.at)}</span>
+              )}
+            </span>
+            <ChevronRight className="mt-3 size-4 shrink-0 text-muted-foreground" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Landing missed-call popup — a prominent but NON-INTRUSIVE banner that drops in
  * at the top of the app on launch when the authenticated user (guest or
@@ -43,7 +166,10 @@ export function MissedCallToast({
   const more = count - 1;
   return (
     <div
-      role="alertdialog"
+      // Passive non-modal banner: role="region" (labelled landmark), not
+      // alertdialog — no focus trap, buttons stay tab-reachable.
+      role="region"
+      aria-live="polite"
       aria-label="Missed calls"
       // z-75: below RelayEngine's reconnect modal (z-80) — if you're mid-call
       // recovery, that takes priority over a missed-call banner.
@@ -123,6 +249,12 @@ export function NotificationBell({
   onDndChange: (value: boolean) => void;
 }) {
   const total = missedCount + unreadCount + pendingDevices;
+  // Blink the icon whenever there's a missed call or an unread message (the
+  // owner's exact triggers) — a live prompt to catch up on return. The badge
+  // count still includes pending-device approvals, but the blink is reserved
+  // for messages/calls so a routine device prompt doesn't strobe the header.
+  // `.relay-blink*` are inert under prefers-reduced-motion (see index.css).
+  const blink = missedCount + unreadCount > 0;
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -143,6 +275,7 @@ export function NotificationBell({
         onClick={() => setOpen((v) => !v)}
         className={
           "relative grid size-9 place-items-center rounded-xl active:scale-95 transition-colors outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
+          (blink && !dnd ? "relay-blink-glow " : "") +
           (dnd
             ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
             : "text-muted-foreground hover:text-foreground hover:bg-muted/50")
@@ -150,7 +283,12 @@ export function NotificationBell({
       >
         {dnd ? <BellOff className="size-[18px]" /> : <Bell className="size-[18px]" />}
         {total > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-destructive text-white text-[10px] items-center justify-center font-bold ring-2 ring-card">
+          <span
+            className={
+              "absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-destructive text-white text-[10px] items-center justify-center font-bold ring-2 ring-card " +
+              (blink ? "relay-blink" : "")
+            }
+          >
             {total > 99 ? "99+" : total}
           </span>
         )}

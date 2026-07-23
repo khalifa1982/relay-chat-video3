@@ -57,3 +57,57 @@ describe("missed-call notification system", () => {
     expect(DIALER).toMatch(/Missed Call/);
   });
 });
+
+/**
+ * v2.99.12 — offline-return batch (owner: "when he logs in again he'll see the
+ * notification on the main page and the icon keeps blinking if there's a
+ * message or a missed call"). The missed-call landing popup existed; this adds
+ * (a) unread MESSAGES to the same landing surface and (b) a blinking indicator.
+ */
+describe("v2.99.12 — offline-return: unread messages surface + blinking icon", () => {
+  const CSS = read("../index.css");
+
+  it("a combined 'while you were away' card surfaces missed calls AND unread messages", () => {
+    expect(MISSED).toMatch(/export function AwaySummaryToast/);
+    expect(MISSED).toMatch(/While you were away/);
+    expect(MISSED).toMatch(/onViewMissed/);
+    expect(MISSED).toMatch(/onOpenMessages/);
+    // AppShell mounts the combined card (not the calls-only one) with both summaries
+    expect(SHELL).toMatch(/<AwaySummaryToast/);
+    expect(SHELL).toMatch(/unread=\{\{ count: unreadTotal, latest: latestUnread \}\}/);
+  });
+
+  it("the landing card re-surfaces on a NEW item via a TIMESTAMP watermark (counts are non-monotonic)", () => {
+    // Counts fall when you review History (markMissedSeen) or read a thread, so
+    // a count high-water mark goes stale-high and hides new activity. The
+    // watermark keys on the latest-item TIMESTAMP, which only moves forward.
+    expect(SHELL).toMatch(/latestMissedAt > seen\.missedAt/);
+    expect(SHELL).toMatch(/latestMsgAt > seen\.msgAt/);
+    expect(SHELL).toMatch(/const awayOpen = showMissedAlert \|\| showUnreadAlert/);
+    // dismiss advances (never lowers) both watermarks
+    expect(SHELL).toMatch(/missedAt: Math\.max\(latestMissedAt, seen\.missedAt\)/);
+    expect(SHELL).toMatch(/relay_away_popup_seen_v2/);
+  });
+
+  it("the catch-up banner is a passive region, not a focus-trapping alertdialog", () => {
+    expect(MISSED).toMatch(/role="region"/);
+    expect(MISSED).not.toMatch(/role="alertdialog"/);
+  });
+
+  it("the bell + tab badges BLINK on a missed call / unread message, gated behind reduced-motion", () => {
+    expect(MISSED).toMatch(/const blink = missedCount \+ unreadCount > 0/);
+    expect(MISSED).toMatch(/relay-blink/);
+    // blink CSS is inert unless the user allows motion
+    expect(CSS).toMatch(/@media \(prefers-reduced-motion: no-preference\)/);
+    expect(CSS).toMatch(/@keyframes relayBlink/);
+    expect(CSS).toMatch(/\.relay-blink \{/);
+    // applied to the Messages + History tab badges (sidebar + mobile)
+    expect(SHELL).toMatch(/relay-blink inline-flex min-w-5/);
+    expect(SHELL).toMatch(/relay-blink absolute -top-0\.5/);
+  });
+
+  it("the latest unread thread powers the messages row (group title or peer name)", () => {
+    expect(SHELL).toMatch(/const latestUnread = useMemo/);
+    expect(SHELL).toMatch(/top\.title \|\| top\.peerDisplayName \|\| top\.peerNumber/);
+  });
+});
