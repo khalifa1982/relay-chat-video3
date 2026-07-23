@@ -5024,3 +5024,17 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
 - [x] Tests: 4 behavioral in relay.test.ts (knock→approve→join, deny, stranger roster-gate reject,
       moderator+pending guards) + server/liveRejoin.test.ts (privacy gate, tRPC shape, client wiring).
       Suite 1335 passed / 1 skipped; check + build green.
+
+## v2.99.10 — badge off the header avatar corner + PIN on every username surface (owner) (2026-07-23)
+- [x] BADGE PLACEMENT (owner screenshot: "why put the badge beside the flag and profile image? once
+      you click the avatar it shows username + PIN — put the badge there"). The captionless tier
+      badge that sat on the header avatar corner (overlapping the flag/photo) is REMOVED; it now
+      renders inside the dropdown that opens when you tap the header avatar — beside the name, with
+      the PIN right under it. AppShell.tsx.
+- [x] PIN EVERYWHERE (owner: "where's the name, the PIN should show everywhere"). The 6-digit PIN
+      now shows next to the name on the Messages chat HEADER and the Messages thread-LIST rows (1:1
+      only), alongside the already-present PIN on Contacts rows, the Dialer preview, History rows,
+      and the profile popup / full-profile view. Badge (tier) already renders on all of these.
+- [x] Tests: client/src/app/badgePinSurfaces.test.ts (badge gone from the avatar corner + present in
+      the dropdown label; PIN on Messages header + list rows + Contacts). Suite 1340 passed / 1
+      skipped; check + build green.

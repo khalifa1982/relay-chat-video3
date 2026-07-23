@@ -380,6 +380,12 @@ export default function MessagesPage() {
                                     )}
                                     <span className="truncate">{t.peerDisplayName || t.peerNumber}</span>
                                     <RoleBadge role={roleFromFlags(t.peerRole, t.peerVerified)} size={14} />
+                                    {/* v2.99.10 (owner): the PIN shows on 1:1 rows too. */}
+                                    {t.kind !== "group" && t.peerNumber && /^\d{6}$/.test(t.peerNumber) && (
+                                      <span className="font-mono text-[10.5px] text-muted-foreground shrink-0" dir="ltr">
+                                        {t.peerNumber.slice(0, 3)}-{t.peerNumber.slice(3)}
+                                      </span>
+                                    )}
                                   </div>
                                   {t.lastMessageAt && (
                                     <div className="text-[10.5px] font-mono text-muted-foreground shrink-0">
@@ -1035,7 +1041,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             <span className="truncate">{thread?.peerDisplayName || thread?.peerNumber || "Conversation"}</span>
             {thread && <RoleBadge role={roleFromFlags(thread.peerRole, thread.peerVerified)} size={15} />}
           </div>
-          <div className="text-[11px] truncate">
+          <div className="text-[11px] truncate flex items-center gap-1.5">
+            {/* v2.99.10 (owner): show the peer's PIN next to the name area on
+                every 1:1 thread — "where's the name, the PIN should show". */}
+            {!isGroup && thread?.peerNumber && /^\d{6}$/.test(thread.peerNumber) && (
+              <span className="font-mono text-muted-foreground" dir="ltr">
+                {thread.peerNumber.slice(0, 3)}-{thread.peerNumber.slice(3)}
+              </span>
+            )}
+            {!isGroup && thread?.peerNumber && <span className="text-muted-foreground/40">·</span>}
             {typers.length > 0 ? (
               <span className="text-[color:var(--relay-online)] font-medium animate-pulse">typing…</span>
             ) : isGroup ? (
