@@ -117,7 +117,10 @@ describe("in-call chat redesign (v2.96.1, owner spec)", () => {
     expect(RELAY_ASSETS).toMatch(/\.mrow \.mtime/);
     expect(RELAY_CLIENT).toMatch(/row\.className = "mrow " \+ \(mine \? "me" : "them"\)/);
     expect(RELAY_CLIENT).toMatch(/toLocaleTimeString\(\[\], \{ hour: "numeric", minute: "2-digit" \}\)/);
-    expect(RELAY_CLIENT).toMatch(/'<div class="mav">' \+ initials\(who\)/);
+    // v2.99.4: the avatar+name+time moved INTO the glass .mident chip (plus the
+    // sender's PIN) — same information, richer presentation.
+    expect(RELAY_CLIENT).toMatch(/<div class="mident">/);
+    expect(RELAY_CLIENT).toMatch(/initials\(who\)/);
   });
 });
 
