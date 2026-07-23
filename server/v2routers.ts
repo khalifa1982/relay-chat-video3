@@ -82,7 +82,12 @@ import {
   getPartyLinesByNumbers,
   listPartyLines,
   MAX_PARTY_LINES_PER_OWNER,
+  claimOfflineMessageEmail,
+  setUserNotificationPrefs,
+  OFFLINE_MESSAGE_EMAIL_COOLDOWN_MS,
 } from "./v2db";
+import { sendEmail, emailEnabled, wrapEmailDocument } from "./email";
+import { appBaseUrl } from "./appUrl";
 import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
@@ -124,6 +129,29 @@ import { createRateLimiter, clientIpOf, trustedProxyHops } from "./rateLimit";
 // when it's an API-tier instance behind the scale-out ALB (REDIS_URL set, no
 // local relay clients). Single-instance deploys are byte-identical.
 import { pinsInCallAsync, partyLineLiveCountsAsync, liveRoomFor } from "./relay";
+
+/**
+ * Offline-message email (v2.99.13). CONTENT-FREE by design (owner: "it will
+ * tell him you received a message but NOT put the contents — log in to see
+ * it"): no sender name, no body, no thread — just a nudge + an Open button.
+ * appUrl is env-derived (APP_URL/DOMAIN) or null; with no env we omit the
+ * button (same rule as the missed-call email — a relative href is dead in a
+ * mail client and a Host-derived one is spoofable).
+ */
+function messageWaitingHtml(opts: { appUrl: string | null }): string {
+  const button = opts.appUrl
+    ? `\n    <a href="${opts.appUrl}/app" style="display:inline-block;background:#3FE0C5;color:#04201B;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:12px">Open RELAY</a>`
+    : "";
+  return wrapEmailDocument(
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0E1014">
+    <div style="font-size:20px;font-weight:800;letter-spacing:-0.02em">RELAY</div>
+    <p style="font-size:16px;line-height:1.5;margin:18px 0 6px">You have a new message waiting on RELAY.</p>
+    <p style="font-size:14px;color:#5A6271;margin:0 0 22px">Log in to read it — we don't include message contents in email.</p>${button}
+    <p style="font-size:12px;color:#8A93A2;margin-top:28px">You're receiving this because message notifications are on for your RELAY account. You can turn them off in Profile → Notifications.</p>
+  </div>`,
+    "New message · RELAY"
+  );
+}
 
 export const NumberSchema = z
   .string()
@@ -1262,6 +1290,44 @@ export const v2MessagesRouter = router({
         /* push is best-effort; polling is the safety net */
       }
 
+      // Offline-message EMAIL (v2.99.13, owner: "if somebody sent me a message
+      // and I'm offline, email me — WITHOUT the content — 'you received a
+      // message, log in to see it'; I can disable it in Profile"). For every
+      // OFFLINE recipient (1:1 or group) with a linked account email and the
+      // preference on, send a content-free nudge — throttled to at most one per
+      // recipient per cooldown (claimOfflineMessageEmail is an atomic, race-safe
+      // pref+cooldown check). This runs only on the real client→peers send path
+      // (the internal offline auto-reply below is a separate sendMessage call,
+      // never this procedure), so it never emails for system messages. Fully
+      // best-effort: a failure here never affects the delivered message.
+      try {
+        if (emailEnabled() && peerIds.length > 0) {
+          const presences = await getPresenceForIds(peerIds);
+          const onlineById = new Map(presences.map((p) => [p.identityId, p.isOnline]));
+          for (const pid of peerIds) {
+            if (onlineById.get(pid)) continue; // only offline recipients
+            const peer = await getIdentityById(pid);
+            if (!peer?.userId) continue; // guests have no email
+            const user = await getUserById(peer.userId);
+            if (!user?.email) continue;
+            // Atomic: only fires when the pref is on AND the cooldown elapsed.
+            const claimed = await claimOfflineMessageEmail(
+              peer.userId,
+              OFFLINE_MESSAGE_EMAIL_COOLDOWN_MS
+            );
+            if (!claimed) continue;
+            const appUrl = appBaseUrl();
+            sendEmail({
+              to: user.email,
+              subject: "You have a new message on RELAY",
+              html: messageWaitingHtml({ appUrl }),
+            }).catch(() => {});
+          }
+        }
+      } catch {
+        /* offline-message email is best-effort — never blocks the send */
+      }
+
       // Offline auto-reply (1:1 only — avoids group spam). If the single other
       // party is offline and hasn't auto-replied in the last 10 min, post a
       // one-time auto-reply FROM them so the sender knows they'll reply later.
@@ -1971,6 +2037,44 @@ export const v2OtpAuthRouter = router({
       preferPin: Boolean(user.preferPinLogin),
     };
   }),
+
+  /* ── email-notification preferences (v2.99.13) ──────────────────────
+     Registered users with a linked email can toggle the two transactional
+     emails: a missed call (while offline) and a content-free "you have a new
+     message" nudge. NULL columns mean ENABLED (the historical default), so
+     the read normalizes `!== false`. Guests / email-less accounts get
+     hasEmail:false and the Profile section hides itself. */
+  getNotificationPrefs: publicProcedure.query(async ({ ctx }) => {
+    const user = ctx.user as (typeof ctx.user & {
+      email?: string | null;
+      emailNotifyMissedCall?: boolean | null;
+      emailNotifyMessage?: boolean | null;
+    }) | null;
+    if (!user) return { signedIn: false, hasEmail: false, missedCall: true, message: true };
+    return {
+      signedIn: true,
+      hasEmail: Boolean(user.email),
+      missedCall: user.emailNotifyMissedCall !== false,
+      message: user.emailNotifyMessage !== false,
+    };
+  }),
+
+  setNotificationPrefs: publicProcedure
+    .input(
+      z.object({
+        missedCall: z.boolean().optional(),
+        message: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const user = ctx.user;
+      if (!user) throw new TRPCError({ code: "UNAUTHORIZED", message: "Sign in first." });
+      await setUserNotificationPrefs(user.id, {
+        emailNotifyMissedCall: input.missedCall,
+        emailNotifyMessage: input.message,
+      });
+      return { ok: true, missedCall: input.missedCall, message: input.message };
+    }),
 
   /* ── device list + remote logout (v2.99.1) ──────────────────────────
      Every login records a row in the `sessions` ledger; this lists the

@@ -5103,3 +5103,30 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       blink + reduced-motion gate, latestUnread resolution). Suite 1349 passed / 1 skipped; check +
       build green. NOTE: the offline-message EMAIL notification + its enable/disable preference is
       tracked separately as the next item (#34).
+
+## v2.99.13 — email-notification preferences (missed call + offline message, content-free, toggleable) (owner) (2026-07-23)
+- [x] OWNER (offline batch): "if he's a registered user and put his email, he'll get an email for a
+      missed call OR when somebody sends a message while he's offline — but WITHOUT the content, just
+      'you received a message, log in to see it'. He can enable/disable it."
+- [x] SCHEMA + MIGRATOR: two additive nullable `users` booleans `emailNotifyMissedCall` /
+      `emailNotifyMessage` + a `lastMessageEmailAt` cooldown watermark (drizzle/schema.ts +
+      ensureSchemaExtensions `adds`). NULL = ENABLED (historical default — the missed-call email
+      always sent), so a user disables by storing false.
+- [x] MISSED-CALL EMAIL GATE (server/_core/index.ts): one line `if (user.emailNotifyMissedCall ===
+      false) return;` placed AFTER the push + recordMissedCall, so History + push stay unconditional
+      and only the EMAIL is preference-gated.
+- [x] OFFLINE-MESSAGE EMAIL (v2MessagesRouter.send): for every OFFLINE recipient (1:1 or group) with
+      a linked account email, send a CONTENT-FREE `messageWaitingHtml()` nudge — no body, no sender,
+      no thread, just "you have a new message, log in to see it" + an Open button. Throttled by
+      `claimOfflineMessageEmail(userId, cooldownMs)`: a SINGLE atomic conditional UPDATE (stamp
+      lastMessageEmailAt=now WHERE pref on (NULL OR true) AND cooldown elapsed (NULL OR < cutoff)),
+      true only when affectedRows>0 → at most one email per 15-min cooldown, race-free (mirrors the
+      v2.98.4 S1 fix) and fail-safe (DB down → false → no email, send unaffected).
+- [x] tRPC (v2OtpAuthRouter): `getNotificationPrefs` (normalizes NULL→on, reports hasEmail) +
+      `setNotificationPrefs` (auth-guarded partial write via setUserNotificationPrefs).
+- [x] PROFILE UI: new `EmailNotificationsSection` (two role="switch" toggles mirroring DndSection,
+      optimistic update + rollback) rendered after NotificationsSection; returns null for guests /
+      email-less accounts so only registered users with an email see it.
+- [x] Tests: server/emailNotifyPrefs.test.ts (11 — schema/migrator, atomic claim, NULL=on across all
+      three read sites, content-free email, gating order, tRPC, Profile section). Suite 1361 passed /
+      1 skipped; check + build green.

@@ -39,6 +39,17 @@ export const users = mysqlTable("users", {
   loginPinAttempts: int("loginPinAttempts"),
   loginPinLockedAt: timestamp("loginPinLockedAt"),
   preferPinLogin: boolean("preferPinLogin"),
+  /* Email-notification preferences (v2.99.13). Additive + nullable via
+     ensureSchemaExtensions(). NULL is treated as ENABLED (the historical
+     default — the missed-call email always sent), so existing users keep
+     getting emails; a user disables by storing false. */
+  /** Email me when I miss a call while offline. NULL/true = on, false = off. */
+  emailNotifyMissedCall: boolean("emailNotifyMissedCall"),
+  /** Email me (content-free) when I get a message while offline. NULL/true = on. */
+  emailNotifyMessage: boolean("emailNotifyMessage"),
+  /** Cooldown watermark: last time we sent an offline-message email to this
+   *  user, so N messages while away don't produce N emails. */
+  lastMessageEmailAt: timestamp("lastMessageEmailAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
