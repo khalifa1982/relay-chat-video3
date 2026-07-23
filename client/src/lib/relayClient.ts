@@ -2435,7 +2435,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
         sendWS({ type: "reject", to: m.from });
         return;
       }
-      waitingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, flag: m.flag, at: Date.now() };
+      // Bug fix: `video` was never carried onto the waiting-ring record, so a
+      // call-waiting VIDEO call always got answered voice-only via switchCall
+      // (it never consults video) and the promoted-after-hangup path (below)
+      // showed a stale video-answer button left over from a PRIOR call.
+      waitingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, flag: m.flag, video: !!m.video, at: Date.now() };
       showCallWaiting(m.fromName || nameOf(m.from!), m.from, m.flag);
       return;
     }
@@ -5460,6 +5464,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // is fully torn down (mirror of onRing's incoming-ring presentation).
     if (promotedRing && !destroyed) {
       pendingRing = promotedRing;
+      // Bug fix: this presentation is a "mirror of onRing" (see above) but was
+      // missing the one thing that makes a video dial answerable as video —
+      // onRing hides/shows the Video-answer button based on the ring's video
+      // flag; without this line the button kept whatever visibility a PRIOR
+      // ring left it in, so a promoted video call could show no Video button
+      // (or a promoted voice call could wrongly show a stale one).
+      const vWrap = $("acceptVideoWrap"); if (vWrap) vWrap.style.display = promotedRing.video ? "" : "none";
       const ringAv = $("ringAv"); if (ringAv) ringAv.textContent = initials(promotedRing.fromName || "?");
       const ringWho = $("ringWho"); if (ringWho) ringWho.textContent = promotedRing.fromName || "Someone";
       const ringSub = $("ringSub"); if (ringSub) ringSub.textContent = "is calling you…";

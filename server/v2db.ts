@@ -1026,38 +1026,51 @@ export async function getOrCreateDmConversation(a: number, b: number) {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
 
+  let convo: { id: number; pairKey: string | null; kind: string } | undefined;
+
   const existing = await db
     .select()
     .from(conversations)
     .where(eq(conversations.pairKey, key))
     .limit(1);
-  if (existing.length > 0) return existing[0];
-
-  try {
-    await db.insert(conversations).values({ pairKey: key, kind: "dm" });
-  } catch (insertErr) {
-    // Two participants can open the same thread at once: both SELECTs above see
-    // nothing, both INSERT, and the loser hits the unique index on pairKey. Re-
-    // select here; if the row now exists the race is benign and we return it.
-    // Only a genuine insert failure (row still absent) is rethrown.
-    const raced = await db
+  if (existing.length > 0) {
+    convo = existing[0];
+  } else {
+    try {
+      await db.insert(conversations).values({ pairKey: key, kind: "dm" });
+    } catch (insertErr) {
+      // Two participants can open the same thread at once: both SELECTs above see
+      // nothing, both INSERT, and the loser hits the unique index on pairKey. Re-
+      // select here; if the row now exists the race is benign and we return it.
+      // Only a genuine insert failure (row still absent) is rethrown.
+      const raced = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.pairKey, key))
+        .limit(1);
+      if (raced.length === 0) throw insertErr;
+    }
+    const created = await db
       .select()
       .from(conversations)
       .where(eq(conversations.pairKey, key))
       .limit(1);
-    if (raced.length === 0) throw insertErr;
+    if (created.length === 0) throw new Error("conversation insert failed");
+    convo = created[0];
   }
-  const created = await db
-    .select()
-    .from(conversations)
-    .where(eq(conversations.pairKey, key))
-    .limit(1);
-  if (created.length === 0) throw new Error("conversation insert failed");
-  const convo = created[0];
 
-  // For self-conversations we only insert one participant row; the
-  // composite primary key (conversationId, identityId) would reject a
-  // duplicate anyway, but being explicit avoids depending on that.
+  // CORRECTNESS: ensure both participant rows exist EVERY time, including when
+  // we returned a PRE-EXISTING conversation — not just on the create branch.
+  // The conversation-row insert and the participant-rows insert are two
+  // separate round trips (not one transaction, unlike createGroupConversation),
+  // so a failure or slow participant insert used to leave a committed
+  // conversation row with NO participants and no recovery path: every later
+  // call hit the early-return above and handed back a thread that
+  // listMessages/sendMessage's membership checks would 403 BOTH users out of,
+  // forever. Re-running this idempotent upsert on every call self-heals any
+  // already-orphaned row and closes the race window for new ones — a
+  // concurrent caller that read the just-inserted conversation row via the
+  // early-return branch above will still land here before returning.
   const participantValues = isSelf
     ? [{ conversationId: convo.id, identityId: a }]
     : [

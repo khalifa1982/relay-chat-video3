@@ -294,7 +294,13 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
       es?.close();
       es = null;
     };
-    // utils is stable from trpc; enabled toggles re-subscribe
+    // utils is stable from trpc; enabled toggles re-subscribe.
+    // Bug fix: `onmessage` closes over `selfId` (used by shouldAlertForMessage
+    // below) but this effect used to depend on [enabled] only — if the
+    // resolved identity ever changed without `enabled` flipping, every
+    // subsequent SSE message kept comparing against the STALE selfId. Adding
+    // it here re-subscribes (a cheap, rare reconnect) so the closure is never
+    // stale.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]);
+  }, [enabled, selfId]);
 }

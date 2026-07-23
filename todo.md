@@ -4666,3 +4666,27 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
 - [ ] RESIDUAL (accepted, not changed): no per-caller outstanding-invite cap / pendingRings reaper (bounded
       benefit vs. hot-signaling-path risk); inbound webhook signature stays opt-in (mandatory would break
       operators running without the secret; the From==owner-email binding still gates the reply path).
+
+## v2.98.5 — RELIABILITY PASS (owner: "make it successful") (2026-07-23)
+- [x] Bug hunt across calling/messaging/onboarding, each candidate independently verified against source
+      before any fix (the calling core turned out heavily hardened already from prior audits — no
+      high-severity correctness bug substantiated there beyond the item below).
+- [x] `getOrCreateDmConversation` could permanently orphan a DM thread — the conversation-row insert and the
+      participant-row insert were two separate round trips with NO transaction (unlike its sibling
+      createGroupConversation, which already wraps both in one); a failure or slow participant insert between
+      them left a committed conversation row with no participants and no recovery path, 403'ing both users
+      out of their own thread forever on every later open. Fixed: the participant upsert now runs
+      unconditionally on every call (self-heals already-orphaned rows, closes the race for new ones).
+- [x] Messages: scrolling back to the bottom never re-fired the read receipt (only a new message arriving or
+      tab-focus did) — a thread could stay "unread"/no-✓✓ forever after the user actually read it. Scroll
+      handler now debounce-fires markRead when back near the bottom.
+- [x] Call-waiting: the promoted-ring presentation (post-hangup "let the waiting caller ring through") didn't
+      reset the Video-answer button — `waitingRing` never carried the `video` flag, and the promotion block
+      (its own comment says "mirror of onRing's presentation") omitted exactly that one reset. Both fixed.
+- [x] `useRealtime`'s SSE onmessage closure could read a stale identity id (effect depended on [enabled] only
+      while capturing selfId) — added selfId to the dependency array.
+- [x] Reviewed and left alone: PresenceManager's instant-offline-on-tab-hide is a deliberate, documented
+      trade-off (catches mobile Safari tab-closes that don't fire pagehide); a debounce would defeat detection
+      on exactly the browsers it targets.
+- [x] New `server/reliabilityPass.test.ts` + `client/src/app/reliabilityPass.test.ts` + a pin in
+      `useRealtime.test.ts`. Suite 1216 passed / 1 skipped; check + build green.

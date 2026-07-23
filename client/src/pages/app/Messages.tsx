@@ -759,13 +759,30 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    // Bug fix: catching back up by scrolling to the bottom after reading
+    // history used to never re-fire the read receipt — only a NEW message
+    // arriving or the tab regaining focus did. If neither happened again, the
+    // thread stayed "unread" forever (badge lit, sender never got ✓✓) even
+    // though the user had actually read everything. Debounced so a scroll
+    // gesture doesn't fire a mutation per frame.
+    let markReadT: ReturnType<typeof setTimeout> | null = null;
     const onScroll = () => {
       const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       setShowScrollButton(fromBottom > 150);
+      if (fromBottom <= 150 && document.visibilityState === "visible") {
+        if (markReadT) clearTimeout(markReadT);
+        markReadT = setTimeout(() => {
+          markReadMutation.mutate({ conversationId });
+        }, 400);
+      }
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
-    return () => el.removeEventListener("scroll", onScroll);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      if (markReadT) clearTimeout(markReadT);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
   function scrollToBottom() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });

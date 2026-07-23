@@ -1,5 +1,22 @@
 import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { shouldAlertForMessage } from "./useRealtime";
+
+/**
+ * Regression (2026-07-23 reliability pass): the SSE effect's `onmessage`
+ * closure reads `selfId` (via shouldAlertForMessage), but the effect used to
+ * depend on [enabled] only — a stale closure if the resolved identity ever
+ * changed without `enabled` flipping. No DOM harness here, so pin the
+ * dependency array by source (matches the file's own `// eslint-disable-next-
+ * line react-hooks/exhaustive-deps` pattern already used one line above it).
+ */
+const USE_REALTIME_SRC = fs.readFileSync(path.resolve(__dirname, "useRealtime.ts"), "utf8");
+describe("useRealtime — the SSE effect re-subscribes when selfId changes", () => {
+  it("depends on both enabled and selfId (not [enabled] alone)", () => {
+    expect(USE_REALTIME_SRC).toMatch(/\}, \[enabled, selfId\]\);/);
+  });
+});
 
 /**
  * The server fans the `message` SSE event out to EVERY participant, including
