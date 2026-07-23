@@ -5068,3 +5068,33 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       miss recorded, no keep-alive, LIVE-path redelivery unchanged); server/v29911OfflineCall.test.ts
       (7 wiring pins); enumBlockHardening.test.ts E4 + client/src/lib/callReachability.test.ts updated
       to the new behavior. Suite 1345 passed / 1 skipped; check green.
+
+## v2.99.12 — offline-return notifications: unread messages surface + blinking icon (owner) (2026-07-23)
+- [x] ON RETURN, SEE WHAT YOU MISSED (owner, offline-call batch: "when he logged in again he will see
+      the notification on the main page and also on the icon and to keep blinking if there is a
+      message or there was in the history a missed call"). Missed calls already had a landing popup +
+      History entry + bell/tab badges; this extends the on-return surfacing to unread MESSAGES too and
+      makes the indicator BLINK.
+- [x] COMBINED LANDING CARD: the calls-only `MissedCallToast` mount is replaced by a new
+      `AwaySummaryToast` (client/src/app/MissedCalls.tsx) — a "While you were away" card that shows a
+      missed-calls row AND an unread-messages row, each a tappable route (→ History?filter=missed / →
+      Messages). Renders nothing when both are zero. `MissedCallToast` is kept exported for
+      backward-compat. AppShell computes `latestUnread` (most-recent unread thread; group title or
+      peer name) to label the messages row.
+- [x] DISMISS HIGH-WATER MARK is now a PAIR "missed:unread" (localStorage `relay_away_popup_dismissed`;
+      legacy single-number `relay_missed_popup_dismissed_count` migrated). The banner re-surfaces when
+      EITHER count climbs past the dismissed mark (a genuinely new miss/message) and stays quiet when
+      counts only shrink (you read something elsewhere).
+- [x] BLINKING ICON: the notification bell badge + the Messages/History tab badges (sidebar + mobile)
+      carry a `relay-blink` class that flashes opacity, and the bell button a `relay-blink-glow` halo,
+      whenever `missedCount + unreadCount > 0` (the owner's exact triggers; pending-device approvals
+      still count in the badge total but don't strobe the header). The keyframes live in
+      client/src/index.css behind `@media (prefers-reduced-motion: no-preference)`, so the class is
+      inert for reduced-motion users — always safe to attach.
+- [x] Realtime: the SSE `message` event already invalidates `messages.threads`, so the unread badge +
+      blink + landing card update live (plus the 15s poll backstop). History missed-call entries were
+      already present (owner's "there was in the history a missed call") — no change needed there.
+- [x] Tests: client/src/app/missedCalls.test.ts +4 (combined card, pair dismiss + legacy migration,
+      blink + reduced-motion gate, latestUnread resolution). Suite 1349 passed / 1 skipped; check +
+      build green. NOTE: the offline-message EMAIL notification + its enable/disable preference is
+      tracked separately as the next item (#34).
