@@ -1,5 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import crypto from "crypto";
+import fs from "node:fs";
+import path from "node:path";
 import {
   createRegistry,
   handleMessage,
@@ -1510,6 +1512,149 @@ describe("relay — room-join authorization", () => {
       handleMessage(reg, caller.asConn(), { type: "signal", to: number, data: { sdp: { type: "offer" } } });
       expect(has(d2, "signal")).toBe(true);
       expect(has(d1, "signal")).toBe(false);
+    } finally {
+      delete process.env.MULTI_DEVICE_RING;
+    }
+  });
+
+  // ── multi-device hardening (v2.99.5, pre-enable review) ──────────────────
+  /** Register two devices sharing one number; returns [d1, d2, number]. */
+  function twoDevices(reg2: RelayRegistry): [FakeConn, FakeConn, string] {
+    const d1 = new FakeConn("dev1");
+    handleMessage(reg2, d1.asConn(), { type: "register", name: "Callee" });
+    const number = d1.pin!;
+    const d2 = new FakeConn("dev2");
+    handleMessage(reg2, d2.asConn(), { type: "register", name: "Callee", pin: number });
+    return [d1, d2, number];
+  }
+
+  it("declining on ONE device ring-cancels the number's OTHER devices (reason: declined)", () => {
+    process.env.MULTI_DEVICE_RING = "1";
+    try {
+      const caller = new FakeConn("caller");
+      handleMessage(reg, caller.asConn(), { type: "register", name: "Caller" });
+      const [d1, d2, number] = twoDevices(reg);
+      handleMessage(reg, caller.asConn(), { type: "invite", to: number });
+      expect(has(d1, "ring")).toBe(true);
+      expect(has(d2, "ring")).toBe(true);
+      d1.outbox.length = 0; d2.outbox.length = 0; caller.outbox.length = 0;
+      // Device 1 declines → device 2 stops ringing too, caller sees rejected.
+      handleMessage(reg, d1.asConn(), { type: "reject", to: caller.pin! });
+      const cancel = d2.outbox.find((m) => typeOf(m) === "ring-cancel") as { from: string; reason?: string } | undefined;
+      expect(cancel?.from).toBe(caller.pin);
+      expect(cancel?.reason).toBe("declined");
+      expect(has(caller, "rejected")).toBe(true);
+      // The declining device itself gets no self-cancel.
+      expect(has(d1, "ring-cancel")).toBe(false);
+    } finally {
+      delete process.env.MULTI_DEVICE_RING;
+    }
+  });
+
+  it("the accept fan-out labels its cancel (reason: answered)", () => {
+    process.env.MULTI_DEVICE_RING = "1";
+    try {
+      const caller = new FakeConn("caller");
+      handleMessage(reg, caller.asConn(), { type: "register", name: "Caller" });
+      const [d1, d2, number] = twoDevices(reg);
+      handleMessage(reg, caller.asConn(), { type: "invite", to: number });
+      const ring = d1.outbox.find((m) => typeOf(m) === "ring") as { roomId: string };
+      d1.outbox.length = 0; d2.outbox.length = 0;
+      handleMessage(reg, d2.asConn(), { type: "accept", roomId: ring.roomId });
+      const cancel = d1.outbox.find((m) => typeOf(m) === "ring-cancel") as { reason?: string } | undefined;
+      expect(cancel?.reason).toBe("answered");
+    } finally {
+      delete process.env.MULTI_DEVICE_RING;
+    }
+  });
+
+  it("a SECONDARY device registering while the number's call lives on the primary gets NO rejoin (no call hijack)", () => {
+    process.env.MULTI_DEVICE_RING = "1";
+    try {
+      const caller = new FakeConn("caller");
+      handleMessage(reg, caller.asConn(), { type: "register", name: "Caller" });
+      const d1 = new FakeConn("dev1");
+      handleMessage(reg, d1.asConn(), { type: "register", name: "Callee" });
+      const number = d1.pin!;
+      handleMessage(reg, caller.asConn(), { type: "invite", to: number });
+      const ring = d1.outbox.find((m) => typeOf(m) === "ring") as { roomId: string };
+      handleMessage(reg, d1.asConn(), { type: "accept", roomId: ring.roomId }); // d1 mid-call
+      // A fresh device now opens the app and registers the same number.
+      const d2 = new FakeConn("dev2");
+      handleMessage(reg, d2.asConn(), { type: "register", name: "Callee", pin: number });
+      expect(d2.pin).toBe(number);
+      expect(has(d2, "rejoin")).toBe(false); // NOT dragged into the live call
+      // The in-call primary keeps routing: a signal still reaches d1, not d2.
+      d1.outbox.length = 0; d2.outbox.length = 0;
+      handleMessage(reg, caller.asConn(), { type: "signal", to: number, data: { sdp: { type: "offer" } } });
+      expect(has(d1, "signal")).toBe(true);
+      expect(has(d2, "signal")).toBe(false);
+    } finally {
+      delete process.env.MULTI_DEVICE_RING;
+    }
+  });
+
+  it("a secondary's RE-AFFIRM register mid-call gets no rejoin either (isPrimaryChannel guard)", () => {
+    process.env.MULTI_DEVICE_RING = "1";
+    try {
+      const caller = new FakeConn("caller");
+      handleMessage(reg, caller.asConn(), { type: "register", name: "Caller" });
+      const [d1, d2, number] = twoDevices(reg);
+      handleMessage(reg, caller.asConn(), { type: "invite", to: number });
+      const ring = d1.outbox.find((m) => typeOf(m) === "ring") as { roomId: string };
+      handleMessage(reg, d1.asConn(), { type: "accept", roomId: ring.roomId }); // d1 is primary now
+      d2.outbox.length = 0;
+      // d2's geo-flag re-affirm (its conn.pin is already bound) must not rejoin.
+      handleMessage(reg, d2.asConn(), { type: "register", name: "Callee", flag: "🇦🇪" });
+      expect(has(d2, "registered")).toBe(true);
+      expect(has(d2, "rejoin")).toBe(false);
+    } finally {
+      delete process.env.MULTI_DEVICE_RING;
+    }
+  });
+
+  it("identity-switch on one device PROMOTES a survivor — the number stays reachable on the other device", () => {
+    process.env.MULTI_DEVICE_RING = "1";
+    try {
+      const [d1, , number] = twoDevices(reg); // d2 became primary (latest registration)
+      // Device 2 signs out → its engine restarts and registers a NEW identity
+      // number on the same browser channel (same cid, fresh connection).
+      const freePin = "999999";
+      const d2b = new FakeConn("dev2");
+      handleMessage(reg, d2b.asConn(), { type: "register", name: "Guest", pin: freePin });
+      expect(d2b.pin).toBe(freePin);
+      // The ORIGINAL number was not torn down: device 1 was promoted primary…
+      expect(reg.clients.get(number)?.cid).toBe("dev1");
+      // …and an incoming call still rings device 1.
+      const caller = new FakeConn("caller");
+      handleMessage(reg, caller.asConn(), { type: "register", name: "Caller" });
+      d1.outbox.length = 0;
+      handleMessage(reg, caller.asConn(), { type: "invite", to: number });
+      expect(has(d1, "ring")).toBe(true);
+    } finally {
+      delete process.env.MULTI_DEVICE_RING;
+    }
+  });
+
+  it("MULTI_DEVICE_RING=1 is baked into the .io pm2 config BEFORE the .env spread (operator can still override)", () => {
+    const eco = fs.readFileSync(path.resolve(__dirname, "..", "ecosystem.config.cjs"), "utf8");
+    expect(eco).toMatch(/MULTI_DEVICE_RING: "1", \.\.\.loadEnvFile\("\/home\/relay\/\.env"\)/);
+  });
+
+  it("a device registering MID-RING gets the pending ring on ITS OWN socket", () => {
+    process.env.MULTI_DEVICE_RING = "1";
+    try {
+      const caller = new FakeConn("caller");
+      handleMessage(reg, caller.asConn(), { type: "register", name: "Caller" });
+      const d1 = new FakeConn("dev1");
+      handleMessage(reg, d1.asConn(), { type: "register", name: "Callee" });
+      const number = d1.pin!;
+      handleMessage(reg, caller.asConn(), { type: "invite", to: number });
+      expect(has(d1, "ring")).toBe(true);
+      // The user now opens the app on a SECOND device while it's still ringing.
+      const d2 = new FakeConn("dev2");
+      handleMessage(reg, d2.asConn(), { type: "register", name: "Callee", pin: number });
+      expect(has(d2, "ring")).toBe(true); // delivered to the registering socket
     } finally {
       delete process.env.MULTI_DEVICE_RING;
     }

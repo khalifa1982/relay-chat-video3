@@ -75,8 +75,10 @@ describe("issue 1 — pre-ring dial drops", () => {
   it("SERVER: pending rings are recorded, redelivered on register, and cleared on accept/reject/cancel", () => {
     expect(SERVER).toMatch(/pendingRings: Map<string, PendingRing>/);
     expect(SERVER).toMatch(/export function deliverPendingRing/);
-    // Both register paths (fresh + re-affirm) redeliver.
-    const hits = SERVER.match(/deliverPendingRing\(reg, (conn\.pin|pin)\)/g) || [];
+    // Both register paths (fresh + re-affirm) redeliver — to the registering
+    // channel's OWN socket (v2.99.5 multi-device: the primary may be another
+    // device that is already ringing).
+    const hits = SERVER.match(/deliverPendingRing\(reg, (conn\.pin|pin), conn\.socket\)/g) || [];
     expect(hits.length).toBe(2);
     expect(SERVER).toMatch(/clearPendingRing\(reg, calleePin, \{ from: callerPin \}\)/); // cancel
     expect(SERVER).toMatch(/clearPendingRing\(reg, conn\.pin, \{ from: targetPin \}\)/);  // reject

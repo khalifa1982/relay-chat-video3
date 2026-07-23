@@ -4872,3 +4872,40 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       v2.84 mobile-toggle pin → the route-menu), v2961Fixes.test.ts (chat row → .mident chip). New
       client/src/lib/callBarV2994.test.ts (labels/colors/state-on-chip, More menu, sound routes,
       glass chip + PIN frames + emoji palette). Suite 1277 passed / 1 skipped; check + build green.
+
+## v2.99.5 — multi-device: one number on every signed-in device, all of them ring (owner report, 2 screenshots) (2026-07-23)
+- [x] BUG (owner screenshots): a registered account signed in on a SECOND device showed the SAME
+      profile but a DIFFERENT number on the Dialer (profile menu: khalifa · 235-680; dialer: 911 801)
+      — and incoming calls rang only one device. ROOT CAUSE (verified in source + by a parallel
+      research pass): `server/relay.ts` register — an `__ownedNumber`-verified claim (F1) to a pin
+      CURRENTLY held by the account's other live device takes the same free-or-mine-or-genPin gate
+      as an unverified claim, so the second device was shunted to `genPin()` → a fresh random
+      number; the ring fan-out (`reg.devices`) was fully built (v2.50-era, flag-gated
+      MULTI_DEVICE_RING) but deliberately never read with the flag off.
+- [x] ENABLED: `MULTI_DEVICE_RING: "1"` baked into ecosystem.config.cjs BEFORE the .env spread
+      (exactly the v2.94.4 RELAY_CLUSTER pattern; operator can still override with =0). The deploy
+      copies the file to EVERY server, which also satisfies the cluster constraint that the flag be
+      identical fleet-wide (the registry lives on the elected leader and leadership can migrate).
+      With the flag on: every signed-in device registers the SAME account number, an incoming call
+      rings ALL idle devices, the first answer wins (others show the cancel), and in-call signaling
+      routes to the answering device.
+- [x] FOUR flag-on gaps found by adversarial review and fixed BEFORE enabling (server/relay.ts):
+      (1) a SECONDARY device registering (or re-affirming) while the number's call lives on the
+      primary received `sendRejoinIfInRoom` — dragging a freshly-opened device straight INTO the
+      live call; both register paths now skip the rejoin for non-primary channels
+      (`keptPrimaryElsewhere` + `isPrimaryChannel`). (2) `deliverPendingRing` sent only to the
+      PRIMARY socket — a device opening mid-ring never rang; it now delivers to the registering
+      channel's own socket (optional `socket` param, default unchanged). (3) declining on one device
+      left the others ringing until their 30s local timeout — reject now fans `ring-cancel` to the
+      number's other devices (mirror of the accept fan-out). (4) identity-switch (logout → new guest
+      registration on one device) DELETED the number's only client record while the account's other
+      devices were still connected, going dark until their next re-register — the sever branch now
+      PROMOTES a surviving device to primary (mirrors the disconnect-grace survivor promotion).
+- [x] Honest UX: multi-device `ring-cancel` now carries `reason: "answered"|"declined"`; the client
+      toasts "Answered on another device" / "Declined on another device" instead of the misleading
+      "Caller cancelled the call" (old clients ignore the field).
+- [x] Tests: 7 new in relay.test.ts (decline fan-out with reason; accept cancel reason; no-rejoin
+      for a registering secondary mid-call; no-rejoin on a secondary's re-affirm; identity-switch
+      survivor promotion keeps the number ringing; mid-ring register rings the new device's own
+      socket; ecosystem.config.cjs bake pin). callReachability.test.ts pin updated to the new
+      deliverPendingRing(…, conn.socket) shape. Suite 1284 passed / 1 skipped; check + build green.
