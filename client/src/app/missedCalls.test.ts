@@ -77,11 +77,21 @@ describe("v2.99.12 — offline-return: unread messages surface + blinking icon",
     expect(SHELL).toMatch(/unread=\{\{ count: unreadTotal, latest: latestUnread \}\}/);
   });
 
-  it("the landing card re-surfaces when EITHER missed OR unread climbs past the dismissed mark", () => {
-    expect(SHELL).toMatch(/missedCount <= dismissed\.m && unreadTotal <= dismissed\.u/);
-    // legacy single-number dismiss key is migrated to the "missed:unread" pair
-    expect(SHELL).toMatch(/relay_missed_popup_dismissed_count/);
-    expect(SHELL).toMatch(/relay_away_popup_dismissed/);
+  it("the landing card re-surfaces on a NEW item via a TIMESTAMP watermark (counts are non-monotonic)", () => {
+    // Counts fall when you review History (markMissedSeen) or read a thread, so
+    // a count high-water mark goes stale-high and hides new activity. The
+    // watermark keys on the latest-item TIMESTAMP, which only moves forward.
+    expect(SHELL).toMatch(/latestMissedAt > seen\.missedAt/);
+    expect(SHELL).toMatch(/latestMsgAt > seen\.msgAt/);
+    expect(SHELL).toMatch(/const awayOpen = showMissedAlert \|\| showUnreadAlert/);
+    // dismiss advances (never lowers) both watermarks
+    expect(SHELL).toMatch(/missedAt: Math\.max\(latestMissedAt, seen\.missedAt\)/);
+    expect(SHELL).toMatch(/relay_away_popup_seen_v2/);
+  });
+
+  it("the catch-up banner is a passive region, not a focus-trapping alertdialog", () => {
+    expect(MISSED).toMatch(/role="region"/);
+    expect(MISSED).not.toMatch(/role="alertdialog"/);
   });
 
   it("the bell + tab badges BLINK on a missed call / unread message, gated behind reduced-motion", () => {

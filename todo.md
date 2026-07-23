@@ -5081,10 +5081,15 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       Messages). Renders nothing when both are zero. `MissedCallToast` is kept exported for
       backward-compat. AppShell computes `latestUnread` (most-recent unread thread; group title or
       peer name) to label the messages row.
-- [x] DISMISS HIGH-WATER MARK is now a PAIR "missed:unread" (localStorage `relay_away_popup_dismissed`;
-      legacy single-number `relay_missed_popup_dismissed_count` migrated). The banner re-surfaces when
-      EITHER count climbs past the dismissed mark (a genuinely new miss/message) and stays quiet when
-      counts only shrink (you read something elsewhere).
+- [x] DISMISS WATERMARK keys on the latest-item TIMESTAMP per category (localStorage
+      `relay_away_popup_seen_v2` `{missedAt,msgAt}`), NOT a count. (Adversarial pre-ship review caught
+      that a count high-water mark is broken: counts FALL when you review History or read a thread, so
+      the mark goes stale-high and silently hides genuinely-new activity — incl. a fresh next-day
+      login with fewer-but-new items, directly violating the directive. A latest-item timestamp only
+      moves forward, so "newer than dismissed" is sound across sessions.) The card opens when EITHER
+      category's newest item is newer than dismissed; `dismissAway` advances both marks via Math.max.
+- [x] A11Y: the catch-up banner is a passive `role="region"` (aria-live polite), not a focus-trapping
+      `alertdialog` (the same fix applied to the retained `MissedCallToast`) — review finding #2.
 - [x] BLINKING ICON: the notification bell badge + the Messages/History tab badges (sidebar + mobile)
       carry a `relay-blink` class that flashes opacity, and the bell button a `relay-blink-glow` halo,
       whenever `missedCount + unreadCount > 0` (the owner's exact triggers; pending-device approvals

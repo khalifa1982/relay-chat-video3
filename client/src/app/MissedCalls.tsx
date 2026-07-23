@@ -58,7 +58,12 @@ export function AwaySummaryToast({
   const moreCalls = missed.count - 1;
   return (
     <div
-      role="alertdialog"
+      // A passive, non-modal catch-up banner — role="region" (a labelled
+      // landmark), NOT alertdialog: it doesn't trap focus or demand a response,
+      // and its buttons stay tab-reachable. aria-live=polite announces it on
+      // appearance without stealing focus.
+      role="region"
+      aria-live="polite"
       aria-label="While you were away"
       // z-75: below RelayEngine's reconnect modal (z-80) — mid-call recovery
       // takes priority over a catch-up banner.
@@ -161,7 +166,10 @@ export function MissedCallToast({
   const more = count - 1;
   return (
     <div
-      role="alertdialog"
+      // Passive non-modal banner: role="region" (labelled landmark), not
+      // alertdialog — no focus trap, buttons stay tab-reachable.
+      role="region"
+      aria-live="polite"
       aria-label="Missed calls"
       // z-75: below RelayEngine's reconnect modal (z-80) — if you're mid-call
       // recovery, that takes priority over a missed-call banner.

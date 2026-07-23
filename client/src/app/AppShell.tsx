@@ -260,49 +260,55 @@ function Inner({ children }: { children: React.ReactNode }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onHistory, missedCount]);
-  // The landing popup is dismissible WITHOUT clearing the History/bell badges
-  // (those stay until the user actually reviews History — dismissing the toast
-  // just says "stop showing me this banner", not "I've seen these calls").
-  // Persisted to localStorage (not just sessionStorage, which only survives a
-  // refresh — not a full close + reopen) and keyed to the dismissed COUNT, so a
-  // brand-new missed call after dismissal still re-surfaces the popup instead
-  // of staying silently suppressed forever.
-  // v2.99.12: the landing card now covers BOTH missed calls and unread
-  // messages, so the dismiss high-water mark is a PAIR "missed:unread". The
-  // banner re-surfaces when EITHER count climbs past what was last dismissed
-  // (a genuinely new miss/message), and stays quiet when counts only shrink
-  // (you read something elsewhere). Legacy single-number keys are migrated.
-  const DISMISS_KEY = "relay_away_popup_dismissed";
-  const [dismissed, setDismissed] = useState<{ m: number; u: number }>(() => {
+  // The landing card is dismissible WITHOUT clearing the History/bell badges
+  // (those stay until the user actually reviews History — dismissing the card
+  // just says "stop showing me this banner", not "I've seen these"). Persisted
+  // to localStorage (survives a full close + reopen, not just a refresh).
+  //
+  // v2.99.12: the card covers BOTH missed calls and unread messages, and the
+  // dismiss watermark keys on the TIMESTAMP of the latest item in each category
+  // — NOT a count. Counts are non-monotonic: they FALL when you review History
+  // (markMissedSeen) or read a thread, so a count high-water mark goes
+  // stale-high and would silently hide genuinely-new activity that lands at or
+  // below it (including a fresh next-day login with fewer-but-new items). A
+  // latest-item timestamp only ever moves forward, so "newer than what I
+  // dismissed" is a sound re-surface test across sessions.
+  const DISMISS_KEY = "relay_away_popup_seen_v2";
+  const [seen, setSeen] = useState<{ missedAt: number; msgAt: number }>(() => {
     try {
-      const raw =
-        localStorage.getItem(DISMISS_KEY) ??
-        localStorage.getItem("relay_missed_popup_dismissed_count");
-      if (!raw) return { m: 0, u: 0 };
-      if (raw.includes(":")) {
-        const [m, u] = raw.split(":");
-        return { m: Number(m) || 0, u: Number(u) || 0 };
+      const raw = localStorage.getItem(DISMISS_KEY);
+      if (raw) {
+        const p = JSON.parse(raw);
+        return { missedAt: Number(p.missedAt) || 0, msgAt: Number(p.msgAt) || 0 };
       }
-      return { m: Number(raw) || 0, u: 0 }; // legacy: only the missed count was stored
-    } catch {
-      return { m: 0, u: 0 };
-    }
+    } catch { /* */ }
+    return { missedAt: 0, msgAt: 0 };
   });
-  const hasAway = missedCount > 0 || unreadTotal > 0;
-  const popupDismissed = hasAway && missedCount <= dismissed.m && unreadTotal <= dismissed.u;
-  const dismissPopup = () => {
-    const next = { m: missedCount, u: unreadTotal };
-    setDismissed(next);
-    try { localStorage.setItem(DISMISS_KEY, `${next.m}:${next.u}`); } catch { /* */ }
+  const latestMissedAt = missed.data?.latest?.at ? new Date(missed.data.latest.at).getTime() : 0;
+  const latestMsgAt = latestUnread?.at ? new Date(latestUnread.at).getTime() : 0;
+  // Show a category's alert only when it has items AND its newest item is newer
+  // than what was last dismissed. The card opens if EITHER is new.
+  const showMissedAlert = missedCount > 0 && latestMissedAt > seen.missedAt;
+  const showUnreadAlert = unreadTotal > 0 && latestMsgAt > seen.msgAt;
+  const awayOpen = showMissedAlert || showUnreadAlert;
+  const dismissAway = () => {
+    // Advance both watermarks to the current latest (never backwards) so
+    // everything currently shown stops nagging until something newer arrives.
+    const next = {
+      missedAt: Math.max(latestMissedAt, seen.missedAt),
+      msgAt: Math.max(latestMsgAt, seen.msgAt),
+    };
+    setSeen(next);
+    try { localStorage.setItem(DISMISS_KEY, JSON.stringify(next)); } catch { /* */ }
   };
   const viewMissed = () => {
-    dismissPopup();
+    dismissAway();
     // Straight to the full Missed log (History → Missed filter pre-selected);
     // reviewing it also acknowledges the missed calls (clears the badges).
     navigate("/app/history?filter=missed");
   };
   const openMessagesFromToast = () => {
-    dismissPopup();
+    dismissAway();
     navigate("/app/messages");
   };
 
@@ -312,13 +318,13 @@ function Inner({ children }: { children: React.ReactNode }) {
     <div className="min-h-svh bg-background text-foreground flex flex-col md:flex-row">
       {/* Landing "while you were away" popup: prominent but non-intrusive, on
           app launch — surfaces missed calls AND unread messages (v2.99.12). */}
-      {!popupDismissed && (
+      {awayOpen && (
         <AwaySummaryToast
           missed={{ count: missedCount, latest: missed.data?.latest ?? null }}
           unread={{ count: unreadTotal, latest: latestUnread }}
           onViewMissed={viewMissed}
           onOpenMessages={openMessagesFromToast}
-          onDismiss={dismissPopup}
+          onDismiss={dismissAway}
         />
       )}
       {/* ── desktop / tablet sidebar ───────────────────────────── */}
