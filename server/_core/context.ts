@@ -2,12 +2,14 @@ import type { CreateExpressContextOptions } from "@trpc/server/adapters/express"
 import type { User } from "../../drizzle/schema";
 import { sdk } from "./sdk";
 import { getUserById } from "../db";
-import { userIdFromLocalSession } from "../authLocal";
+import { readLocalSession } from "../authLocal";
 import {
   bindDeviceIdToIdentity,
   ensureUserIdentity,
   getIdentityByDeviceId,
   getIdentityByGuestToken,
+  sessionState,
+  touchSession,
   type ResolvedIdentity,
 } from "../v2db";
 
@@ -27,7 +29,26 @@ export type TrpcContext = {
    * the calling browser.
    */
   deviceId: string | null;
+  /** The session ledger id from the local cookie (v2.99.1 device list), or null
+   *  for OAuth users, guests, and legacy pre-ledger cookies. Lets procedures
+   *  mark "this device" and clear the cookie when the current session is revoked. */
+  sessionSid: string | null;
 };
+
+/** In-memory throttle so we bump a session's lastSeenAt at most every ~5 min
+ *  instead of on every request (the ledger write is cosmetic). Per-process is
+ *  fine — worst case a couple of instances each write once per window. */
+const lastTouch = new Map<string, number>();
+function maybeTouchSession(sid: string): void {
+  const now = Date.now();
+  const prev = lastTouch.get(sid) ?? 0;
+  if (now - prev < 5 * 60_000) return;
+  lastTouch.set(sid, now);
+  // Fire-and-forget; never block the request on a cosmetic write.
+  void touchSession(sid).catch(() => {});
+  // Bound the map so a long-lived process can't grow it without limit.
+  if (lastTouch.size > 5000) lastTouch.clear();
+}
 
 /**
  * Pull the device id from the inbound request header. Validate shape
@@ -56,10 +77,29 @@ export async function createContext(
   }
   // Fall back to a self-hosted email/password session (relay_session cookie) when
   // there's no Manus OAuth session. Both auth methods resolve to the same `user`.
+  let sessionSid: string | null = null;
   if (!user) {
     try {
-      const uid = userIdFromLocalSession(opts.req);
-      if (uid != null) user = (await getUserById(uid)) ?? null;
+      const sess = readLocalSession(opts.req);
+      if (sess?.userId != null) {
+        if (sess.sid) {
+          // NEW-format cookie (v2.99.1): gate it on the session ledger so a
+          // device that was logged out remotely (row deleted) stops
+          // authenticating. sessionState FAILS OPEN ("error") on any DB
+          // trouble, so a hiccup never mass-logs-out the fleet. Legacy
+          // cookies (sid null) skip this whole branch and behave as before.
+          const state = await sessionState(sess.sid);
+          if (state !== "revoked") {
+            user = (await getUserById(sess.userId)) ?? null;
+            if (user) {
+              sessionSid = sess.sid;
+              if (state === "active") maybeTouchSession(sess.sid);
+            }
+          }
+        } else {
+          user = (await getUserById(sess.userId)) ?? null;
+        }
+      }
     } catch {
       user = null;
     }
@@ -147,5 +187,6 @@ export async function createContext(
     user,
     identity,
     deviceId,
+    sessionSid,
   };
 }

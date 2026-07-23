@@ -571,6 +571,36 @@ export const onlineWatches = mysqlTable(
 export type OnlineWatch = typeof onlineWatches.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
+ * sessions — the device/session ledger (v2.99.1 device list + remote logout).
+ *
+ * One row per LOGIN. The session cookie carries a matching `sid`; a request is
+ * authenticated by the signed cookie as before, and — ONLY for cookies that
+ * carry a sid — the row's presence is additionally consulted so a specific
+ * device can be logged out by DELETING its row. Legacy cookies (no sid) never
+ * touch this table and behave exactly as before. Created at boot by
+ * ensureSchemaExtensions (CREATE TABLE IF NOT EXISTS).
+ * ────────────────────────────────────────────────────────────────────────── */
+export const sessions = mysqlTable(
+  "sessions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    /** Random hex id embedded in the cookie; deleting the row logs the device out. */
+    sid: varchar("sid", { length: 64 }).notNull(),
+    /** The account this session signs in. */
+    userId: int("userId").notNull(),
+    /** Human device label derived from the User-Agent at login. */
+    label: varchar("label", { length: 160 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    lastSeenAt: timestamp("lastSeenAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    sidUnique: uniqueIndex("sessions_sid_unique").on(t.sid),
+    userIdx: index("sessions_user_idx").on(t.userId),
+  }),
+);
+export type SessionRow = typeof sessions.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
  * party_lines — dialable ROOM numbers (v2.89, the signature feature).
  *
  * A user creates a party line and it gets its OWN 6-digit number from the SAME

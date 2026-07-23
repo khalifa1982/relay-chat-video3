@@ -86,7 +86,9 @@ import {
 import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
-import { setSessionCookie, rememberToTtlMs, LOCAL_SESSION_COOKIE } from "./authLocal";
+import { recordSession, listSessionsForUser, revokeSession } from "./v2db";
+import { setSessionCookie, rememberToTtlMs, LOCAL_SESSION_COOKIE, newSessionId } from "./authLocal";
+import { deviceLabelFromUA } from "./deviceLabel";
 import { COOKIE_NAME } from "@shared/const";
 import { normalizeEmail, isValidEmail } from "./authCrypto";
 import {
@@ -1632,6 +1634,20 @@ function otpRegisterBypassEnabled(): boolean {
   return process.env.RELAY_OTP_REGISTER_BYPASS === "1";
 }
 
+/** Mint a session id, record it in the device ledger (labelled from the
+ *  User-Agent), and return the sid to embed in the cookie (v2.99.1 device
+ *  list). recordSession is best-effort and never throws, so a ledger hiccup
+ *  can't block a login — the cookie still authenticates. */
+async function startSession(
+  ctx: { req: { headers?: Record<string, unknown> } },
+  userId: number,
+): Promise<string> {
+  const sid = newSessionId();
+  const label = deviceLabelFromUA(ctx.req?.headers?.["user-agent"]);
+  await recordSession(sid, userId, label);
+  return sid;
+}
+
 export const v2OtpAuthRouter = router({
   /** Login path: if the email is known, email a code; else tell the UI to register. */
   requestOtp: publicProcedure
@@ -1670,7 +1686,7 @@ export const v2OtpAuthRouter = router({
         const displayName = `${input.firstName} ${input.lastName}`.trim() || email.split("@")[0];
         const identity = await ensureUserIdentity({ userId, displayName, guestToken });
         await markIdentityVerified(identity.id, { firstName: input.firstName, lastName: input.lastName });
-        setSessionCookie(ctx.res, userId, rememberToTtlMs(undefined));
+        setSessionCookie(ctx.res, userId, rememberToTtlMs(undefined), await startSession(ctx, userId));
         return { ok: true, sent: false, bypass: true };
       }
       if (!(await cooldownOk(email))) return { ok: true, sent: true, cooldown: true };
@@ -1717,7 +1733,7 @@ export const v2OtpAuthRouter = router({
         `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || email.split("@")[0];
       const identity = await ensureUserIdentity({ userId, displayName, guestToken });
       await markIdentityVerified(identity.id, { firstName: row.firstName, lastName: row.lastName });
-      setSessionCookie(ctx.res, userId, rememberToTtlMs(input.remember));
+      setSessionCookie(ctx.res, userId, rememberToTtlMs(input.remember), await startSession(ctx, userId));
       return { ok: true, verified: true };
     }),
 
@@ -1743,10 +1759,14 @@ export const v2OtpAuthRouter = router({
       return { ok: sent, sent };
     }),
 
-  /** Sign out of a passwordless session (clears the local session cookie). */
-  signOut: publicProcedure.mutation(({ ctx }) => {
+  /** Sign out of a passwordless session (clears the local session cookie + drops
+   *  this device from the session ledger so it leaves the device list). */
+  signOut: publicProcedure.mutation(async ({ ctx }) => {
     const opts = getSessionCookieOptions(ctx.req);
     ctx.res.clearCookie("relay_session", { ...opts, maxAge: -1 });
+    if (ctx.user && ctx.sessionSid) {
+      await revokeSession(ctx.user.id, ctx.sessionSid).catch(() => {});
+    }
     return { ok: true };
   }),
 
@@ -1809,7 +1829,7 @@ export const v2OtpAuthRouter = router({
           // identity so number/contacts/messages survive.
           const guestToken = (ctx.req.cookies?.[GUEST_COOKIE] as string | undefined) ?? null;
           await ensureUserIdentity({ userId: user.id, displayName: user.name ?? email.split("@")[0], guestToken });
-          setSessionCookie(ctx.res, user.id, rememberToTtlMs(input.remember));
+          setSessionCookie(ctx.res, user.id, rememberToTtlMs(input.remember), await startSession(ctx, user.id));
           return { ok: true };
         }
         case "no-pin":
@@ -1859,6 +1879,46 @@ export const v2OtpAuthRouter = router({
       preferPin: Boolean(user.preferPinLogin),
     };
   }),
+
+  /* ── device list + remote logout (v2.99.1) ──────────────────────────
+     Every login records a row in the `sessions` ledger; this lists the
+     signed-in user's devices and lets them log any one out by deleting its
+     row (which stops that device's cookie from authenticating). Only the
+     account owner sees/affects their own sessions. */
+
+  /** The signed-in user's devices, newest-active first. Marks the CURRENT one. */
+  listSessions: publicProcedure.query(async ({ ctx }) => {
+    const user = ctx.user;
+    if (!user) return { signedIn: false, sessions: [] as Array<{
+      sid: string; label: string; createdAt: number; lastSeenAt: number; current: boolean;
+    }> };
+    const rows = await listSessionsForUser(user.id);
+    return {
+      signedIn: true,
+      sessions: rows.map((r) => ({
+        sid: r.sid,
+        label: r.label || "Unknown device",
+        createdAt: new Date(r.createdAt).getTime(),
+        lastSeenAt: new Date(r.lastSeenAt).getTime(),
+        current: ctx.sessionSid != null && r.sid === ctx.sessionSid,
+      })),
+    };
+  }),
+
+  /** Log a specific device out by deleting its session row. If it's the CURRENT
+   *  device, also clear this cookie so the response signs the caller out too. */
+  revokeSession: publicProcedure
+    .input(z.object({ sid: z.string().regex(/^[a-f0-9]{1,64}$/) }))
+    .mutation(async ({ ctx, input }) => {
+      const user = ctx.user;
+      if (!user) throw new TRPCError({ code: "UNAUTHORIZED", message: "Sign in first." });
+      const removed = await revokeSession(user.id, input.sid);
+      if (removed && ctx.sessionSid && input.sid === ctx.sessionSid) {
+        const opts = getSessionCookieOptions(ctx.req);
+        ctx.res.clearCookie(LOCAL_SESSION_COOKIE, { ...opts, maxAge: -1 });
+      }
+      return { ok: true, removed };
+    }),
 });
 
 /* ── web push router (v2.83) ──────────────────────────────────────

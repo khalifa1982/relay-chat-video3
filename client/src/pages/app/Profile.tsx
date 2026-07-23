@@ -7,11 +7,14 @@ import {
   Copy,
   LogOut,
   Lock,
+  Monitor,
   Moon,
   ScanFace,
   Share2,
   ShieldCheck,
+  Smartphone,
   Sun,
+  Trash2,
   Volume2,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -356,6 +359,9 @@ export default function ProfilePage() {
 
         {/* sign-in PIN (v2.87) */}
         <LoginPinSection />
+
+        {/* signed-in devices + remote logout (v2.99.1) */}
+        <DevicesSection />
 
         {/* do not disturb */}
         <DndSection />
@@ -768,6 +774,123 @@ function LoginPinSection() {
         </div>
       )}
       {msg && <p className="mt-2 text-xs text-muted-foreground">{msg}</p>}
+    </section>
+  );
+}
+
+/** Signed-in devices + remote logout (v2.99.1). Each login records a session in
+ *  the server ledger; deleting one logs that device out. Registered users only. */
+function DevicesSection() {
+  const list = trpc.otpAuth.listSessions.useQuery(undefined, { refetchOnWindowFocus: false });
+  const revoke = trpc.otpAuth.revokeSession.useMutation();
+  const [confirm, setConfirm] = useState<{ sid: string; label: string; current: boolean } | null>(null);
+
+  if (!list.data?.signedIn) return null; // guests have no account sessions
+
+  const sessions = list.data.sessions;
+  const relTime = (ms: number) => {
+    const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+    if (s < 60) return "just now";
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    return d < 30 ? `${d}d ago` : new Date(ms).toLocaleDateString();
+  };
+
+  const doRevoke = async () => {
+    if (!confirm) return;
+    const wasCurrent = confirm.current;
+    try {
+      await revoke.mutateAsync({ sid: confirm.sid });
+      setConfirm(null);
+      if (wasCurrent) {
+        // Our own cookie was cleared server-side — reload to the signed-out app.
+        window.location.assign("/app");
+        return;
+      }
+      void list.refetch();
+      toast.success("Signed that device out.");
+    } catch (e) {
+      setConfirm(null);
+      toast.error((e as { message?: string })?.message ?? "Couldn't sign that device out.");
+    }
+  };
+
+  return (
+    <section className="rounded-2xl border border-border bg-card p-4">
+      <h3 className="mb-1 text-sm font-bold">Devices</h3>
+      <p className="mb-3 text-xs text-muted-foreground">
+        Where you're signed in. Remove a device to sign it out remotely.
+      </p>
+      {sessions.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          This device will appear here after your next sign-in.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {sessions.map((s) => {
+            const isDesktop = /Windows|Mac|Linux|ChromeOS/.test(s.label);
+            const Icon = isDesktop ? Monitor : Smartphone;
+            return (
+              <li
+                key={s.sid}
+                className="flex items-center gap-3 rounded-xl border border-border/60 bg-background/40 p-3"
+              >
+                <span className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground">
+                  <Icon className="size-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium">{s.label}</span>
+                    {s.current && (
+                      <span className="shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                        This device
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Active {relTime(s.lastSeenAt)} · added {new Date(s.createdAt).toLocaleDateString()}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  aria-label={s.current ? "Sign out this device" : `Sign out ${s.label}`}
+                  onClick={() => setConfirm({ sid: s.sid, label: s.label, current: s.current })}
+                  className="grid size-8 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
+                >
+                  {s.current ? <LogOut className="size-4" /> : <Trash2 className="size-4" />}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <AlertDialog open={confirm !== null} onOpenChange={(o) => !o && setConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirm?.current ? "Sign out this device?" : `Sign out ${confirm?.label}?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirm?.current
+                ? "You'll be signed out here and returned to the start screen."
+                : "That device will be signed out and will need to sign in again."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); void doRevoke(); }}
+              disabled={revoke.isPending}
+            >
+              Sign out
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }

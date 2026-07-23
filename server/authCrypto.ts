@@ -84,24 +84,49 @@ export function passwordIssue(password: unknown): string | null {
 }
 
 /* ── stateless session token (signed, no DB) ──────────────────────────────
- * A compact `userId.expMs.hmac` token signed with the app secret. Lets a
- * local (email/password) login mint a session cookie without a sessions table,
- * mirroring how the Manus OAuth cookie is self-contained. */
+ * A compact signed token. Two shapes, both accepted forever:
+ *   legacy (pre-v2.99.1):  `userId.expMs.hmac`            (3 parts, no sid)
+ *   v2.99.1+ (revocable):  `userId.expMs.sid.hmac`        (4 parts, with sid)
+ * The `sid` ties the cookie to a row in the `sessions` ledger so a specific
+ * device can be logged out remotely (the device-list feature). It is OPTIONAL:
+ * omitting it reproduces the exact legacy token byte-for-byte, so every cookie
+ * already in the wild keeps verifying unchanged (the ledger is only consulted
+ * for tokens that actually carry a sid). The `sid` is restricted to hex so it
+ * can never contain the `.` separator. */
 
-export function signSession(userId: number, secret: string, ttlMs: number, nowMs: number): string {
+export function signSession(
+  userId: number,
+  secret: string,
+  ttlMs: number,
+  nowMs: number,
+  sid?: string,
+): string {
   const exp = nowMs + ttlMs;
-  const body = `${userId}.${exp}`;
+  const body = sid ? `${userId}.${exp}.${sid}` : `${userId}.${exp}`;
   const mac = crypto.createHmac("sha256", secret).update(body).digest("hex");
   return `${body}.${mac}`;
 }
 
-/** Verify a session token; returns the userId when valid + unexpired, else null. */
-export function verifySession(token: string, secret: string, nowMs: number): number | null {
+/** Parse + verify a session token → `{ userId, sid }` when valid + unexpired,
+ *  else null. `sid` is null for legacy 3-part tokens. Timing-safe; never throws. */
+export function readSession(
+  token: string,
+  secret: string,
+  nowMs: number,
+): { userId: number; sid: string | null } | null {
   try {
     const parts = String(token || "").split(".");
-    if (parts.length !== 3) return null;
-    const [uidStr, expStr, mac] = parts;
-    const body = `${uidStr}.${expStr}`;
+    let uidStr: string, expStr: string, sid: string | null, mac: string;
+    if (parts.length === 3) {
+      [uidStr, expStr, mac] = parts;
+      sid = null;
+    } else if (parts.length === 4) {
+      [uidStr, expStr, sid, mac] = parts;
+      if (!/^[a-f0-9]{1,64}$/.test(sid)) return null;
+    } else {
+      return null;
+    }
+    const body = sid ? `${uidStr}.${expStr}.${sid}` : `${uidStr}.${expStr}`;
     const expected = crypto.createHmac("sha256", secret).update(body).digest("hex");
     const a = Buffer.from(mac, "hex");
     const b = Buffer.from(expected, "hex");
@@ -109,8 +134,13 @@ export function verifySession(token: string, secret: string, nowMs: number): num
     const exp = parseInt(expStr, 10);
     const uid = parseInt(uidStr, 10);
     if (!Number.isFinite(exp) || !Number.isFinite(uid) || exp < nowMs) return null;
-    return uid;
+    return { userId: uid, sid };
   } catch {
     return null;
   }
+}
+
+/** Back-compat shim: the userId only. Prefer `readSession` when the sid matters. */
+export function verifySession(token: string, secret: string, nowMs: number): number | null {
+  return readSession(token, secret, nowMs)?.userId ?? null;
 }
