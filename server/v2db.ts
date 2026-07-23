@@ -22,6 +22,7 @@ import {
   gte,
   inArray,
   isNull,
+  isNotNull,
   like,
   lt,
   lte,
@@ -762,6 +763,9 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "users", column: "loginPinAttempts", ddl: "ADD COLUMN `loginPinAttempts` int" },
     { table: "users", column: "loginPinLockedAt", ddl: "ADD COLUMN `loginPinLockedAt` timestamp NULL" },
     { table: "users", column: "preferPinLogin", ddl: "ADD COLUMN `preferPinLogin` boolean" },
+    // New-device approval (v2.99.7): NULL = approved/normal (every legacy row);
+    // non-NULL = sign-in is WAITING for approval from another device.
+    { table: "sessions", column: "pendingApproval", ddl: "ADD COLUMN `pendingApproval` timestamp NULL" },
     // Hot-path indexes (v2.88, mirrored in drizzle/schema.ts):
     //  - messages(conversationId, id): the listThreads groupwise-max + every
     //    listMessages page (ORDER BY id within a conversation).
@@ -997,20 +1001,32 @@ export async function listContacts(ownerId: number) {
  * DELETE in that range; the revoke helper below legitimately deletes a row.) */
 
 /** Insert a login session. Best-effort; a failure just means it won't appear in
- *  the device list (auth still works via the cookie). */
-export async function recordSession(sid: string, userId: number, label: string): Promise<void> {
+ *  the device list (auth still works via the cookie).
+ *  v2.99.7: `pending` writes the row AWAITING new-device approval — such a row
+ *  does NOT authenticate (sessionState treats it as revoked) until approved. */
+export async function recordSession(sid: string, userId: number, label: string, pending = false): Promise<void> {
   const db = await getDb();
   if (!db) return;
   try {
-    await db.insert(sessions).values({ sid, userId, label: label.slice(0, 160) || null });
+    await db.insert(sessions).values({
+      sid,
+      userId,
+      label: label.slice(0, 160) || null,
+      pendingApproval: pending ? new Date() : null,
+    });
   } catch (e) {
     console.warn("[sessions] record skipped:", (e as Error)?.message || "");
   }
 }
 
 /** The revocation gate for a cookie's sid:
- *   "active"  → the session row exists (valid),
- *   "revoked" → the row is gone (removed = the device was logged out),
+ *   "active"  → the session row exists AND is approved (valid),
+ *   "revoked" → the row is gone (logged out) OR still PENDING new-device
+ *               approval (v2.99.7) — a pending sid must NOT authenticate, so
+ *               from the AUTH gate's view it's identical to revoked (the
+ *               context's `state !== "revoked"` check keeps them out with no
+ *               change); the pending rows surface separately for the approval
+ *               UI via pendingSessionsForUser / sessionApprovalBySid,
  *   "error"   → no DB / query failed → the caller FAILS OPEN (keeps the user
  *               signed in), so a DB hiccup never logs anyone out.
  *  Only ever called for cookies that carry a sid; legacy cookies skip it. */
@@ -1019,13 +1035,106 @@ export async function sessionState(sid: string): Promise<"active" | "revoked" | 
   if (!db) return "error";
   try {
     const rows = await db
-      .select({ id: sessions.id })
+      .select({ id: sessions.id, pending: sessions.pendingApproval })
       .from(sessions)
       .where(eq(sessions.sid, sid))
       .limit(1);
-    return rows.length > 0 ? "active" : "revoked";
+    if (rows.length === 0) return "revoked"; // logged out
+    return rows[0].pending == null ? "active" : "revoked"; // pending ⇒ not yet authenticated
   } catch {
     return "error";
+  }
+}
+
+/** New-device approval (v2.99.7): does the account have another APPROVED session
+ *  that was active within `sinceMs` (≈ "another device is online right now")?
+ *  Drives the rule "ask an online device to approve a new sign-in" — and is
+ *  fail-SAFE against lockout: on any DB trouble it returns false, so approval is
+ *  never required when we can't prove an approver exists. `exceptSid` excludes
+ *  the sign-in's own (not-yet-created) session defensively. */
+export async function hasRecentApprovedSession(
+  userId: number,
+  sinceMs: number,
+  exceptSid?: string,
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    const cutoff = new Date(Date.now() - sinceMs);
+    const rows = await db
+      .select({ sid: sessions.sid })
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.userId, userId),
+          isNull(sessions.pendingApproval),
+          gte(sessions.lastSeenAt, cutoff),
+        ),
+      );
+    return rows.some((r) => r.sid !== exceptSid);
+  } catch {
+    return false;
+  }
+}
+
+/** The account's sessions still WAITING for approval (for the notification-center
+ *  approve/deny UI), newest first. Best-effort → [] on error. */
+export async function pendingSessionsForUser(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    return await db
+      .select()
+      .from(sessions)
+      .where(and(eq(sessions.userId, userId), isNotNull(sessions.pendingApproval)))
+      .orderBy(desc(sessions.createdAt));
+  } catch {
+    return [];
+  }
+}
+
+/** The waiting device polls this by its OWN cookie sid (it isn't authenticated
+ *  yet, so it can't use userId-scoped queries):
+ *    "pending"  → row exists, still awaiting approval,
+ *    "approved" → row exists, approved (pendingApproval cleared) → proceed,
+ *    "denied"   → row gone (rejected / never existed) → back to sign-in.
+ *  On DB error returns "approved" (fail OPEN — a hiccup must never strand a
+ *  legitimately signed-in device on the waiting screen). */
+export async function sessionApprovalBySid(
+  sid: string,
+): Promise<"pending" | "approved" | "denied"> {
+  const db = await getDb();
+  if (!db) return "approved";
+  try {
+    const rows = await db
+      .select({ pending: sessions.pendingApproval })
+      .from(sessions)
+      .where(eq(sessions.sid, sid))
+      .limit(1);
+    if (rows.length === 0) return "denied";
+    return rows[0].pending == null ? "approved" : "pending";
+  } catch {
+    return "approved";
+  }
+}
+
+/** Approve ONE pending session the user owns → it starts authenticating.
+ *  Ownership-scoped (a user can only approve their OWN sessions). Returns true
+ *  when a row actually flipped. */
+export async function approveSession(userId: number, sid: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    const res = await db
+      .update(sessions)
+      .set({ pendingApproval: null })
+      .where(and(eq(sessions.userId, userId), eq(sessions.sid, sid)));
+    const affected = (res as unknown as { rowsAffected?: number; affectedRows?: number })?.rowsAffected
+      ?? (res as unknown as [{ affectedRows?: number }])?.[0]?.affectedRows
+      ?? 0;
+    return affected > 0;
+  } catch {
+    return false;
   }
 }
 

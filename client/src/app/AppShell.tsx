@@ -227,6 +227,14 @@ function Inner({ children }: { children: React.ReactNode }) {
     refetchInterval: 20_000,
   });
   const missedCount = missed.data?.count ?? 0;
+  // New-device sign-ins waiting for this account's approval (v2.99.7) — the
+  // bell surfaces the count; SSE "device_pending" invalidates this instantly.
+  const pendingDevicesQ = trpc.otpAuth.pendingSessions.useQuery(undefined, {
+    enabled: !!me,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  });
+  const pendingDevices = pendingDevicesQ.data?.pending?.length ?? 0;
   const markSeen = trpc.calls.markMissedSeen.useMutation({
     onSuccess: () => utils.calls.missedSummary.invalidate(),
   });
@@ -287,8 +295,10 @@ function Inner({ children }: { children: React.ReactNode }) {
             <NotificationBell
               missedCount={missedCount}
               unreadCount={unreadTotal}
+              pendingDevices={pendingDevices}
               onOpenHistory={() => navigate("/app/history?filter=missed")}
               onOpenMessages={() => navigate("/app/messages")}
+              onOpenDevices={() => navigate("/app/profile#devices")}
               dnd={dnd}
               onDndChange={setDnd}
             />
@@ -499,8 +509,10 @@ function Inner({ children }: { children: React.ReactNode }) {
             <NotificationBell
               missedCount={missedCount}
               unreadCount={unreadTotal}
+              pendingDevices={pendingDevices}
               onOpenHistory={() => navigate("/app/history?filter=missed")}
               onOpenMessages={() => navigate("/app/messages")}
+              onOpenDevices={() => navigate("/app/profile#devices")}
               dnd={dnd}
               onDndChange={setDnd}
             />

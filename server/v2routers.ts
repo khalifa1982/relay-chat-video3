@@ -88,7 +88,8 @@ import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
 import { recordSession, listSessionsForUser, revokeSession } from "./v2db";
 import { getRolesByIdentityIds, type IdentityRole } from "./v2db";
-import { setSessionCookie, rememberToTtlMs, LOCAL_SESSION_COOKIE, newSessionId } from "./authLocal";
+import { hasRecentApprovedSession, pendingSessionsForUser, sessionApprovalBySid, approveSession } from "./v2db";
+import { setSessionCookie, rememberToTtlMs, LOCAL_SESSION_COOKIE, newSessionId, readLocalSession } from "./authLocal";
 import { deviceLabelFromUA } from "./deviceLabel";
 import { COOKIE_NAME } from "@shared/const";
 import { normalizeEmail, isValidEmail } from "./authCrypto";
@@ -1650,18 +1651,53 @@ function otpRegisterBypassEnabled(): boolean {
   return process.env.RELAY_OTP_REGISTER_BYPASS === "1";
 }
 
+/** How recently another session must have been active for a NEW sign-in to
+ *  require its approval (v2.99.7). Matches "another device is online right now"
+ *  — the session lastSeenAt is bumped ~every 5 min while a device is in use, so
+ *  a 12-min window means "used within the last couple of heartbeats". Longer
+ *  than the touch throttle so an actively-used device is never missed. */
+const NEW_DEVICE_APPROVAL_WINDOW_MS = 12 * 60_000;
+
 /** Mint a session id, record it in the device ledger (labelled from the
  *  User-Agent), and return the sid to embed in the cookie (v2.99.1 device
  *  list). recordSession is best-effort and never throws, so a ledger hiccup
- *  can't block a login — the cookie still authenticates. */
+ *  can't block a login — the cookie still authenticates.
+ *
+ *  v2.99.7: when `pending` is true the row is written AWAITING approval — the
+ *  cookie is still set, but the session does NOT authenticate (createContext's
+ *  sessionState gate treats a pending row as revoked) until another device
+ *  approves it. The result object tells the client to park on the waiting
+ *  screen. */
 async function startSession(
   ctx: { req: { headers?: Record<string, unknown> } },
   userId: number,
+  pending = false,
 ): Promise<string> {
   const sid = newSessionId();
   const label = deviceLabelFromUA(ctx.req?.headers?.["user-agent"]);
-  await recordSession(sid, userId, label);
+  await recordSession(sid, userId, label, pending);
   return sid;
+}
+
+/** Decide whether a NEW email-code sign-in must wait for approval: only when the
+ *  account has ANOTHER device that was active recently (someone can actually
+ *  approve it). Fail-SAFE — hasRecentApprovedSession returns false on any DB
+ *  trouble, so we never require an approval that could strand the user. PIN
+ *  logins never call this (the PIN itself is the bypass, per the owner spec). */
+async function shouldRequireApproval(userId: number): Promise<boolean> {
+  return hasRecentApprovedSession(userId, NEW_DEVICE_APPROVAL_WINDOW_MS);
+}
+
+/** Notify the account's other (already signed-in) devices that a new device is
+ *  waiting for approval, so the notification center lights up in real time.
+ *  Best-effort; the waiting screen also polls, so a dropped event is harmless. */
+async function announcePendingDevice(userId: number, sid: string, label: string): Promise<void> {
+  try {
+    const identity = await getIdentityByUserId(userId);
+    if (identity) publishToIdentity(identity.id, { kind: "device_pending", sid, label });
+  } catch {
+    /* the poll is the backstop */
+  }
 }
 
 export const v2OtpAuthRouter = router({
@@ -1749,7 +1785,20 @@ export const v2OtpAuthRouter = router({
         `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || email.split("@")[0];
       const identity = await ensureUserIdentity({ userId, displayName, guestToken });
       await markIdentityVerified(identity.id, { firstName: row.firstName, lastName: row.lastName });
-      setSessionCookie(ctx.res, userId, rememberToTtlMs(input.remember), await startSession(ctx, userId));
+      // New-device approval (v2.99.7): an email-code sign-in on an account that
+      // already has another ONLINE device waits for that device to approve it,
+      // UNLESS this is a brand-new registration (`row.firstName` present means
+      // the OTP was minted by register → first device, nothing to approve
+      // against). PIN login is the explicit bypass and never lands here.
+      const wasRegistration = !!(row.firstName || row.lastName);
+      const pending = !wasRegistration && (await shouldRequireApproval(userId));
+      const sid = await startSession(ctx, userId, pending);
+      setSessionCookie(ctx.res, userId, rememberToTtlMs(input.remember), sid);
+      if (pending) {
+        const label = deviceLabelFromUA(ctx.req?.headers?.["user-agent"]);
+        await announcePendingDevice(userId, sid, label);
+        return { ok: true, verified: true, pending: true };
+      }
       return { ok: true, verified: true };
     }),
 
@@ -1934,6 +1983,51 @@ export const v2OtpAuthRouter = router({
         ctx.res.clearCookie(LOCAL_SESSION_COOKIE, { ...opts, maxAge: -1 });
       }
       return { ok: true, removed };
+    }),
+
+  /* ── new-device login approval (v2.99.7) ────────────────────────────
+     A new email-code sign-in on an account with another ONLINE device parks
+     as `pendingApproval` and does not authenticate until an existing device
+     approves it (or the user used their 4-digit PIN, which bypasses this
+     entirely). The waiting device polls `sessionApprovalStatus` by its own
+     cookie; the account's other devices see `pendingSessions` in the
+     notification center and call approve/revoke. */
+
+  /** Polled by the WAITING device (it isn't authenticated yet, so this reads
+   *  its own cookie sid directly): "pending" | "approved" | "denied".
+   *  Fail-open ("approved") on any trouble so a legit device is never stranded. */
+  sessionApprovalStatus: publicProcedure.query(async ({ ctx }) => {
+    const sess = readLocalSession(ctx.req);
+    if (!sess?.sid) return { status: "approved" as const };
+    const status = await sessionApprovalBySid(sess.sid);
+    return { status };
+  }),
+
+  /** The account's devices still WAITING for this user to approve them (drives
+   *  the notification-center approve/deny rows). Empty unless signed in. */
+  pendingSessions: publicProcedure.query(async ({ ctx }) => {
+    const user = ctx.user;
+    if (!user) return { signedIn: false, pending: [] as Array<{ sid: string; label: string; createdAt: number }> };
+    const rows = await pendingSessionsForUser(user.id);
+    return {
+      signedIn: true,
+      pending: rows.map((r) => ({
+        sid: r.sid,
+        label: r.label || "Unknown device",
+        createdAt: new Date(r.createdAt).getTime(),
+      })),
+    };
+  }),
+
+  /** Approve a waiting device (ownership-scoped) → it starts authenticating.
+   *  Deny is just `revokeSession` (deletes the row → cookie stops working). */
+  approveSession: publicProcedure
+    .input(z.object({ sid: z.string().regex(/^[a-f0-9]{1,64}$/) }))
+    .mutation(async ({ ctx, input }) => {
+      const user = ctx.user;
+      if (!user) throw new TRPCError({ code: "UNAUTHORIZED", message: "Sign in first." });
+      const approved = await approveSession(user.id, input.sid);
+      return { ok: true, approved };
     }),
 });
 

@@ -590,6 +590,12 @@ export const sessions = mysqlTable(
     userId: int("userId").notNull(),
     /** Human device label derived from the User-Agent at login. */
     label: varchar("label", { length: 160 }),
+    /** New-device approval (v2.99.7). NULL = approved/normal (every legacy row
+     *  and every PIN login); non-NULL = when this sign-in started WAITING for
+     *  approval from one of the account's other devices. A pending sid does
+     *  NOT authenticate; approve = set NULL, deny = delete the row. Additive +
+     *  nullable via ensureSchemaExtensions(). */
+    pendingApproval: timestamp("pendingApproval"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     lastSeenAt: timestamp("lastSeenAt").defaultNow().notNull(),
   },

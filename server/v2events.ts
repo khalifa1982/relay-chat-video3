@@ -51,6 +51,9 @@ export type V2Event =
   /** Status realtime (v2.96): someone in your feed posted (or removed) a
    *  status — refresh rings/feed instantly; toast only when `removed` unset. */
   | { kind: "status"; number: string; name: string; removed?: boolean }
+  /** New-device approval (v2.99.7): a new sign-in on this account is WAITING
+   *  for one of the existing devices to approve it — light up the bell. */
+  | { kind: "device_pending"; sid: string; label: string }
   | { kind: "ping" };
 
 function writeEvent(client: SseClient, ev: V2Event) {
