@@ -4837,3 +4837,38 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       (stacked rows + wrap + per-action accents + panel width). Suite 1262 passed / 1 skipped.
       Remaining from this owner batch (increment 2): in-call control-bar redesign (labels + colors +
       sound-output menu) and the full-featured in-call side chat with the glass identity header.
+
+## v2.99.4 — in-call control bar redesign + phone sound menu + in-call chat upgrade (owner batch pt.2) (2026-07-23)
+- [x] CONTROL BAR (owner: "make all these icons different colors with a very nice shape. Put a label
+      below each icon"). Every control is now a COLORED round icon chip (.ctrl-ic) with a text LABEL
+      underneath (.ctrl-lbl): Mute/Unmute (green, swaps with the mic's .off class), Cam off/Cam on
+      (sky, swaps), Flip (violet), Share (amber), Quality with the HD/SD chip text in #qualityTxt
+      (pink — updateQualityBtn writes the span, never the button, so the label survives), Sound
+      (orange), PiP (indigo), Filters (fuchsia), Add + (teal), Host (gold — now a CROWN icon, not
+      ⋮), Chat (lime), NEW ⋯ More (gray). Each button carries a full-sentence title tooltip
+      describing exactly what it does. State classes (.on/.off/.voiced) restyle the chip; JS
+      untouched. The hang-up button keeps its dedicated red circle (explicit display:grid so the
+      v2.98.3 centering can't regress) + the pre-connect halo screen is unchanged. Headless-verified
+      at 430px + 1280px: 13 buttons, 0 clipped, 12 distinct chip colors, pre-connect intact.
+- [x] ⋯ MORE MENU: Record call (the same #recordBtn id — availability/`.on` JS untouched — now a
+      labeled row with a description, shown only when recording is configured) + Diagnostics (the
+      per-peer connection panel). Outside-click dismissal like the other in-call menus.
+- [x] SOUND MENU ON PHONES (owner: "when you click on Sound, it should show a menu for the
+      loudspeaker, internal speaker, or Bluetooth"). The v2.84 blind speakerphone TOGGLE is replaced
+      with a real three-route menu — Loudspeaker (the WebAudio media-route force; native AudioManager
+      in the Android app), Earpiece (drops the force → OS default route), Bluetooth/headset (drops
+      the force so the OS default route follows the connected device; honestly labeled "No Bluetooth
+      device detected" + dimmed when none is enumerable). Selected route shows a check; each row
+      carries a one-line description. Desktop keeps the real output-device sink list unchanged.
+- [x] IN-CALL CHAT (owner: "make it full-featured with emojis… put the username, the pin number, and
+      the user's icon in a different box showing like a bubble-style glass"). Every message now
+      renders a GLASS identity chip (backdrop-blur bubble: avatar disc + username + PIN + time)
+      above the text bubble — mine right (teal tint), theirs left. Chat frames carry the sender's
+      PIN (`pin` field; old clients ignore it), avatars resolve once per PIN via the public
+      directory.lookup into a lifetime cache and drop in async (initials until then). The composer
+      gains a real EMOJI PALETTE (48 common emojis, lazy-built on first open, caret-position
+      insertion) behind a 😊 toggle — like the main Messages tab.
+- [x] Stale pins updated to the superseding shapes: callAudio.test.ts + updateChecker.test.ts (the
+      v2.84 mobile-toggle pin → the route-menu), v2961Fixes.test.ts (chat row → .mident chip). New
+      client/src/lib/callBarV2994.test.ts (labels/colors/state-on-chip, More menu, sound routes,
+      glass chip + PIN frames + emoji palette). Suite 1277 passed / 1 skipped; check + build green.

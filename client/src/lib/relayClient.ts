@@ -908,7 +908,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function updateQualityBtn() {
     const b = $("qualityBtn");
     if (b) {
-      b.textContent = videoQuality === "low" ? "SD" : "HD";
+      // v2.99.4: the HD/SD text lives in the #qualityTxt chip span (the button
+      // now also contains the "Quality" label) — writing button.textContent
+      // would wipe both children. Fallback covers any older markup.
+      const t = $("qualityTxt");
+      if (t) t.textContent = videoQuality === "low" ? "SD" : "HD";
+      else b.textContent = videoQuality === "low" ? "SD" : "HD";
       b.classList.toggle("on", videoQuality === "high");
       b.setAttribute("title", videoQuality === "low" ? "Data saver — tap for HD" : "HD — tap for data saver");
     }
@@ -1217,14 +1222,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     toast(ok ? "Speaker on 🔊" : "Couldn't switch the output on this device.", !ok);
   }
   function openAudioMenu() {
-    // PHONES: the OS owns earpiece/speaker/Bluetooth routing and exposes no
-    // output list to the web — Android enumerates NO audiooutput devices even
-    // where setSinkId exists, so the old sink menu opened EMPTY ("No selectable
-    // outputs"), a dead end that read as "the speaker button does nothing on
-    // answered calls". On mobile the button is a straight speakerphone TOGGLE:
-    // the WebAudio media-route force, which works on Android AND iOS and
-    // follows a connected headset/AirPods automatically.
-    if (IS_ANDROID || IS_IOS) { void toggleLoudspeaker(); return; }
+    // PHONES (v2.99.4 owner spec): a real three-route MENU — Loudspeaker /
+    // Earpiece / Bluetooth — instead of the old blind speakerphone toggle.
+    // The OS exposes no output-device list to the web on Android/iOS (the
+    // sink menu opened EMPTY there), so the routes map onto what phones CAN
+    // do: Loudspeaker = the WebAudio media-route force (or the native
+    // AudioManager in the Android app), Earpiece = dropping that force, and
+    // Bluetooth = dropping the force so the OS default route follows the
+    // connected headset (phones hand the default route to BT automatically).
+    if (IS_ANDROID || IS_IOS) {
+      void renderMobileAudioMenu().then(() => $("audioMenu")?.classList.add("open"));
+      return;
+    }
     if (!audioOutSupported) {
       toast("Your device routes call audio automatically (headset/Bluetooth switches on its own).");
       return;
@@ -1233,7 +1242,68 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("audioMenu")?.classList.add("open");
   }
   function closeAudioMenu() { $("audioMenu")?.classList.remove("open"); }
+  /** True when any enumerated device looks like a headset/Bluetooth output. */
+  async function headsetPresent(): Promise<boolean> {
+    try {
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      return devs.some(d => looksLikeHeadset(d.label));
+    } catch { return false; }
+  }
+  function mobileAudioRow(route: string, icon: string, label: string, desc: string, selected: boolean, dim = false): string {
+    return '<button type="button" class="ao-item' + (selected ? " ao-sel" : "") + (dim ? " ao-dim" : "") +
+      '" data-route="' + route + '"><span class="ao-ic">' + icon + '</span><span class="ao-tx"><span>' +
+      escapeHtml(label) + "</span><i>" + escapeHtml(desc) + "</i></span></button>";
+  }
+  async function renderMobileAudioMenu() {
+    const menu = $("audioMenu");
+    if (!menu) return;
+    const bt = await headsetPresent();
+    // Which route carries audio right now: the loudspeaker force when on;
+    // otherwise the OS default — which follows a connected headset, else the
+    // earpiece (the documented Android/iOS WebRTC default while a mic is live).
+    const current = loudspeakerOn ? "loud" : bt ? "bt" : "ear";
+    menu.innerHTML =
+      mobileAudioRow("loud", "🔊", "Loudspeaker", "Hands-free — hear the call out loud", current === "loud") +
+      mobileAudioRow("ear", "📞", "Earpiece", "Private — hold the phone to your ear", current === "ear") +
+      mobileAudioRow("bt", "🎧", "Bluetooth / headset",
+        bt ? "Route the call to your connected device" : "No Bluetooth device detected — connect one and it takes over",
+        current === "bt", !bt);
+  }
+  async function setMobileRoute(route: string) {
+    closeAudioMenu();
+    if (route === "loud") {
+      // Native Android app: real OS speakerphone. Web: the WebAudio force.
+      if (isNativeAndroid() && (await nativeSetSpeaker(true))) {
+        loudspeakerOn = true;
+        setLoudspeakerPref(true);
+        updateAudioBtn();
+        toast("Speaker on 🔊");
+        return;
+      }
+      const ok = await loudspeakerEnable();
+      if (ok) setLoudspeakerPref(true);
+      updateAudioBtn();
+      toast(ok ? "Speaker on 🔊" : "Couldn't switch the output on this device.", !ok);
+      return;
+    }
+    // Earpiece and Bluetooth both DROP the loudspeaker force — the OS default
+    // route then carries the audio (earpiece normally; the headset when one is
+    // connected, phones hand the default route to Bluetooth on their own).
+    if (isNativeAndroid()) { try { await nativeSetSpeaker(false); } catch { /* */ } }
+    loudspeakerDisable();
+    setLoudspeakerPref(false);
+    updateAudioBtn();
+    if (route === "bt") {
+      toast((await headsetPresent())
+        ? "Audio routed to your Bluetooth device"
+        : "Connect a Bluetooth device — the call follows it automatically");
+    } else {
+      toast("Earpiece — hold the phone to your ear");
+    }
+  }
   function onAudioMenuClick(e: Event) {
+    const rbtn = (e.target as HTMLElement)?.closest?.("button[data-route]") as HTMLElement | null;
+    if (rbtn) { void setMobileRoute(rbtn.getAttribute("data-route") || "ear"); return; }
     const btn = (e.target as HTMLElement)?.closest?.("button[data-sink]") as HTMLElement | null;
     if (!btn) return;
     void pickAudioSink(btn.getAttribute("data-sink") || "");
@@ -4895,7 +4965,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     try {
       const d = JSON.parse(raw);
       if (!markChatSeen(d.id)) return; // duplicate — skip
-      addChatMsg(d.name, d.text, false);
+      // v2.99.4: frames carry the sender's PIN (older clients simply omit it).
+      addChatMsg(d.name, d.text, false, typeof d.pin === "string" ? d.pin : undefined);
     } catch { /* */ }
   }
   function setupDC(pin: string, dc: RTCDataChannel) {
@@ -4906,7 +4977,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // caller can warn the user when a send reached nobody). On the SFU path we
   // can't count subscribers, so a successful publish counts as "delivered".
   function broadcastChat(text: string, id: string): number {
-    const p = JSON.stringify({ name: me.name, text, id });
+    // `pin` (v2.99.4) lets receivers render the sender's number + avatar in the
+    // chat's glass identity chip. Old clients ignore unknown fields.
+    const p = JSON.stringify({ name: me.name, text, id, pin: me.pin || undefined });
     if (livekitEnabled && lkRoom) {
       // SFU path: there are no per-peer datachannels — fan out over LiveKit data.
       try {
@@ -4930,20 +5003,53 @@ export function startRelay(root: HTMLElement): RelayHandle {
       return `<a href="${href}" target="_blank" rel="noopener noreferrer nofollow" style="color:var(--accent2);text-decoration:underline">${u}</a>`;
     });
   }
-  function addChatMsg(name: string, text: string, mine: boolean) {
+  // ── chat avatars (v2.99.4) ─────────────────────────────────────────────────
+  // Sender photos for the chat's identity chips, resolved once per PIN via the
+  // public directory.lookup (same call the incoming-ring card uses) and cached
+  // for the engine's lifetime. Rows render initials instantly; the photo drops
+  // in when (and if) the lookup lands. null = looked up, no photo.
+  const chatAvatars = new Map<string, string | null>();
+  function applyChatAvatar(pin: string) {
+    const url = chatAvatars.get(pin);
+    if (!url) return;
+    document.querySelectorAll('.mident .mav[data-pin="' + pin + '"]').forEach((el) => {
+      const av = el as HTMLElement;
+      av.style.backgroundImage = "url(" + JSON.stringify(url) + ")";
+      av.textContent = "";
+    });
+  }
+  function ensureChatAvatar(pin?: string) {
+    if (!pin || !/^\d{6}$/.test(pin)) return;
+    if (chatAvatars.has(pin)) { applyChatAvatar(pin); return; }
+    chatAvatars.set(pin, null); // in-flight marker — one fetch per pin
+    const input = encodeURIComponent(JSON.stringify({ json: { number: pin } }));
+    fetch("/api/trpc/directory.lookup?input=" + input, { credentials: "include" })
+      .then(r => (r.ok ? r.json() : null))
+      .then((j) => {
+        const d = (j as { result?: { data?: { json?: { avatarUrl?: string | null } | null } } } | null)?.result?.data?.json;
+        if (d?.avatarUrl) { chatAvatars.set(pin, d.avatarUrl); applyChatAvatar(pin); }
+      })
+      .catch(() => { /* decoration only */ });
+  }
+  function addChatMsg(name: string, text: string, mine: boolean, pin?: string) {
     const log = $("chatLog"); if (!log) return;
-    // v2.96.1 (owner spec): every message shows the sender's avatar disc,
-    // name, and TIME — mine on the RIGHT, everyone else on the LEFT.
+    // v2.99.4 (owner spec): every message carries a GLASS identity chip —
+    // avatar + username + PIN + time in its own frosted bubble above the text
+    // bubble — mine on the RIGHT, everyone else on the LEFT.
     const who = mine ? (me.name || "You") : (name || "Guest");
+    const idPin = mine ? (me.pin || undefined) : pin;
     const time = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     const row = document.createElement("div");
     row.className = "mrow " + (mine ? "me" : "them");
     row.innerHTML =
-      '<div class="mav">' + initials(who) + "</div>" +
-      '<div class="mbody"><div class="mmeta"><span class="mname">' + escapeHtml(mine ? "You" : who) + "</span>" +
+      '<div class="mbody"><div class="mident">' +
+      '<span class="mav"' + (idPin ? ' data-pin="' + idPin + '"' : "") + ">" + initials(who) + "</span>" +
+      '<span class="mwho"><b>' + escapeHtml(mine ? "You" : who) + "</b>" +
+      (idPin ? "<i>" + fmtPin(idPin) + "</i>" : "") + "</span>" +
       '<span class="mtime">' + time + "</span></div>" +
       '<div class="relay-msg ' + (mine ? "me" : "them") + '">' + linkifyEscaped(escapeHtml(text)) + "</div></div>";
     log.appendChild(row); log.scrollTop = log.scrollHeight;
+    ensureChatAvatar(idPin);
     if (!mine && !$("chatPanel")?.classList.contains("open")) {
       unread++;
       const b = $("chatBadge");
@@ -4972,6 +5078,44 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (delivered === 0 && Object.keys(peers).length > 0) {
       toast("Message not delivered — check your connection.", true);
     }
+  }
+  // ── chat emoji palette (v2.99.4) ──────────────────────────────────────────
+  // A real picker like the main Messages tab: 😊 toggles a wrap of common
+  // emojis between the log and the composer; tapping one inserts it at the
+  // caret. Built lazily on first open (zero cost for text-only chats).
+  const CHAT_EMOJIS = [
+    "😀","😁","😂","🤣","😊","😍","😘","😜","🤔","😎","🥳","😭",
+    "😅","🙃","😇","🤩","😤","😱","🤯","😴","🤗","🫡","🙄","😬",
+    "👍","👎","👏","🙏","💪","🤝","👋","✌️","🤞","🫶","❤️","💔",
+    "🔥","💯","🎉","✨","⭐","🎂","🌹","☕","🍕","⚡","✅","❌",
+  ];
+  let chatEmojisBuilt = false;
+  function insertChatEmoji(emoji: string) {
+    const f = $("chatField") as HTMLInputElement | null;
+    if (!f || !emoji) return;
+    const start = f.selectionStart ?? f.value.length;
+    const end = f.selectionEnd ?? f.value.length;
+    f.value = f.value.slice(0, start) + emoji + f.value.slice(end);
+    const pos = start + emoji.length;
+    try { f.setSelectionRange(pos, pos); } catch { /* */ }
+    f.focus();
+  }
+  function toggleChatEmojis() {
+    const p = $("chatEmojis");
+    if (!p) return;
+    if (!chatEmojisBuilt) {
+      chatEmojisBuilt = true;
+      p.innerHTML = CHAT_EMOJIS
+        .map(e => '<button type="button" data-emoji="' + e + '" aria-label="Insert ' + e + '">' + e + "</button>")
+        .join("");
+      p.addEventListener("click", (ev) => {
+        const t = (ev.target as HTMLElement)?.closest?.("button[data-emoji]") as HTMLElement | null;
+        if (t) insertChatEmoji(t.getAttribute("data-emoji") || "");
+      });
+    }
+    const open = p.classList.toggle("open");
+    $("chatEmojiBtn")?.classList.toggle("open", open);
+    if (!open) ($("chatField") as HTMLInputElement | null)?.focus();
   }
 
   // ---------- recents ----------
@@ -5629,6 +5773,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     };
     if (outside("addpad", "addBtn")) closeAddPad();
     if (outside("audioMenu", "audioBtn")) closeAudioMenu();
+    if (outside("moreMenu", "moreBtn")) $("moreMenu")?.classList.remove("open");
     // Tile menu closes on any outside click (its ⋮ openers live on tiles).
     const tm = $("tileMenu");
     if (tm && tm.classList.contains("open") && !tm.contains(t) && !(t as HTMLElement)?.closest?.(".tile-menu-btn")) closeTileMenu();
@@ -5648,7 +5793,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const sb = $("screenBtn") as HTMLElement | null;
     if (sb) sb.style.display = "";
   }
-  ($("recordBtn") as HTMLElement | null)?.addEventListener("click", toggleRecording);
+  ($("recordBtn") as HTMLElement | null)?.addEventListener("click", () => {
+    $("moreMenu")?.classList.remove("open");
+    toggleRecording();
+  });
+  // ⋯ More menu (v2.99.4): Record + Diagnostics rows live here.
+  ($("moreBtn") as HTMLElement | null)?.addEventListener("click", () => {
+    $("moreMenu")?.classList.toggle("open");
+  });
+  ($("diagMenuBtn") as HTMLElement | null)?.addEventListener("click", () => {
+    $("moreMenu")?.classList.remove("open");
+    toggleDiag();
+  });
   ($("qualityBtn") as HTMLElement | null)?.addEventListener("click", toggleQuality);
   updateQualityBtn();
   // Audio output (speaker / earpiece / headset / Bluetooth).
@@ -5681,6 +5837,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("filterBtn") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("filterClose") as HTMLElement | null)?.addEventListener("click", toggleFilterStrip);
   ($("chatSend") as HTMLElement | null)?.addEventListener("click", sendChat);
+  ($("chatEmojiBtn") as HTMLElement | null)?.addEventListener("click", toggleChatEmojis);
   ($("chatField") as HTMLElement | null)?.addEventListener("keydown", onChatField as EventListener);
   ($("addInput") as HTMLElement | null)?.addEventListener("keydown", onAddInput as EventListener);
   ($("diagBtn") as HTMLElement | null)?.addEventListener("click", toggleDiag);

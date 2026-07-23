@@ -132,7 +132,11 @@ export const RELAY_MARKUP = `
       <div class="chat" id="chatPanel">
         <div class="chat-head"><span class="chat-title">Chat</span><button class="chat-close-btn" id="chatClose" aria-label="Close chat" title="Close chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
         <div class="chat-log" id="chatLog"></div>
+        <!-- Emoji palette (v2.99.4): built by JS on first open; sits between the
+             log and the composer so the input never loses its position. -->
+        <div class="chat-emojis" id="chatEmojis"></div>
         <div class="chat-input">
+          <button type="button" class="chat-emoji-btn" id="chatEmojiBtn" title="Emoji" aria-label="Insert emoji"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c.9 1.2 2.1 1.9 3.5 1.9s2.6-.7 3.5-1.9"/><circle cx="9" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none"/></svg></button>
           <input id="chatField" placeholder="Message everyone&hellip;" maxlength="500">
           <button id="chatSend">&uarr;</button>
         </div>
@@ -168,46 +172,72 @@ export const RELAY_MARKUP = `
         </div>
         <div class="host-list" id="hostList"></div>
       </div>
+      <div class="more-menu" id="moreMenu">
+        <!-- Overflow menu (v2.99.4). The RECORD control lives here now (was a
+             bare unlabeled circle in the bar); JS keeps toggling its id's
+             display/.on class exactly as before. Each row explains itself. -->
+        <button type="button" class="mm-item" id="recordBtn" style="display:none" title="Record this call to the cloud">
+          <span class="mm-ic mm-rec"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg></span>
+          <span class="mm-tx"><b>Record call</b><i>Save this call as a video — everyone sees a REC badge</i></span>
+        </button>
+        <button type="button" class="mm-item" id="diagMenuBtn" title="Connection diagnostics">
+          <span class="mm-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .8-1 1.7"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/></svg></span>
+          <span class="mm-tx"><b>Diagnostics</b><i>Live connection details for troubleshooting</i></span>
+        </button>
+      </div>
       <div class="ctrl-bar">
-        <!-- Mic + camera carry TWO icons each (v2.96.1): the normal glyph and a
-             SLASHED "off" glyph swapped by the .off class — the state is
-             readable from the icon itself, not just a tint. -->
-        <button class="ctrl" id="micBtn" title="Mute microphone" aria-label="Mute microphone">
-          <svg class="ic-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-          <svg class="ic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+        <!-- v2.99.4 (owner spec): every control is a COLORED icon chip with a
+             LABEL underneath, so each button says what it does. Mic + camera
+             carry TWO icons each (v2.96.1): the normal glyph and a SLASHED
+             "off" glyph swapped by the .off class — and their labels swap the
+             same way (Mute/Unmute · Cam off/Cam on). -->
+        <button class="ctrl" id="micBtn" title="Microphone — tap to mute or unmute yourself" aria-label="Mute or unmute microphone">
+          <span class="ctrl-ic"><svg class="ic-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><svg class="ic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></span>
+          <span class="ctrl-lbl"><span class="lbl-on">Mute</span><span class="lbl-off">Unmute</span></span>
         </button>
-        <button class="ctrl" id="camBtn" title="Turn camera on or off" aria-label="Turn camera on or off">
-          <svg class="ic-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
-          <svg class="ic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+        <button class="ctrl" id="camBtn" title="Camera — tap to turn your video on or off" aria-label="Turn camera on or off">
+          <span class="ctrl-ic"><svg class="ic-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg><svg class="ic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
+          <span class="ctrl-lbl"><span class="lbl-on">Cam off</span><span class="lbl-off">Cam on</span></span>
         </button>
-        <button class="ctrl" id="screenBtn" title="Share screen" style="display:none">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        <button class="ctrl" id="flipCamBtn" title="Switch between the front and back camera">
+          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg></span>
+          <span class="ctrl-lbl">Flip</span>
         </button>
-        <button class="ctrl" id="flipCamBtn" title="Flip camera (front ↔ back)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
+        <button class="ctrl" id="screenBtn" title="Share your screen with everyone on the call" style="display:none">
+          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
+          <span class="ctrl-lbl">Share</span>
         </button>
-        <button class="ctrl" id="recordBtn" title="Record call" style="display:none">
-          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg>
+        <button class="ctrl ctrl-text" id="qualityBtn" title="Video quality — switch between HD and Data saver">
+          <span class="ctrl-ic"><span id="qualityTxt">HD</span></span>
+          <span class="ctrl-lbl">Quality</span>
         </button>
-        <button class="ctrl ctrl-text" id="qualityBtn" title="Streaming quality">HD</button>
-        <button class="ctrl" id="audioBtn" title="Audio output" style="display:none">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg>
+        <button class="ctrl" id="audioBtn" title="Sound output — loudspeaker, earpiece or Bluetooth" style="display:none">
+          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg></span>
+          <span class="ctrl-lbl">Sound</span>
         </button>
-        <button class="ctrl" id="pipBtn" title="Auto Picture-in-Picture (keeps the call visible when you switch apps)" style="display:none">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="5" rx="1" fill="currentColor" stroke="none"/></svg>
+        <button class="ctrl" id="pipBtn" title="Picture-in-Picture — keeps the call visible when you switch apps" style="display:none">
+          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="5" rx="1" fill="currentColor" stroke="none"/></svg></span>
+          <span class="ctrl-lbl">PiP</span>
         </button>
-        <button class="ctrl" id="filterBtn" title="Filters">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="7" r="4"/><circle cx="12" cy="16" r="4"/></svg>
+        <button class="ctrl" id="filterBtn" title="Camera filters — color effects, background blur, face fun">
+          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="7" r="4"/><circle cx="12" cy="16" r="4"/></svg></span>
+          <span class="ctrl-lbl">Filters</span>
         </button>
-        <button class="ctrl" id="addBtn" title="Add person">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        <button class="ctrl" id="addBtn" title="Add another person to this call">
+          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
+          <span class="ctrl-lbl">Add</span>
         </button>
-        <button class="ctrl" id="hostBtn" title="Host controls" style="display:none">
-          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+        <button class="ctrl" id="hostBtn" title="Host controls — mute, pin, promote or remove participants" style="display:none">
+          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l1.8-9 4.7 3.8L12 5l2.5 6.8L19.2 8 21 17z"/><path d="M5 21h14"/></svg></span>
+          <span class="ctrl-lbl">Host</span>
         </button>
-        <button class="ctrl" id="chatBtn" title="Chat">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1z"/></svg>
-          <span class="badge" id="chatBadge" style="display:none">0</span>
+        <button class="ctrl" id="chatBtn" title="In-call chat with everyone on the line">
+          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1z"/></svg><span class="badge" id="chatBadge" style="display:none">0</span></span>
+          <span class="ctrl-lbl">Chat</span>
+        </button>
+        <button class="ctrl" id="moreBtn" title="More — recording and diagnostics">
+          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></span>
+          <span class="ctrl-lbl">More</span>
         </button>
         <button class="ctrl hangup" id="hangBtn" title="Leave">
           <!-- Material "call end": a DRAWN horizontal handset, no CSS transform.
@@ -675,9 +705,32 @@ export const RELAY_CSS = `
 .relay-root .relay-msg.sys{align-self:center;color:var(--faint);font-size:12px;background:none}
 .relay-root .chat-input{padding:13px;border-top:1px solid var(--border);display:flex;gap:9px}
 .relay-root .chat-input input{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:11px 14px;
-  color:var(--text);font-family:inherit;font-size:14px;outline:none}
+  color:var(--text);font-family:inherit;font-size:14px;outline:none;min-width:0}
 .relay-root .chat-input input:focus{border-color:var(--accent)}
-.relay-root .chat-input button{background:var(--grad);border:none;border-radius:11px;width:44px;color:#04201B;font-size:17px;cursor:pointer}
+.relay-root .chat-input button{background:var(--grad);border:none;border-radius:11px;width:44px;color:#04201B;font-size:17px;cursor:pointer;flex-shrink:0}
+/* Emoji palette + toggle (v2.99.4): the composer gets a real emoji picker like
+   the main Messages tab. The palette opens between the log and the input. */
+.relay-root .chat-input .chat-emoji-btn{background:var(--surface);border:1px solid var(--border);color:var(--text2,#9aa);
+  display:grid;place-items:center}
+.relay-root .chat-input .chat-emoji-btn svg{width:20px;height:20px}
+.relay-root .chat-input .chat-emoji-btn.open,.relay-root .chat-input .chat-emoji-btn:hover{color:var(--accent);border-color:var(--accent);background:var(--surface)}
+.relay-root .chat-emojis{display:none;flex-wrap:wrap;gap:2px;padding:8px 10px;border-top:1px solid var(--border);
+  max-height:132px;overflow-y:auto;background:var(--bg2)}
+.relay-root .chat-emojis.open{display:flex}
+.relay-root .chat-emojis button{background:none;border:none;font-size:21px;line-height:1;padding:5px;border-radius:8px;cursor:pointer;font-family:inherit}
+.relay-root .chat-emojis button:hover{background:var(--surface)}
+/* Glass identity bubble (v2.99.4 owner spec): every in-call chat message shows
+   the sender's icon + username + PIN (+ time) in its OWN frosted glass chip
+   above the text bubble — mine on the right, theirs on the left. */
+.relay-root .mident{display:flex;align-items:center;gap:7px;padding:4px 10px 4px 5px;border-radius:999px;margin:0 2px 4px;
+  width:max-content;max-width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:inset 0 1px 0 rgba(255,255,255,.07)}
+.relay-root .mrow.me .mident{margin-left:auto;background:rgba(63,224,197,.10);border-color:rgba(63,224,197,.22)}
+.relay-root .mident .mav{width:22px;height:22px;font-size:9px;overflow:hidden;background-size:cover;background-position:center;border-radius:50%}
+.relay-root .mident .mwho{display:flex;align-items:baseline;gap:6px;min-width:0}
+.relay-root .mident .mwho b{font-size:11.5px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
+.relay-root .mident .mwho i{font-style:normal;font-family:"JetBrains Mono",monospace;font-size:9.5px;color:var(--text2,#9aa);letter-spacing:.06em;white-space:nowrap}
+.relay-root .mident .mtime{font-size:9.5px;color:var(--faint);font-family:"JetBrains Mono",monospace}
 
 /* Glassmorphic frosted control bar */
 .relay-root .controls{display:flex;align-items:center;justify-content:center;gap:14px;padding:18px 16px max(22px,env(safe-area-inset-bottom));position:relative;background:none;border-top:none}
@@ -686,18 +739,49 @@ export const RELAY_CSS = `
   background:rgba(20,23,29,.72);border:1px solid rgba(255,255,255,.10);border-radius:24px;
   box-shadow:0 16px 50px -18px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.06);
   backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4)}
-.relay-root .ctrl{width:48px;height:48px;border-radius:50%;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);
-  color:var(--text);cursor:pointer;display:grid;place-items:center;transition:transform .16s cubic-bezier(0.23,1,0.32,1),background .16s,border-color .16s;position:relative}
-.relay-root .ctrl:hover{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.16);transform:translateY(-1px)}
+/* v2.99.4 (owner spec): each control is a COLUMN — a colored round icon chip
+   (.ctrl-ic) with a small text LABEL underneath (.ctrl-lbl) — so every button
+   says what it does. State classes (.on/.off) stay on the BUTTON (JS
+   unchanged); the chip + label restyle from them. The hang-up button keeps its
+   own dedicated circle structure below. */
+.relay-root .ctrl{width:auto;height:auto;min-width:52px;border-radius:14px;background:none;border:none;
+  color:var(--text);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px;padding:0;
+  transition:transform .16s cubic-bezier(0.23,1,0.32,1);position:relative;font-family:inherit}
+.relay-root .ctrl .ctrl-ic{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;position:relative;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);
+  transition:background .16s,border-color .16s,box-shadow .16s;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+.relay-root .ctrl:hover{transform:translateY(-1px)}
+.relay-root .ctrl:hover .ctrl-ic{border-color:rgba(255,255,255,.22);box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 6px 18px -8px rgba(0,0,0,.6)}
 .relay-root .ctrl:active{transform:scale(.94)}
-.relay-root .ctrl.off{background:rgba(255,92,114,.18);border-color:rgba(255,92,114,.36);color:var(--danger)}
-.relay-root .ctrl-text{font-family:"JetBrains Mono",monospace;font-weight:800;font-size:13px;letter-spacing:.04em}
-.relay-root .ctrl-text.on{background:rgba(63,224,197,.16);border-color:rgba(63,224,197,.34);color:var(--accent)}
+.relay-root .ctrl-lbl{font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--text2,#9aa);line-height:1;white-space:nowrap}
+/* Distinct color identity per control (owner: "all these icons different
+   colors with a very nice shape"). Chip tint + icon + label share the hue. */
+.relay-root #micBtn .ctrl-ic{color:#34d399;background:rgba(52,211,153,.13);border-color:rgba(52,211,153,.3)}
+.relay-root #camBtn .ctrl-ic{color:#38bdf8;background:rgba(56,189,248,.13);border-color:rgba(56,189,248,.3)}
+.relay-root #flipCamBtn .ctrl-ic{color:#a78bfa;background:rgba(167,139,250,.13);border-color:rgba(167,139,250,.3)}
+.relay-root #screenBtn .ctrl-ic{color:#fbbf24;background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.3)}
+.relay-root #qualityBtn .ctrl-ic{color:#f472b6;background:rgba(244,114,182,.12);border-color:rgba(244,114,182,.3)}
+.relay-root #audioBtn .ctrl-ic{color:#fb923c;background:rgba(251,146,60,.13);border-color:rgba(251,146,60,.3)}
+.relay-root #pipBtn .ctrl-ic{color:#818cf8;background:rgba(129,140,248,.13);border-color:rgba(129,140,248,.3)}
+.relay-root #filterBtn .ctrl-ic{color:#e879f9;background:rgba(232,121,249,.12);border-color:rgba(232,121,249,.3)}
+.relay-root #addBtn .ctrl-ic{color:var(--accent);background:rgba(63,224,197,.13);border-color:rgba(63,224,197,.3)}
+.relay-root #hostBtn .ctrl-ic{color:#facc15;background:rgba(250,204,21,.12);border-color:rgba(250,204,21,.3)}
+.relay-root #chatBtn .ctrl-ic{color:#a3e635;background:rgba(163,230,53,.12);border-color:rgba(163,230,53,.3)}
+.relay-root #moreBtn .ctrl-ic{color:#cbd5e1;background:rgba(203,213,225,.10);border-color:rgba(203,213,225,.24)}
+/* State overrides win over the per-button tints. */
+.relay-root .ctrl.off .ctrl-ic{background:rgba(255,92,114,.18);border-color:rgba(255,92,114,.4);color:var(--danger)}
+.relay-root .ctrl.off .ctrl-lbl{color:var(--danger)}
+.relay-root .ctrl-text .ctrl-ic{font-family:"JetBrains Mono",monospace;font-weight:800;font-size:13px;letter-spacing:.04em}
 .relay-root .ctrl svg{width:20px;height:20px}
-/* Dual-icon controls (v2.96.1): mic/cam swap to a SLASHED glyph when off. */
+/* Dual-icon controls (v2.96.1): mic/cam swap to a SLASHED glyph when off —
+   and (v2.99.4) their LABELS swap the same way (Mute/Unmute · Cam off/on). */
 .relay-root .ctrl .ic-off{display:none}
 .relay-root .ctrl.off .ic-on{display:none}
 .relay-root .ctrl.off .ic-off{display:block}
+.relay-root .ctrl .lbl-off{display:none}
+.relay-root .ctrl.off .lbl-on{display:none}
+.relay-root .ctrl.off .lbl-off{display:inline}
 .relay-root .ctrl .badge{position:absolute;top:-4px;right:-4px;background:var(--accent);color:#04201B;font-size:10px;font-weight:700;
   min-width:17px;height:17px;border-radius:9px;display:grid;place-items:center;padding:0 4px;border:2px solid var(--bg)}
 /* Hang-up (v2.96.3 redesign): a proper round red phone button — a perfect
@@ -705,6 +789,7 @@ export const RELAY_CSS = `
    read as a blob). The pre-connect dial screen gets a bigger one, iPhone
    style, since it's the only control on that screen. */
 .relay-root .ctrl.hangup{width:58px;height:58px;border-radius:50%;background:linear-gradient(145deg,#FF5C72,#E62E4D);border-color:transparent;color:#fff;
+  display:grid;place-items:center;padding:0;min-width:0;
   box-shadow:0 10px 26px -8px rgba(255,59,92,.65),inset 0 1px 0 rgba(255,255,255,.25)}
 .relay-root .ctrl.hangup svg{width:26px;height:26px}
 .relay-root .ctrl.hangup:hover{transform:translateY(-1px);box-shadow:0 14px 32px -8px rgba(255,92,114,.75),inset 0 1px 0 rgba(255,255,255,.25)}
@@ -759,17 +844,20 @@ export const RELAY_CSS = `
    in full (letterboxed) rather than cropped like a camera tile. */
 .relay-root .relay-tile.you.screen video{-webkit-transform:none;transform:none;object-fit:contain;background:#000}
 /* Active control state (e.g. screen-share on) — accent-tinted like .off is red. */
-.relay-root .ctrl.on{background:rgba(63,224,197,.18);border-color:rgba(63,224,197,.4);color:var(--accent)}
+.relay-root .ctrl.on .ctrl-ic{background:rgba(63,224,197,.2);border-color:rgba(63,224,197,.48);color:var(--accent);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 0 12px -2px rgba(63,224,197,.45)}
+.relay-root .ctrl.on .ctrl-lbl{color:var(--accent)}
 /* Mic VU feedback: a soft accent ring pulses on #micBtn while YOUR mic is picking
    up sound (live AnalyserNode on the local track) — so a forgotten mute (or a
    hot mic you meant to mute) is obvious without anyone having to say something.
    Never applied while .off (muted). transform/opacity-friendly box-shadow ring,
    matching the existing speaking-pulse / call-waiting-pulse pattern. */
-.relay-root .ctrl.voiced:not(.off){animation:relayMicVoiced 1.1s ease-out infinite}
+.relay-root .ctrl.voiced:not(.off) .ctrl-ic{animation:relayMicVoiced 1.1s ease-out infinite}
 @keyframes relayMicVoiced{0%{box-shadow:0 0 0 0 rgba(63,224,197,.45)}100%{box-shadow:0 0 0 7px rgba(63,224,197,0)}}
-@media (prefers-reduced-motion: reduce){.relay-root .ctrl.voiced:not(.off){animation:none;box-shadow:0 0 0 3px rgba(63,224,197,.35)}}
-/* Record button, when armed, glows red. */
-.relay-root #recordBtn.on{background:rgba(255,76,76,.22);border-color:rgba(255,76,76,.5);color:#ff5d5d}
+@media (prefers-reduced-motion: reduce){.relay-root .ctrl.voiced:not(.off) .ctrl-ic{animation:none;box-shadow:0 0 0 3px rgba(63,224,197,.35)}}
+/* Record row (now inside the ⋯ More menu), when armed, glows red. */
+.relay-root #recordBtn.on{background:rgba(255,76,76,.14)}
+.relay-root #recordBtn.on .mm-tx b{color:#ff5d5d}
 /* "● REC" live indicator in the call header. */
 .relay-root .call-head-right{display:flex;align-items:center;gap:12px}
 .relay-root .rec-ind{display:flex;align-items:center;gap:6px;font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700;letter-spacing:.06em;color:#ff5d5d}
@@ -822,9 +910,11 @@ export const RELAY_CSS = `
   /* Allow the control bar to wrap to a 2nd row on narrow phones so every button
      (screen-share / record / pip / …) is reachable and never clipped. */
   .relay-root .ctrl-bar{gap:8px;padding:8px 10px;flex-wrap:wrap;justify-content:center;max-width:96vw;max-height:40vh;overflow-y:auto}
-  /* Keep a comfortable 48px touch target even on the narrowest phones (the wrap
-     absorbs the extra width) — 44px was below the Material minimum. */
-  .relay-root .ctrl{width:48px;height:48px}
+  /* Keep a comfortable 44px+ chip touch target even on the narrowest phones
+     (the wrap absorbs the extra width; the label extends the hit area). */
+  .relay-root .ctrl{min-width:48px}
+  .relay-root .ctrl .ctrl-ic{width:44px;height:44px}
+  .relay-root .ctrl-lbl{font-size:9.5px}
   .relay-root .ctrl.hangup{width:52px;height:52px}
   /* Clear the phone's home indicator so the wrapped 2nd row is never hidden
      behind it (this is why the screen-share button "couldn't be seen"). */
@@ -928,6 +1018,29 @@ export const RELAY_CSS = `
 .relay-root .ao-item.ao-sel::before{content:"\\2713";font-weight:800}
 .relay-root .ao-item:not(.ao-sel)::before{content:"";width:9px}
 .relay-root .ao-empty{padding:16px;text-align:center;font-size:12px;color:var(--text2,#9aa)}
+/* Mobile sound-route rows (v2.99.4 owner spec): Loudspeaker / Earpiece /
+   Bluetooth as a real MENU (the button used to blind-toggle), each with an
+   icon tile + a one-line description of what it does. */
+.relay-root .ao-item .ao-ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex-shrink:0;
+  background:rgba(255,255,255,.06);border:1px solid var(--border);font-size:16px;line-height:1}
+.relay-root .ao-item .ao-tx{display:flex;flex-direction:column;gap:1px;min-width:0}
+.relay-root .ao-item .ao-tx i{font-style:normal;font-size:11px;color:var(--text2,#9aa);font-weight:500;line-height:1.3}
+.relay-root .ao-item.ao-dim{opacity:.55}
+/* ── ⋯ More menu (v2.99.4): Record + Diagnostics with real labels ────────── */
+.relay-root .more-menu{position:absolute;bottom:84px;right:18px;width:300px;max-width:90vw;display:none;
+  flex-direction:column;background:var(--surface);border:1px solid var(--border2);border-radius:16px;overflow:hidden;
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:31;padding:6px}
+.relay-root .more-menu.open{display:flex;animation:relayFade .2s ease both}
+.relay-root .mm-item{background:none;border:none;text-align:left;padding:10px 11px;border-radius:11px;color:var(--text);
+  cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:11px;transition:background .12s}
+.relay-root .mm-item:hover{background:var(--bg2)}
+.relay-root .mm-ic{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;flex-shrink:0;
+  background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--text2,#9aa)}
+.relay-root .mm-ic svg{width:18px;height:18px}
+.relay-root .mm-ic.mm-rec{color:#ff5d5d;background:rgba(255,76,76,.12);border-color:rgba(255,76,76,.3)}
+.relay-root .mm-tx{display:flex;flex-direction:column;gap:2px;min-width:0}
+.relay-root .mm-tx b{font-size:13px;font-weight:600}
+.relay-root .mm-tx i{font-style:normal;font-size:11px;color:var(--text2,#9aa);line-height:1.3}
 .relay-root #addClose{background:none;border:none;color:var(--text2,#9aa);font-size:14px;line-height:1;cursor:pointer;padding:3px 7px;border-radius:8px;font-weight:700}
 .relay-root #addClose:hover{background:var(--bg2);color:var(--text)}
 .relay-root .addpad input{background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:12px;text-align:center;

@@ -30,9 +30,16 @@ const ASSETS = read("client/src/lib/relayAssets.ts");
 const NOTIF = read("client/src/app/notifications.ts");
 const PROFILE = read("client/src/pages/app/Profile.tsx");
 
-describe("mobile speaker — toggle, default-on, gesture priming", () => {
-  it("the audio button is a speakerphone TOGGLE on Android AND iOS (no dead sink menu)", () => {
-    expect(CLIENT).toMatch(/if \(IS_ANDROID \|\| IS_IOS\) \{ void toggleLoudspeaker\(\); return; \}/);
+describe("mobile speaker — route menu, default-on, gesture priming", () => {
+  it("the audio button opens the Loudspeaker/Earpiece/Bluetooth ROUTE MENU on Android AND iOS (v2.99.4 — never the dead sink menu)", () => {
+    // v2.84 made the button a blind toggle because the sink menu enumerated
+    // EMPTY on phones; v2.99.4 (owner spec) replaces the toggle with a real
+    // three-route menu built from what phones CAN do (loudspeaker force /
+    // drop-force for earpiece / drop-force so the OS follows Bluetooth).
+    expect(CLIENT).toMatch(/if \(IS_ANDROID \|\| IS_IOS\) \{\s*\n\s*void renderMobileAudioMenu\(\)/);
+    expect(CLIENT).toMatch(/mobileAudioRow\("loud"/);
+    expect(CLIENT).toMatch(/mobileAudioRow\("ear"/);
+    expect(CLIENT).toMatch(/mobileAudioRow\("bt"/);
   });
 
   it("phones DEFAULT the speaker ON (persisted preference; iOS earpiece routing was heard as one-way audio)", () => {
