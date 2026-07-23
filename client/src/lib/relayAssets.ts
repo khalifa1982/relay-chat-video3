@@ -856,7 +856,7 @@ export const RELAY_CSS = `
 .relay-root .relay-tile .nm-flag{line-height:1}
 .relay-root .relay-tile .nm-flag:not(:empty){margin-right:5px}
 .relay-root .relay-tile .ph-name .nm-flag:not(:empty){margin-right:4px;font-size:1.1em}
-.relay-root .host-panel{position:absolute;bottom:84px;right:18px;width:280px;max-width:88vw;max-height:60vh;display:none;
+.relay-root .host-panel{position:absolute;bottom:84px;right:18px;width:320px;max-width:92vw;max-height:66vh;display:none;
   flex-direction:column;background:var(--surface);border:1px solid var(--border2);border-radius:18px;
   box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:31;overflow:hidden}
 .relay-root .host-panel.open{display:flex;animation:relayFade .2s ease both}
@@ -865,19 +865,33 @@ export const RELAY_CSS = `
 .relay-root #hostClose{background:none;border:none;color:var(--text2,#9aa);font-size:14px;cursor:pointer;padding:3px 7px;border-radius:8px;font-weight:700}
 .relay-root #hostClose:hover{background:var(--bg2);color:var(--text)}
 .relay-root .host-actions{display:flex;gap:7px;padding:11px 13px;border-bottom:1px solid var(--border);flex-wrap:wrap}
-.relay-root .host-actions button{flex:1;min-width:78px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;padding:8px 6px;
-  color:var(--text);font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
-.relay-root .host-actions button:hover{border-color:var(--accent)}
-.relay-root .host-list{overflow-y:auto;padding:6px}
-.relay-root .hl-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 8px;border-radius:10px}
-.relay-root .hl-row:hover{background:var(--bg2)}
-.relay-root .hl-name{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;min-width:0}
-.relay-root .hl-name .hl-pin{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--text2,#9aa);font-weight:500}
-.relay-root .hl-badge{background:var(--accent);color:#04201B;font-size:8px;font-weight:800;padding:1px 4px;border-radius:4px;text-transform:uppercase}
-.relay-root .hl-acts{display:flex;gap:4px;flex-shrink:0}
-.relay-root .hl-acts button{background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:4px 7px;color:var(--text);
-  font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap}
+.relay-root .host-actions button{flex:1;min-width:88px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:9px 6px;
+  color:var(--text);font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:border-color .12s,background .12s}
+.relay-root .host-actions button:hover{border-color:var(--accent);background:var(--surface)}
+.relay-root .host-list{overflow-y:auto;padding:8px}
+/* v2.99.3: each participant row STACKS (name over actions) and the action
+   buttons WRAP — the old single inline row overflowed the panel and clipped the
+   last button ("Remove") off the edge (owner screenshot). */
+.relay-root .hl-row{display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:10px;border-radius:12px;
+  background:var(--bg2);margin-bottom:7px}
+.relay-root .hl-row:last-child{margin-bottom:0}
+.relay-root .hl-name{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:13.5px;font-weight:600;min-width:0}
+.relay-root .hl-name .hl-pin{font-family:"JetBrains Mono",monospace;font-size:10.5px;color:var(--text2,#9aa);font-weight:500}
+.relay-root .hl-badge{background:var(--accent);color:#04201B;font-size:8px;font-weight:800;padding:1px 5px;border-radius:5px;text-transform:uppercase;letter-spacing:.04em}
+.relay-root .hl-acts{display:flex;flex-wrap:wrap;gap:6px}
+.relay-root .hl-acts button{flex:1 1 auto;min-width:72px;background:var(--surface);border:1px solid var(--border);border-radius:9px;
+  padding:8px 10px;color:var(--text);font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;
+  text-align:center;transition:border-color .12s,background .12s,color .12s}
 .relay-root .hl-acts button:hover{border-color:var(--accent);color:var(--accent)}
+/* Distinct accents per action so the row is scannable at a glance. */
+.relay-root .hl-acts button[data-act="mute"]{color:#fbbf24;border-color:rgba(251,191,36,.28)}
+.relay-root .hl-acts button[data-act="mute"]:hover{border-color:#fbbf24;background:rgba(251,191,36,.12)}
+.relay-root .hl-acts button[data-act="pin"]{color:#38bdf8;border-color:rgba(56,189,248,.28)}
+.relay-root .hl-acts button[data-act="pin"]:hover{border-color:#38bdf8;background:rgba(56,189,248,.12)}
+.relay-root .hl-acts button[data-act="cohost"]{color:#a78bfa;border-color:rgba(167,139,250,.28)}
+.relay-root .hl-acts button[data-act="cohost"]:hover{border-color:#a78bfa;background:rgba(167,139,250,.12)}
+.relay-root .hl-acts button[data-act="makehost"]{color:var(--accent);border-color:rgba(63,224,197,.28)}
+.relay-root .hl-acts button[data-act="makehost"]:hover{border-color:var(--accent);background:rgba(63,224,197,.12)}
 .relay-root .hl-acts button.hl-danger{color:var(--danger);border-color:rgba(255,92,114,.3)}
 .relay-root .hl-acts button.hl-danger:hover{border-color:var(--danger);color:var(--danger);background:rgba(255,92,114,.12)}
 .relay-root .hl-empty{padding:18px;text-align:center;font-size:12px;color:var(--text2,#9aa)}

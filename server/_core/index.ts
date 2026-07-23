@@ -13,9 +13,9 @@ import { createContext } from "./context";
 import { serveStatic } from "./static";
 import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
-import { registerV2Events, publishToIdentity } from "../v2events";
+import { registerV2Events, publishToIdentity, publishPresenceTo } from "../v2events";
 import { registerV2Offline } from "../v2offline";
-import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy } from "../v2db";
+import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy, getPresenceAudienceIds } from "../v2db";
 import { sendPushToIdentity } from "../webPush";
 import { registerWellKnown } from "../wellKnown";
 import { registerSeo } from "../seo";
@@ -394,11 +394,25 @@ async function startServer() {
   });
 
   // Stale-presence sweep — once a minute, flip users whose heartbeat
-  // expired to offline. Cheap UPDATE; safe to run from a single instance.
+  // expired to offline. For EACH reaped user, broadcast an offline SSE event to
+  // their audience (v2.99.3) so SSE-fed surfaces (Contacts/Messages/profile
+  // popup) don't keep showing a crashed/closed user green until their own poll.
   setInterval(() => {
-    reapStalePresence(120).catch((err) => {
-      console.warn("[v2 presence reaper]", err);
-    });
+    reapStalePresence(120)
+      .then(async (reaped) => {
+        const now = new Date();
+        for (const r of reaped) {
+          try {
+            const audience = await getPresenceAudienceIds(r.id, r.number);
+            publishPresenceTo(audience, r.number, false, now);
+          } catch {
+            /* per-user best-effort; never break the sweep */
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn("[v2 presence reaper]", err);
+      });
   }, 60_000).unref();
   // Purge expired email-OTP rows every 5 minutes (10-min TTL codes).
   setInterval(() => {

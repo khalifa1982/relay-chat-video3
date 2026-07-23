@@ -172,6 +172,25 @@ describe("relay call UI regression guards", () => {
     });
   }
 
+  // ── host-panel layout + per-action accents (v2.99.3) ──────────────────────
+  // Owner screenshot: the old single inline row overflowed the 280px panel and
+  // clipped "Remove" off the edge. Rows now STACK (name over actions) and the
+  // action buttons WRAP, each with a distinct color accent.
+  it("host-panel participant rows stack vertically so buttons can never clip", () => {
+    expect(RELAY_CSS).toMatch(/\.hl-row\{[^}]*flex-direction:column/);
+    expect(RELAY_CSS).toMatch(/\.hl-acts\{[^}]*flex-wrap:wrap/);
+  });
+  it("each host action carries a distinct color accent (scannable at a glance)", () => {
+    expect(RELAY_CSS).toMatch(/\.hl-acts button\[data-act="mute"\]\{[^}]*#fbbf24/);
+    expect(RELAY_CSS).toMatch(/\.hl-acts button\[data-act="pin"\]\{[^}]*#38bdf8/);
+    expect(RELAY_CSS).toMatch(/\.hl-acts button\[data-act="cohost"\]\{[^}]*#a78bfa/);
+    expect(RELAY_CSS).toMatch(/\.hl-acts button\[data-act="makehost"\]\{[^}]*var\(--accent\)/);
+    expect(RELAY_CSS).toMatch(/\.hl-acts button\.hl-danger\{[^}]*var\(--danger\)/);
+  });
+  it("the host panel is wide enough for the stacked rows (320px, 92vw cap)", () => {
+    expect(RELAY_CSS).toMatch(/\.host-panel\{[^}]*width:320px;max-width:92vw/);
+  });
+
   // ── highlighted, blinking version/build footer (v2.55.1) ───────────────────
   it("highlights the in-call version + build with white, glowing, blinking spans", () => {
     // Version + build date are wrapped (the template interpolates the real values).
