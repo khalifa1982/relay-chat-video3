@@ -11,6 +11,7 @@ import {
   UserPlus,
   Users,
   Share2,
+  Check,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -676,11 +677,15 @@ export default function DialerPage() {
               ) : null}
             </div>
 
-            {/* Quick-add */}
-            {dialed.length === 6 && previewIdentity && previewIdentity.number !== myNumber ? (
+            {/* Quick-add (v2.99.8): offer Save for ANY complete 6-digit number
+                that isn't yours, isn't a party line, and isn't already saved —
+                even when the directory has no match yet (owner: "while you're
+                typing the number on the pad it will give you Save if this
+                contact is not in your contact list"). */}
+            {/^\d{6}$/.test(dialed) && dialed !== myNumber && !previewIdentity?.partyLine ? (
               <QuickAddContact
-                number={previewIdentity.number}
-                displayName={previewIdentity.displayName}
+                number={dialed}
+                displayName={previewIdentity?.displayName || dialed}
               />
             ) : null}
           </div>
@@ -710,20 +715,32 @@ function QuickAddContact({ number, displayName }: { number: string; displayName:
   const upsert = trpc.contacts.upsert.useMutation({
     onSuccess: () => {
       utils.contacts.list.invalidate();
+      toast.success("Saved to your contacts.");
     },
+    onError: (e) => toast.error((e as { message?: string })?.message ?? "Couldn't save the contact."),
   });
   const existing = trpc.contacts.list.useQuery();
   const isAlready = (existing.data ?? []).some((c) => c.number === number);
-  if (isAlready) return null;
+  const fmt = number.length === 6 ? number.slice(0, 3) + "-" + number.slice(3) : number;
+  if (isAlready) {
+    // Already saved → a quiet confirmation, no action (v2.99.8).
+    return (
+      <div className="mx-auto inline-flex items-center gap-1.5 text-[0.72rem] text-muted-foreground">
+        <Check className="size-3.5 text-[color:var(--relay-online,#06d6a0)]" />
+        In your contacts
+      </div>
+    );
+  }
+  // A prominent pill (owner wanted it obvious "down to save"), not a faint link.
   return (
     <button
       type="button"
-      onClick={() => upsert.mutate({ number, displayName })}
+      onClick={() => upsert.mutate({ number, displayName: displayName === number ? undefined : displayName })}
       disabled={upsert.isPending}
-      className="mx-auto inline-flex items-center gap-1.5 text-[0.7rem] text-muted-foreground hover:text-primary transition-colors"
+      className="mx-auto inline-flex items-center gap-2 rounded-full border border-primary/40 bg-primary/10 px-4 py-2 text-xs font-semibold text-primary hover:bg-primary/20 active:scale-95 transition-transform disabled:opacity-60"
     >
-      <UserPlus className="size-3" />
-      {upsert.isPending ? "Adding…" : `Save ${displayName} to contacts`}
+      <UserPlus className="size-4" />
+      {upsert.isPending ? "Saving…" : `Save ${fmt} to contacts`}
     </button>
   );
 }

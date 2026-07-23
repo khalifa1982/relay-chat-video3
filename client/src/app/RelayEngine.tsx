@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation } from "wouter";
-import { Loader2, PhoneOff, UserPlus } from "lucide-react";
+import { Loader2, PhoneOff, UserPlus, Minimize2, Maximize2, Scan, GripHorizontal, Users } from "lucide-react";
 // TYPE-ONLY import — erased at build. The call engine (relayClient + its
 // markup/CSS) is DYNAMICALLY imported inside the mount effect below (v2.88):
 // it's several hundred KB that only matters once a signed-in user is inside
@@ -85,10 +85,38 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   // A 1:1 dial that never connected (no answer / declined / offline) — drives
   // the post-dial voicemail + call-back-alert card (v2.88).
   const [failedDial, setFailedDial] = useState<FailedDialInfo | null>(null);
+  // In-page minimize (v2.99.8): the live call shrinks to a small draggable box
+  // (NOT a browser PiP window) so the user can use Messages/History behind it.
+  // The engine div is never torn down — only its position/size class changes,
+  // so media keeps flowing. `minimized` is a display state, orthogonal to the
+  // engine's phase machine.
+  const [minimized, setMinimized] = useState(false);
+  const [fitContain, setFitContain] = useState(false); // "fit screen": letterbox vs cover
+  const [miniPos, setMiniPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [peopleCount, setPeopleCount] = useState(1);
   // A new call supersedes an undismissed "they didn't answer" card — without
   // this it resurfaces when the LATER call ends (review v2.88).
   useEffect(() => {
     if (phase !== "idle") setFailedDial(null);
+    // Returning to idle ends the call → reset the minimize/fit/drag display state.
+    if (phase === "idle") { setMinimized(false); setFitContain(false); setMiniPos({ x: 0, y: 0 }); }
+  }, [phase]);
+
+  // Tell the engine to force the compact 2-up layout while minimized (the
+  // engine's ResizeObserver is the passive fallback).
+  useEffect(() => {
+    handleRef.current?.setMinimized(minimized);
+  }, [minimized]);
+
+  // Poll the live head-count (self + remote peers) so the mini box shows how
+  // many are on the call — and grows a touch as more join. Same 3s poll the
+  // in-call save-contacts chip uses.
+  useEffect(() => {
+    if (phase !== "in-call") { setPeopleCount(1); return; }
+    const read = () => setPeopleCount((handleRef.current?.getRoster().length ?? 0) + 1);
+    read();
+    const t = setInterval(read, 3000);
+    return () => clearInterval(t);
   }, [phase]);
 
   // Incoming-ring "quick reply": the engine calls back with (callerPin, text)
@@ -131,7 +159,20 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const blocked = (contactsList.data ?? []).filter((c) => c.blocked).map((c) => c.number);
     handleRef.current?.setBlockedPins(blocked);
+    // Per-tile "add to contacts" mark (v2.99.8): push the saved numbers so the
+    // engine shows the mark only on peers you HAVEN'T saved (and drops it the
+    // instant one is added).
+    handleRef.current?.setSavedContacts((contactsList.data ?? []).map((c) => c.number));
   }, [contactsList.data]);
+
+  // Bridge the engine's per-tile add-contact tap to the contacts stack (v2.99.8).
+  const saveContact = trpc.contacts.upsert.useMutation({
+    onSuccess: () => contactsList.refetch(),
+  });
+  const saveContactRef = useRef<(pin: string, name: string) => void>(() => {});
+  saveContactRef.current = (pin, name) => {
+    saveContact.mutate({ number: pin, displayName: name || undefined });
+  };
 
   // Latest identity values, read by the (mount-once) auto-register loop.
   const nameRef = useRef<string | null>(null);
@@ -184,6 +225,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
       handle.setOnPinChange(setPin);
       handle.setOnRejoinChange(setRejoining);
       handle.setOnQuickReply((toPin, text) => quickReplyRef.current(toPin, text));
+      handle.setOnSaveContact((pin, name) => saveContactRef.current(pin, name));
       // Voicemail (v2.88): surface the "Leave a voice message / alert me when
       // online" card after a failed 1:1 dial. The engine's own ~2s reason card
       // shows first; this appears above it and outlives the teardown.
@@ -236,12 +278,55 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inApp, me?.id]);
 
-  // Hide the phone-app chrome while a call / incoming ring is on screen.
+  // Hide the phone-app chrome while a call / incoming ring is on screen — but
+  // NOT while minimized (v2.99.8): the mini box floats over the app so the user
+  // can keep using Messages / History behind it, so the bottom nav / sidebar
+  // must stay visible.
   useEffect(() => {
     if (typeof document === "undefined") return;
-    document.body.classList.toggle("relay-call-active", phase !== "idle");
+    document.body.classList.toggle("relay-call-active", phase !== "idle" && !minimized);
     return () => document.body.classList.remove("relay-call-active");
-  }, [phase]);
+  }, [phase, minimized]);
+
+  // ── mini-box dragging (v2.99.8) ──────────────────────────────────────────
+  // Pointer drag on the mini box's header, writing a translate offset applied
+  // to BOTH the engine root and the control overlay (one source of truth).
+  // Clamped so the box can't be dragged fully off-screen.
+  const dragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+  const onMiniDragStart = (e: React.PointerEvent) => {
+    if (!minimized) return;
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    dragRef.current = { startX: e.clientX, startY: e.clientY, baseX: miniPos.x, baseY: miniPos.y };
+  };
+  const onMiniDragMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    // Dragging up/left is negative — the box is anchored bottom-right, so clamp
+    // the offset to keep it within the viewport with a small margin.
+    const nx = Math.min(0, Math.max(-(window.innerWidth - 120), d.baseX + (e.clientX - d.startX)));
+    const ny = Math.min(0, Math.max(-(window.innerHeight - 160), d.baseY + (e.clientY - d.startY)));
+    setMiniPos({ x: nx, y: ny });
+  };
+  const onMiniDragEnd = () => { dragRef.current = null; };
+
+  // The mini box geometry — applied inline (beats the base `.relay-root{inset:0}`
+  // rule without needing !important, since inline styles win over class rules).
+  const miniBoxStyle: React.CSSProperties = {
+    position: "fixed",
+    inset: "auto",
+    right: 14,
+    bottom: 88,
+    top: "auto",
+    left: "auto",
+    width: "min(340px, 86vw)",
+    // Grows a little with headcount so a busy call's 2-up isn't cramped.
+    height: peopleCount > 1 ? 232 : 196,
+    transform: `translate(${miniPos.x}px, ${miniPos.y}px)`,
+    borderRadius: 18,
+    overflow: "hidden",
+    boxShadow: "0 24px 60px -18px rgba(0,0,0,.7)",
+    zIndex: 60,
+  };
 
   const value: RelayEngineValue = {
     dial: (n, opts) => handleRef.current?.dial(n, opts) ?? false,
@@ -254,6 +339,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     // this reflects the registered transport's real cap (mesh 6 / SFU 10).
     maxParticipants: handleRef.current?.maxParticipants() ?? 10,
   };
+  const active = phase !== "idle";
 
   return (
     <RelayEngineContext.Provider value={value}>
@@ -269,19 +355,107 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
         /* v2.96.1 (owner): the copyright/version footer has no place on the
            call screen — it collided with the chat composer on phones. */
         body.relay-call-active .relay-root .version-tag { display: none !important; }
+        /* Minimized mini-box (v2.99.8): only the video grid shows — the call
+           header, control bar and chat panel are hidden; a slim React overlay
+           provides drag + Maximize + Hang up. Geometry is inline (see
+           miniBoxStyle) so it beats the base .relay-root{inset:0}. */
+        .relay-root.relay-minimized .call-head,
+        .relay-root.relay-minimized .controls,
+        .relay-root.relay-minimized #chatPanel,
+        .relay-root.relay-minimized #filterDock,
+        .relay-root.relay-minimized .diag-btn { display: none !important; }
+        .relay-root.relay-minimized .call-main { padding-top: 30px !important; }
+        .relay-root.relay-minimized .grid { padding: 6px !important; }
+        /* "Fit screen" (v2.99.8): letterbox every tile's video (contain) instead
+           of the default crop-to-fill (cover), so nothing is cut off. */
+        .relay-root.relay-fit .relay-tile video { object-fit: contain !important; }
       `}</style>
-      {/* The engine host: parked off-screen when idle, promoted to a fullscreen
-          overlay (above all app chrome) during a call or incoming ring. */}
+      {/* The engine host: parked off-screen when idle; a fullscreen overlay
+          during a live call; or a small draggable mini-box when minimized. The
+          div (and its live media) is NEVER torn down — only its class/geometry
+          changes. */}
       <div
         ref={engineRoot}
+        style={active && minimized ? miniBoxStyle : undefined}
         className={
           "relay-root relay-embedded " +
-          (phase === "idle"
+          (fitContain ? "relay-fit " : "") +
+          (!active
             ? "absolute -left-[10000px] top-0 size-px overflow-hidden pointer-events-none opacity-0"
-            : "fixed inset-0 z-40")
+            : minimized
+              ? "relay-minimized"
+              : "fixed inset-0 z-40")
         }
         data-relay-engine-root="true"
       />
+      {/* Fullscreen in-call controls (v2.99.8): a Minimize + Fit cluster
+          top-left (the engine owns the rest of the chrome). Hidden while
+          minimized (the mini box has its own controls) and pre-connect. */}
+      {phase === "in-call" && !minimized ? (
+        <div className="fixed top-3 left-1/2 z-[70] flex -translate-x-1/2 gap-2">
+          <button
+            type="button"
+            onClick={() => setMinimized(true)}
+            className="inline-flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-2 text-xs font-semibold text-white shadow-lg backdrop-blur-md hover:bg-black/75 active:scale-95 transition-transform"
+            aria-label="Minimize the call to a floating window"
+            title="Minimize — keep the call in a small window while you use the app"
+          >
+            <Minimize2 className="size-4" /> Minimize
+          </button>
+          <button
+            type="button"
+            onClick={() => setFitContain((v) => !v)}
+            className={
+              "inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold shadow-lg backdrop-blur-md active:scale-95 transition-transform " +
+              (fitContain ? "bg-[color:var(--relay-online,#06d6a0)] text-black" : "bg-black/60 text-white hover:bg-black/75")
+            }
+            aria-label="Fit the whole video on screen"
+            title={fitContain ? "Fit: showing the whole frame (tap for fill)" : "Fit screen — show the whole video, no cropping"}
+          >
+            <Scan className="size-4" /> Fit
+          </button>
+        </div>
+      ) : null}
+      {/* Minimized mini-box overlay (v2.99.8): a draggable header with the live
+          people-count + Maximize + Hang up, laid exactly over the engine box. */}
+      {active && minimized ? (
+        <div style={{ ...miniBoxStyle, pointerEvents: "none" }} className="flex flex-col">
+          <div
+            onPointerDown={onMiniDragStart}
+            onPointerMove={onMiniDragMove}
+            onPointerUp={onMiniDragEnd}
+            className="pointer-events-auto flex cursor-grab items-center gap-2 bg-black/70 px-2.5 py-1.5 text-white backdrop-blur-md active:cursor-grabbing"
+            style={{ touchAction: "none" }}
+          >
+            <GripHorizontal className="size-4 shrink-0 opacity-70" />
+            <span className="flex items-center gap-1 text-xs font-semibold">
+              <Users className="size-3.5" /> {peopleCount}
+            </span>
+            <span className="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setMinimized(false)}
+                className="grid size-7 place-items-center rounded-lg bg-white/10 hover:bg-white/20 active:scale-95 transition-transform"
+                aria-label="Maximize the call back to full screen"
+                title="Maximize"
+              >
+                <Maximize2 className="size-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRef.current?.hangup()}
+                className="grid size-7 place-items-center rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 active:scale-95 transition-transform"
+                aria-label="End the call"
+                title="End call"
+              >
+                <PhoneOff className="size-4" />
+              </button>
+            </span>
+          </div>
+          {/* The rest of the box is the engine's video grid, showing through. */}
+          <div className="flex-1" />
+        </div>
+      ) : null}
       {/* In-call one-tap contact conversion (v2.96): a quiet chip for the
           first on-call peer who isn't in your contacts yet. */}
       {phase === "in-call" ? <InCallSaveContacts handleRef={handleRef} /> : null}

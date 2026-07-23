@@ -813,9 +813,14 @@ export const RELAY_CSS = `
   background:linear-gradient(155deg,#FF7A8A 0%,#FF3B5C 55%,#D81B42 100%);
   box-shadow:0 22px 46px -14px rgba(216,27,66,.65),0 0 0 1px rgba(255,255,255,.06) inset}
 .relay-root #call.pre-connect .ctrl.hangup svg{width:33px;height:33px}
-.relay-root #call.pre-connect .ctrl.hangup .hangup-lbl{display:block;position:absolute;top:calc(100% + 12px);left:50%;
+.relay-root #call.pre-connect .ctrl.hangup .hangup-lbl{display:block;position:absolute;top:calc(100% + 10px);left:50%;
   transform:translateX(-50%);white-space:nowrap;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;
   font-size:13px;letter-spacing:.02em;color:#ffb9c2}
+/* v2.99.8 (owner screenshot): the "End Call" caption sits BELOW the 76px
+   button via top:calc(100%+10px), but the base .controls only reserves ~22px
+   of bottom padding — so on a phone the caption fell below the viewport edge.
+   Reserve enough room (caption height + safe-area) on the pre-connect screen. */
+.relay-root #call.pre-connect .controls{padding-bottom:max(60px,calc(env(safe-area-inset-bottom) + 48px))}
 .relay-root #call.pre-connect .ctrl-bar{background:none;border:none;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;padding:0;position:relative;
   /* Undo the mobile "wrap + scroll" override below (max-height/overflow-y:auto)
      — with just ONE button there's nothing to scroll, and auto-overflow was
@@ -996,6 +1001,26 @@ export const RELAY_CSS = `
   font-weight:800;cursor:pointer;line-height:1;padding:0}
 .relay-root #videoGrid.mod-on .relay-tile:not(.you) .tile-menu-btn{display:grid}
 .relay-root .relay-tile .tile-menu-btn:hover{background:var(--accent);color:#04201B}
+/* Screen-share MAXIMIZE button (v2.99.8): shown ONLY on a .screen tile —
+   full-bleeds the shared screen (hides the thumb filmstrip); tap again to
+   restore. Sits top-right, clear of the ⋮ (bottom-right) and the name (bottom-left). */
+.relay-root .relay-tile .tile-max-btn{position:absolute;right:8px;top:8px;z-index:5;width:32px;height:32px;border-radius:9px;
+  border:none;display:none;place-items:center;background:rgba(8,9,12,.62);backdrop-filter:blur(6px);color:#fff;cursor:pointer;padding:0}
+.relay-root .relay-tile .tile-max-btn svg{width:17px;height:17px}
+.relay-root .relay-tile.screen .tile-max-btn{display:grid}
+.relay-root .relay-tile .tile-max-btn:hover{background:var(--accent);color:#04201B}
+.relay-root #videoGrid.screen-max .relay-tile.is-spotlight .tile-max-btn{background:var(--accent);color:#04201B}
+/* Per-tile "add to contacts" mark (v2.99.8): a small pill UNDER the name (name
+   is bottom-left), shown for a remote peer who isn't a saved contact yet. */
+.relay-root .relay-tile .tile-addc{position:absolute;left:12px;bottom:40px;z-index:4;display:inline-flex;align-items:center;gap:5px;
+  border:1px solid rgba(63,224,197,.5);background:rgba(8,9,12,.62);backdrop-filter:blur(6px);color:var(--accent);
+  border-radius:999px;padding:4px 10px 4px 8px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;line-height:1}
+.relay-root .relay-tile .tile-addc svg{width:13px;height:13px}
+.relay-root .relay-tile .tile-addc:hover{background:var(--accent);color:#04201B;border-color:var(--accent)}
+/* On tiny thumbs the pill would overlap; drop the label there. */
+.relay-root #videoGrid.spotlight .relay-tile.is-thumb .tile-addc{display:none}
+.relay-root #videoGrid.compact .relay-tile .tile-addc span{display:none}
+.relay-root #videoGrid.compact .relay-tile .tile-addc{padding:5px;bottom:12px}
 /* Shared bottom-sheet action menu opened by a tile's ⋮ button. */
 .relay-root .tile-menu{position:absolute;left:0;right:0;margin-inline:auto;bottom:96px;width:min(260px,90vw);display:none;
   flex-direction:column;background:var(--surface);border:1px solid var(--border2);border-radius:16px;overflow:hidden;

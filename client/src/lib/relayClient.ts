@@ -191,6 +191,17 @@ export interface RelayHandle {
   /** Set our country flag emoji (shown beside our name on remote tiles).
    *  Re-affirms registration if already connected. */
   setSelfFlag: (flag: string) => void;
+  /** In-page minimize (v2.99.8): when the React host shrinks the engine to a
+   *  small floating box, force the compact 2-up layout deterministically (the
+   *  ResizeObserver is a fallback). */
+  setMinimized: (on: boolean) => void;
+  /** Numbers the user has ALREADY saved as contacts (v2.99.8). Drives the
+   *  per-tile "add to contacts" mark: a peer NOT in this set shows the mark;
+   *  saving removes it. Replace-style — pass the full current list each time. */
+  setSavedContacts: (pins: string[]) => void;
+  /** Wire the per-tile "add to contacts" mark to the host's contacts stack:
+   *  called with (pin, name) when the user taps a peer's add mark in-call. */
+  setOnSaveContact: (cb: ((pin: string, name: string) => void) | null) => void;
 }
 
 export function startRelay(root: HTMLElement): RelayHandle {
@@ -290,6 +301,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // ---------- active-speaker / spotlight view (v2.35) ----------
   let spotlightId: string | null = null;     // tile id manually pinned big, or null
   let manualSpotlight = false;               // user clicked a tile to pin it
+  // Screen-share MAXIMIZE (v2.99.8): full-bleed the shared screen (hide the
+  // thumb filmstrip) vs. the normal spotlight-with-thumbs.
+  let screenMaximized = false;
+  // Per-tile "add to contacts" mark (v2.99.8): the pins the user has ALREADY
+  // saved (pushed from React via setSavedContacts); a peer NOT in this set gets
+  // an add mark under their name. `onSaveContact` bridges the tap to React.
+  let savedContactPins = new Set<string>();
+  let onSaveContact: ((pin: string, name: string) => void) | null = null;
   let activeSpeakerId: string | null = null; // tile id of the loudest speaker (auto)
   let speakerOrder: string[] = [];           // tile ids, most-recently-loud first
   let speakerCandidate: string | null = null; // pending new leader (hysteresis)
@@ -3116,6 +3135,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const menuBtn = pin
       ? '<button class="tile-menu-btn" type="button" data-pin="' + escapeHtml(pin) + '" aria-label="Participant options" title="Options">⋮</button>'
       : "";
+    // Screen-share MAXIMIZE (v2.99.8): a per-tile button revealed by CSS ONLY on
+    // a .screen tile — toggles full-bleed of the shared screen (hide thumbs).
+    const maxBtn = pin
+      ? '<button class="tile-max-btn" type="button" data-pin="' + escapeHtml(pin) + '" aria-label="Maximize shared screen" title="Maximize / restore shared screen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6M20 10h-6V4M14 10l6-6M10 14l-6 6"/></svg></button>'
+      : "";
+    // Add-to-contacts MARK (v2.99.8): under a REMOTE peer's name, when they
+    // aren't a saved contact yet. `addContactMarkHTML` returns "" for saved
+    // peers so the mark disappears the moment they're added.
+    const addMark = pin ? addContactMarkHTML(pin, name) : "";
     // The flag lives ONLY in the bottom-left .nm label (not also in the centered
     // cam-off name) so it never renders twice on a camera-off tile.
     return (
@@ -3123,9 +3151,45 @@ export function startRelay(root: HTMLElement): RelayHandle {
       '<div class="ph-name">' + escapeHtml(name) + "</div>" +
       SOUND_WAVE_HTML + "</div>" +
       '<div class="nm">' + fl + '<span class="nm-text">' + escapeHtml(name) + "</span></div>" +
+      addMark +
       '<div class="tile-info">' + dev + '<span class="ti-speed"></span></div>' +
-      menuBtn
+      menuBtn + maxBtn
     );
+  }
+  /** The per-tile "add to contacts" mark markup for a remote peer — empty when
+   *  the peer is already saved (v2.99.8). Kept as its own function so a live
+   *  saved-set change can re-render just the marks. */
+  function addContactMarkHTML(pin: string, name: string): string {
+    if (!/^\d{6}$/.test(pin) || savedContactPins.has(pin)) return "";
+    return (
+      '<button class="tile-addc" type="button" data-addc="' + escapeHtml(pin) +
+      '" data-name="' + escapeHtml(name) + '" aria-label="Add ' + escapeHtml(name) +
+      ' to contacts" title="Add to contacts">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>' +
+      '<span>Add</span></button>'
+    );
+  }
+  /** Re-render every tile's add-contact mark (after the saved set changes). */
+  function refreshAllTileAddMarks() {
+    const grid = $("videoGrid");
+    if (!grid) return;
+    grid.querySelectorAll(".relay-tile").forEach((tileEl) => {
+      const tile = tileEl as HTMLElement;
+      const id = tile.id || "";
+      const pin = id.startsWith("tile-") ? id.slice(5) : "";
+      if (!/^\d{6}$/.test(pin)) return; // self / non-pin tiles never get the mark
+      const existing = tile.querySelector(".tile-addc");
+      if (savedContactPins.has(pin)) {
+        existing?.remove();
+        return;
+      }
+      if (!existing) {
+        const nameEl = tile.querySelector(".nm-text");
+        const name = (nameEl?.textContent || "Guest").trim();
+        const nm = tile.querySelector(".nm");
+        if (nm) nm.insertAdjacentHTML("afterend", addContactMarkHTML(pin, name));
+      }
+    });
   }
   function setTileDevice(tileId: string, device: string) {
     const el = document.getElementById(tileId);
@@ -3258,6 +3322,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     } else {
       screenShareIds.delete(id);
       tile?.classList.remove("screen");
+      // A full-bleed maximize collapses back to the grid when its screen ends.
+      if (screenMaximized && spotlightId === id) { screenMaximized = false; manualSpotlight = false; spotlightId = null; }
     }
     layoutGrid();
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutGrid());
@@ -4414,12 +4480,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
     if (plan.mode === "spotlight" && plan.focusId) {
       g.classList.add("spotlight");
+      // Screen-share MAXIMIZE (v2.99.8): only meaningful when the focused tile
+      // is actually a screen share; a maximize with thumbs hidden = full-bleed.
+      const maxNow = screenMaximized && screenShareIds.has(plan.focusId);
+      g.classList.toggle("screen-max", maxNow);
       const cols = Math.max(plan.thumbIds.length, 1);
-      g.style.gridTemplateColumns = "repeat(" + cols + ",minmax(0,1fr))";
-      g.style.gridTemplateRows = plan.thumbIds.length ? "minmax(0,1fr) 22%" : "1fr";
+      g.style.gridTemplateColumns = maxNow ? "1fr" : "repeat(" + cols + ",minmax(0,1fr))";
+      g.style.gridTemplateRows = maxNow || !plan.thumbIds.length ? "1fr" : "minmax(0,1fr) 22%";
       const spot = byId(plan.focusId);
-      if (spot) { spot.classList.add("is-spotlight"); spot.style.gridColumn = "1 / -1"; spot.style.gridRow = "1"; }
-      plan.thumbIds.forEach(id => { const t = byId(id); if (t) { t.classList.add("is-thumb"); t.style.gridRow = "2"; } });
+      if (spot) { spot.classList.add("is-spotlight"); spot.style.gridColumn = "1 / -1"; spot.style.gridRow = maxNow ? "1 / -1" : "1"; }
+      plan.thumbIds.forEach(id => {
+        const t = byId(id);
+        if (t) { t.classList.add("is-thumb"); t.style.gridRow = "2"; if (maxNow) t.style.display = "none"; }
+      });
       return;
     }
 
@@ -4433,17 +4506,48 @@ export function startRelay(root: HTMLElement): RelayHandle {
   /** Click a tile to spotlight it big; click the spotlighted tile again to unpin. */
   function onGridClick(e: Event) {
     if (!inCall) return;
+    const target = e.target as HTMLElement;
     // A tap on the per-tile ⋮ opens the host menu instead of spotlighting.
-    const menuBtn = (e.target as HTMLElement)?.closest?.(".tile-menu-btn") as HTMLElement | null;
+    const menuBtn = target?.closest?.(".tile-menu-btn") as HTMLElement | null;
     if (menuBtn) {
       e.stopPropagation();
       openTileMenu(menuBtn.getAttribute("data-pin") || "");
       return;
     }
-    const tile = (e.target as HTMLElement)?.closest?.(".relay-tile") as HTMLElement | null;
+    // Add-to-contacts mark (v2.99.8): bridge to React, which upserts the
+    // contact and pushes back the new saved set (removing the mark).
+    const addBtn = target?.closest?.(".tile-addc") as HTMLElement | null;
+    if (addBtn) {
+      e.stopPropagation();
+      const pin = addBtn.getAttribute("data-addc") || "";
+      const nm = addBtn.getAttribute("data-name") || "Guest";
+      if (/^\d{6}$/.test(pin)) {
+        // Optimistic: drop the mark immediately; React confirms via setSavedContacts.
+        savedContactPins.add(pin);
+        addBtn.remove();
+        try { onSaveContact?.(pin, nm); } catch { /* */ }
+      }
+      return;
+    }
+    // Screen-share MAXIMIZE (v2.99.8): full-bleed the shared screen (toggle).
+    const maxBtn = target?.closest?.(".tile-max-btn") as HTMLElement | null;
+    if (maxBtn) {
+      e.stopPropagation();
+      const tileEl = maxBtn.closest(".relay-tile") as HTMLElement | null;
+      if (tileEl) {
+        if (screenMaximized && spotlightId === tileEl.id) {
+          screenMaximized = false;
+        } else {
+          screenMaximized = true; manualSpotlight = true; spotlightId = tileEl.id;
+        }
+        layoutGrid();
+      }
+      return;
+    }
+    const tile = target?.closest?.(".relay-tile") as HTMLElement | null;
     if (!tile) return;
     if (manualSpotlight && spotlightId === tile.id) {
-      manualSpotlight = false; spotlightId = null;
+      manualSpotlight = false; spotlightId = null; screenMaximized = false;
     } else {
       manualSpotlight = true; spotlightId = tile.id;
     }
@@ -4455,7 +4559,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     spotlightId = null; manualSpotlight = false;
     activeSpeakerId = null; speakerOrder = [];
     speakerCandidate = null; speakerCandidateCount = 0;
-    screenShareIds.clear(); compactView = false;
+    screenShareIds.clear(); compactView = false; screenMaximized = false;
   }
 
   // ---------- mesh active-speaker (Web Audio level metering) ----------
@@ -6003,6 +6107,20 @@ export function startRelay(root: HTMLElement): RelayHandle {
     setOnQuickReply(cb) { onQuickReply = cb; },
     setOnDialFailed(cb) { onDialFailed = cb; },
     setBlockedPins(pins) { blockedPins = new Set(pins); },
+    setMinimized(on) {
+      // React drives compact deterministically (the ResizeObserver at boot is
+      // the passive fallback). Forcing it here means the mini box shows the
+      // 2-up even if it's sized at/above the observer threshold.
+      if (compactView === !!on) return;
+      compactView = !!on;
+      layoutGrid();
+    },
+    setSavedContacts(pins) {
+      savedContactPins = new Set((pins || []).filter((p) => /^\d{6}$/.test(p)));
+      // Re-render tile chrome so the add-contact marks refresh live.
+      try { refreshAllTileAddMarks(); } catch { /* */ }
+    },
+    setOnSaveContact(cb) { onSaveContact = cb; },
     setOnPinChange(cb) {
       onPinChange = cb;
       // Fire immediately with the current value so a late subscriber syncs up.
