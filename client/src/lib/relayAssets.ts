@@ -531,7 +531,11 @@ export const RELAY_CSS = `
 .relay-root #call.pre-connect .dial-card{display:flex;animation:relayFade .3s ease both}
 .relay-root #call.pre-connect .call-main .grid{display:none}
 .relay-root #call.pre-connect .ctrl-bar .ctrl{display:none}
-.relay-root #call.pre-connect .ctrl-bar .ctrl.hangup{display:flex}
+/* GRID, not flex (v2.98.3): .ctrl centers its glyph with display:grid +
+   place-items:center. This un-hide rule used display:flex, and flexbox has
+   no justify-items — the handset fell back to flex-start and sat pinned to
+   the LEFT edge of the big red circle (owner screenshot). */
+.relay-root #call.pre-connect .ctrl-bar .ctrl.hangup{display:grid}
 .relay-root .dial-card .dc-av{width:96px;height:96px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:700;color:var(--text);background:linear-gradient(160deg,#262b36,#14171d);border:1px solid var(--border);box-shadow:0 18px 50px rgba(0,0,0,.45);margin-bottom:8px}
 .relay-root .dial-card .dc-num{font-family:"JetBrains Mono",monospace;font-size:34px;font-weight:700;letter-spacing:.08em;color:var(--text)}
 .relay-root .dial-card .dc-name{font-size:17px;color:var(--muted)}
