@@ -4738,3 +4738,39 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       NOTE: this affects new REGISTRATIONS only; existing users are not retroactively forced to add a
       photo (that would be a separate, riskier change). Pinned in authPanelRegister.test.ts (4 tests).
 - [x] Suite 1186 passed / 1 skipped locally; rebased onto main (v2.98.6) before ship.
+
+## v2.99.1 — multi-device session list + remote logout (owner directive) (2026-07-23)
+- [x] DEVICE LIST + REMOTE LOGOUT ("device list... show the device name + which date he logged in,
+      and he can log out by clicking delete"). Built on a NEW revocable-session model, designed to
+      be maximally fail-safe on production auth:
+      • Token format (server/authCrypto.ts): the signed session cookie gains an OPTIONAL `sid`
+        (`userId.exp.sid.hmac`); omitting it reproduces the exact legacy 3-part token byte-for-byte.
+        New `readSession()` returns `{userId, sid}`; `verifySession()` kept as a uid-only shim. The
+        sid is hex-restricted so it can never contain the `.` separator.
+      • Ledger (drizzle `sessions` table + boot `CREATE TABLE IF NOT EXISTS` in ensureSchemaExtensions):
+        one row per login — `sid`, `userId`, `label` (from the User-Agent), `createdAt`, `lastSeenAt`.
+      • createContext gating (server/_core/context.ts): ONLY cookies that carry a sid consult the
+        ledger; a deleted row ⇒ that device stops authenticating. `sessionState()` FAILS OPEN
+        ("error") on any DB trouble, so a hiccup can NEVER mass-log-out the fleet. Legacy (no-sid)
+        cookies — i.e. everyone already signed in before this deploy — skip the ledger entirely and
+        behave exactly as before (zero risk). lastSeenAt is bumped fire-and-forget, throttled ~5 min.
+      • Login paths (verifyOtp / loginWithPin / register-bypass) mint a sid via `startSession()`,
+        record the labelled row, and thread the sid into setSessionCookie. `deviceLabelFromUA`
+        (server/deviceLabel.ts) turns a UA into "Chrome on Android" / "Safari on iPhone" / etc.
+      • tRPC (otpAuth): `listSessions` (marks the current device) + `revokeSession(sid)`
+        (ownership-scoped delete; if it's the current device the cookie is also cleared). `signOut`
+        now drops its own ledger row too.
+      • UI: a "Devices" section in Profile (client/src/pages/app/Profile.tsx `DevicesSection`) lists
+        each device (phone/desktop icon, label, "This device" badge, last-active + added date) with a
+        confirm-guarded log-out. Registered users only; empty state until the next sign-in for
+        pre-existing legacy cookies.
+- [x] APP-LOCK / PASSKEY (owner: "face lock the app by PIN or passkey or face recognition, optional"):
+      confirmed this ALREADY exists and ships today — Profile's app-lock (passcode.ts + PasscodeGate.tsx
+      + biometric.ts + PasscodeSection) locks the whole app behind a 4-digit passcode OR a real device
+      platform passkey (Face ID / fingerprint via WebAuthn `navigator.credentials`, which syncs to the
+      Google/Apple keychain), and it's optional. A TRUE cross-device ACCOUNT passkey sign-in (log into a
+      brand-new device with only a passkey, no email/PIN) needs server-side WebAuthn and remains a
+      separate, larger follow-up — noted, not built this round.
+- [x] Tests: authCrypto.test.ts (+5 sid round-trip / legacy-compat / tamper / non-hex / expiry),
+      new server/deviceSessions.test.ts (deviceLabelFromUA behavioral + fail-open / sid-gating /
+      ownership / login-wiring source pins). Suite 1241 passed / 1 skipped; check + build green.

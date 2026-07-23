@@ -35,6 +35,7 @@ import {
   passwordIssue,
   signSession,
   verifySession,
+  readSession,
 } from "./authCrypto";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
 import { appBaseUrl } from "./appUrl";
@@ -156,10 +157,18 @@ async function consumeToken(token: string, nowMs: number): Promise<number | null
  *     close (the signed token still carries a 90-day safety expiry so a
  *     long-lived tab can't outlive the signature).
  */
-export function setSessionCookie(res: Response, userId: number, ttlMs?: number): void {
+export function setSessionCookie(
+  res: Response,
+  userId: number,
+  ttlMs?: number,
+  sid?: string,
+): void {
   const isSession = ttlMs === 0;
   const tokenTtl = isSession ? 90 * 24 * 60 * 60 * 1000 : (ttlMs ?? SESSION_TTL_MS);
-  const token = signSession(userId, sessionSecret(), tokenTtl, Date.now());
+  // A `sid` binds this cookie to a row in the `sessions` ledger so the device
+  // can be logged out remotely (v2.99.1 device list). Omitting it yields the
+  // exact legacy token, so callers that don't opt in are byte-identical.
+  const token = signSession(userId, sessionSecret(), tokenTtl, Date.now(), sid);
   const opts: CookieOptions = {
     httpOnly: true,
     secure: true,
@@ -188,6 +197,22 @@ export function userIdFromLocalSession(req: { cookies?: Record<string, unknown> 
   const tok = req.cookies?.[LOCAL_SESSION_COOKIE];
   if (typeof tok !== "string" || !tok) return null;
   return verifySession(tok, sessionSecret(), Date.now());
+}
+
+/** Resolve `{ userId, sid }` from a local session cookie, or null. `sid` is null
+ *  for legacy cookies (minted before the device-list feature) — the caller then
+ *  skips the ledger check entirely, so those sessions behave exactly as before. */
+export function readLocalSession(
+  req: { cookies?: Record<string, unknown> },
+): { userId: number; sid: string | null } | null {
+  const tok = req.cookies?.[LOCAL_SESSION_COOKIE];
+  if (typeof tok !== "string" || !tok) return null;
+  return readSession(tok, sessionSecret(), Date.now());
+}
+
+/** A fresh random session id (hex) for the `sessions` ledger + the cookie. */
+export function newSessionId(): string {
+  return genToken(16); // 32 hex chars
 }
 
 /* ── verification email + pages ───────────────────────────────────────────── */

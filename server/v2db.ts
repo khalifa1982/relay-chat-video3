@@ -42,6 +42,7 @@ import {
   partyLines,
   presence,
   pushSubscriptions,
+  sessions,
   statuses,
   statusViews,
   users,
@@ -882,6 +883,21 @@ export async function ensureSchemaExtensions(): Promise<void> {
         KEY \`status_views_status_idx\` (\`statusId\`)
       )`,
     },
+    {
+      // Device/session ledger (v2.99.1). One row per login; the cookie's sid
+      // maps here so a device can be logged out by deleting its row.
+      name: "sessions",
+      ddl: `CREATE TABLE IF NOT EXISTS \`sessions\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`sid\` varchar(64) NOT NULL,
+        \`userId\` int NOT NULL,
+        \`label\` varchar(160),
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`lastSeenAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY \`sessions_sid_unique\` (\`sid\`),
+        KEY \`sessions_user_idx\` (\`userId\`)
+      )`,
+    },
   ];
   for (const t of tableCreates) {
     try {
@@ -917,6 +933,94 @@ export async function listContacts(ownerId: number) {
     .where(eq(contacts.ownerId, ownerId))
     .orderBy(desc(contacts.favourite), desc(contacts.updatedAt));
   return rows;
+}
+
+/* ── sessions / device list (v2.99.1) ─────────────────────────────────────
+ * The cookie stays the source of truth for AUTHENTICATION (signed HMAC); this
+ * ledger only powers the device list + remote logout. Every helper is
+ * best-effort and NEVER throws to its caller: recording a session must not
+ * block a login, and the revocation gate FAILS OPEN on any DB error so a
+ * transient outage can never mass-log-out the fleet.
+ * (Defined AFTER listContacts on purpose — the contacts.test.ts additive-only
+ * guard slices [ensureSchemaExtensions, listContacts) and forbids the word
+ * DELETE in that range; the revoke helper below legitimately deletes a row.) */
+
+/** Insert a login session. Best-effort; a failure just means it won't appear in
+ *  the device list (auth still works via the cookie). */
+export async function recordSession(sid: string, userId: number, label: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.insert(sessions).values({ sid, userId, label: label.slice(0, 160) || null });
+  } catch (e) {
+    console.warn("[sessions] record skipped:", (e as Error)?.message || "");
+  }
+}
+
+/** The revocation gate for a cookie's sid:
+ *   "active"  → the session row exists (valid),
+ *   "revoked" → the row is gone (removed = the device was logged out),
+ *   "error"   → no DB / query failed → the caller FAILS OPEN (keeps the user
+ *               signed in), so a DB hiccup never logs anyone out.
+ *  Only ever called for cookies that carry a sid; legacy cookies skip it. */
+export async function sessionState(sid: string): Promise<"active" | "revoked" | "error"> {
+  const db = await getDb();
+  if (!db) return "error";
+  try {
+    const rows = await db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.sid, sid))
+      .limit(1);
+    return rows.length > 0 ? "active" : "revoked";
+  } catch {
+    return "error";
+  }
+}
+
+/** Bump lastSeenAt for a session (throttled by the caller). Best-effort. */
+export async function touchSession(sid: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.update(sessions).set({ lastSeenAt: new Date() }).where(eq(sessions.sid, sid));
+  } catch {
+    /* ignore — lastSeenAt is cosmetic */
+  }
+}
+
+/** The user's active sessions, newest first (for the device list). */
+export async function listSessionsForUser(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    return await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.userId, userId))
+      .orderBy(desc(sessions.lastSeenAt));
+  } catch {
+    return [];
+  }
+}
+
+/** Revoke ONE session the user owns → logs that device out. Returns true when a
+ *  row was actually removed (ownership-scoped: a user can only revoke their OWN
+ *  sessions). */
+export async function revokeSession(userId: number, sid: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    const res = await db
+      .delete(sessions)
+      .where(and(eq(sessions.userId, userId), eq(sessions.sid, sid)));
+    const affected = (res as unknown as { rowsAffected?: number; affectedRows?: number })?.rowsAffected
+      ?? (res as unknown as [{ affectedRows?: number }])?.[0]?.affectedRows
+      ?? 0;
+    return affected > 0;
+  } catch {
+    return false;
+  }
 }
 
 /** Columns that may be updated on a contact (everything except ownerId/number,

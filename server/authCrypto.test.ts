@@ -9,6 +9,7 @@ import {
   passwordIssue,
   signSession,
   verifySession,
+  readSession,
 } from "./authCrypto";
 
 describe("password hashing (scrypt)", () => {
@@ -77,5 +78,32 @@ describe("stateless session token", () => {
     expect(verifySession(tok.replace("42", "43"), secret, now)).toBeNull();
     expect(verifySession(tok, "other-secret", now)).toBeNull();
     expect(verifySession("a.b.c", secret, now)).toBeNull();
+  });
+
+  // v2.99.1 revocable sessions: an optional `sid` rides in the token so a
+  // specific device can be logged out. Legacy (no-sid) tokens MUST keep working.
+  it("a legacy no-sid token still verifies and reports sid=null", () => {
+    const tok = signSession(42, secret, 60_000, now);
+    expect(tok.split(".").length).toBe(3); // byte-identical legacy shape
+    expect(readSession(tok, secret, now + 1000)).toEqual({ userId: 42, sid: null });
+  });
+  it("round-trips a token WITH a sid", () => {
+    const tok = signSession(42, secret, 60_000, now, "deadbeef");
+    expect(tok.split(".").length).toBe(4);
+    expect(readSession(tok, secret, now + 1000)).toEqual({ userId: 42, sid: "deadbeef" });
+    expect(verifySession(tok, secret, now + 1000)).toBe(42); // shim still returns the uid
+  });
+  it("a sid token is bound to its sid — swapping the sid breaks the signature", () => {
+    const tok = signSession(42, secret, 60_000, now, "aaaa");
+    const swapped = tok.replace("aaaa", "bbbb");
+    expect(readSession(swapped, secret, now)).toBeNull();
+  });
+  it("rejects a non-hex sid (guards the '.' separator + injection)", () => {
+    // Hand-craft a 4-part token whose sid contains a non-hex char.
+    expect(readSession("42.99999999999.zz.deadbeef", secret, now)).toBeNull();
+  });
+  it("rejects an expired sid token", () => {
+    const tok = signSession(42, secret, 60_000, now, "abc123");
+    expect(readSession(tok, secret, now + 61_000)).toBeNull();
   });
 });
