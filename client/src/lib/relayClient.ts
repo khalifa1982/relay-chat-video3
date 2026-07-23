@@ -23,6 +23,7 @@ import { isDndOn } from "@/app/dnd";
 import { notify } from "@/app/notifications";
 import { RINGTONE_NOTES, RINGTONE_LOOP_MS, RINGTONE_PEAK_GAIN, RINGTONE_WAVE } from "@shared/ringtone";
 import { isNativeAndroid, nativeSetSpeaker, nativeSetInCall } from "./nativeBridge";
+import { DEVICE_ID_HEADER, getDeviceId } from "./deviceId";
 
 interface IceConfig {
   iceServers: Array<{ urls: string; username?: string; credential?: string }>;
@@ -572,12 +573,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const retriable = !!obj && obj.type !== "leave";
     let body: string;
     try { body = JSON.stringify({ cid, message: obj }); } catch { return; }
+    // Attach the stable device id so the server can resolve THIS browser's
+    // identity (and bind `register` to the caller's real number, F1) even when
+    // the guest cookie was dropped by Safari ITP / privacy mode — the same
+    // cookie-loss fallback the tRPC client and the upload route use. The SSE
+    // stream (EventSource) can't set headers, but signaling — including
+    // register — rides these POSTs, which can.
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const did = getDeviceId();
+    if (did) headers[DEVICE_ID_HEADER] = did;
     void (async () => {
       for (let attempt = 0; ; attempt++) {
         try {
           const res = await fetch("/api/relay/send", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers,
             body,
             keepalive: true,
           });

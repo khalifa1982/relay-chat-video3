@@ -12,7 +12,7 @@
  * A 4-digit space is tiny (10,000), so the attempt cap is the real defense;
  * verification stays timing-safe anyway.
  */
-import { eq } from "drizzle-orm";
+import { eq, and, isNull, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { users } from "../drizzle/schema";
 import { hashPassword, verifyPassword } from "./authCrypto";
@@ -115,34 +115,54 @@ export function lockEmailHtml(): string {
 export async function attemptPinLogin(row: PinUserRow, pin: string): Promise<PinVerdict> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
-  const verdict = judgePinAttempt(row, pin);
-  switch (verdict.outcome) {
-    case "ok":
-      await db.update(users).set({ loginPinAttempts: 0 }).where(eq(users.id, row.id));
-      break;
-    case "wrong":
-      await db
-        .update(users)
-        .set({ loginPinAttempts: (row.loginPinAttempts ?? 0) + 1 })
-        .where(eq(users.id, row.id));
-      break;
-    case "locked-now": {
-      await db
-        .update(users)
-        .set({ loginPinAttempts: (row.loginPinAttempts ?? 0) + 1, loginPinLockedAt: new Date() })
-        .where(eq(users.id, row.id));
-      if (row.email) {
-        // Best-effort — the lock itself never depends on email delivery.
-        void sendEmail({
-          to: row.email,
-          subject: "RELAY: your account was locked after 4 wrong PIN entries",
-          html: lockEmailHtml(),
-        });
-      }
-      break;
-    }
-    default:
-      break;
+  // Non-mutating verdicts first — they never touch the counter.
+  if (!row.loginPinHash) return { outcome: "no-pin" };
+  if (row.loginPinLockedAt) return { outcome: "locked" };
+  if (verifyPassword(pin, row.loginPinHash)) {
+    await db.update(users).set({ loginPinAttempts: 0 }).where(eq(users.id, row.id));
+    return { outcome: "ok" };
   }
-  return verdict;
+
+  // WRONG pin. SECURITY: increment + lock-on-threshold ATOMICALLY in one
+  // statement, guarded on the row still being unlocked. The old code read the
+  // count, decided the verdict, then wrote `stale+1` — so N concurrent wrong
+  // guesses all observed attempts=0 and each wrote 1, losing increments and
+  // letting an attacker blow past the 3-try cap to brute-force the 10^4 PIN
+  // space. Deciding from the PERSISTED post-increment value (below) closes the
+  // lost-update race: once the count crosses the cap the row locks and every
+  // later guess fails the `IS NULL` guard.
+  const res = await db
+    .update(users)
+    .set({
+      loginPinAttempts: sql`COALESCE(${users.loginPinAttempts}, 0) + 1`,
+      loginPinLockedAt: sql`CASE WHEN COALESCE(${users.loginPinAttempts}, 0) + 1 > ${PIN_MAX_ATTEMPTS} THEN NOW() ELSE ${users.loginPinLockedAt} END`,
+    })
+    .where(and(eq(users.id, row.id), isNull(users.loginPinLockedAt)));
+  // mysql2 returns [ResultSetHeader]; affectedRows>0 means THIS statement
+  // modified the row (i.e. it ran while still unlocked), which we use to send
+  // the lock email exactly once (the statement that crosses the threshold).
+  const thisStmtApplied =
+    Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+
+  const [after] = await db
+    .select({ attempts: users.loginPinAttempts, lockedAt: users.loginPinLockedAt })
+    .from(users)
+    .where(eq(users.id, row.id))
+    .limit(1);
+  const attempts = after?.attempts ?? PIN_MAX_ATTEMPTS + 1;
+  if (after?.lockedAt) {
+    // The crossing statement is the one that both applied and pushed the
+    // persisted count to exactly cap+1; concurrent no-op guesses (guard failed)
+    // don't re-send.
+    if (row.email && thisStmtApplied && attempts === PIN_MAX_ATTEMPTS + 1) {
+      // Best-effort — the lock itself never depends on email delivery.
+      void sendEmail({
+        to: row.email,
+        subject: "RELAY: your account was locked after 4 wrong PIN entries",
+        html: lockEmailHtml(),
+      });
+    }
+    return { outcome: "locked-now" };
+  }
+  return { outcome: "wrong", attemptsLeft: PIN_MAX_ATTEMPTS - attempts + 1 };
 }

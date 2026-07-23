@@ -1630,21 +1630,27 @@ export async function consumeExpiringMessage(input: {
       meta: { ...meta, consumedAt: Date.now() },
     })
     .where(eq(messages.id, input.messageId));
-  if (row.attachmentId != null) {
-    // Revoke media access, not just the link — without this the storage key
-    // stays fetchable by participants forever.
-    try {
-      await db.delete(attachments).where(eq(attachments.id, row.attachmentId));
-    } catch {
-      /* content is already nulled; the orphan row is a cost, not a leak */
-    }
-  }
+  // SECURITY (F3): we deliberately do NOT delete the attachments row on consume.
+  // The message's attachmentId was just nulled above, so no conversation
+  // references this file and getAttachmentForIdentity now denies every
+  // participant (including the reader who burned it) — access IS revoked.
+  // Deleting the row instead would make getAttachmentByStorageKey return null,
+  // so authorizeStorageKey classifies the (still-present) S3 object as `unknown`,
+  // which the storage proxy serves to ANYONE, unauthenticated. That is: burning
+  // view-once media would make it MORE accessible, not less. Keeping the row
+  // keeps the key classified as `attachment` and fails CLOSED (403) for every
+  // non-uploader — matching the status-media model (ephemeral at the access
+  // layer even though the object lingers in the bucket).
   return { conversationId: row.conversationId, participantIds: pids };
 }
 
-export async function markThreadRead(input: { conversationId: number; identityId: number }) {
+export async function markThreadRead(input: {
+  conversationId: number;
+  identityId: number;
+}): Promise<boolean> {
   const db = await getDb();
-  if (!db) return;
+  if (!db) return false;
+  let isMember = false;
   // last visible message id — must match listMessages/listThreads' deletedAt
   // filter, or a soft-deleted message could become lastReadMessageId and get
   // skipped over forever (its content is gone, but its id still "counts").
@@ -1652,6 +1658,25 @@ export async function markThreadRead(input: { conversationId: number; identityId
   // failure can't leave the participant's unreadCount reset to 0 without the
   // matching read-receipt flip (or vice versa). Mirrors the sendMessage txn.
   await db.transaction(async (tx) => {
+    // SECURITY (S6): confirm the caller is actually a participant BEFORE
+    // flipping any read state. The unreadCount write below is already
+    // membership-scoped (it no-ops for a non-member), but the peer-message
+    // `status:"read"` UPDATE was not — so any identity could mark another
+    // conversation's inbound messages "read" by iterating conversation ids,
+    // corrupting real participants' delivery receipts. Check inside the same
+    // tx (no TOCTOU) and bail out for non-members.
+    const membership = await tx
+      .select({ id: conversationParticipants.identityId })
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, input.conversationId),
+          eq(conversationParticipants.identityId, input.identityId)
+        )
+      )
+      .limit(1);
+    if (membership.length === 0) return;
+    isMember = true;
     // last visible message id — must match listMessages/listThreads' deletedAt
     // filter, or a soft-deleted message could become lastReadMessageId and get
     // skipped over forever (its content is gone, but its id still "counts").
@@ -1690,6 +1715,7 @@ export async function markThreadRead(input: { conversationId: number; identityId
         );
     }
   });
+  return isMember;
 }
 
 /* ── attachments ──────────────────────────────────────────────── */

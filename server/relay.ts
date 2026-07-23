@@ -28,6 +28,7 @@ import {
   stopRoomRecording,
 } from "./recording";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
+import { createContext } from "./_core/context";
 import {
   busEnabled,
   initBusyStateSync,
@@ -951,6 +952,16 @@ export interface RelayMessage {
   target?: string;
   /** invite: the caller dialed this as a VIDEO call (mutual-consent flow). */
   video?: boolean;
+  /**
+   * SERVER-SET ONLY (F1). The 6-digit number the POST /api/relay/send handler
+   * resolved for the authenticated caller (from their session/guest cookie),
+   * or `null` when no identity could be resolved. NEVER trusted from client
+   * input — the handler strips any client-supplied value before setting it.
+   * `register` binds the claimed pin to this so a client can only take its OWN
+   * number. Absent (field undefined) ⇒ a direct handleMessage call (unit tests):
+   * the legacy client-requested-pin behavior is preserved.
+   */
+  __ownedNumber?: string | null;
 }
 
 export type InviteHook = (info: {
@@ -1062,7 +1073,28 @@ export function handleMessage(
     // Prefer the pin this channel (cid) already owns, so a reconnect keeps the
     // same number even if a stale client entry is still being cleaned up.
     const ownedPin = cid ? reg.cidToPin.get(cid) : undefined;
-    const requested = typeof msg.pin === "string" && /^\d{6}$/.test(msg.pin) ? msg.pin : undefined;
+    let requested = typeof msg.pin === "string" && /^\d{6}$/.test(msg.pin) ? msg.pin : undefined;
+
+    // SECURITY (F1): bind the claimed number to the AUTHENTICATED caller. The
+    // POST /api/relay/send handler resolves the caller's own identity number
+    // (from their session/guest cookie) and stamps it on `__ownedNumber` — a
+    // client can never set this. Without this bind, a client could `register`
+    // with ANY free 6-digit number (the transport is keyed only by a
+    // client-minted `cid`), letting an attacker seize a victim's number while
+    // the victim's app is closed and intercept their inbound calls / spoof
+    // their caller-ID.
+    //   • a resolved number  → IGNORE whatever pin the client asked for and use
+    //     the caller's real number (also self-heals a stale client after
+    //     regenerateNumber).
+    //   • resolved to null (no identity: no cookie, or a resolution error) → do
+    //     NOT honor an explicit claim; fall through to the caller's existing
+    //     cid-owned pin or a freshly allocated one.
+    //   • field ABSENT (undefined) → a direct handleMessage call (unit tests):
+    //     keep the legacy client-requested-pin behavior.
+    if ("__ownedNumber" in msg) {
+      const owned = msg.__ownedNumber;
+      requested = typeof owned === "string" && /^\d{6}$/.test(owned) ? owned : undefined;
+    }
 
     const multiDevice = multiDeviceEnabled();
     // SECURITY: an explicit, valid pin request that DIFFERS from the pin this
@@ -1665,13 +1697,28 @@ export function handleMessage(
     }
 
     case "signal": {
-      const target = reg.clients.get(String(msg.to || ""));
-      if (target)
-        safeSend(target.socket, {
-          type: "signal",
-          from: conn.pin,
-          data: msg.data,
-        });
+      const to = String(msg.to || "");
+      const target = reg.clients.get(to);
+      if (!target) break;
+      // SECURITY (S2): relay SDP/ICE ONLY between peers that actually share a
+      // room (active OR held). Without this gate, any registered client could
+      // push a `signal` to any ONLINE pin and force a silent WebRTC handshake —
+      // harvesting the victim's host/srflx ICE candidates (IP deanonymization)
+      // with no call, no ring, and no camera/mic consent. Legitimate signaling
+      // only flows after both peers are members of the same room (post-accept /
+      // peer-joined), and a call-waiting HOLD keeps both in the held room's set,
+      // so both are covered. Mirrors the membership discipline of accept/reject.
+      const activeRid = reg.pinRoom.get(conn.pin) ?? self.roomId;
+      const heldRid = reg.heldRoom.get(conn.pin);
+      const shares =
+        (!!activeRid && reg.rooms.get(activeRid)?.has(to)) ||
+        (!!heldRid && reg.rooms.get(heldRid)?.has(to));
+      if (!shares) break;
+      safeSend(target.socket, {
+        type: "signal",
+        from: conn.pin,
+        data: msg.data,
+      });
       break;
     }
 
@@ -2439,13 +2486,32 @@ export function attachRelay(
   });
 
   // Inbound messages from the client.
-  app.post("/api/relay/send", (req: Request, res: Response) => {
+  app.post("/api/relay/send", async (req: Request, res: Response) => {
     const body = req.body || {};
     const cid = String(body.cid || "");
     const message = body.message;
     if (!cid || cid.length > 200 || typeof message !== "object" || message === null) {
       res.status(400).json({ error: "bad request" });
       return;
+    }
+    // SECURITY (F1): `__ownedNumber` is a SERVER-ONLY field. Strip any value a
+    // client tried to inject BEFORE we (maybe) set it, so it can never be forged
+    // through this endpoint or the cluster forward. For a `register`, resolve the
+    // caller's real identity number from their cookie and stamp it — the register
+    // handler binds the claimed pin to it. Resolution failures fail CLOSED (null
+    // ⇒ a fresh number is allocated), never open. Only `register` pays the
+    // identity-resolution cost; every other signaling message operates on the
+    // pin already bound at register time.
+    delete (message as Record<string, unknown>).__ownedNumber;
+    if ((message as RelayMessage).type === "register") {
+      let owned: string | null = null;
+      try {
+        const ctx = await createContext({ req, res } as Parameters<typeof createContext>[0]);
+        owned = ctx.identity?.number ?? null;
+      } catch {
+        owned = null;
+      }
+      (message as RelayMessage).__ownedNumber = owned;
     }
     // Cap signaling payload size. SDP/ICE/control messages are all small (a big
     // SDP is ~10-20 KB; the in-call chat rides the WebRTC data channel, NOT this

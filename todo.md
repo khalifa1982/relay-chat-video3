@@ -4597,3 +4597,72 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       compact in-call hang-up (grid all along) was never affected — which is why only the dial
       screen looked wrong. Pinned in v298CallerHangup.test.ts (display:grid + a flex ban).
       Suite 1181 passed / 1 skipped; check + build green.
+
+## v2.98.4 (pt.1) — SECURITY AUDIT & REMEDIATION (owner-requested full front/back/DB review) (2026-07-22)
+- [x] CONTEXT: owner asked for "a full check of all security everything — all app connections, front and
+      back, and the database" and to fix + report. Ran an automated scan (Claude Security), then
+      independently VERIFIED every candidate against the current source before touching anything. 5
+      findings confirmed (1 High / 2 Medium / 2 Low); all fixed. Full report saved to the repo as
+      `SECURITY-AUDIT-2026-07-22.md`. Owner-accepted designs (SSE-not-WebSocket, kept `/api/oauth/callback`,
+      `RELAY_OTP_REGISTER_BYPASS`) reviewed and NOT flagged as defects.
+- [x] F1 (HIGH) — signaling `register` had no identity binding. The SSE+POST transport was keyed only by a
+      client-minted `cid`, and `register` granted ANY free 6-digit number from the client's `msg.pin`, so an
+      attacker could claim a victim's number while the victim's app was closed and INTERCEPT their inbound
+      calls / SPOOF caller-ID. Fix (`server/relay.ts` + `client/src/lib/relayClient.ts`): for `register`
+      messages `POST /api/relay/send` resolves the caller's OWN identity number via `createContext`
+      (session/guest cookie) and stamps a server-only `__ownedNumber` (client value stripped first); the
+      register handler binds the pin to it — resolved ⇒ own number (self-heals stale clients post-renumber);
+      null ⇒ explicit claim refused + fresh number (fail closed); field absent ⇒ legacy/test behavior. The
+      client now sends `x-relay-device-id` on the signaling POST so cookie-dropped ITP guests still resolve.
+      Only `register` is async now; offer/answer/ICE stay fully synchronous. Residual follow-up: a
+      room-membership check on the `signal` relay.
+- [x] F2 (MEDIUM) — `identity.updateProfile` validated only the SHAPE of `avatarUrl`, letting a user point
+      it at another user's private `/manus-storage` attachment key, which `authorizeStorageKey`'s
+      avatar-rescue then served to anyone (survived unsend). Fix: `keyInOwnerNamespace` gate on write
+      (matches `attachments.register`/`status.post`).
+- [x] F3 (MEDIUM) — burning view-once media made it MORE accessible: `consumeExpiringMessage` deleted the
+      attachments row → `authorizeStorageKey` classified the still-present S3 object as `unknown` → the
+      storage proxy served it with NO auth. Fix: keep the row (message `attachmentId` already nulled ⇒
+      participants lose access) so the key stays `attachment` and fails CLOSED (403) for every non-uploader.
+- [x] F4 (LOW) — per-IP rate limits trusted the LEFTMOST `X-Forwarded-For` hop (client-appendable behind the
+      appending ALB), so rotating the header defeated every limiter. Fix (`server/rateLimit.ts` +
+      `pickClientIp`): trust the proxy-APPENDED hop (`trustedProxyHops()` from the right, default 1; set
+      `RELAY_TRUSTED_PROXY_HOPS=2` for a CloudFront→ALB chain).
+- [x] F5 (LOW) — `directory.lookup`/`presenceMany` were public and unthrottled over the 10^6 number space
+      (free directory scrape). Fix: a generous per-IP `directoryGate` (120 burst / ~60/min, honors
+      `RELAY_RATELIMIT_OFF`); endpoints stay public so the `/i/<pin>` call-link direct-join still works.
+- [x] Tests: new `server/securityAudit.test.ts` (F1 behavioral — bind/attacker-refused/null-refused/reconnect/
+      legacy — plus F2/F3/F5 wiring pins); updated `rateLimit.test.ts`, `geoSelf.test.ts`,
+      `peerIdentityBatch.test.ts` (F3), `relayCluster.integration.test.ts` (async register). Suite 1196
+      passed / 1 skipped; `tsc --noEmit` + production build green.
+
+## v2.98.4 — SECURITY SWEEP ROUND 2 (owner: "maximize the bugs, fix it everywhere, merge to main") (2026-07-23)
+- [x] Exhaustive multi-agent audit of 12 attack surfaces (auth, signaling, storage/SigV4, tRPC IDOR, SQL,
+      crypto/secrets, SSRF, email/inbound, client XSS/CSP, DoS/ReDoS, Redis-bus cluster, headers/config).
+      Every candidate adversarially verified against source; 7 confirmed + 6 partial survived (8 refuted).
+      All meaningful findings fixed (S1–S11); report appended to `SECURITY-AUDIT-2026-07-22.md`.
+- [x] S1 (HIGH) PIN lockout brute-force race — `server/authPin.ts attemptPinLogin` wrote `stale+1`, so
+      concurrent wrong guesses lost increments and defeated the 3-try cap on the 10^4 PIN space. Fixed with a
+      single guarded conditional UPDATE (increment + lock-on-threshold, `WHERE loginPinLockedAt IS NULL`),
+      verdict from the persisted post-value, lock email once via affectedRows.
+- [x] S2 (MED) `signal` relay had no room-membership check — any registered client could push SDP/ICE to any
+      online pin and harvest its ICE candidates (IP deanonymization). Fixed to relay only within a shared room
+      (active pinRoom OR held heldRoom); behavioral test (in-room relay works, out-of-room dropped).
+- [x] S3–S5 (LOW) F5 enumeration gaps — `directory.presence` (+ missing guest-privacy), `directory.watchOnline`
+      (name-harvest oracle), `calls.logStart` (existence oracle + history-row injection) all bypassed the F5
+      directoryGate; now gated (presence also runs isGuestPresenceHidden). Endpoints stay public for /i/<pin>.
+- [x] S6 (LOW) `messages.markRead` IDOR — the peer-message status:"read" flip wasn't membership-scoped;
+      `markThreadRead` now checks conversationParticipants in-tx + returns membership, router fans out the read
+      SSE only for members.
+- [x] S7 (LOW) `POST /api/v2/upload` storage DoS — added per-IP + per-identity token buckets before storagePut.
+- [x] S8 (LOW) Web Push endpoint SSRF — `isAllowedWebPushEndpoint` (https + known push-service allowlist) on
+      push.subscribe + defensively before webpush.sendNotification (legacy rows dropped).
+- [x] S9 (LOW) OTP attempt-counter race — `recordOtpFailure` made atomic (same pattern as S1).
+- [x] S10/S11 (LOW) signing secrets failed open — `sessionSecret`/`inboundSecret` fell back to a public
+      constant when env unset (bare-HMAC session ⇒ trivial forgery); now fail CLOSED in production, dev/test
+      keep the fallback; inbound webhook route rate-limited.
+- [x] `server/securitySweep.test.ts` (12 tests) + S2 behavioral test in relay.test.ts. Suite 1208 passed /
+      1 skipped; check + build green.
+- [ ] RESIDUAL (accepted, not changed): no per-caller outstanding-invite cap / pendingRings reaper (bounded
+      benefit vs. hot-signaling-path risk); inbound webhook signature stays opt-in (mandatory would break
+      operators running without the secret; the From==owner-email binding still gates the reply path).
