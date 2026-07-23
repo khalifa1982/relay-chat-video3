@@ -8,7 +8,8 @@ import path from "node:path";
  * Issue 1 ("History redial drops within two seconds, before it rings"):
  *   • callee-side ZOMBIE ring state must not blind-auto-reject a fresh call
  *   • a mid-dial re-register must not reap the caller's dial room (server)
- *   • an unreachable-but-real callee is PAGED (push + late ring), not bounced
+ *   • an unreachable-but-real callee gets a fast honest error{offline} + the
+ *     leave-a-message card (v2.99.11 retired the v2.83 paging keep-alive)
  *   • pre-establishment SFU Disconnected retries instead of hanging up
  *   • a failed dial shows its reason ON the dial card before teardown
  * Issue 2 (iOS: no ring sound / notification):
@@ -85,9 +86,15 @@ describe("issue 1 — pre-ring dial drops", () => {
     expect(SERVER).toMatch(/clearPendingRing\(reg, newcomerPin, \{ roomId \}\)/);         // accept
   });
 
-  it("CALLER UX: a paged callee shows 'Reaching their phone…' (honest, not a fake Ringing…)", () => {
-    expect(CLIENT).toMatch(/if \(m\.paging\) setCallStatus\("ringing", "Reaching their phone…"\)/);
-    expect(SERVER).toMatch(/paging: true/);
+  it("CALLER UX (v2.99.11): a cold OFFLINE dial gets a fast honest error + leave-a-message card — the 'Reaching their phone…' paging status is RETIRED", () => {
+    // Owner directive: an offline user must NOT be auto-rung. The server answers
+    // a cold dial to an offline identity with error{offline} naming the callee
+    // (no `paging: true` ack), and the client turns that into the voicemail/SMS
+    // card via failDial("server-error:offline").
+    expect(SERVER).toMatch(/code: "offline",\s*\n\s*message: \(info\.name \|\| "They"\) \+ " is offline right now\."/);
+    expect(SERVER).not.toMatch(/paging: true/);
+    expect(CLIENT).not.toMatch(/setCallStatus\("ringing", "Reaching their phone…"\)/);
+    expect(CLIENT).toMatch(/reason === "no-answer" \|\| reason === "peer-rejected" \|\| reason === "server-error:offline"/);
   });
 
   it("voice-first everywhere: History redial, missed banner, Messages call button, hardware Enter", () => {
@@ -154,11 +161,17 @@ describe("issue 2 — iOS ring sound + notifications", () => {
     expect(SHELL).toMatch(/<PushBanner \/>/);
   });
 
-  it("server wakes unreachable devices: incoming-call page + missed-call push, stable derived VAPID keys", () => {
-    expect(CORE).toMatch(/kind: "incoming-call"/);
+  it("server records the miss + wakes the RETURNING callee with a missed-call push (v2.99.11: no incoming-call auto-ring), stable derived VAPID keys", () => {
+    // v2.99.11 (owner: an offline user must NOT be auto-rung): _core's paging
+    // hook no longer sends a full-screen incoming-call push. It resolves the
+    // identity only; the miss is recorded and a missed-call push/email reaches
+    // the callee when they next open the app.
+    expect(CORE).not.toMatch(/kind: "incoming-call"/);
     expect(CORE).toMatch(/kind: "missed-call"/);
     expect(CORE).toMatch(/return \{ exists: true, name: callee\.displayName \?\? undefined \}/);
     expect(WEBPUSH).toMatch(/export function deriveVapidKeys/);
+    // The incoming-call push kind + its 70s TTL stay as generic push infra (the
+    // native Android app still uses it for ring-when-closed via FCM data).
     expect(WEBPUSH).toMatch(/TTL: payload\.kind === "incoming-call" \? 70 : 3600/);
   });
 });

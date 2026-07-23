@@ -1382,40 +1382,41 @@ export function handleMessage(
             } catch { /* never let a notification hook break call setup */ }
             return;
           }
-          // PAGE the callee: their device isn't connected, but the number may
-          // belong to a real identity whose phone can be woken with a push
-          // notification. Keep the dial alive (the caller's staged UI shows
-          // "Reaching their phone…"); if they open the app within the ring
-          // window, register redelivers the ring (deliverPendingRing) and the
-          // call proceeds normally. The miss is recorded only when the caller
-          // gives up (leave → cancelPendingRings), never double-recorded here.
+          // OFFLINE (v2.99.11, owner: "if the user is offline it should NOT ring
+          // automatically — tell the caller he's offline; you can leave an SMS or
+          // voice message"). The number may belong to a real identity whose device
+          // just isn't connected. We RESOLVE the identity (name + existence) via
+          // the hook but DO NOT keep the dial alive, do NOT page-wake their phone
+          // with a full incoming-call ring, and do NOT sit on "Reaching their
+          // phone…" for 65s. Instead: a fast honest "offline" error → the caller's
+          // client shows the leave-a-message card. The MISS is recorded here so it
+          // still surfaces on their History + fires the missed-call notification /
+          // email when they next open the app (that's how they "see it on return").
           if (process.env.RELAY_DIAG === "1" || process.env.NODE_ENV === "development") {
-            console.log(`[relay-diag]    invite -> ${to} PAGING: target ${target ? "in-grace (dead socket)" : "not registered"}`);
+            console.log(`[relay-diag]    invite -> ${to} OFFLINE: target ${target ? "in-grace (dead socket)" : "not registered"}`);
           }
-          const pagingRoomId = ensureDialRoom();
-          me.ringing.add(to);
-          reg.pendingRings.set(to, { from: callerPin, roomId: pagingRoomId, video: wantVideo, at: Date.now() });
-          const failPage = (message: string) => {
-            const callerNow = reg.clients.get(callerPin);
-            // The caller may have hung up (or started something else) meanwhile.
-            if (!callerNow || !callerNow.ringing.has(to)) return;
-            callerNow.ringing.delete(to);
-            clearPendingRing(reg, to, { from: callerPin });
-            safeSend(callerSocket, { type: "error", code: "offline", message });
-          };
-          onPageCallee({ calleePin: to, callerPin, callerName: me.name, roomId: pagingRoomId, video: wantVideo })
+          onPageCallee({ calleePin: to, callerPin, callerName: me.name, roomId: "", video: wantVideo })
             .then(info => {
               const callerNow = reg.clients.get(callerPin);
-              if (!callerNow || !callerNow.ringing.has(to)) return;
+              if (!callerNow) return; // caller vanished while we resolved
               if (info && info.exists) {
-                // Staged-progress ack, flagged as PAGING (device being woken, not
-                // yet alerting) so the dial card is honest about the difference.
-                safeSend(callerSocket, { type: "ringing", pin: to, name: info.name, paging: true });
+                safeSend(callerSocket, {
+                  type: "error",
+                  code: "offline",
+                  message: (info.name || "They") + " is offline right now.",
+                });
+                // Record the miss → History + (pref-gated) missed-call email on return.
+                try {
+                  onMissedCall?.({ calleePin: to, callerPin, callerName: me.name, reason: "cancelled" });
+                } catch { /* never let a notification hook break call setup */ }
               } else {
-                failPage("That number doesn't exist.");
+                safeSend(callerSocket, { type: "error", code: "nonexistent", message: "That number doesn't exist." });
               }
             })
-            .catch(() => failPage("That number doesn't exist or is offline."));
+            .catch(() => {
+              const callerNow = reg.clients.get(callerPin);
+              if (callerNow) safeSend(callerSocket, { type: "error", code: "offline", message: "They're offline right now." });
+            });
           return;
         }
         if (!target) return; // unreachable (targetReachable ⇒ target) — narrows TS

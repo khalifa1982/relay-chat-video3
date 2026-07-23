@@ -5038,3 +5038,33 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
 - [x] Tests: client/src/app/badgePinSurfaces.test.ts (badge gone from the avatar corner + present in
       the dropdown label; PIN on Messages header + list rows + Contacts). Suite 1340 passed / 1
       skipped; check + build green.
+
+## v2.99.11 — offline call: no auto-ring; leave an SMS or voice message (owner directive) (2026-07-23)
+- [x] OFFLINE ≠ AUTO-RING (owner, verbatim: "if the user is offline and you try to call him it
+      should NOT ring automatically. It will tell you he's offline but you can keep for him an SMS
+      message or voice message"). The v2.83 PAGING model (caller parks on "Reaching their phone…"
+      up to 65s + a full-screen incoming-call Web Push wakes the pocketed device + the ring is
+      redelivered when the app opens) is RETIRED for a COLD offline dial.
+- [x] SERVER (server/relay.ts invite `!targetReachable` branch): resolve the callee identity via the
+      `onPageCallee` hook, then send a FAST `error{offline}` naming the callee (real identity) or
+      `error{nonexistent}` (unknown number). NO ensureDialRoom / pendingRings / keep-alive. The miss
+      is recorded immediately (`onMissedCall{reason:"cancelled"}`) → History + (pref-gated, #34)
+      missed-call notification/email on return.
+- [x] SERVER (server/_core/index.ts): `onPageCallee` is now a PURE identity resolver — no
+      `sendPushToIdentity`, no `kind:"incoming-call"` push. It answers exists + display name only.
+- [x] CLIENT (relayClient.ts): `"nonexistent"` added to the fatal-error set; `server-error:offline`
+      now raises the post-dial `VoicemailPrompt` card (nonexistent excluded — no thread to send to).
+      The retired paging status line `setCallStatus("ringing","Reaching their phone…")` is removed; a
+      `ringing` ack now always means a real live ring. The `paging?` wire field is kept for
+      old-server compat but never read.
+- [x] CLIENT (VoicemailPrompt.tsx): the offline card offers BOTH a ≤60s voice message AND a quick
+      written SMS (new `sendText` → openThread + `messages.send kind:"text"`), plus the existing
+      "tell me when they're back online" watch. Reason line says "They're offline right now."
+- [x] TRADEOFF FLAGGED: dropping the incoming-call Web Push means a closed/backgrounded BROWSER is no
+      longer woken to ring on the WEB path — this is exactly the "don't auto-ring an offline user"
+      behavior requested. The native Android FCM ring-when-closed path (M4) is untouched; the
+      `incoming-call` push kind + 70s TTL remain in server/webPush.ts as generic infra.
+- [x] Tests: server/relayPaging.test.ts rewritten (8 behavioral — fast error{offline}/{nonexistent},
+      miss recorded, no keep-alive, LIVE-path redelivery unchanged); server/v29911OfflineCall.test.ts
+      (7 wiring pins); enumBlockHardening.test.ts E4 + client/src/lib/callReachability.test.ts updated
+      to the new behavior. Suite 1345 passed / 1 skipped; check green.
