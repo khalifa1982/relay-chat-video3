@@ -4932,3 +4932,33 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
 - [x] Tests: verifiedBadge.test.ts rewritten around the three tiers (colors + captions + caption
       sizing + roleFromFlags rules + every surface wired + server emissions + the v2db tier rule);
       Contacts.test.ts pin updated. Suite 1290 passed / 1 skipped; check + build green.
+
+## v2.99.7 — new-device login approval (owner spec) (2026-07-23)
+- [x] FEATURE: signing in on a NEW device via email code, when the account already has ANOTHER
+      device online, now PARKS on a "Waiting for approval" screen until an existing device approves
+      it — mirroring WhatsApp's linked-device flow. Entering the account's 4-digit login PIN
+      BYPASSES approval entirely (the PIN is the second factor). Registrations (first device) never
+      wait. Fully FAIL-SAFE against lockout: approval is required ONLY when another session was
+      active in the last 12 min (≈ a device that can actually approve), and every gate/poll fails
+      OPEN — a DB hiccup never strands a user or logs anyone out.
+- [x] SERVER: additive nullable `sessions.pendingApproval` column (boot migrator; NULL = every
+      legacy row, byte-identical). v2db helpers: `recordSession(…, pending)`, `sessionState` maps a
+      pending row → "revoked" (so the UNCHANGED createContext `state !== "revoked"` gate blocks it —
+      pending sessions don't authenticate), `hasRecentApprovedSession` (fail-safe approver check),
+      `pendingSessionsForUser`, `sessionApprovalBySid` (waiting device's own-cookie poll, fail-open
+      "approved"), `approveSession` (ownership-scoped, clears the stamp). otpAuth router:
+      `startSession(…, pending)`, `shouldRequireApproval`, `announcePendingDevice`; verifyOtp parks a
+      non-registration sign-in that needs approval + emits SSE; loginWithPin never gates; NEW
+      procedures `sessionApprovalStatus` (public, own cookie), `pendingSessions` (auth), and
+      `approveSession` (deny reuses `revokeSession`). New SSE kind `device_pending`.
+- [x] CLIENT: AuthPanel gains a "waiting" stage (polls `sessionApprovalStatus` every 2.5s →
+      proceeds on approve, resets to email on deny; does NOT invalidate whoami while pending).
+      useRealtime handles `device_pending` (refreshes the pending list + toast → Profile#devices).
+      The notification bell counts pending devices with a Review row; Profile → Devices shows each
+      waiting sign-in with Approve / Decline (id="devices" anchor for the deep-link).
+- [x] Tests: server/newDeviceApproval.test.ts (pending-never-authenticates, fail-safe gates, login
+      paths, approval procedures + SSE + migrator) + client/src/app/newDeviceApproval.test.ts
+      (waiting stage, device_pending handler, bell + Profile UI); deviceSessions.test.ts startSession
+      pin updated for the split call. Suite 1306 passed / 1 skipped; check + build green.
+      Follow-up scope noted: web-push wake for a fully-closed device (this increment covers the
+      online/SSE + bell path — the owner's "if you were online" case).

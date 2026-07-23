@@ -26,6 +26,8 @@ type V2Event =
   | { kind: "watched_online"; number: string; name: string }
   /** Status realtime (v2.96): someone in your feed posted/removed a status. */
   | { kind: "status"; number: string; name: string; removed?: boolean }
+  /** New-device approval (v2.99.7): a new sign-in on this account is waiting. */
+  | { kind: "device_pending"; sid: string; label: string }
   | { kind: "ping" };
 
 /* ── SSE-gated poll demotion (v2.88) ─────────────────────────────
@@ -211,6 +213,26 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
           case "contact":
             utils.contacts.list.invalidate().catch(() => {});
             break;
+          case "device_pending": {
+            // New-device approval (v2.99.7): a new sign-in on this account is
+            // waiting — refresh the notification center's pending list and
+            // raise a toast with a jump to the Devices approval UI.
+            utils.otpAuth.pendingSessions.invalidate().catch(() => {});
+            void import("sonner")
+              .then(({ toast }) =>
+                toast(`New device wants to sign in`, {
+                  description: `${payload.label} is waiting for your approval.`,
+                  action: {
+                    label: "Review",
+                    onClick: () => {
+                      if (typeof window !== "undefined") window.location.href = "/app/profile#devices";
+                    },
+                  },
+                })
+              )
+              .catch(() => {});
+            break;
+          }
           case "watched_online": {
             // Call-back alert (v2.88): the user explicitly asked to be told.
             const who = payload.name || payload.number;

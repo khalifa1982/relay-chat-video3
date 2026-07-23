@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { PhoneMissed, X, Bell, BellOff, MessageSquare, Clock, ChevronRight } from "lucide-react";
+import { PhoneMissed, X, Bell, BellOff, MessageSquare, Clock, ChevronRight, ShieldQuestion } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
 /** "3m" / "2h" / "5d" / date — compact relative time. */
@@ -105,19 +105,24 @@ export function MissedCallToast({
 export function NotificationBell({
   missedCount,
   unreadCount,
+  pendingDevices = 0,
   onOpenHistory,
   onOpenMessages,
+  onOpenDevices,
   dnd,
   onDndChange,
 }: {
   missedCount: number;
   unreadCount: number;
+  /** New-device sign-ins waiting for this account's approval (v2.99.7). */
+  pendingDevices?: number;
   onOpenHistory: () => void;
   onOpenMessages: () => void;
+  onOpenDevices?: () => void;
   dnd: boolean;
   onDndChange: (value: boolean) => void;
 }) {
-  const total = missedCount + unreadCount;
+  const total = missedCount + unreadCount + pendingDevices;
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -178,8 +183,26 @@ export function NotificationBell({
             <div className="px-4 py-6 text-center text-sm text-muted-foreground">You're all caught up 🎉</div>
           ) : (
             <ul>
-              {missedCount > 0 && (
+              {pendingDevices > 0 && (
                 <li>
+                  <button
+                    type="button"
+                    onClick={() => { setOpen(false); onOpenDevices?.(); }}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/40 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+                  >
+                    <span className="grid size-9 place-items-center rounded-xl bg-amber-400/15 text-amber-500">
+                      <ShieldQuestion className="size-4" />
+                    </span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm font-medium">{pendingDevices} new device{pendingDevices > 1 ? "s" : ""} waiting</span>
+                      <span className="block text-xs text-muted-foreground">Approve or decline the sign-in</span>
+                    </span>
+                    <ChevronRight className="size-4 text-muted-foreground shrink-0" />
+                  </button>
+                </li>
+              )}
+              {missedCount > 0 && (
+                <li className={pendingDevices > 0 ? "border-t border-border/60" : ""}>
                   <button
                     type="button"
                     onClick={() => { setOpen(false); onOpenHistory(); }}

@@ -12,6 +12,7 @@ import {
   ScanFace,
   Share2,
   ShieldCheck,
+  ShieldQuestion,
   Smartphone,
   Sun,
   Trash2,
@@ -798,11 +799,45 @@ function LoginPinSection() {
 /** Signed-in devices + remote logout (v2.99.1). Each login records a session in
  *  the server ledger; deleting one logs that device out. Registered users only. */
 function DevicesSection() {
+  const utils = trpc.useUtils();
   const list = trpc.otpAuth.listSessions.useQuery(undefined, { refetchOnWindowFocus: false });
   const revoke = trpc.otpAuth.revokeSession.useMutation();
+  // New-device approval (v2.99.7): devices waiting for this account to approve
+  // them. Polled so an approval request that arrived while this tab was idle
+  // still surfaces even if the SSE toast was missed.
+  const pending = trpc.otpAuth.pendingSessions.useQuery(undefined, {
+    refetchOnWindowFocus: true,
+    refetchInterval: 15_000,
+  });
+  const approve = trpc.otpAuth.approveSession.useMutation();
   const [confirm, setConfirm] = useState<{ sid: string; label: string; current: boolean } | null>(null);
 
   if (!list.data?.signedIn) return null; // guests have no account sessions
+
+  const pendingList = pending.data?.pending ?? [];
+  const refreshDeviceLists = () => {
+    void list.refetch();
+    void pending.refetch();
+    void utils.otpAuth.pendingSessions.invalidate();
+  };
+  const doApprove = async (sid: string) => {
+    try {
+      await approve.mutateAsync({ sid });
+      refreshDeviceLists();
+      toast.success("Device approved — it can sign in now.");
+    } catch (e) {
+      toast.error((e as { message?: string })?.message ?? "Couldn't approve that device.");
+    }
+  };
+  const doDeny = async (sid: string) => {
+    try {
+      await revoke.mutateAsync({ sid });
+      refreshDeviceLists();
+      toast.success("Sign-in declined.");
+    } catch (e) {
+      toast.error((e as { message?: string })?.message ?? "Couldn't decline that device.");
+    }
+  };
 
   const sessions = list.data.sessions;
   const relTime = (ms: number) => {
@@ -836,11 +871,51 @@ function DevicesSection() {
   };
 
   return (
-    <section className="rounded-2xl border border-border bg-card p-4">
+    <section id="devices" className="rounded-2xl border border-border bg-card p-4">
       <h3 className="mb-1 text-sm font-bold">Devices</h3>
       <p className="mb-3 text-xs text-muted-foreground">
         Where you're signed in. Remove a device to sign it out remotely.
       </p>
+
+      {/* New-device approval requests (v2.99.7): a new sign-in on this account
+          waits here until you approve it — or your 4-digit PIN bypasses it. */}
+      {pendingList.length > 0 && (
+        <div className="mb-3 space-y-2">
+          {pendingList.map((p) => (
+            <div
+              key={p.sid}
+              className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3"
+            >
+              <div className="flex items-center gap-2">
+                <ShieldQuestion className="size-4 shrink-0 text-amber-500" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold">New sign-in waiting</div>
+                  <div className="truncate text-xs text-muted-foreground">{p.label}</div>
+                </div>
+              </div>
+              <div className="mt-2.5 flex gap-2">
+                <Button
+                  size="sm"
+                  className="h-8 flex-1 rounded-lg"
+                  disabled={approve.isPending}
+                  onClick={() => doApprove(p.sid)}
+                >
+                  Approve
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-8 flex-1 rounded-lg"
+                  disabled={revoke.isPending}
+                  onClick={() => doDeny(p.sid)}
+                >
+                  Decline
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {sessions.length === 0 ? (
         <p className="text-xs text-muted-foreground">
           This device will appear here after your next sign-in.

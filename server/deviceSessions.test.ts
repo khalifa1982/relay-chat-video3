@@ -68,10 +68,15 @@ describe("revocable-session wiring (source pins)", () => {
 
   it("every login path records a session + threads the sid into the cookie", () => {
     // startSession() records the ledger row and returns the sid; all three
-    // login mutations pass it as the 4th setSessionCookie arg.
+    // login mutations mint one (verifyOtp / register-bypass / loginWithPin).
+    // v2.99.7 split verifyOtp's call across two lines (it needs the sid for the
+    // pending-approval branch), so count startSession calls directly + confirm
+    // each mints the cookie with a sid.
     expect(routers).toMatch(/async function startSession\(/);
-    const calls = routers.match(/setSessionCookie\(ctx\.res,[\s\S]*?await startSession\(ctx,/g) || [];
-    expect(calls.length).toBe(3);
+    const starts = routers.match(/await startSession\(ctx, [^)]*\)/g) || [];
+    expect(starts.length).toBe(3);
+    const cookieWithSid = routers.match(/setSessionCookie\(ctx\.res, [^;]*(await startSession\(ctx,|sid\))/g) || [];
+    expect(cookieWithSid.length).toBe(3);
   });
 
   it("revoking the CURRENT device also clears this cookie; signOut drops its row", () => {

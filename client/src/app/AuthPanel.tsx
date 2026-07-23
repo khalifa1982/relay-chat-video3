@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { X, Mail, ShieldCheck, ArrowLeft, Lock, LockKeyhole, Check, Camera } from "lucide-react";
+import { X, Mail, ShieldCheck, ArrowLeft, Lock, LockKeyhole, Check, Camera, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,7 +29,7 @@ function fmtNumber(n: string): string {
  * On success the server has set the session cookie; we invalidate whoami so the
  * app re-renders as the freshly-verified user (which also earns the blue badge).
  */
-type Stage = "email" | "register" | "code" | "pin" | "setup";
+type Stage = "email" | "register" | "code" | "pin" | "setup" | "waiting";
 type Remember = 0 | 30 | 60 | 90;
 type LockState = "idle" | "engaging" | "ok" | "err";
 
@@ -175,6 +175,29 @@ export function AuthPanel({
     enabled: stage === "setup",
     refetchOnWindowFocus: false,
   });
+
+  // New-device approval (v2.99.7): while parked on the waiting screen, poll the
+  // server for our own session's approval status. Approved → proceed into the
+  // app; denied → back to the email screen with a note.
+  const approvalStatus = trpc.otpAuth.sessionApprovalStatus.useQuery(undefined, {
+    enabled: stage === "waiting",
+    refetchInterval: stage === "waiting" ? 2500 : false,
+    refetchOnWindowFocus: true,
+  });
+  useEffect(() => {
+    if (stage !== "waiting") return;
+    const s = approvalStatus.data?.status;
+    if (s === "approved") {
+      void utils.identity.whoami.invalidate().then(() => {
+        if (onVerified) onVerified();
+        else onClose();
+      });
+    } else if (s === "denied") {
+      setStage("email");
+      setError("That sign-in was declined on your other device.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approvalStatus.data?.status, stage]);
 
   // v2.87 PIN state
   const [pin, setPin] = useState("");
@@ -370,13 +393,22 @@ export function AuthPanel({
     if (verifyOtp.isPending) return;
     setError(null);
     try {
-      await verifyOtp.mutateAsync({ email: cleanEmail, code: codeStr.trim(), remember });
+      const res = await verifyOtp.mutateAsync({ email: cleanEmail, code: codeStr.trim(), remember });
       // Fresh REGISTRATION: offer the sign-in choice (email code vs 4-digit PIN).
       if (wasRegistration) {
         setSetupPin("");
         setSetupPin2("");
         setError(null);
         setStage("setup");
+        return;
+      }
+      // New-device approval (v2.99.7): the account has another online device
+      // and no PIN was used — park on the waiting screen until that device
+      // approves (or use the 4-digit PIN, which never lands here). We do NOT
+      // invalidate whoami yet: the pending cookie doesn't authenticate, so the
+      // app would just bounce back to the gate.
+      if ((res as { pending?: boolean })?.pending) {
+        setStage("waiting");
         return;
       }
       await utils.identity.whoami.invalidate();
@@ -404,6 +436,7 @@ export function AuthPanel({
     : stage === "register" ? "Create your account"
     : stage === "pin" ? "Enter your PIN"
     : stage === "setup" ? "Finish setting up"
+    : stage === "waiting" ? "Waiting for approval"
     : "Sign in";
 
   return (
@@ -520,6 +553,38 @@ export function AuthPanel({
               Three wrong tries are forgiven — a fourth locks the account until you sign in by email code.
             </p>
           </form>
+        )}
+
+        {stage === "waiting" && (
+          <div className="space-y-5 text-center">
+            <div className="mx-auto flex size-16 items-center justify-center rounded-full bg-primary/10">
+              <Loader2 className="size-8 animate-spin text-primary" aria-hidden="true" />
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-sm">
+                For your security, approve this sign-in from a device already
+                signed in to <span className="font-semibold break-all">{cleanEmail}</span>.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Open the notification bell (or Profile → Devices) on your other
+                device and tap <span className="font-semibold">Approve</span>. This screen
+                continues automatically.
+              </p>
+            </div>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-11 w-full rounded-xl"
+              onClick={() => { setStage("email"); setError(null); setNotice(null); }}
+              disabled={busy}
+            >
+              Cancel
+            </Button>
+            <p className="text-center text-xs text-muted-foreground">
+              Have your 4-digit PIN? It signs you in instantly, no approval needed.
+            </p>
+          </div>
         )}
 
         {stage === "setup" && (
