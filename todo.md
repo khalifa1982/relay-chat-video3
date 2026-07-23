@@ -4998,3 +4998,29 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       toggle+layout+reset, RelayEngine minimize/fit/drag/save wiring, dialpad gate, caption padding).
       Headless render verified: grid add-pills, screen-max full-bleed with thumbs hidden, End Call
       caption above the bottom edge. Suite 1321 passed / 1 skipped; check + build green.
+
+## v2.99.9 — rejoin a live call from History (knock → host approval → join) (owner spec) (2026-07-23)
+- [x] A user who LEFT a call (logout drops room membership) can rejoin from History (owner: "if you've
+      been disconnected you can log back in, go to History, and if the call's still alive it shows you
+      live — number of parties, their names, who's the host — and a Join; click Join → the host gets a
+      notification you want to join → you join"). History shows a "Live now · N in the call · hosted
+      by X · Join" card for any recent-call number that is currently in a live call the viewer was
+      part of.
+- [x] SERVER: `liveRoomInfo(reg, number, requester)` resolves the number's alive room + roster + host,
+      authorized ONLY when the requester was PREVIOUSLY in that room (`roomMeta.roster` is add-only →
+      no enumeration/eavesdrop oracle). `liveRoomFor` is the API-tier wrapper (reads activeRegistry;
+      null off the signaling node). New signaling: `knock{to}` → host (+cohosts) get `knock{fromPin,
+      fromName,roomId}` + knocker gets `knock-result{pending}`; `knock-approve`/`knock-deny`
+      (moderator-guarded + pending-knock-guarded — no forged admit) → `admitToRoom` join-without-ring
+      (joinRoomMember + `joined` + `peer-joined` fan-out + SFU token) / `knock-result{denied}`. New
+      `RoomMeta.knocks` map. tRPC `directory.liveRoom(number)` — caller-roster-gated, names-only (no
+      dialable pins) — powers the History card.
+- [x] CLIENT: engine handle knock/approveKnock/denyKnock/setOnKnock + `knock`/`knock-result` dispatch;
+      RelayEngine host Approve/Decline prompt + `knock()` on the engine context; History
+      `LiveRejoinCard` (polls directory.liveRoom, Join → engine.knock).
+- [x] Cross-instance note: knock/approve/join all ride `/api/relay/*` (pinned to the leader), so the
+      flow is correct fleet-wide; only the History PREVIEW card (tRPC liveRoom) needs the signaling
+      node's registry and degrades to absent on a non-leader instance.
+- [x] Tests: 4 behavioral in relay.test.ts (knock→approve→join, deny, stranger roster-gate reject,
+      moderator+pending guards) + server/liveRejoin.test.ts (privacy gate, tRPC shape, client wiring).
+      Suite 1335 passed / 1 skipped; check + build green.

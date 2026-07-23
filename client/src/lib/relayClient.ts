@@ -131,6 +131,10 @@ interface Msg {
    *  "answered"/"declined" happened on ANOTHER of the user's devices. Absent on
    *  a caller's own cancel (old servers / caller hung up). */
   reason?: string;
+  /** knock (v2.99.9): the pin/name of someone requesting to rejoin a live call
+   *  (delivered to the host), and the result of our own knock. */
+  fromPin?: string;
+  ok?: boolean;
 }
 
 export type RelayPhase = "idle" | "dialing" | "ringing" | "in-call";
@@ -202,6 +206,16 @@ export interface RelayHandle {
   /** Wire the per-tile "add to contacts" mark to the host's contacts stack:
    *  called with (pin, name) when the user taps a peer's add mark in-call. */
   setOnSaveContact: (cb: ((pin: string, name: string) => void) | null) => void;
+  /** Live-call rejoin (v2.99.9): ask to rejoin the live call `number` is in
+   *  (History "Join"). The server verifies we were previously in that room and
+   *  asks the host to approve. */
+  knock: (number: string) => void;
+  /** Host-side: approve / deny a pending knock for our call. */
+  approveKnock: (roomId: string, pin: string) => void;
+  denyKnock: (roomId: string, pin: string) => void;
+  /** Host-side callback: someone who was in this call wants back in — surface a
+   *  prompt. Called with (pin, name, roomId). */
+  setOnKnock: (cb: ((pin: string, name: string, roomId: string) => void) | null) => void;
 }
 
 export function startRelay(root: HTMLElement): RelayHandle {
@@ -309,6 +323,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // an add mark under their name. `onSaveContact` bridges the tap to React.
   let savedContactPins = new Set<string>();
   let onSaveContact: ((pin: string, name: string) => void) | null = null;
+  // Live-call rejoin (v2.99.9): host-side "someone wants to rejoin" callback.
+  let onKnock2: ((pin: string, name: string, roomId: string) => void) | null = null;
   let activeSpeakerId: string | null = null; // tile id of the loudest speaker (auto)
   let speakerOrder: string[] = [];           // tile ids, most-recently-loud first
   let speakerCandidate: string | null = null; // pending new leader (hysteresis)
@@ -746,6 +762,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
         toast("You were removed from the call by the host.", true);
         hangUp("kicked");
         break;
+      case "knock":        onKnock(m); break;
+      case "knock-result": onKnockResult(m); break;
       case "signal":       onSignal(m.from!, m.data); break;
       case "ice":          onIceServers(m); break;
       case "error": {
@@ -2670,6 +2688,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
     stopRingtone();
     toast(note);
     emitPhase("idle");
+  }
+
+  // ── live-call rejoin: knock handling (v2.99.9) ────────────────────────────
+  // As the HOST: someone who was in this call wants back in. Surface it to the
+  // React layer (a prompt with Approve/Decline) via the onKnock callback.
+  function onKnock(m: Msg) {
+    if (!m.fromPin || !m.roomId) return;
+    try { onKnock2?.(m.fromPin, m.fromName || nameOf(m.fromPin), m.roomId); } catch { /* */ }
+  }
+  // As the KNOCKER: the result of our request to rejoin.
+  function onKnockResult(m: Msg) {
+    if (m.ok && m.reason === "pending") { toast("Asked the host to let you in…"); return; }
+    if (m.reason === "denied") { toast("The host declined your request to join.", true); return; }
+    if (m.reason === "full") { toast("That call is full.", true); return; }
+    if (m.reason === "gone") { toast("That call has ended.", true); return; }
   }
 
   // ---------- mesh / SFU ----------
@@ -6121,6 +6154,22 @@ export function startRelay(root: HTMLElement): RelayHandle {
       try { refreshAllTileAddMarks(); } catch { /* */ }
     },
     setOnSaveContact(cb) { onSaveContact = cb; },
+    knock(number) {
+      if (!/^\d{6}$/.test(number) || !me.pin || number === me.pin) return;
+      if (!ws || ws.readyState !== 1) { toast("Not connected — try again in a moment.", true); return; }
+      // Prime the speaker route inside the tap, like a dial (we may join media).
+      loudspeakerPrime();
+      sendWS({ type: "knock", to: number });
+    },
+    approveKnock(roomId, pin) {
+      if (!roomId || !/^\d{6}$/.test(pin)) return;
+      sendWS({ type: "knock-approve", roomId, pin });
+    },
+    denyKnock(roomId, pin) {
+      if (!roomId || !/^\d{6}$/.test(pin)) return;
+      sendWS({ type: "knock-deny", roomId, pin });
+    },
+    setOnKnock(cb) { onKnock2 = cb; },
     setOnPinChange(cb) {
       onPinChange = cb;
       // Fire immediately with the current value so a late subscriber syncs up.

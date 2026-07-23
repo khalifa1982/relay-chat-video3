@@ -11,6 +11,7 @@ import {
   Phone,
   PhoneMissed,
   PhoneOutgoing,
+  Radio,
   Search,
   Trash2,
   UserPlus,
@@ -368,6 +369,15 @@ export default function HistoryPage() {
         <Clock className="size-5 text-primary" />
         <h1 className="text-lg font-semibold tracking-tight">Call history</h1>
       </header>
+
+      {/* Live-call rejoin (v2.99.9): any recent call that is STILL ALIVE and
+          that you were part of shows a "Live now · Join" card — tap Join to ask
+          the host to let you back in. Only numbers currently in a call are
+          probed (via the busy LED set), and directory.liveRoom returns a card
+          only for a room you were actually in. */}
+      {Array.from(inCallSet).slice(0, 4).map((num) => (
+        <LiveRejoinCard key={num} number={num} />
+      ))}
 
       {/* Search across the log by name / number / PIN. */}
       {items.length > 0 && (
@@ -994,5 +1004,54 @@ function SoloItem({
         </div>
       </div>
     </li>
+  );
+}
+
+/**
+ * Live-call rejoin card (v2.99.9). For a number currently in a call that the
+ * viewer was part of, `directory.liveRoom` returns the live roster + host (or
+ * null — for a stranger's call, an ended call, or a non-signaling instance).
+ * Tapping Join asks the host to let you back in (a knock); the engine surfaces
+ * the host's approval and, once granted, drops you into the live call.
+ */
+function LiveRejoinCard({ number }: { number: string }) {
+  const engine = useRelayEngine();
+  const q = trpc.directory.liveRoom.useQuery(
+    { number },
+    { refetchInterval: 15_000, refetchOnWindowFocus: true },
+  );
+  const info = q.data;
+  if (!info) return null;
+  const names = info.members.map((m) => m.name).filter(Boolean);
+  const preview =
+    names.length === 0
+      ? `${info.count} in the call`
+      : names.slice(0, 3).join(", ") + (names.length > 3 ? ` +${names.length - 3}` : "");
+  return (
+    <div className="mb-2.5 flex items-center gap-3 rounded-2xl border border-[color:var(--relay-online,#06d6a0)]/40 bg-[color:var(--relay-online,#06d6a0)]/10 p-3">
+      <span className="grid size-10 shrink-0 place-items-center rounded-full bg-[color:var(--relay-online,#06d6a0)]/20 text-[color:var(--relay-online,#06d6a0)]">
+        <Radio className="size-5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 text-sm font-semibold">
+          Live now
+          <span className="text-xs font-normal text-muted-foreground">· {info.count} in the call</span>
+        </div>
+        <div className="truncate text-xs text-muted-foreground">
+          {preview}
+          {info.hostName ? ` · hosted by ${info.hostName}` : ""}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => {
+          engine.knock(number);
+          toast("Asked the host to let you in…");
+        }}
+        className="shrink-0 rounded-full bg-[color:var(--relay-online,#06d6a0)] px-4 py-2 text-xs font-semibold text-black active:scale-95 transition-transform"
+      >
+        Join
+      </button>
+    </div>
   );
 }

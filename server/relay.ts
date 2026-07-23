@@ -136,6 +136,10 @@ export interface RoomMeta {
   roster: Map<string, string>;  // pin -> latest display name
   hostPin: string | null;       // the room creator (host) for moderation
   cohosts: Set<string>;         // pins the host promoted to co-host
+  // Live-call rejoin (v2.99.9): pins currently KNOCKING to be let back in,
+  // pending host approval. Cleared on approve/deny. Optional (older rooms/tests
+  // never set it).
+  knocks?: Map<string, { name: string; at: number }>;
 }
 
 /** Host/co-host role of a pin in a room, for badges + moderation gating. */
@@ -435,6 +439,66 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
     livekitUrl: lk.url,
   });
   pushLivekitToken(reg, pin, rid);
+}
+
+/**
+ * Admit a pin into an EXISTING live room WITHOUT a ring (v2.99.9) — the
+ * join-without-ring machinery shared by the approved-knock rejoin. Mirrors the
+ * accept path + joinPartyLine: roster/host roles, `joined` to the newcomer,
+ * `peer-joined` fan-out to everyone already in, and an SFU token. The caller
+ * is responsible for authorization (knock-approve gates it on host consent).
+ * No-op if the newcomer has no live client record or the room is gone/full.
+ */
+function admitToRoom(reg: RelayRegistry, pin: string, roomId: string): void {
+  const joiner = reg.clients.get(pin);
+  const room = reg.rooms.get(roomId);
+  const meta = reg.roomMeta.get(roomId);
+  if (!joiner || !room || !meta) return;
+  const cap = livekitConfig().enabled ? 10 : 6;
+  if (room.size >= cap && !room.has(pin)) {
+    safeSend(joiner.socket, { type: "knock-result", to: "", ok: false, reason: "full" });
+    return;
+  }
+  // If the joiner was mid-something in a stale solo room, drop it first.
+  if (joiner.roomId && joiner.roomId !== roomId) leaveRoom(reg, pin);
+  const members = Array.from(room)
+    .filter(p => p !== pin && reg.clients.has(p))
+    .map(p => ({ pin: p, name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest", device: reg.clients.get(p)?.device, flag: reg.clients.get(p)?.flag, role: roleOf(meta, p) }));
+  joinRoomMember(reg, roomId, pin);
+  joiner.roomId = roomId;
+  meta.roster.set(pin, joiner.name);
+  meta.lastActiveAt = Date.now();
+  const lk = livekitConfig();
+  pushLivekitToken(reg, pin, roomId);
+  safeSend(joiner.socket, {
+    type: "joined",
+    roomId,
+    members,
+    selfRole: roleOf(meta, pin),
+    hostPin: meta.hostPin ?? null,
+    iceServers: iceServers(pin),
+    livekit: lk.enabled,
+    livekitUrl: lk.url,
+  });
+  const activeRec = reg.recordings.get(roomId);
+  if (activeRec) safeSend(joiner.socket, { type: "recording", on: true, by: activeRec.by });
+  members.forEach(m => {
+    const o = reg.clients.get(m.pin);
+    if (o) {
+      safeSend(o.socket, {
+        type: "peer-joined",
+        pin,
+        name: joiner.name,
+        device: joiner.device,
+        flag: joiner.flag,
+        role: roleOf(meta, pin),
+        iceServers: iceServers(m.pin),
+        livekit: lk.enabled,
+        livekitUrl: lk.url,
+      });
+    }
+  });
+  touchBusyState();
 }
 
 /** Multi-device ring is OFF by default — enable per-deploy with MULTI_DEVICE_RING=1.
@@ -1681,6 +1745,63 @@ export function handleMessage(
       break;
     }
 
+    // ── live-call rejoin: knock → host approval → direct join (v2.99.9) ──────
+    // A user who LEFT a call (logout drops room membership) can ask to rejoin
+    // from History. `knock` targets the NUMBER whose live room they want back
+    // into; the server resolves the room, verifies the knocker was PREVIOUSLY
+    // in it (roster gate — no joining a stranger's call), and asks the HOST to
+    // approve. This is the authorization boundary that replaces a fresh invite.
+    case "knock": {
+      const toNum = String(msg.to || "");
+      const info = liveRoomInfo(reg, toNum, conn.pin);
+      if (!info) {
+        safeSend(conn.socket, { type: "knock-result", to: toNum, ok: false, reason: "gone" });
+        break;
+      }
+      const host = info.hostPin ? reg.clients.get(info.hostPin) : null;
+      if (!host) {
+        safeSend(conn.socket, { type: "knock-result", to: toNum, ok: false, reason: "gone" });
+        break;
+      }
+      // Record the pending knock on the ROOM meta so approve/deny can validate
+      // it (and it's scoped to this room, not a free-floating grant).
+      const meta = reg.roomMeta.get(info.roomId);
+      if (meta) {
+        if (!meta.knocks) meta.knocks = new Map();
+        meta.knocks.set(conn.pin, { name: self.name, at: Date.now() });
+      }
+      // Alert the host (+ co-hosts) that someone wants back in.
+      const knockMsg = { type: "knock", fromPin: conn.pin, fromName: self.name, roomId: info.roomId };
+      safeSend(host.socket, knockMsg);
+      if (meta) meta.cohosts.forEach(cp => { const c = reg.clients.get(cp); if (c) safeSend(c.socket, knockMsg); });
+      safeSend(conn.socket, { type: "knock-result", to: toNum, ok: true, reason: "pending" });
+      break;
+    }
+
+    case "knock-approve":
+    case "knock-deny": {
+      const roomId = String(msg.roomId || "");
+      const knockerPin = String(msg.pin || "");
+      const meta = reg.roomMeta.get(roomId);
+      const room = reg.rooms.get(roomId);
+      // Only the room's HOST or a co-host may approve/deny, and only a knock
+      // that's actually pending (guards against a forged approve for an
+      // arbitrary pin → unsolicited call injection).
+      if (!meta || !room || !isModerator(meta, conn.pin)) break;
+      if (!meta.knocks || !meta.knocks.has(knockerPin)) break;
+      meta.knocks.delete(knockerPin);
+      const knocker = reg.clients.get(knockerPin);
+      if (!knocker) break; // knocker vanished while we deliberated
+      if (type === "knock-deny") {
+        safeSend(knocker.socket, { type: "knock-result", to: "", ok: false, reason: "denied" });
+        break;
+      }
+      // APPROVED — admit the knocker with the join-without-ring machinery
+      // (mirrors the accept path + joinPartyLine; the host approval IS the authz).
+      admitToRoom(reg, knockerPin, roomId);
+      break;
+    }
+
     case "refresh-ice": {
       // Client is about to do an ICE restart and wants fresh TURN creds.
       // Mint a per-peer set and ship it back; safe to call frequently.
@@ -2098,6 +2219,58 @@ export function partyLineLiveCounts(numbers: readonly string[]): Map<string, num
     out.set(n, c);
   }
   return out;
+}
+
+/**
+ * Live-call rejoin (v2.99.9): resolve the ALIVE room a given number is in and
+ * return its roster/host — but ONLY to a `requester` who was PREVIOUSLY in that
+ * exact room (their pin is retained in `roomMeta.roster`, which is add-only).
+ * That relationship gate makes this safe to expose to the API tier: you can
+ * only see the live roster of a call you were already part of (no enumeration
+ * or eavesdrop oracle over the number space). Returns null when there's no live
+ * room, the requester was never in it, or signaling isn't attached (so on a
+ * non-leader API instance it simply degrades to "no live card"). Same
+ * single-instance trust model as pinsInCall.
+ */
+export type LiveRoomInfo = { roomId: string; hostPin: string | null; hostName: string | null; count: number; members: Array<{ pin: string; name: string; role: string }>; startedAt: number };
+
+/** Registry-parameterized core of `liveRoomFor` — used by the signaling `knock`
+ *  handler (which has its own `reg` in scope) so it never depends on the global
+ *  `activeRegistry` (that would be a different/absent registry in tests and
+ *  wrong under a per-request handler). */
+export function liveRoomInfo(
+  reg: RelayRegistry,
+  number: string,
+  requester: string,
+): LiveRoomInfo | null {
+  if (!reg || !/^\d{6}$/.test(number) || !/^\d{6}$/.test(requester)) return null;
+  // The number's CURRENT room (a connected member's live roomId; fall back to
+  // persistent membership for a member in disconnect-grace).
+  const rid = reg.clients.get(number)?.roomId ?? reg.pinRoom.get(number) ?? null;
+  if (!rid) return null;
+  const room = reg.rooms.get(rid);
+  const meta = reg.roomMeta.get(rid);
+  if (!room || !meta) return null;
+  // Alive = a real (answered) call with at least one CONNECTED member.
+  if (!meta.accepted || roomConnectedCount(reg, rid) < 1) return null;
+  // Relationship gate: the requester must have been in this room before.
+  if (requester !== meta.hostPin && !meta.roster.has(requester)) return null;
+  // Don't advertise a call the requester is ALREADY an active member of.
+  if (room.has(requester) && reg.clients.get(requester)?.roomId === rid) return null;
+  const members = Array.from(room)
+    .filter(p => reg.clients.has(p))
+    .map(p => ({ pin: p, name: (reg.clients.get(p) || { name: "Guest" }).name || "Guest", role: roleOf(meta, p) ?? "" }));
+  const hostName = meta.hostPin ? (reg.clients.get(meta.hostPin)?.name ?? meta.roster.get(meta.hostPin) ?? null) : null;
+  return { roomId: rid, hostPin: meta.hostPin, hostName, count: members.length, members, startedAt: meta.startedAt };
+}
+
+/** The API-tier entry (tRPC directory.liveRoom): reads the module-level
+ *  `activeRegistry` the signaling node set. Returns null off the signaling node
+ *  (degrades to "no live card" on a non-leader instance). */
+export function liveRoomFor(number: string, requester: string): LiveRoomInfo | null {
+  const reg = activeRegistry;
+  if (!reg) return null;
+  return liveRoomInfo(reg, number, requester);
 }
 
 /* ── Tiered busy-state (v2.91, Redis bus) ────────────────────────
