@@ -4962,3 +4962,39 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       pin updated for the split call. Suite 1306 passed / 1 skipped; check + build green.
       Follow-up scope noted: web-push wake for a fully-closed device (this increment covers the
       online/SSE + bell path — the owner's "if you were online" case).
+
+## v2.99.8 — in-call UI batch pt.1: minimize box + screen-share maximize + per-tile add-contact + dialpad save (owner spec) (2026-07-23)
+- [x] MINIMIZE (owner: "minimize the call session… a small box showing the cameras / number of people,
+      move easily between Messages/History, that pop-up window is within your browser not a new
+      window"). A Minimize control shrinks the live call to a small DRAGGABLE in-DOM box floating over
+      the app (NOT the browser PiP window — that stays a separate feature). The engine div is never
+      torn down: RelayEngine adds a `minimized` display state → a third positioning branch (inline
+      geometry that beats `.relay-root{inset:0}` without !important) + a new `setMinimized` handle
+      that forces the engine's existing `compactView` 2-up; the chrome-hide effect is now gated
+      `phase!=="idle" && !minimized` so the bottom nav/sidebar stay usable behind the box. The box
+      header (React overlay laid over the same geometry) has a drag handle, a live people-count
+      (`getRoster().length+1`, box grows a touch with headcount), Maximize, and hang-up. A "Fit"
+      toggle letterboxes the video (object-fit:contain via a `.relay-fit` root class).
+- [x] SCREEN-SHARE MAXIMIZE (owner: "if somebody shares his screen … a button to maximize it out of
+      the other screens … or minimize/restore within the grid"). A per-tile button revealed by CSS
+      ONLY on a `.screen` tile toggles `screenMaximized`; layoutGrid's spotlight branch full-bleeds
+      the share (`#videoGrid.screen-max` — single-cell grid, thumbs `display:none`, spotlight spans
+      all rows) and tap-again / share-end / call-reset restores the grid. Reuses the existing
+      spotlight plumbing; callLayout.ts untouched.
+- [x] PER-TILE ADD-TO-CONTACTS (owner: "under each username on the call, if he's not in your contacts
+      show a mark to add them; adding it makes it disappear; already-saved shows nothing"). New
+      `addContactMarkHTML` renders an "Add" pill under each unsaved remote peer's name (`tile-addc`);
+      `refreshAllTileAddMarks` re-renders on a saved-set change. onGridClick bridges the tap to React
+      via `setOnSaveContact` (optimistically drops the mark), and RelayEngine pushes the saved numbers
+      via `setSavedContacts` (from contacts.list) + upserts on tap.
+- [x] DIALPAD SAVE (owner: "while typing the number on the pad, give you Save if this contact isn't in
+      your list"). The Dialer quick-add now offers Save for ANY complete non-self, non-party-line
+      6-digit number (previously only a resolved directory user), as a prominent pill with success/
+      error toasts + an "In your contacts" confirmation when already saved.
+- [x] END CALL caption fix (owner screenshot: the pre-connect "End Call" label fell below the
+      viewport) — the pre-connect `.controls` now reserve `padding-bottom:max(60px,safe-area+48px)`
+      and the caption offset trimmed to 10px. Headless-verified back on-screen.
+- [x] Tests: client/src/lib/callUiV2998.test.ts (handle methods, add-mark render+bridge, screen-max
+      toggle+layout+reset, RelayEngine minimize/fit/drag/save wiring, dialpad gate, caption padding).
+      Headless render verified: grid add-pills, screen-max full-bleed with thumbs hidden, End Call
+      caption above the bottom edge. Suite 1321 passed / 1 skipped; check + build green.
