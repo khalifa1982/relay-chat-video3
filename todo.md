@@ -4690,3 +4690,27 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       on exactly the browsers it targets.
 - [x] New `server/reliabilityPass.test.ts` + `client/src/app/reliabilityPass.test.ts` + a pin in
       `useRealtime.test.ts`. Suite 1216 passed / 1 skipped; check + build green.
+
+## v2.98.6 — HARDENING PASS 3 + call-latency review (owner: "improve security + call latency, ship to main") (2026-07-23)
+- [x] CALL LATENCY: reviewed every code-level lever — connect path already fully optimized (multi-STUN
+      Google×2+Cloudflare, iceCandidatePoolSize/max-bundle/rtcp-mux, TURN UDP+TCP:443+TCP:3478+TLS, engine
+      preloaded+auto-registered on /app entry, heavy deps code-split). NO code change made; the only remaining
+      variable is a dedicated operator coturn (TURN_SECRET/TURN_HOST) vs the free openrelay fallback — ops, not
+      code. Deliberately did not churn the live call path with speculative changes.
+- [x] Fresh cross-surface security/correctness re-check (every tRPC procedure, v2db helpers, Express routes,
+      SSE/upload/storage, signaling moderation, client rendering of user strings). Found the "system-wide
+      application" gap in the messages router + a call-path block gap. 4 fixed:
+- [x] E1 (MED) `messages.openThread` — un-throttled number→identity oracle leaking display name + avatar AND
+      planting an empty DM thread in the target's inbox per probe. Added directoryGate (same gate as F5/S3–S5).
+- [x] E2 (LOW-MED) `messages.createGroup` — existence oracle via skipped/BAD_REQUEST + forced group-inbox
+      write. Added directoryGate.
+- [x] E3 (LOW) `messages.typing` — fanned a typing indicator into ANY conversation id with no membership
+      check (missed sibling of the S6 markRead fix). Now requires participant membership before fan-out.
+- [x] E4 (LOW) blocking not server-enforced on the call path — a blocked caller could still trigger the
+      callee's desktop call_offer notif + full-screen incoming-call push. Both notification hooks
+      (onInvite/onPageCallee) now suppress when isNumberBlockedBy(callee, caller); paging/routing unchanged,
+      block not revealed to the caller.
+- [x] Verified clean: IDOR/ownership (send/list/search/delete/consume/contacts/status/attachments/partyLines),
+      storage-proxy fail-closed, client XSS (escapeHtml/linkify; bio/socials never exposed to others),
+      signaling authz + moderation, auth/crypto/rate-limits.
+- [x] New `server/enumBlockHardening.test.ts`. Suite 1222 passed / 1 skipped; check + build green.

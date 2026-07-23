@@ -919,6 +919,15 @@ export const v2MessagesRouter = router({
   openThread: publicProcedure
     .input(z.object({ number: NumberSchema }))
     .mutation(async ({ ctx, input }) => {
+      // SECURITY: openThread resolves number→identity (NOT_FOUND vs a hit is an
+      // existence oracle) AND returns the target's display name + avatar AND
+      // plants a DM thread in the target's inbox — strictly worse than the
+      // directory endpoints F5/S3–S5 already throttled. Apply the same per-IP
+      // gate so it can't be looped to scrape the 10^6 number space (names +
+      // avatars) or spam arbitrary users' inboxes with empty threads. The
+      // `/i/<pin>` call-link flow uses directory.lookup, not this, so no
+      // legitimate path is affected. Honors RELAY_RATELIMIT_OFF.
+      directoryGate(ctx);
       const me = requireIdentity(ctx);
       const other = await getIdentityByNumber(input.number);
       if (!other) {
@@ -971,6 +980,11 @@ export const v2MessagesRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // SECURITY: same enumeration class as openThread — the `skipped` count
+      // and BAD_REQUEST reveal which supplied numbers are real users, and
+      // success force-creates a group thread in every resolved member's inbox.
+      // Gate it on the shared per-IP directory bucket (honors RELAY_RATELIMIT_OFF).
+      directoryGate(ctx);
       const me = requireIdentity(ctx);
       const unique = Array.from(new Set(input.numbers)).filter((n) => n !== me.number);
       const members = await getIdentitiesByNumbers(unique);
@@ -1280,7 +1294,13 @@ export const v2MessagesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
       try {
-        for (const pid of await getConversationParticipantIds(input.conversationId)) {
+        const participants = await getConversationParticipantIds(input.conversationId);
+        // SECURITY: only a MEMBER may emit a typing indicator into a thread —
+        // the missed sibling of the S6 markRead membership fix. Without this,
+        // any identity could push a spurious "typing…" event into strangers'
+        // conversations by iterating conversation ids.
+        if (!participants.includes(me.id)) return { ok: true };
+        for (const pid of participants) {
           if (pid !== me.id) {
             publishToIdentity(pid, {
               kind: "typing",

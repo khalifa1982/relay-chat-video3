@@ -15,7 +15,7 @@ import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
 import { registerV2Events, publishToIdentity } from "../v2events";
 import { registerV2Offline } from "../v2offline";
-import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation } from "../v2db";
+import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy } from "../v2db";
 import { sendPushToIdentity } from "../webPush";
 import { registerWellKnown } from "../wellKnown";
 import { registerSeo } from "../seo";
@@ -200,6 +200,12 @@ async function startServer() {
       try {
         const callee = await getIdentityByNumber(info.toPin);
         if (!callee) return;
+        // SECURITY/privacy: a caller the callee has BLOCKED must not be able to
+        // pop a call notification on the callee's devices. Block enforcement was
+        // client-only (auto-decline after the ring) + only on messages.send;
+        // suppress the notification server-side too. (Notification-only hooks —
+        // this doesn't touch the synchronous call-routing state machine.)
+        if (await isNumberBlockedBy(callee.id, info.fromPin).catch(() => false)) return;
         publishToIdentity(callee.id, {
           kind: "call_offer",
           fromNumber: info.fromPin,
@@ -293,6 +299,14 @@ async function startServer() {
       // device with a Web Push so a pocketed phone actually alerts.
       const callee = await getIdentityByNumber(info.calleePin);
       if (!callee) return { exists: false };
+      // SECURITY/privacy: don't wake a device with a full-screen incoming-call
+      // push from a caller the callee has BLOCKED. We still return exists:true so
+      // the caller's dial experience is unchanged (a normal unanswered ring that
+      // times out) and the block is not revealed — only the intrusive push is
+      // suppressed. Routing/paging state is untouched.
+      if (await isNumberBlockedBy(callee.id, info.callerPin).catch(() => false)) {
+        return { exists: true, name: callee.displayName ?? undefined };
+      }
       const caller = info.callerName
         ? `${info.callerName} (${info.callerPin})`
         : info.callerPin;
