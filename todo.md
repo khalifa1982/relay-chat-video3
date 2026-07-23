@@ -4586,7 +4586,19 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       navigator.language ban + English-default comment pin); updateChecker version pin → 2.98.2.
       Suite 1180 passed / 1 skipped; check + build green.
 
-## v2.98.3 — SECURITY AUDIT & REMEDIATION (owner-requested full front/back/DB review) (2026-07-22)
+## v2.98.3 — hang-up glyph centered on the dial screen (owner screenshot) (2026-07-23)
+- [x] The white handset icon sat pinned to the LEFT edge of the big red End Call circle on the
+      pre-connect dial screen (owner screenshot, native-shell WebView). ROOT CAUSE: `.ctrl`
+      centers its glyph with `display:grid;place-items:center`, but the v2.74 pre-connect
+      un-hide rule (`#call.pre-connect .ctrl-bar .ctrl.hangup`) re-showed the button with
+      `display:flex` — flexbox has no justify-items, so the svg fell back to flex-start.
+      Reproduced in an isolated headless render of the REAL markup+CSS: svg offsets 1px left /
+      42px right before, 21.5px on all four sides after the one-word fix (flex→grid). The
+      compact in-call hang-up (grid all along) was never affected — which is why only the dial
+      screen looked wrong. Pinned in v298CallerHangup.test.ts (display:grid + a flex ban).
+      Suite 1181 passed / 1 skipped; check + build green.
+
+## v2.98.4 (pt.1) — SECURITY AUDIT & REMEDIATION (owner-requested full front/back/DB review) (2026-07-22)
 - [x] CONTEXT: owner asked for "a full check of all security everything — all app connections, front and
       back, and the database" and to fix + report. Ran an automated scan (Claude Security), then
       independently VERIFIED every candidate against the current source before touching anything. 5
