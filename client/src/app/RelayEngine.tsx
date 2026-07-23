@@ -29,6 +29,10 @@ interface RelayEngineValue {
   maxParticipants: number;
   /** End/leave the current call (or cancel an outgoing one). */
   hangup: () => void;
+  /** Live-call rejoin (v2.99.9): ask to rejoin the live call `number` is in
+   *  (History "Join"). The host is asked to approve. Returns false if the
+   *  engine isn't ready. */
+  knock: (number: string) => boolean;
   /** idle | dialing | ringing | in-call. */
   phase: RelayPhase;
   /** Authoritative 6-digit signaling number, or null until registered. */
@@ -41,6 +45,7 @@ const RelayEngineContext = createContext<RelayEngineValue>({
   dial: () => false,
   dialGroup: () => false,
   hangup: () => {},
+  knock: () => false,
   phase: "idle",
   pin: null,
   ready: false,
@@ -94,6 +99,8 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   const [fitContain, setFitContain] = useState(false); // "fit screen": letterbox vs cover
   const [miniPos, setMiniPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [peopleCount, setPeopleCount] = useState(1);
+  // Live-call rejoin (v2.99.9): host-side "someone wants to rejoin" prompt.
+  const [knockReq, setKnockReq] = useState<{ pin: string; name: string; roomId: string } | null>(null);
   // A new call supersedes an undismissed "they didn't answer" card — without
   // this it resurfaces when the LATER call ends (review v2.88).
   useEffect(() => {
@@ -226,6 +233,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
       handle.setOnRejoinChange(setRejoining);
       handle.setOnQuickReply((toPin, text) => quickReplyRef.current(toPin, text));
       handle.setOnSaveContact((pin, name) => saveContactRef.current(pin, name));
+      handle.setOnKnock((pin, name, roomId) => setKnockReq({ pin, name, roomId }));
       // Voicemail (v2.88): surface the "Leave a voice message / alert me when
       // online" card after a failed 1:1 dial. The engine's own ~2s reason card
       // shows first; this appears above it and outlives the teardown.
@@ -332,6 +340,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     dial: (n, opts) => handleRef.current?.dial(n, opts) ?? false,
     dialGroup: (nums, opts) => handleRef.current?.dialGroup(nums, opts) ?? false,
     hangup: () => handleRef.current?.hangup(),
+    knock: (n) => { if (!handleRef.current) return false; handleRef.current.knock(n); return true; },
     phase,
     pin,
     ready,
@@ -497,6 +506,39 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
             <PhoneOff className="size-4" />
             Exit the call
           </button>
+        </div>
+      ) : null}
+      {/* Live-call rejoin (v2.99.9): the HOST is asked to approve someone who
+          was in this call and wants back in (from their History → Join). */}
+      {knockReq ? (
+        <div
+          className="fixed inset-x-0 top-4 z-[85] mx-auto flex w-[min(360px,92vw)] items-center gap-3 rounded-2xl border border-amber-400/40 bg-card/95 p-3 shadow-2xl backdrop-blur-md"
+          role="alertdialog"
+          aria-label="Someone wants to rejoin the call"
+        >
+          <span className="grid size-10 shrink-0 place-items-center rounded-full bg-amber-400/15 text-amber-500 font-bold">
+            {(knockReq.name || "?").slice(0, 2).toUpperCase()}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold">{knockReq.name || "Someone"}</div>
+            <div className="text-xs text-muted-foreground">wants to rejoin the call</div>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              onClick={() => { handleRef.current?.approveKnock(knockReq.roomId, knockReq.pin); setKnockReq(null); }}
+              className="rounded-lg bg-[color:var(--relay-online,#06d6a0)] px-3 py-1.5 text-xs font-semibold text-black active:scale-95 transition-transform"
+            >
+              Approve
+            </button>
+            <button
+              type="button"
+              onClick={() => { handleRef.current?.denyKnock(knockReq.roomId, knockReq.pin); setKnockReq(null); }}
+              className="rounded-lg bg-muted px-3 py-1.5 text-xs font-semibold text-foreground active:scale-95 transition-transform"
+            >
+              Decline
+            </button>
+          </div>
         </div>
       ) : null}
     </RelayEngineContext.Provider>

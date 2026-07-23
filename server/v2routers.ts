@@ -123,7 +123,7 @@ import { createRateLimiter, clientIpOf, trustedProxyHops } from "./rateLimit";
 // serves signaling, and the Redis mirror (`relay:busypins`/`relay:plcounts`)
 // when it's an API-tier instance behind the scale-out ALB (REDIS_URL set, no
 // local relay clients). Single-instance deploys are byte-identical.
-import { pinsInCallAsync, partyLineLiveCountsAsync } from "./relay";
+import { pinsInCallAsync, partyLineLiveCountsAsync, liveRoomFor } from "./relay";
 
 export const NumberSchema = z
   .string()
@@ -570,6 +570,33 @@ export const v2DirectoryRouter = router({
         inCall: hidden ? false : (await pinsInCallAsync([id.number])).has(id.number),
         partyLine: false,
         memberCount: 0,
+      };
+    }),
+
+  /**
+   * Live-call rejoin (v2.99.9): is `number` in a still-alive call the CALLER
+   * was previously part of? Returns the live roster + host so History can show
+   * a "Live now · N in the call · hosted by X · Join" card. Privacy-safe: the
+   * registry reader only returns data when the caller's own number is in that
+   * room's roster (you can only see a call you were in — no enumeration/
+   * eavesdrop oracle). Null on a non-signaling instance (degrades to no card).
+   */
+  liveRoom: publicProcedure
+    .input(z.object({ number: NumberSchema }))
+    .query(async ({ input, ctx }) => {
+      directoryGate(ctx);
+      const me = ctx.identity;
+      if (!me || !/^\d{6}$/.test(me.number)) return null;
+      const info = liveRoomFor(input.number, me.number);
+      if (!info) return null;
+      return {
+        roomId: info.roomId,
+        count: info.count,
+        hostName: info.hostName,
+        startedAt: info.startedAt,
+        // Names only (no pins) — the caller was in this call, but we still don't
+        // hand back a machine-dialable roster of everyone's numbers.
+        members: info.members.map((m) => ({ name: m.name, role: m.role })),
       };
     }),
 

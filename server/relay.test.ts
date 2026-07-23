@@ -1466,6 +1466,74 @@ describe("relay — room-join authorization", () => {
   // ── multi-device ring (feature-flagged) ──────────────────────────────────
   const typeOf = (m: unknown) => (m as { type?: string })?.type;
   const has = (c: FakeConn, t: string) => c.outbox.some((m) => typeOf(m) === t);
+  const find = (c: FakeConn, t: string) => c.outbox.find((m) => typeOf(m) === t) as Record<string, unknown> | undefined;
+
+  // ── live-call rejoin: knock → host approval → direct join (v2.99.9) ───────
+  /** A live 2-party call: Alice (host) + Bob, both joined. Returns them + rid. */
+  function liveCall(reg2: RelayRegistry): { a: FakeConn; b: FakeConn; rid: string } {
+    const a = register(reg2, "Alice");
+    const b = register(reg2, "Bob");
+    handleMessage(reg2, a.asConn(), { type: "invite", to: b.pin! });
+    const rid = roomIdOf(a);
+    handleMessage(reg2, b.asConn(), { type: "accept", roomId: rid });
+    return { a, b, rid };
+  }
+
+  it("a returning member knocks → the HOST is prompted → approve drops them back in", () => {
+    const { a, b, rid } = liveCall(reg);
+    // Bob leaves the room (he stays registered + in the room's roster — the
+    // "you were in this call and want back" case).
+    handleMessage(reg, b.asConn(), { type: "leave" });
+    expect(reg.pinRoom.has(b.pin!)).toBe(false);
+    expect(reg.rooms.get(rid)?.has(b.pin!)).toBe(false);
+    // Bob knocks to rejoin the call Alice is still in.
+    a.outbox.length = 0; b.outbox.length = 0;
+    handleMessage(reg, b.asConn(), { type: "knock", to: a.pin! });
+    // Host (Alice) gets the knock; Bob gets a "pending" ack.
+    const knock = find(a, "knock");
+    expect(knock?.fromPin).toBe(b.pin);
+    expect(knock?.roomId).toBe(rid);
+    expect(find(b, "knock-result")?.ok).toBe(true);
+    // Alice approves → Bob is admitted (joined) + Alice sees peer-joined.
+    a.outbox.length = 0; b.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "knock-approve", roomId: rid, pin: b.pin! });
+    expect(has(b, "joined")).toBe(true);
+    expect(reg.rooms.get(rid)?.has(b.pin!)).toBe(true);
+    expect(has(a, "peer-joined")).toBe(true);
+  });
+
+  it("a knock to deny is refused (knocker told denied, NOT admitted)", () => {
+    const { a, b, rid } = liveCall(reg);
+    handleMessage(reg, b.asConn(), { type: "leave" });
+    handleMessage(reg, b.asConn(), { type: "knock", to: a.pin! });
+    b.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "knock-deny", roomId: rid, pin: b.pin! });
+    expect(find(b, "knock-result")?.reason).toBe("denied");
+    expect(reg.rooms.get(rid)?.has(b.pin!)).toBe(false);
+  });
+
+  it("a STRANGER who was never in the room cannot knock (roster gate)", () => {
+    const { a } = liveCall(reg);
+    const carol = register(reg, "Carol"); // never in Alice+Bob's room
+    handleMessage(reg, carol.asConn(), { type: "knock", to: a.pin! });
+    // No knock reaches the host; Carol is told the call's unavailable.
+    expect(has(a, "knock")).toBe(false);
+    expect(find(carol, "knock-result")?.ok).toBe(false);
+  });
+
+  it("only a moderator can approve a knock, and only a PENDING one (no forged admit)", () => {
+    const { a, b, rid } = liveCall(reg);
+    handleMessage(reg, b.asConn(), { type: "leave" });
+    // Carol is a bystander (was never in the room).
+    const carol = register(reg, "Carol");
+    handleMessage(reg, b.asConn(), { type: "knock", to: a.pin! });
+    // A non-moderator (Carol) tries to approve Bob → ignored.
+    handleMessage(reg, carol.asConn(), { type: "knock-approve", roomId: rid, pin: b.pin! });
+    expect(reg.rooms.get(rid)?.has(b.pin!)).toBe(false);
+    // Even the host approving a pin that never knocked → ignored (no injection).
+    handleMessage(reg, a.asConn(), { type: "knock-approve", roomId: rid, pin: carol.pin! });
+    expect(reg.rooms.get(rid)?.has(carol.pin!)).toBe(false);
+  });
 
   it("without MULTI_DEVICE_RING, a 2nd device requesting a taken number gets a DIFFERENT number", () => {
     delete process.env.MULTI_DEVICE_RING;
