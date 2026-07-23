@@ -1762,8 +1762,14 @@ function MessageMenu({
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div
             className={
+              // Open toward the screen INTERIOR, never off the edge: the ⋮ for
+              // MY messages sits at the far LEFT of the row (justify-end puts the
+              // menu button before the bubble), so the menu must grow rightward
+              // (left-0); received messages have the ⋮ on the right, so grow
+              // leftward (right-0). The old mapping was reversed, which clipped
+              // the menu off the left edge on wide own-bubbles (e.g. voice notes).
               "absolute z-50 bottom-8 min-w-36 rounded-xl border border-border bg-card p-1 shadow-xl " +
-              (mine ? "right-0" : "left-0")
+              (mine ? "left-0" : "right-0")
             }
           >
             <button

@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { X, Mail, ShieldCheck, ArrowLeft, Lock, LockKeyhole, Check } from "lucide-react";
+import { X, Mail, ShieldCheck, ArrowLeft, Lock, LockKeyhole, Check, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
+import { uploadAvatarImage } from "@/lib/uploadAttachment";
+
+/** Format a 6-digit RELAY number as NNN-NNN (LTR island). */
+function fmtNumber(n: string): string {
+  return n && n.length === 6 ? `${n.slice(0, 3)}-${n.slice(3)}` : n;
+}
 
 /**
  * Passwordless email-OTP sign-in / registration (v2.68) + 4-digit PIN login
@@ -159,6 +165,15 @@ export function AuthPanel({
   const loginProbe = trpc.otpAuth.loginProbe.useMutation();
   const loginWithPin = trpc.otpAuth.loginWithPin.useMutation();
   const setLoginPin = trpc.otpAuth.setLoginPin.useMutation();
+  const updateProfile = trpc.identity.updateProfile.useMutation();
+
+  // The setup step shows the just-minted account: its 6-digit RELAY number and
+  // its avatar. We only need it once we're signed in (setup stage), so it's a
+  // cheap idle query the rest of the time.
+  const whoami = trpc.identity.whoami.useQuery(undefined, {
+    enabled: stage === "setup",
+    refetchOnWindowFocus: false,
+  });
 
   // v2.87 PIN state
   const [pin, setPin] = useState("");
@@ -169,6 +184,36 @@ export function AuthPanel({
   useEffect(() => {
     if (stage === "pin") setTimeout(() => pinRef.current?.focus(), 50);
   }, [stage]);
+
+  // Mandatory profile photo during registration setup (owner directive): the
+  // account isn't "done" until it has a real avatar. Local preview mirrors the
+  // uploaded url so the gate + circle update instantly without a whoami round-trip.
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarFileRef = useRef<HTMLInputElement>(null);
+  const shownAvatar = avatarUrl ?? whoami.data?.avatarUrl ?? null;
+
+  async function onSetupAvatar(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { setError("Your photo must be an image."); return; }
+    if (file.size > 4 * 1024 * 1024) { setError("Your photo must be under 4 MB."); return; }
+    setAvatarUploading(true);
+    setError(null);
+    try {
+      const json = await uploadAvatarImage(file, { mimeType: file.type });
+      // AWAIT the save (v2.98.0 lesson): the upload and the profile save are two
+      // round-trips; only report success once the avatarUrl is actually persisted.
+      await updateProfile.mutateAsync({ avatarUrl: json.url });
+      setAvatarUrl(json.url);
+      await utils.identity.whoami.invalidate();
+    } catch (err) {
+      setError(messageOf(err, "Photo upload failed. Try again."));
+    } finally {
+      setAvatarUploading(false);
+      if (avatarFileRef.current) avatarFileRef.current.value = "";
+    }
+  }
 
   const busy =
     requestOtp.isPending || register.isPending || verifyOtp.isPending ||
@@ -272,21 +317,18 @@ export function AuthPanel({
   async function submitSetup(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (setupPin.length !== 4) { setError("The PIN is exactly 4 digits."); return; }
-    if (setupPin !== setupPin2) { setError("The PINs don't match."); return; }
+    // Both are MANDATORY now (owner directive): a photo AND a 4-digit passcode.
+    if (!shownAvatar) { setError("Add a profile photo to finish."); return; }
+    if (setupPin.length !== 4) { setError("Your passcode is exactly 4 digits."); return; }
+    if (setupPin !== setupPin2) { setError("The passcodes don't match."); return; }
     try {
       await setLoginPin.mutateAsync({ pin: setupPin, preferPin: true });
       await utils.identity.whoami.invalidate();
       if (onVerified) onVerified();
       else onClose();
     } catch (err) {
-      setError(messageOf(err, "Couldn't save the PIN. You can set it later in Profile."));
+      setError(messageOf(err, "Couldn't save your passcode. Try again."));
     }
-  }
-
-  function skipSetup() {
-    if (onVerified) onVerified();
-    else onClose();
   }
 
   async function submitRegister(e: React.FormEvent) {
@@ -359,7 +401,7 @@ export function AuthPanel({
     stage === "code" ? "Enter your code"
     : stage === "register" ? "Create your account"
     : stage === "pin" ? "Enter your PIN"
-    : stage === "setup" ? "How do you want to sign in?"
+    : stage === "setup" ? "Finish setting up"
     : "Sign in";
 
   return (
@@ -418,7 +460,7 @@ export function AuthPanel({
         {stage === "register" && (
           <form onSubmit={submitRegister} className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              We didn't find an account for <span className="font-medium text-foreground break-all">{cleanEmail}</span>. Create one — it takes a moment.
+              Just your name to finish — we already have your email.
             </p>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5">
@@ -430,13 +472,18 @@ export function AuthPanel({
                 <Input id="auth-last" required value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Rivera" maxLength={64} className="h-12 rounded-xl" />
               </div>
             </div>
+            {/* Email is already known from the previous step — shown read-only so
+                the user never retypes it (owner directive). "Back" changes it. */}
             <div className="space-y-1.5">
-              <Label htmlFor="auth-email2">Email</Label>
-              <Input id="auth-email2" type="email" inputMode="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" className="h-12 rounded-xl" />
+              <Label>Email</Label>
+              <div className="flex h-12 items-center gap-2 rounded-xl border border-border/60 bg-background/40 px-3 text-sm">
+                <Mail className="size-4 shrink-0 text-muted-foreground" />
+                <span className="truncate font-medium">{cleanEmail}</span>
+              </div>
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" className="h-12 w-full rounded-xl" disabled={busy || !firstName.trim() || !lastName.trim() || !cleanEmail}>
-              {register.isPending ? "Sending…" : "Create account & send code"}
+              {register.isPending ? "Creating…" : "Continue"}
             </Button>
           </form>
         )}
@@ -476,16 +523,63 @@ export function AuthPanel({
         {stage === "setup" && (
           <form onSubmit={submitSetup} className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              You're verified ✅ — one last choice. Set a 4-digit PIN to sign in
-              instantly next time, or skip to get a fresh email code on every
-              sign-in. You can change this anytime in Profile.
+              You're in ✅ — here's your number. Add a photo and pick a 4-digit
+              passcode to finish. You'll use this passcode to sign in on any device.
             </p>
+
+            {/* The freshly-minted 6-digit RELAY number (LTR island). */}
+            <div className="rounded-2xl border border-border/60 bg-background/40 p-4 text-center">
+              <div className="text-[0.7rem] font-medium uppercase tracking-[0.22em] text-muted-foreground">
+                Your RELAY number
+              </div>
+              <div dir="ltr" className="mt-1 font-mono text-2xl font-bold tracking-[0.15em]">
+                {whoami.data?.number ? fmtNumber(whoami.data.number) : "······"}
+              </div>
+            </div>
+
+            {/* Mandatory profile photo (owner directive). The circle IS the picker. */}
+            <div className="flex flex-col items-center gap-2">
+              <button
+                type="button"
+                onClick={() => avatarFileRef.current?.click()}
+                disabled={avatarUploading}
+                aria-label={shownAvatar ? "Replace profile photo" : "Add profile photo"}
+                className="relative grid size-24 place-items-center rounded-full outline-none transition active:scale-95 focus-visible:ring-2 focus-visible:ring-primary/60 disabled:opacity-70"
+                style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)" }}
+              >
+                <span className="grid size-[86px] place-items-center overflow-hidden rounded-full bg-background">
+                  {shownAvatar ? (
+                    <img src={shownAvatar} alt="Your photo" className="size-full rounded-full object-cover" />
+                  ) : (
+                    <Camera className="size-7 text-muted-foreground" />
+                  )}
+                </span>
+                <span className="absolute -bottom-0.5 -right-0.5 grid size-8 place-items-center rounded-full border-[3px] border-card bg-secondary text-primary">
+                  {avatarUploading ? (
+                    <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  ) : (
+                    <Camera className="size-4" />
+                  )}
+                </span>
+              </button>
+              <span className="text-xs text-muted-foreground">
+                {shownAvatar ? "Looking good — tap to change" : "Add a profile photo (required)"}
+              </span>
+              <input
+                ref={avatarFileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={onSetupAvatar}
+              />
+            </div>
+
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5">
-                <Label htmlFor="pin-1">4-digit PIN</Label>
+                <Label htmlFor="pin-1">4-digit passcode</Label>
                 <Input id="pin-1" type="password" inputMode="numeric" maxLength={4} value={setupPin}
                   onChange={(e) => setSetupPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                  placeholder="••••" className="text-center font-mono tracking-[0.4em] h-12 rounded-xl" autoFocus />
+                  placeholder="••••" className="text-center font-mono tracking-[0.4em] h-12 rounded-xl" />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="pin-2">Repeat it</Label>
@@ -495,11 +589,12 @@ export function AuthPanel({
               </div>
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
-            <Button type="submit" className="h-12 w-full rounded-xl" disabled={busy || setupPin.length !== 4 || setupPin2.length !== 4}>
-              {setLoginPin.isPending ? "Saving…" : "Use this PIN to sign in"}
-            </Button>
-            <Button type="button" variant="secondary" className="h-11 w-full rounded-xl" onClick={skipSetup} disabled={busy}>
-              Skip — email me a code each time
+            <Button
+              type="submit"
+              className="h-12 w-full rounded-xl"
+              disabled={busy || avatarUploading || !shownAvatar || setupPin.length !== 4 || setupPin2.length !== 4}
+            >
+              {setLoginPin.isPending ? "Finishing…" : "Finish"}
             </Button>
           </form>
         )}
