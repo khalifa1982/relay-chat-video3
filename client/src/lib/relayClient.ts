@@ -127,6 +127,10 @@ interface Msg {
   recording?: boolean;
   on?: boolean;
   by?: string;
+  /** ring-cancel (v2.99.5, multi-device): why the ring ended on THIS device —
+   *  "answered"/"declined" happened on ANOTHER of the user's devices. Absent on
+   *  a caller's own cancel (old servers / caller hung up). */
+  reason?: string;
 }
 
 export type RelayPhase = "idle" | "dialing" | "ringing" | "in-call";
@@ -2610,6 +2614,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // The caller hung up before we answered — clear the incoming-ring UI without
   // sending a reject back (they're already gone).
   function onRingCancel(m: Msg) {
+    // Multi-device (v2.99.5): the server says WHY this device's ring ended —
+    // the call was answered/declined on ANOTHER of your devices. Absent reason
+    // = the caller cancelled (old servers send nothing).
+    const note =
+      m.reason === "answered" ? "Answered on another device" :
+      m.reason === "declined" ? "Declined on another device" :
+      "Caller cancelled the call";
     // A cancelled CALL-WAITING ring must also dismiss the "Switch" popup. It was
     // only clearing `pendingRing`, so a stale waiting popup survived a cancel —
     // and tapping it later parked your LIVE call then died on the server's
@@ -2617,7 +2628,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (waitingRing && (!m.from || waitingRing.from === m.from)) {
       waitingRing = null;
       hideCallWaiting();
-      toast("Caller cancelled the call");
+      toast(note);
     }
     if (!pendingRing) return;
     if (m.from && pendingRing.from !== m.from) return;
@@ -2625,7 +2636,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     $("ringOverlay")?.classList.remove("active");
     stopRingtone();
-    toast("Caller cancelled the call");
+    toast(note);
     emitPhase("idle");
   }
 

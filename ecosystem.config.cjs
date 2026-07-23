@@ -53,9 +53,19 @@ module.exports = {
       script: "dist/index.js",
       instances: 1,
       exec_mode: "fork",
-      // RELAY_CLUSTER default goes BEFORE the .env spread so an operator can
-      // still override it in /home/relay/.env (e.g. RELAY_CLUSTER=0 to disable).
-      env: { NODE_ENV: "production", RELAY_CLUSTER: "1", ...loadEnvFile("/home/relay/.env") },
+      // RELAY_CLUSTER / MULTI_DEVICE_RING defaults go BEFORE the .env spread so
+      // an operator can still override them in /home/relay/.env (e.g.
+      // RELAY_CLUSTER=0 / MULTI_DEVICE_RING=0 to disable).
+      //
+      // MULTI_DEVICE_RING=1 (v2.99.5, owner report with screenshots): a
+      // registered user signed in on TWO devices got a DIFFERENT number on the
+      // second one (the register path refused the taken pin and minted a fresh
+      // one) and calls rang only one device. With the flag on, every signed-in
+      // device shares the account number, an incoming call rings all idle
+      // devices, the first to answer wins (the rest show "answered elsewhere"),
+      // and in-call signaling routes to the answering device. Registry state
+      // lives on the RELAY_CLUSTER leader, so this works across the fleet.
+      env: { NODE_ENV: "production", RELAY_CLUSTER: "1", MULTI_DEVICE_RING: "1", ...loadEnvFile("/home/relay/.env") },
       max_memory_restart: "1G",
     },
   ],

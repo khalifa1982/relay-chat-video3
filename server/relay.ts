@@ -254,7 +254,7 @@ export function clearPendingRing(
  * actually alerting. The entry is kept until accept/reject/cancel/TTL so a
  * second reload mid-ring redelivers again.
  */
-export function deliverPendingRing(reg: RelayRegistry, calleePin: string) {
+export function deliverPendingRing(reg: RelayRegistry, calleePin: string, socket?: RelaySocket) {
   const pr = reg.pendingRings.get(calleePin);
   if (!pr) return;
   if (Date.now() - pr.at > PENDING_RING_TTL_MS) {
@@ -268,7 +268,10 @@ export function deliverPendingRing(reg: RelayRegistry, calleePin: string) {
   }
   const callee = reg.clients.get(calleePin);
   if (!callee) return;
-  safeSend(callee.socket, {
+  // Multi-device (v2.99.5): deliver to the channel that just (re)registered
+  // when the caller passes it — the number's primary socket may be a
+  // DIFFERENT device that is already ringing. Default stays the primary.
+  safeSend(socket ?? callee.socket, {
     type: "ring",
     from: pr.from,
     fromName: caller.name,
@@ -1059,10 +1062,18 @@ export function handleMessage(
         const lk = livekitConfig();
         safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
         // A within-grace re-attach (same cid) also auto-rejoins its active call.
-        sendRejoinIfInRoom(reg, conn.socket, conn.pin);
+        // Multi-device (v2.99.5): a SECONDARY device's re-affirm (geo flag,
+        // SSE blip) must NOT receive a rejoin while the number's call lives on
+        // the PRIMARY device — that dragged the idle device into the call.
+        // Same-cid (the primary itself, and every flag-off caller) is unchanged.
+        const isPrimaryChannel =
+          !multiDeviceEnabled() || existing.cid === conn.cid || existing.cid === null;
+        if (isPrimaryChannel) sendRejoinIfInRoom(reg, conn.socket, conn.pin);
         // …and receives any ring that's still live (page reload / paged device
         // opening from a push) — the ring would otherwise be lost forever.
-        deliverPendingRing(reg, conn.pin);
+        // Delivered to THIS channel's socket so a multi-device secondary that
+        // reloaded mid-ring actually rings (the default was the primary socket).
+        deliverPendingRing(reg, conn.pin, conn.socket);
       }
       return;
     }
@@ -1110,8 +1121,23 @@ export function handleMessage(
       const stale = reg.clients.get(ownedPin);
       if (!stale || stale.cid === cid || stale.cid === null) {
         if (stale?.graceT) { clearTimeout(stale.graceT); stale.graceT = null; }
-        leaveRoom(reg, ownedPin); // clears pinRoom membership + notifies peers
-        reg.clients.delete(ownedPin);
+        // Multi-device (v2.99.5): this browser is switching identity away
+        // (logout → new guest, or a different login), but the number may still
+        // be LIVE on the user's other devices — promote a survivor to primary
+        // instead of tearing the number down (mirrors the disconnect-grace
+        // survivor promotion), otherwise the other device silently became
+        // unreachable until its next re-register.
+        const devs = multiDevice ? reg.devices.get(ownedPin) : undefined;
+        const survivor = devs
+          ? Array.from(devs.entries()).find(([dcid]) => dcid !== cid)
+          : undefined;
+        if (stale && survivor) {
+          stale.socket = survivor[1];
+          stale.cid = survivor[0];
+        } else {
+          leaveRoom(reg, ownedPin); // clears pinRoom membership + notifies peers
+          reg.clients.delete(ownedPin);
+        }
       }
       if (cid && reg.cidToPin.get(cid) === ownedPin) reg.cidToPin.delete(cid);
       deviceRemove(reg, ownedPin, cid);
@@ -1139,6 +1165,9 @@ export function handleMessage(
     // Reuse/refresh an existing client record (preserves room membership across
     // a reconnect); otherwise create a fresh one.
     const prev = reg.clients.get(pin);
+    // True when another device stayed primary for a live call (multi-device):
+    // the newly-registered SECONDARY must not receive that call's rejoin.
+    let keptPrimaryElsewhere = false;
     if (prev) {
       if (prev.graceT) { clearTimeout(prev.graceT); prev.graceT = null; }
       // Multi-device: if the existing PRIMARY is in a live call, a different
@@ -1148,6 +1177,7 @@ export function handleMessage(
       // flag is off (or it's the same cid, or the primary is idle) behaviour is
       // identical to before: the latest registration becomes primary.
       const keepPrimary = multiDevice && !!prev.roomId && prev.cid !== cid && prev.cid !== null;
+      keptPrimaryElsewhere = keepPrimary;
       if (!keepPrimary) {
         prev.socket = conn.socket;
         prev.cid = cid || prev.cid;
@@ -1175,10 +1205,15 @@ export function handleMessage(
     const lk = livekitConfig();
     safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
     // AUTO-REJOIN an active call this number is still a member of (no re-invite).
-    sendRejoinIfInRoom(reg, conn.socket, pin);
+    // Multi-device (v2.99.5): NOT when the call lives on another device that
+    // kept the primary slot — sending the rejoin here dragged every freshly
+    // opened secondary device straight into the primary's live call.
+    if (!keptPrimaryElsewhere) sendRejoinIfInRoom(reg, conn.socket, pin);
     // Deliver any ring that's still live for this number: a reload mid-ring, or
     // a PAGED offline device the user just opened from the push notification.
-    deliverPendingRing(reg, pin);
+    // Sent to THIS device's socket (a multi-device secondary must ring here,
+    // not on the primary that is already ringing).
+    deliverPendingRing(reg, pin, conn.socket);
     // Busy-line mirror (v2.91): a (re)registered client can change both party-
     // line CONNECTED counts and busy verdicts (rejoin restores roomId) without
     // crossing any join/leave funnel — sync the settled state.
@@ -1554,7 +1589,9 @@ export function handleMessage(
         const devs = reg.devices.get(conn.pin);
         if (devs) {
           devs.forEach((sock, c) => {
-            if (c !== conn.cid) safeSend(sock, { type: "ring-cancel", from: callerPin });
+            // `reason` (v2.99.5) lets the other devices show the honest
+            // "Answered on another device" note; old clients ignore it.
+            if (c !== conn.cid) safeSend(sock, { type: "ring-cancel", from: callerPin, reason: "answered" });
           });
         }
       }
@@ -1615,6 +1652,17 @@ export function handleMessage(
       if (target && target.ringing.has(conn.pin)) {
         target.ringing.delete(conn.pin);
         clearPendingRing(reg, conn.pin, { from: targetPin });
+        // Multi-device (v2.99.5): declining on ONE device silences the ring on
+        // the number's OTHER devices too (mirror of the accept fan-out) —
+        // without this they kept ringing until their own 30s local timeout.
+        if (multiDeviceEnabled()) {
+          const devs = reg.devices.get(conn.pin);
+          if (devs) {
+            devs.forEach((sock, c) => {
+              if (c !== conn.cid) safeSend(sock, { type: "ring-cancel", from: targetPin, reason: "declined" });
+            });
+          }
+        }
         safeSend(target.socket, { type: "rejected", from: conn.pin });
         // Record the decline (call_history). Caller=targetPin, callee=us.
         try {
