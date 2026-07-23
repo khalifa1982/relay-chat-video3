@@ -33,6 +33,14 @@ import {
 import { getUserById, getUserByOpenId } from "./db";
 import { publishToIdentity } from "./v2events";
 import { stripHtml } from "./email";
+import { createRateLimiter, clientIpOf } from "./rateLimit";
+
+// SECURITY (S11): the inbound webhook was unthrottled. Add a modest per-IP token
+// bucket — a legitimate provider (Resend Inbound) fires occasional webhooks, so
+// this never bites real traffic but caps abuse/replay floods. Honors
+// RELAY_RATELIMIT_OFF like the other gates.
+const inboundIpLimiter = createRateLimiter({ capacity: 60, refillPerSec: 1 });
+setInterval(() => inboundIpLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
 
 export interface InboundConfig {
   enabled: boolean;
@@ -47,7 +55,19 @@ export function inboundConfig(): InboundConfig {
 }
 
 function inboundSecret(): string {
-  return process.env.INBOUND_EMAIL_SECRET || process.env.JWT_SECRET || "relay-inbound-dev-secret";
+  const secret = process.env.INBOUND_EMAIL_SECRET || process.env.JWT_SECRET;
+  if (secret) return secret;
+  // SECURITY (S11): this key signs the reply-to address that binds an inbound
+  // email to a conversation. The public constant fallback would let anyone forge
+  // a valid reply address in production — fail CLOSED there (a real deploy always
+  // has JWT_SECRET). Dev/test keep the fallback so the flow stays runnable
+  // without an env.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "INBOUND_EMAIL_SECRET or JWT_SECRET must be set in production — refusing to sign inbound reply addresses with the public dev fallback."
+    );
+  }
+  return "relay-inbound-dev-secret";
 }
 
 /** HMAC tag (first 20 hex chars) over the convo+identity tuple. */
@@ -279,6 +299,13 @@ export function registerEmailInbound(app: Express): void {
       try {
         if (!inboundConfig().enabled) {
           res.status(200).json({ ok: false, reason: "disabled" });
+          return;
+        }
+        if (
+          process.env.RELAY_RATELIMIT_OFF !== "1" &&
+          !inboundIpLimiter.allow(clientIpOf(req), Date.now())
+        ) {
+          res.status(429).json({ ok: false, reason: "rate_limited" });
           return;
         }
         const rawBuf = (req as { rawBody?: Buffer }).rawBody;

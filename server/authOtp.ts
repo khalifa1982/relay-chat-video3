@@ -18,7 +18,7 @@
  * correctly-configured production (gated on NODE_ENV / RELAY_OTP_DEV_LOG).
  */
 import crypto from "crypto";
-import { and, desc, eq, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { users, emailOtps } from "../drizzle/schema";
 import { hashPassword, verifyPassword, genToken } from "./authCrypto";
@@ -113,12 +113,26 @@ export async function lastOtpAt(email: string): Promise<number | null> {
 /** Record a failed attempt; burn the row (consume) once the cap is hit. */
 export async function recordOtpFailure(rowId: number, currentAttempts: number, nowMs = Date.now()): Promise<number> {
   const db = await getDb();
-  if (!db) return currentAttempts;
-  const next = currentAttempts + 1;
-  const patch: Record<string, unknown> = { attempts: next };
-  if (next >= OTP_MAX_ATTEMPTS) patch.consumedAt = new Date(nowMs); // burn it
-  await db.update(emailOtps).set(patch).where(eq(emailOtps.id, rowId));
-  return next;
+  if (!db) return currentAttempts + 1;
+  // SECURITY (S9): increment + burn ATOMICALLY, guarded on the row not already
+  // being consumed. The old read-modify-write from the caller-passed count lost
+  // increments under concurrent wrong guesses (each observed the same stale
+  // `attempts` and wrote the same `next`), letting an attacker make more than
+  // OTP_MAX_ATTEMPTS guesses before the burn. The persisted post-increment
+  // value (read back below) is authoritative; `currentAttempts` is advisory.
+  await db
+    .update(emailOtps)
+    .set({
+      attempts: sql`COALESCE(${emailOtps.attempts}, 0) + 1`,
+      consumedAt: sql`CASE WHEN COALESCE(${emailOtps.attempts}, 0) + 1 >= ${OTP_MAX_ATTEMPTS} THEN ${new Date(nowMs)} ELSE ${emailOtps.consumedAt} END`,
+    })
+    .where(and(eq(emailOtps.id, rowId), isNull(emailOtps.consumedAt)));
+  const [after] = await db
+    .select({ attempts: emailOtps.attempts })
+    .from(emailOtps)
+    .where(eq(emailOtps.id, rowId))
+    .limit(1);
+  return after?.attempts ?? currentAttempts + 1;
 }
 
 /** Mark an OTP row consumed (single-use) after a successful verify. */

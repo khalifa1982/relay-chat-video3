@@ -1697,13 +1697,28 @@ export function handleMessage(
     }
 
     case "signal": {
-      const target = reg.clients.get(String(msg.to || ""));
-      if (target)
-        safeSend(target.socket, {
-          type: "signal",
-          from: conn.pin,
-          data: msg.data,
-        });
+      const to = String(msg.to || "");
+      const target = reg.clients.get(to);
+      if (!target) break;
+      // SECURITY (S2): relay SDP/ICE ONLY between peers that actually share a
+      // room (active OR held). Without this gate, any registered client could
+      // push a `signal` to any ONLINE pin and force a silent WebRTC handshake —
+      // harvesting the victim's host/srflx ICE candidates (IP deanonymization)
+      // with no call, no ring, and no camera/mic consent. Legitimate signaling
+      // only flows after both peers are members of the same room (post-accept /
+      // peer-joined), and a call-waiting HOLD keeps both in the held room's set,
+      // so both are covered. Mirrors the membership discipline of accept/reject.
+      const activeRid = reg.pinRoom.get(conn.pin) ?? self.roomId;
+      const heldRid = reg.heldRoom.get(conn.pin);
+      const shares =
+        (!!activeRid && reg.rooms.get(activeRid)?.has(to)) ||
+        (!!heldRid && reg.rooms.get(heldRid)?.has(to));
+      if (!shares) break;
+      safeSend(target.socket, {
+        type: "signal",
+        from: conn.pin,
+        data: msg.data,
+      });
       break;
     }
 

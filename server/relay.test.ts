@@ -250,11 +250,19 @@ describe("relay signaling", () => {
     expect(peerJoined.name).toBe("Bob");
   });
 
-  it("relays signal payloads only to the addressed peer", () => {
+  it("relays signal payloads only to the addressed peer — and only within a shared room (S2)", () => {
     const a = register(reg, "Alice");
     const b = register(reg, "Bob");
     const c = register(reg, "Carol");
     const bPin = (b.last() as { pin: string }).pin;
+    // Establish an actual call room between Alice and Bob (invite → accept).
+    handleMessage(reg, a.asConn(), { type: "invite", to: bPin });
+    const roomId = (a.outbox.find(
+      (m): m is { type: string; roomId: string } =>
+        typeof m === "object" && m !== null && (m as { type: string }).type === "room"
+    ) as { roomId: string }).roomId;
+    handleMessage(reg, b.asConn(), { type: "accept", roomId });
+
     a.outbox.length = b.outbox.length = c.outbox.length = 0;
     const sdp = { type: "offer", sdp: "v=0..." };
     handleMessage(reg, a.asConn(), { type: "signal", to: bPin, data: { sdp } });
@@ -263,6 +271,12 @@ describe("relay signaling", () => {
     const relayed = b.last() as { type: string; data: { sdp: { type: string } } };
     expect(relayed.type).toBe("signal");
     expect(relayed.data.sdp.type).toBe("offer");
+
+    // SECURITY (S2): Carol is NOT in Alice/Bob's room, so she cannot push a
+    // signal to Bob (no ICE-candidate harvesting of an online stranger).
+    b.outbox.length = 0;
+    handleMessage(reg, c.asConn(), { type: "signal", to: bPin, data: { sdp } });
+    expect(b.outbox).toHaveLength(0);
   });
 
   it("rings the callee (call waiting) instead of flagging busy when already in a call", () => {

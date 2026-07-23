@@ -111,8 +111,85 @@ Because `EventSource` can't send custom headers but the signaling **POSTs** can,
 - `server/rateLimit.ts` — F4: `trustedProxyHops()` + rightmost-hop `clientIpOf`.
 - Tests: `server/securityAudit.test.ts` (new), `server/rateLimit.test.ts`, `server/geoSelf.test.ts`, `server/peerIdentityBatch.test.ts`, `server/relayCluster.integration.test.ts`.
 
-## Recommended follow-ups (not in this change)
+---
 
-- Add a room-membership assertion to the signaling `signal` case (F1 residual).
-- Consider deleting/overwriting the S3 object on view-once consume for defense-in-depth (the access layer already fails closed).
+# Round 2 — full-platform deep sweep (v2.98.4)
+
+After the initial 5 findings, an exhaustive multi-agent sweep covered 12 attack
+surfaces (auth/sessions, the rest of signaling, storage/SigV4, tRPC IDOR, SQL,
+crypto/secrets, SSRF, email/inbound, client XSS/CSP, DoS/ReDoS, the Redis-bus
+cluster, and HTTP headers/config). Every candidate was put through an
+independent adversarial verifier and then re-verified by hand against current
+source before any change. **7 confirmed + 6 partial** survived verification; 8
+were refuted. All confirmed findings and the meaningful partials are fixed
+below (S1–S11).
+
+| ID | Severity | Area | Status |
+|----|----------|------|--------|
+| S1 | **High** | PIN lockout bypass via a lost-update race (concurrent wrong guesses) | Fixed |
+| S2 | Medium | `signal` relay had no room-membership check → ICE-candidate harvesting / IP deanonymization | Fixed |
+| S3 | Low | `directory.presence`: anonymous, unthrottled presence + last-seen enumeration (no guest-privacy) | Fixed |
+| S4 | Low | `directory.watchOnline`: unthrottled number-enumeration + name-harvest oracle | Fixed |
+| S5 | Low | `calls.logStart`: unthrottled existence oracle + call-history row injection | Fixed |
+| S6 | Low | `messages.markRead`: read-receipt IDOR across conversations you're not in | Fixed |
+| S7 | Low | `POST /api/v2/upload`: no rate limit / quota → storage-cost DoS | Fixed |
+| S8 | Low | Web Push endpoint: unvalidated URL → authenticated blind (HTTPS) SSRF | Fixed |
+| S9 | Low | OTP attempt-counter lost-update race (same class as S1) | Fixed |
+| S10 | Low | Session HMAC secret fell back to a public constant when `JWT_SECRET` unset | Fixed (fail closed in prod) |
+| S11 | Low | Inbound-email HMAC secret same fail-open + unthrottled webhook | Fixed (fail closed in prod + rate limit) |
+
+## S1 — PIN lockout bypass via a lost-update race (HIGH)
+
+**Where:** `server/authPin.ts` `attemptPinLogin`.
+**Problem.** The wrong-attempt counter was written as `stale_read + 1`: the code read `loginPinAttempts`, judged the verdict, then wrote a fixed value. N concurrent wrong guesses all observed `attempts = 0` and each wrote `1`, so increments were lost and an attacker could blow past the 3-try cap and brute-force the 10⁴ PIN space.
+**Fix.** Increment + lock-on-threshold in a single conditional `UPDATE` guarded on `loginPinLockedAt IS NULL`, and derive the verdict from the **persisted** post-increment value (read back), not the stale caller count. Once the count crosses the cap the row locks and every later guess fails the guard. The lock email is sent exactly once (gated on the statement that crossed the threshold via `affectedRows`).
+
+## S2 — `signal` relay had no room-membership check (MEDIUM)
+
+**Where:** `server/relay.ts` `signal` case.
+**Problem.** The `signal` relay forwarded SDP/ICE to any *currently-registered* pin with no check that the sender and target share a call. Any client with a guest identity who knew a victim's (public) number could, while the victim is merely online, force a silent WebRTC handshake and harvest the victim's host/srflx ICE candidates — **IP deanonymization** with no call, ring, or media consent.
+**Fix.** Relay only when the sender and target share a room (active `pinRoom`/`roomId` **or** held `heldRoom`), mirroring the membership discipline already on `accept`/`reject`. Behavioral test added (positive in-room relay + negative out-of-room drop).
+
+## S3–S5 — enumeration gaps that bypassed the F5 throttle (LOW)
+
+`directory.presence`, `directory.watchOnline`, and `calls.logStart` each resolved identities / presence without the per-IP `directoryGate` that F5 added to `lookup`/`presenceMany`, leaving free enumeration + (for `watchOnline`) name-harvest and (for `logStart`) call-history row injection over the 10⁶ number space. **Fix:** apply `directoryGate(ctx)` to all three, and add the guest-privacy (`isGuestPresenceHidden`) pass to `presence` so hidden guests don't leak last-seen. Endpoints stay public (the `/i/<pin>` direct-join needs them).
+
+## S6 — `markRead` read-receipt IDOR (LOW)
+
+**Where:** `server/v2db.ts` `markThreadRead` + the `messages.markRead` router.
+**Problem.** The `unreadCount` write was membership-scoped, but the peer-message `status:"read"` UPDATE was not — any identity could iterate conversation ids and flip other conversations' inbound messages to "read", corrupting real participants' delivery receipts (and the router fanned out a `read` SSE regardless).
+**Fix.** Confirm `conversationParticipants` membership inside the same transaction and bail out for non-members; `markThreadRead` now returns whether the caller was a member, and the router only fans out the SSE when true.
+
+## S7 — upload endpoint DoS (LOW)
+
+**Where:** `server/v2upload.ts`.
+**Problem.** `POST /api/v2/upload` had no rate limit or quota; a single free guest could loop ~40 MB PUTs into the operator's S3 bucket (storage/egress cost DoS).
+**Fix.** Per-IP **and** per-identity token buckets (generous — a photo is thumb + full = 2 calls), checked before any `storagePut`, honoring `RELAY_RATELIMIT_OFF`.
+
+## S8 — Web Push endpoint SSRF (LOW)
+
+**Where:** `server/v2routers.ts` `push.subscribe` → `server/webPush.ts`.
+**Problem.** The `webpush` `endpoint` is a client-supplied URL the server later connects to (`web-push` → `https.request`). No validation meant a caller could subscribe with an internal URL and turn a later push into a blind SSRF (e.g. cloud metadata / a VPC service).
+**Fix.** New `isAllowedWebPushEndpoint` requires `https:` on a known push-service host (FCM / Mozilla / WNS / Apple); enforced on `subscribe` and again defensively before `sendNotification` (legacy rows dropped). FCM tokens (not URLs) are unaffected.
+
+## S9 — OTP attempt-counter race (LOW)
+
+**Where:** `server/authOtp.ts` `recordOtpFailure`. Same lost-update class as S1. **Fix:** atomic guarded `UPDATE` (increment + burn-on-cap), verdict from the persisted count.
+
+## S10 / S11 — signing secrets failed open in production (LOW)
+
+**Where:** `server/authLocal.ts` `sessionSecret`, `server/emailInbound.ts` `inboundSecret`.
+**Problem.** Both fell back to a public constant (`"relay-dev-secret"` / `"relay-inbound-dev-secret"`) when `JWT_SECRET`/`INBOUND_EMAIL_SECRET` were unset. The session token is a bare HMAC over `"<userId>.<exp>"` with no server store, so the public constant would make session forgery for any user trivial. Not exploitable on the correctly-provisioned `.io` fleet (which sets `JWT_SECRET`), but a latent fail-open.
+**Fix.** Fail **closed** in production (`NODE_ENV === "production"` → throw rather than sign/verify with the public constant); dev/test keep the fallback. The inbound webhook route also gained a per-IP rate limit.
+
+## Verification (round 2)
+
+`pnpm check` clean; `pnpm test` **1208 passing / 1 skipped**; `pnpm build` clean. New `server/securitySweep.test.ts` (behavioral SSRF-allowlist tests + source pins for S1/S3–S11); `server/relay.test.ts` gained a behavioral S2 test (in-room relay works, out-of-room is dropped).
+
+## Accepted residuals / follow-ups (not changed)
+
+- **Signaling invite fan-out** (partial): no per-caller outstanding-ring cap / `pendingRings` reaper. The verifier downgraded the "one message → O(N)" framing (each invite is an individual rate-limited POST), and the risk of a too-low cap or too-short reaper TTL breaking legitimate group dials / slow-answer paging outweighs the bounded benefit — deliberately not changed in this batch.
+- **Inbound webhook signature** stays opt-in (`INBOUND_EMAIL_WEBHOOK_SECRET`), since making it mandatory would break operators running inbound email without it; the reply path is still bound by the `From == owner-email` check.
+- Consider deleting/overwriting the S3 object on view-once consume for defense-in-depth (the access layer already fails closed — F3).
 - Set `RELAY_TRUSTED_PROXY_HOPS` explicitly on any deployment with more than one front proxy.
+- No CSP / `X-Frame-Options` header (deliberate — the app is framed by the editor; refuted as no-exploit); revisit if the framing requirement is dropped.

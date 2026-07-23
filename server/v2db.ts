@@ -1644,9 +1644,13 @@ export async function consumeExpiringMessage(input: {
   return { conversationId: row.conversationId, participantIds: pids };
 }
 
-export async function markThreadRead(input: { conversationId: number; identityId: number }) {
+export async function markThreadRead(input: {
+  conversationId: number;
+  identityId: number;
+}): Promise<boolean> {
   const db = await getDb();
-  if (!db) return;
+  if (!db) return false;
+  let isMember = false;
   // last visible message id — must match listMessages/listThreads' deletedAt
   // filter, or a soft-deleted message could become lastReadMessageId and get
   // skipped over forever (its content is gone, but its id still "counts").
@@ -1654,6 +1658,25 @@ export async function markThreadRead(input: { conversationId: number; identityId
   // failure can't leave the participant's unreadCount reset to 0 without the
   // matching read-receipt flip (or vice versa). Mirrors the sendMessage txn.
   await db.transaction(async (tx) => {
+    // SECURITY (S6): confirm the caller is actually a participant BEFORE
+    // flipping any read state. The unreadCount write below is already
+    // membership-scoped (it no-ops for a non-member), but the peer-message
+    // `status:"read"` UPDATE was not — so any identity could mark another
+    // conversation's inbound messages "read" by iterating conversation ids,
+    // corrupting real participants' delivery receipts. Check inside the same
+    // tx (no TOCTOU) and bail out for non-members.
+    const membership = await tx
+      .select({ id: conversationParticipants.identityId })
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, input.conversationId),
+          eq(conversationParticipants.identityId, input.identityId)
+        )
+      )
+      .limit(1);
+    if (membership.length === 0) return;
+    isMember = true;
     // last visible message id — must match listMessages/listThreads' deletedAt
     // filter, or a soft-deleted message could become lastReadMessageId and get
     // skipped over forever (its content is gone, but its id still "counts").
@@ -1692,6 +1715,7 @@ export async function markThreadRead(input: { conversationId: number; identityId
         );
     }
   });
+  return isMember;
 }
 
 /* ── attachments ──────────────────────────────────────────────── */

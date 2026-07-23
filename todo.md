@@ -4623,3 +4623,34 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       legacy — plus F2/F3/F5 wiring pins); updated `rateLimit.test.ts`, `geoSelf.test.ts`,
       `peerIdentityBatch.test.ts` (F3), `relayCluster.integration.test.ts` (async register). Suite 1196
       passed / 1 skipped; `tsc --noEmit` + production build green.
+
+## v2.98.4 — SECURITY SWEEP ROUND 2 (owner: "maximize the bugs, fix it everywhere, merge to main") (2026-07-23)
+- [x] Exhaustive multi-agent audit of 12 attack surfaces (auth, signaling, storage/SigV4, tRPC IDOR, SQL,
+      crypto/secrets, SSRF, email/inbound, client XSS/CSP, DoS/ReDoS, Redis-bus cluster, headers/config).
+      Every candidate adversarially verified against source; 7 confirmed + 6 partial survived (8 refuted).
+      All meaningful findings fixed (S1–S11); report appended to `SECURITY-AUDIT-2026-07-22.md`.
+- [x] S1 (HIGH) PIN lockout brute-force race — `server/authPin.ts attemptPinLogin` wrote `stale+1`, so
+      concurrent wrong guesses lost increments and defeated the 3-try cap on the 10^4 PIN space. Fixed with a
+      single guarded conditional UPDATE (increment + lock-on-threshold, `WHERE loginPinLockedAt IS NULL`),
+      verdict from the persisted post-value, lock email once via affectedRows.
+- [x] S2 (MED) `signal` relay had no room-membership check — any registered client could push SDP/ICE to any
+      online pin and harvest its ICE candidates (IP deanonymization). Fixed to relay only within a shared room
+      (active pinRoom OR held heldRoom); behavioral test (in-room relay works, out-of-room dropped).
+- [x] S3–S5 (LOW) F5 enumeration gaps — `directory.presence` (+ missing guest-privacy), `directory.watchOnline`
+      (name-harvest oracle), `calls.logStart` (existence oracle + history-row injection) all bypassed the F5
+      directoryGate; now gated (presence also runs isGuestPresenceHidden). Endpoints stay public for /i/<pin>.
+- [x] S6 (LOW) `messages.markRead` IDOR — the peer-message status:"read" flip wasn't membership-scoped;
+      `markThreadRead` now checks conversationParticipants in-tx + returns membership, router fans out the read
+      SSE only for members.
+- [x] S7 (LOW) `POST /api/v2/upload` storage DoS — added per-IP + per-identity token buckets before storagePut.
+- [x] S8 (LOW) Web Push endpoint SSRF — `isAllowedWebPushEndpoint` (https + known push-service allowlist) on
+      push.subscribe + defensively before webpush.sendNotification (legacy rows dropped).
+- [x] S9 (LOW) OTP attempt-counter race — `recordOtpFailure` made atomic (same pattern as S1).
+- [x] S10/S11 (LOW) signing secrets failed open — `sessionSecret`/`inboundSecret` fell back to a public
+      constant when env unset (bare-HMAC session ⇒ trivial forgery); now fail CLOSED in production, dev/test
+      keep the fallback; inbound webhook route rate-limited.
+- [x] `server/securitySweep.test.ts` (12 tests) + S2 behavioral test in relay.test.ts. Suite 1208 passed /
+      1 skipped; check + build green.
+- [ ] RESIDUAL (accepted, not changed): no per-caller outstanding-invite cap / pendingRings reaper (bounded
+      benefit vs. hot-signaling-path risk); inbound webhook signature stays opt-in (mandatory would break
+      operators running without the secret; the From==owner-email binding still gates the reply path).

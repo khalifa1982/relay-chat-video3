@@ -83,7 +83,7 @@ import {
   listPartyLines,
   MAX_PARTY_LINES_PER_OWNER,
 } from "./v2db";
-import { vapidConfig, sendPushToIdentity } from "./webPush";
+import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
 import { setSessionCookie, rememberToTtlMs, LOCAL_SESSION_COOKIE } from "./authLocal";
@@ -622,9 +622,26 @@ export const v2DirectoryRouter = router({
   /** Get presence for an array of identity ids. */
   presence: publicProcedure
     .input(z.object({ ids: z.array(z.number().int().positive()).max(200) }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      // SECURITY (S3): throttle (this was an anonymous, unthrottled enumeration
+      // of the sequential id space) and apply the SAME guest-privacy rule the
+      // other directory surfaces use — a guest inactive >24h must not leak
+      // presence / last-seen here when they're hidden everywhere else.
+      directoryGate(ctx);
       if (input.ids.length === 0) return [];
-      return getPresenceForIds(input.ids);
+      const [presList, idents] = await Promise.all([
+        getPresenceForIds(input.ids),
+        getIdentitiesByIds(input.ids),
+      ]);
+      const isGuestById = new Map(idents.map((i) => [i.id, i.userId == null]));
+      return presList.map((p) => {
+        const hidden = isGuestPresenceHidden({
+          isGuest: isGuestById.get(p.identityId) ?? false,
+          isOnline: p.isOnline,
+          lastSeenAt: p.lastSeenAt,
+        });
+        return hidden ? { ...p, isOnline: false, lastSeenAt: null } : p;
+      });
     }),
 
   /**
@@ -669,6 +686,11 @@ export const v2DirectoryRouter = router({
   watchOnline: publicProcedure
     .input(z.object({ number: NumberSchema }))
     .mutation(async ({ ctx, input }) => {
+      // SECURITY (S4): this resolves a number→identity and returns the display
+      // name on a hit, so without the gate it was a free number-enumeration +
+      // name-harvest oracle over the 10^6 space (bypassing the F5 throttle on
+      // its sibling directory endpoints). Same per-IP bucket as lookup.
+      directoryGate(ctx);
       const me = requireIdentity(ctx);
       const target = await getIdentityByNumber(input.number);
       if (!target) {
@@ -1226,24 +1248,28 @@ export const v2MessagesRouter = router({
     .input(z.object({ conversationId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
-      await markThreadRead({
+      const wasMember = await markThreadRead({
         conversationId: input.conversationId,
         identityId: me.id,
       });
-      // Notify the peer so their read-receipt ticks update.
-      try {
-        const peers = await getConversationParticipantIds(input.conversationId);
-        for (const pid of peers) {
-          if (pid !== me.id) {
-            publishToIdentity(pid, {
-              kind: "read",
-              conversationId: input.conversationId,
-              reader: me.id,
-            });
+      // SECURITY (S6): only fan out the read-receipt when the caller is actually
+      // a participant — otherwise a non-member could spam bogus `read` events at
+      // a conversation's real participants even though the DB write no-op'd.
+      if (wasMember) {
+        try {
+          const peers = await getConversationParticipantIds(input.conversationId);
+          for (const pid of peers) {
+            if (pid !== me.id) {
+              publishToIdentity(pid, {
+                kind: "read",
+                conversationId: input.conversationId,
+                reader: me.id,
+              });
+            }
           }
+        } catch {
+          /* ignore */
         }
-      } catch {
-        /* ignore */
       }
       return { ok: true };
     }),
@@ -1472,6 +1498,12 @@ export const v2CallsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // SECURITY (S5): logStart resolves calleeNumber→identity (NOT_FOUND vs a
+      // row is an existence oracle) and writes a call-history row, both
+      // unbounded before this — a free enumeration bypass of the F5 throttle
+      // plus a way to spam a victim's History with bogus "initiated" rows. Gate
+      // it on the same per-IP bucket; legit dial-preflight is one call.
+      directoryGate(ctx);
       const me = requireIdentity(ctx);
       const callee = await getIdentityByNumber(input.calleeNumber);
       if (!callee) {
@@ -1842,6 +1874,12 @@ export const v2PushRouter = router({
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
       const kind = input.kind ?? "webpush";
+      // SECURITY (S8): a webpush endpoint is a URL the server later connects to;
+      // reject anything that isn't https on a known push service so it can't be
+      // used as a stored blind-SSRF primitive. FCM tokens aren't URLs.
+      if (kind === "webpush" && !isAllowedWebPushEndpoint(input.endpoint)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Unsupported push endpoint." });
+      }
       await upsertPushSubscription({
         identityId: me.id,
         endpoint: input.endpoint,

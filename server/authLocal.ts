@@ -45,7 +45,22 @@ const VERIFY_TTL_MS = 24 * 60 * 60 * 1000; // verification link valid 24h
 const RESEND_COOLDOWN_MS = 60_000; // 1 minute (matches the "regenerate after 1 min" ask)
 
 function sessionSecret(): string {
-  return process.env.JWT_SECRET || process.env.INBOUND_EMAIL_SECRET || "relay-dev-secret";
+  const secret = process.env.JWT_SECRET || process.env.INBOUND_EMAIL_SECRET;
+  if (secret) return secret;
+  // SECURITY (S10): the session cookie is a bare HMAC over "<userId>.<exp>" with
+  // NO server-side store, so anyone who knows the signing key can forge a
+  // session for ANY user. Falling back to the public constant "relay-dev-secret"
+  // in production would make that forgery trivial — fail CLOSED instead: a
+  // correctly-provisioned deploy always sets JWT_SECRET, so reaching here in
+  // production is a misconfiguration, not a valid state. Dev/test (no NODE_ENV
+  // === "production") keep the convenience fallback so `pnpm dev`/vitest run
+  // without an env.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "JWT_SECRET (or INBOUND_EMAIL_SECRET) must be set in production — refusing to sign/verify sessions with the public dev fallback."
+    );
+  }
+  return "relay-dev-secret";
 }
 
 function baseUrl(req: Request): string {

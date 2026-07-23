@@ -35,6 +35,41 @@ export interface PushPayload {
 
 const b64url = (b: Buffer) => b.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
+/**
+ * SECURITY (S8): a Web Push `endpoint` is a client-supplied URL that the
+ * `web-push` library connects to server-side (https.request). Without
+ * validation, a caller could subscribe with an internal/arbitrary URL and turn
+ * a later push into a blind SSRF (e.g. hitting a VPC service or the cloud
+ * metadata endpoint). Restrict webpush endpoints to https on the KNOWN push
+ * services. FCM subscriptions carry a bare device token (not a URL) and are
+ * validated separately, so they bypass this.
+ */
+const WEBPUSH_HOST_SUFFIXES = [
+  ".push.services.mozilla.com", // Firefox (updates.push.services.mozilla.com)
+  ".notify.windows.com", // Edge / WNS (wns2-*.notify.windows.com)
+  ".push.apple.com", // Safari (web.push.apple.com)
+  ".googleapis.com", // Chrome FCM web push (fcm.googleapis.com, android.googleapis.com)
+];
+const WEBPUSH_HOST_EXACT = new Set([
+  "fcm.googleapis.com",
+  "android.googleapis.com",
+  "web.push.apple.com",
+  "updates.push.services.mozilla.com",
+]);
+
+export function isAllowedWebPushEndpoint(endpoint: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:") return false;
+  const host = u.hostname.toLowerCase();
+  if (WEBPUSH_HOST_EXACT.has(host)) return true;
+  return WEBPUSH_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
+}
+
 /** P-256 group order (the private scalar must be in [1, n-1]). */
 const P256_N = BigInt("0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551");
 
@@ -137,6 +172,12 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
   await Promise.all(
     subs.map(async (s) => {
       try {
+        // Defense-in-depth (S8): never connect to a non-allowlisted host, even
+        // if a legacy row predates the subscribe-time guard. Drop it.
+        if (!isAllowedWebPushEndpoint(s.endpoint)) {
+          await deletePushSubscription(s.endpoint).catch(() => {});
+          return;
+        }
         await webpush.sendNotification(
           { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
           body,

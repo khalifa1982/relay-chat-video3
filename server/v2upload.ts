@@ -33,6 +33,20 @@ import { storagePut } from "./storage";
 import { s3Config } from "./s3";
 import { createContext } from "./_core/context";
 import { recordAttachment } from "./v2db";
+import { createRateLimiter, clientIpOf } from "./rateLimit";
+
+// SECURITY (S7): the upload route had NO rate limit or quota — a single free
+// guest session could loop ~40 MB PUTs into the operator's S3 bucket (storage /
+// egress cost DoS). Gate per-IP AND per-identity with a generous token bucket
+// (a photo is a thumb + full = 2 calls, and users attach several at once), both
+// honoring RELAY_RATELIMIT_OFF like every other gate.
+const uploadIpLimiter = createRateLimiter({ capacity: 60, refillPerSec: 1 });
+const uploadIdLimiter = createRateLimiter({ capacity: 60, refillPerSec: 1 });
+setInterval(() => {
+  const now = Date.now();
+  uploadIpLimiter.sweep(now, 30 * 60_000);
+  uploadIdLimiter.sweep(now, 30 * 60_000);
+}, 30 * 60_000).unref();
 
 const ALLOWED_MIME = /^(image|video|audio|application|text)\//i;
 // Deny script-bearing subtypes even when their top-level type passes ALLOWED_MIME.
@@ -70,6 +84,17 @@ export function registerV2Upload(app: Express) {
       }
       if (identityId == null) {
         return res.status(401).json({ error: "No identity. Sign in or start a guest session." });
+      }
+
+      // Rate limit BEFORE reading/storing bytes (S7).
+      if (process.env.RELAY_RATELIMIT_OFF !== "1") {
+        const now = Date.now();
+        if (
+          !uploadIpLimiter.allow(clientIpOf(req), now) ||
+          !uploadIdLimiter.allow(String(identityId), now)
+        ) {
+          return res.status(429).json({ error: "Too many uploads. Try again shortly." });
+        }
       }
 
       // ── extract payload (raw binary vs legacy base64 JSON) ──
