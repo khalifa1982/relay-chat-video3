@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { Phone, Video, MessageSquare, UserPlus, Check, CircleUserRound } from "lucide-react";
+import { Phone, Video, MessageSquare, UserPlus, Check, CircleUserRound, ArrowLeft, X } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -176,6 +176,10 @@ export function PeerOverlaysHost() {
   const utils = trpc.useUtils();
   const [statusNumber, setStatusNumber] = useState<string | null>(null);
   const [profileNumber, setProfileNumber] = useState<string | null>(null);
+  // Full-screen "profile page" opened by tapping the avatar in the popup — the
+  // owner asked for a fuller view (big photo + details) that opens even when the
+  // peer has no active status.
+  const [fullProfile, setFullProfile] = useState(false);
 
   useEffect(() => {
     const onStatus = (e: Event) => setStatusNumber((e as CustomEvent).detail?.number ?? null);
@@ -237,17 +241,31 @@ export function PeerOverlaysHost() {
         />
       )}
 
-      <Dialog open={profileNumber != null} onOpenChange={(o) => !o && setProfileNumber(null)}>
+      <Dialog open={profileNumber != null} onOpenChange={(o) => { if (!o) { setProfileNumber(null); setFullProfile(false); } }}>
         <DialogContent className="max-w-sm rounded-3xl p-6">
           {p ? (
             <div className="flex flex-col items-center text-center">
-              <PeerAvatar
-                number={p.number}
-                name={p.displayName}
-                avatarUrl={p.avatarUrl}
-                size={72}
-                clickable={p.number !== profileNumber || !!statusInfo?.hasAny}
-              />
+              {/* Tapping the avatar always does something: a status if there is
+                  one, otherwise the full-screen profile view (owner request —
+                  the image must be clickable with or without a status). */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (statusInfo?.hasAny && profileNumber) openPeerStatus(profileNumber);
+                  else setFullProfile(true);
+                }}
+                aria-label={statusInfo?.hasAny ? `View ${p.displayName || "profile"}'s status` : "View full profile"}
+                title={statusInfo?.hasAny ? "View status" : "View full profile"}
+                className="rounded-full outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] active:scale-95 transition-transform"
+              >
+                <PeerAvatar
+                  number={p.number}
+                  name={p.displayName}
+                  avatarUrl={p.avatarUrl}
+                  size={72}
+                  clickable={false}
+                />
+              </button>
               <DialogTitle className="mt-3 flex items-center gap-1.5 text-lg font-bold">
                 <span className="truncate max-w-[14rem]">{p.displayName || "Guest"}</span>
                 {p.verified && <VerifiedBadge size={16} />}
@@ -324,6 +342,100 @@ export function PeerOverlaysHost() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Full-screen profile view (owner request) — opened by tapping the popup
+          avatar; a bigger, calmer "profile page" that works with or without a
+          status. Sits above the popup Dialog. */}
+      {fullProfile && p && (
+        <div
+          className="dark fixed inset-0 z-[140] flex flex-col text-foreground"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${p.displayName || "Profile"} full profile`}
+        >
+          <div aria-hidden className="absolute inset-0 bg-background/95 backdrop-blur-xl" onClick={() => setFullProfile(false)} />
+          <div className="relative flex items-center justify-between px-5 pt-[max(1rem,env(safe-area-inset-top))]">
+            <button
+              type="button"
+              onClick={() => setFullProfile(false)}
+              aria-label="Back"
+              className="rounded-full p-2 text-muted-foreground hover:bg-muted"
+            >
+              <ArrowLeft className="size-5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => { setFullProfile(false); setProfileNumber(null); }}
+              aria-label="Close"
+              className="rounded-full p-2 text-muted-foreground hover:bg-muted"
+            >
+              <X className="size-5" />
+            </button>
+          </div>
+
+          <div className="relative flex flex-1 flex-col items-center overflow-y-auto px-6 pb-10 text-center">
+            {/* Big avatar — tap opens the status when there is one. */}
+            <button
+              type="button"
+              disabled={!statusInfo?.hasAny}
+              onClick={() => { if (statusInfo?.hasAny && profileNumber) { setFullProfile(false); openPeerStatus(profileNumber); } }}
+              className="mt-4 rounded-full outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:cursor-default"
+            >
+              <PeerAvatar number={p.number} name={p.displayName} avatarUrl={p.avatarUrl} size={148} clickable={false} />
+            </button>
+            <div className="mt-4 flex items-center gap-2">
+              <h1 className="text-2xl font-extrabold tracking-tight">{p.displayName || "Guest"}</h1>
+              {p.verified && <VerifiedBadge size={20} />}
+            </div>
+            <div className="mt-1 font-mono text-base text-muted-foreground" dir="ltr">
+              {p.number.length === 6 ? `${p.number.slice(0, 3)}-${p.number.slice(3)}` : p.number}
+            </div>
+            {presenceLine(p) && (
+              <div className={"mt-2 text-sm " + (p.isOnline ? "text-[color:var(--relay-online,#06d6a0)]" : "text-muted-foreground")}>
+                {presenceLine(p)}
+              </div>
+            )}
+
+            <div className="mt-7 grid w-full max-w-sm grid-cols-3 gap-2.5">
+              <button
+                type="button"
+                onClick={() => { if (profileNumber) openThread.mutate({ number: profileNumber }); }}
+                className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#fb923c]/12 px-2 py-4 text-sm font-semibold text-[#fb923c] active:scale-95 transition-transform"
+              >
+                <MessageSquare className="size-6" /> Message
+              </button>
+              <button
+                type="button"
+                onClick={() => { if (profileNumber && engine.dial(profileNumber, { voice: true, displayName: p.displayName })) { setFullProfile(false); setProfileNumber(null); } }}
+                className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#22c55e]/12 px-2 py-4 text-sm font-semibold text-[#22c55e] active:scale-95 transition-transform"
+              >
+                <Phone className="size-6" /> Voice
+              </button>
+              <button
+                type="button"
+                onClick={() => { if (profileNumber && engine.dial(profileNumber, { voice: false, displayName: p.displayName })) { setFullProfile(false); setProfileNumber(null); } }}
+                className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#38bdf8]/12 px-2 py-4 text-sm font-semibold text-[#38bdf8] active:scale-95 transition-transform"
+              >
+                <Video className="size-6" /> Video
+              </button>
+            </div>
+
+            <div className="mt-2.5 w-full max-w-sm">
+              <button
+                type="button"
+                disabled={saved || upsert.isPending}
+                onClick={() => { if (profileNumber) upsert.mutate({ number: profileNumber, displayName: p.displayName || undefined }); }}
+                className={
+                  "flex w-full items-center justify-center gap-2 rounded-2xl px-3 py-3 text-sm font-semibold active:scale-95 transition-transform " +
+                  (saved ? "bg-muted/50 text-muted-foreground" : "bg-primary/12 text-primary")
+                }
+              >
+                {saved ? (<><Check className="size-4" /> In your contacts</>) : (<><UserPlus className="size-4" /> Add to contacts</>)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
