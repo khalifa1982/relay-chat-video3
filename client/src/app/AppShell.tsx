@@ -555,14 +555,17 @@ function Inner({ children }: { children: React.ReactNode }) {
                   className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-card"
                   style={{ background: dnd ? "#fbbf24" : "#06d6a0" }}
                 />
-                {/* Tiny avatar-corner tier mark (no caption — the corner is 14px). */}
-                <span className="absolute -left-1 -top-1">
-                  <RoleBadge role={roleFromFlags(me.role, me.verified)} size={14} caption={false} />
-                </span>
+                {/* v2.99.10 (owner): the tier badge no longer crowds the header
+                    avatar corner (it overlapped the flag/photo). It now lives
+                    in the dropdown that opens on tap — beside the name, with the
+                    PIN right under it. */}
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuLabel className="min-w-0">
-                  <div className="truncate font-semibold">{me.displayName}</div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate font-semibold">{me.displayName}</span>
+                    <RoleBadge role={roleFromFlags(me.role, me.verified)} size={15} />
+                  </div>
                   <div className="font-mono text-xs text-muted-foreground">{formatNumber(me.number)}</div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
