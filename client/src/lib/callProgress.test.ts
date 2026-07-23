@@ -73,7 +73,9 @@ describe("pre-connect dial screen (dedicated calling card)", () => {
 
   it("pre-connect hides every control EXCEPT End Call, and the grid", () => {
     expect(ASSETS).toMatch(/#call\.pre-connect \.ctrl-bar \.ctrl\{display:none\}/);
-    expect(ASSETS).toMatch(/#call\.pre-connect \.ctrl-bar \.ctrl\.hangup\{display:flex\}/);
+    // display:GRID, not flex (v2.98.3): .ctrl centers its glyph via grid +
+    // place-items; the old flex un-hide pinned the handset to the left edge.
+    expect(ASSETS).toMatch(/#call\.pre-connect \.ctrl-bar \.ctrl\.hangup\{display:grid\}/);
     expect(ASSETS).toMatch(/#call\.pre-connect \.call-main \.grid\{display:none\}/);
   });
 

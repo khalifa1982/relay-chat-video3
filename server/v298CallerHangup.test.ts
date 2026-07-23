@@ -47,6 +47,15 @@ describe("caller-side End Call redesign (v2.98.0)", () => {
     expect(gated.slice(0, 600)).toMatch(/\.ctrl-bar::before\{animation:relayHaloPulse/);
     expect(ASSETS).toMatch(/@keyframes relayHaloPulse/);
   });
+  it("the glyph is CENTERED: the pre-connect un-hide uses display:grid, never flex (v2.98.3)", () => {
+    // .ctrl centers its glyph with display:grid + place-items:center. The
+    // pre-connect un-hide rule used display:flex — flexbox has no
+    // justify-items, so the white handset fell back to flex-start and sat
+    // pinned to the LEFT edge of the 76px red circle (owner screenshot;
+    // measured 1px left / 42px right before, 21.5px all around after).
+    expect(ASSETS).toMatch(/#call\.pre-connect \.ctrl-bar \.ctrl\.hangup\{display:grid\}/);
+    expect(ASSETS).not.toMatch(/\.ctrl\.hangup\{display:flex\}/);
+  });
   it("the compact IN-CALL hang-up button (crowded control bar) is untouched by the pre-connect-only rules", () => {
     // Scoped selectors only — no bare `.ctrl.hangup` change that would leak
     // the caption/halo into the small in-call button among mic/cam/etc.
