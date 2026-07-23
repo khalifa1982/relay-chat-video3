@@ -114,8 +114,10 @@ interface Msg {
   url?: string;
   /** invite/ring: the caller dialed this as a VIDEO call (mutual-consent flow). */
   video?: boolean;
-  /** ringing ack: the callee has no live connection — the server is PAGING
-   *  them (push notification + late ring delivery when their app opens). */
+  /** ringing ack (LEGACY, v2.83–v2.99.10): the callee had no live connection so
+   *  the server was PAGING them. Retired in v2.99.11 — an offline callee now
+   *  gets error{offline} instead of a paging ack. Field kept for wire-compat
+   *  with a mid-rollout old server; never read. */
   paging?: boolean;
   /** room/joined (v2.89): the dialed number was a PARTY LINE — the server
    *  dropped us straight into its persistent room instead of ringing anyone. */
@@ -691,15 +693,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
         }
         break;
       case "ringing":
-        // Server confirmed our invite was DELIVERED — the callee's device is
-        // now actually alerting. Advance the caller's staged progress from
+        // Server confirmed our invite was DELIVERED to a LIVE callee device —
+        // it's now actually alerting. Advance the caller's staged progress from
         // "Calling…" (request sent) to "Ringing…" (destination being alerted).
-        // `paging` variant: the callee has NO live connection — the server is
-        // waking their phone with a push and will deliver the ring the moment
-        // their app opens. Say so honestly instead of faking "Ringing…".
+        // v2.99.11: the old `paging` variant ("Reaching their phone…") is gone —
+        // an OFFLINE callee is no longer auto-rung/paged, so the server now
+        // returns error{offline} instead of a paging ack (the caller then gets
+        // the leave-a-message card). A `ringing` ack therefore always means a
+        // real, live ring.
         if (inCall && outgoingDial && !callAnswered) {
-          if (m.paging) setCallStatus("ringing", "Reaching their phone…");
-          else setCallStatus("ringing");
+          setCallStatus("ringing");
           // Upgrade the dial card with the callee's registered display name if
           // the dialer didn't know it (dialed a raw number, not a contact).
           if (m.name && !outgoingDial.group && !outgoingDial.name) {
@@ -772,7 +775,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // /11th SFU accept, or a full-party-line dial) so it exits cleanly; the
         // aloneInCall() guard below spares any LIVE call (host-only forbidden).
         const fatalCode = m.code === "offline" || m.code === "self" || m.code === "gone" ||
-          m.code === "full" || m.code === "forbidden";
+          m.code === "full" || m.code === "forbidden" || m.code === "nonexistent";
         if (addInviteOfflineGuard && m.code === "offline") {
           // Offline error for an add-to-call invite — don't tear down our call.
           addInviteOfflineGuard = false;
@@ -4187,13 +4190,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // the engine finishes tearing down. Groups and self-inflicted failures
     // (media denied, server errors other than offline) don't qualify.
     const d = outgoingDial;
-    // NOT "server-error:offline": with paging live (production always), a
-    // REAL offline callee ends as "no-answer" — the offline code fires almost
-    // only for NONEXISTENT numbers, where a recorded voicemail would be
-    // unsendable (openThread NOT_FOUND) and the copy would lie (review v2.88).
+    // v2.99.11: "server-error:offline" now DOES raise the leave-a-message card.
+    // Paging was retired (owner: an offline user must not be auto-rung), so a
+    // real offline callee ends as server-error:offline within one round-trip and
+    // the identity provably EXISTS — so openThread-by-number succeeds and the
+    // voice/text message is deliverable. A NONEXISTENT number returns the
+    // distinct "server-error:nonexistent" reason, which is excluded (no thread
+    // to send to). "no-answer"/"peer-rejected" still qualify as before.
     if (
       d && !d.group &&
-      (reason === "no-answer" || reason === "peer-rejected")
+      (reason === "no-answer" || reason === "peer-rejected" || reason === "server-error:offline")
     ) {
       try { onDialFailed?.({ pin: d.pin, name: d.name ?? null, reason }); } catch { /* host errors never break teardown */ }
     }

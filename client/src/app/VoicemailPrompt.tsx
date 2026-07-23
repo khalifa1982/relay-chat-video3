@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, Check, Mic, PhoneMissed, Square, X } from "lucide-react";
+import { Bell, Check, Mic, PhoneMissed, Send, Square, X } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { uploadAttachment } from "@/lib/uploadAttachment";
@@ -36,6 +36,10 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
   const [recState, setRecState] = useState<"idle" | "recording" | "sending" | "sent">("idle");
   const [elapsedMs, setElapsedMs] = useState(0);
   const [watched, setWatched] = useState(false);
+  // Text-message composer (v2.99.11): the offline card lets you drop a quick
+  // written message into the DM thread without leaving the call flow.
+  const [text, setText] = useState("");
+  const [textState, setTextState] = useState<"idle" | "sending" | "sent">("idle");
   const recRef = useRef<VoiceRecording | null>(null);
 
   // Elapsed ticker while recording (also proves the 60s cap visually).
@@ -109,6 +113,22 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
     recRef.current?.stop();
   }
 
+  async function sendText() {
+    const body = text.trim();
+    if (!body || textState === "sending") return;
+    setTextState("sending");
+    try {
+      const thread = await openThread.mutateAsync({ number: info.pin });
+      await sendMessage.mutateAsync({ conversationId: thread.conversationId, kind: "text", body });
+      setTextState("sent");
+      toast.success(`Message sent to ${who}.`);
+      window.setTimeout(onClose, 1200);
+    } catch (err) {
+      setTextState("idle");
+      toast.error("Couldn't send the message: " + (err instanceof Error ? err.message : String(err)));
+    }
+  }
+
   async function requestWatch() {
     try {
       await watchOnline.mutateAsync({ number: info.pin });
@@ -175,6 +195,28 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
           </div>
         ) : (
           <div className="space-y-2">
+            {/* Send a written message (v2.99.11) — a quick text into the DM. */}
+            <div className="flex items-center gap-2 rounded-2xl border border-border bg-muted/20 p-1.5 pl-3">
+              <input
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") sendText(); }}
+                disabled={textState !== "idle"}
+                placeholder={`Message ${who}…`}
+                aria-label={`Message ${who}`}
+                maxLength={2000}
+                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              />
+              <button
+                type="button"
+                onClick={sendText}
+                disabled={!text.trim() || textState !== "idle"}
+                aria-label="Send message"
+                className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground disabled:opacity-40 active:scale-95 transition-transform"
+              >
+                {textState === "sent" ? <Check className="size-4" /> : <Send className="size-4" />}
+              </button>
+            </div>
             <button
               type="button"
               onClick={beginRecording}

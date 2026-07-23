@@ -10,14 +10,17 @@ import {
 } from "./relay";
 
 /**
- * v2.83 — offline-callee PAGING + late-ring redelivery, protocol tests.
+ * Offline-callee behavior — protocol tests.
  *
- * The two reported bugs share one root: a callee whose SSE is gone (locked /
- * backgrounded phone, closed tab) could never be rung — the caller's dial died
- * instantly as "offline" (History redials dropping "within two seconds, before
- * it even rings") and the callee never saw ANY alert. Now an invite to an
- * unreachable-but-real number PAGES: the dial stays alive, a push hook wakes
- * the device, and the ring is DELIVERED the moment the callee (re)registers.
+ * v2.99.11 (owner directive: "if the user is offline it should NOT ring
+ * automatically — tell the caller he's offline; you can leave an SMS or voice
+ * message"): the v2.83 PAGING model (keep the dial alive + push-wake the phone
+ * + redeliver the ring on reconnect) is RETIRED for a cold offline dial. An
+ * invite to an unreachable number now resolves the identity via the hook and
+ * returns a FAST, honest error{offline} (real identity) or error{nonexistent},
+ * recording the miss immediately so it surfaces on the callee's History +
+ * (pref-gated) email when they return. The LIVE-path ring redelivery
+ * (deliverPendingRing on a mid-ring reload) is unchanged.
  */
 
 type Sent = Record<string, unknown>;
@@ -81,7 +84,7 @@ describe("offline-callee paging", () => {
     expect(reg.pendingRings.size).toBe(0);
   });
 
-  it("pages a REAL but unreachable number: room kept, ringing{paging} ack, push hook fired, NO instant miss", async () => {
+  it("a REAL but unreachable number → FAST error{offline} + records the miss, NO keep-alive ring (v2.99.11)", async () => {
     const misses: string[] = [];
     const paged: string[] = [];
     const onPage: PageCalleeHook = async (info) => {
@@ -91,75 +94,36 @@ describe("offline-callee paging", () => {
     const a = register(reg, "Ana", "111111");
     handleMessage(reg, a.asConn(), { type: "invite", to: "222222" }, undefined, (i) => misses.push(i.calleePin), onPage);
     await flush();
-    // No offline error — instead a room + a paging-flavoured ringing ack.
-    expect(a.ofType("error").length).toBe(0);
-    expect(a.ofType("room").length).toBe(1);
-    const ringing = a.ofType("ringing")[0];
-    expect(ringing?.paging).toBe(true);
-    expect(ringing?.name).toBe("Bob");
-    expect(paged).toEqual(["222222"]);
-    // The miss is recorded when the caller GIVES UP, not at invite time.
-    expect(misses).toEqual([]);
-    // Ring bookkeeping is live: redeliverable + cancellable.
-    expect(reg.pendingRings.get("222222")?.from).toBe("111111");
-    expect(reg.clients.get("111111")?.ringing.has("222222")).toBe(true);
-  });
-
-  it("NONEXISTENT number (hook says exists:false): classic offline error + clean bookkeeping", async () => {
-    const onPage: PageCalleeHook = async () => ({ exists: false });
-    const a = register(reg, "Ana", "111111");
-    handleMessage(reg, a.asConn(), { type: "invite", to: "999999" }, undefined, undefined, onPage);
-    await flush();
+    // Honest offline error naming the callee — no room kept, no ringing ack.
     const err = a.ofType("error")[0];
     expect(err?.code).toBe("offline");
+    expect(String(err?.message)).toMatch(/offline/i);
+    expect(a.ofType("ringing").length).toBe(0);
+    // The identity was resolved (name), and the miss is recorded IMMEDIATELY so
+    // it lands on the callee's History + email when they return.
+    expect(paged).toEqual(["222222"]);
+    expect(misses).toEqual(["222222"]);
+    // No dangling dial bookkeeping — nothing to redeliver, nothing to reap.
+    expect(reg.pendingRings.size).toBe(0);
+    expect(reg.clients.get("111111")?.ringing.size ?? 0).toBe(0);
+  });
+
+  it("NONEXISTENT number (hook says exists:false): error{nonexistent}, no miss recorded", async () => {
+    const misses: string[] = [];
+    const onPage: PageCalleeHook = async () => ({ exists: false });
+    const a = register(reg, "Ana", "111111");
+    handleMessage(reg, a.asConn(), { type: "invite", to: "999999" }, undefined, (i) => misses.push(i.calleePin), onPage);
+    await flush();
+    const err = a.ofType("error")[0];
+    expect(err?.code).toBe("nonexistent");
     expect(String(err?.message)).toMatch(/doesn't exist/);
     expect(reg.pendingRings.size).toBe(0);
     expect(reg.clients.get("111111")?.ringing.size).toBe(0);
+    // A number that doesn't exist has nobody to record a miss against.
+    expect(misses).toEqual([]);
   });
 
-  it("delivers the ring when the paged callee OPENS THE APP (register), upgrades the caller to a real Ringing ack, and the accept completes the call", async () => {
-    const onPage: PageCalleeHook = async () => ({ exists: true, name: "Bob" });
-    const a = register(reg, "Ana", "111111");
-    handleMessage(reg, a.asConn(), { type: "invite", to: "222222", video: true }, undefined, undefined, onPage);
-    await flush();
-    const roomId = String(a.ofType("room")[0]?.roomId);
-
-    // Callee opens the app from the push → registers → the held ring arrives.
-    const b = register(reg, "Bob", "222222");
-    const ring = b.ofType("ring")[0];
-    expect(ring).toBeTruthy();
-    expect(ring?.from).toBe("111111");
-    expect(ring?.fromName).toBe("Ana");
-    expect(ring?.roomId).toBe(roomId);
-    expect(ring?.video).toBe(true); // the dialed MODE survives the redelivery
-    // Caller's dial card advances from "Reaching their phone…" to Ringing….
-    const acks = a.ofType("ringing");
-    expect(acks.length).toBeGreaterThanOrEqual(2);
-    expect(acks[acks.length - 1]?.paging).toBeUndefined();
-
-    // And the answer path is the normal one.
-    handleMessage(reg, b.asConn(), { type: "accept", roomId }, undefined, undefined, onPage);
-    expect(b.ofType("joined").length).toBe(1);
-    expect(a.ofType("peer-joined")[0]?.pin).toBe("222222");
-    // Answered → the pending ring must never redeliver again.
-    expect(reg.pendingRings.has("222222")).toBe(false);
-  });
-
-  it("caller hangs up first → pending ring cleared + miss recorded; the callee's later open gets NO ghost ring", async () => {
-    const misses: Array<{ calleePin: string; reason: string }> = [];
-    const onPage: PageCalleeHook = async () => ({ exists: true, name: "Bob" });
-    const onMissed: MissedCallHook = (i) => misses.push({ calleePin: i.calleePin, reason: i.reason });
-    const a = register(reg, "Ana", "111111", undefined, { onMissed, onPage });
-    handleMessage(reg, a.asConn(), { type: "invite", to: "222222" }, undefined, onMissed, onPage);
-    await flush();
-    handleMessage(reg, a.asConn(), { type: "leave" }, undefined, onMissed, onPage);
-    expect(reg.pendingRings.size).toBe(0);
-    expect(misses).toEqual([{ calleePin: "222222", reason: "cancelled" }]);
-    const b = register(reg, "Bob", "222222");
-    expect(b.ofType("ring").length).toBe(0);
-  });
-
-  it("treats a DEAD-BUT-IN-GRACE callee socket like an offline device (pages instead of ringing into the void)", async () => {
+  it("a DEAD-BUT-IN-GRACE callee socket is treated as offline too (fast error, no ring into the void)", async () => {
     const onPage: PageCalleeHook = async () => ({ exists: true, name: "Bob" });
     // Bob was registered, then his phone locked → SSE closed, record in grace.
     const b = register(reg, "Bob", "222222", "cid-bob");
@@ -167,13 +131,9 @@ describe("offline-callee paging", () => {
     const a = register(reg, "Ana", "111111");
     handleMessage(reg, a.asConn(), { type: "invite", to: "222222" }, undefined, undefined, onPage);
     await flush();
-    // The old behavior safeSend()'d the ring into the closed stream and acked a
-    // fake "Ringing…". Now: paging ack + redeliverable pending ring.
-    expect(a.ofType("ringing")[0]?.paging).toBe(true);
+    expect(a.ofType("error")[0]?.code).toBe("offline");
+    expect(a.ofType("ringing").length).toBe(0);
     expect(b.ofType("ring").length).toBe(0);
-    // Bob's app comes back (same cid reconnect + re-register) → ring delivered.
-    const b2 = register(reg, "Bob", "222222", "cid-bob");
-    expect(b2.ofType("ring")[0]?.from).toBe("111111");
   });
 
   it("reload mid-ring (LIVE path) redelivers too: the ring survives the callee's refresh", () => {

@@ -45,10 +45,17 @@ describe("E4 — a blocked caller cannot notify the callee's devices", () => {
     expect(around).toMatch(/isNumberBlockedBy\(callee\.id, info\.fromPin\)/);
     expect(seg.length).toBeGreaterThanOrEqual(0);
   });
-  it("suppresses the onPageCallee incoming-call push when blocked (paging semantics unchanged)", () => {
-    const seg = src.slice(src.indexOf("onPageCallee"), src.indexOf('kind: "incoming-call"'));
-    expect(seg).toMatch(/isNumberBlockedBy\(callee\.id, info\.callerPin\)/);
-    // Still returns exists:true so the caller's dial experience / block-secrecy is preserved.
+  it("onPageCallee no longer pushes at all — it is a pure identity resolver (v2.99.11), so a blocked caller can't notify via it either", () => {
+    // Owner directive: an OFFLINE user must NOT be auto-rung. The v2.83 paging
+    // model (a full-screen incoming-call Web Push that woke a pocketed phone)
+    // is retired, so onPageCallee no longer sends ANY push — the block-secrecy
+    // property holds trivially because nobody is notified through this path.
+    const seg = src.slice(src.indexOf("onPageCallee"), src.indexOf("onResolveDial"));
+    expect(seg).not.toMatch(/kind: "incoming-call"/);
+    expect(seg).not.toMatch(/sendPushToIdentity\(/);
+    // It answers only whether the number is a real identity (+ name) so the
+    // relay can return a fast, honest "they're offline" to the caller.
     expect(seg).toMatch(/return \{ exists: true, name: callee\.displayName/);
+    expect(seg).toMatch(/return \{ exists: false \}/);
   });
 });

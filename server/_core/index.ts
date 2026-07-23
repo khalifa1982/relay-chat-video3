@@ -292,33 +292,18 @@ async function startServer() {
       }
     },
     async (info) => {
-      // onPageCallee: an invite targeted a number with NO live signaling
-      // connection (backgrounded/locked phone, closed tab). Answer whether the
-      // number belongs to a real identity — if so the relay PAGES it (keeps the
-      // dial alive + redelivers the ring when the app opens) and we WAKE the
-      // device with a Web Push so a pocketed phone actually alerts.
+      // onPageCallee (v2.99.11 — now purely an IDENTITY RESOLVER): an invite
+      // targeted a number with NO live signaling connection. We answer only
+      // whether the number belongs to a real identity (+ its display name) so
+      // the relay can return a fast, honest "they're offline" to the caller.
+      //
+      // Owner directive: an offline user must NOT be auto-rung — so we NO LONGER
+      // send a full-screen incoming-call Web Push here (that woke a pocketed
+      // phone with a ring). The caller instead gets to leave an SMS / voice
+      // message, and the callee learns of the missed call from their History +
+      // the (preference-gated) missed-call email/notification when they return.
       const callee = await getIdentityByNumber(info.calleePin);
       if (!callee) return { exists: false };
-      // SECURITY/privacy: don't wake a device with a full-screen incoming-call
-      // push from a caller the callee has BLOCKED. We still return exists:true so
-      // the caller's dial experience is unchanged (a normal unanswered ring that
-      // times out) and the block is not revealed — only the intrusive push is
-      // suppressed. Routing/paging state is untouched.
-      if (await isNumberBlockedBy(callee.id, info.callerPin).catch(() => false)) {
-        return { exists: true, name: callee.displayName ?? undefined };
-      }
-      const caller = info.callerName
-        ? `${info.callerName} (${info.callerPin})`
-        : info.callerPin;
-      sendPushToIdentity(callee.id, {
-        kind: "incoming-call",
-        title: `Incoming ${info.video ? "video" : "voice"} call`,
-        body: `${caller} is calling you on RELAY — tap to answer.`,
-        tag: `relay-call-${info.roomId}`,
-        url: "/app/dialer",
-      }).catch(() => {
-        /* push is best-effort — the page itself still works via reconnect */
-      });
       return { exists: true, name: callee.displayName ?? undefined };
     },
     async (pin) => {
