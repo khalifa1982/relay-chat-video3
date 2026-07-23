@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
 import { uploadAvatarImage } from "@/lib/uploadAttachment";
+import { AvatarPicker } from "./AvatarPicker";
 
 /** Format a 6-digit RELAY number as NNN-NNN (LTR island). */
 function fmtNumber(n: string): string {
@@ -190,6 +191,7 @@ export function AuthPanel({
   // uploaded url so the gate + circle update instantly without a whoami round-trip.
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
+  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
   const avatarFileRef = useRef<HTMLInputElement>(null);
   const shownAvatar = avatarUrl ?? whoami.data?.avatarUrl ?? null;
 
@@ -537,13 +539,13 @@ export function AuthPanel({
               </div>
             </div>
 
-            {/* Mandatory profile photo (owner directive). The circle IS the picker. */}
+            {/* Mandatory avatar (owner directive) — photo OR an emoji character. */}
             <div className="flex flex-col items-center gap-2">
               <button
                 type="button"
-                onClick={() => avatarFileRef.current?.click()}
+                onClick={() => setAvatarPickerOpen(true)}
                 disabled={avatarUploading}
-                aria-label={shownAvatar ? "Replace profile photo" : "Add profile photo"}
+                aria-label={shownAvatar ? "Change avatar" : "Add an avatar"}
                 className="relative grid size-24 place-items-center rounded-full outline-none transition active:scale-95 focus-visible:ring-2 focus-visible:ring-primary/60 disabled:opacity-70"
                 style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)" }}
               >
@@ -563,7 +565,7 @@ export function AuthPanel({
                 </span>
               </button>
               <span className="text-xs text-muted-foreground">
-                {shownAvatar ? "Looking good — tap to change" : "Add a profile photo (required)"}
+                {shownAvatar ? "Looking good — tap to change" : "Add a photo or emoji (required)"}
               </span>
               <input
                 ref={avatarFileRef}
@@ -643,6 +645,13 @@ export function AuthPanel({
           </form>
         )}
       </div>
+
+      <AvatarPicker
+        open={avatarPickerOpen}
+        onClose={() => setAvatarPickerOpen(false)}
+        displayName={whoami.data?.displayName}
+        onSaved={(url) => setAvatarUrl(url)}
+      />
 
       <style>{`
         .relay-auth .lockbadge-ring { animation: authSpin .8s linear infinite; }

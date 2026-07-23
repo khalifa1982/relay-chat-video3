@@ -21,6 +21,7 @@ import { trpc } from "@/lib/trpc";
 import { uploadAvatarImage } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
 import { useSignOut } from "@/app/useSignOut";
+import { AvatarPicker } from "@/app/AvatarPicker";
 import { VerifiedBadge } from "@/app/VerifiedBadge";
 import { CountryFlag } from "@/app/CountryFlag";
 import { QRCodeSVG } from "qrcode.react";
@@ -94,6 +95,7 @@ export default function ProfilePage() {
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [showAuth, setShowAuth] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -236,10 +238,10 @@ export default function ProfilePage() {
                 it; the cyan ring is the shared logo gradient. */}
             <button
               type="button"
-              onClick={() => fileRef.current?.click()}
+              onClick={() => setPickerOpen(true)}
               disabled={uploading || updateProfile.isPending}
-              title="Tap to set your photo"
-              aria-label={me.avatarUrl ? "Replace profile photo" : "Add profile photo"}
+              title="Tap to set your avatar"
+              aria-label={me.avatarUrl ? "Change avatar" : "Add an avatar"}
               className="relative grid size-24 place-items-center rounded-full outline-none transition active:scale-95 focus-visible:ring-2 focus-visible:ring-primary/60 disabled:opacity-70"
               style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)" }}
             >
@@ -289,6 +291,14 @@ export default function ProfilePage() {
           </span>
 
           <div className="flex items-center gap-3 text-xs">
+            <button
+              type="button"
+              onClick={() => setPickerOpen(true)}
+              disabled={updateProfile.isPending}
+              className="font-medium text-primary transition hover:underline disabled:opacity-60"
+            >
+              {me.avatarUrl ? "Change avatar" : "Add a photo or emoji"}
+            </button>
             {me.avatarUrl && (
               <button
                 type="button"
@@ -296,10 +306,9 @@ export default function ProfilePage() {
                 disabled={updateProfile.isPending}
                 className="font-medium text-muted-foreground transition hover:text-destructive disabled:opacity-60"
               >
-                Remove photo
+                Remove
               </button>
             )}
-            <span className="text-muted-foreground/70">PNG, JPG, WebP or GIF up to 4 MB</span>
           </div>
         </section>
 
@@ -388,6 +397,12 @@ export default function ProfilePage() {
           </section>
         )}
         {showAuth && <AuthPanel onClose={() => setShowAuth(false)} />}
+        <AvatarPicker
+          open={pickerOpen}
+          onClose={() => setPickerOpen(false)}
+          displayName={me.displayName}
+          onSaved={() => refresh()}
+        />
 
         {/* sign out — the final, destructive action; styled as a danger card */}
         <section className="pt-2">

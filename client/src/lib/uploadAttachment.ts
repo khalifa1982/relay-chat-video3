@@ -112,9 +112,17 @@ export async function uploadThumbnail(
 }
 
 /** Shared `?bare=1` upload: bytes into the caller's own namespace, NO
- *  attachment row — so the storage proxy's participant gate never applies. */
-async function uploadBare(blob: Blob, mime: string): Promise<{ storageKey: string; url: string }> {
+ *  attachment row — so the storage proxy's participant gate never applies.
+ *  `avatar` marks the upload as a PROFILE PHOTO so the server names the key
+ *  `avatar_…` instead of `status_…` (v2.99.2 — status-named avatar keys were
+ *  403'd by the status gate: the re-uploaded-photo-shows-broken bug). */
+async function uploadBare(
+  blob: Blob,
+  mime: string,
+  opts?: { avatar?: boolean },
+): Promise<{ storageKey: string; url: string }> {
   const qs = new URLSearchParams({ bare: "1", mime });
+  if (opts?.avatar) qs.set("avatar", "1");
   const headers: Record<string, string> = { "Content-Type": "application/octet-stream" };
   const deviceId = getDeviceId();
   if (deviceId) headers[DEVICE_ID_HEADER] = deviceId;
@@ -154,5 +162,5 @@ export async function uploadAvatarImage(
   blob: Blob,
   opts: { mimeType?: string },
 ): Promise<{ storageKey: string; url: string }> {
-  return uploadBare(blob, opts.mimeType || blob.type || "image/jpeg");
+  return uploadBare(blob, opts.mimeType || blob.type || "image/jpeg", { avatar: true });
 }

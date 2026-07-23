@@ -124,7 +124,11 @@ describe("status media upload (no-row `?bare=1`)", () => {
     expect(up).toMatch(/body\.bare === true/); // base64 path (native app)
     expect(up).toMatch(/\^\(image\|video\|audio\)\\\//);
     // Key lands in the owner's namespace so status.post's ownership check passes.
-    expect(up).toMatch(/relay-chat\/\$\{identityId\}\/status_/);
+    // v2.99.2: the bare path now names the object by kind — `status` for status
+    // media, `avatar` for profile photos (the latter keeps the status gate from
+    // 403'ing avatars). Status media still gets a `status_…` key (bname="status").
+    expect(up).toMatch(/relay-chat\/\$\{identityId\}\/\$\{bname\}_/);
+    expect(up).toMatch(/const bname = isAvatar \? "avatar" : "status"/);
   });
   it("client helper posts to ?bare=1", () => {
     const client = read("client/src/lib/uploadAttachment.ts");

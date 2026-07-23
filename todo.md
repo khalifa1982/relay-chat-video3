@@ -4774,3 +4774,32 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
 - [x] Tests: authCrypto.test.ts (+5 sid round-trip / legacy-compat / tamper / non-hex / expiry),
       new server/deviceSessions.test.ts (deviceLabelFromUA behavioral + fail-open / sid-gating /
       ownership / login-wiring source pins). Suite 1241 passed / 1 skipped; check + build green.
+
+## v2.99.2 — profile photo fix (broken avatar after re-upload) + emoji/character avatars (owner) (2026-07-23)
+- [x] BUG: removing then re-posting a profile photo showed a BROKEN image everywhere (owner
+      screenshot — broken-image glyph in the top bar + profile hero). ROOT CAUSE: since v2.96.1
+      avatars upload via `?bare=1`, which named the S3 object `status_…`; `authorizeStorageKey`
+      treats every `/status_` key as rich-status media and FAILS CLOSED without an active
+      `statuses` row — so every avatar uploaded that way 403'd (it "worked" briefly only from the
+      60s signed-URL cache). Fixed on two layers:
+      • server/v2upload.ts — `?bare=1&avatar=1` (raw) and `body.avatar===true` (base64) now mint
+        `avatar_…` keys (images-only) instead of `status_…`; client uploadAvatarImage sends the flag.
+      • server/v2db.ts authorizeStorageKey — the `/status_` branch, on finding NO active status row,
+        now RESCUES a key that is some identity's CURRENT avatarUrl (isIdentityAvatarKey) → served as
+        a semi-public avatar. This HEALS every already-broken photo with no migration; genuinely
+        expired/deleted status media (not an avatar) still fails closed. Safe from laundering: the
+        updateProfile keyInOwnerNamespace (F2) gate means only the key's owner can adopt it.
+- [x] EMOJI / CHARACTER AVATARS (owner: "set up an icon avatar — emoji, small icon — a collection of
+      happy smiley characters — or upload my picture — either empty, or with emoji/characters, or with
+      photo"). New `client/src/lib/emojiAvatar.ts`: 56 curated smileys/characters/animals/fun icons +
+      10 gradient backgrounds + `renderEmojiAvatar()` (draws the emoji on the gradient to a 256px PNG).
+      An emoji avatar is UPLOADED through the same profile-photo path, so it becomes a real avatarUrl
+      that renders on EVERY surface (thread rows, contacts, history, in-call tiles, other users'
+      directory previews) and syncs across devices — no schema change, no client-only drift. New
+      `client/src/app/AvatarPicker.tsx` sheet: Upload photo · pick a character on a chosen background ·
+      Remove (→ initials). Wired into Profile's avatar hero + the registration "Finish setting up"
+      screen (both now open the picker). Headless-verified the canvas render (emoji over gradient →
+      real PNG). ANIMATED avatars were scoped out (would need in-browser GIF/APNG encoding) — noted.
+- [x] Tests: server/avatarBareKey.test.ts (avatar key naming + status-gate rescue),
+      client/src/lib/emojiAvatar.test.ts (collection + palette + render contract); status.test.ts pin
+      updated to the by-kind key naming. Suite 1249 passed / 1 skipped; check + build green.

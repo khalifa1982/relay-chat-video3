@@ -1977,7 +1977,19 @@ export async function authorizeStorageKey(
   // thumbnails are unaffected.
   if (/\/status_/.test(storageKey)) {
     const st = await getActiveStatusByMediaKey(storageKey);
-    if (!st) return { kind: "status", authorized: false };
+    if (!st) {
+      // AVATAR RESCUE (v2.99.2): v2.96.1→v2.99.1 profile photos were uploaded
+      // via `?bare=1`, which named them `status_…` — so this branch failed them
+      // CLOSED (no status row ⇒ 403) and every avatar uploaded in that window
+      // shows broken (owner report). A status-named key that is some identity's
+      // CURRENT avatarUrl is a profile photo, semi-public by design — serve it.
+      // No laundering risk: updateProfile's keyInOwnerNamespace gate (F2) means
+      // only the key's OWNER can have adopted it as their avatar, and doing so
+      // deliberately publishes their own media. Genuinely expired/deleted status
+      // media (not anyone's avatar) still fails closed exactly as before.
+      if (await isIdentityAvatarKey(storageKey)) return { kind: "avatar", authorized: true };
+      return { kind: "status", authorized: false };
+    }
     if (identityId == null) return { kind: "status", authorized: false };
     if (st.identityId === identityId) return { kind: "status", authorized: true };
     const ok = await statusAudienceAuthorized(identityId, st.identityId);

@@ -146,7 +146,19 @@ export function registerV2Upload(app: Express) {
         // so a CONTACT viewing a status isn't blocked by the participant-only
         // attachment gate. The key lands in the owner's namespace so
         // status.post's keyInOwnerNamespace ownership check passes.
+        //
+        // `?bare=1&avatar=1` (v2.99.2): PROFILE PHOTOS must NOT reuse the
+        // `status_` key name — authorizeStorageKey treats every `/status_` key
+        // as rich-status media and FAILS CLOSED without an active status row,
+        // which 403'd every avatar uploaded since v2.96.1 pointed avatars at
+        // the bare path (owner report: re-uploaded photo shows broken). Avatars
+        // mint `avatar_…` keys (images only), which the proxy serves as the
+        // semi-public objects they are.
         if (req.query.bare === "1") {
+          const isAvatar = req.query.avatar === "1";
+          if (isAvatar && !/^image\//i.test(mimeType)) {
+            return res.status(400).json({ error: "Profile photos must be images" });
+          }
           if (BLOCKED_MIME.test(mimeType) || !/^(image|video|audio)\//i.test(mimeType)) {
             return res.status(400).json({ error: "Status media must be an image, video, or audio file" });
           }
@@ -156,7 +168,8 @@ export function registerV2Upload(app: Express) {
           }
           const bext = (mimeType.split("/")[1] || "bin").split(/[+;]/)[0].slice(0, 8);
           const bhash = crypto.randomBytes(6).toString("hex");
-          const bkey = `relay-chat/${identityId}/status_${Date.now()}_${bhash}.${bext}`;
+          const bname = isAvatar ? "avatar" : "status";
+          const bkey = `relay-chat/${identityId}/${bname}_${Date.now()}_${bhash}.${bext}`;
           const stored = await storagePut(bkey, buf, mimeType);
           return res.json({ bare: true, storageKey: stored.key, url: stored.url });
         }
@@ -217,14 +230,21 @@ export function registerV2Upload(app: Express) {
         // raw `?bare=1` path, used by the native app (which uploads base64 JSON).
         // Same rules: image/video/audio only, owner-namespaced key, no row (so the
         // storage proxy gates it as a status object, not a public attachment).
+        // `avatar: true` mints an `avatar_…` key instead (v2.99.2, same reason
+        // as the raw path: `status_`-named avatars were 403'd by the status gate).
         if (body.bare === true) {
+          const isAvatar = body.avatar === true;
+          if (isAvatar && !/^image\//i.test(mimeType)) {
+            return res.status(400).json({ error: "Profile photos must be images" });
+          }
           if (BLOCKED_MIME.test(mimeType) || !/^(image|video|audio)\//i.test(mimeType)) {
             return res.status(400).json({ error: "Status media must be an image, video, or audio file" });
           }
           if (buf.length === 0) return res.status(400).json({ error: "Empty payload" });
           const bext = (mimeType.split("/")[1] || "bin").split(/[+;]/)[0].slice(0, 8);
           const bhash = crypto.randomBytes(6).toString("hex");
-          const bkey = `relay-chat/${identityId}/status_${Date.now()}_${bhash}.${bext}`;
+          const bname = isAvatar ? "avatar" : "status";
+          const bkey = `relay-chat/${identityId}/${bname}_${Date.now()}_${bhash}.${bext}`;
           const stored = await storagePut(bkey, buf, mimeType);
           return res.json({ bare: true, storageKey: stored.key, url: stored.url });
         }
