@@ -174,6 +174,35 @@ export async function getIdentityByNumber(number: string): Promise<ResolvedIdent
   return rows.length > 0 ? rowToResolved(rows[0]) : null;
 }
 
+/** Three-tier account badge (v2.99.6, owner spec):
+ *  admin — the identity's owning user carries users.role = "admin";
+ *  registered — email-verified identity (the old "verified" blue badge);
+ *  guest — everything else (no account, or never verified). */
+export type IdentityRole = "guest" | "registered" | "admin";
+
+/** Resolve the badge tier for a batch of identities in ONE query
+ *  (identities LEFT JOIN users). Decoration-only: any DB hiccup returns an
+ *  empty map and callers fall back to "guest"/verified — never throws. */
+export async function getRolesByIdentityIds(ids: number[]): Promise<Map<number, IdentityRole>> {
+  const out = new Map<number, IdentityRole>();
+  if (ids.length === 0) return out;
+  const db = await getDb();
+  if (!db) return out;
+  try {
+    const rows = await db
+      .select({ id: identities.id, verified: identities.verified, userRole: users.role })
+      .from(identities)
+      .leftJoin(users, eq(users.id, identities.userId))
+      .where(inArray(identities.id, ids));
+    rows.forEach((r) =>
+      out.set(r.id, r.userRole === "admin" ? "admin" : r.verified === true ? "registered" : "guest")
+    );
+  } catch {
+    /* badge is decoration — never break a payload over it */
+  }
+  return out;
+}
+
 export async function getIdentityByGuestToken(
   token: string
 ): Promise<ResolvedIdentity | null> {

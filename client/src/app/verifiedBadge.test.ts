@@ -19,21 +19,63 @@ describe("VerifiedBadge component", () => {
   });
 });
 
-describe("badge is wired into every primary identity surface", () => {
+/**
+ * v2.99.6 (owner spec) — the single verified-only badge is superseded by the
+ * THREE-TIER RoleBadge: blue ✓ Guest, green ✓ Registered, yellow ✓ Admin,
+ * each with the tier name in very small type right under the mark (first
+ * letter capital). Every primary identity surface renders it for EVERY user.
+ */
+describe("RoleBadge — three account tiers with captions", () => {
+  const src = read("client/src/app/VerifiedBadge.tsx");
+  it("defines the three tiers with the owner's colors + capitalized captions", () => {
+    expect(src).toMatch(/guest: \{ color: "#4c9bff", label: "Guest"/);
+    expect(src).toMatch(/registered: \{ color: "#22c55e", label: "Registered"/);
+    expect(src).toMatch(/admin: \{ color: "#eab308", label: "Admin"/);
+  });
+  it("renders the caption under the mark in very small type (scaled to badge size)", () => {
+    expect(src).toMatch(/flex-col items-center/);
+    expect(src).toMatch(/Math\.max\(7, Math\.round\(size \* 0\.52\)\)/);
+  });
+  it("roleFromFlags: role wins; null = no badge (party lines); old payloads fall back to verified", () => {
+    expect(src).toMatch(/if \(role === "guest" \|\| role === "registered" \|\| role === "admin"\) return role;/);
+    expect(src).toMatch(/if \(role === null\) return null;/);
+    expect(src).toMatch(/return verified \? "registered" : "guest";/);
+  });
+});
+
+describe("role badge is wired into every primary identity surface", () => {
   const sites: Array<[string, RegExp]> = [
-    ["client/src/app/AppShell.tsx", /me\.verified && <VerifiedBadge/],
-    ["client/src/pages/app/Profile.tsx", /me\.verified &&[\s\S]*?VerifiedBadge/],
-    ["client/src/pages/app/Contacts.tsx", /c\.verified && <VerifiedBadge/],
-    ["client/src/pages/app/Messages.tsx", /peerVerified && <VerifiedBadge/],
-    ["client/src/pages/app/Dialer.tsx", /previewIdentity\.verified && <VerifiedBadge/],
+    ["client/src/app/AppShell.tsx", /<RoleBadge role=\{roleFromFlags\(me\.role, me\.verified\)\}/],
+    ["client/src/pages/app/Profile.tsx", /<RoleBadge role=\{roleFromFlags\(me\.role, me\.verified\)\}/],
+    ["client/src/pages/app/Contacts.tsx", /<RoleBadge role=\{roleFromFlags\(c\.role, c\.verified\)\}/],
+    ["client/src/pages/app/Messages.tsx", /<RoleBadge role=\{roleFromFlags\(t\.peerRole, t\.peerVerified\)\}/],
+    ["client/src/pages/app/Dialer.tsx", /<RoleBadge role=\{roleFromFlags\(previewIdentity\.role, previewIdentity\.verified\)\}/],
+    ["client/src/app/PeerOverlays.tsx", /<RoleBadge role=\{roleFromFlags\(p\.role, p\.verified\)\}/],
   ];
   for (const [file, re] of sites) {
-    it(`${file.split("/").pop()} gates a VerifiedBadge on the verified flag`, () => {
+    it(`${file.split("/").pop()} renders the RoleBadge from the payload role (verified fallback)`, () => {
       const src = read(file);
-      expect(src).toMatch(/VerifiedBadge/);
+      expect(src).toMatch(/RoleBadge/);
       expect(src).toMatch(re);
     });
   }
+  it("the incoming-call ring card tints its badge by tier + shows the tiny tier caption", () => {
+    const client = read("client/src/lib/relayClient.ts");
+    expect(client).toMatch(/guest: \["#4c9bff", "Guest"\], registered: \["#22c55e", "Registered"\], admin: \["#eab308", "Admin"\]/);
+    const assets = read("client/src/lib/relayAssets.ts");
+    expect(assets).toMatch(/id="ringRoleTxt"/);
+    expect(assets).toMatch(/\.ring-role-txt\{font-style:normal;font-size:7\.5px/);
+  });
+  it("the server emits role on whoami / directory.lookup / contacts.list / messages.threads", () => {
+    const routers = read("server/v2routers.ts");
+    expect(routers).toMatch(/getRolesByIdentityIds\(\[ctx\.identity\.id\]\)/); // whoami
+    expect(routers).toMatch(/role: \(\(await getRolesByIdentityIds\(\[id\.id\]\)\)\.get\(id\.id\)/); // lookup
+    expect(routers).toMatch(/role: \(ident != null \? \(rolesById\.get\(ident\) \?\? "guest"\) : "guest"\)/); // contacts
+    expect(routers).toMatch(/peerRole: \(rolesById\.get\(b\.otherIdentityId\) \?\? "guest"\)/); // threads
+    const db = read("server/v2db.ts");
+    // admin = owning user's users.role; registered = verified; guest otherwise.
+    expect(db).toMatch(/r\.userRole === "admin" \? "admin" : r\.verified === true \? "registered" : "guest"/);
+  });
 });
 
 describe("passwordless auth — no third-party sign-in buttons remain", () => {

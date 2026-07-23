@@ -22,7 +22,7 @@ import { uploadAvatarImage } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
 import { useSignOut } from "@/app/useSignOut";
 import { AvatarPicker } from "@/app/AvatarPicker";
-import { VerifiedBadge } from "@/app/VerifiedBadge";
+import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { CountryFlag } from "@/app/CountryFlag";
 import { QRCodeSVG } from "qrcode.react";
 import {
@@ -277,7 +277,9 @@ export default function ProfilePage() {
 
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-extrabold tracking-tight">{me.displayName || "You"}</h1>
-            {me.verified && <VerifiedBadge size={18} />}
+            {/* v2.99.6: three-tier badge (Guest/Registered/Admin) — me.verified
+                keeps the fallback for a cached whoami without `role`. */}
+            <RoleBadge role={roleFromFlags(me.role, me.verified)} size={18} />
           </div>
 
           {/* presence pill — LED colour reflects the saved status override */}

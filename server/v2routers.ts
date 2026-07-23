@@ -87,6 +87,7 @@ import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./web
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
 import { recordSession, listSessionsForUser, revokeSession } from "./v2db";
+import { getRolesByIdentityIds, type IdentityRole } from "./v2db";
 import { setSessionCookie, rememberToTtlMs, LOCAL_SESSION_COOKIE, newSessionId } from "./authLocal";
 import { deviceLabelFromUA } from "./deviceLabel";
 import { COOKIE_NAME } from "@shared/const";
@@ -212,6 +213,10 @@ export const v2AuthRouter = router({
         /* email is best-effort */
       }
     }
+    // Three-tier badge (v2.99.6): guest / registered / admin.
+    const role: IdentityRole =
+      (await getRolesByIdentityIds([ctx.identity.id])).get(ctx.identity.id) ??
+      (ctx.identity.verified ? "registered" : "guest");
     return {
       id: ctx.identity.id,
       number: ctx.identity.number,
@@ -225,6 +230,7 @@ export const v2AuthRouter = router({
       mobiles: ctx.identity.mobiles,
       socials: ctx.identity.socials,
       verified: ctx.identity.verified,
+      role,
       firstName: ctx.identity.firstName,
       lastName: ctx.identity.lastName,
     };
@@ -531,6 +537,7 @@ export const v2DirectoryRouter = router({
           statusOverride: "" as "" | "away" | "travel",
           presenceHidden: false,
           verified: false,
+          role: null as IdentityRole | null, // a line is not a person — no badge
           inCall: false,
           partyLine: true,
           memberCount,
@@ -555,6 +562,9 @@ export const v2DirectoryRouter = router({
         statusOverride: hidden ? "" : ((id.statusOverride as "" | "away" | "travel" | null) ?? ""),
         presenceHidden: hidden,
         verified: id.verified,
+        // Three-tier badge (v2.99.6): guest / registered / admin.
+        role: ((await getRolesByIdentityIds([id.id])).get(id.id) ??
+          (id.verified ? "registered" : "guest")) as IdentityRole | null,
         // Carrier-style busy line (v2.88): they're ON A CALL right now.
         inCall: hidden ? false : (await pinsInCallAsync([id.number])).has(id.number),
         partyLine: false,
@@ -775,6 +785,8 @@ export const v2ContactsRouter = router({
     const isGuestById = new Map(idents.map((i) => [i.id, i.userId == null]));
     // Verified (blue badge) per identity.
     const verifiedById = new Map(idents.map((i) => [i.id, i.verified]));
+    // Three-tier badge (v2.99.6): guest / registered / admin, one batched query.
+    const rolesById = await getRolesByIdentityIds(idents.map((i) => i.id));
     // LIVE profile photo per number (v2.96): the contact row's avatarUrl is a
     // frozen copy from save-time — the peer's CURRENT photo must win, else a
     // profile-photo change never propagates to anyone who saved them.
@@ -813,6 +825,7 @@ export const v2ContactsRouter = router({
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
         presenceHidden: hidden,
         verified: ident != null ? (verifiedById.get(ident) ?? false) : false,
+        role: (ident != null ? (rolesById.get(ident) ?? "guest") : "guest") as IdentityRole,
         inCall: hidden ? false : inCallSet.has(r.number),
       };
     });
@@ -891,6 +904,8 @@ export const v2MessagesRouter = router({
     // Resolve the peer's verified (blue-badge) flag in one batched query.
     const peerIdents = await getIdentitiesByIds(otherIds);
     const verifiedById = new Map(peerIdents.map((i) => [i.id, i.verified]));
+    // Three-tier badge (v2.99.6): guest / registered / admin, one batched query.
+    const rolesById = await getRolesByIdentityIds(otherIds);
     return base.map((b) => {
       const p = byId.get(b.otherIdentityId);
       return {
@@ -905,6 +920,7 @@ export const v2MessagesRouter = router({
         peerIsOnline: p?.isOnline ?? false,
         peerLastSeenAt: p?.lastSeenAt ?? null,
         peerVerified: verifiedById.get(b.otherIdentityId) ?? false,
+        peerRole: (rolesById.get(b.otherIdentityId) ?? "guest") as IdentityRole,
         lastMessageAt: b.lastMessageAt,
         lastMessageBody: b.lastMessagePreview,
         lastMessageKind: b.lastMessageKind,

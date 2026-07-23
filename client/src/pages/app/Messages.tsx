@@ -45,7 +45,7 @@ import {
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
 import { trpc } from "@/lib/trpc";
-import { VerifiedBadge } from "@/app/VerifiedBadge";
+import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { previewOf } from "@/app/messagePreview";
 import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
 import { StatusStrip } from "./Status";
@@ -379,7 +379,7 @@ export default function MessagesPage() {
                                       <BellOff className="size-3.5 shrink-0 text-muted-foreground" />
                                     )}
                                     <span className="truncate">{t.peerDisplayName || t.peerNumber}</span>
-                                    {t.peerVerified && <VerifiedBadge size={14} />}
+                                    <RoleBadge role={roleFromFlags(t.peerRole, t.peerVerified)} size={14} />
                                   </div>
                                   {t.lastMessageAt && (
                                     <div className="text-[10.5px] font-mono text-muted-foreground shrink-0">
@@ -1033,7 +1033,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         >
           <div className="font-semibold text-[15px] truncate flex items-center gap-1.5">
             <span className="truncate">{thread?.peerDisplayName || thread?.peerNumber || "Conversation"}</span>
-            {thread?.peerVerified && <VerifiedBadge size={15} />}
+            {thread && <RoleBadge role={roleFromFlags(thread.peerRole, thread.peerVerified)} size={15} />}
           </div>
           <div className="text-[11px] truncate">
             {typers.length > 0 ? (
