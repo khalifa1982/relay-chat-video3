@@ -5445,6 +5445,24 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       invitee handling), M13/M14/M18 (contacts/directory), M15/M16/L5 (status), M20/L8 (allocation races),
       M6 (draft debounce), M12/L4 (presence), L2/L3 (auth), M11 (server ephemeral content gating).
 
+## v2.99.28 — heavy-QA sweep fixes, batch 6 (contacts/directory) (2026-07-24)
+- [x] M18 (MED) blocked-watcher back-online bypass: directory.watchOnline armed a call-back-alert watch
+      with NO block check, so a user the target BLOCKED could still be told (with the target's name + a
+      ready-to-dial link) the moment they came online. FIX (server/v2routers.ts): after the self-check,
+      `if (await isNumberBlockedBy(target.id, me.number)) throw NOT_FOUND` reusing the exact "isn't a RELAY
+      user yet" message so the block is never revealed (mirrors openThread/createGroup/call-invite gates).
+- [x] M14 (MED) false "Guest" badge on a non-user: contacts.list returned role "guest" for a saved number
+      that doesn't resolve to any identity, rendering a blue "✓ Guest" seal on a non-RELAY entry. FIX:
+      emit role: null (explicit) for the unresolved case → roleFromFlags returns null → no badge; a real
+      identity with no admin/registered flag still defaults to "guest". Client ContactRow role prop → | null.
+- [x] M13 (MED) deleting a blocked contact silently unblocks: the block lives on contacts.blocked, so
+      removing the contact hard-deletes the row and drops the block silently. FIX (Contacts.tsx): the
+      "Remove contact?" dialog warns when deletingContact.blocked ("removing them also unblocks them…"),
+      turning a silent unblock into an informed choice (warn fix; a server tombstone would leave an
+      invisible forever-blocked row, surprising the user who chose "remove").
+- [x] Tests: server/qaBatch6.test.ts (6 pins); verifiedBadge.test.ts contacts-role pin updated to null shape.
+      1436 tests. QA-sweep progress: 22 of 37 fixed.
+
 ## v2.99.27 — heavy-QA sweep fixes, batch 5 (group-call invitee handling) (2026-07-24)
 - [x] M19 (MED) group-picker off-by-one: the picker used engine.maxParticipants (TOTAL room cap incl. the
       caller) as the count of OTHERS, so the last acceptee hit a full room. FIX: MAX_PARTICIPANTS =
