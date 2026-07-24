@@ -721,14 +721,23 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     senderIdentityId: number;
     body: string | null;
     kind: string;
+    // meta MUST ride along (QA H2): previewOf() only masks a disappearing
+    // message's body when it can see `meta.expire`. Without it the reply bar
+    // printed the raw secret of an expiring message.
+    meta?: unknown;
   } | null>(null);
-  function setReplyingTo(m: { id: number; senderIdentityId: number; body: string | null; kind: string } | null) {
+  function setReplyingTo(m: { id: number; senderIdentityId: number; body: string | null; kind: string; meta?: unknown } | null) {
     setReplyingToState(m);
     updateDraft({ replyToId: m?.id ?? null });
   }
+  // Reply target is per-conversation (QA M5): a "Replying to Alice" banner from
+  // one thread must not leak into the next and post with the wrong replyToId.
+  // Clearing it here lets the draft-reconstruct effect below re-hydrate the
+  // NEW conversation's own saved reply (if any).
+  useEffect(() => { setReplyingToState(null); }, [conversationId]);
   // Quick lookup of a message by id (to render the quoted reply preview).
   const msgById = useMemo(() => {
-    const m = new Map<number, { senderIdentityId: number; body: string | null; kind: string }>();
+    const m = new Map<number, { senderIdentityId: number; body: string | null; kind: string; meta?: unknown }>();
     for (const x of messagesQuery.data ?? []) m.set(x.id, x);
     return m;
   }, [messagesQuery.data]);
@@ -738,7 +747,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   useEffect(() => {
     if (draft.replyToId == null || replyingTo) return;
     const m = msgById.get(draft.replyToId);
-    if (m) setReplyingToState({ id: draft.replyToId, senderIdentityId: m.senderIdentityId, body: m.body, kind: m.kind });
+    if (m) setReplyingToState({ id: draft.replyToId, senderIdentityId: m.senderIdentityId, body: m.body, kind: m.kind, meta: (m as { meta?: unknown }).meta });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft.replyToId, msgById]);
   function senderLabel(identityId: number): string {
@@ -920,7 +929,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             ? "audio"
             : "file"
       : "text";
-    const exp = expire;
+    // QA M3: never attach an expire in a group thread (one shared row burns for
+    // all on the first open). The toggle is already hidden in groups; this is the
+    // defensive backstop so a stale value can't slip a disappearing message in.
+    const exp = isGroup ? null : expire;
     // Clear the composer immediately (snappy), but if the send FAILS restore the
     // text/reply/attachment so the message is never silently lost — the user can
     // just tap send again. (Prevents the "I typed a message and it vanished" bug.)
@@ -1463,7 +1475,21 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 </div>
                   );
                 })()}
-                {!mine && (
+                {!mine && (() => {
+                  // QA H2: a still-LOCKED expiring message (received, meta.expire
+                  // set, not yet revealed by me, not burned) must NOT be
+                  // extractable without burning. Copy would write the plaintext
+                  // to the clipboard and Reply would surface it in the composer —
+                  // neither calls consumeExpiring, so the "view once" guarantee
+                  // was defeated with one tap. Suppress the whole menu until the
+                  // recipient taps to view (which burns it); once revealed
+                  // locally or burned, the normal menu returns.
+                  const exp = m.meta as { expire?: unknown; consumedAt?: number } | null;
+                  const isExpiring = exp?.expire != null;
+                  const burned = isExpiring && (exp?.consumedAt != null || (!m.body && !m.attachment));
+                  const locked = isExpiring && !revealed.has(m.id) && !burned;
+                  if (locked) return null;
+                  return (
                   <MessageMenu
                     onReply={() => setReplyingTo(m)}
                     onCopy={m.body ? () => {
@@ -1472,7 +1498,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         .catch(() => toast.error("Failed to copy"));
                     } : undefined}
                   />
-                )}
+                  );
+                })()}
                 </div>
               </div>
             );
@@ -1630,7 +1657,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             <Paperclip className="size-5" />
           </Button>
           {/* Self-destruct toggle (v2.96): off → view-once → 5s → 10s → 30s.
-              Applies to the NEXT send (text, media, or voice note). */}
+              Applies to the NEXT send (text, media, or voice note).
+              QA M3: 1:1 ONLY. In a group the message is one shared row, so the
+              FIRST member to open it burns it for EVERYONE — the rest just see
+              "This message has disappeared". Until per-recipient burn exists,
+              hide the control in groups (the convo-switch effect keeps `expire`
+              null on entry, and the send path re-guards on !isGroup). */}
+          {!isGroup && (
           <Button
             type="button"
             variant="ghost"
@@ -1656,6 +1689,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               </span>
             )}
           </Button>
+          )}
           <input
             ref={imageRef}
             type="file"
