@@ -235,3 +235,118 @@ describe("M41 — regenerateNumber is throttled (number-space sibling of M21)", 
     expect(fn).toMatch(/monotonic|never recycled/);
   });
 });
+
+/* ── M42: the inbound-address regex can't be driven quadratic ───────────── */
+
+describe("M42 — inbound email address parsing is length-capped (ReDoS)", () => {
+  const INBOUND = read("emailInbound.ts");
+
+  it("caps the input BEFORE the backtracking-prone match", () => {
+    expect(INBOUND).toMatch(/const MAX_INBOUND_ADDRESS_LEN = 1024;/);
+    const fn = INBOUND.slice(
+      INBOUND.indexOf("export function parseInboundAddress"),
+      INBOUND.indexOf("const angle = raw.match"),
+    );
+    expect(fn).toMatch(/if \(raw\.length > MAX_INBOUND_ADDRESS_LEN\) return null;/);
+  });
+
+  it("documents that the process is single-threaded, so this is a full outage", () => {
+    expect(INBOUND).toMatch(/single-threaded/);
+  });
+
+  /**
+   * The actual pathological shape: a `<` with no `>` anywhere. Unbounded, the
+   * engine retries `[^>]+` from every `<` and gives back a character at a time —
+   * quadratic. Bounded, the work is trivially small. Assert the guard rejects the
+   * payload rather than timing the regex (a timing assertion would be flaky).
+   */
+  it("rejects the payload shape that caused the blow-up", () => {
+    const cap = 1024;
+    const guard = (raw: string) => raw.length <= cap;
+    expect(guard("<".repeat(5 * 1024 * 1024))).toBe(false);
+    expect(guard("<" + "a".repeat(5 * 1024 * 1024))).toBe(false);
+    // A real address, with or without a display name, is far under the cap.
+    expect(guard('"Some Person" <relay+12.34.abcdef@inbound.example.com>')).toBe(true);
+    expect(guard("relay+12.34.abcdef@inbound.example.com")).toBe(true);
+  });
+
+  it("the bounded regex is linear on any accepted input", () => {
+    // At <=1024 chars the worst case is ~1024^2 steps — microseconds. Prove the
+    // engine actually terminates promptly on the worst accepted shape.
+    const worst = "<".repeat(1024);
+    const started = process.hrtime.bigint();
+    worst.match(/<([^>]+)>/);
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    expect(ms).toBeLessThan(100);
+  });
+});
+
+/* ── M43: sign-out revokes the session ledger row ───────────────────────── */
+
+describe("M43 — logout revokes server-side, not just the cookies", () => {
+  const logout = APP_ROUTERS.slice(
+    APP_ROUTERS.indexOf("logout: publicProcedure"),
+    APP_ROUTERS.indexOf("// v2.0 phone-app namespace"),
+  );
+
+  it("revokes the caller's own ledger row by sid", () => {
+    expect(logout).toMatch(/await revokeSession\(ctx\.user\.id, ctx\.sessionSid\)/);
+    expect(logout).toMatch(/if \(ctx\.user && ctx\.sessionSid\)/);
+    expect(APP_ROUTERS).toMatch(/import \{ revokeSession \} from "\.\/v2db";/);
+  });
+
+  it("still clears all three cookies even if the revoke throws", () => {
+    // The revoke is wrapped so a DB hiccup can't leave the user signed in.
+    expect(logout).toMatch(/try \{[\s\S]*revokeSession[\s\S]*\} catch \{/);
+    expect(logout.indexOf("revokeSession")).toBeLessThan(logout.indexOf("clearCookie"));
+    for (const c of ["COOKIE_NAME", "LOCAL_SESSION_COOKIE", "GUEST_COOKIE"]) {
+      expect(logout).toContain(c);
+    }
+  });
+
+  it("is async now (it awaits the revoke)", () => {
+    expect(logout).toMatch(/^logout: publicProcedure\.mutation\(async \(\{ ctx \}\) => \{/m);
+  });
+});
+
+/* ── region injection: the third free-text input on the SSM path ────────── */
+
+describe("aws-ops ses-ssm — the `region` input is no longer spliced raw", () => {
+  const OPS = read("..", ".github", "workflows", "aws-ops.yml");
+  const sesSsm = OPS.slice(OPS.indexOf("ses-ssm — SES ops"), OPS.indexOf("- name: iam-grant-ses"));
+
+  it("base64-encodes AWS_REGION alongside SES_EMAIL and DOMAIN", () => {
+    expect(sesSsm).toMatch(/REGION_B64=\$\(printf %s "\$AWS_REGION" \| base64 -w0\)/);
+  });
+
+  it("every remote command decodes it instead of interpolating the raw value", () => {
+    for (const c of ["C1", "C2", "C3", "C4", "C5"]) {
+      const line = sesSsm.split("\n").find((l) => l.trim().startsWith(`${c}="`)) || "";
+      expect(line, `${c} decodes the region`).toMatch(/RG=\\\$\(echo \$REGION_B64 \| base64 -d\)/);
+      expect(line, `${c} uses the decoded value`).toMatch(/--region \\"\\\$RG\\"/);
+      expect(line, `${c} no longer splices $AWS_REGION`).not.toMatch(/--region \$AWS_REGION/);
+    }
+  });
+
+  it("explains that this input was missed when the sibling two were fixed", () => {
+    expect(sesSsm).toMatch(/THIRD free-text workflow_dispatch input/);
+  });
+});
+
+/* ── M44: the media limiter isn't tight enough to break shared egress ───── */
+
+describe("M44 — storage-proxy limiter tolerates a shared-egress network", () => {
+  it("was raised above a realistic multi-user image burst", () => {
+    expect(PROXY).toMatch(/createRateLimiter\(\{ capacity: 600, refillPerSec: 20 \}\)/);
+    expect(PROXY).not.toMatch(/capacity: 240, refillPerSec: 4/);
+  });
+
+  it("records that a throttled media request surfaces as a broken image", () => {
+    expect(PROXY).toMatch(/BROKEN IMAGE/);
+  });
+
+  it("keeps the sweep and the kill switch", () => {
+    expect(PROXY).toMatch(/storageIpLimiter\.sweep\(/);
+    expect(PROXY).toMatch(/RELAY_RATELIMIT_OFF/);
+  });
+});

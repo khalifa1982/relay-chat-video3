@@ -658,12 +658,23 @@ jobs:
           # workflow_dispatch input, previously spliced unescaped into the
           # https URL passed as --website-url.
           DOMAIN_B64=$(printf %s "$DOMAIN" | base64 -w0)
-          C1="echo '== whoami (instance role) =='; aws sts get-caller-identity --region $AWS_REGION 2>&1 || true"
-          C2="echo '== SES account =='; aws sesv2 get-account --region $AWS_REGION 2>&1 || true"
-          C3="EM=\$(echo $SES_EMAIL_B64 | base64 -d); echo \"== suppression check: \$EM ==\"; aws sesv2 get-suppressed-destination --email-address \"\$EM\" --region $AWS_REGION 2>&1 || echo not-suppressed-or-denied"
-          C4="EM=\$(echo $SES_EMAIL_B64 | base64 -d); echo \"== verify identity: \$EM ==\"; aws sesv2 create-email-identity --email-identity \"\$EM\" --region $AWS_REGION 2>&1 && echo VERIFICATION_EMAIL_SENT || true"
+          # SECURITY: `region` is the THIRD free-text workflow_dispatch input on
+          # this path and was missed when SES_EMAIL/DOMAIN were fixed — it was
+          # still spliced raw into every C1..C5 command string below, each of
+          # which is executed on production EC2 via SSM RunShellScript. A value
+          # containing a quote or semicolon breaks out exactly like the other two
+          # did and runs arbitrary commands under the instance role. Same
+          # treatment: encode on the runner, decode only on the instance. (Its
+          # OTHER uses — configure-aws-credentials and runner-local aws calls —
+          # are safe single-pass substitutions that never cross into a second
+          # shell, so they are deliberately left alone.)
+          REGION_B64=$(printf %s "$AWS_REGION" | base64 -w0)
+          C1="RG=\$(echo $REGION_B64 | base64 -d); echo '== whoami (instance role) =='; aws sts get-caller-identity --region \"\$RG\" 2>&1 || true"
+          C2="RG=\$(echo $REGION_B64 | base64 -d); echo '== SES account =='; aws sesv2 get-account --region \"\$RG\" 2>&1 || true"
+          C3="EM=\$(echo $SES_EMAIL_B64 | base64 -d); RG=\$(echo $REGION_B64 | base64 -d); echo \"== suppression check: \$EM ==\"; aws sesv2 get-suppressed-destination --email-address \"\$EM\" --region \"\$RG\" 2>&1 || echo not-suppressed-or-denied"
+          C4="EM=\$(echo $SES_EMAIL_B64 | base64 -d); RG=\$(echo $REGION_B64 | base64 -d); echo \"== verify identity: \$EM ==\"; aws sesv2 create-email-identity --email-identity \"\$EM\" --region \"\$RG\" 2>&1 && echo VERIFICATION_EMAIL_SENT || true"
           # The \$( ) is escaped so the base64 payloads decode ON the instance.
-          C5="echo '== request production access =='; DOM=\$(echo $DOMAIN_B64 | base64 -d); aws sesv2 put-account-details --production-access-enabled --mail-type TRANSACTIONAL --website-url \"https://\$DOM\" --contact-language EN --use-case-description \"\$(echo $DESC_B64 | base64 -d)\" --region $AWS_REGION 2>&1 && echo PROD_REQUEST_SUBMITTED || true"
+          C5="echo '== request production access =='; DOM=\$(echo $DOMAIN_B64 | base64 -d); RG=\$(echo $REGION_B64 | base64 -d); aws sesv2 put-account-details --production-access-enabled --mail-type TRANSACTIONAL --website-url \"https://\$DOM\" --contact-language EN --use-case-description \"\$(echo $DESC_B64 | base64 -d)\" --region \"\$RG\" 2>&1 && echo PROD_REQUEST_SUBMITTED || true"
           [ -n "$SES_EMAIL" ] || { C3="true"; C4="true"; }
           [ "$REQUEST_PROD" = "true" ] || C5="true"
           PARAMS=$(jq -n --arg c1 "$C1" --arg c2 "$C2" --arg c3 "$C3" --arg c4 "$C4" --arg c5 "$C5" '{commands:[$c1,$c2,$c3,$c4,$c5]}')

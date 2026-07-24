@@ -2,6 +2,7 @@ import { GUEST_COOKIE } from "./_core/context";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { LOCAL_SESSION_COOKIE } from "./authLocal";
+import { revokeSession } from "./v2db";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import {
@@ -51,7 +52,25 @@ export const appRouter = router({
       } = u as typeof u & { passwordHash?: unknown; loginPinHash?: unknown };
       return safe;
     }),
-    logout: publicProcedure.mutation(({ ctx }) => {
+    logout: publicProcedure.mutation(async ({ ctx }) => {
+      // SECURITY (M43): actually REVOKE the session server-side, not just drop
+      // the cookies. v2.99.1 introduced a revocable session ledger, and
+      // createContext gates every sid-bearing cookie on it — but sign-out only
+      // ever cleared cookies, so the row stayed ACTIVE. Two consequences: the
+      // device kept showing up in the user's own "Devices" list as a live
+      // session long after they signed out (the 30-min reaper only drops rows
+      // idle past the cookie TTL), and the token itself remained valid, so a
+      // copy recovered from a synced browser profile, a disk backup, or a shared
+      // machine would still authenticate. "Log out" has to mean the credential
+      // stops working, otherwise the whole revocable-session model is decorative.
+      // Best-effort: a DB hiccup must never stop the cookies being cleared.
+      if (ctx.user && ctx.sessionSid) {
+        try {
+          await revokeSession(ctx.user.id, ctx.sessionSid);
+        } catch {
+          /* cookies are still cleared below */
+        }
+      }
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       // v2.88: members signed in via email-OTP/PIN carry `relay_session`, not

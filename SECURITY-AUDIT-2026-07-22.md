@@ -507,3 +507,50 @@ The status audience rule means **anyone who saves your six-digit number can see 
 ### Correction to H11 (register bypass) — superseded by removal
 
 H11 hardened the `RELAY_OTP_REGISTER_BYPASS` branch to be create-only. Between that shipping and this round, the stopgap was **deleted outright** (v2.99.39) because AWS approved the operator's SES production access on 2026-07-24: registration now always mints and emails a real verification code, and the account is created only by `verifyOtp`. Removal strictly supersedes the hardening — there is no branch left to get wrong, and a stale `RELAY_OTP_REGISTER_BYPASS=1` in a server `.env` has no effect because nothing reads it. The operator note attached to H11 ("worth unsetting the flag") is therefore resolved. H11's regression test was retargeted to pin the absence of the branch rather than the shape of its guard.
+
+## Round 5 pt.4 — sweep complete
+
+The class-based sweep finished: **14 of 14** hunter classes reported, and the three-lens adversarial panel returned **55 verdicts — 51 refuted, 4 upheld**. That refutation rate is the panel doing its job; it killed 51 plausible-but-wrong claims that would otherwise have consumed review time or produced churn. This section covers the final wave plus the panel's survivors, shipped as v2.99.41.
+
+### H22 — ReDoS on the inbound-email webhook (MED)
+
+**Where:** `server/emailInbound.ts` `parseInboundAddress`.
+**Problem.** The function ran `/<([^>]+)>/` against an untrusted header value with **no length cap**, on a route that accepts 5 MB of JSON. On input containing a `<` but no `>`, the engine lets `[^>]+` run to the end of the string from every `<` position, fails to find `>`, then gives back one character at a time — quadratic, on the order of 10¹³ steps for a 5 MB payload. Node is single-threaded and this process serves every SSE stream, every signaling POST and the whole API, so **one** request stalls calls and messaging for every user. The webhook signature check is opt-in (`INBOUND_EMAIL_WEBHOOK_SECRET`), so this can be unauthenticated.
+
+This was the panel's highest-confidence new finding; the verifier reported it had "verified the sink empirically three ways" and failed to refute it at any guard.
+
+**Fix.** Reject anything over 1024 bytes before the match. RFC 5321 caps an addr-spec at 320 bytes and a display-name plus angle-addr is still far under this, so nothing legitimate is affected — and bounding *n* makes the regex's worst case irrelevant, which is more robust than trying to write a cleverer pattern.
+
+### H23 — `region` was still spliced raw into the SSM commands (MED) — a gap in H11's own fix
+
+**Where:** `.github/workflows/aws-ops.yml`.
+**Problem.** The earlier fix base64-encoded `SES_EMAIL` and `DOMAIN`, but `region` is the **third** free-text `workflow_dispatch` input on the same code path and was missed. It remained interpolated unescaped into all five command strings executed on production EC2 via SSM `RunShellScript`, so a value containing a quote or semicolon breaks out exactly as the other two did and runs arbitrary commands under the instance role.
+
+Worth recording plainly: this is an incomplete remediation of my own, found only because the sweep re-examined the file by a different lens. Fixing two of three inputs on a path is not fixing the path.
+
+**Fix.** Same encode-on-runner / decode-on-instance treatment, applied to all five commands. The input's *other* uses (`configure-aws-credentials`, runner-local `aws` calls) run directly on the runner via safe single-pass substitution and never cross into a second shell, so they are deliberately left alone.
+
+### H24 — sign-out never revoked the session ledger row (LOW, upheld)
+
+**Where:** `server/routers.ts` `auth.logout`.
+**Problem.** v2.99.1 introduced a revocable session ledger, and `createContext` gates every sid-bearing cookie on it — but sign-out only ever cleared cookies, leaving the row **active**. Two consequences: the device kept appearing in the user's own "Devices" list as a live session (the 30-minute reaper only drops rows idle past the cookie TTL), and the token itself remained valid, so a copy recovered from a synced browser profile, a disk backup, or a shared machine would still authenticate. "Log out" has to mean the credential stops working, or the revocable-session model is decorative.
+**Fix.** Revoke the caller's own row by `sid` (already available as `ctx.sessionSid`), wrapped so a DB hiccup can never prevent the cookies being cleared.
+
+### H25 — the media-proxy limiter was too tight for shared egress (availability, not a vulnerability)
+
+**Where:** `server/_core/storageProxy.ts`.
+**Problem.** The per-IP budget was 240 burst / 4 per second. Any shared egress puts many real users behind one address — carrier CGNAT, an office, a school, a café — and RELAY is an image-heavy chat, so a handful of people scrolling media threads together could exhaust the burst and then be rationed. A throttled media request renders as a **broken image**, which is precisely the user-visible symptom this project has repeatedly chased.
+**Fix.** Raised to 600 / 20 per second. The guard's real target is DB-CPU cost on the miss path (the avatar rescue does a `LIKE '%/manus-storage/<key>'` scan), **not** key enumeration — keys carry a random hex suffix and cannot be guessed — so a higher ceiling still caps a scraper two orders of magnitude below unlimited. Recorded here because loosening a security control deserves the same scrutiny as adding one.
+
+### Verified and downgraded on independent checking
+
+The sweep reported that Android release builds of the production `applicationId` are signed with the committed debug keystore. `mobile/native/android/app/build.gradle` does say `release { signingConfig signingConfigs.debug }`, and `debug.keystore` is committed with the well-known password — so the claim is literally true of the Gradle config. But `native-rn.yml` **re-signs the AAB after the build** with a real keystore from `ANDROID_KEYSTORE_BASE64` (skipping signing entirely when the secret is absent), so the store artifact is properly signed. It is a genuine footgun — a locally built "release" APK is debug-signed and could be mistaken for distributable — but not a live compromise. Left as an operator note rather than changed blind, since editing signing config without knowing the real keystore setup risks the release pipeline.
+
+### Left to the operator (not fixable from the repo)
+
+- **The deploy OIDC role trusts `repo:…:*`** — a workflow on *any* branch can assume the production deploy role. That is an AWS IAM trust-policy edit (scope it to the default branch and/or an environment), not a code change.
+- **`deploy.yml` pins third-party actions to mutable major tags** in the job that holds production deploy credentials. Pinning to immutable commit SHAs is the fix; doing it requires verified SHAs, and guessing one would break the deploy pipeline.
+
+### Verification (round 5 pt.4)
+
+`pnpm check` clean; `pnpm test` **1638 passing / 1 skipped**; `pnpm build` clean. `server/hardeningPass6.test.ts` grows to 35, including a bounded-regex timing check on the worst accepted input and per-command assertions that every SSM command decodes the region rather than interpolating it.

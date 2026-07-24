@@ -6137,3 +6137,46 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
 - NOTE for the owner (product decision, NOT a bug): the status audience rule means anyone who saves your
   6-digit number can see your story posts — contacts are self-service with no consent step. Flagged
   rather than changed.
+
+## v2.99.41 — hardening pass 7: sweep COMPLETE (14/14 classes) + panel survivors (2026-07-24)
+- [x] The class-based sweep finished: all 14 hunter classes reported and the 3-lens adversarial panel
+      returned 55 verdicts (51 refuted, 4 upheld). This ships the last wave plus the panel's survivors.
+      The high refutation rate is the panel working as intended — it killed 51 plausible-but-wrong claims.
+- [x] (1) ReDoS on the inbound-email webhook — the panel's highest-confidence NEW finding (MED, "verified
+      the sink empirically three ways"). parseInboundAddress ran /<([^>]+)>/ against an untrusted header
+      value with NO length cap, on a route accepting 5MB of JSON. Input with a `<` and no `>` makes the
+      engine retry [^>]+ from every `<`, giving back one char at a time — quadratic, ~10^13 steps for
+      5MB. Node is single-threaded and this process serves every SSE stream, signaling POST and API call,
+      so ONE request stalls calls + messaging for EVERY user; the webhook signature check is opt-in, so
+      it can be unauthenticated. Capped at 1024 bytes before the match (RFC 5321 caps addr-spec at 320),
+      bounding n rather than relying on a cleverer regex.
+- [x] (2) `region` was STILL spliced raw into the SSM remote commands — A GAP IN MY OWN EARLIER FIX. G11
+      base64'd SES_EMAIL and DOMAIN but missed `region`, the THIRD free-text workflow_dispatch input on
+      the same path, still interpolated unescaped into all five command strings run on production EC2
+      under the instance role. Same encode-on-runner/decode-on-instance treatment. Its other uses run on
+      the runner via safe single-pass substitution and are deliberately left alone.
+- [x] (3) Sign-out never revoked the session ledger row (UPHELD by the panel, traced end to end).
+      v2.99.1 built a revocable session model and createContext gates every sid-bearing cookie on it, but
+      auth.logout only cleared COOKIES — the row stayed ACTIVE, so the device kept showing in the user's
+      own Devices list as a live session AND the token stayed valid, meaning a copy recovered from a
+      synced browser profile, a disk backup, or a shared machine would still authenticate. Now revokes by
+      sid, wrapped so a DB hiccup can never stop the cookies being cleared.
+- [x] (4) The media-proxy per-IP limiter was too tight for shared egress — an AVAILABILITY finding, not a
+      vuln. 240 burst / 4-per-sec is per-IP, and carrier CGNAT / an office / a café put many real users
+      behind ONE address; on an image-heavy chat a few people scrolling together could exhaust it, and a
+      throttled media request renders as a BROKEN IMAGE — the exact symptom this project has chased
+      repeatedly. Raised to 600 / 20-per-sec, still capping a scraper two orders of magnitude below
+      unlimited. The guard's real target is DB-CPU cost on the miss path, not enumeration (keys carry a
+      random suffix and can't be guessed).
+- [x] VERIFIED AND DOWNGRADED by independent checking: the Android `release { signingConfig
+      signingConfigs.debug }` line is a genuine footgun but NOT a live compromise — native-rn.yml
+      re-signs the AAB with a real keystore from ANDROID_KEYSTORE_BASE64 after the build, so the store
+      artifact is properly signed. Recorded as an operator note rather than changed blind (touching
+      signing config without knowing their keystore setup risks their release pipeline).
+- [x] LEFT TO THE OPERATOR — cannot be fixed from the repo, and guessing would break the deploy:
+      (a) the deploy OIDC role trusts `repo:…:*`, so a workflow on ANY branch can assume the production
+      deploy role — that's an AWS IAM trust-policy edit, not a code change; (b) deploy.yml pins
+      third-party actions to mutable major tags in the job holding production credentials — pinning
+      properly needs verified commit SHAs.
+- [x] Tests: hardeningPass6.test.ts grows to 35, incl. a bounded-regex timing check and per-command
+      assertions on the region fix. Suite 1638 passed / 1 skipped; check + build green.

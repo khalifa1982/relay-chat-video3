@@ -12,7 +12,17 @@ import { createRateLimiter, clientIpOf } from "../rateLimit";
  * DoS with no cap. Generous — a chat screen legitimately bursts many images at
  * once (240 burst, ~4/s sustained per IP) — so only a true flood is throttled.
  * Honors RELAY_RATELIMIT_OFF like the other gates. */
-const storageIpLimiter = createRateLimiter({ capacity: 240, refillPerSec: 4 });
+/* M44: raised from (240, 4/s). The threat this guards is DB-CPU cost on the MISS
+ * path (the avatar-rescue does a `LIKE '%/manus-storage/<key>'` scan), NOT key
+ * enumeration — keys carry a random hex suffix, so they can't be guessed. But
+ * the budget is per-IP, and any shared egress puts many real users behind ONE
+ * address: carrier CGNAT, an office, a school, a café. RELAY is an image-heavy
+ * chat, so a handful of people scrolling media threads together could exhaust a
+ * 240 burst and then be rationed at 4/s — and a throttled media request renders
+ * as a BROKEN IMAGE, the exact user-visible symptom this project has chased
+ * repeatedly. 600 burst / 20-per-second comfortably covers a shared network
+ * while still capping a scraper two orders of magnitude below unlimited. */
+const storageIpLimiter = createRateLimiter({ capacity: 600, refillPerSec: 20 });
 /* M33: sweep idle buckets. Every OTHER limiter in the codebase pairs itself with
  * a periodic sweep (directoryGate, otpGate, statusGate, the SSE open limiter…);
  * this one shipped without it, so its per-IP Map grew for the lifetime of the

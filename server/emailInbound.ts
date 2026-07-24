@@ -96,9 +96,31 @@ export interface ParsedInbound {
  * bare address. Returns null if it isn't ours, is malformed, or the HMAC fails
  * (timing-safe compare).
  */
+/**
+ * Longest header value we will even attempt to parse as an address.
+ *
+ * SECURITY (M42 — ReDoS / event-loop stall): `raw` is an untrusted header value
+ * off the inbound-email webhook body, and that route accepts 5 MB of JSON. The
+ * `/<([^>]+)>/` match below backtracks quadratically on input that contains a
+ * `<` but NO `>`: for every `<` position the engine lets `[^>]+` run to the end
+ * of the string, fails to find `>`, then gives back one character at a time. A
+ * 5 MB payload of `<` is therefore on the order of 10^13 steps. Node is
+ * single-threaded and this process serves every SSE stream, every signaling POST
+ * and the whole API, so ONE such request stalls calls and messaging for all
+ * users — a full outage from a single POST, and the webhook signature check is
+ * opt-in (`INBOUND_EMAIL_WEBHOOK_SECRET`), so it can be unauthenticated.
+ *
+ * A real value is tiny: RFC 5321 caps an addr-spec at 320 bytes, and a
+ * display-name plus angle-addr is still far under this. Rejecting anything
+ * longer costs nothing legitimate and makes the regex's worst case irrelevant by
+ * bounding n, rather than relying on a cleverer pattern.
+ */
+const MAX_INBOUND_ADDRESS_LEN = 1024;
+
 export function parseInboundAddress(raw: string): ParsedInbound | null {
   const cfg = inboundConfig();
   if (!cfg.enabled || !raw) return null;
+  if (raw.length > MAX_INBOUND_ADDRESS_LEN) return null; // M42 — see above
   // Extract the bare address from "Display Name <addr>" if present.
   const angle = raw.match(/<([^>]+)>/);
   const addr = (angle ? angle[1] : raw).trim().toLowerCase();
