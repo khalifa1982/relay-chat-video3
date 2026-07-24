@@ -5284,3 +5284,47 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       multi-device cancel fan-out; source-pins for the client + DB fixes). Two pre-existing pins updated
       to the refactored error handler (multiCallFixes §4a → joinErr; updateChecker add-guard regex).
       Suite 1400 passed / 1 skipped; check + build green.
+
+## v2.99.20 — HARDENING PASS 4: full backend + frontend security sweep (owner: "expose the security bugs... check the entire app... I want full backend and frontend") (2026-07-24)
+- [x] Dispatched the dedicated `claude-security` orchestrator across the whole app (tRPC authz/IDOR,
+      auth/crypto/session, client trust surface, raw Express routes, mobile/CI/secrets, client XSS,
+      signaling engine, S3 driver + mailer, push/redis-bus/events, inbound-email/well-known/seo) and
+      independently re-verified every candidate against source before fixing. 11 confirmed + fixed:
+- [x] (1) HIGH — storage-proxy key-normalization bypass: `authorizeStorageKey` matched the RAW request
+      key while `s3PresignGetUrl` silently normalized via `sanitizeS3Key` at presign time; a real
+      attachment key with an extra slash missed the exact-match lookup (fell into the fail-open
+      `unknown` classification) yet still resolved to and served the real object. Fixed by
+      canonicalizing the key ONCE up front in `storageProxy.ts`.
+- [x] (2) `openThread`/`createGroup` let a caller force a brand-new DM/group onto a target who had
+      blocked them (block only stopped `messages.send`); both now check `isNumberBlockedBy` before
+      creating a FRESH thread/group, responding identically to "not found" so the block stays hidden.
+- [x] (3) `push.unsubscribe` IDOR — deleted a subscription by `endpoint` alone with no ownership check;
+      new `deleteOwnPushSubscription` scopes it to the caller's identity.
+- [x] (4) `attachments.register` accepted an arbitrary client `url` (tracking beacon / phishing
+      open-redirect via any external/javascript:/data: URL); `url` is now always derived server-side
+      from the validated `storageKey`.
+- [x] (5) OAuth `getSessionSecret()` fail-open — signed/verified sessions with an empty key when
+      `JWT_SECRET` was unset; now throws in production, matching the existing fail-closed convention.
+- [x] (6) `cidToPin` memory leak — a disconnected client's mapping was never cleared once its room
+      reaped; a 15-min sweep now purges only entries with no live client AND no active-or-held room.
+- [x] (7) Redis bus (`relay:v2ev`) event-kind allowlist — a forged/malformed envelope could smuggle an
+      unbounded shape into the SSE handler; `_handleBusV2Event` now drops anything outside the known
+      `V2Event` kinds.
+- [x] (8) SMTP STARTTLS response-injection (CVE-2011-0411 class) — the plaintext read buffer was
+      shared across the TLS upgrade boundary; `upgradeTls` now clears it before the handshake.
+- [x] (9) `randomDigits6` used `Math.random()` instead of the CSPRNG every other identifier in the
+      codebase already uses; switched to `crypto.randomInt`.
+- [x] (10) `appUrl.ts`'s `requestOrigin()` fed an unvalidated Host/X-Forwarded-Host into sitemap XML
+      and email-verification links; added a `SAFE_HOST_RE` allowlist.
+- [x] (11) CI/CD command injection in `.github/workflows/aws-ops.yml`'s `ses-ssm` action — `SES_EMAIL`/
+      `DOMAIN` workflow_dispatch inputs were spliced unescaped into command strings run on production
+      EC2 via SSM; fixed with the same base64-encode-on-runner/decode-on-remote treatment `DESC_B64`
+      already used. `iam-grant-ses` reviewed and found not vulnerable (runs directly on the runner).
+- [x] Accepted residuals (documented, not fixed this pass): Redis bus still has no message
+      authentication (architectural), cluster-leader trust of bus-forwarded `__ownedNumber`/`home`
+      (same trust boundary), no per-account password-login lockout (only per-IP), upload-DoS ordering,
+      `/api/v2/offline` has no rate limit, anonymous `/api/relay/ice` TURN credential minting for
+      arbitrary `who`.
+- [x] Tests: `storageProxy.test.ts` (+3), `awsOps.test.ts` (+3), plus source-pinned coverage for the
+      block-bypass, push IDOR, attachment-URL, OAuth fail-closed, and cidToPin-reaper fixes. Suite
+      1392 passed / 1 skipped; check + build green.

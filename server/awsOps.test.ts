@@ -157,3 +157,32 @@ describe("docs-aws-scale-out.md — runbook contracts", () => {
     expect(DOCS).toMatch(/curl -si https:\/\/dXXXX\.cloudfront\.net\/api\/health -H "Host: your-chat\.io"/);
   });
 });
+
+describe("aws-ops.yml — ses-ssm: no free-text workflow_dispatch input reaches the remote shell unescaped", () => {
+  // SECURITY regression: SES_EMAIL and DOMAIN are both free-text
+  // workflow_dispatch inputs that get embedded into command strings executed
+  // on production EC2 via SSM RunShellScript. Splicing them directly inside
+  // single-quoted fragments (the old shape) let a value containing a quote/
+  // semicolon break out and inject arbitrary shell commands on the fleet
+  // under the instance role. Both must now be base64-encoded on the runner
+  // and decoded only on the remote instance — the same treatment the
+  // account-description text (DESC_B64) already used.
+  const sesSsm = OPS.slice(OPS.indexOf("ses-ssm — SES ops"), OPS.indexOf("- name: iam-grant-ses"));
+
+  it("base64-encodes SES_EMAIL and DOMAIN before building the remote command strings", () => {
+    expect(sesSsm).toMatch(/SES_EMAIL_B64=\$\(printf %s "\$SES_EMAIL" \| base64 -w0\)/);
+    expect(sesSsm).toMatch(/DOMAIN_B64=\$\(printf %s "\$DOMAIN" \| base64 -w0\)/);
+  });
+
+  it("C3/C4/C5 decode the base64 value ON THE REMOTE INSTANCE rather than splicing the raw input", () => {
+    expect(sesSsm).toMatch(/EM=\\\$\(echo \$SES_EMAIL_B64 \| base64 -d\)/);
+    expect(sesSsm).toMatch(/DOM=\\\$\(echo \$DOMAIN_B64 \| base64 -d\)/);
+  });
+
+  it("never interpolates the raw $SES_EMAIL or bare 'https://$DOMAIN' inside a quoted remote command fragment", () => {
+    // The old vulnerable shapes: a raw --email-address '$SES_EMAIL' and a raw
+    // 'https://$DOMAIN' spliced straight into a C-string.
+    expect(sesSsm).not.toMatch(/--email-address '\$SES_EMAIL'/);
+    expect(sesSsm).not.toMatch(/'https:\/\/\$DOMAIN'/);
+  });
+});

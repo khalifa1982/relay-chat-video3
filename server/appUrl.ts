@@ -43,7 +43,18 @@ function headerStr(v: unknown): string {
   return Array.isArray(v) ? String(v[0] ?? "") : v == null ? "" : String(v);
 }
 
-/** `proto://host` for a request, or null when the Host header is absent. */
+// SECURITY: a bare hostname[:port] only — no scheme, path, credentials, or
+// markup-breaking characters. `X-Forwarded-Host`/`Host` are attacker-supplied
+// on this single-ALB topology (the ALB does not overwrite/append either
+// header the way it does X-Forwarded-For, so whatever the client sends
+// arrives here verbatim). Rejecting anything outside this shape means a
+// header value can never carry `<`/`>`/`"`/`/`/control characters into a
+// downstream sink (e.g. breaking out of the `<loc>` element in sitemap.xml) —
+// at worst an invalid host degrades to null exactly like a missing Host
+// header already does, never to an injection primitive.
+const SAFE_HOST_RE = /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d{1,5})?$/;
+
+/** `proto://host` for a request, or null when the Host header is absent or unsafe. */
 export function requestOrigin(req: HostSource): string | null {
   const proto =
     headerStr(req.headers["x-forwarded-proto"]).split(",")[0].trim() ||
@@ -53,7 +64,7 @@ export function requestOrigin(req: HostSource): string | null {
     headerStr(req.headers["x-forwarded-host"]).split(",")[0].trim() ||
     headerStr(req.headers["host"]).split(",")[0].trim()
   );
-  if (!host) return null;
+  if (!host || !SAFE_HOST_RE.test(host)) return null;
   return `${proto}://${host}`;
 }
 

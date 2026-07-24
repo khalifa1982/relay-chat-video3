@@ -643,12 +643,27 @@ jobs:
           set -euo pipefail
           DESC="RELAY (https://$DOMAIN) is a self-hosted calling and messaging web app. We send TRANSACTIONAL email only: one-time sign-in codes (OTP), email-verification links, and missed-call notifications to registered users who requested them. No marketing or bulk mail. Sender domain $DOMAIN is verified with SPF, DKIM (Easy DKIM) and a custom MAIL FROM (mail.$DOMAIN); bounces and complaints are handled via the SES account-level suppression list. Expected volume: under 500 emails/day."
           DESC_B64=$(printf %s "$DESC" | base64 -w0)
+          # SECURITY: SES_EMAIL is a free-text workflow_dispatch input embedded
+          # into a command string that runs on production EC2 via SSM. A value
+          # containing a single quote or semicolon used to break out of the
+          # single-quoted --email-address flag built from it below and inject
+          # arbitrary shell commands executed on the fleet under the instance
+          # role — the exact class the DESC_B64/base64 treatment below already
+          # avoids for the account-description text. Apply the same treatment:
+          # encode on the runner, decode ONLY on the remote instance, so no
+          # byte of the input is ever given shell-metacharacter meaning by
+          # either shell.
+          SES_EMAIL_B64=$(printf %s "$SES_EMAIL" | base64 -w0)
+          # Same injection class as SES_EMAIL — DOMAIN is also a free-text
+          # workflow_dispatch input, previously spliced unescaped into the
+          # https URL passed as --website-url.
+          DOMAIN_B64=$(printf %s "$DOMAIN" | base64 -w0)
           C1="echo '== whoami (instance role) =='; aws sts get-caller-identity --region $AWS_REGION 2>&1 || true"
           C2="echo '== SES account =='; aws sesv2 get-account --region $AWS_REGION 2>&1 || true"
-          C3="echo '== suppression check: $SES_EMAIL =='; aws sesv2 get-suppressed-destination --email-address '$SES_EMAIL' --region $AWS_REGION 2>&1 || echo not-suppressed-or-denied"
-          C4="echo '== verify identity: $SES_EMAIL =='; aws sesv2 create-email-identity --email-identity '$SES_EMAIL' --region $AWS_REGION 2>&1 && echo VERIFICATION_EMAIL_SENT || true"
-          # The \$( ) is escaped so the base64 description decodes ON the instance.
-          C5="echo '== request production access =='; aws sesv2 put-account-details --production-access-enabled --mail-type TRANSACTIONAL --website-url 'https://$DOMAIN' --contact-language EN --use-case-description \"\$(echo $DESC_B64 | base64 -d)\" --region $AWS_REGION 2>&1 && echo PROD_REQUEST_SUBMITTED || true"
+          C3="EM=\$(echo $SES_EMAIL_B64 | base64 -d); echo \"== suppression check: \$EM ==\"; aws sesv2 get-suppressed-destination --email-address \"\$EM\" --region $AWS_REGION 2>&1 || echo not-suppressed-or-denied"
+          C4="EM=\$(echo $SES_EMAIL_B64 | base64 -d); echo \"== verify identity: \$EM ==\"; aws sesv2 create-email-identity --email-identity \"\$EM\" --region $AWS_REGION 2>&1 && echo VERIFICATION_EMAIL_SENT || true"
+          # The \$( ) is escaped so the base64 payloads decode ON the instance.
+          C5="echo '== request production access =='; DOM=\$(echo $DOMAIN_B64 | base64 -d); aws sesv2 put-account-details --production-access-enabled --mail-type TRANSACTIONAL --website-url \"https://\$DOM\" --contact-language EN --use-case-description \"\$(echo $DESC_B64 | base64 -d)\" --region $AWS_REGION 2>&1 && echo PROD_REQUEST_SUBMITTED || true"
           [ -n "$SES_EMAIL" ] || { C3="true"; C4="true"; }
           [ "$REQUEST_PROD" = "true" ] || C5="true"
           PARAMS=$(jq -n --arg c1 "$C1" --arg c2 "$C2" --arg c3 "$C3" --arg c4 "$C4" --arg c5 "$C5" '{commands:[$c1,$c2,$c3,$c4,$c5]}')

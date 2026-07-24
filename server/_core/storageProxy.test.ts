@@ -23,7 +23,10 @@ vi.mock("./context", () => ({ createContext: mockCreateContext }));
 vi.mock("../v2db", () => ({ authorizeStorageKey: mockAuthorize }));
 // Storage backends unconfigured → an authorized request halts at the config
 // guard (500) before any network I/O, keeping the test hermetic.
-vi.mock("../s3", () => ({ s3Config: () => null, s3PresignGetUrl: () => "" }));
+vi.mock("../s3", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../s3")>();
+  return { ...actual, s3Config: () => null, s3PresignGetUrl: () => "" };
+});
 vi.mock("./env", () => ({ ENV: { forgeApiUrl: undefined, forgeApiKey: undefined } }));
 
 import { registerStorageProxy } from "./storageProxy";
@@ -122,6 +125,44 @@ describe("storage proxy — participant-only file access", () => {
   it("rejects path traversal BEFORE any auth work (400)", async () => {
     const r = mkRes();
     await handler()(mkReq("relay-chat/../secret"), r);
+    expect(r.statusCode).toBe(400);
+    expect(mockAuthorize).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Regression: the authorization check and the eventual S3 presign used to
+   * run on DIFFERENT normalizations of the same key — authorizeStorageKey did
+   * an exact-string DB match on the RAW key, while s3PresignGetUrl silently
+   * collapsed a double slash back to the real single-slash key via
+   * sanitizeS3Key. A double-slash variant of a real attachment's key missed
+   * the exact-match lookup (classified `unknown`, the fail-open avatar
+   * branch) but still normalized to — and served — the real private object.
+   * The fix canonicalizes the key ONCE, up front, so both steps always agree.
+   */
+  it("normalizes a slash-mangled key BEFORE authorizing, closing the double-slash bypass", async () => {
+    asIdentity(null);
+    mockAuthorize.mockResolvedValue({ kind: "attachment", authorized: false });
+    const r = mkRes();
+    // A real attachment key with an extra "/" inserted must still be
+    // recognized (and denied) as that SAME attachment — not fall through to
+    // the "unknown" (avatar-like, served-to-anyone) classification.
+    await handler()(mkReq("relay-chat/9//photo_ab12.jpg"), r);
+    expect(mockAuthorize).toHaveBeenCalledWith("relay-chat/9/photo_ab12.jpg", null);
+    expect(r.statusCode).toBe(403);
+  });
+
+  it("normalizes a leading-slash key the same way", async () => {
+    asIdentity(null);
+    mockAuthorize.mockResolvedValue({ kind: "attachment", authorized: false });
+    const r = mkRes();
+    await handler()(mkReq("/relay-chat/9/photo_ab12.jpg"), r);
+    expect(mockAuthorize).toHaveBeenCalledWith("relay-chat/9/photo_ab12.jpg", null);
+    expect(r.statusCode).toBe(403);
+  });
+
+  it("rejects a trailing-slash key (would-be empty segment) with 400, no auth work", async () => {
+    const r = mkRes();
+    await handler()(mkReq("relay-chat/9/photo_ab12.jpg/"), r);
     expect(r.statusCode).toBe(400);
     expect(mockAuthorize).not.toHaveBeenCalled();
   });

@@ -2557,6 +2557,26 @@ export function attachRelay(
     streamOpenLimiter.sweep(now, 10 * 60_000);
     iceLimiter.sweep(now, 10 * 60_000);
   }, 10 * 60_000).unref();
+  // cidToPin backstop reaper: a cid that disconnects while its pin is in an
+  // ACTIVE call is deliberately KEPT — including its reg.clients entry being
+  // removed — so a reconnect with the same cid can auto-rejoin the call (see
+  // cleanupRegistryConn's in-call branch). If that client never reconnects,
+  // the room eventually reaps (clearing pinRoom) but nothing else ever removes
+  // the now-inert cidToPin entry — an unbounded, if slow, per-cid memory leak.
+  // A pin with NO live client AND NO active-or-held room has nothing left to
+  // reconnect into; only THEN is its cidToPin entry safe to purge (checking
+  // `clients` alone would wrongly delete entries mid-legitimate-reconnect-
+  // window, since clients.delete(pin) runs immediately on disconnect even
+  // while the room — and the reconnect opportunity — is still alive).
+  setInterval(() => {
+    const stale: string[] = [];
+    reg.cidToPin.forEach((pin, cid) => {
+      if (!reg.clients.has(pin) && !reg.pinRoom.has(pin) && !reg.heldRoom.has(pin)) {
+        stale.push(cid);
+      }
+    });
+    stale.forEach((cid) => reg.cidToPin.delete(cid));
+  }, 15 * 60_000).unref();
   // Concurrent SSE streams per IP — each open stream holds a socket + timer,
   // so an attacker opening thousands exhausts the instance. ~25 is far above
   // any legitimate device count behind one NAT hitting ONE Cloud Run instance.

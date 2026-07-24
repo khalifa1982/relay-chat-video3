@@ -42,6 +42,7 @@ import {
   getIdentityById,
   getIdentityByNumber,
   getOrCreateDmConversation,
+  dmConversationExists,
   createGroupConversation,
   deleteMessage,
   consumeExpiringMessage,
@@ -73,7 +74,7 @@ import {
   recentAutoReplyExists,
   getPublicStats,
   upsertPushSubscription,
-  deletePushSubscription,
+  deleteOwnPushSubscription,
   addOnlineWatch,
   takeOnlineWatchers,
   createPartyLine,
@@ -1017,6 +1018,22 @@ export const v2MessagesRouter = router({
         });
       }
       const isSelf = other.id === me.id;
+      // SECURITY: a target who has BLOCKED the caller must not be reachable
+      // via a brand-new thread — otherwise blocking is trivially pointless,
+      // since anyone can force an empty DM into the victim's inbox with no
+      // consent and (today) no way for the victim to delete/leave it. Only
+      // gate the FRESH-creation case: a conversation that already existed
+      // before the block keeps working, exactly like 1:1 send-blocking never
+      // retroactively hides prior history. Respond identically to "unknown
+      // number" so the block itself is never revealed to the blocked caller.
+      if (!isSelf && !(await dmConversationExists(me.id, other.id))) {
+        if (await isNumberBlockedBy(other.id, me.number)) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "That number isn't a RELAY user yet",
+          });
+        }
+      }
       const convo = await getOrCreateDmConversation(me.id, other.id);
       return {
         conversationId: convo.id,
@@ -1067,7 +1084,17 @@ export const v2MessagesRouter = router({
       directoryGate(ctx);
       const me = requireIdentity(ctx);
       const unique = Array.from(new Set(input.numbers)).filter((n) => n !== me.number);
-      const members = await getIdentitiesByNumbers(unique);
+      const resolved = await getIdentitiesByNumbers(unique);
+      // SECURITY: a target who has blocked the creator must not be forcibly
+      // addable to a BRAND-NEW group — otherwise blocking is trivially
+      // bypassed (create a fresh group containing just the victim + one
+      // throwaway member, and message them there). Silently exclude — fold
+      // into the existing `skipped` count so the block is never revealed,
+      // matching the existing "not found" secrecy on this same endpoint.
+      const blockChecks = await Promise.all(
+        resolved.map((m) => isNumberBlockedBy(m.id, me.number).catch(() => false))
+      );
+      const members = resolved.filter((_, i) => !blockChecks[i]);
       if (members.length === 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -1492,7 +1519,6 @@ export const v2AttachmentsRouter = router({
     .input(
       z.object({
         storageKey: z.string().min(1).max(256),
-        url: z.string().min(1),
         mimeType: z.string().min(1).max(128),
         sizeBytes: z.number().int().nonnegative(),
         width: z.number().int().positive().optional().nullable(),
@@ -1513,8 +1539,20 @@ export const v2AttachmentsRouter = router({
           message: "storageKey must be in your own upload namespace",
         });
       }
+      // SECURITY: `url` is NEVER accepted from the client — it used to be, which
+      // let a caller register an attachment row pointing at an ARBITRARY external
+      // URL (or a javascript:/data: scheme). Every client that opens the returned
+      // attachment (AttachmentView/FileCard/MediaLightbox) trusts `url` to be a
+      // same-origin `/manus-storage/{key}` path — the only shape the real upload
+      // endpoint ever produces — and renders it directly into <img src>/<a href>
+      // with no scheme check, so an attacker-chosen url was a no-interaction
+      // tracking beacon (any image attachment auto-loads it) and a phishing
+      // open-redirect. Deriving it here from the already namespace-validated
+      // storageKey, exactly like /api/v2/upload does, makes that shape the only
+      // one that can ever exist.
       const row = await recordAttachment({
         ...input,
+        url: `/manus-storage/${input.storageKey}`,
         uploadedByIdentityId: me.id,
       });
       return row;
@@ -2227,8 +2265,12 @@ export const v2PushRouter = router({
    *  enough to remove one (same trust model as the push service itself). */
   unsubscribe: publicProcedure
     .input(z.object({ endpoint: z.string().min(10).max(500) }))
-    .mutation(async ({ input }) => {
-      await deletePushSubscription(input.endpoint);
+    .mutation(async ({ ctx, input }) => {
+      // SECURITY: scope the delete to the caller's OWN subscription. `endpoint`
+      // alone used to be sufficient — anyone who learned a victim's endpoint
+      // string could silently kill their incoming-call/missed-call push.
+      const me = requireIdentity(ctx);
+      await deleteOwnPushSubscription(me.id, input.endpoint);
       return { ok: true };
     }),
 });

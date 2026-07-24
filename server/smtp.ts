@@ -190,6 +190,19 @@ function makeWire(socket: net.Socket | tls.TLSSocket, onSocketSwap: (s: tls.TLSS
         sock.removeAllListeners("error");
         sock.removeAllListeners("close");
         sock.setTimeout(0);
+        // SECURITY (STARTTLS plaintext-injection class, CVE-2011-0411-style):
+        // `buffer` is a closure shared across the plaintext and TLS phases of
+        // this connection. An on-path attacker can pack extra reply lines into
+        // the SAME TCP segment as the genuine "220 go ahead" STARTTLS response;
+        // pump() only consumes ONE complete reply per call and leaves any
+        // following bytes sitting in `buffer`. Without clearing it here, those
+        // attacker-injected plaintext lines would be the FIRST thing consumed
+        // once the encrypted session starts reading replies — letting an
+        // on-path MITM forge the perceived outcome (success/failure) of the
+        // real, encrypted SMTP dialog. Discard any such residue before the
+        // handshake so nothing read before TLS can be interpreted as a reply
+        // within the TLS session.
+        buffer = "";
         const secured = tls.connect({ socket: sock, host, servername: host }, () => resolve());
         secured.on("error", reject);
         attach(secured);

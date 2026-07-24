@@ -67,11 +67,17 @@ export function pairKey(a: number, b: number): string {
 }
 
 function randomDigits6(): string {
+  // SECURITY: every other identifier this codebase mints (OTP codes, guest/
+  // verification tokens) uses a CSPRNG (crypto.randomInt/randomBytes) — this
+  // was the one exception, using non-cryptographic Math.random(), whose
+  // internal state (V8's xorshift128+) is recoverable from a handful of
+  // observed outputs. Numbers are a semi-public dialing address, not a
+  // secret, so the practical exploit is narrow (predicting/pre-claiming a
+  // soon-to-be-issued number), but there is no reason to accept that
+  // exposure when crypto.randomInt is the same one-line call.
   // Avoid leading zero -> reserves first digit 1-9.
-  const first = 1 + Math.floor(Math.random() * 9);
-  const rest = Math.floor(Math.random() * 100000)
-    .toString()
-    .padStart(5, "0");
+  const first = 1 + crypto.randomInt(0, 9);
+  const rest = crypto.randomInt(0, 100000).toString().padStart(5, "0");
   return `${first}${rest}`;
 }
 
@@ -1367,6 +1373,24 @@ export async function deleteContact(ownerId: number, contactId: number) {
 }
 
 /* ── conversations & messages ─────────────────────────────────── */
+
+/**
+ * Does a 1:1 conversation between these two identities already exist? Used to
+ * gate NEW-thread creation on the block state without disturbing a thread that
+ * already legitimately existed before a block was set (block only stops
+ * FRESH/unwanted contact — it never retroactively hides prior history).
+ */
+export async function dmConversationExists(a: number, b: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const key = pairKey(a, b);
+  const rows = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(eq(conversations.pairKey, key))
+    .limit(1);
+  return rows.length > 0;
+}
 
 /**
  * Get or create a 1:1 conversation between two identities. When
@@ -2931,6 +2955,26 @@ export async function deletePushSubscription(endpoint: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, endpoint.slice(0, 500)));
+}
+
+/**
+ * Delete a push subscription — but ONLY if it belongs to the calling identity.
+ * The unscoped `deletePushSubscription` above stays for the system's own
+ * dead-token cleanup (webPush.ts, after a failed/rejected send — no identity
+ * context there, and it's already independently determined the endpoint is
+ * invalid), but the user-facing `push.unsubscribe` procedure has no reason to
+ * delete a row it doesn't own: without this scoping, `endpoint` alone was
+ * enough for ANY caller to silently kill a stranger's incoming-call/missed-
+ * call notifications (a targeted, silent notification DoS) by learning their
+ * endpoint string (e.g. leaked in logs, a referrer, or the FCM token exposed
+ * to the native layer).
+ */
+export async function deleteOwnPushSubscription(identityId: number, endpoint: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .delete(pushSubscriptions)
+    .where(and(eq(pushSubscriptions.endpoint, endpoint.slice(0, 500)), eq(pushSubscriptions.identityId, identityId)));
 }
 
 export async function listPushSubscriptions(

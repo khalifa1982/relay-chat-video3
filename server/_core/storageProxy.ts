@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { Readable } from "node:stream";
 import { ENV } from "./env";
-import { s3Config, s3PresignGetUrl } from "../s3";
+import { s3Config, s3PresignGetUrl, sanitizeS3Key } from "../s3";
 import { createContext } from "./context";
 import { authorizeStorageKey } from "../v2db";
 
@@ -51,21 +51,36 @@ function cacheSet(key: string, url: string, now: number): void {
 
 export function registerStorageProxy(app: Express) {
   app.get("/manus-storage/*", async (req, res) => {
-    const key = (req.params as Record<string, string>)[0];
-    if (!key) {
+    const rawKey = (req.params as Record<string, string>)[0];
+    if (!rawKey) {
       res.status(400).send("Missing storage key");
       return;
     }
 
-    // Traversal guard: keys are flat storage identifiers minted by storagePut;
-    // a ".." SEGMENT is never legitimate and could confuse prefix-scoped
-    // ownership checks upstream of a signed URL. Segment-wise on purpose
-    // (v2.91 review D2, matching sanitizeS3Key): filenames legitimately
-    // contain ".." runs ("photo..2020.png" → key "…_photo..2020.png") and a
-    // substring check 400'd those keys forever — including pre-v2.91 rows.
+    // SECURITY: normalize the key to the SAME canonical form `sanitizeS3Key`
+    // (used later, only at presign time) produces, and use that ONE value for
+    // every downstream step — the authorization check, the cache key, AND the
+    // presign. Previously the authorization check ran against the RAW key
+    // (an exact-string DB match) while presigning silently normalized it via
+    // sanitizeS3Key (which collapses a run of slashes like "a//b" -> "a/b"
+    // *before* its own empty-segment check ever sees it — so it does not
+    // reject that shape). A request for a real attachment's key with an extra
+    // "/" inserted therefore missed the exact-match DB lookup (classified
+    // `unknown`, the FAIL-OPEN branch reserved for non-attachment keys like
+    // avatars) while still normalizing back to the real object at presign
+    // time — serving any known/guessed private attachment to an unauthorized
+    // or anonymous requester with no participant check, and also re-exposing
+    // "burned" view-once media (F3) via the same route. Canonicalizing once,
+    // up front, makes that mismatch structurally impossible: authorization
+    // and serving can never disagree about which object is being requested.
+    // sanitizeS3Key also subsumes the prior ad-hoc traversal guard (rejects
+    // "." / ".." / empty segments, a >900-byte key, and control characters) —
     // Express percent-decodes before req.params, so an encoded traversal
     // ("%2e%2e") still arrives here as a real ".." segment and is caught.
-    if (key.split("/").some((s) => s === ".." || s === ".")) {
+    let key: string;
+    try {
+      key = sanitizeS3Key(rawKey);
+    } catch {
       res.status(400).send("Bad storage key");
       return;
     }

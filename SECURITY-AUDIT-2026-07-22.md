@@ -193,3 +193,88 @@ below (S1–S11).
 - Consider deleting/overwriting the S3 object on view-once consume for defense-in-depth (the access layer already fails closed — F3).
 - Set `RELAY_TRUSTED_PROXY_HOPS` explicitly on any deployment with more than one front proxy.
 - No CSP / `X-Frame-Options` header (deliberate — the app is framed by the editor; refuted as no-exploit); revisit if the framing requirement is dropped.
+
+---
+
+# Round 4 (2026-07-24) — full backend + frontend sweep via the dedicated `claude-security` orchestrator
+
+Owner request: *"expose the security bugs... check the entire app... I want full backend and frontend."* The `claude-security` orchestrator was dispatched across every surface (tRPC authz/IDOR, auth/crypto/session, client trust surface, raw Express routes, mobile/CI/secrets, client XSS, the signaling engine, the S3 driver + mailer, push/redis-bus/events, inbound-email/well-known/seo). Every candidate it raised, plus a direct manual re-read of the surfaces above, was independently verified against source before any fix — the same bar as prior rounds. 11 confirmed and fixed.
+
+## G1 — storage-proxy key-normalization bypass (HIGH)
+
+**Where:** `server/_core/storageProxy.ts`.
+**Problem.** `authorizeStorageKey(key, identityId)` ran its exact-string DB lookup against the RAW request key, while `s3PresignGetUrl` (called later, only at presign time) silently normalized the key via `sanitizeS3Key` — collapsing a run of slashes (`a//b` → `a/b`) and stripping a leading `/` *before* its own segment checks ever see it. A real private attachment's key with an extra `/` inserted therefore missed the exact-match lookup (classified `unknown`, the fail-open branch reserved for non-attachment keys like avatars) while still normalizing back to — and serving — the real object, with no participant check. This also re-exposed "burned" view-once media (F3, round 1) via the same mismatch.
+**Fix.** Canonicalize the key ONCE via `sanitizeS3Key` at the top of the request handler, before authorization; every downstream step (authorization, the response cache key, and the presign) now operates on that single canonical string, making the mismatch structurally impossible.
+
+## G2 — `openThread` / `createGroup` block bypass (MED)
+
+**Where:** `server/v2routers.ts` `messages.openThread`, `messages.createGroup`.
+**Problem.** Blocking a number stopped `messages.send` but not thread/group *creation* — a blocked-by target could still have a brand-new empty DM or a fresh group forced into their inbox, pointless-ifying the block.
+**Fix.** Both endpoints now check `isNumberBlockedBy` before creating a FRESH thread/group (an existing thread that predates the block keeps working, mirroring send-blocking's non-retroactive behavior) and respond identically to "not found"/silently exclude the member, so the block is never revealed to the blocked caller.
+
+## G3 — `push.unsubscribe` IDOR (LOW)
+
+**Where:** `server/v2routers.ts` `push.unsubscribe` → `server/v2db.ts`.
+**Problem.** Deleted a push-subscription row keyed only on the client-supplied `endpoint`, with no ownership check — anyone who learned a victim's endpoint string (log leakage, a referrer, the native FCM token) could silently kill their incoming-call/missed-call push notifications.
+**Fix.** New `deleteOwnPushSubscription(identityId, endpoint)` scopes the delete to the caller's own identity; the original unscoped `deletePushSubscription` is kept for `webPush.ts`'s own dead-token cleanup, which has no identity context.
+
+## G4 — `attachments.register` arbitrary client `url` (MED)
+
+**Where:** `server/v2routers.ts` `attachments.register`.
+**Problem.** The input schema accepted a free-form `url` from the client and stored it verbatim, even though `storageKey` was already ownership-validated. Every client surface (`AttachmentView`/`FileCard`/`MediaLightbox`) trusts the returned `url` to be a same-origin `/manus-storage/{key}` path and renders it directly with no scheme check — an attacker-chosen `url` was a no-interaction tracking beacon (image attachments auto-load) or a phishing open-redirect.
+**Fix.** `url` is no longer accepted from the client; it's derived server-side as `` `/manus-storage/${storageKey}` `` after the existing namespace check, matching exactly what `/api/v2/upload` already produces.
+
+## G5 — OAuth session secret fail-open (LOW)
+
+**Where:** `server/_core/sdk.ts` `getSessionSecret()`.
+**Problem.** Fell back to an empty/undefined key when `JWT_SECRET` was unset, the same fail-open class already closed for other secrets in S10/S11 (round 2) but missed here.
+**Fix.** Throws in production when unset, matching the established fail-closed convention; dev/test unaffected.
+
+## G6 — `cidToPin` unbounded memory growth (LOW)
+
+**Where:** `server/relay.ts`.
+**Problem.** A signaling client that disconnected mid-call kept its `cidToPin` entry (by design, to support reconnect-and-auto-rejoin) — but once the room later reaped with no reconnect, nothing ever cleared that entry, an unbounded per-cid leak over the process lifetime.
+**Fix.** A 15-minute sweep purges `cidToPin` entries that have no live client AND no active-or-held room — deliberately checking all three, since `reg.clients` alone would wrongly purge entries during the legitimate in-call reconnect window (`cleanupRegistryConn` clears `clients` immediately on any disconnect, in-call or not).
+
+## G7 — Redis bus event-kind allowlist (LOW)
+
+**Where:** `server/v2events.ts`.
+**Problem.** `relay:v2ev` has no message authentication (anything with VPC/security-group reach to the Redis node can publish); `_handleBusV2Event` validated only that an envelope had a string `kind`, not that it was a real one.
+**Fix.** A `KNOWN_V2_EVENT_KINDS` allowlist drops any envelope outside the actual `V2Event` union before it reaches a browser's SSE stream — a cheap backstop, not a substitute for transport-level authentication (see residuals).
+
+## G8 — SMTP STARTTLS response-injection (LOW)
+
+**Where:** `server/smtp.ts` `makeWire`.
+**Problem.** CVE-2011-0411-class: the plaintext read buffer was a closure shared across the STARTTLS upgrade boundary. An on-path attacker could pack extra reply lines into the same TCP segment as the genuine "220 go ahead," and those bytes would be the first thing consumed once the encrypted session started reading — letting a MITM forge the perceived outcome of the real, encrypted dialog.
+**Fix.** `upgradeTls` now clears the buffer immediately before the TLS handshake, so nothing read before TLS can be interpreted as a reply within the TLS session.
+
+## G9 — weak RNG for 6-digit number allocation (LOW)
+
+**Where:** `server/v2db.ts` `randomDigits6`.
+**Problem.** Used `Math.random()` (V8's xorshift128+, recoverable from a handful of observed outputs) while every other identifier in the codebase (OTP codes, guest/verification tokens) already used a CSPRNG. Numbers are semi-public dialing addresses, not secrets, so the practical exploit is narrow (predicting/pre-claiming a soon-to-be-issued number).
+**Fix.** Switched to `crypto.randomInt`.
+
+## G10 — `appUrl.ts` host-header validation (LOW)
+
+**Where:** `server/appUrl.ts` `requestOrigin()`.
+**Problem.** Fed an unvalidated `X-Forwarded-Host`/`Host` header straight into sitemap XML and (as one contributing factor, narrowed not eliminated) email-verification links.
+**Fix.** A `SAFE_HOST_RE` allowlist rejects malformed/injection-shaped host values before they're used.
+
+## G11 — CI/CD command injection in `aws-ops.yml`'s `ses-ssm` action (MED)
+
+**Where:** `.github/workflows/aws-ops.yml`.
+**Problem.** The `ses_email`/`domain` `workflow_dispatch` free-text inputs were spliced unescaped into single-quoted command strings executed on production EC2 via SSM `RunShellScript` — a value containing a quote or semicolon could break out of the intended quoting and inject arbitrary shell commands under the EC2 instance role.
+**Fix.** Both values are base64-encoded on the GitHub Actions runner and decoded ONLY inside the remote-executed command string, the same treatment the adjacent `DESC_B64` (account-description) value already used. The sibling `iam-grant-ses` action was reviewed and found NOT vulnerable to the same class — its interpolation of the same inputs runs directly on the runner via safe single-pass double-quoted substitution, never re-serialized through a second (SSM remote) shell.
+
+## Verification (round 4)
+
+`pnpm check` clean; `pnpm test` **1392 passing / 1 skipped**; `pnpm build` clean. New/updated tests: `server/_core/storageProxy.test.ts` (+3: double-slash bypass, leading-slash normalization, trailing-slash rejection), `server/awsOps.test.ts` (+3: base64-encode-on-runner, decode-on-remote, absence of the old vulnerable splice shapes), plus source-pinned coverage for the block-bypass, push IDOR, attachment-URL, OAuth fail-closed, and `cidToPin`-reaper fixes.
+
+## Accepted residuals / follow-ups (round 4, not changed)
+
+- **Redis bus message authentication** — `relay:v2ev` still has no cryptographic authentication between publisher and subscriber; G7's allowlist bounds the blast radius of a forged envelope but doesn't prevent one from a host with VPC/SG-level reach. Closing this fully means either signing envelopes or trusting the VPC/SG boundary explicitly — an architectural decision, not a bug fix, and consistent with the existing "cross-instance relay rooms explicitly out of scope" stance in `CLAUDE.md`.
+- **Cluster-leader trust of bus-forwarded identity fields** (`__ownedNumber`/`home`) — same Redis-trust-boundary class as G7/above; deferred alongside it.
+- **No per-account password-login lockout** (only per-IP) — would need a new schema/design decision (which identity to lock, for how long, how it interacts with multi-device), out of scope for a fix-what's-broken pass.
+- **Upload memory-exhaustion ordering** — `/api/v2/upload`'s rate limiter runs after the request body is already buffered; a flood of large bodies can still cost memory before being rejected. Noted, not fixed this pass.
+- **`/api/v2/offline` has no rate limit** — the sendBeacon-driven presence-offline endpoint; noted, not fixed this pass.
+- **Anonymous `/api/relay/ice` TURN credential minting** — any anonymous caller can mint short-lived TURN credentials for an arbitrary `who`; only a bandwidth-freeloading concern, and only matters once an operator configures a dedicated coturn (`TURN_SECRET`/`TURN_HOST`) rather than the free `openrelay` fallback.

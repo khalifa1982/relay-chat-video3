@@ -56,6 +56,21 @@ export type V2Event =
   | { kind: "device_pending"; sid: string; label: string }
   | { kind: "ping" };
 
+/**
+ * The only `kind` values a bus envelope is ever allowed to carry. The Redis
+ * bus (relay:v2ev) has no message authentication — anything with network
+ * reach to the (intra-VPC, SG-scoped) Redis node can publish an envelope, and
+ * the ONLY existing guard (redisBus's per-instance-id loop drop) is pure
+ * loop-prevention, not authentication. This allowlist is a cheap, safe
+ * backstop: a forged/malformed envelope can smuggle at most a well-shaped
+ * KNOWN event kind (still bounded by publishToIdentity's own logic elsewhere)
+ * rather than an arbitrary client-defined shape reaching the browser's SSE
+ * handler unfiltered.
+ */
+const KNOWN_V2_EVENT_KINDS = new Set<V2Event["kind"]>([
+  "message", "typing", "read", "presence", "contact", "call_offer", "watched_online", "status", "device_pending", "ping",
+]);
+
 function writeEvent(client: SseClient, ev: V2Event) {
   if (client.closed) return;
   // Guard the window where the underlying socket has already died but our
@@ -92,6 +107,7 @@ export function _handleBusV2Event(payload: unknown): void {
   const ev = p.ev as V2Event | undefined;
   if (!ev || typeof ev !== "object" || typeof (ev as { kind?: unknown }).kind !== "string")
     return;
+  if (!KNOWN_V2_EVENT_KINDS.has(ev.kind)) return;
   if (p.t === "*") {
     clientsByIdentity.forEach((set) => set.forEach((c) => writeEvent(c, ev)));
     return;

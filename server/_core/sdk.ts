@@ -156,6 +156,19 @@ class SDKServer {
 
   private getSessionSecret() {
     const secret = ENV.cookieSecret;
+    // SECURITY: this key signs/verifies the OAuth session JWT (HS256, no
+    // server-side store) — anyone who knows it can mint a session for ANY
+    // openId, including the owner's. `ENV.cookieSecret` silently falls back to
+    // "" when JWT_SECRET is unset; failing open here (rather than throwing, as
+    // the sibling S10/S11 fixes already do for the local-auth session and the
+    // inbound-email HMAC) would let a misconfigured production box sign/verify
+    // with an empty key. Fail CLOSED in production; dev/test keep the
+    // convenience of running without an env.
+    if (!secret && ENV.isProduction) {
+      throw new Error(
+        "JWT_SECRET must be set in production — refusing to sign/verify OAuth sessions with an empty key."
+      );
+    }
     return new TextEncoder().encode(secret);
   }
 
