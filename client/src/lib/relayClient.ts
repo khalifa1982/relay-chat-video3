@@ -3230,7 +3230,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // The flag lives ONLY in the bottom-left .nm label (not also in the centered
     // cam-off name) so it never renders twice on a camera-off tile.
     return (
-      '<div class="ph"><div class="av">' + initials(name) + "</div>" +
+      // M26: `name` is a peer-chosen display name. The two full renderings below
+      // are escaped; escape the initials too — the 2-char slice can't carry an
+      // event handler, but a bare "<" still corrupts this row's parse.
+      '<div class="ph"><div class="av">' + escapeHtml(initials(name)) + "</div>" +
       '<div class="ph-name">' + escapeHtml(name) + "</div>" +
       SOUND_WAVE_HTML + "</div>" +
       '<div class="nm">' + fl + '<span class="nm-text">' + escapeHtml(name) + "</span></div>" +
@@ -5251,13 +5254,37 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // avatar + username + PIN + time in its own frosted bubble above the text
     // bubble — mine on the RIGHT, everyone else on the LEFT.
     const who = mine ? (me.name || "You") : (name || "Guest");
-    const idPin = mine ? (me.pin || undefined) : pin;
+    // SECURITY (M26 — zero-click DOM XSS on the app origin): `pin` arrives on a
+    // chat frame over the peer's DATA CHANNEL and the receive path validated it
+    // with nothing but `typeof d.pin === "string"`. It is then interpolated into
+    // this row's innerHTML TWICE, unescaped: once inside the double-quoted
+    // `data-pin="…"` ATTRIBUTE, and once through `fmtPin`, which returns a
+    // non-matching string completely UNCHANGED. So a peer sending
+    //   pin: 'x"><img src=x onerror=…>'
+    // broke out of the attribute and injected a live element that executes on
+    // parse — no click, no hover, just receiving the message. Running on our own
+    // origin, that script can drive the whole authenticated API as the victim
+    // (read every thread, send as them, edit the profile), i.e. session takeover.
+    // Reachable by anyone who can share a call — including a PARTY LINE, which is
+    // joinable by number, so one frame could hit every participant at once.
+    //
+    // A pin is ALWAYS exactly six digits, so validate rather than merely escape:
+    // anything else is not a pin and is dropped to `undefined` (the chip simply
+    // renders without a pin). This is the same check `ensureChatAvatar` already
+    // applied — it just ran AFTER the markup was written, so it protected the
+    // avatar fetch and not the render. It also keeps the `[data-pin="…"]`
+    // querySelectorAll in `applyChatAvatar` from being fed a malformed selector.
+    const idPinRaw = mine ? (me.pin || undefined) : pin;
+    const idPin = idPinRaw && /^\d{6}$/.test(idPinRaw) ? idPinRaw : undefined;
     const time = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     const row = document.createElement("div");
     row.className = "mrow " + (mine ? "me" : "them");
     row.innerHTML =
       '<div class="mbody"><div class="mident">' +
-      '<span class="mav"' + (idPin ? ' data-pin="' + idPin + '"' : "") + ">" + initials(who) + "</span>" +
+      // `initials` slices a peer-supplied name to 2 chars, so it can't fit an
+      // event-handler attribute, but an unescaped "<" still corrupts the parse —
+      // escape it too rather than reasoning about the length cap.
+      '<span class="mav"' + (idPin ? ' data-pin="' + idPin + '"' : "") + ">" + escapeHtml(initials(who)) + "</span>" +
       '<span class="mwho"><b>' + escapeHtml(mine ? "You" : who) + "</b>" +
       (idPin ? "<i>" + fmtPin(idPin) + "</i>" : "") + "</span>" +
       '<span class="mtime">' + time + "</span></div>" +
@@ -5348,7 +5375,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     recents.forEach(r => {
       const d = document.createElement("div");
       d.className = "relay-usr";
-      d.innerHTML = '<div class="av">' + initials(r.name) + '</div><div class="info"><b>' + escapeHtml(r.name) + "</b><span>" + r.id + "</span></div><div class=\"go\">&#8635;</div>";
+      // M26: same as the call tiles — `r.name` is peer-chosen, so escape the
+      // initials as well as the full name. `r.id` is a server-issued 6-digit pin.
+      d.innerHTML = '<div class="av">' + escapeHtml(initials(r.name)) + '</div><div class="info"><b>' + escapeHtml(r.name) + "</b><span>" + escapeHtml(r.id) + "</span></div><div class=\"go\">&#8635;</div>";
       d.onclick = () => { dialed = r.id; refreshDisplay(); startCall(); };
       list.appendChild(d);
     });

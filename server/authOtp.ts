@@ -124,7 +124,13 @@ export async function recordOtpFailure(rowId: number, currentAttempts: number, n
     .update(emailOtps)
     .set({
       attempts: sql`COALESCE(${emailOtps.attempts}, 0) + 1`,
-      consumedAt: sql`CASE WHEN COALESCE(${emailOtps.attempts}, 0) + 1 >= ${OTP_MAX_ATTEMPTS} THEN ${new Date(nowMs)} ELSE ${emailOtps.consumedAt} END`,
+      // Same MySQL left-to-right assignment semantics as the PIN ladder in
+      // authPin.ts: this CASE already sees `attempts` as `old + 1`, so adding
+      // another `+ 1` double-counted and burned the code on the FOURTH wrong
+      // guess instead of the fifth (`old + 2 >= 5`). Fail-safe in direction, but
+      // it silently contradicts OTP_MAX_ATTEMPTS. Compare the post-increment
+      // value directly.
+      consumedAt: sql`CASE WHEN COALESCE(${emailOtps.attempts}, 0) >= ${OTP_MAX_ATTEMPTS} THEN ${new Date(nowMs)} ELSE ${emailOtps.consumedAt} END`,
     })
     .where(and(eq(emailOtps.id, rowId), isNull(emailOtps.consumedAt)));
   const [after] = await db
@@ -199,6 +205,46 @@ export async function markUserEmailVerified(userId: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.update(users).set({ emailVerified: true }).where(eq(users.id, userId));
+}
+
+/**
+ * SECURITY (M29 — ACCOUNT PRE-HIJACKING, classic "unexpired session / unverified
+ * credential" variant): destroy any password credential attached to a user row
+ * that was created but NEVER email-verified, at the moment the email's real
+ * owner claims that row by proving the address with a one-time code.
+ *
+ * The attack this closes:
+ *   1. The legacy self-hosted route `POST /api/auth/register` is unauthenticated
+ *      and creates a `loginMethod:"local"` user with an ATTACKER-chosen
+ *      `passwordHash` and `emailVerified:false` — for ANY email, including one
+ *      that has never signed up. Nothing stops an attacker pre-registering a
+ *      target address (or a batch of likely ones).
+ *   2. The victim later signs up / signs in normally with an email one-time
+ *      code. `findUserByEmailAny` deliberately falls back to a `local` row
+ *      (v2.92, so pre-existing accounts keep working), so the OTP flow RESOLVES
+ *      TO THE ATTACKER'S ROW rather than creating a fresh one…
+ *   3. …and then calls `markUserEmailVerified`, flipping `emailVerified` to true
+ *      while leaving the attacker's `passwordHash` in place.
+ *   4. `POST /api/auth/login` requires only a matching password plus
+ *      `emailVerified` — both now satisfied. The attacker signs in and shares
+ *      the victim's account: every thread, contact, and call record, plus the
+ *      ability to change the profile and number. The victim sees nothing amiss.
+ *
+ * A password set before the address was ever proven carries no trust, so it is
+ * cleared rather than honored. Deliberately scoped to rows that are still
+ * UNVERIFIED: a legitimate local user who verified via their own emailed link
+ * keeps their password, because by then `emailVerified` is already true and this
+ * never runs for them. The PIN fields are cleared defensively too — a PIN can
+ * only be set from an authenticated session, so it should not be reachable
+ * pre-verification, but if it ever were it would be the identical foothold.
+ */
+export async function clearUnverifiedCredentials(userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(users)
+    .set({ passwordHash: null, loginPinHash: null, loginPinAttempts: 0, loginPinLockedAt: null })
+    .where(and(eq(users.id, userId), eq(users.emailVerified, false)));
 }
 
 /* ── email dispatch ───────────────────────────────────────────────────────── */

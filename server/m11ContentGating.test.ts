@@ -27,22 +27,42 @@ describe("v2.99.34 M11 — list withholds locked expiring content", () => {
 
 describe("v2.99.34 M11 — revealExpiring returns the content once and burns it", () => {
   it("revealExpiringMessage captures content BEFORE burning (view-once, keeps the attachments row)", () => {
-    const fn = V2DB.slice(V2DB.indexOf("export async function revealExpiringMessage"), V2DB.indexOf("export async function revealExpiringMessage") + 1400);
+    const fn = V2DB.slice(
+      V2DB.indexOf("export async function revealExpiringMessage"),
+      V2DB.indexOf("export async function markThreadRead"),
+    );
     expect(fn).toMatch(/const capturedBody = row\.body \?\? null;/);
     expect(fn).toMatch(/const capturedAttachmentId = row\.attachmentId \?\? null;/);
-    // same burn as consume: null body + attachmentId + consumedAt
-    expect(fn).toMatch(/body: null,\s*\n\s*attachmentId: null,\s*\n\s*meta: \{ \.\.\.meta, consumedAt: Date\.now\(\) \}/);
+    // v2.99.37 (M22): the burn moved into the shared ATOMIC helper, so the
+    // content-nulling is asserted there (see below) and the reveal path is
+    // asserted to go through it — and to hand back nothing if it lost the race.
+    expect(fn).toMatch(/await burnExpiringMessage\(/);
+    expect(fn).toMatch(/return null; \/\/ lost the race/);
     // authorization: not the sender, participant, not already consumed
     expect(fn).toMatch(/row\.senderIdentityId === input\.identityId\) return null;/);
     expect(fn).toMatch(/meta\.consumedAt != null\) return null;/);
   });
+  it("the shared burn nulls body + attachmentId + stamps consumedAt, guarded so only one caller wins", () => {
+    const fn = V2DB.slice(
+      V2DB.indexOf("async function burnExpiringMessage"),
+      V2DB.indexOf("export async function consumeExpiringMessage"),
+    );
+    expect(fn).toMatch(/body: null,\s*\n\s*attachmentId: null,\s*\n\s*meta: \{ \.\.\.meta, consumedAt: Date\.now\(\) \}/);
+    expect(fn).toMatch(/JSON_EXTRACT\(\$\{messages\.meta\}, '\$\.consumedAt'\) IS NULL/);
+    expect(fn).toMatch(/affectedRows/);
+  });
   it("the router inlines media as a data URL (immediate burn can't race a client fetch)", () => {
-    const fn = ROUTERS.slice(ROUTERS.indexOf("revealExpiring: publicProcedure"), ROUTERS.indexOf("revealExpiring: publicProcedure") + 2000);
+    const fn = ROUTERS.slice(
+      ROUTERS.indexOf("revealExpiring: publicProcedure"),
+      ROUTERS.indexOf("/* ── attachments router"),
+    );
     expect(fn).toMatch(/revealExpiringMessage\(\{ messageId: input\.messageId, identityId: me\.id \}\)/);
     expect(fn).toMatch(/storageGetSignedUrl\(att\.storageKey\)/);
     expect(fn).toMatch(/data:\$\{mime\};base64,/);
-    // bounded so a huge object never hangs the reveal
-    expect(fn).toMatch(/30 \* 1024 \* 1024/);
+    // bounded so a huge object never hangs the reveal. v2.99.37 (M23): the cap
+    // is now a named constant enforced against the STREAM, not a trusted header.
+    expect(ROUTERS).toMatch(/REVEAL_MAX_INLINE_BYTES = 30 \* 1024 \* 1024/);
+    expect(fn).toMatch(/total > REVEAL_MAX_INLINE_BYTES/);
     // fans the change to participants so their list refetches → "disappeared"
     expect(fn).toMatch(/publishToIdentity\(pid, \{ kind: "message"/);
   });

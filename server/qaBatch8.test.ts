@@ -29,9 +29,19 @@ describe("v2.99.30 QA M20 — shared cross-table number reservation", () => {
     expect(V2DB).toMatch(/PRIMARY KEY \(\\`number\\`\)/);
   });
   it("tryReserveNumber INSERTs atomically, retries on duplicate, and fails OPEN otherwise", () => {
-    const fn = V2DB.slice(V2DB.indexOf("async function tryReserveNumber"), V2DB.indexOf("async function tryReserveNumber") + 700);
+    const fn = V2DB.slice(
+      V2DB.indexOf("async function tryReserveNumber"),
+      V2DB.indexOf("async function allocateSharedNumber"),
+    );
     expect(fn).toMatch(/INSERT INTO \\`number_reservations\\`/);
-    expect(fn).toMatch(/if \(\/duplicate\/i\.test\(msg\)\) return false/);
+    // v2.99.37 (M24): duplicate detection keys on mysql's STABLE machine-readable
+    // markers first, because this helper fails OPEN — recognizing the duplicate
+    // only by the error TEXT meant any driver/locale change silently turned a
+    // lost race into "reservation won", reintroducing the cross-table collision.
+    // The text sniff is retained purely as a fallback.
+    expect(fn).toMatch(/errno === 1062/);
+    expect(fn).toMatch(/ER_DUP_ENTRY/);
+    expect(fn).toMatch(/\/duplicate\/i\.test\(/);
     // any other error (e.g. table missing on first boot) → true = behave as pre-ledger
     expect(fn).toMatch(/return true; \/\/ table missing/);
   });

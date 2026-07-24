@@ -114,6 +114,7 @@ import {
   findUserByEmailAny,
   createOtpUser,
   markUserEmailVerified,
+  clearUnverifiedCredentials,
   OTP_MAX_ATTEMPTS,
   OTP_RESEND_COOLDOWN_MS,
 } from "./authOtp";
@@ -176,16 +177,34 @@ const DisplayNameSchema = z
  * which would reject every avatar that came from our own upload
  * endpoint.
  */
+/**
+ * SECURITY (M27 — avatar-as-tracking-beacon): an avatar URL may point at OUR OWN
+ * storage or be an inline data: image. Arbitrary `http(s)://` URLs used to be
+ * accepted, which made a profile photo a remote-fetch primitive aimed at other
+ * users' browsers — and the avatar is rendered on the INCOMING-CALL RING CARD,
+ * which appears with no interaction from the callee. So an attacker could set
+ * their avatar to `http://their-host/x.png`, dial a victim, and harvest the
+ * victim's IP address and User-Agent from a call the victim never answered —
+ * deanonymizing them on demand. It also fired from thread lists, contact rows,
+ * and in-call tiles, giving a passive read on when a target is looking at them.
+ *
+ * This is the same threat the status-background sanitizer already rejects
+ * `url(...)` for ("so an author can't turn a status into a tracking beacon that
+ * phones home from every viewer's browser"), and it cuts directly against this
+ * app's stated no-tracing goal — so it gets the same answer.
+ *
+ * No compatibility cost: every client path sets this from our own upload
+ * endpoint (always a `/manus-storage/…` key) or clears it to null, and it is
+ * never re-sent on an unrelated profile edit. This gates WRITES only, so any
+ * pre-existing row keeps rendering exactly as before.
+ */
 const AvatarUrlSchema = z
   .string()
   .trim()
   .min(1)
   .max(2048)
   .refine(
-    v =>
-      v.startsWith("/manus-storage/") ||
-      /^https?:\/\//i.test(v) ||
-      v.startsWith("data:image/"),
+    v => v.startsWith("/manus-storage/") || v.startsWith("data:image/"),
     { message: "Invalid avatar URL" }
   );
 
@@ -219,7 +238,54 @@ function requireIdentity(ctx: { identity: unknown }) {
   return id;
 }
 
+/**
+ * Hard ceiling on bytes inlined into a `revealExpiring` response. Kept at the
+ * original 30MB so no legitimate view-once clip regresses (a 60s video note is
+ * ≈20MB), but now enforced against the STREAM rather than a trusted
+ * `content-length` header — see the bounded read loop in `revealExpiring`.
+ */
+const REVEAL_MAX_INLINE_BYTES = 30 * 1024 * 1024;
+
 /* ── auth/identity router ─────────────────────────────────────── */
+
+/**
+ * SECURITY (M21): `startGuest` MINTS a brand-new identity — an `identities` row
+ * plus a permanent claim on one of the ~980,000 available 6-digit numbers — and
+ * it is `publicProcedure` reachable with no cookie and no credential. It was the
+ * only unauthenticated *resource-creating* endpoint with NO throttle at all
+ * (every comparable one already has a gate: directoryGate, otpGate,
+ * partyLineGate, statusGate, the upload buckets, the storage-proxy limiter).
+ *
+ * That mattered more than a normal write endpoint because the 6-digit space is
+ * FINITE and, in practice, never reclaimed: `numberTaken` treats a row's mere
+ * existence as "taken" (it does not consider guest expiry) and nothing anywhere
+ * deletes identities, while M20's `number_reservations` ledger is deliberately
+ * monotonic. So each unthrottled call permanently consumed one number. Drained
+ * far enough, `allocateSharedNumber`'s 40-attempt random search starts failing
+ * for EVERYONE — and once it does, every new guest, every registration, and
+ * every party-line creation fails with "could not allocate a unique 6-digit
+ * number", with no recovery path short of manual DB surgery. A slow, permanent,
+ * unauthenticated denial of service on all new onboarding.
+ *
+ * Deliberately generous so it is invisible to real traffic: a genuine visitor
+ * calls this once or twice per session (the reuse paths (1)/(2) above return
+ * early WITHOUT allocating, and they are gated too — a shared NAT of real users
+ * re-entering costs one token each, not a new number). 20 burst, ~1 per 10s
+ * sustained per IP still lets a busy office through while turning space
+ * exhaustion from an afternoon's scripting into an implausible multi-year grind.
+ * Honors RELAY_RATELIMIT_OFF like every other gate.
+ */
+const guestMintIpLimiter = createRateLimiter({ capacity: 20, refillPerSec: 0.1 });
+setInterval(() => guestMintIpLimiter.sweep(Date.now(), 60 * 60_000), 60 * 60_000).unref();
+function guestMintGate(ctx: { req: unknown }) {
+  if (process.env.RELAY_RATELIMIT_OFF === "1") return;
+  if (!guestMintIpLimiter.allow(clientIpOf(ctx.req as Parameters<typeof clientIpOf>[0]), Date.now())) {
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: "Too many sign-in attempts from this network. Try again shortly.",
+    });
+  }
+}
 
 export const v2AuthRouter = router({
   /**
@@ -305,6 +371,7 @@ export const v2AuthRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      guestMintGate(ctx);
       const deviceId =
         input.deviceId?.toLowerCase() ?? ctx.deviceId ?? null;
 
@@ -1579,14 +1646,43 @@ export const v2MessagesRouter = router({
           if (att?.storageKey) {
             const signed = await storageGetSignedUrl(att.storageKey);
             const resp = await fetch(signed);
-            const len = Number(resp.headers.get("content-length") ?? 0);
-            if (resp.ok && len <= 30 * 1024 * 1024) {
-              const buf = Buffer.from(await resp.arrayBuffer());
-              if (buf.length <= 30 * 1024 * 1024) {
-                const mime = att.mimeType || "application/octet-stream";
-                media = { dataUrl: `data:${mime};base64,${buf.toString("base64")}`, mimeType: mime };
-              }
+            if (!resp.ok || !resp.body) throw new Error("reveal: upstream unavailable");
+            // SECURITY (M23 — unbounded buffering): the size guard used to be
+            // `Number(content-length ?? 0) <= CAP`, so an upstream response with
+            // NO content-length yielded len=0, PASSED the check, and then went
+            // straight into `arrayBuffer()` — buffering the entire body with no
+            // ceiling at all. The follow-up `buf.length <= CAP` check was too
+            // late to help: the memory was already committed. A lying (small)
+            // content-length had the same effect. Because the inlined bytes are
+            // then base64'd (+33%) and serialized into a JSON tRPC response,
+            // one request could pin several times the object's size in heap, and
+            // this endpoint is only per-IP throttled — so a handful of hosts
+            // could OOM the instance.
+            //
+            // Now: reject a DECLARED over-cap size cheaply, then read the stream
+            // with a HARD ceiling regardless of what the header claimed, so a
+            // missing or dishonest content-length cannot exceed the cap either.
+            const declared = Number(resp.headers.get("content-length"));
+            if (Number.isFinite(declared) && declared > REVEAL_MAX_INLINE_BYTES) {
+              throw new Error("reveal: declared size over cap");
             }
+            const reader = resp.body.getReader();
+            const chunks: Buffer[] = [];
+            let total = 0;
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (!value) continue;
+              total += value.byteLength;
+              if (total > REVEAL_MAX_INLINE_BYTES) {
+                await reader.cancel().catch(() => {});
+                throw new Error("reveal: body exceeded cap");
+              }
+              chunks.push(Buffer.from(value));
+            }
+            const buf = Buffer.concat(chunks);
+            const mime = att.mimeType || "application/octet-stream";
+            media = { dataUrl: `data:${mime};base64,${buf.toString("base64")}`, mimeType: mime };
           }
         } catch {
           /* best-effort — the reader still gets the text body / a burned card */
@@ -1965,6 +2061,11 @@ export const v2OtpAuthRouter = router({
         let userId = (await findUserByEmailAny(email))?.id ?? null;
         if (!userId) userId = await createOtpUser({ email, firstName: input.firstName, lastName: input.lastName });
         if (!userId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create your account." });
+        // M29: burn any credential planted on this row while it was still
+        // unverified BEFORE flipping emailVerified — otherwise an attacker who
+        // pre-registered this address via /api/auth/register keeps a working
+        // password on the account the real owner is about to claim.
+        await clearUnverifiedCredentials(userId);
         await markUserEmailVerified(userId);
         await unlockLoginPin(userId);
         const guestToken = (ctx.req.cookies?.[GUEST_COOKIE] as string | undefined) ?? null;
@@ -2009,6 +2110,11 @@ export const v2OtpAuthRouter = router({
       let userId = (await findUserByEmailAny(email))?.id ?? null;
       if (!userId) userId = await createOtpUser({ email, firstName: row.firstName, lastName: row.lastName });
       if (!userId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create your account." });
+      // M29 (account pre-hijacking): the code proves this caller owns the
+      // address, so any password/PIN attached to the row BEFORE that proof is
+      // untrustworthy — clear it before granting verified status. Must run
+      // ahead of markUserEmailVerified, whose own guard is `emailVerified=false`.
+      await clearUnverifiedCredentials(userId);
       await markUserEmailVerified(userId);
       // v2.87: an email-code sign-in is the recovery path — unlock the PIN.
       await unlockLoginPin(userId);
@@ -2518,28 +2624,46 @@ export const v2StatusRouter = router({
       const me = requireIdentity(ctx);
       statusGate(ctx);
       const text = (input.text ?? "").trim();
+      // SECURITY (M30 — status-media laundering, the F2 class again): the
+      // ownership gate below used to live ONLY in the media-kind `else` branch,
+      // but `input.mediaKey` was persisted for EVERY kind. So a `kind:"text"`
+      // post could smuggle an arbitrary key into its `mediaKey`/`mediaUrl`
+      // without any namespace check.
+      //
+      // That matters because `authorizeStorageKey` resolves a `/status_` key by
+      // looking up whichever ACTIVE status row claims it, and grants access to
+      // THAT row's owner and audience — checked BEFORE the attachment branch. So
+      // planting another user's status key on your own text status re-activates
+      // it: an EXPIRED or DELETED status, whose media is supposed to be
+      // permanently unreachable ("truly ephemeral at the access layer even
+      // though the object lingers in the bucket"), becomes readable again by the
+      // planter and re-exposed to the planter's own audience. Anyone who was in
+      // the original audience while it was live already knows the key.
+      //
+      // Validate whenever a key is supplied, regardless of kind.
+      if (input.mediaKey && !keyInOwnerNamespace(input.mediaKey, me.id, s3Config()?.prefix ?? "")) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "That upload isn't yours." });
+      }
       if (input.kind === "text") {
         if (!text) throw new TRPCError({ code: "BAD_REQUEST", message: "A text status needs some text." });
       } else {
         if (!input.mediaKey) throw new TRPCError({ code: "BAD_REQUEST", message: "Missing media for this status." });
-        // Ownership gate (same as attachments.register): a client-supplied key
-        // may only be claimed within the caller's OWN upload namespace.
-        if (!keyInOwnerNamespace(input.mediaKey, me.id, s3Config()?.prefix ?? "")) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "That upload isn't yours." });
-        }
       }
+      // A text status has no media by definition — never persist a key for one,
+      // so it can't claim a `/status_` key in the authorization table at all.
+      const mediaKey = input.kind === "text" ? null : (input.mediaKey ?? null);
       // Per-user cap so posting isn't an unbounded DB/storage cost vector.
       if ((await countActiveStatuses(me.id)) >= STATUS_MAX_ACTIVE) {
         throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: `You can have up to ${STATUS_MAX_ACTIVE} active statuses.` });
       }
-      const mediaUrl = input.mediaKey ? `/manus-storage/${input.mediaKey}` : null;
+      const mediaUrl = mediaKey ? `/manus-storage/${mediaKey}` : null;
       const row = await insertStatus({
         identityId: me.id,
         kind: input.kind,
         text: text || null,
         // Author-controlled bg is restricted to safe color/gradient tokens.
         bgColor: sanitizeStatusBg(input.bgColor),
-        mediaKey: input.mediaKey ?? null,
+        mediaKey,
         mediaUrl,
         mimeType: input.mimeType ?? null,
         durationMs: input.durationMs ?? null,

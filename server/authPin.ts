@@ -131,11 +131,27 @@ export async function attemptPinLogin(row: PinUserRow, pin: string): Promise<Pin
   // space. Deciding from the PERSISTED post-increment value (below) closes the
   // lost-update race: once the count crosses the cap the row locks and every
   // later guess fails the `IS NULL` guard.
+  // MySQL EVALUATES SINGLE-TABLE `UPDATE` SET ASSIGNMENTS LEFT TO RIGHT, and a
+  // later assignment sees the ALREADY-UPDATED value of an earlier one (an
+  // explicitly documented MySQL deviation from standard SQL). So by the time the
+  // CASE below runs, `loginPinAttempts` is ALREADY `old + 1` — do NOT add another
+  // `+ 1` here. The original `... + 1 > PIN_MAX_ATTEMPTS` double-counted, making
+  // the effective test `old + 2 > 3`, which broke the ladder in two ways:
+  //   • the row locked on the THIRD wrong PIN, not the fourth (the UI's
+  //     "attempts left" counter and the lock email's "four times in a row" copy
+  //     both promise four), and
+  //   • the persisted count could then only ever reach 3, while the lock-alert
+  //     email below requires exactly `PIN_MAX_ATTEMPTS + 1` (4) — so the email
+  //     was UNREACHABLE and an account owner was NEVER told their account was
+  //     being brute-forced. Locking early is fail-safe; silently dropping the
+  //     alert is not.
+  // Comparing the post-increment value directly restores both: `old + 1 > 3`
+  // locks on the 4th wrong entry and persists 4, which the email condition sees.
   const res = await db
     .update(users)
     .set({
       loginPinAttempts: sql`COALESCE(${users.loginPinAttempts}, 0) + 1`,
-      loginPinLockedAt: sql`CASE WHEN COALESCE(${users.loginPinAttempts}, 0) + 1 > ${PIN_MAX_ATTEMPTS} THEN NOW() ELSE ${users.loginPinLockedAt} END`,
+      loginPinLockedAt: sql`CASE WHEN COALESCE(${users.loginPinAttempts}, 0) > ${PIN_MAX_ATTEMPTS} THEN NOW() ELSE ${users.loginPinLockedAt} END`,
     })
     .where(and(eq(users.id, row.id), isNull(users.loginPinLockedAt)));
   // mysql2 returns [ResultSetHeader]; affectedRows>0 means THIS statement

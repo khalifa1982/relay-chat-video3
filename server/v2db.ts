@@ -126,8 +126,17 @@ async function tryReserveNumber(
     await db.execute(sql`INSERT INTO \`number_reservations\` (\`number\`) VALUES (${candidate})`);
     return true;
   } catch (e) {
-    const msg = (e as Error)?.message || "";
-    if (/duplicate/i.test(msg)) return false; // lost the race — retry a new candidate
+    // Detect the duplicate-key case by mysql's STABLE machine-readable markers
+    // (errno 1062 / code ER_DUP_ENTRY) first, and only fall back to sniffing the
+    // human-readable text. Matching the message ALONE was fragile in exactly the
+    // wrong direction: this helper fails OPEN (returns true) for anything it
+    // doesn't recognize, so a driver upgrade, a localized server, or a wrapped
+    // error that no longer contains the literal word "duplicate" would silently
+    // turn every lost race into "reservation won" — reintroducing the very
+    // cross-table collision the ledger exists to prevent, with no visible sign.
+    const err = e as { errno?: number; code?: string; message?: string };
+    if (err?.errno === 1062 || err?.code === "ER_DUP_ENTRY") return false;
+    if (/duplicate/i.test(err?.message || "")) return false;
     return true; // table missing / transient hiccup → behave as pre-ledger
   }
 }
@@ -2086,6 +2095,44 @@ export async function deleteMessage(input: {
  * deleted so the storage key stops authorizing (same access-layer honesty as
  * status media). Returns the conversation + roster for the SSE fan-out.
  */
+/**
+ * ATOMIC view-once burn (M22). Nulls the content and stamps `consumedAt`, but
+ * ONLY if the message has not already been consumed — the `JSON_EXTRACT(...)
+ * IS NULL` guard is evaluated by MySQL as part of the UPDATE, so exactly ONE
+ * concurrent caller can ever win. Returns true for the winner, false for a
+ * caller that lost the race (or whose row vanished).
+ *
+ * SECURITY (same lost-update class as the S1 PIN-lockout and S9 OTP races):
+ * both burn paths previously did read → check `meta.consumedAt == null` in JS →
+ * write, with an await in between (the participant lookup). Two concurrent
+ * reveals of the SAME view-once message therefore both observed "not yet
+ * consumed", both passed, and both returned the captured content — defeating
+ * the once-only guarantee the whole feature rests on. It also amplified the
+ * reveal path's cost: N racing reveals each triggered a full storage fetch and
+ * base64 inline of the same object.
+ */
+async function burnExpiringMessage(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  messageId: number,
+  meta: Record<string, unknown>,
+): Promise<boolean> {
+  const res = await db
+    .update(messages)
+    .set({
+      body: null,
+      attachmentId: null,
+      meta: { ...meta, consumedAt: Date.now() },
+    })
+    .where(
+      and(
+        eq(messages.id, messageId),
+        sql`JSON_EXTRACT(${messages.meta}, '$.consumedAt') IS NULL`,
+      ),
+    );
+  // mysql2 returns [ResultSetHeader]; affectedRows>0 means THIS statement won.
+  return Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+}
+
 export async function consumeExpiringMessage(input: {
   messageId: number;
   identityId: number;
@@ -2103,14 +2150,9 @@ export async function consumeExpiringMessage(input: {
   if (row.senderIdentityId === input.identityId) return null;
   const pids = await getConversationParticipantIds(row.conversationId);
   if (!pids.includes(input.identityId)) return null;
-  await db
-    .update(messages)
-    .set({
-      body: null,
-      attachmentId: null,
-      meta: { ...meta, consumedAt: Date.now() },
-    })
-    .where(eq(messages.id, input.messageId));
+  if (!(await burnExpiringMessage(db, input.messageId, meta as Record<string, unknown>))) {
+    return null; // lost the race — another caller already burned it
+  }
   // SECURITY (F3): we deliberately do NOT delete the attachments row on consume.
   // The message's attachmentId was just nulled above, so no conversation
   // references this file and getAttachmentForIdentity now denies every
@@ -2160,14 +2202,11 @@ export async function revealExpiringMessage(input: {
   const capturedAttachmentId = row.attachmentId ?? null;
   // Burn — same as consumeExpiringMessage (keep the attachments ROW per F3 so
   // the lingering S3 object stays classified `attachment` and fails CLOSED).
-  await db
-    .update(messages)
-    .set({
-      body: null,
-      attachmentId: null,
-      meta: { ...meta, consumedAt: Date.now() },
-    })
-    .where(eq(messages.id, input.messageId));
+  // ATOMIC (M22): only the caller that actually flips `consumedAt` may receive
+  // the captured content, so two concurrent reveals can't both read it.
+  if (!(await burnExpiringMessage(db, input.messageId, meta as Record<string, unknown>))) {
+    return null; // lost the race — another caller already burned it
+  }
   return {
     conversationId: row.conversationId,
     participantIds: pids,
@@ -2449,6 +2488,28 @@ export async function getAttachmentForIdentity(attachmentId: number, identityId:
   if (att.uploadedByIdentityId === identityId) return att;
   // Otherwise require a message that references this attachment to live in a
   // conversation the caller participates in.
+  //
+  // SECURITY (M28 — view-once bypass): a still-LOCKED expiring message must NOT
+  // serve as that authorization. M11 stopped handing the attachment back from
+  // `messages.list` for a locked message, but this function is the gate behind
+  // BOTH `attachments.get` (which takes a sequential integer id, so a recipient
+  // can simply enumerate ids until one resolves) AND `authorizeStorageKey`, and
+  // it happily matched the locked message — whose `attachmentId` is only nulled
+  // at BURN time. So a recipient could read view-once media, repeatedly, without
+  // ever burning it: the message stayed "locked" for everyone and the sender was
+  // never told it had been seen — defeating the entire guarantee of the feature.
+  //
+  // Worse, the same gate is what `messages.send` uses to decide whether a caller
+  // "owns" an attachment they're attaching, so a recipient could RE-ATTACH the
+  // sender's view-once media to a brand-new message in another conversation —
+  // laundering content that was meant to vanish into a permanent one the
+  // original sender cannot unsend.
+  //
+  // The only legitimate path to locked content is `messages.revealExpiring`,
+  // which burns it and inlines the bytes server-side. Note the uploader (i.e.
+  // the SENDER) already returned above, so this restricts recipients only, and
+  // a CONSUMED message has its `attachmentId` nulled and therefore stops
+  // matching at all (fails closed, per F3).
   const ref = await db
     .select({ conversationId: messages.conversationId })
     .from(messages)
@@ -2459,7 +2520,8 @@ export async function getAttachmentForIdentity(attachmentId: number, identityId:
     .where(
       and(
         eq(messages.attachmentId, attachmentId),
-        eq(conversationParticipants.identityId, identityId)
+        eq(conversationParticipants.identityId, identityId),
+        sql`(JSON_EXTRACT(${messages.meta}, '$.expire') IS NULL OR JSON_EXTRACT(${messages.meta}, '$.consumedAt') IS NOT NULL)`
       )
     )
     .limit(1);

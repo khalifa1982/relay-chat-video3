@@ -171,8 +171,16 @@ describe("self-destructing messages (v2.96)", () => {
       V2DB.indexOf("export async function markThreadRead")
     );
     // The message's attachmentId is nulled (revokes participant access via
-    // getAttachmentForIdentity)…
-    expect(fn).toMatch(/attachmentId: null/);
+    // getAttachmentForIdentity). v2.99.37 (M22): that write moved into the
+    // shared ATOMIC `burnExpiringMessage` helper, so assert the delegation here
+    // and the nulling itself at the helper.
+    expect(fn).toMatch(/await burnExpiringMessage\(/);
+    expect(
+      V2DB.slice(
+        V2DB.indexOf("async function burnExpiringMessage"),
+        V2DB.indexOf("export async function consumeExpiringMessage"),
+      ),
+    ).toMatch(/attachmentId: null/);
     // …but the attachments ROW is deliberately NOT deleted. Deleting it made
     // getAttachmentByStorageKey return null → authorizeStorageKey classified the
     // still-present S3 object as `unknown`, which the storage proxy serves to

