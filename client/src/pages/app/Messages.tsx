@@ -324,10 +324,15 @@ export default function MessagesPage() {
                           <div
                             key={t.conversationId}
                             className={
-                              "flex items-center gap-2.5 px-4 md:px-5 py-2 border-b border-border last:border-b-0 transition-colors " +
+                              "flex flex-col px-4 md:px-5 py-2.5 border-b border-border last:border-b-0 transition-colors " +
                               (isActive ? "bg-muted/40" : "hover:bg-muted/30")
                             }
                           >
+                            {/* Line 1 — avatar + FULL name/badge/PIN/time + preview.
+                                The action buttons moved to their own line below
+                                (v2.99.33, owner) so the name is never squeezed to
+                                "A…"; everything on this line gets the full width. */}
+                            <div className="flex items-center gap-2.5">
                             {/* The avatar sits OUTSIDE the open-thread button —
                                 it's its own button (status/profile) and nested
                                 buttons are invalid HTML. */}
@@ -374,27 +379,20 @@ export default function MessagesPage() {
                             <button
                               type="button"
                               onClick={() => setLocation(`/app/messages?c=${t.conversationId}`)}
-                              className="flex-1 min-w-0 flex items-center gap-3 text-left"
+                              className="flex-1 min-w-0 flex items-start gap-3 text-left"
                             >
                               <div className="flex-1 min-w-0">
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="font-semibold text-[14.5px] truncate flex items-center gap-1.5">
-                                    {isThreadMuted(t.conversationId) && (
-                                      <BellOff className="size-3.5 shrink-0 text-muted-foreground" />
-                                    )}
-                                    <span className="truncate">{t.peerDisplayName || t.peerNumber}</span>
-                                    <RoleBadge role={roleFromFlags(t.peerRole, t.peerVerified)} size={14} />
-                                    {/* v2.99.10 (owner): the PIN shows on 1:1 rows too. */}
-                                    {t.kind !== "group" && t.peerNumber && /^\d{6}$/.test(t.peerNumber) && (
-                                      <span className="font-mono text-[10.5px] text-muted-foreground shrink-0" dir="ltr">
-                                        {t.peerNumber.slice(0, 3)}-{t.peerNumber.slice(3)}
-                                      </span>
-                                    )}
-                                  </div>
-                                  {t.lastMessageAt && (
-                                    <div className="text-[10.5px] font-mono text-muted-foreground shrink-0">
-                                      {timeAgo(t.lastMessageAt)}
-                                    </div>
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  {isThreadMuted(t.conversationId) && (
+                                    <BellOff className="size-3.5 shrink-0 text-muted-foreground" />
+                                  )}
+                                  <span className="font-semibold text-[14.5px] truncate">{t.peerDisplayName || t.peerNumber}</span>
+                                  <RoleBadge role={roleFromFlags(t.peerRole, t.peerVerified)} size={14} />
+                                  {/* v2.99.10 (owner): the PIN shows on 1:1 rows too. */}
+                                  {t.kind !== "group" && t.peerNumber && /^\d{6}$/.test(t.peerNumber) && (
+                                    <span className="font-mono text-[10.5px] text-muted-foreground shrink-0" dir="ltr">
+                                      {t.peerNumber.slice(0, 3)}-{t.peerNumber.slice(3)}
+                                    </span>
                                   )}
                                 </div>
                                 <div className="mt-0.5">
@@ -409,24 +407,34 @@ export default function MessagesPage() {
                                   )}
                                 </div>
                               </div>
+                              {t.lastMessageAt && (
+                                <div className="text-[10.5px] font-mono text-muted-foreground shrink-0 pt-0.5">
+                                  {timeAgo(t.lastMessageAt)}
+                                </div>
+                              )}
                             </button>
-                            {/* Quick actions: message (orange) + DM voice (green) / video (blue). */}
-                            <div className="flex items-center gap-1 shrink-0">
+                            </div>
+                            {/* Line 2 — quick actions on their own row (indented
+                                past the avatar) so they're fully tappable and never
+                                crowd the name: message (orange) + DM voice (green) /
+                                video (blue), with the unread badge. */}
+                            <div className="flex items-center gap-1.5 pl-[52px] mt-1.5">
                               {t.unreadCount > 0 && (
                                 <span
-                                  className="inline-flex min-w-[18px] h-[18px] px-1.5 rounded-full text-white text-[10px] items-center justify-center font-extrabold"
+                                  className="inline-flex min-w-[20px] h-[20px] px-1.5 rounded-full text-white text-[10.5px] items-center justify-center font-extrabold mr-auto"
                                   style={{ background: "linear-gradient(135deg,#fb923c,#c2410c)" }}
                                 >
-                                  {t.unreadCount > 99 ? "99+" : t.unreadCount}
+                                  {t.unreadCount > 99 ? "99+" : t.unreadCount} unread
                                 </span>
                               )}
+                              {t.unreadCount === 0 && <span className="mr-auto" />}
                               <AccentCircle
                                 rgb="251,146,60"
                                 hex="#fb923c"
                                 title="Message"
                                 onClick={() => setLocation(`/app/messages?c=${t.conversationId}`)}
                               >
-                                <MessageSquare className="size-3.5" />
+                                <MessageSquare className="size-4" />
                               </AccentCircle>
                               {isDm && (
                                 <>
@@ -436,7 +444,7 @@ export default function MessagesPage() {
                                     title="Voice call"
                                     onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(t.peerNumber)}&voice=1`)}
                                   >
-                                    <Phone className="size-3.5" />
+                                    <Phone className="size-4" />
                                   </AccentCircle>
                                   <AccentCircle
                                     rgb="56,189,248"
@@ -444,7 +452,7 @@ export default function MessagesPage() {
                                     title="Video call"
                                     onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(t.peerNumber)}&video=1`)}
                                   >
-                                    <Video className="size-3.5" />
+                                    <Video className="size-4" />
                                   </AccentCircle>
                                 </>
                               )}

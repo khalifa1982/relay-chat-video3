@@ -5445,6 +5445,23 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       invitee handling), M13/M14/M18 (contacts/directory), M15/M16/L5 (status), M20/L8 (allocation races),
       M6 (draft debounce), M12/L4 (presence), L2/L3 (auth), M11 (server ephemeral content gating).
 
+## v2.99.33 — owner feedback: Messages row layout + status visibility (2026-07-24)
+- [x] (1) Thread rows cramped — name truncated to "A…": the DIRECT rows put name + badge + PIN + time AND
+      the 4 action buttons on one line, squeezing the name. FIX (Messages.tsx): the row is a vertical stack
+      (flex flex-col) — line 1 = full-width avatar + full name/badge/PIN + time + preview/typing; line 2 =
+      the quick-action circles on their own row (pl-[52px] mt-1.5, size-4 icons) + an "N unread" pill.
+      Typing indicator unchanged.
+- [x] (2) Status "when you post it, it doesn't appear on anyone": visibility was follower-only
+      (statusAudienceAuthorized passed only when the REQUESTER saved the OWNER), so a post was invisible to
+      the poster's own contacts unless they saved back, and the PeerAvatar story-ring never lit. FIX
+      (either-direction, WhatsApp-style): visible when EITHER side saved the other minus blocks either way —
+      statusAudienceAuthorized (iSavedThem || theySavedMe); getStatusAudienceIds unions savers + the owner's
+      own saved contacts (realtime fan-out); the feed adds getIdentityIdsWhoSaved(me.number). Composer copy →
+      "visible for 24h to your contacts and anyone who's saved you".
+- [x] Tests: client/src/pages/app/ownerRowStatus.test.ts (6 pins); qaBatch7 M16 + server/status.test.ts
+      audience pins updated. 1466 tests. NOTE: widens status visibility (deliberate owner call; blocks still
+      hide both ways).
+
 ## v2.99.32 — heavy-QA sweep fixes, batch 10 (presence) (2026-07-24)
 - [x] M12 (MED) closing one of two tabs flipped the identity offline: presence is one boolean per identity
       but every tab runs its own PresenceManager, so closing one of two tabs beaconed offline (contacts blink)

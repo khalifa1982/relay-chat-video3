@@ -94,10 +94,13 @@ describe("status privacy hardening (review §3/§4/§5)", () => {
     expect(proxy).toMatch(/authz\.kind === "status" && !authz\.authorized/);
   });
 
-  it("audience honors blocks both ways", () => {
-    // requester must have saved (non-blocked) the owner AND owner must not block them
-    expect(db).toMatch(/saved\.blocked === true\) return false/);
-    expect(db).toMatch(/isNumberBlockedBy\(ownerId, requester\.number\)/);
+  it("audience is either-direction and honors blocks both ways", () => {
+    // v2.99.33 (owner): visible if EITHER side saved the other (your contacts
+    // see your status without adding you back), minus a block in either direction.
+    expect(db).toMatch(/isNumberBlockedBy\(ownerId, requester\.number\)/); // owner blocked me
+    expect(db).toMatch(/isNumberBlockedBy\(requesterId, owner\.number\)/); // I blocked owner
+    expect(db).toMatch(/if \(iSavedThem\) return true;/);
+    expect(db).toMatch(/return !!theySavedMe;/);
     // feed drops owners who blocked me
     expect(router).toMatch(/ownersWhoBlockedNumber/);
   });

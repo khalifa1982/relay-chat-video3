@@ -9,10 +9,10 @@ import { VideoRecordSheet } from "@/app/VideoRecordSheet";
 
 /**
  * Rich user status (v2.95) — WhatsApp/story-style ephemeral updates: text,
- * image+caption, video+caption, or audio, visible for 24h to anyone who has
- * you saved in their contacts (M16: the audience is people who saved YOUR
- * number, not people you saved — statusAudienceAuthorized gates on the viewer
- * having saved the owner, so the poster-side copy must say so).
+ * image+caption, video+caption, or audio, visible for 24h to your contacts and
+ * anyone who's saved you (v2.99.33 either-direction: statusAudienceAuthorized
+ * passes when EITHER side saved the other, so posting reaches the people you've
+ * added without requiring them to add you back).
  *
  * - <StatusStrip/> is the horizontal ring row (mounted atop the Messages tab):
  *   "My status" first, then contacts with active statuses (bright ring = unseen).
@@ -149,7 +149,7 @@ export function StatusStrip() {
 
         {others.length === 0 && !myGroup && (
           <span className="text-xs text-muted-foreground/80 pl-1">
-            Share a photo, video, or a line — visible for 24h to anyone who has you in their contacts.
+            Share a photo, video, or a line — visible for 24h to your contacts.
           </span>
         )}
       </div>
@@ -258,7 +258,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           durationMs,
         });
       }
-      toast.success("Status posted — visible for 24h to anyone who has you in their contacts.");
+      toast.success("Status posted — visible for 24h to your contacts and anyone who's saved you.");
       onPosted();
     } catch (e) {
       toast.error((e as Error)?.message || "Couldn't post your status.");

@@ -39,12 +39,16 @@ describe("v2.99.29 QA M15 — video/audio status runs its true length", () => {
   });
 });
 
-describe("v2.99.29 QA M16 — status audience copy matches the enforcement", () => {
-  it("no longer claims 'visible to your contacts' (wrong direction)", () => {
-    expect(src).not.toMatch(/visible to your contacts/);
+describe("v2.99.29/33 QA M16 — status audience copy matches the enforcement", () => {
+  // v2.99.33 (owner) switched status to EITHER-DIRECTION visibility — a status
+  // reaches your contacts AND anyone who saved you — so "your contacts" is now
+  // ACCURATE poster-side copy (it was wrong-direction only under the old
+  // saved-you-only model). The composer says so, and mentions the follower side.
+  it("the strip/poster copy says a status reaches your contacts", () => {
+    expect(src).toMatch(/visible for 24h to your contacts/);
   });
-  it("says the audience is people who have you saved", () => {
-    expect(src).toMatch(/anyone who has you in their contacts/);
+  it("the toast also mentions the anyone-who-saved-you direction", () => {
+    expect(src).toMatch(/your contacts and anyone who's saved you/);
   });
 });
 

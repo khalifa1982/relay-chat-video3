@@ -33,6 +33,7 @@ import {
   getStatusViewerIds,
   getStatusViewCounts,
   getContactNumbersForOwner,
+  getIdentityIdsWhoSaved,
   statusAudienceAuthorized,
   countActiveStatuses,
   ownersWhoBlockedNumber,
@@ -2487,11 +2488,17 @@ export const v2StatusRouter = router({
   /** The story feed: my active statuses + my contacts', grouped by owner. */
   feed: publicProcedure.query(async ({ ctx }) => {
     const me = requireIdentity(ctx);
-    // `getContactNumbersForOwner` already drops contacts I blocked. Then drop any
-    // owner who has blocked ME, so a block hides statuses BOTH ways.
+    // Either-direction feed (v2.99.33): my own statuses + statuses of people I
+    // saved AND people who saved ME — so a contact's post shows up even if I
+    // haven't added them back (mirrors statusAudienceAuthorized). Blocks are
+    // dropped: getContactNumbersForOwner already excludes contacts I blocked,
+    // and `blockedMe` below drops any owner who blocked ME.
     const contactNumbers = await getContactNumbersForOwner(me.id);
     const contactIdents = contactNumbers.length ? await getIdentitiesByNumbers(contactNumbers) : [];
-    const candidateIds = Array.from(new Set<number>([me.id, ...contactIdents.map((i) => i.id)]));
+    const savedMeIds = await getIdentityIdsWhoSaved(me.number);
+    const candidateIds = Array.from(
+      new Set<number>([me.id, ...contactIdents.map((i) => i.id), ...savedMeIds]),
+    );
     const blockedMe = await ownersWhoBlockedNumber(candidateIds.filter((id) => id !== me.id), me.number);
     const ownerIds = candidateIds.filter((id) => id === me.id || !blockedMe.has(id));
     const rows = await getActiveStatusesForOwners(ownerIds);

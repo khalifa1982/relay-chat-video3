@@ -2581,6 +2581,19 @@ export async function getContactNumbersForOwner(ownerId: number): Promise<string
   return rows.filter((r) => r.blocked !== true).map((r) => r.number);
 }
 
+/** Identity ids of everyone who has SAVED `number` as a (non-blocked) contact —
+ *  the "people who added me" direction, so my feed can include their statuses
+ *  too (v2.99.33 either-direction status visibility). */
+export async function getIdentityIdsWhoSaved(number: string): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ ownerId: contacts.ownerId, blocked: contacts.blocked })
+    .from(contacts)
+    .where(eq(contacts.number, number));
+  return Array.from(new Set(rows.filter((r) => r.blocked !== true).map((r) => r.ownerId)));
+}
+
 /** A single ACTIVE status by its media key (drives storage-proxy authorization). */
 export async function getActiveStatusByMediaKey(
   mediaKey: string,
@@ -2596,10 +2609,13 @@ export async function getActiveStatusByMediaKey(
 }
 
 /**
- * Can `requesterId` view statuses owned by `ownerId`? The owner always can;
- * otherwise the requester must have SAVED the owner (a non-blocked contact for
- * the owner's number) AND the owner must not have blocked the requester. This is
- * the single audience rule shared by the feed, markViewed, and media access.
+ * Can `requesterId` view statuses owned by `ownerId`? The owner always can.
+ * Otherwise (v2.99.33, owner: "when you post it, it doesn't appear on anyone")
+ * visibility is EITHER-DIRECTION, WhatsApp-style: a status reaches the people
+ * YOU'VE added as contacts AND anyone who has added YOU — so posting is visible
+ * to your contacts without requiring them to have saved you back. A block in
+ * EITHER direction hides statuses BOTH ways. This is the single audience rule
+ * shared by the feed, markViewed, and media access.
  */
 export async function statusAudienceAuthorized(
   requesterId: number,
@@ -2609,17 +2625,24 @@ export async function statusAudienceAuthorized(
   const db = await getDb();
   if (!db) return false;
   const owner = await getIdentityById(ownerId);
-  if (!owner) return false;
-  const [saved] = await db
-    .select({ blocked: contacts.blocked })
+  const requester = await getIdentityById(requesterId);
+  if (!owner || !requester) return false;
+  // A block either way hides statuses in BOTH directions.
+  if (await isNumberBlockedBy(ownerId, requester.number)) return false; // owner blocked me
+  if (await isNumberBlockedBy(requesterId, owner.number)) return false; // I blocked owner
+  // Either side having saved the other authorizes viewing.
+  const [iSavedThem] = await db
+    .select({ id: contacts.id })
     .from(contacts)
     .where(and(eq(contacts.ownerId, requesterId), eq(contacts.number, owner.number)))
     .limit(1);
-  if (!saved || saved.blocked === true) return false; // must have saved (not blocked) them
-  const requester = await getIdentityById(requesterId);
-  if (!requester) return false;
-  if (await isNumberBlockedBy(ownerId, requester.number)) return false; // owner blocked me
-  return true;
+  if (iSavedThem) return true;
+  const [theySavedMe] = await db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(and(eq(contacts.ownerId, ownerId), eq(contacts.number, requester.number)))
+    .limit(1);
+  return !!theySavedMe;
 }
 
 /** Count of a user's currently-active statuses (for the per-user cap). */
@@ -2635,9 +2658,11 @@ export async function countActiveStatuses(ownerId: number): Promise<number> {
 
 /**
  * The REVERSE of the feed query: identity ids of everyone whose feed includes
- * `ownerId`'s statuses — i.e. everyone who SAVED the owner's number (non-blocked)
- * and whom the owner hasn't blocked back. Used to fan out realtime "status"
- * events the moment a status is posted or removed.
+ * `ownerId`'s statuses — used to fan out realtime "status" events the moment a
+ * status is posted or removed. v2.99.33 (either-direction): that's everyone who
+ * SAVED the owner's number (non-blocked) AND everyone the OWNER has saved
+ * (their own contacts) — so a fresh post lights up on the poster's contacts
+ * live, not just on people who saved them. Mutual blocks are dropped.
  */
 export async function getStatusAudienceIds(
   ownerId: number,
@@ -2645,12 +2670,21 @@ export async function getStatusAudienceIds(
 ): Promise<number[]> {
   const db = await getDb();
   if (!db) return [];
+  // People who SAVED the owner (follower direction).
   const savers = await db
     .select({ ownerId: contacts.ownerId, blocked: contacts.blocked })
     .from(contacts)
     .where(eq(contacts.number, ownerNumber));
+  const saverIds = savers.filter((r) => r.blocked !== true).map((r) => r.ownerId);
+  // People the OWNER saved (their own contacts) — a status also reaches these.
+  const ownerContacts = await db
+    .select({ number: contacts.number, blocked: contacts.blocked })
+    .from(contacts)
+    .where(eq(contacts.ownerId, ownerId));
+  const savedNumbers = ownerContacts.filter((r) => r.blocked !== true).map((r) => r.number);
+  const savedIdents = savedNumbers.length ? await getIdentitiesByNumbers(savedNumbers) : [];
   const candidateIds = Array.from(
-    new Set(savers.filter((r) => r.blocked !== true).map((r) => r.ownerId)),
+    new Set<number>([...saverIds, ...savedIdents.map((i) => i.id)]),
   ).filter((id) => id !== ownerId);
   if (candidateIds.length === 0) return [];
   // A block hides statuses BOTH ways — drop anyone the owner blocked.
