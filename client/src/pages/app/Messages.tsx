@@ -208,7 +208,11 @@ export default function MessagesPage() {
       },
     ];
     return cats.filter((c) => c.rows.length > 0);
-  }, [threads.data, me]);
+    // threadSearch MUST be a dep (QA H3): the memo filters `list` by it, but it
+    // was missing here — so typing in the search box re-rendered yet returned the
+    // cached unfiltered list (threads.data is stable via structural sharing), and
+    // search silently did nothing.
+  }, [threads.data, me, threadSearch]);
 
   // While a conversation is open on MOBILE, hide the app's top bar so the chat
   // has ONE compact header (name + status) instead of two stacked headers

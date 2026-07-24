@@ -1759,8 +1759,20 @@ export function handleMessage(
         // someone in (the in-call ➕ / group-dial flush) stays PARKED on the
         // line when that invitee declines. A pl- room is a persistent
         // destination, not a throwaway dial room.
+        // GROUP-DIAL GUARD (QA H1): a group dial rings A/B/C off one room; while
+        // everyone rings, the caller's room is still size 1 (nobody accepted).
+        // If we reaped it the moment A declined, B and C would keep ringing with
+        // pendingRings pointing at a DELETED room → they'd get error{gone} on
+        // accept and the whole conference dies over one decline. Only reap once
+        // the caller is ringing NOBODY else (`target.ringing` already had the
+        // decliner removed at line 1739), so an in-progress group dial survives.
         const callerRid = target.roomId;
-        if (callerRid && !callerRid.startsWith(PARTY_LINE_ROOM_PREFIX) && roomSize(reg, callerRid) === 1) {
+        if (
+          callerRid &&
+          !callerRid.startsWith(PARTY_LINE_ROOM_PREFIX) &&
+          roomSize(reg, callerRid) === 1 &&
+          target.ringing.size === 0
+        ) {
           leaveRoom(reg, targetPin);
         }
       }
