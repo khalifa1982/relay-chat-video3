@@ -314,15 +314,22 @@ const REVEAL_MAX_INLINE_BYTES = 30 * 1024 * 1024;
  * number", with no recovery path short of manual DB surgery. A slow, permanent,
  * unauthenticated denial of service on all new onboarding.
  *
- * Deliberately generous so it is invisible to real traffic: a genuine visitor
- * calls this once or twice per session (the reuse paths (1)/(2) above return
- * early WITHOUT allocating, and they are gated too — a shared NAT of real users
- * re-entering costs one token each, not a new number). 20 burst, ~1 per 10s
- * sustained per IP still lets a busy office through while turning space
- * exhaustion from an afternoon's scripting into an implausible multi-year grind.
+ * Sized against the real shape of the traffic. Only the ALLOCATING branch is
+ * metered (see the call site), and `startGuest` is invoked from exactly one
+ * place — the "Enter as guest" form submit — so one new visitor costs one token
+ * and returning visitors cost nothing. 60 burst then ~1 every 5s therefore
+ * absorbs a whole room of people signing up together on one shared address (a
+ * demo, a classroom, a conference, an office behind CGNAT), which is a realistic
+ * scenario for this app and one where the failure mode would be a hard
+ * TOO_MANY_REQUESTS on the only screen that gets a person into the product.
+ *
+ * It still bounds scripted abuse to roughly 17k numbers/day from a single host —
+ * ~57 days to walk the space rather than an afternoon. A determined attacker with
+ * several addresses is not stopped by a per-IP bucket alone; that would need a
+ * global budget, which is noted as a follow-up rather than pretended here.
  * Honors RELAY_RATELIMIT_OFF like every other gate.
  */
-const guestMintIpLimiter = createRateLimiter({ capacity: 20, refillPerSec: 0.1 });
+const guestMintIpLimiter = createRateLimiter({ capacity: 60, refillPerSec: 0.2 });
 setInterval(() => guestMintIpLimiter.sweep(Date.now(), 60 * 60_000), 60 * 60_000).unref();
 function guestMintGate(ctx: { req: unknown }) {
   if (process.env.RELAY_RATELIMIT_OFF === "1") return;
@@ -418,7 +425,6 @@ export const v2AuthRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      guestMintGate(ctx);
       const deviceId =
         input.deviceId?.toLowerCase() ?? ctx.deviceId ?? null;
 
@@ -473,6 +479,18 @@ export const v2AuthRouter = router({
       }
 
       // (3) Fresh identity. Bind the device id now.
+      //
+      // SELF-REVIEW (M21 refinement): the throttle belongs HERE, on the branch
+      // that actually ALLOCATES, not at the top of the resolver. Cases (1) and
+      // (2) above return an EXISTING identity and consume no number, yet a gate
+      // at the entrance charged them a token anyway — so on a shared egress
+      // (carrier CGNAT, an office, a conference, a classroom) returning visitors
+      // whose cookie had been dropped would drain the bucket and then block
+      // people who genuinely needed a new identity, with a hard
+      // TOO_MANY_REQUESTS on the one screen that gets them into the app. The
+      // resource being protected is the finite 6-digit number space, so meter
+      // exactly the operation that spends it.
+      guestMintGate(ctx);
       const { identity, guestToken } = await createGuestIdentity({
         displayName: input.displayName,
         deviceId,

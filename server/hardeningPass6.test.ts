@@ -211,6 +211,24 @@ describe("M40 — offline dials can't be used as an enumeration oracle", () => {
   it("documents that it is scoped to the offline branch (group dials untouched)", () => {
     expect(RELAY).toMatch(/Scoped deliberately to the OFFLINE branch/);
   });
+
+  it("is sized for GROUP dials, where one dial spends a token per offline invitee", () => {
+    // Self-review retune: a 9-person all-offline group dial spends 9 tokens at
+    // once, so the original 20/1-per-4s budget was gone by the second such dial —
+    // and the throttled path skips onMissedCall, so people dialled after that
+    // silently lost their missed-call record, History row and notification.
+    expect(RELAY).toMatch(/createRateLimiter\(\{ capacity: 60, refillPerSec: 0\.5 \}\)/);
+    expect(RELAY).not.toMatch(/capacity: 20, refillPerSec: 0\.25/);
+  });
+
+  it("its throttled reply is classified by the client as a reachErr, so a group dial survives", () => {
+    // code "offline" is in the client's reachErr set, which during a group-dial
+    // bootstrap PROMOTES the next invitee instead of failing the whole dial.
+    const ENGINE = read("..", "client", "src", "lib", "relayClient.ts");
+    expect(ENGINE).toMatch(/const reachErr = m\.code === "offline"/);
+    expect(ENGINE).toMatch(/if \(reachErr && callIsGroup && outgoingDial/);
+    expect(RELAY).toMatch(/reachErr/);
+  });
 });
 
 /* ── M41: regenerateNumber can't drain the number space ────────────────── */

@@ -39,13 +39,27 @@ describe("M21 — startGuest is rate limited (number-space exhaustion)", () => {
     expect(gate).toMatch(/clientIpOf/);
   });
 
-  it("calls the gate INSIDE startGuest's resolver, before any identity work", () => {
+  it("meters ONLY the allocating branch, not the reuse paths", () => {
+    // Refined after self-review: the gate started at the top of the resolver,
+    // which charged a token to cases (1)/(2) — the paths that return an EXISTING
+    // identity and allocate no number. On a shared egress that let returning
+    // visitors drain the bucket and lock out people who genuinely needed a new
+    // identity. The resource being protected is the finite number space, so the
+    // meter belongs on the operation that actually spends it.
     const start = ROUTERS.indexOf("startGuest: publicProcedure");
     expect(start).toBeGreaterThan(-1);
-    const body = ROUTERS.slice(start, start + 900);
+    const body = ROUTERS.slice(start, ROUTERS.indexOf("Explicit sign-out."));
     expect(body).toMatch(/guestMintGate\(ctx\)/);
-    // The gate must precede the deviceId resolution / identity reuse branches.
-    expect(body.indexOf("guestMintGate(ctx)")).toBeLessThan(body.indexOf("ctx.identity"));
+    // It must NOT run before the reuse branches…
+    expect(body.indexOf("guestMintGate(ctx)")).toBeGreaterThan(body.indexOf("ctx.identity"));
+    // …and must run immediately before the allocation.
+    expect(body).toMatch(/guestMintGate\(ctx\);\s*\n\s*const \{ identity, guestToken \} = await createGuestIdentity\(/);
+  });
+
+  it("is sized for a room of people signing up on one shared address", () => {
+    expect(ROUTERS).toMatch(/createRateLimiter\(\{ capacity: 60, refillPerSec: 0\.2 \}\)/);
+    // The pre-refinement budget was far tighter and could hard-fail signup.
+    expect(ROUTERS).not.toMatch(/capacity: 20, refillPerSec: 0\.1/);
   });
 
   it("sweeps the limiter map so it can't grow without bound itself", () => {

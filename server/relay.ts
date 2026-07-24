@@ -37,12 +37,32 @@ import { createContext } from "./_core/context";
  * the server-resolved caller pin rather than an IP, so it follows the identity
  * rather than the network path.
  *
- * 20 burst then ~1 per 4s: a person dialling a handful of offline contacts in a
- * row never notices, while a scraper walking the 10^6 number space for
- * existence + display names drops from "under two hours" to implausible. Honors
- * RELAY_RATELIMIT_OFF like every other gate.
+ * SELF-REVIEW: sized against GROUP DIALS, which are the heavy legitimate case.
+ * A group dial fans one invite per invitee, so dialling 9 contacts who all
+ * happen to be offline spends 9 tokens at once — an initial 20/1-per-4s budget
+ * was exhausted by the second such dial, and the throttled path deliberately
+ * skips `onMissedCall`, so the people dialled after that would silently lose
+ * their missed-call record, History row and notification. That is a real
+ * functional loss for a heavy but entirely ordinary user.
+ *
+ * 60 burst then ~1 every 2s absorbs roughly six full 9-person offline group
+ * dials back to back, and 30/min sustained. Enumeration of the 10^6 space still
+ * goes from "under two hours" (the flood limiter alone) to about three weeks, so
+ * the oracle is closed in every practical sense without costing real dialling.
+ *
+ * Division of labour worth recording: the missed-call EMAIL amplification is
+ * bounded separately and more precisely by `claimMissedCallEmail`'s per-user
+ * cooldown (v2.99.44), which deliberately leaves the push and the History record
+ * unconditional so a throttled email never costs someone the record of the call.
+ * This limiter therefore exists for the ENUMERATION ORACLE — the existence and
+ * display-name leak — and does not need to be tight enough to police email.
+ *
+ * Note the throttled reply is code "offline", which the client classifies as a
+ * `reachErr` — during a group-dial bootstrap that PROMOTES the next invitee
+ * rather than tearing the dial down, so a throttle degrades one invitee instead
+ * of collapsing the call. Honors RELAY_RATELIMIT_OFF like every other gate.
  */
-const offlineDialLimiter = createRateLimiter({ capacity: 20, refillPerSec: 0.25 });
+const offlineDialLimiter = createRateLimiter({ capacity: 60, refillPerSec: 0.5 });
 setInterval(() => offlineDialLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
 import {
   busEnabled,
