@@ -91,7 +91,9 @@ describe("issue 1 — pre-ring dial drops", () => {
     // a cold dial to an offline identity with error{offline} naming the callee
     // (no `paging: true` ack), and the client turns that into the voicemail/SMS
     // card via failDial("server-error:offline").
-    expect(SERVER).toMatch(/code: "offline",\s*\n\s*message: \(info\.name \|\| "They"\) \+ " is offline right now\."/);
+    // v2.99.44 adds `pin` (which invitee) so a group dial can tell when the
+    // LAST one has resolved; the message itself is unchanged.
+    expect(SERVER).toMatch(/code: "offline",\s*\n\s*pin: to,\s*\n\s*message: \(info\.name \|\| "They"\) \+ " is offline right now\."/);
     expect(SERVER).not.toMatch(/paging: true/);
     expect(CLIENT).not.toMatch(/setCallStatus\("ringing", "Reaching their phone…"\)/);
     expect(CLIENT).toMatch(/reason === "no-answer" \|\| reason === "peer-rejected" \|\| reason === "server-error:offline"/);

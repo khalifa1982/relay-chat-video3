@@ -58,6 +58,12 @@ export const users = mysqlTable("users", {
   pushEnabled: boolean("pushEnabled"),
   /** Day (UTC, midnight-truncated) that `messageEmailsToday` counts. */
   messageEmailDay: timestamp("messageEmailDay"),
+  /** Cooldown watermark for the missed-call email (v2.99.44). Deliberately a
+   *  cooldown with NO daily cap, unlike the message nudge: a missed call is a
+   *  first-class event and suppressing the tenth one could hide the one that
+   *  mattered. Repeated dialling past this is harassment, which blocking already
+   *  shuts off — a blocked caller reaches neither the push nor this email. */
+  lastMissedCallEmailAt: timestamp("lastMissedCallEmailAt"),
   /** Offline-message emails already sent on `messageEmailDay`. Hard-capped, so
    *  a busy day can never turn RELAY into a mail flood (and can never put the
    *  SES reputation at risk). Reset implicitly when the day rolls over. */

@@ -5445,6 +5445,107 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       invitee handling), M13/M14/M18 (contacts/directory), M15/M16/L5 (status), M20/L8 (allocation races),
       M6 (draft debounce), M12/L4 (presence), L2/L3 (auth), M11 (server ephemeral content gating).
 
+## v2.99.44 — the last two DEFERRED follow-ups (H8 throttle, L1 all-decline dial) (2026-07-24)
+- [x] Owner asked whether anything was still missing. Audited every DEFERRED / "remaining" / "residual" line in
+      the changelog against current source — not against memory. Two items had been flagged in their original
+      batch and never revisited. Everything else was either shipped or a documented, deliberate residual.
+- [x] H8 — THE MISSED-CALL EMAIL HAD NO THROTTLE (deferred in v2.99.22 as "needs a cooldown column").
+      Verified in source: the path was gated on the block check, `reason !== "cancelled"`, a linked email and
+      the pref — then sent, unbounded. So a caller dialling you repeatedly produced one email per attempt, the
+      same shape the offline-message nudge was just tightened out of, and a free amplifier aimed at whoever the
+      caller chose. FIX: new `lastMissedCallEmailAt` column (additive + nullable, boot-migrated) and
+      `claimMissedCallEmail()` — one atomic conditional UPDATE keyed on the cooldown, verdict from
+      `affectedRows`, so two simultaneous missed calls can't both claim. 10-minute window. The push and the
+      History record stay UNCONDITIONAL and run before the claim, so a throttled email never costs the user the
+      record of the call. A failed send releases the claim by inspecting `sent.ok` — not `.catch()`, which would
+      be dead code (`sendEmail` never throws; that trap was found in the v2.99.42 review).
+      DELIBERATELY a cooldown with NO daily cap, unlike the message nudge: a missed call is a first-class event
+      and suppressing the tenth could hide the one that mattered, while repeated dialling is what blocking is
+      for — and a blocked caller already reaches neither the push nor this email (v2.99.22).
+- [x] L1 — AN ALL-DECLINED GROUP DIAL HUNG FOR 65s (deferred in v2.99.27). `inParkedCall()` is true for a group
+      call, so a decline correctly does NOT tear the dial down — two of three people declining must leave the
+      third ringing. But nothing watched for the LAST one: when everyone declined, the caller sat on "Ringing…"
+      until the 65s no-answer backstop with nobody left to answer. FIX: `groupDialOutstanding`, a set that is
+      non-null ONLY while a fresh group dial is unanswered (never for an add-person invite into an existing
+      call). Declines, busies and unreachable invitees each resolve one; when the last resolves and nobody has
+      answered (`inCall && outgoingDial && !establishedOnce && aloneInCall()`) the dial ends honestly
+      ("Everyone declined."). Cleared by both `failDial` and `hangUp`.
+      The server now also stamps `pin` on its reachability errors (additive — old clients ignore it): a group
+      dial rings several people, so without knowing WHICH invitee an `error{offline}` is about, the caller
+      cannot tell when the last one has resolved. This is the only thing that notices a later invitee going
+      offline once the room already exists.
+- [x] Tests: `server/deferredTail.test.ts` (11) — the claim's atomicity and ordering, that the push/History are
+      not throttled, the release-by-result, the outstanding-invitee lifecycle, and a re-pin of the v2.99.22
+      property that a PARTIAL decline still leaves the others ringing. Four pre-existing pins updated for the
+      new `pin` field and a shifted slice boundary. 1714 tests; check + build green.
+- [x] FIXED A BROKEN FILE ON `main`: the parallel session pushed CLAUDE.md with UNRESOLVED conflict markers
+      committed into it (`<<<<<<< HEAD` / `=======` / `>>>>>>>` at line 13, the version header — the repo's
+      primary contract file). Their side of that conflict had also DROPPED the whole v2.99.42 entry. Resolved by
+      reconstructing the line so nothing is lost: my new v2.99.44 entry, then their v2.99.43, then the v2.99.42
+      entry spliced back from the other side, then the untouched chain. A tree-wide scan confirmed CLAUDE.md was
+      the only file affected. todo.md was also reordered + de-duplicated again (six sections had two byte-identical
+      copies), behind the same guard that refuses to delete any duplicate whose copies differ.
+- NOTHING KNOWN OUTSTANDING after this. The heavy-QA sweep (37 findings), the owner's Rounds 1–8 file and both
+      of these deferrals are closed; what remains is documented accepted residuals (the push.subscribe endpoint
+      re-bind, leaked number reservations, Redis-bus transport auth, per-account password lockout, upload-DoS
+      ordering) — each a recorded decision with its reasoning, not an omission.
+
+## v2.99.43 — hardening pass 8: the verified-and-queued list (2026-07-24)
+- [x] These five were confirmed during the class sweep but held back from the pass that shipped three
+      HIGH fixes, because four sit in the CALL PATH — the most delicate code here — and bundling them
+      behind one version bump was a bad trade against a green suite. Taken one at a time. One turned out
+      to be WRONG on inspection and is recorded as a refutation, not a fix.
+- [x] (M45) MODERATOR POWERS OUTLIVED MEMBERSHIP. `knock-approve` gated only on isModerator(meta, pin),
+      but it takes roomId from the CLIENT and roomMeta outlives membership (the roster is add-only and
+      nothing clears hostPin/cohosts on leave). So a FORMER host who hung up could still name the old
+      room and admit an outsider into a call they'd left. Worse, it chained with `kick`: leaveRoom only
+      drops membership and never touched meta.cohosts, so a KICKED CO-HOST kept their role, could knock,
+      and could then APPROVE THEMSELVES BACK IN — the kick was undoable by its own target. Fixed both
+      ends: knock-approve now also requires room.has(conn.pin) (membership, not `rid === self.roomId`,
+      because a host whose call is on HOLD is still in the member Set and must still be able to approve),
+      and kick revokes cohost + any pending knock and broadcasts role:null so no client keeps rendering
+      host controls for them.
+- [x] (M46) IN-CALL CHAT TRUSTED THE FRAME'S SELF-DECLARED SENDER. Both `name` and `pin` came straight
+      from the JSON, so any participant could publish {name:"Alice", pin:"<alice's pin>"} and have it
+      render as Alice, avatar included (the chip resolves the photo BY PIN). Both transports already know
+      the real sender: the mesh has one data channel PER PEER (setupDC's `pin` is authenticated by the
+      channel itself) and LiveKit hands DataReceived the sending participant, whose identity is the
+      server-minted token pin. receiveChatFrame now takes that proven identity, prefers it over the
+      frame, and takes the display name from the roster (nameOf) — with the param optional so any
+      future/legacy caller degrades instead of dropping messages.
+- [x] (M47) DUPLICATE IDENTITIES PER USER — the long-standing "my number changes randomly / this device
+      shows a different number" symptom. ensureUserIdentity is a check-then-insert with no unique
+      constraint, so two concurrent sign-ins for one account (double-tapped Sign in, two devices, an OTP
+      verify racing a PIN login) could each mint an identity → two rows, two 6-digit numbers — and
+      getIdentityByUserId used a bare .limit(1) with NO ordering, so MySQL returned EITHER row per query
+      and messages/contacts split across both. Layered fix: orderBy(asc(id)) makes resolution
+      DETERMINISTIC even where duplicates already exist in production, and a UNIQUE index on
+      identities.userId (boot migrator) stops new ones being created. NULL userId is repeatable under a
+      MySQL UNIQUE index so guests are unaffected, and the migrator's per-item catch means an existing-
+      duplicate deployment logs and boots normally rather than failing.
+- [x] (M48) `?to=` PLACED A CALL WITH NO GESTURE. The Dialer auto-dials the param so in-app "call" taps
+      connect instantly — but it couldn't tell an in-app route change from someone ARRIVING on the URL,
+      and mic permission persists per-origin, so for any regular user a link like
+      /app/dialer?to=<attacker-pin> turned ONE CLICK into a live outbound call to a number the attacker
+      chose (camera too with ?video=1, and their side can auto-answer). A route module can't detect this
+      itself — Dialer.tsx is lazily loaded, so its module scope first evaluates AT the navigation that
+      needs it. New client/src/lib/bootUrl.ts is imported by main.tsx, so it captures the boot URL before
+      any routing: a `to=` present there means the user arrived on it → prefill the pad (one deliberate
+      tap) instead of dialing. Verified the in-app paths are unaffected: /i/:pin uses wouter's
+      client-side <Redirect> and Contacts/Messages use setLocation, so `to` is NOT in their boot URL.
+      The one legitimate full-page path — the "<name> is back online — tap to call them now" alert the
+      user armed — keeps its single tap via a one-time same-origin sessionStorage intent marker, which a
+      link cannot forge or carry to someone else.
+- [x] REFUTED, not fixed: "/api/relay/send resolves the full identity context before checking the rate
+      limit." The limiter is app.use middleware on that path registered at _core/index.ts:141, and
+      attachRelay is called at :206 — Express runs middleware in REGISTRATION order, so it already
+      precedes the handler that calls createContext (and only `register` calls it at all). Pinned as a
+      refutation so the claim isn't re-raised.
+- [x] Tests: new server/hardeningPass7.test.ts (24), incl. a behavioural check that a forged chat pin
+      loses to the transport-proven one. Two stale pins updated for the new shapes (contacts.test.ts's
+      additive-DDL rule now allows ADD UNIQUE INDEX; androidAudioCamera.test.ts's chat-dedup pin now
+      expects the threaded sender). Suite 1662 passed / 1 skipped; check + build green.
+
 ## v2.99.42 — Rounds 1–8 gaps: prod bundle, message push, push switch, SES-safe email (2026-07-24)
 - [x] Audited the owner's `claudecodeinstructions.txt` (Rounds 1–8) against current source. ALREADY SHIPPED and
       pinned by their own releases: R1, R2B, R3, R4A/B, R5, R6, R7-GAP4, R8-FIX1/2/3/4. FOUR were genuinely
@@ -6104,366 +6205,3 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       outstanding-invitee tracking + device testing).
 - QA-sweep progress: 19 of 37 confirmed findings fixed. Remaining: M13/M14/M18 (contacts/directory),
       M15/M16/L5 (status), M20/L8 (allocation races), M6 (draft debounce), M12/L4 (presence), L1/L2/L3, M11.
-
-## v2.99.35 — landing page structurally alive: React-19 innerHTML re-set killed all landing listeners (owner report) (2026-07-24)
-- [x] OWNER REPORT: "after the loading… the dial pad, it's not active. If you click, doesn't click. The
-      numbers doesn't show" + "the Arabic tab on the top on the landing page is not active — check both
-      directions" + the dial-a-user-directly flow (check exists → name-only entry → callee sees caller name).
-- [x] REPRODUCED against the real production build in headless Chromium: keypad clicks changed nothing,
-      the lang button was dead both ways, and the boot overlay was being cleared by the pure-CSS
-      lpAutoClear watchdog — not by the engine.
-- [x] ROOT CAUSE (instrumented DOMTokenList.add → addEventListener → MutationObserver → finally the
-      Element.innerHTML SETTER itself): React 19 re-applies dangerouslySetInnerHTML whenever the {__html}
-      OBJECT identity changes, even when the string is byte-identical. Home.tsx built `{{ __html: html }}`
-      inline — a fresh object every render — so the first unrelated re-render (the live-stats useQuery
-      resolving ~0.5s after mount) re-set innerHTML on the live DOM and REBUILT EVERY NODE, discarding all
-      engine wiring; the [lang]-keyed effect saw no change and never re-wired. Empirical timeline: markup
-      mounted ~170ms, engine wired ~450ms, DOM replaced ~565ms (same string hash, new object). This also
-      explains why v2.99.24's "wire controls first" hardening didn't cure the owner's report — the
-      controls WERE wired; the nodes they were wired to got thrown away 100ms later.
-- [x] FIX — three reinforcing layers in client/src/pages/Home.tsx: (1) the {__html} object is memoized
-      (dsih) so React only re-sets innerHTML when the markup truly changes; (2) the wiring effect keys on
-      [lang, dsih] so any future DOM replacement re-runs the engine in the same commit; (3) all
-      dialer/lang clicks moved off per-node listeners onto ONE DELEGATED click handler on the stable host
-      wrapper (React owns it; innerHTML only replaces its CHILDREN). The v2.99.15 live lookup, v2.99.21
-      RTL binding, and v2.99.24 wire-first ordering all survive unchanged on top.
-- [x] POLISH (found while verifying): dialStatus sat on "CHECKING NUMBER…" forever right above a RESOLVED
-      dialPreview ("Sara · ONLINE") — two contradicting lines. The status line now hides while a resolved
-      preview is showing, and the two FALLBACK (fail-open) paths flip it to "LINE READY — PRESS CALL".
-- [x] ALSO FIXED: client/index.html shipped <script src="%VITE_ANALYTICS_ENDPOINT%/umami"> VERBATIM
-      whenever the env was unset (vite keeps unknown %VARS% as-is) — every production page load requested
-      the bogus URL, got a 400, and logged a strict-MIME refusal. Tag removed; client/src/main.tsx now
-      injects analytics at runtime only when VITE_ANALYTICS_ENDPOINT/_WEBSITE_ID are configured.
-- [x] VERIFIED headlessly against the rebuilt production bundle (tRPC-batch-shaped lookup stubs): keypad
-      digits render AFTER the stats re-render that used to kill the page; found-online arms CALL,
-      found-offline disarms (guest rule), party line shows "JOIN CALL", not-found disarms, lookup outage
-      fail-opens; EN→AR flips dir=rtl + Arabic copy with the keypad still working; AR→EN restores; CALL on
-      a found number ran the cinematic and landed on /app/dialer?to=555001 (the name-only direct-join).
-      Screenshots: EN-found, EN-notfound, AR-found.
-- [x] server/v29935LandingAlive.test.ts (9 pins incl. the polish) + the v2.99.24 pin in Home.test.ts
-      updated to the delegated shape (same ordering invariant, new anchors). Suite 1480 passed / 1
-      skipped; check + build green.
-
-## v2.99.36 — landing polish: Arabic Open-App icon, dial-pad erase key, audible key tones (owner asks) (2026-07-24)
-- [x] OWNER (screenshot + notes): "In the arabic the open app icon is not showing"; "in the dial pad both
-      in arabic and english landing page make delete number icons so if you enter you can erase it";
-      "make tone when you click each number as sound".
-- [x] (1) ARABIC OPEN-APP ICON — the pill's copy string ended in a bare `↗` (U+2197). The v2.99.16 RTL rule
-      forces 'Noto Kufi Arabic' on EVERY element in Arabic, that face has no U+2197, so iOS fell through to
-      the emoji font and painted a boxed ↗️ next to the Arabic label. FIX: the arrow is an inline SVG
-      (ARROW_NE) — identical in every language/font/platform — mirrored in RTL via `.lp-arrow`.
-- [x] SECOND INSTANCE of the same defect found while writing the pin (my own test caught it): the CALL
-      button label also ended in `↗`, and the button is NOT inside a `dir="ltr"` island, so in Arabic it
-      rendered the identical emoji box. `setCallState` gained an `arrow` flag: the label stays textContent
-      (it carries localized copy) and only the CONSTANT SVG is appended via insertAdjacentHTML, so there is
-      no interpolation/injection surface. Verified live: `document.body.innerText` contains no U+2197 at all.
-- [x] (2) ERASE KEY — now occupies the keypad's bottom-right cell, replacing `#` (pure decoration here: the
-      pad only accepts 0-9 for a 6-digit RELAY number, so `#` did nothing but play a tone). Dims to .35 when
-      there is nothing to erase, removes one digit per tap, no-ops when empty, localized aria-label/title.
-- [x] REAL BUG caught mid-build and fixed: the FIRST implementation put the erase button beside the number
-      display (absolute, `inset-inline-end`). In English it covered the 6th placeholder dot; in ARABIC,
-      where it mirrors to the leading edge, it landed ON TOP of the first digit — the display is simply too
-      wide to share that row. Moving it into the grid removes the overlap by construction and gives it a
-      full 54px-tall touch target. Pinned by a no-overlap assertion measured in the browser.
-- [x] (3) KEY TONES — DTMF existed but was effectively silent for two reasons, both fixed: (a) the
-      oscillators were scheduled at `ac.currentTime` in the SAME tick as the ASYNC `ac.resume()`, so on iOS
-      the note's start time had already elapsed by the time the context actually ran (the classic iOS Web
-      Audio race) — a suspended context now resumes and THEN schedules, and every note starts at a +5ms
-      lookahead so it can never be scheduled in the past; (b) the peak gain was 0.045 (≈ -27 dBFS),
-      inaudible — now 0.18. The context is also unlocked on the first real gesture (1-sample silent buffer
-      on pointerdown, the standard iOS unlock). Erase gets its own softer 420/310Hz tone.
-- [x] HONEST LIMIT documented in-source (not papered over): on iPhone the hardware mute/silent switch
-      silences Web Audio outright — no web page can override that.
-- [x] VERIFIED headlessly on an emulated phone against the REAL built bundle, instrumenting AudioContext:
-      exactly 2 oscillators per keypress at the correct DTMF frequencies (770/1336 for "5", 941/1336 for
-      "0"), peak 0.18, ZERO notes scheduled in the past, the iOS silent-buffer unlock firing on first touch;
-      the erase key overlapping neither the display nor any key in EITHER language, erasing one digit per
-      tap and no-opping when empty; the Arabic pill AND the Arabic CALL button both painting mirrored SVG
-      arrows with no U+2197 anywhere on the page.
-- [x] Also proved a scare was NOT a bug: one Arabic keypad tap registered a neighbouring digit in an early
-      run. Re-tested — key 7 correct 5/5 by coordinate, correct via raw touchscreen, and all 10 digits
-      correct by direct dispatch, with the visual grid order intact (123456789*0#). It was a synthetic-tap
-      artifact of the pad's 3D perspective tilt (Playwright's hover moves the surface between measuring and
-      tapping); real touch input never triggers that tilt.
-- [x] `server/v29936LandingPolish.test.ts` (15 pins). Suite 1495 passed / 1 skipped; check + build green.
-
-## v2.99.37 — HARDENING PASS 5: class-based security sweep (owner: "cover all type of security bugs... very perfect") (2026-07-24)
-- [x] Prior passes audited SURFACE BY SURFACE (routers, then auth, then storage). This one audited by
-      VULNERABILITY CLASS — injection, XSS, authz/IDOR, CSRF, SSRF, upload/path, crypto, race/TOCTOU,
-      DoS/ReDoS, business-logic, info-disclosure, client-trust, deps, CI — which is what surfaced these.
-      All 10 verified against source before any change. 2 HIGH.
-- [x] (1) HIGH ZERO-CLICK DOM XSS, in-call chat (client/src/lib/relayClient.ts): a chat frame's `pin`
-      comes over the peer's DATA CHANNEL and was validated only by `typeof d.pin === "string"`, then
-      interpolated into the row's innerHTML twice unescaped — inside the double-quoted `data-pin="…"`
-      attribute, and through `fmtPin`, which passes a non-matching string through UNCHANGED. A peer
-      sending pin='x"><img src=x onerror=…>' executed on parse with no click, on our origin → session
-      takeover via the authenticated API. Reachable by anyone sharing a call, incl. a PARTY LINE
-      (joinable by number) → one frame hits everyone. Fixed by validating to /^\d{6}$/ (the check
-      ensureChatAvatar already did, but only AFTER the markup was written); initials() sinks on the chat
-      chip, call tiles and recents escaped too.
-- [x] (2) HIGH ACCOUNT PRE-HIJACKING → takeover: unauthenticated POST /api/auth/register creates a
-      local user with an ATTACKER-chosen passwordHash and emailVerified:false for ANY email. The real
-      owner later signs in by email code; findUserByEmailAny deliberately falls back to that local row
-      (v2.92 compat) and markUserEmailVerified flipped it verified WITHOUT clearing the password — then
-      /api/auth/login (password + verified) issued the attacker a session on the victim's account. New
-      clearUnverifiedCredentials(userId) wipes password/PIN on a still-UNVERIFIED row at the moment the
-      address is proven, called before markUserEmailVerified at BOTH claim sites. Scoped to unverified
-      rows so a legitimate local user who used their own verify link keeps their password.
-- [x] (3) VIEW-ONCE LOCK BYPASS (getAttachmentForIdentity): authorized a non-uploader via ANY
-      referencing message including a still-LOCKED expiring one (attachmentId is only nulled at burn).
-      That one function backs attachments.get (sequential int ids → enumerate), authorizeStorageKey AND
-      messages.send's ownership check — so a recipient could read view-once media repeatedly without
-      burning it (sender never told), and RE-ATTACH it to a new permanent message elsewhere. Locked
-      expiring messages no longer authorize; the uploader early-return keeps senders unaffected.
-- [x] (4) MySQL LEFT-TO-RIGHT UPDATE ASSIGNMENT broke BOTH attempt ladders: a later SET assignment
-      reads the value an earlier one just wrote, so the lock CASE saw `attempts` already incremented and
-      the extra `+1` double-counted. PIN locked on the 3rd wrong entry, not the 4th — and the persisted
-      count could then only reach 3 while the brute-force ALERT EMAIL requires exactly 4, so that email
-      was UNREACHABLE: an owner was never told their account was under attack. Same defect burned the
-      email OTP a guess early. Both now compare the post-increment value directly.
-- [x] (5) startGuest was an unauthenticated, UNTHROTTLED identity MINTER — the only resource-creating
-      public endpoint with no gate. Each call permanently claims one of ~980,000 six-digit numbers
-      (numberTaken ignores guest expiry, nothing deletes identities, M20's ledger is monotonic). Drained
-      far enough, allocateSharedNumber's 40-attempt search fails for EVERYONE → every new guest,
-      registration and party line dies permanently. Added guestMintGate (20 burst, ~1/10s per IP).
-- [x] (6) revealExpiring buffered an UNBOUNDED body: the guard was Number(content-length ?? 0) <= CAP,
-      so a MISSING header → 0 → passed → arrayBuffer() with no ceiling (the later buf.length check was
-      too late), then base64 +33% inside a JSON response. Now REVEAL_MAX_INLINE_BYTES enforced against
-      the STREAM, so a missing OR lying header can't exceed it.
-- [x] (7) VIEW-ONCE BURN WAS NOT ATOMIC: both paths did read → check consumedAt in JS → write with an
-      await between, so two concurrent reveals both returned the content (the S1/S9 lost-update class).
-      Now one conditional UPDATE guarded on JSON_EXTRACT(meta,'$.consumedAt') IS NULL, verdict from
-      affectedRows.
-- [x] (8) avatarUrl accepted arbitrary http(s):// — a profile photo became a remote-fetch primitive
-      aimed at other users, and it renders on the INCOMING-RING card, which appears with NO interaction:
-      set an avatar to your host, dial a victim, harvest their IP + User-Agent from a call they never
-      answered. Same threat the status-bg sanitizer already rejects url() for. Restricted to our storage
-      path or data:image/ — zero compat cost (clients only ever set it from our own upload endpoint).
-- [x] (9) status.post skipped keyInOwnerNamespace for kind:"text" while still persisting mediaKey.
-      authorizeStorageKey resolves a /status_ key via whichever ACTIVE status claims it, so planting
-      another user's key RE-ACTIVATED their expired/deleted status media — readable again and re-exposed
-      to the planter's audience, defeating ephemerality. Gate now applies to any supplied key; a text
-      status never persists media.
-- [x] (10) tryReserveNumber detected a duplicate key by ERROR-MESSAGE TEXT in a helper that fails OPEN,
-      so a driver upgrade/localized server would silently turn a lost race into "reservation won",
-      reintroducing the cross-table collision the ledger prevents. Now errno 1062 / ER_DUP_ENTRY first.
-- [x] VERIFIED CLEAN (documented negatives, so the negative result is trustworthy): no SQL injection
-      (every sql`` template parameterizes values, Drizzle column refs for identifiers); landing-page
-      innerHTML escaping intact after the v2.99.35 React-19 rework (escLp covers all 5 chars, applied
-      post-composition, all sinks text-context); secret comparisons consistently timingSafeEqual with
-      length guards; CSRF genuinely defended by SameSite=Lax on every cookie (the /api/v2/offline beacon
-      can't fire cross-site, its deviceId fallback needs a secret); keyInOwnerNamespace correctly
-      anchored (trailing slash defeats the 1-vs-12 prefix collision) and the absolute-URL avatar
-      suffix-match fix unexploitable; searchMessages filters expiring content; tabPresence stores no
-      secrets and fails safe.
-- [x] ACCEPTED RESIDUAL: push.subscribe's upsert is keyed on the globally-unique `endpoint`, so knowing
-      a victim's endpoint lets you re-bind it and silently kill their notifications. NOT fixed: no API
-      ever returns an endpoint, the hijacker gains nothing readable (pushes are encrypted to their own
-      keys), and the only correct fix is a proof-of-possession challenge — naively refusing re-binds
-      would break the documented account-switch-on-same-device flow and silently kill notifications for
-      real users. Prior-round residuals unchanged.
-- [x] Tests: server/hardeningPass5.test.ts (44) incl. a real arithmetic SIMULATION of MySQL's assignment
-      order (so the off-by-one can't silently return) and the actual XSS payloads the pin guard must
-      reject; 4 stale pre-existing pins updated to the new shapes (m11ContentGating ×2, peerIdentityBatch,
-      qaBatch8). Suite 1540 passed / 1 skipped; check + build green.
-
-## v2.99.38 — hardening pass 5 pt.2: remaining class-sweep findings (2026-07-24)
-- [x] (1) HIGH RELAY_OTP_REGISTER_BYPASS was unauthenticated ACCOUNT TAKEOVER, not just unproven
-      signup: the bypass branch of otpAuth.register (a publicProcedure whose whole input is a name +
-      email) called findUserByEmailAny and signed the caller in as WHATEVER IT RESOLVED. With the flag
-      on, anyone knowing a registered user's email got a full session as them — no code, no password.
-      The accepted trade was "email ownership isn't proven AT SIGNUP"; taking over EXISTING accounts
-      never was. Branch is now CREATE-ONLY: refuses with CONFLICT when the address already has an
-      account, only ever mints a new one. Signing in stays requestOtp/loginWithPin (real credentials).
-      NOTE for the owner: this flag is set in /home/relay/.env, not in repo config, so I can't tell
-      from here whether it's currently on — worth unsetting it now that SES should be approved.
-- [x] (2) HIGH BLOCKED_MIME bypass via a multi-valued Content-Type: ALLOWED_MIME and BLOCKED_MIME are
-      both START-ANCHORED, so they only inspected the FIRST type of the client-supplied ?mime= value.
-      "image/png,text/html" passes ALLOWED (starts image/) and misses BLOCKED (doesn't start with a
-      blocked type); the value was then stored and replayed verbatim as the Content-Type of a
-      same-origin response — the stored-XSS shape BLOCKED_MIME exists to stop, since header parsers
-      disagree about which listed type wins. New exported normalizeMimeType() reduces to a canonical
-      type/subtype essence (params dropped, case-folded) and requires exactly ONE RFC-2045-token media
-      type (no commas, no whitespace), applied at BOTH mimeType sources before any gate or storage write.
-- [x] (3) ACCOUNT DIVERSION — the other half of M29: /api/auth/register's findLocalUserByEmail matches
-      only rows that HAVE a passwordHash, so it's blind to OAuth/otp accounts and inserted a SECOND
-      users row for the same email. findUserByEmailAny ranks a "local" row ABOVE a legacy OAuth row, so
-      the victim's email code signed them into the attacker's empty row — and with the OAuth UI removed
-      in v2.92 the email code is their ONLY way in, so their real account (number, contacts, history)
-      became unreachable. New findAnyUserByEmail refuses registration when ANY row holds the address;
-      the unverified-local resend path is untouched.
-- [x] (4) GZIP AMPLIFICATION on /api/v2/upload: body-parser inflates encoded bodies by default and
-      enforces `limit` against the DECOMPRESSED stream — so the 41MB ceiling held, but the cost to
-      REACH it collapsed ~1000x (tens of KB of compressed zeros → 41MB buffered). That compounds the
-      known ordering weakness that this route's rate limit runs INSIDE the handler, i.e. after
-      buffering. inflate:false on both upload parsers — no client compresses an upload body (browsers
-      never gzip request bodies; the native app streams raw), so it costs nothing real.
-- [x] (5) The storage-proxy rate limiter was NEVER SWEPT. Every other limiter here pairs itself with a
-      periodic sweep; this one shipped without, so its per-IP Map grew for the whole process lifetime
-      on the app's only fully anonymous, high-fan-out endpoint. Added the sweep.
-- [x] Tests: hardeningPass5.test.ts grows to 59, incl. behavioral normalizeMimeType coverage of the
-      real bypass payloads (comma-lists, whitespace, case) and proof the blocked list still catches a
-      normalized dangerous type. Suite 1555 passed / 1 skipped; check + build green.
-
-## v2.99.40 — hardening pass 6: the class sweep's later-reporting classes (2026-07-24)
-- [x] (1) HIGH — the 4-try PIN LOCKOUT WAS BYPASSABLE BY CONCURRENCY. attemptPinLogin gated on
-      `row.loginPinLockedAt` — a field from a snapshot the CALLER already read — then ran verifyPassword
-      regardless of the row's LIVE state. N simultaneous requests all saw an unlocked row, all passed,
-      and all got a PIN checked: the S1 fix made the COUNTER race-free but never bounded how many
-      VERIFICATIONS could happen, so the cap wasn't enforced per attempt and a burst could sweep much of
-      the 10^4 space, limited only by the per-IP bucket. Inverted the order: every attempt must WIN a
-      slot from the DB first (UPDATE … WHERE lockedAt IS NULL AND attempts <= cap, verdict from
-      affectedRows) and only a winner may verify — MySQL serializes per row, so at most cap+1
-      verifications happen between unlocks no matter the concurrency or instance. Ladder unchanged: the
-      4th try is still verified (a correct 4th succeeds); a wrong 4th latches via its own isNull-guarded
-      UPDATE, which also owns sending the alert email exactly once. The pure judgePinAttempt helper is
-      test-only and now carries a loud "NOT AN ENFORCEMENT PATH" warning (it decides from a snapshot by
-      design, so wiring it into a login route would reintroduce this).
-- [x] (2) HIGH — UNSOLICITED video-accept FORCED A PEER'S CAMERA ON. onVideoAccept checked only
-      `inCall`, so any call peer could send that frame and run unlockApprovedVideo() on the victim — a
-      total bypass of the v2.81 mutual-consent protocol; the only notice was a "Video is on — both
-      sides 🎥" toast, and on a party line one frame hits everyone. videoReqT alone couldn't guard it: a
-      VIDEO DIAL answered with Video also replies video-accept and there consent was implicit in dialing
-      (no request sent), while outgoingDial is cleared at establishment though consent frames often
-      arrive before the transport exists. New per-call videoOfferedByUs flag set at BOTH consent points,
-      cleared by the existing per-call reset; an unsolicited accept is dropped SILENTLY (no toast).
-- [x] (3) HIGH — ATTACKER-CHOSEN Content-Type SERVED SAME-ORIGIN. The proxy relays the stored
-      (uploader-supplied) type verbatim and nosniff means the DECLARED type is obeyed, so the upload
-      denylist was the only defence — over an allowlist admitting text/* and application/* WHOLESALE.
-      The whole XML family was missing (text/xml, application/xml, text/xsl, application/xslt+xml — XML
-      with SVG/XHTML namespaces + <script> executes in some browsers, exactly what image/svg+xml is
-      blocked for), as were the other JavaScript media types. Fixed at BOTH layers: denylist extended,
-      AND the proxy now serves only an inline-safe set as itself, downgrading everything else to
-      application/octet-stream + Content-Disposition: attachment — robust without enumerating every
-      dangerous type, and matching how the client already presents attachments.
-- [x] (4) auth.me SHIPPED THE CALLER'S CREDENTIAL HASHES to the browser: getUserById does an
-      unprojected select(), so the handler serialized the whole users row — scrypt passwordHash AND
-      loginPinHash — into every response, where it sits in the React Query cache, devtools/HAR captures,
-      and anything an extension can read. Self-only so not cross-user disclosure, but it turns any
-      read-only client foothold (an XSS like v2.99.37 #1, a malicious extension) into offline cracking,
-      and the PIN hash covers 10^4. Stripped as a DENYLIST so no client-consumed field can vanish.
-- [x] (5) The signaling OFFLINE DIAL was the last unthrottled number→identity oracle AND a third-party
-      spam amplifier: replies differ by design ("<Name> is offline right now." vs "That number doesn't
-      exist."), leaking existence + display name over the 10^6 space, and each pass writes a History row
-      and fires a missed-call push AND email — with NO cooldown (unlike the offline-message email). The
-      tRPC resolvers were gated for exactly this (F5) but this path never was, and the signaling limiter
-      is a ~200/s FLOOD guard a scraper stays under (full enumeration in under two hours). New
-      per-caller-pin offlineDialLimiter (20 burst, ~1/4s) scoped ONLY to the offline branch — a dial to
-      an ONLINE user never reaches it, so normal calling and group dials are untouched (which is why
-      this sidesteps the previously-rejected idea of capping invites in general). The throttled reply is
-      the GENERIC offline message and returns before resolving anything or recording a miss.
-- [x] (6) identity.regenerateNumber had NO THROTTLE — the M21 sibling. Each call permanently claims
-      another of ~980,000 numbers and the old one is never recycled, so one authenticated account could
-      drain the shared space and break allocation for every future signup. Now behind the mint budget.
-- [x] Tests: new server/hardeningPass6.test.ts (22) + M36 coverage in hardeningPass5.test.ts including a
-      simulation proving a 10,000-request burst yields exactly cap+1 PIN verifications, and behavioural
-      coverage of the real BLOCKED_MIME / INLINE_SAFE_TYPE predicates. 3 stale pins retargeted
-      (securitySweep S1, hardeningPass5 M25 ×2). Suite 1582 passed / 1 skipped; check + build green.
-- NOTE (verified, queued — deliberately NOT rushed into the call path in this commit): signaling
-  `knock-approve` doesn't re-check the approver is still in the room and `kick` doesn't revoke co-host;
-  in-call chat trusts the frame's self-declared sender name (impersonation, cosmetic vs the fixed XSS);
-  `ensureUserIdentity` is a check-then-insert with no unique index on identities.userId; Dialer's `?to=`
-  places a call with no user gesture; member sign-out doesn't revoke its session-ledger row and password
-  logins mint sid-less cookies; /api/relay/send resolves the full identity context before the rate check.
-- NOTE for the owner (product decision, NOT a bug): the status audience rule means anyone who saves your
-  6-digit number can see your story posts — contacts are self-service with no consent step. Flagged
-  rather than changed.
-
-## v2.99.41 — hardening pass 7: sweep COMPLETE (14/14 classes) + panel survivors (2026-07-24)
-- [x] The class-based sweep finished: all 14 hunter classes reported and the 3-lens adversarial panel
-      returned 55 verdicts (51 refuted, 4 upheld). This ships the last wave plus the panel's survivors.
-      The high refutation rate is the panel working as intended — it killed 51 plausible-but-wrong claims.
-- [x] (1) ReDoS on the inbound-email webhook — the panel's highest-confidence NEW finding (MED, "verified
-      the sink empirically three ways"). parseInboundAddress ran /<([^>]+)>/ against an untrusted header
-      value with NO length cap, on a route accepting 5MB of JSON. Input with a `<` and no `>` makes the
-      engine retry [^>]+ from every `<`, giving back one char at a time — quadratic, ~10^13 steps for
-      5MB. Node is single-threaded and this process serves every SSE stream, signaling POST and API call,
-      so ONE request stalls calls + messaging for EVERY user; the webhook signature check is opt-in, so
-      it can be unauthenticated. Capped at 1024 bytes before the match (RFC 5321 caps addr-spec at 320),
-      bounding n rather than relying on a cleverer regex.
-- [x] (2) `region` was STILL spliced raw into the SSM remote commands — A GAP IN MY OWN EARLIER FIX. G11
-      base64'd SES_EMAIL and DOMAIN but missed `region`, the THIRD free-text workflow_dispatch input on
-      the same path, still interpolated unescaped into all five command strings run on production EC2
-      under the instance role. Same encode-on-runner/decode-on-instance treatment. Its other uses run on
-      the runner via safe single-pass substitution and are deliberately left alone.
-- [x] (3) Sign-out never revoked the session ledger row (UPHELD by the panel, traced end to end).
-      v2.99.1 built a revocable session model and createContext gates every sid-bearing cookie on it, but
-      auth.logout only cleared COOKIES — the row stayed ACTIVE, so the device kept showing in the user's
-      own Devices list as a live session AND the token stayed valid, meaning a copy recovered from a
-      synced browser profile, a disk backup, or a shared machine would still authenticate. Now revokes by
-      sid, wrapped so a DB hiccup can never stop the cookies being cleared.
-- [x] (4) The media-proxy per-IP limiter was too tight for shared egress — an AVAILABILITY finding, not a
-      vuln. 240 burst / 4-per-sec is per-IP, and carrier CGNAT / an office / a café put many real users
-      behind ONE address; on an image-heavy chat a few people scrolling together could exhaust it, and a
-      throttled media request renders as a BROKEN IMAGE — the exact symptom this project has chased
-      repeatedly. Raised to 600 / 20-per-sec, still capping a scraper two orders of magnitude below
-      unlimited. The guard's real target is DB-CPU cost on the miss path, not enumeration (keys carry a
-      random suffix and can't be guessed).
-- [x] VERIFIED AND DOWNGRADED by independent checking: the Android `release { signingConfig
-      signingConfigs.debug }` line is a genuine footgun but NOT a live compromise — native-rn.yml
-      re-signs the AAB with a real keystore from ANDROID_KEYSTORE_BASE64 after the build, so the store
-      artifact is properly signed. Recorded as an operator note rather than changed blind (touching
-      signing config without knowing their keystore setup risks their release pipeline).
-- [x] LEFT TO THE OPERATOR — cannot be fixed from the repo, and guessing would break the deploy:
-      (a) the deploy OIDC role trusts `repo:…:*`, so a workflow on ANY branch can assume the production
-      deploy role — that's an AWS IAM trust-policy edit, not a code change; (b) deploy.yml pins
-      third-party actions to mutable major tags in the job holding production credentials — pinning
-      properly needs verified commit SHAs.
-- [x] Tests: hardeningPass6.test.ts grows to 35, incl. a bounded-regex timing check and per-command
-      assertions on the region fix. Suite 1638 passed / 1 skipped; check + build green.
-
-## v2.99.43 — hardening pass 8: the verified-and-queued list (2026-07-24)
-- [x] These five were confirmed during the class sweep but held back from the pass that shipped three
-      HIGH fixes, because four sit in the CALL PATH — the most delicate code here — and bundling them
-      behind one version bump was a bad trade against a green suite. Taken one at a time. One turned out
-      to be WRONG on inspection and is recorded as a refutation, not a fix.
-- [x] (M45) MODERATOR POWERS OUTLIVED MEMBERSHIP. `knock-approve` gated only on isModerator(meta, pin),
-      but it takes roomId from the CLIENT and roomMeta outlives membership (the roster is add-only and
-      nothing clears hostPin/cohosts on leave). So a FORMER host who hung up could still name the old
-      room and admit an outsider into a call they'd left. Worse, it chained with `kick`: leaveRoom only
-      drops membership and never touched meta.cohosts, so a KICKED CO-HOST kept their role, could knock,
-      and could then APPROVE THEMSELVES BACK IN — the kick was undoable by its own target. Fixed both
-      ends: knock-approve now also requires room.has(conn.pin) (membership, not `rid === self.roomId`,
-      because a host whose call is on HOLD is still in the member Set and must still be able to approve),
-      and kick revokes cohost + any pending knock and broadcasts role:null so no client keeps rendering
-      host controls for them.
-- [x] (M46) IN-CALL CHAT TRUSTED THE FRAME'S SELF-DECLARED SENDER. Both `name` and `pin` came straight
-      from the JSON, so any participant could publish {name:"Alice", pin:"<alice's pin>"} and have it
-      render as Alice, avatar included (the chip resolves the photo BY PIN). Both transports already know
-      the real sender: the mesh has one data channel PER PEER (setupDC's `pin` is authenticated by the
-      channel itself) and LiveKit hands DataReceived the sending participant, whose identity is the
-      server-minted token pin. receiveChatFrame now takes that proven identity, prefers it over the
-      frame, and takes the display name from the roster (nameOf) — with the param optional so any
-      future/legacy caller degrades instead of dropping messages.
-- [x] (M47) DUPLICATE IDENTITIES PER USER — the long-standing "my number changes randomly / this device
-      shows a different number" symptom. ensureUserIdentity is a check-then-insert with no unique
-      constraint, so two concurrent sign-ins for one account (double-tapped Sign in, two devices, an OTP
-      verify racing a PIN login) could each mint an identity → two rows, two 6-digit numbers — and
-      getIdentityByUserId used a bare .limit(1) with NO ordering, so MySQL returned EITHER row per query
-      and messages/contacts split across both. Layered fix: orderBy(asc(id)) makes resolution
-      DETERMINISTIC even where duplicates already exist in production, and a UNIQUE index on
-      identities.userId (boot migrator) stops new ones being created. NULL userId is repeatable under a
-      MySQL UNIQUE index so guests are unaffected, and the migrator's per-item catch means an existing-
-      duplicate deployment logs and boots normally rather than failing.
-- [x] (M48) `?to=` PLACED A CALL WITH NO GESTURE. The Dialer auto-dials the param so in-app "call" taps
-      connect instantly — but it couldn't tell an in-app route change from someone ARRIVING on the URL,
-      and mic permission persists per-origin, so for any regular user a link like
-      /app/dialer?to=<attacker-pin> turned ONE CLICK into a live outbound call to a number the attacker
-      chose (camera too with ?video=1, and their side can auto-answer). A route module can't detect this
-      itself — Dialer.tsx is lazily loaded, so its module scope first evaluates AT the navigation that
-      needs it. New client/src/lib/bootUrl.ts is imported by main.tsx, so it captures the boot URL before
-      any routing: a `to=` present there means the user arrived on it → prefill the pad (one deliberate
-      tap) instead of dialing. Verified the in-app paths are unaffected: /i/:pin uses wouter's
-      client-side <Redirect> and Contacts/Messages use setLocation, so `to` is NOT in their boot URL.
-      The one legitimate full-page path — the "<name> is back online — tap to call them now" alert the
-      user armed — keeps its single tap via a one-time same-origin sessionStorage intent marker, which a
-      link cannot forge or carry to someone else.
-- [x] REFUTED, not fixed: "/api/relay/send resolves the full identity context before checking the rate
-      limit." The limiter is app.use middleware on that path registered at _core/index.ts:141, and
-      attachRelay is called at :206 — Express runs middleware in REGISTRATION order, so it already
-      precedes the handler that calls createContext (and only `register` calls it at all). Pinned as a
-      refutation so the claim isn't re-raised.
-- [x] Tests: new server/hardeningPass7.test.ts (24), incl. a behavioural check that a forged chat pin
-      loses to the transport-proven one. Two stale pins updated for the new shapes (contacts.test.ts's
-      additive-DDL rule now allows ADD UNIQUE INDEX; androidAudioCamera.test.ts's chat-dedup pin now
-      expects the threaded sender). Suite 1662 passed / 1 skipped; check + build green.

@@ -294,6 +294,29 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // Group call: extra invitees queued until the server confirms the room, so a
   // fresh group dial can't race into two separate rooms.
   let pendingGroupInvites: string[] = [];
+  /**
+   * Invitees of an UNANSWERED group dial who haven't resolved yet (v2.99.44,
+   * closing the L1 follow-up deferred in v2.99.27).
+   *
+   * A decline is deliberately not fatal to a group dial — `inParkedCall()` is
+   * true for one, so two of three people declining must leave the third still
+   * ringing. But nothing was watching for the LAST one: when everybody declined,
+   * the caller sat on "Ringing…" until the 65s no-answer backstop, with nobody
+   * left to answer. This set is the missing bookkeeping — non-null ONLY while a
+   * group dial is outstanding and unanswered, so it can never affect an
+   * established call or an add-person invite.
+   */
+  let groupDialOutstanding: Set<string> | null = null;
+  /** Drop one invitee; when the last one resolves with nobody having answered,
+   *  end the dial honestly instead of waiting out the backstop. */
+  function groupInviteeResolved(pin: string | undefined, why: string): void {
+    if (!groupDialOutstanding || !pin) return;
+    groupDialOutstanding.delete(pin);
+    if (groupDialOutstanding.size > 0) return;
+    groupDialOutstanding = null;
+    // Only when this really is still an unanswered dial with nobody on it.
+    if (inCall && outgoingDial && !establishedOnce && aloneInCall()) failDial(why, "group-dial-exhausted");
+  }
   // Per-tile enrichment (v2.39): remote device types (pin -> "Mobile"/"Desktop",
   // shared via signaling) + a periodic getStats sampler for live bitrate.
   const peerDevices: Record<string, string> = {};
@@ -750,6 +773,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "livekit-token": onLivekitToken(m); break;
       case "rejected":
         toast(nameOf(m.from!) + " declined.");
+        // Group dial: note the decline; the LAST one ends the dial (see
+        // groupInviteeResolved) instead of ringing on into the backstop.
+        groupInviteeResolved(m.from, "Everyone declined.");
         // A decline is only fatal to a lone 1:1 DIALER. In a group call or on
         // a party line the invite was an ADD — stay parked (inParkedCall).
         if (inCall && aloneInCall() && !inParkedCall()) {
@@ -759,6 +785,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         break;
       case "busy":
         toast("They're on another call.", true);
+        groupInviteeResolved(m.from, "Nobody was available.");
         if (inCall && aloneInCall() && !inParkedCall()) {
           if (outgoingDial && !establishedOnce) failDial("They're on another call.", "peer-busy");
           else hangUp("peer-busy");
@@ -838,6 +865,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // promote the next pending invitee as the new bootstrap; only fail once
         // every invitee is exhausted. Sent one at a time — never all-at-once —
         // so we never race several room-creating invites into duplicate rooms.
+        if (reachErr && callIsGroup && outgoingDial && !establishedOnce) {
+          // An unreachable invitee is resolved either way; when the room already
+          // exists this is the only thing that notices them.
+          if (groupDialOutstanding && m.pin) groupDialOutstanding.delete(m.pin);
+        }
         if (reachErr && callIsGroup && outgoingDial && !establishedOnce && !roomId && aloneInCall()) {
           if (pendingGroupInvites.length) {
             const next = pendingGroupInvites.shift()!;
@@ -2185,10 +2217,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
       emitPhase("dialing");
     }
     if (alreadyInRoom) {
+      // Adding people to a call that already exists — never a dial, so the
+      // outstanding-invitee bookkeeping below must not apply.
       clean.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t, video: camOn }); });
     } else {
       const [first, ...rest] = clean;
       pendingGroupInvites = rest;
+      groupDialOutstanding = new Set(clean);
       sendWS({ type: "invite", to: first, video: camOn });
     }
     toast("Starting group call (" + clean.length + ")…");
@@ -4385,6 +4420,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (failDialT) { clearTimeout(failDialT); failDialT = null; }
   }
   function failDial(message: string, reason: string) {
+    groupDialOutstanding = null;
     if (failDialT) return; // already presenting a failure
     if (!inCall || establishedOnce || !outgoingDial) { hangUp(reason); return; }
     clearDialTimeout();
@@ -5955,6 +5991,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     addInviting = false;
   }
   function hangUp(reason: string = "manual") {
+    groupDialOutstanding = null;
     sendWS({ type: "leave", reason });
     // Native Android: leave OS call mode + drop the ongoing-call service.
     if (isNativeAndroid()) void nativeSetInCall(false);

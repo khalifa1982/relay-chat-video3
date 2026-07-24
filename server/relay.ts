@@ -1399,6 +1399,11 @@ export function handleMessage(
             safeSend(callerSocket, {
               type: "error",
               code: "offline",
+              // `pin` names WHICH invitee this is about (v2.99.44). A group dial
+              // rings several people, so without it the caller can't tell which
+              // one went unreachable and can't know when the last one has
+              // resolved. Additive: older clients ignore the field.
+              pin: to,
               message: "That number doesn't exist or is offline.",
             });
             // The callee was offline — record the miss and (for registered users)
@@ -1446,6 +1451,7 @@ export function handleMessage(
             safeSend(callerSocket, {
               type: "error",
               code: "offline",
+              pin: to,
               message: "They're offline right now.",
             });
             return;
@@ -1466,6 +1472,7 @@ export function handleMessage(
                 safeSend(callerSocket, {
                   type: "error",
                   code: "offline",
+                  pin: to,
                   message: (info.name || "They") + " is offline right now.",
                 });
                 // Record the miss → History + (pref-gated) missed-call email on return.

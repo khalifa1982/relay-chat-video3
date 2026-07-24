@@ -171,7 +171,7 @@ describe("R7 GAP3 — the message email is SES-safe: last resort, capped, unsubs
     expect(V2DB).toMatch(/OFFLINE_MESSAGE_EMAIL_MAX_PER_DAY = 3/);
     const claim = V2DB.slice(
       V2DB.indexOf("export async function claimOfflineMessageEmail"),
-      V2DB.indexOf("export async function hasPushSubscription")
+      V2DB.indexOf("export async function claimMissedCallEmail")
     );
     expect(claim).toMatch(/COALESCE\(\$\{users\.messageEmailsToday\}, 0\) < \$\{OFFLINE_MESSAGE_EMAIL_MAX_PER_DAY\}/);
     expect(claim).toMatch(/affectedRows/);
@@ -193,7 +193,7 @@ describe("R7 GAP3 — the message email is SES-safe: last resort, capped, unsubs
     // whose SET is a pure increment. Correct under ANY emitted order.
     const claim = V2DB.slice(
       V2DB.indexOf("export async function claimOfflineMessageEmail"),
-      V2DB.indexOf("export async function hasPushSubscription")
+      V2DB.indexOf("export async function claimMissedCallEmail")
     );
     // No day logic may remain in either SET clause.
     expect(claim).not.toMatch(/IF\(\$\{users\.messageEmailDay\}/);
@@ -209,7 +209,7 @@ describe("R7 GAP3 — the message email is SES-safe: last resort, capped, unsubs
   it("the cap is enforced by the WHERE against the pre-update row", () => {
     const claim = V2DB.slice(
       V2DB.indexOf("export async function claimOfflineMessageEmail"),
-      V2DB.indexOf("export async function hasPushSubscription")
+      V2DB.indexOf("export async function claimMissedCallEmail")
     );
     const where = claim.slice(claim.lastIndexOf(".where("));
     expect(where).toMatch(/COALESCE\(\$\{users\.messageEmailsToday\}, 0\) < \$\{OFFLINE_MESSAGE_EMAIL_MAX_PER_DAY\}/);

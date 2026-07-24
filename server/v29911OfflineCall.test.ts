@@ -32,7 +32,7 @@ describe("v2.99.11 — server: offline dial is a fast error, not a paged keep-al
     const branch = relay.slice(relay.indexOf("if (!targetReachable)"), relay.indexOf("if (!target) return;"));
     // Resolve identity, then a fast honest error — NO ensureDialRoom / pendingRings.
     expect(branch).toMatch(/onPageCallee\(\{ calleePin: to, callerPin, callerName: me\.name, roomId: "", video: wantVideo \}\)/);
-    expect(branch).toMatch(/code: "offline",\s*\n\s*message: \(info\.name \|\| "They"\) \+ " is offline right now\."/);
+    expect(branch).toMatch(/code: "offline",\s*\n\s*pin: to,\s*\n\s*message: \(info\.name \|\| "They"\) \+ " is offline right now\."/);
     expect(branch).toMatch(/code: "nonexistent", message: "That number doesn't exist\."/);
     // The miss is recorded for a real identity (History + email-on-return).
     expect(branch).toMatch(/onMissedCall\?\.\(\{ calleePin: to, callerPin, callerName: me\.name, reason: "cancelled" \}\)/);
