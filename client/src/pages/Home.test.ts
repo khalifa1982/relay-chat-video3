@@ -240,3 +240,22 @@ describe("v2.99.21 — the Arabic toggle actually activates RTL (owner: 'not act
     expect(HOME_TSX).toMatch(/dir="\$\{ar \? "rtl" : "ltr"\}"/);
   });
 });
+
+describe("v2.99.24 — landing controls wired before throwable init (rendered-but-dead hardening)", () => {
+  it("wires the language toggle in the same block as the keypad, BEFORE the decorative/boot init", () => {
+    // The keypad and langBtn must both be wired before the try-wrapped
+    // decorative init, so a throw in initReveals/Scramble/Matrix/bootThree
+    // can't leave the page rendered-but-dead. Anchors are unique strings.
+    const keypadAt = HOME_TSX.indexOf('querySelectorAll<HTMLElement>("[data-lp-key]")');
+    const langAt = HOME_TSX.indexOf('$("langBtn")?.addEventListener("click", opts.onToggleLang)');
+    const decorTryAt = HOME_TSX.indexOf('window.addEventListener("mousemove", onMove');
+    expect(keypadAt).toBeGreaterThan(0);
+    expect(langAt).toBeGreaterThan(keypadAt);
+    expect(decorTryAt).toBeGreaterThan(langAt);
+  });
+  it("wraps the decorative + boot init in try/catch and force-dismisses the loader on failure", () => {
+    expect(HOME_TSX).toMatch(/const dismissLoader = \(\) =>/);
+    expect(HOME_TSX).toMatch(/\[landing\] decorative init failed/);
+    expect(HOME_TSX).toMatch(/\[landing\] boot\/fx init failed/);
+  });
+});

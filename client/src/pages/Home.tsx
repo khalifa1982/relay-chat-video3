@@ -1449,36 +1449,60 @@ function startLanding(
   };
 
   /* ── wire it all up ── */
+  // ROBUSTNESS (v2.99.24): wire EVERY interactive control FIRST — the keypad,
+  // Clear, Call, AND the language toggle — and arm the dial state, BEFORE any
+  // decorative / 3D / audio / boot code runs. Those extras can throw on a
+  // stricter or older browser (WebGL/AudioContext/rAF quirks); if they threw
+  // before the controls were wired, the page would render but nothing would be
+  // clickable (the reported symptom). The critical controls now attach up front
+  // and the rest is wrapped so a failure can NEVER disable them or leave the
+  // full-screen loader stuck over the page eating taps.
   host.querySelectorAll<HTMLElement>("[data-lp-key]").forEach((b) => b.addEventListener("click", onKeyClick));
   $("clearBtn")?.addEventListener("click", clearDial);
   $("demoBtn")?.addEventListener("click", demoDial);
   $("callBtn")?.addEventListener("click", callNow);
-  window.addEventListener("mousemove", onMove, { passive: true });
-  window.addEventListener("scroll", onScroll, { passive: true });
-  window.addEventListener("resize", onResize);
-  onScroll();
-  initReveals();
-  initScramble();
-  initMatrix();
   $("langBtn")?.addEventListener("click", opts.onToggleLang);
-  if (reduced || opts.skipBoot) {
-    // Reduced motion, or a LANGUAGE SWITCH re-init (the boot cinematic only
-    // plays once per visit): clear the overlay and go straight to content.
-    const ov = $("loader");
-    if (ov) ov.style.display = "none";
-    if (!reduced) {
-      raf = requestAnimationFrame(fxLoop);
-      void bootThree();
-    }
-  } else {
-    raf = requestAnimationFrame(fxLoop);
-    runLoader(3400, t.bootMsgs as LoaderMsg[], () => {
-      replayHero();
-      // Boot the 3D scene only now — its shader compile can't stall the loader.
-      void bootThree();
-    });
-  }
   syncDial();
+  const dismissLoader = () => {
+    const ov = $("loader");
+    if (ov) { ov.style.opacity = "0"; ov.style.pointerEvents = "none"; ov.style.display = "none"; }
+  };
+  try {
+    window.addEventListener("mousemove", onMove, { passive: true });
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onResize);
+    onScroll();
+    initReveals();
+    initScramble();
+    initMatrix();
+  } catch (e) {
+    // Decorative extras only — the controls above already work.
+    console.warn("[landing] decorative init failed (controls still work):", e);
+  }
+  try {
+    if (reduced || opts.skipBoot) {
+      // Reduced motion, or a LANGUAGE SWITCH re-init (the boot cinematic only
+      // plays once per visit): clear the overlay and go straight to content.
+      dismissLoader();
+      if (!reduced) {
+        raf = requestAnimationFrame(fxLoop);
+        void bootThree();
+      }
+    } else {
+      raf = requestAnimationFrame(fxLoop);
+      runLoader(3400, t.bootMsgs as LoaderMsg[], () => {
+        replayHero();
+        // Boot the 3D scene only now — its shader compile can't stall the loader.
+        void bootThree();
+      });
+    }
+  } catch (e) {
+    // If boot/fx init throws before the loader was dismissed, the opaque
+    // full-screen overlay would sit over the page and swallow every tap — force
+    // it down so the (already-wired) controls are reachable.
+    console.warn("[landing] boot/fx init failed:", e);
+    dismissLoader();
+  }
 
   return () => {
     alive = false;
