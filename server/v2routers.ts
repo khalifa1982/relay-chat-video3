@@ -294,6 +294,50 @@ function requireIdentity(ctx: { identity: unknown }) {
  */
 const REVEAL_MAX_INLINE_BYTES = 30 * 1024 * 1024;
 
+/**
+ * AGGREGATE ceiling for the same endpoint (v2.99.48).
+ *
+ * ── SELF-REVIEW: M23 BOUNDED ONE OBJECT, NOT THE PROCESS ── the per-request cap
+ * stopped a single unbounded read, and M23's own comment reasoned that the per-IP
+ * throttle covered the rest. It does not: tRPC batching lets ONE HTTP request
+ * carry many `revealExpiring` calls, and the shared `statusGate` bucket permits a
+ * 60-burst — so ~60 reveals of a 30MB attachment could be in flight at once, each
+ * holding the buffer, its `Buffer.concat` copy, a ~40MB base64 string and the
+ * JSON response body. That is >100MB of live heap per entry against a
+ * `max_memory_restart: "1G"`, `instances: 1` process — and that single process
+ * holds the ENTIRE in-memory signaling registry plus every open SSE stream, with
+ * `/api/relay/*` ALB-pinned to it. An OOM restart therefore drops every call on
+ * the fleet, not just the attacker's request.
+ *
+ * So concurrency and total in-flight bytes are bounded too. Over budget answers
+ * "try again" WITHOUT burning the message — the reveal must stay retryable,
+ * because a burn the reader never saw is unrecoverable data loss.
+ */
+const REVEAL_MAX_CONCURRENT = 2;
+const REVEAL_MAX_INFLIGHT_BYTES = 60 * 1024 * 1024;
+let revealInFlight = 0;
+let revealInFlightBytes = 0;
+
+/** Reserve a slot for one inline read, or null when the process is at budget. */
+function reserveRevealSlot(): { release: (bytes: number) => void } | null {
+  if (revealInFlight >= REVEAL_MAX_CONCURRENT) return null;
+  if (revealInFlightBytes >= REVEAL_MAX_INFLIGHT_BYTES) return null;
+  revealInFlight++;
+  let released = false;
+  return {
+    release: (bytes: number) => {
+      if (released) return;
+      released = true;
+      revealInFlight = Math.max(0, revealInFlight - 1);
+      revealInFlightBytes = Math.max(0, revealInFlightBytes - bytes);
+    },
+  };
+}
+/** Exported for tests — the counters are process-global by design. */
+export function revealBudgetState(): { inFlight: number; bytes: number } {
+  return { inFlight: revealInFlight, bytes: revealInFlightBytes };
+}
+
 /* ── auth/identity router ─────────────────────────────────────── */
 
 /**
@@ -317,20 +361,27 @@ const REVEAL_MAX_INLINE_BYTES = 30 * 1024 * 1024;
  *
  * Sized against the real shape of the traffic. Only the ALLOCATING branch is
  * metered (see the call site), and `startGuest` is invoked from exactly one
- * place — the "Enter as guest" form submit — so one new visitor costs one token
- * and returning visitors cost nothing. 60 burst then ~1 every 5s therefore
- * absorbs a whole room of people signing up together on one shared address (a
- * demo, a classroom, a conference, an office behind CGNAT), which is a realistic
- * scenario for this app and one where the failure mode would be a hard
- * TOO_MANY_REQUESTS on the only screen that gets a person into the product.
+ * place — the "Enter as guest" form submit.
  *
- * It still bounds scripted abuse to roughly 17k numbers/day from a single host —
- * ~57 days to walk the space rather than an afternoon. A determined attacker with
- * several addresses is not stopped by a per-IP bucket alone; that would need a
- * global budget, which is noted as a follow-up rather than pretended here.
+ * ── SELF-REVIEW (v2.99.48): THE SIZING RATIONALE WAS WRONG ── v2.99.45 raised the
+ * burst on the argument that "returning visitors cost nothing". They do not:
+ * guest identity is deliberately SESSION-scoped (the device id lives in
+ * `sessionStorage` and the guest cookie is a session cookie, so both halves die
+ * on browser close), which means the SAME person spends a fresh token every
+ * browser session. Demand therefore tracks sessions/day, not distinct people, and
+ * a large shared egress (carrier CGNAT, an office, a school, a conference) is
+ * governed by the SUSTAINED rate — which was still only 0.2/s, i.e. the 13th
+ * visitor per minute got a hard TOO_MANY_REQUESTS on the one screen that gets a
+ * person into the product, with no client-side retry. Raising the burst fixed the
+ * spike and left the steady state broken.
+ *
+ * Sustained is now ~1/s, and the real ceiling on the finite resource moved to the
+ * GLOBAL mint budget inside `allocateSharedNumber` (v2.99.48) — which is the
+ * correct shape: a global counter protects a global resource, whereas a per-IP
+ * counter mostly punishes whoever shares an address.
  * Honors RELAY_RATELIMIT_OFF like every other gate.
  */
-const guestMintIpLimiter = createRateLimiter({ capacity: 60, refillPerSec: 0.2 });
+const guestMintIpLimiter = createRateLimiter({ capacity: 60, refillPerSec: 1 });
 setInterval(() => guestMintIpLimiter.sweep(Date.now(), 60 * 60_000), 60 * 60_000).unref();
 function guestMintGate(ctx: { req: unknown }) {
   if (process.env.RELAY_RATELIMIT_OFF === "1") return;
@@ -1779,6 +1830,15 @@ export const v2MessagesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
       statusGate(ctx); // reuse the generic per-IP throttle
+      // Reserve the aggregate slot BEFORE the burn (v2.99.48). Order matters: the
+      // burn is irreversible, so refusing after it would destroy a message the
+      // reader never got to see. `retry` tells the client this one is still there.
+      const slot = reserveRevealSlot();
+      if (!slot) {
+        return { ok: false as const, retry: true as const };
+      }
+      let reservedBytes = 0;
+      try {
       const res = await revealExpiringMessage({ messageId: input.messageId, identityId: me.id });
       if (!res) return { ok: false as const };
       // Tell every participant the row changed so their list refetches and shows
@@ -1836,6 +1896,11 @@ export const v2MessagesRouter = router({
               chunks.push(Buffer.from(value));
             }
             const buf = Buffer.concat(chunks);
+            // Charge the aggregate budget with what we really hold (the base64
+            // string and the JSON body are multiples of this, which is why the
+            // ceiling sits well under the process limit).
+            reservedBytes = buf.length;
+            revealInFlightBytes += reservedBytes;
             const mime = att.mimeType || "application/octet-stream";
             media = { dataUrl: `data:${mime};base64,${buf.toString("base64")}`, mimeType: mime };
           }
@@ -1844,6 +1909,9 @@ export const v2MessagesRouter = router({
         }
       }
       return { ok: true as const, body: res.body, media };
+      } finally {
+        slot.release(reservedBytes);
+      }
     }),
 });
 

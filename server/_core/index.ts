@@ -461,6 +461,35 @@ async function startServer() {
     );
   }, 30 * 60_000).unref();
   // tRPC API
+  //
+  // SECURITY (v2.99.48): cap the BATCH size. tRPC's httpBatchLink packs many
+  // calls into one request, and with no cap a single request could carry dozens
+  // of the same expensive procedure — which is how a per-call limit on
+  // `messages.revealExpiring` (a 30MB inline read each) still added up to enough
+  // heap to OOM this process, and this process owns the whole in-memory signaling
+  // registry. The real client batches a handful of light queries at a time, so a
+  // generous cap costs nothing legitimate. Runs BEFORE the tRPC middleware, so an
+  // over-cap batch is rejected without any resolver executing.
+  const TRPC_MAX_BATCH = 20;
+  app.use("/api/trpc", (req, res, next) => {
+    if (req.query.batch === undefined) return next();
+    let n = 0;
+    if (req.method === "GET") {
+      // GET batches encode inputs as `?input={"0":…,"1":…}`; the path names the
+      // procedures, comma-separated.
+      const path = req.path.replace(/^\//, "");
+      n = path ? path.split(",").length : 0;
+    } else if (Array.isArray(req.body)) {
+      n = req.body.length;
+    } else if (req.body && typeof req.body === "object") {
+      n = Object.keys(req.body as Record<string, unknown>).length;
+    }
+    if (n > TRPC_MAX_BATCH) {
+      res.status(413).json({ error: "batch_too_large" });
+      return;
+    }
+    next();
+  });
   app.use(
     "/api/trpc",
     createExpressMiddleware({

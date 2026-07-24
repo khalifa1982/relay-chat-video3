@@ -282,6 +282,20 @@ export function registerLocalAuth(app: Express): void {
   // Tight limits on the auth endpoints (brute-force / spam guard).
   const ipLimiter = createRateLimiter({ capacity: 30, refillPerSec: 30 / 60 }); // ~30/min burst, 0.5/s
   setInterval(() => ipLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
+  // v2.99.48: registration ALSO spends a permanent 6-digit number (via
+  // ensureUserIdentity → allocateNumber) and also sends mail, and it had no mint
+  // budget at all — 43,200 permanent claims/day/IP through a sibling endpoint,
+  // more than the per-endpoint bound M21 advertised for `startGuest`. A second,
+  // tighter bucket meters exactly the registrations that CREATE an account, so
+  // the login/verify/resend routes keep the looser gate above.
+  const mintLimiter = createRateLimiter({ capacity: 20, refillPerSec: 20 / 60 }); // 20 burst, ~1/3s
+  setInterval(() => mintLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
+  const mintGate = (req: Request, res: Response): boolean => {
+    if (rlOff) return true;
+    if (mintLimiter.allow(clientIpOf(req), Date.now())) return true;
+    res.status(429).json({ error: "rate_limited", message: "Too many sign-ups from this network. Try again shortly." });
+    return false;
+  };
   const gate = (req: Request, res: Response): boolean => {
     if (rlOff) return true;
     if (ipLimiter.allow(clientIpOf(req), Date.now())) return true;
@@ -353,6 +367,9 @@ export function registerLocalAuth(app: Express): void {
         });
         return;
       }
+      // Meter the ALLOCATING path only (an unverified re-register above resends a
+      // link and spends no number, so it stays on the looser gate).
+      if (!mintGate(req, res)) return;
       const userId = await createLocalUser(email, hashPassword(password));
       if (!userId) { res.status(503).json({ error: "unavailable", message: "Service unavailable. Try again." }); return; }
       // Give them an identity row now (guest cookie migrated if present) so their

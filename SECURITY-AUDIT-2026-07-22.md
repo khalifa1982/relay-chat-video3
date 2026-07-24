@@ -679,3 +679,137 @@ directly) and `server/selfReviewRelay.test.ts` (12 behavioural tests against the
 real signaling handler, including the exact M45 dead-end scenario). Nine stale
 pins across seven files were rewritten to the **stronger** invariants, never
 relaxed to match the new code.
+
+---
+
+## Round 7 — the fixes that only looked closed (2026-07-24, v2.99.48)
+
+The remaining red-team clusters found the sharpest class of problem in this whole
+audit, and it repeated three times. Naming it, because it is the lesson:
+
+> **A fix keyed to something the attacker controls, or a guard that parses
+> differently from the code it guards, looks closed and is not.**
+
+Three previously-shipped HIGH fixes were still exploitable. None of them were
+wrong about the vulnerability; each was wrong about the thing it keyed on.
+
+### M60 — the forced-call hole, still open two ways (HIGH ×2)
+
+**Where:** `client/src/lib/bootUrl.ts`, `client/src/App.tsx`.
+
+M48 blocked auto-dialing a `?to=` the document was *loaded* with. It tested the
+raw search string with `/(^|[?&])to=/`, while the Dialer reads the value with
+`URLSearchParams` — which **percent-decodes keys**. So:
+
+    https://your-chat.io/app/dialer?%74o=555555&video=1      (%74 is 't')
+
+is invisible to the guard and perfectly visible to the code it guards. One click:
+live mic *and* camera to a number the attacker chose.
+
+Second path: `/i/<pin>` — the app's own share link, and the shorter form people
+actually send — boots with an **empty** search and only then redirects
+client-side to `/app/dialer?to=…`, which read as an in-app tap. The documented
+invite URL stayed fully exploitable while only the long form was closed.
+
+**Fix.** The detector now runs the **consumer's** parser over the boot URL
+(`bootDialTarget()` via `URLSearchParams`) and captures `BOOT_PATH`, so an arrival
+on `/i/<pin>` (or the legacy `/app/call`) counts as an arrival. Proven
+empirically in `client/src/lib/bootUrl.test.ts`, which stubs a boot location per
+case and asserts the old regex is blind to `%74o=` where the new parser is not.
+
+Two regressions from the same fix, also closed: `BOOT_SEARCH` is captured per
+**document**, so after one arrival every later in-app call tap in that tab hit
+the prefill branch and one-tap calling stayed broken for the session (the test is
+now per-**navigation**); and of the three armed "tap to call" entry points only
+the notification branch marked the intent — the sonner toast action did not
+(fixed), and the Web Push path structurally cannot (a service worker has no
+`sessionStorage`), so it honestly requires a confirming tap.
+
+### M57 — the enumeration oracle never actually closed (HIGH)
+
+**Where:** `server/relay.ts`.
+
+M40 added a per-caller budget to the offline-dial branch, keyed on `callerPin`.
+But a caller with **no cookie** is handed a fresh random pin by `genPin` at
+register time, and the SSE stream can be reopened about once a second. So:
+
+    new cid → register → 60 invites → discard → repeat
+
+minted a new bucket every iteration and probed at ~60/s from one address — a full
+walk of the 10⁶ space in **hours**, not the "about three weeks" the v2.99.45
+changelog claimed (a ~100× overestimate on my part). Worse, the reply carried the
+callee's display **name**, so it was name-harvesting, not just existence-probing.
+Same root cause let an anonymous client be assigned a real user's number and
+drain *their* bucket, throttling their legitimate dials and silently costing
+their callees missed-call records.
+
+**Fix.** The budget follows something the caller cannot re-mint: `verifiedPin`
+(recorded at register time from F1's cookie-resolved `__ownedNumber`) keys it to
+the identity; everything else keys to the address, stamped as a new server-only
+`__clientIp` and stripped from client input exactly like `__ownedNumber`. The
+callee's name is now sent only to a verified caller.
+
+### M58 — the number-space ceiling was in the wrong place (HIGH)
+
+**Where:** `server/v2db.ts`, `server/authLocal.ts`.
+
+M21 metered `startGuest` and M41 metered `regenerateNumber`, but
+`POST /api/auth/register` reaches the same permanent-number sink through
+`ensureUserIdentity` with **no mint budget at all** — 43,200 claims/day/IP, more
+than the bound M21 advertised, and inside a bare `catch {}` so nothing surfaces
+when allocation begins to fail. A per-endpoint gate can always be forgotten by
+the next caller.
+
+**Fix.** The ceiling moved to `allocateSharedNumber` — the one funnel all four
+allocators pass through — as a global rolling budget (5,000/hour/instance, far
+above any real day). Deliberately soft: no schema, no cross-instance
+coordination, resets on restart. It is a runaway-loop backstop, not an
+authorization boundary; the per-IP gates remain the first line, and the
+registration path gained one of its own on the branch that actually creates an
+account.
+
+Also retuned, for the second time: M21's per-IP sizing rationale assumed
+"returning visitors cost nothing". They don't — guest identity is deliberately
+session-scoped (device id in `sessionStorage`, guest cookie a session cookie), so
+the same person spends a token every browser session and demand tracks
+sessions/day. 0.2/s sustained still hard-failed the 13th visitor per minute on a
+shared egress; it is now ~1/s, with the global budget protecting the real
+resource.
+
+### M59 — one reveal was bounded, the process wasn't (HIGH)
+
+**Where:** `server/v2routers.ts`, `server/_core/index.ts`.
+
+M23 capped a single `revealExpiring` inline read at 30 MB and reasoned the per-IP
+throttle covered the rest. It doesn't: tRPC batching packs many calls into one
+request and the shared `statusGate` permits a 60-burst, so ~60 reveals of a 30 MB
+attachment could be in flight together — each holding the buffer, its
+`Buffer.concat` copy, a ~40 MB base64 string, and the JSON response body.
+
+Against `max_memory_restart: "1G"` with `instances: 1`, that is an OOM restart of
+the process that owns the **entire in-memory signaling registry** and every open
+SSE stream, with `/api/relay/*` ALB-pinned to it. Every call on the fleet drops —
+not just the attacker's request.
+
+**Fix.** A process-wide slot and in-flight byte budget (2 concurrent, 60 MB),
+reserved **before** the irreversible burn so an over-budget reveal answers
+`{ok:false, retry:true}` with the message intact — refusing after the burn would
+destroy content the reader never saw. tRPC batches are additionally capped at 20
+(413 `batch_too_large`), ahead of the middleware so no resolver runs.
+
+A LOW follow-up to M22 shipped alongside: the client wrote its `revealed` cache
+unconditionally, so a tab that *lost* the atomic burn race rendered an empty
+bubble still wearing the "View once" chip, latched unretryable for the thread
+session. Only a reveal that actually returned content is cached now; anything
+else refetches, so the row's own state drives the honest placeholder and a
+transient failure (network, 429, the new budget) stays retryable — which matters
+because in those cases the message was never burned.
+
+### Verification (round 7)
+
+`pnpm verify` green: **1775 passing / 1 skipped**, typecheck and production build
+clean. New `client/src/lib/bootUrl.test.ts` (11, boot-location stubs proving both
+bypasses and the per-document regression) and `server/selfReviewPass3.test.ts`
+(18, including behavioural verified-pin coverage through the real register
+handler). Seven stale pins across seven files rewritten to the stronger
+invariants.

@@ -261,6 +261,12 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
                 action: {
                   label: "Call",
                   onClick: () => {
+                    // v2.99.48: mark the intent here too. This is the SAME armed
+                    // one-tap call as the notification branch above, but only
+                    // that one marked it — so tapping Call on the toast landed on
+                    // a prefilled pad and needed a second tap, silently losing
+                    // the promise of the feature.
+                    markDialIntent(payload.number);
                     if (typeof window !== "undefined") window.location.href = dialUrl;
                   },
                 },

@@ -46,7 +46,9 @@ describe("v2.99.30 QA M20 — shared cross-table number reservation", () => {
     expect(fn).toMatch(/return true; \/\/ table missing/);
   });
   it("allocateSharedNumber gates on numberTaken THEN reserves, and both allocators use it", () => {
-    const fn = V2DB.slice(V2DB.indexOf("async function allocateSharedNumber"), V2DB.indexOf("async function allocateSharedNumber") + 600);
+    // Window widened for v2.99.48's global mint budget (a guard added ahead of
+    // the candidate loop); the ordering asserted below is unchanged.
+    const fn = V2DB.slice(V2DB.indexOf("async function allocateSharedNumber"), V2DB.indexOf("async function allocateSharedNumber") + 1100);
     expect(fn).toMatch(/if \(await numberTaken\(db, candidate\)\) continue;/);
     expect(fn).toMatch(/if \(await tryReserveNumber\(db, candidate\)\) return candidate;/);
     // both public allocators delegate to the shared core

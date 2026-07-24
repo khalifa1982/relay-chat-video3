@@ -93,7 +93,7 @@ describe("issue 1 — pre-ring dial drops", () => {
     // card via failDial("server-error:offline").
     // v2.99.44 adds `pin` (which invitee) so a group dial can tell when the
     // LAST one has resolved; the message itself is unchanged.
-    expect(SERVER).toMatch(/code: "offline",\s*\n\s*pin: to,\s*\n\s*message: \(info\.name \|\| "They"\) \+ " is offline right now\."/);
+    expect(SERVER).toMatch(/code: "offline",\s*\n\s*pin: to,(?:[\s\S]{0,700}?)verifiedPin\s*\n?\s*\? \(info\.name \|\| "They"\) \+ " is offline right now\."/);
     expect(SERVER).not.toMatch(/paging: true/);
     expect(CLIENT).not.toMatch(/setCallStatus\("ringing", "Reaching their phone…"\)/);
     expect(CLIENT).toMatch(/reason === "no-answer" \|\| reason === "peer-rejected" \|\| reason === "server-error:offline"/);

@@ -6568,6 +6568,89 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       additive-DDL rule now allows ADD UNIQUE INDEX; androidAudioCamera.test.ts's chat-dedup pin now
       expects the threaded sender). Suite 1662 passed / 1 skipped; check + build green.
 
+## v2.99.48 — self-review round 3: the fixes that only LOOKED closed (2026-07-24)
+- [x] The remaining red-team clusters landed, and they found the sharpest class of problem yet. Worth
+      naming the pattern, because it repeated three times: **a fix keyed to something the ATTACKER
+      controls, or a guard that parses differently from the code it guards, looks closed and isn't.**
+- [x] (M60, HIGH ×2 — the M48 forced-call hole was STILL OPEN, two ways) (a) `bootedWithDialTarget()`
+      tested the RAW search string with `/(^|[?&])to=/` while the Dialer reads the value with
+      `URLSearchParams`, which PERCENT-DECODES KEYS — so `?%74o=555555&video=1` (`%74` is `t`) was
+      invisible to the guard and perfectly visible to the code it guarded. One click still opened a live
+      mic AND camera to an attacker-chosen number. (b) `/i/<pin>` — the app's OWN share link, and the
+      shorter form people actually send — boots with an EMPTY search and only then redirects
+      client-side to `/app/dialer?to=…`, which read as an in-app tap. So the documented invite URL
+      stayed fully exploitable while only the long form was closed. Fixed by making the detector use the
+      CONSUMER'S parser (`bootDialTarget()` via `URLSearchParams`) and by capturing `BOOT_PATH` so an
+      arrival on `/i/<pin>` (or the legacy `/app/call`) counts as an arrival. Verified empirically:
+      `client/src/lib/bootUrl.test.ts` stubs a boot location per case and proves the old regex is blind
+      to `%74o=` while the new parser sees it.
+- [x] (M60c, MED — REGRESSION from M48) ONE-TAP CALLING BROKE FOR THE REST OF THE SESSION. `BOOT_SEARCH`
+      is captured once per DOCUMENT, so after any arrival with a `to=` (tapping "Call" on a back-online
+      alert is a full page load) EVERY later in-app call tap from Contacts/Messages in that tab took the
+      prefill branch — the pad filled and nothing dialed, and it never self-healed. The question is now
+      per-NAVIGATION: `arrivedWithDialTarget(to)` asks "is THIS the number the document was opened
+      with?", not "did this document ever open with one?".
+- [x] (M60d, MED — REGRESSION from M48) TWO OF THREE ARMED-CALL PATHS LOST THEIR ONE TAP. v2.99.45
+      claimed the back-online "tap to call" kept its single tap via the intent marker, but only the
+      notification branch marked it — the sonner toast action ten lines below did not (one-line fix,
+      now marked). The Web Push path CANNOT mark it (a service worker has no `sessionStorage`), so that
+      one honestly requires a confirming tap; the claim is corrected in the code comment rather than
+      papered over.
+- [x] (M57, HIGH — INCOMPLETE CLOSURE of M40) THE ENUMERATION ORACLE NEVER ACTUALLY CLOSED. M40's budget
+      was keyed on `callerPin` — but a caller with no cookie is handed a FRESH RANDOM pin by `genPin` at
+      register time, and the SSE stream can be reopened about once a second. So an anonymous loop (new
+      cid → register → 60 invites → discard → repeat) minted a new bucket every time and probed at
+      ~60/s from one address: a full walk of the 10^6 space in HOURS, not the "about three weeks"
+      v2.99.45 claimed — a ~100× overestimate on my part, and the reply even carried the callee's
+      display NAME, so it was name-harvesting too. The same root cause let an anonymous client be
+      assigned a real user's number and drain THAT user's bucket, throttling their legitimate dials and
+      silently costing their callees missed-call records. Fixed by making the budget follow something
+      the caller cannot re-mint: `verifiedPin` (recorded at register time from F1's cookie-resolved
+      `__ownedNumber`) keys it to the identity, and everything else keys to the address (stamped as a
+      new server-only `__clientIp`, stripped from client input exactly like `__ownedNumber`). The
+      callee's NAME is now only sent to a verified caller.
+- [x] (M58, HIGH — INCOMPLETE CLOSURE of M21) THE NUMBER-SPACE CEILING WAS IN THE WRONG PLACE. M21 and
+      M41 metered `startGuest` and `regenerateNumber`, but `/api/auth/register` reaches the SAME
+      permanent-number sink through `ensureUserIdentity` and had no mint budget at all — 43,200 claims/
+      day/IP, MORE than the bound M21 advertised, and wrapped in a bare `catch {}` so nothing surfaces
+      when allocation starts failing. And a per-endpoint gate can always be forgotten by the next
+      caller. So the ceiling moved to `allocateSharedNumber` — the ONE funnel all four allocators pass
+      through — as a global rolling budget (5,000/hour/instance, far above any real day; deliberately
+      soft, since this is a runaway-loop backstop, not an authorization boundary). The registration path
+      also gained its own per-IP mint gate, metering only the branch that actually creates an account.
+- [x] (M21 retune #2, MED — the sizing RATIONALE was wrong) My v2.99.45 note argued 0.2/s sustained was
+      fine because "returning visitors cost nothing". They don't: guest identity is deliberately
+      SESSION-scoped (device id in `sessionStorage`, guest cookie a session cookie — both die on browser
+      close), so the same person spends a fresh token EVERY browser session and demand tracks
+      sessions/day. A large shared egress is governed by the sustained rate, so the 13th visitor per
+      minute still got a hard TOO_MANY_REQUESTS on the only screen that gets a person into the product,
+      with no client retry. Raised to ~1/s now that the global budget above protects the actual resource.
+- [x] (M59, HIGH — INCOMPLETE CLOSURE of M23) ONE REVEAL WAS BOUNDED; THE PROCESS WASN'T. M23 capped a
+      single inline read at 30MB and reasoned the per-IP throttle covered the rest. It doesn't: tRPC
+      batching packs many calls into ONE request and the shared `statusGate` permits a 60-burst, so ~60
+      reveals of a 30MB attachment could be in flight together — each holding the buffer, its
+      `Buffer.concat` copy, a ~40MB base64 string and the JSON body. Against `max_memory_restart: "1G"`
+      with `instances: 1`, that is an OOM restart of the process that owns the ENTIRE in-memory signaling
+      registry and every open SSE stream, with `/api/relay/*` ALB-pinned to it — so every call on the
+      fleet drops, not just the attacker's request. Added a process-wide slot + in-flight byte budget
+      (2 concurrent, 60MB), reserved BEFORE the irreversible burn so an over-budget reveal answers
+      `{ok:false, retry:true}` with the message intact — refusing after the burn would destroy content
+      the reader never saw. Also capped tRPC batches at 20 (413 `batch_too_large`), ahead of the
+      middleware so no resolver runs.
+- [x] (M22 follow-up, LOW) A REFUSED REVEAL RENDERED AN EMPTY BUBBLE. M22 correctly made the burn atomic
+      so a second tab that loses the race is refused — but the client wrote `revealed` unconditionally,
+      so the loser rendered an EMPTY bubble still wearing the "View once — gone when you leave" chip
+      (the `copy` branch is checked before `burned`), and `revealed.has(id)` then made it unretryable
+      for the rest of the thread session (view-once has `until === null`, so it never self-purged).
+      Now only a reveal that actually returned content is cached; anything else refetches, so the row's
+      own state drives the honest "This message has disappeared" placeholder and a TRANSIENT failure
+      (network, 429, the new budget) stays retryable — which matters because in those cases the message
+      was never burned.
+- [x] Tests: `client/src/lib/bootUrl.test.ts` (11 — boot-location stubs proving both bypasses and the
+      per-document regression), `server/selfReviewPass3.test.ts` (18 — incl. behavioural verified-pin
+      coverage through the real register handler). Seven stale pins across seven files rewritten to the
+      stronger invariants. Suite 1775 passed / 1 skipped; `pnpm verify` green.
+
 ## v2.99.47 — self-review round 2: regressions and half-closures in MY OWN fixes (2026-07-24)
 - [x] A second red-team pass over the 29 fixes shipped today, looking for ways each one made the app
       WORSE for a legitimate user or left the invariant it claimed only half-shut. Eight items, every

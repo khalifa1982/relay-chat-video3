@@ -63,6 +63,30 @@ import { createContext } from "./_core/context";
  * of collapsing the call. Honors RELAY_RATELIMIT_OFF like every other gate.
  */
 const offlineDialLimiter = createRateLimiter({ capacity: 60, refillPerSec: 0.5 });
+
+/**
+ * The key M40's offline-dial budget is charged against.
+ *
+ * ── SELF-REVIEW (v2.99.48): KEYING ON THE PIN MEANT THE LIMITER NEVER BOUND ──
+ * A caller with no cookie is assigned a FRESH RANDOM pin by `genPin` at register
+ * time, and `/api/relay/stream` can be reopened about once a second. So an
+ * anonymous loop — new cid, register, 60 invites, discard, repeat — minted a new
+ * bucket every time and probed at ~60/s from ONE address. The number→identity
+ * oracle M40 was added to close stayed fully open: a full walk of the 10^6 space
+ * in hours, not the weeks v2.99.45 claimed. It also let an anonymous client be
+ * assigned a REAL user's number and drain that user's bucket, throttling their
+ * legitimate dials and silently costing their callees missed-call records.
+ *
+ * So the budget follows something the caller cannot re-mint: their cookie-proven
+ * pin when they have one (`verifiedPin`), otherwise their address. An anonymous
+ * scraper now shares one bucket per address no matter how many cids it burns,
+ * and a real user's bucket can only be spent by that user.
+ */
+function offlineDialKey(reg: RelayRegistry, callerPin: string): string {
+  const c = reg.clients.get(callerPin);
+  if (c?.verifiedPin) return "id:" + callerPin;
+  return "ip:" + (c?.ip || "unknown");
+}
 setInterval(() => offlineDialLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
 import {
   busEnabled,
@@ -139,6 +163,13 @@ export interface RelayClient {
    *  invites (which move only dialEpoch) keep ringing. Same global sequence
    *  as dialEpoch for the same uniqueness guarantee. */
   ctxEpoch?: number;
+  /** True when this pin was bound to a COOKIE-RESOLVED identity at register
+   *  time (F1's `__ownedNumber`), i.e. the caller cannot re-mint it at will.
+   *  Per-caller abuse budgets key on the pin only when this holds — see
+   *  `offlineDialKey`. */
+  verifiedPin?: boolean;
+  /** Address this client registered from, for the unverified-caller fallback. */
+  ip?: string | null;
 }
 
 export interface RelayConnection {
@@ -1117,6 +1148,10 @@ export interface RelayMessage {
    * the legacy client-requested-pin behavior is preserved.
    */
   __ownedNumber?: string | null;
+  /** SERVER-ONLY, stamped alongside __ownedNumber (v2.99.48). Stripped from any
+   *  client payload first, exactly like __ownedNumber. Lets per-caller budgets
+   *  fall back to the address when the caller has no verified identity. */
+  __clientIp?: string | null;
 }
 
 export type InviteHook = (info: {
@@ -1254,10 +1289,20 @@ export function handleMessage(
     //     cid-owned pin or a freshly allocated one.
     //   • field ABSENT (undefined) → a direct handleMessage call (unit tests):
     //     keep the legacy client-requested-pin behavior.
-    if ("__ownedNumber" in msg) {
+    // v2.99.48: remember whether the caller's number was PROVEN, not just claimed.
+    // Only a cookie-resolved pin is unmintable, and every per-caller budget keyed
+    // on the pin depends on that (see offlineDialKey). Field absent = a direct
+    // handleMessage call (unit tests), which keeps legacy behaviour and is treated
+    // as verified — there is no untrusted transport in that path.
+    const overHttp = "__ownedNumber" in msg;
+    if (overHttp) {
       const owned = msg.__ownedNumber;
       requested = typeof owned === "string" && /^\d{6}$/.test(owned) ? owned : undefined;
     }
+    const registerIp = typeof msg.__clientIp === "string" ? msg.__clientIp : null;
+    /** Proven, not merely claimed: a cookie-resolved pin we are about to honour. */
+    const verifiedClaim = (pinFinal: string) =>
+      !overHttp || (requested !== undefined && pinFinal === requested);
 
     const multiDevice = multiDeviceEnabled();
     // SECURITY: an explicit, valid pin request that DIFFERS from the pin this
@@ -1346,13 +1391,19 @@ export function handleMessage(
         prev.ctxEpoch = prev.dialEpoch;
       }
       prev.name = name;
+      // Verified-ness follows the pin actually in use: a verified re-register
+      // keeps it, and an UNVERIFIED registration can never upgrade a record
+      // (`verifiedClaim`), so an anonymous client landing on
+      // someone's number cannot inherit their budget.
+      prev.verifiedPin = verifiedClaim(pin);
+      prev.ip = registerIp ?? prev.ip ?? null;
       if (msg.device) prev.device = String(msg.device).slice(0, 16);
       if (msg.flag) prev.flag = String(msg.flag).slice(0, 8);
     } else {
       // ctxEpoch is seeded at creation so a continuation captured under a
       // DELETED record (whose ctxEpoch was undefined-or-older) can never
       // match this new record's generation and ghost-ring under it.
-      reg.clients.set(pin, { socket: conn.socket, name, device: msg.device ? String(msg.device).slice(0, 16) : undefined, flag: msg.flag ? String(msg.flag).slice(0, 8) : undefined, roomId: null, cid: cid || null, graceT: null, ringing: new Set(), ctxEpoch: ++dialEpochSeq });
+      reg.clients.set(pin, { socket: conn.socket, name, device: msg.device ? String(msg.device).slice(0, 16) : undefined, flag: msg.flag ? String(msg.flag).slice(0, 8) : undefined, roomId: null, cid: cid || null, graceT: null, ringing: new Set(), ctxEpoch: ++dialEpochSeq, verifiedPin: verifiedClaim(pin), ip: registerIp });
     }
     const lk = livekitConfig();
     safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
@@ -1508,7 +1559,7 @@ export function handleMessage(
           // invites at once) are untouched — which is why this avoids the
           // previously-rejected idea of capping invites in general. Generous
           // enough that a person dialling several offline contacts never notices.
-          if (process.env.RELAY_RATELIMIT_OFF !== "1" && !offlineDialLimiter.allow(callerPin, Date.now())) {
+          if (process.env.RELAY_RATELIMIT_OFF !== "1" && !offlineDialLimiter.allow(offlineDialKey(reg, callerPin), Date.now())) {
             // `unavailable`, NOT `offline` (v2.99.47): the throttle fires BEFORE
             // the number is resolved, so we do not actually know the callee
             // exists. Claiming "offline" made the client raise the leave-a-message
@@ -1542,7 +1593,15 @@ export function handleMessage(
                   type: "error",
                   code: "offline",
                   pin: to,
-                  message: (info.name || "They") + " is offline right now.",
+                  // v2.99.48: the NAME is only for a caller who proved who they
+                  // are. An unverified caller (no cookie ⇒ a genPin'd throwaway
+                  // pin) is exactly the enumeration case, and a named reply
+                  // turned existence-probing into name-harvesting across the
+                  // whole number space. A real user dialling a contact still
+                  // gets the honest "<Name> is offline right now."
+                  message: reg.clients.get(callerPin)?.verifiedPin
+                    ? (info.name || "They") + " is offline right now."
+                    : "They're offline right now.",
                 });
                 // Record the miss → History + (pref-gated) missed-call email on return.
                 try {
@@ -2973,6 +3032,7 @@ export function attachRelay(
     // identity-resolution cost; every other signaling message operates on the
     // pin already bound at register time.
     delete (message as Record<string, unknown>).__ownedNumber;
+    delete (message as Record<string, unknown>).__clientIp;
     if ((message as RelayMessage).type === "register") {
       let owned: string | null = null;
       try {
@@ -2982,6 +3042,13 @@ export function attachRelay(
         owned = null;
       }
       (message as RelayMessage).__ownedNumber = owned;
+      // v2.99.48: also record the ADDRESS, so a caller with no verified identity
+      // is budgeted per-IP instead of per-pin (which they can re-mint freely).
+      try {
+        (message as RelayMessage).__clientIp = clientIpOf(req);
+      } catch {
+        (message as RelayMessage).__clientIp = null;
+      }
     }
     // Cap signaling payload size. SDP/ICE/control messages are all small (a big
     // SDP is ~10-20 KB; the in-call chat rides the WebRTC data channel, NOT this

@@ -689,10 +689,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     setRevealing(m.id);
     let body: string | null = null;
     let attachment: Msg["attachment"] = null;
+    let got = false;
     try {
       // Fetch the withheld content from the server, which burns it as it returns.
       const res = await revealExpiringMutation.mutateAsync({ messageId: m.id });
       if (res.ok) {
+        got = true;
         body = res.body ?? null;
         if (res.media) {
           // A data: URL renders directly and survives the burn — no fetch/blob.
@@ -705,7 +707,25 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         }
       }
     } catch {
-      /* transient — the next list refetch will show the burned card */
+      /* transient — handled below, same as an explicit refusal */
+    }
+    setRevealing(null);
+    // v2.99.48: only cache a reveal we actually RECEIVED.
+    //
+    // M22 made the burn atomic, so a second device/tab that loses the race is now
+    // correctly refused ({ok:false}) instead of being handed the content. But this
+    // wrote `revealed` unconditionally, so the loser rendered an EMPTY bubble
+    // still wearing the "View once — gone when you leave" chip (the `copy` branch
+    // is checked before the `burned` branch), and because `revealed.has(id)` was
+    // then true the early return above made it unretryable for the rest of the
+    // thread session — with `until === null` for view-once, it never self-purged
+    // either. Refetch instead: the row's own consumed state drives the honest
+    // "This message has disappeared" placeholder, and a TRANSIENT failure
+    // (network, 429, the aggregate reveal budget) stays retryable, which matters
+    // because in those cases the message was NOT burned.
+    if (!got) {
+      utils.messages.list.invalidate().catch(() => {});
+      return;
     }
     const until = mode === "once" ? null : Date.now() + mode * 1000;
     setRevealed((prev) => {
@@ -713,7 +733,6 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       next.set(m.id, { body, attachment, until });
       return next;
     });
-    setRevealing(null);
   }
   const removeMutation = trpc.messages.remove.useMutation({
     // Optimistically drop the message from the visible list the instant the user

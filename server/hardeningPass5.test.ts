@@ -57,9 +57,31 @@ describe("M21 — startGuest is rate limited (number-space exhaustion)", () => {
   });
 
   it("is sized for a room of people signing up on one shared address", () => {
-    expect(ROUTERS).toMatch(/createRateLimiter\(\{ capacity: 60, refillPerSec: 0\.2 \}\)/);
-    // The pre-refinement budget was far tighter and could hard-fail signup.
+    // v2.99.48: sustained raised 0.2/s → 1/s. The earlier rationale ("returning
+    // visitors cost nothing") was wrong — guest identity is SESSION-scoped, so the
+    // same person spends a token every browser session and a large shared egress
+    // is governed by the sustained rate, not the burst. The 13th visitor per
+    // minute was getting a hard TOO_MANY_REQUESTS on the only screen that gets a
+    // person into the product.
+    expect(ROUTERS).toMatch(/createRateLimiter\(\{ capacity: 60, refillPerSec: 1 \}\)/);
+    // The pre-refinement budgets were far tighter and could hard-fail signup.
     expect(ROUTERS).not.toMatch(/capacity: 20, refillPerSec: 0\.1/);
+    expect(ROUTERS).not.toMatch(/capacity: 60, refillPerSec: 0\.2/);
+  });
+
+  it("the real ceiling on the number space is GLOBAL, at the one allocator funnel", () => {
+    // A per-IP gate only punishes whoever shares an address; the resource is
+    // global. It also can't be forgotten by a future caller — /api/auth/register
+    // reached the same sink with no mint budget at all until v2.99.48.
+    expect(V2DB).toMatch(/function claimMintBudget\(/);
+    expect(V2DB).toMatch(/MINT_MAX_PER_WINDOW/);
+    const alloc = V2DB.slice(V2DB.indexOf("async function allocateSharedNumber"));
+    expect(alloc.slice(0, 500)).toMatch(/if \(!claimMintBudget\(Date\.now\(\)\)\)/);
+    // …and the registration path that was missed now has its own per-IP gate.
+    const LOCAL = read("authLocal.ts");
+    expect(LOCAL).toMatch(/const mintGate = \(req: Request, res: Response\)/);
+    const reg = LOCAL.slice(LOCAL.indexOf('app.post("/api/auth/register"'));
+    expect(reg.indexOf("if (!mintGate(req, res)) return;")).toBeLessThan(reg.indexOf("await createLocalUser("));
   });
 
   it("sweeps the limiter map so it can't grow without bound itself", () => {

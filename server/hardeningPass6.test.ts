@@ -232,9 +232,16 @@ describe("M40 — offline dials can't be used as an enumeration oracle", () => {
   });
 
   it("gates the offline branch on the CALLER PIN and honors the kill switch", () => {
+    // v2.99.48: the key is no longer the bare callerPin — an anonymous caller is
+    // handed a FRESH random pin at register, so a pin-keyed bucket never bound and
+    // the oracle stayed open at ~60 probes/s. It now follows the cookie-proven
+    // identity, else the address.
     expect(RELAY).toMatch(
-      /process\.env\.RELAY_RATELIMIT_OFF !== "1" && !offlineDialLimiter\.allow\(callerPin, Date\.now\(\)\)/,
+      /process\.env\.RELAY_RATELIMIT_OFF !== "1" && !offlineDialLimiter\.allow\(offlineDialKey\(reg, callerPin\), Date\.now\(\)\)/,
     );
+    const key = RELAY.slice(RELAY.indexOf("function offlineDialKey"), RELAY.indexOf("function offlineDialKey") + 400);
+    expect(key).toMatch(/if \(c\?\.verifiedPin\) return "id:" \+ callerPin;/);
+    expect(key).toMatch(/return "ip:" \+ \(c\?\.ip \|\| "unknown"\);/);
   });
 
   it("refuses BEFORE resolving the identity, so nothing leaks and no miss is recorded", () => {

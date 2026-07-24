@@ -17,7 +17,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
-import { bootedWithDialTarget, consumeDialIntent } from "@/lib/bootUrl";
+import { arrivedWithDialTarget, consumeDialIntent } from "@/lib/bootUrl";
 import { RoleBadge, roleFromFlags, roleLabel } from "@/app/VerifiedBadge";
 import { openPeerProfile } from "@/app/PeerOverlays";
 import { playDtmf, disposeDtmf } from "@/lib/dtmf";
@@ -162,8 +162,15 @@ export default function DialerPage() {
     // connect immediately, unchanged.
     // A matching one-time intent means WE navigated here (the back-online
     // notification the user armed and tapped), so it stays a single tap.
+    //
+    // v2.99.48: the question is whether THIS number is the one the document was
+    // opened with — not whether the document ever opened with any. `BOOT_SEARCH`
+    // is captured per document, so the old "did we boot with a target?" test
+    // meant that after one arrival (tapping Call on a back-online alert is a full
+    // page load) every later in-app call tap in that tab hit this branch, and
+    // one-tap calling from Contacts/Messages stayed broken for the whole session.
     const intended = consumeDialIntent() === to;
-    if (bootedWithDialTarget() && !intended) {
+    if (arrivedWithDialTarget(to) && !intended) {
       setDialed(to);
       try {
         window.history.replaceState(null, "", "/app/dialer");

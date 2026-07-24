@@ -164,7 +164,7 @@ describe("M48 — ?to= only auto-dials when the intent came from inside the app"
 
   it("the Dialer prefills instead of dialing when the document arrived with ?to=", () => {
     const eff = DIALER.slice(DIALER.indexOf("const autoDialedRef"), DIALER.indexOf("const history ="));
-    expect(eff).toMatch(/if \(bootedWithDialTarget\(\) && !intended\) \{/);
+    expect(eff).toMatch(/if \(arrivedWithDialTarget\(to\) && !intended\) \{/);
     expect(eff).toMatch(/setDialed\(to\);/);
     // …and the guard sits BEFORE the dial.
     expect(eff.indexOf("bootedWithDialTarget()")).toBeLessThan(eff.indexOf("engine.dial(to"));

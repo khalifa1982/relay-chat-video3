@@ -145,9 +145,60 @@ async function tryReserveNumber(
 /** Shared allocator for the ONE 6-digit number space (identities + party
  *  lines). numberTaken guards pre-existing rows; tryReserveNumber closes the
  *  cross-table NEW-vs-NEW race atomically. */
+/**
+ * GLOBAL MINT BUDGET (v2.99.48).
+ *
+ * Every 6-digit number ever handed out is permanent, and the space is 10^6 —
+ * shared by guests, registrations, party lines and regenerations. M21 metered
+ * `startGuest` and M41 metered `regenerateNumber`, but the budget that matters is
+ * GLOBAL while every one of those gates is PER-IP: a caller with several
+ * addresses simply pays the toll several times. And the audit's own follow-up
+ * note was right that a per-endpoint gate can always be forgotten — it was:
+ * `POST /api/auth/register` reaches this same sink through `ensureUserIdentity`
+ * and had no mint budget at all, at 43,200 permanent claims/day/IP, more than the
+ * per-endpoint bound M21 advertised.
+ *
+ * So the ceiling lives HERE, at the one funnel all four allocators pass through,
+ * where no future caller can miss it. It is sized far above any real day
+ * (RELAY's whole population is a rounding error against it) and exists only to
+ * stop a scripted drain: once the space is walked far enough, the 40-attempt
+ * search below starts failing for EVERYONE — every new guest, every
+ * registration, every party line — with no recovery short of DB surgery.
+ *
+ * Deliberately a soft rolling window rather than a hard daily counter: no schema,
+ * no cross-instance coordination, and a restart resets it. That is an accepted
+ * weakness — this is a backstop against a runaway loop, not an authorization
+ * boundary, and the per-IP gates in front of it remain the first line.
+ */
+const MINT_WINDOW_MS = 60 * 60_000;          // one hour
+const MINT_MAX_PER_WINDOW = 5_000;           // ~0.5% of the space per hour, per instance
+let mintWindowStart = 0;
+let mintedInWindow = 0;
+
+/** Exported for tests + observability; call sites use it via allocateSharedNumber. */
+export function mintBudgetState(nowMs: number): { used: number; remaining: number } {
+  if (nowMs - mintWindowStart >= MINT_WINDOW_MS) return { used: 0, remaining: MINT_MAX_PER_WINDOW };
+  return { used: mintedInWindow, remaining: Math.max(0, MINT_MAX_PER_WINDOW - mintedInWindow) };
+}
+
+function claimMintBudget(nowMs: number): boolean {
+  if (nowMs - mintWindowStart >= MINT_WINDOW_MS) {
+    mintWindowStart = nowMs;
+    mintedInWindow = 0;
+  }
+  if (mintedInWindow >= MINT_MAX_PER_WINDOW) return false;
+  mintedInWindow++;
+  return true;
+}
+
 async function allocateSharedNumber(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
 ): Promise<string> {
+  if (!claimMintBudget(Date.now())) {
+    // Same error shape as exhaustion below, so every caller's existing handling
+    // (guest start, registration, party line, regenerate) already covers it.
+    throw new Error("number allocation is temporarily rate-limited");
+  }
   for (let attempt = 0; attempt < 40; attempt++) {
     const candidate = randomDigits6();
     if (RESERVED_PREFIXES.some((p) => candidate.startsWith(p))) continue;
