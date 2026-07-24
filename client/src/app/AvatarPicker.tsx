@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { X, ImagePlus, Trash2, Loader2 } from "lucide-react";
+import { X, ImagePlus, Trash2, Loader2, Sparkles } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { uploadAvatarImage } from "@/lib/uploadAttachment";
 import { AVATAR_EMOJIS, AVATAR_BGS, renderEmojiAvatar } from "@/lib/emojiAvatar";
+import { renderAnimatedEmojiAvatar } from "@/lib/animatedAvatar";
 import { toast } from "sonner";
 
 /**
@@ -30,6 +31,10 @@ export function AvatarPicker({
   const updateProfile = trpc.identity.updateProfile.useMutation();
   const [bgIdx, setBgIdx] = useState(0);
   const [busy, setBusy] = useState(false);
+  // Animated avatars (v2.99.18): when on, a picked character is rendered to an
+  // ANIMATED GIF (gentle bounce/pulse) instead of a static PNG — uploaded the
+  // same way, so it animates on every surface that shows the avatar.
+  const [animated, setAnimated] = useState(false);
 
   if (!open) return null;
   const bg = AVATAR_BGS[bgIdx];
@@ -45,8 +50,12 @@ export function AvatarPicker({
     if (busy) return;
     setBusy(true);
     try {
-      const blob = await renderEmojiAvatar(emoji, bg);
-      const { url } = await uploadAvatarImage(blob, { mimeType: "image/png" });
+      const blob = animated
+        ? await renderAnimatedEmojiAvatar(emoji, bg)
+        : await renderEmojiAvatar(emoji, bg);
+      const { url } = await uploadAvatarImage(blob, {
+        mimeType: animated ? "image/gif" : "image/png",
+      });
       await save(url);
     } catch (e) {
       toast.error((e as { message?: string })?.message ?? "Couldn't set that avatar.");
@@ -140,7 +149,25 @@ export function AvatarPicker({
           </div>
 
           {/* emoji / character grid */}
-          <div className="mt-5 mb-2 text-xs font-medium text-muted-foreground">Pick a character</div>
+          <div className="mt-5 mb-2 flex items-center justify-between">
+            <span className="text-xs font-medium text-muted-foreground">Pick a character</span>
+            {/* Animated toggle — renders the picked character as a looping GIF. */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={animated}
+              disabled={busy}
+              onClick={() => setAnimated((v) => !v)}
+              className={
+                "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition disabled:opacity-50 " +
+                (animated
+                  ? "border-primary/40 bg-primary/15 text-primary"
+                  : "border-border bg-background/50 text-muted-foreground hover:bg-muted/60")
+              }
+            >
+              <Sparkles className="size-3.5" /> {animated ? "Animated ✨" : "Animated"}
+            </button>
+          </div>
           <div className="grid grid-cols-6 gap-2 sm:grid-cols-8">
             {AVATAR_EMOJIS.map((emoji) => (
               <button

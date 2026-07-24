@@ -585,6 +585,11 @@ export const v2DirectoryRouter = router({
         id: id.id,
         number: id.number,
         displayName: id.displayName,
+        // First/last name (v2.99.18): registered users have these split; the
+        // landing dialer + previews show "First Last" explicitly (owner asked
+        // the preview to show "the name first and last"). Null for guests.
+        firstName: id.firstName,
+        lastName: id.lastName,
         avatarUrl: id.avatarUrl,
         isOnline: hidden ? false : (pres?.isOnline ?? false),
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
