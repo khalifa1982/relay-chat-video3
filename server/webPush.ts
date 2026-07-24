@@ -19,12 +19,12 @@
  * (Apple's restriction — a plain Safari tab cannot be pushed).
  */
 import crypto from "crypto";
-import { listPushSubscriptions, deletePushSubscription } from "./v2db";
+import { listPushSubscriptions, deletePushSubscription, pushEnabledForIdentity } from "./v2db";
 import { sendFcmData } from "./fcm";
 import { appBaseUrl } from "./appUrl";
 
 export interface PushPayload {
-  kind: "incoming-call" | "missed-call" | "voicemail" | "contact-online";
+  kind: "incoming-call" | "missed-call" | "voicemail" | "contact-online" | "message";
   title: string;
   body?: string;
   /** Notification tag — same tag replaces instead of stacking. */
@@ -133,6 +133,11 @@ export function vapidConfig(): { publicKey: string; privateKey: string; subject:
  * Best-effort: failures never propagate; dead endpoints (404/410) are pruned.
  */
 export async function sendPushToIdentity(identityId: number, payload: PushPayload): Promise<number> {
+  // The user's master push switch (v2.99.40). Checked HERE, once, so every
+  // caller and every future push kind honours it — a per-call-site check is the
+  // kind that gets forgotten when a new notification is added. Reads NULL/true
+  // as on and fails OPEN on DB trouble, so a hiccup can never silence a call.
+  if (!(await pushEnabledForIdentity(identityId))) return 0;
   let subs: Array<{ endpoint: string; p256dh: string; auth: string; kind?: string | null }>;
   try {
     subs = await listPushSubscriptions(identityId);

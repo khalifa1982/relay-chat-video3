@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
 import {
   Bell,
+  BellRing,
   BellOff,
   Camera,
   Check,
@@ -1210,6 +1211,7 @@ function EmailNotificationsSection() {
               ...old,
               ...(vars.missedCall !== undefined ? { missedCall: vars.missedCall } : {}),
               ...(vars.message !== undefined ? { message: vars.message } : {}),
+              ...(vars.push !== undefined ? { push: vars.push } : {}),
             }
           : old
       );
@@ -1224,37 +1226,56 @@ function EmailNotificationsSection() {
     },
   });
 
-  // Email notifications need a registered account with a linked email; guests
-  // and email-less accounts simply don't see this section.
-  if (!prefs.data?.signedIn || !prefs.data.hasEmail) return null;
+  // Needs a signed-in account (the prefs live on the user row). Guests keep
+  // their device-level controls — Do Not Disturb below — and see nothing here.
+  if (!prefs.data?.signedIn) return null;
 
   const busy = setPrefs.isPending;
+  // Email rows need a linked address; the push row doesn't (v2.99.40).
+  const hasEmail = prefs.data.hasEmail;
   return (
     <section className="space-y-3">
       <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-        Email notifications
+        Notifications
       </Label>
       <div className="rounded-2xl border border-border bg-card/40 divide-y divide-border/60">
+        {/* PUSH — the master switch for calls AND messages reaching this
+            account's devices when RELAY isn't open (v2.99.40). Off means we
+            send nothing, on every device, regardless of subscriptions. */}
         <EmailToggleRow
-          icon={<PhoneMissed className="size-5" />}
-          title="Missed calls"
-          desc="Email me when I miss a call while I'm offline."
-          checked={prefs.data.missedCall}
+          icon={<BellRing className="size-5" />}
+          title="Push notifications"
+          desc="Alert my devices about incoming calls and new messages while RELAY is closed."
+          checked={prefs.data.push}
           disabled={busy}
-          onChange={(v) => setPrefs.mutate({ missedCall: v })}
+          onChange={(v) => setPrefs.mutate({ push: v })}
         />
-        <EmailToggleRow
-          icon={<MessageSquare className="size-5" />}
-          title="New messages"
-          desc="Email me when a message arrives while I'm offline. We never include the message content."
-          checked={prefs.data.message}
-          disabled={busy}
-          onChange={(v) => setPrefs.mutate({ message: v })}
-        />
+        {hasEmail && (
+          <EmailToggleRow
+            icon={<PhoneMissed className="size-5" />}
+            title="Missed-call email"
+            desc="Email me when I miss a call while I'm offline."
+            checked={prefs.data.missedCall}
+            disabled={busy}
+            onChange={(v) => setPrefs.mutate({ missedCall: v })}
+          />
+        )}
+        {hasEmail && (
+          <EmailToggleRow
+            icon={<MessageSquare className="size-5" />}
+            title="Message email"
+            desc="Email me when a message arrives while I'm offline — only if your devices can't be reached, at most a few times a day. We never include the message content."
+            checked={prefs.data.message}
+            disabled={busy}
+            onChange={(v) => setPrefs.mutate({ message: v })}
+          />
+        )}
       </div>
-      <p className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
-        <Mail className="size-3.5" /> Sent to your account email. Message emails never contain the message itself.
-      </p>
+      {hasEmail && (
+        <p className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <Mail className="size-3.5" /> Sent to your account email. Message emails never contain the message itself.
+        </p>
+      )}
     </section>
   );
 }
