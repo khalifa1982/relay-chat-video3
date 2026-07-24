@@ -1579,11 +1579,17 @@ export default function Home() {
               return next;
             });
           },
+          // QA H9: do NOT swallow a lookup ERROR into null here. `directory.lookup`
+          // RESOLVES to null for a genuine not-a-user (→ "NO RELAY USER", CALL
+          // off) and only REJECTS on a real failure (a shared-NAT rate-limit 429,
+          // a transient 500). A `.catch(() => null)` turned every such error into
+          // a false "NO RELAY USER" and disabled CALL for real online users. Let
+          // the rejection reach runLookup's fail-open (FALLBACK → arm CALL → /i
+          // re-resolves + gates), which is exactly what that .catch is there for.
           onLookup: (number: string) =>
             utils.directory.lookup
               .fetch({ number })
-              .then((r) => (r as DialLookup | null) ?? null)
-              .catch(() => null),
+              .then((r) => (r as DialLookup | null) ?? null),
         })
       : undefined;
     bootedOnceRef.current = true;

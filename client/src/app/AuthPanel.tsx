@@ -279,6 +279,14 @@ export function AuthPanel({
    * code.
    */
   async function routeAfterProbe(email: string): Promise<void> {
+    // QA H4: clear any stale registration flag before routing. wasRegistration
+    // is set true by submitRegister and drives verifyCode → the "Finish setting
+    // up" screen. It was never reset, so a user who started a registration, went
+    // Back, then signed IN to an existing (PIN-less) account was routed into that
+    // setup screen — where whoami has no minted number and setLoginPin/updateProfile
+    // 401, stranding them. submitRegister runs AFTER this (a separate submit), so
+    // resetting here is safe and re-set true only on a real registration.
+    setWasRegistration(false);
     const p = await loginProbe.mutateAsync({ email });
     if (p.unregistered) { setStage("register"); return; }
     if (p.hasPin && !p.locked) {
