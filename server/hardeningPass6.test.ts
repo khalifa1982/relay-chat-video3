@@ -23,14 +23,22 @@ const PROXY = read("_core", "storageProxy.ts");
 /* ── M37: unsolicited video-accept can't force a camera on ─────────────── */
 
 describe("M37 — mutual-consent video can't be bypassed by an unsolicited accept", () => {
-  it("onVideoAccept requires that WE offered video", () => {
+  /**
+   * v2.99.47 — these pins were rewritten when the flag became ROOM-KEYED. The
+   * original boolean was cleared only in `hangUp`, and a call can be left
+   * WITHOUT hanging up (`switchCall` abandons an unanswered dial; hold/swap park
+   * one), so the offer survived into the NEXT call and the bypass stayed open.
+   * The invariant asserted now is the stronger one: an accept is honoured only
+   * when the offer was bound to the room the accept arrives in.
+   */
+  it("onVideoAccept honours an accept only for the room the offer was made in", () => {
     const fn = ENGINE.slice(
       ENGINE.indexOf("function onVideoAccept()"),
       ENGINE.indexOf("function onVideoDecline()"),
     );
-    expect(fn).toMatch(/if \(!videoOfferedByUs\) return;/);
+    expect(fn).toMatch(/videoOfferedForRoom === null \|\| videoOfferedForRoom !== roomId/);
     // The guard must precede the camera unlock.
-    expect(fn.indexOf("videoOfferedByUs")).toBeLessThan(fn.indexOf("unlockApprovedVideo()"));
+    expect(fn.indexOf("videoOfferedForRoom")).toBeLessThan(fn.indexOf("unlockApprovedVideo()"));
   });
 
   it("drops the frame SILENTLY (no toast) so it reveals nothing", () => {
@@ -39,31 +47,51 @@ describe("M37 — mutual-consent video can't be bypassed by an unsolicited accep
       ENGINE.indexOf("function onVideoDecline()"),
     );
     // The success toast must sit AFTER the guard, not before it.
-    expect(fn.indexOf("if (!videoOfferedByUs) return;")).toBeLessThan(fn.indexOf("toast("));
+    expect(fn.indexOf("videoOfferedForRoom !== roomId")).toBeLessThan(fn.indexOf("toast("));
   });
 
-  it("sets the flag at BOTH legitimate consent points", () => {
-    // (a) an explicit mid-call request…
+  it("records the offer at BOTH legitimate consent points", () => {
+    // (a) an explicit mid-call request — the room is already known…
     const req = ENGINE.slice(
       ENGINE.indexOf("function requestVideoUpgrade()"),
       ENGINE.indexOf("function onVideoRequest("),
     );
-    expect(req).toMatch(/videoOfferedByUs = true;/);
-    expect(req.indexOf("videoOfferedByUs")).toBeLessThan(req.indexOf('sendWS({ type: "video-request" })'));
+    expect(req).toMatch(/if \(roomId\) videoOfferedForRoom = roomId; else videoOfferPending = true;/);
+    expect(req.indexOf("videoOfferedForRoom")).toBeLessThan(req.indexOf('sendWS({ type: "video-request" })'));
     // (b) …and placing a VIDEO dial, where consent is implicit (no request is
-    // ever sent, so videoReqT alone would have broken this flow).
-    expect(ENGINE).toMatch(/videoOfferedByUs = camOn;/);
-    expect((ENGINE.match(/videoOfferedByUs = !opts\?\.voice;/g) || []).length).toBe(2);
+    // ever sent, so videoReqT alone would have broken this flow). The room does
+    // not exist yet, so the offer is PENDING until the ack names it.
+    expect(ENGINE).toMatch(/videoOfferPending = camOn;/);
+    expect((ENGINE.match(/videoOfferPending = !opts\?\.voice;/g) || []).length).toBe(2);
   });
 
-  it("is per-call state, cleared by the same reset as videoApproved", () => {
+  it("binds a pending offer ONLY on the ack to our own invite", () => {
+    // `case "room"` is the server's reply to OUR invite — the only place a room
+    // is provably the one our dial created. Nothing else may bind.
+    expect((ENGINE.match(/bindVideoOfferToRoom\(/g) || []).length).toBe(2); // decl + 1 call
+    const ack = ENGINE.slice(ENGINE.indexOf('case "room":'), ENGINE.indexOf('case "room":') + 900);
+    expect(ack).toMatch(/bindVideoOfferToRoom\(roomId\);/);
+    const bind = ENGINE.slice(ENGINE.indexOf("function bindVideoOfferToRoom"), ENGINE.indexOf("function bindVideoOfferToRoom") + 260);
+    expect(bind).toMatch(/if \(videoOfferPending\) \{ videoOfferedForRoom = rid; videoOfferPending = false; \}/);
+  });
+
+  it("is per-call state, dropped wherever the ACTIVE CALL changes", () => {
+    // hangUp still clears it…
     expect(ENGINE).toMatch(
-      /videoApproved = false; callIsGroup = false;[^\n]*\n\s*videoOfferedByUs = false;/,
+      /videoApproved = false; callIsGroup = false;[^\n]*\n\s*videoOfferedForRoom = null; videoOfferPending = false;/,
     );
+    // …and so do the two paths that switch calls without hanging up. This is
+    // belt-and-braces: the room check alone already refuses a stale offer.
+    const reset = ENGINE.slice(ENGINE.indexOf("function resetVideoConsent"), ENGINE.indexOf("function videoGateActive"));
+    expect(reset).toMatch(/videoApproved = false;/);
+    expect(reset).toMatch(/videoOfferedForRoom = null;/);
+    expect(reset).toMatch(/videoOfferPending = false;/);
+    expect((ENGINE.match(/resetVideoConsent\(\);/g) || []).length).toBeGreaterThanOrEqual(2);
   });
 
   it("declares the flag with the reasoning, next to the consent state", () => {
-    expect(ENGINE).toMatch(/let videoOfferedByUs = false;/);
+    expect(ENGINE).toMatch(/let videoOfferPending = false;/);
+    expect(ENGINE).toMatch(/let videoOfferedForRoom: string \| null = null;/);
     expect(ENGINE).toMatch(/mutual-consent protocol/);
   });
 });
@@ -71,47 +99,58 @@ describe("M37 — mutual-consent video can't be bypassed by an unsolicited accep
 /* ── M38: no attacker-chosen Content-Type is honoured same-origin ───────── */
 
 describe("M38 — dangerous media types are blocked at upload AND at the proxy", () => {
-  it("the upload denylist now covers the XML and script families", () => {
+  it("the upload denylist keeps the document-rendering and executable types", () => {
     // The source spells these as regex alternatives with escaped slashes, e.g.
-    // the literal characters `text\/xml`, so compare with the same escaping.
+    // the literal characters `text\/html`, so compare with the same escaping.
     for (const t of [
-      "text\\/xml",
-      "text\\/xsl",
-      "application\\/xml",
-      "application\\/xslt\\+xml",
-      "text\\/javascript",
-      "application\\/ecmascript",
-      "application\\/x-javascript",
+      "image\\/svg\\+xml",
+      "text\\/html",
+      "application\\/xhtml\\+xml",
+      "application\\/javascript",
+      "application\\/x-msdownload",
+      "application\\/x-sh",
     ]) {
       expect(UPLOAD, `denylist covers ${t}`).toContain(t);
     }
-    // …without losing the originals.
-    expect(UPLOAD).toContain("image\\/svg\\+xml");
-    expect(UPLOAD).toContain("text\\/html");
   });
 
-  /** Exercise the real denylist against the types that used to slip through. */
-  it("behaviourally rejects every script-capable type", () => {
+  /**
+   * v2.99.47 — the door-level denylist must NOT block ordinary files.
+   *
+   * M38 first widened it to the whole XML + JavaScript families, which broke
+   * attaching a plain `feed.xml` or `app.js` (the Messages paperclip has no
+   * `accept` filter and browsers report those as `text/xml` / `text/javascript`).
+   * The same change made storageProxy downgrade every non-inline-safe type to an
+   * octet-stream attachment, so the widening bought nothing — the guarantee lives
+   * at the serving end, asserted by the INLINE_SAFE_TYPE cases below.
+   */
+  it("behaviourally blocks renderable markup but admits everyday documents", () => {
     const m = UPLOAD.match(/const BLOCKED_MIME =\s*\n?\s*(\/\^\([^\n]+\/i);/);
     expect(m, "BLOCKED_MIME is extractable").not.toBeNull();
     // eslint-disable-next-line no-eval
     const BLOCKED: RegExp = eval(m![1]);
     for (const evil of [
-      "text/xml",
-      "application/xml",
-      "text/xsl",
-      "application/xslt+xml",
-      "text/javascript",
-      "application/ecmascript",
-      "application/x-javascript",
       "image/svg+xml",
       "text/html",
       "application/xhtml+xml",
+      "application/x-msdownload",
+      "application/x-sh",
     ]) {
       expect(BLOCKED.test(evil), `${evil} must be blocked`).toBe(true);
     }
-    // Legitimate attachment types must still pass.
-    for (const ok of ["image/png", "video/mp4", "audio/mpeg", "application/pdf", "text/plain"]) {
+    // Legitimate attachment types must still pass — including the ones the
+    // widened list rejected. The proxy forces each of these to download.
+    for (const ok of [
+      "image/png",
+      "video/mp4",
+      "audio/mpeg",
+      "application/pdf",
+      "text/plain",
+      "text/xml",
+      "application/xml",
+      "text/javascript",
+      "text/csv",
+    ]) {
       expect(BLOCKED.test(ok), `${ok} must be allowed`).toBe(false);
     }
   });
@@ -137,7 +176,18 @@ describe("M38 — dangerous media types are blocked at upload AND at the proxy",
     for (const ok of ["image/png", "image/webp", "video/mp4", "audio/mpeg", "application/pdf"]) {
       expect(SAFE.test(ok), `${ok} renders inline`).toBe(true);
     }
-    for (const bad of ["text/html", "text/xml", "image/svg+xml", "application/javascript", "text/plain"]) {
+    // Every type the door-level denylist deliberately admits (v2.99.47) must be
+    // caught HERE — this is the layer that actually prevents execution.
+    for (const bad of [
+      "text/html",
+      "text/xml",
+      "application/xml",
+      "text/xsl",
+      "image/svg+xml",
+      "application/javascript",
+      "text/javascript",
+      "text/plain",
+    ]) {
       expect(SAFE.test(bad), `${bad} must be forced to download`).toBe(false);
     }
   });
@@ -198,14 +248,18 @@ describe("M40 — offline dials can't be used as an enumeration oracle", () => {
     expect(branch).not.toMatch(/onMissedCall/);
   });
 
-  it("its reply is the GENERIC offline message — no name, no existence signal", () => {
+  it("its reply is GENERIC — no name, no existence signal either way", () => {
     const branch = RELAY.slice(
       RELAY.indexOf("if (process.env.RELAY_RATELIMIT_OFF !== \"1\" && !offlineDialLimiter"),
       RELAY.indexOf("onPageCallee({ calleePin: to"),
     );
-    expect(branch).toMatch(/message: "They're offline right now\."/);
+    // v2.99.47: the code is `unavailable`, not `offline`. The throttle fires
+    // BEFORE the number is resolved, so claiming they are offline asserted an
+    // existence the server hadn't checked — and the client then offered to leave
+    // a voice message for a possibly-nonexistent number, losing the recording.
+    expect(branch).toMatch(/code: "unavailable"/);
+    expect(branch).toMatch(/message: "Can't place that call right now/);
     expect(branch).not.toMatch(/info\.name/);
-    expect(branch).not.toMatch(/nonexistent/);
   });
 
   it("documents that it is scoped to the offline branch (group dials untouched)", () => {
@@ -222,10 +276,12 @@ describe("M40 — offline dials can't be used as an enumeration oracle", () => {
   });
 
   it("its throttled reply is classified by the client as a reachErr, so a group dial survives", () => {
-    // code "offline" is in the client's reachErr set, which during a group-dial
-    // bootstrap PROMOTES the next invitee instead of failing the whole dial.
+    // `unavailable` (v2.99.47) joins the client's reachErr set, which during a
+    // group-dial bootstrap PROMOTES the next invitee instead of failing the whole
+    // dial — but is deliberately NOT voicemail-eligible (see the M55 pins).
     const ENGINE = read("..", "client", "src", "lib", "relayClient.ts");
-    expect(ENGINE).toMatch(/const reachErr = m\.code === "offline"/);
+    expect(ENGINE).toMatch(/const reachErr =\s*\n?\s*m\.code === "offline"/);
+    expect(ENGINE).toMatch(/m\.code === "unavailable"/);
     expect(ENGINE).toMatch(/if \(reachErr && callIsGroup && outgoingDial/);
     expect(RELAY).toMatch(/reachErr/);
   });

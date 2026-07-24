@@ -33,7 +33,9 @@ describe("v2.99.11 — server: offline dial is a fast error, not a paged keep-al
     // Resolve identity, then a fast honest error — NO ensureDialRoom / pendingRings.
     expect(branch).toMatch(/onPageCallee\(\{ calleePin: to, callerPin, callerName: me\.name, roomId: "", video: wantVideo \}\)/);
     expect(branch).toMatch(/code: "offline",\s*\n\s*pin: to,\s*\n\s*message: \(info\.name \|\| "They"\) \+ " is offline right now\."/);
-    expect(branch).toMatch(/code: "nonexistent", message: "That number doesn't exist\."/);
+    // v2.99.47 added `pin: to` here: a group dial drains its outstanding set BY
+    // PIN, so a reply without one left the caller on "Ringing…" for 65s.
+    expect(branch).toMatch(/code: "nonexistent", pin: to, message: "That number doesn't exist\."/);
     // The miss is recorded for a real identity (History + email-on-return).
     expect(branch).toMatch(/onMissedCall\?\.\(\{ calleePin: to, callerPin, callerName: me\.name, reason: "cancelled" \}\)/);
     // No paging keep-alive: the retired ack is gone.

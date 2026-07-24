@@ -52,20 +52,28 @@ const ALLOWED_MIME = /^(image|video|audio|application|text)\//i;
 // Deny script-bearing subtypes even when their top-level type passes ALLOWED_MIME.
 // image/svg+xml is the notable one — it's an "image" but can embed <script>, so
 // serving it same-origin would be a stored-XSS vector.
-// M38: the original list named only a handful of script-bearing types, but
-// ALLOWED_MIME admits `text/*` and `application/*` WHOLESALE, and the storage
-// proxy relays the stored type verbatim as the Content-Type of a SAME-ORIGIN
-// response. Everything in the XML family was missing: a document served as
-// `text/xml` / `application/xml` / `text/xsl` is parsed as XML, and XML carrying
-// SVG or XHTML namespaces with a <script> element executes in some browsers —
-// the exact stored-XSS outcome `image/svg+xml` is blocked for. The remaining
-// JavaScript media types were missing too (only `application/javascript` was
-// listed, not `text/javascript` / `application/ecmascript` / the x- variants).
-// Note this is defence at the door; storageProxy independently refuses to serve
-// anything outside a safe inline set (see `INLINE_SAFE_TYPE` there), so a
-// pre-existing row with one of these types can't execute either.
+//
+// ── SELF-REVIEW (v2.99.47): M38 WIDENED THIS AND BROKE ORDINARY ATTACHMENTS ──
+// M38 added the whole XML family (`text/xml`, `application/xml`, `text/xsl`,
+// `application/xslt+xml`) and the remaining JavaScript media types because
+// ALLOWED_MIME admits `text/*` and `application/*` wholesale and the proxy used
+// to relay the stored type verbatim on a same-origin response. But the SAME
+// change fixed that at the serving end, which is the layer that actually
+// decides whether bytes can execute: storageProxy now serves only
+// `INLINE_SAFE_TYPE` as itself and downgrades everything else to
+// `application/octet-stream` + `Content-Disposition: attachment`, and a file the
+// browser saves cannot run in our origin. So the widening was redundant — while
+// costing real functionality: the Messages paperclip has no `accept` filter, and
+// browsers report `feed.xml` as `text/xml` and `app.js` as `text/javascript`, so
+// attaching an everyday XML or JS file started answering 400 where it had always
+// worked. Redundant defence that breaks a working feature is a bad trade.
+//
+// Restored to the pre-M38 set: the markup types a browser renders AS A DOCUMENT
+// (the classic stored-XSS shapes) plus the two executable-download types. This
+// is door-level defence in depth only; `INLINE_SAFE_TYPE` in storageProxy.ts is
+// the load-bearing guarantee, and it covers types stored before either existed.
 const BLOCKED_MIME =
-  /^(image\/svg\+xml|text\/html|text\/xml|text\/xsl|text\/javascript|text\/ecmascript|application\/xhtml\+xml|application\/xml|application\/xslt\+xml|application\/javascript|application\/ecmascript|application\/x-javascript|application\/x-msdownload|application\/x-sh)/i;
+  /^(image\/svg\+xml|text\/html|application\/xhtml\+xml|application\/javascript|application\/x-msdownload|application\/x-sh)/i;
 const MAX_BYTES = 40 * 1024 * 1024; // 40 MB ceiling per attachment (raw path)
 // Legacy base64-JSON route: 10 MB decoded. Base64 peaks at ~3-6x the payload in
 // process memory, so big files must use the raw path (the web client does).

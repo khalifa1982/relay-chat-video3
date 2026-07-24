@@ -332,8 +332,25 @@ export function registerLocalAuth(app: Express): void {
       // above. Refuse rather than insert a duplicate row for the same email —
       // a second row would OUTRANK the victim's real account in
       // findUserByEmailAny and divert their only sign-in path to it.
-      if (await findAnyUserByEmail(email)) {
-        res.status(409).json({ error: "exists", message: "An account with this email already exists. Sign in instead." });
+      const other = await findAnyUserByEmail(email);
+      if (other) {
+        // v2.99.47 — SIGNPOST THE ONE DEAD END M29 + M35 CAN CREATE TOGETHER.
+        // A row with no passwordHash cannot sign in here at all, and there is
+        // deliberately no password-reset route in this app, so "sign in instead"
+        // sent such a caller back to a login that answers 401 forever. This
+        // happens to a user's OWN account when they register a password, sign in
+        // with an email code before clicking the verification link (M29 then
+        // correctly destroys the unproven credential — the server cannot tell a
+        // self-registration from an attacker pre-registering someone else's
+        // address), and later try to re-register. Name the way in instead: the
+        // email code IS this app's primary sign-in (v2.92 removed OAuth), so
+        // nothing is actually lost but the password.
+        res.status(409).json({
+          error: "exists",
+          message: other.passwordHash
+            ? "An account with this email already exists. Sign in instead."
+            : "An account with this email already exists and signs in with an email code — open RELAY and choose \"Email me a code\".",
+        });
         return;
       }
       const userId = await createLocalUser(email, hashPassword(password));

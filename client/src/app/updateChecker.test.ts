@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.99.46)", () => {
-    expect(APP_VERSION).toBe("2.99.46");
+  it("is the current release (2.99.47)", () => {
+    expect(APP_VERSION).toBe("2.99.47");
   });
 });
 
@@ -190,10 +190,12 @@ describe("call-routing fixes (v2.50)", () => {
     expect(RELAY_CLIENT).toMatch(/addInviteOfflineGuard/);
     // The error handler checks the guard before the alone-in-call hangUp — and
     // v2.99.19 widened it to BOTH offline + nonexistent (the add-to-call "+"
-    // pad can hit either code depending on whether the number is a real user).
+    // pad can hit either code depending on whether the number is a real user);
+    // v2.99.47 added `unavailable` (the offline-dial throttle) for the same
+    // reason and pushed the guard further down the case, hence the wider window.
     const errCase = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf('case "error"'));
-    expect(errCase.slice(0, 1600)).toMatch(
-      /addInviteOfflineGuard\s*&&\s*\(m\.code === ["']offline["']\s*\|\|\s*m\.code === ["']nonexistent["']\)/,
+    expect(errCase.slice(0, 2400)).toMatch(
+      /addInviteOfflineGuard\s*&&\s*\(m\.code === ["']offline["']\s*\|\|\s*m\.code === ["']nonexistent["']/,
     );
   });
 });

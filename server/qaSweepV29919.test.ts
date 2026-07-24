@@ -125,7 +125,7 @@ describe("v2.99.19 QA — #46 group-dial does not collapse when an invitee is of
     expect(src).toMatch(/if \(reachErr && inParkedCall\(\)\) break;/);
   });
   it("#51 add-person guard accepts BOTH offline and nonexistent", () => {
-    expect(src).toMatch(/addInviteOfflineGuard && \(m\.code === "offline" \|\| m\.code === "nonexistent"\)/);
+    expect(src).toMatch(/addInviteOfflineGuard && \(m\.code === "offline" \|\| m\.code === "nonexistent"/);
   });
 });
 

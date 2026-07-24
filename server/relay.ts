@@ -781,6 +781,46 @@ function broadcastToRoom(
  * now empty. NOTE: a mere connection drop does NOT call this — that path keeps
  * the membership so the member can auto-rejoin (see the grace reaper).
  */
+/**
+ * HOST SUCCESSION (v2.99.47). `hostPin` was written only at room creation and by
+ * an explicit `makehost`, and nothing cleared or moved it when the host left — so
+ * a call that outlived its creator (a group call, where the others stay parked)
+ * had a host who was no longer in the room.
+ *
+ * That was mostly cosmetic until M45 added `room.has(conn.pin)` to the moderation
+ * gate — correct in itself, since roomMeta outlives membership and a departed
+ * host must not keep moderating. But the knock alert is only ever delivered to
+ * `hostPin` + co-hosts, so with an absent host the History "Live now · Join" card
+ * became a dead end: the knock was recorded, the prompt went to someone not in
+ * the call, and an Approve tap hit the new gate and `break`'d silently, leaving
+ * the knocker on "Asked the host to let you in…" forever.
+ *
+ * Promoting a successor fixes that at the root and restores every other host
+ * control (mute, pin, kick) for the remaining participants. Preference order:
+ * an existing co-host — already trusted by the original host — else the
+ * longest-standing connected member, which the room's insertion order gives us.
+ * Ghost members (membership without a live client) are skipped: handing the role
+ * to a disconnected pin would recreate exactly the vacancy being repaired.
+ */
+function promoteHostIfVacant(reg: RelayRegistry, roomId: string, departed: string) {
+  const meta = reg.roomMeta.get(roomId);
+  const room = reg.rooms.get(roomId);
+  if (!meta || !room || room.size === 0) return;
+  if (meta.hostPin !== departed) return;              // the host is still here
+  meta.cohosts.delete(departed);
+  const connected = Array.from(room).filter(p => reg.clients.has(p));
+  const successor = connected.find(p => meta.cohosts.has(p)) ?? connected[0];
+  if (!successor) return;                             // only ghosts remain
+  meta.hostPin = successor;
+  meta.cohosts.delete(successor);                     // host outranks co-host
+  broadcastToRoom(reg, roomId, {
+    type: "role",
+    pin: successor,
+    role: "host",
+    hostPin: successor,
+  });
+}
+
 export function leaveRoom(reg: RelayRegistry, pin: string) {
   touchBusyState(); // busy-line + party-line-count mirror (v2.91)
   const roomId = reg.pinRoom.get(pin) ?? reg.clients.get(pin)?.roomId ?? null;
@@ -797,6 +837,7 @@ export function leaveRoom(reg: RelayRegistry, pin: string) {
       const o = reg.clients.get(p);
       if (o) safeSend(o.socket, { type: "peer-left", pin });
     });
+    promoteHostIfVacant(reg, roomId, pin);
     if (room.size === 0) {
       reapRoom(reg, roomId);
     } else {
@@ -1468,11 +1509,19 @@ export function handleMessage(
           // previously-rejected idea of capping invites in general. Generous
           // enough that a person dialling several offline contacts never notices.
           if (process.env.RELAY_RATELIMIT_OFF !== "1" && !offlineDialLimiter.allow(callerPin, Date.now())) {
+            // `unavailable`, NOT `offline` (v2.99.47): the throttle fires BEFORE
+            // the number is resolved, so we do not actually know the callee
+            // exists. Claiming "offline" made the client raise the leave-a-message
+            // card for a MISTYPED number — the user recorded up to 60s of voice
+            // and the send then failed against a non-existent identity, losing the
+            // recording. The client treats this as unreachable (ends the dial
+            // honestly) but never voicemail-eligible. The message stays generic,
+            // so it still leaks nothing about whether the number is real.
             safeSend(callerSocket, {
               type: "error",
-              code: "offline",
+              code: "unavailable",
               pin: to,
-              message: "They're offline right now.",
+              message: "Can't place that call right now — try again in a moment.",
             });
             return;
           }
@@ -1500,13 +1549,19 @@ export function handleMessage(
                   onMissedCall?.({ calleePin: to, callerPin, callerName: me.name, reason: "cancelled" });
                 } catch { /* never let a notification hook break call setup */ }
               } else {
-                safeSend(callerSocket, { type: "error", code: "nonexistent", message: "That number doesn't exist." });
+                // `pin` names the invitee (v2.99.47): a GROUP dial tracks one
+                // outstanding entry per invitee and drains it by pin, so a reply
+                // without one left the counter stuck and the caller sat on
+                // "Ringing…" until the 65s no-answer backstop — the very hang
+                // v2.99.44 set out to close. Its three sibling replies already
+                // carried it; these last two did not.
+                safeSend(callerSocket, { type: "error", code: "nonexistent", pin: to, message: "That number doesn't exist." });
               }
             })
             .catch(() => {
               const callerNow = reg.clients.get(callerPin);
               if (!callerNow || callerNow.ctxEpoch !== ctxEpoch) return;
-              safeSend(callerSocket, { type: "error", code: "offline", message: "They're offline right now." });
+              safeSend(callerSocket, { type: "error", code: "offline", pin: to, message: "They're offline right now." });
             });
           return;
         }
@@ -1862,7 +1917,16 @@ export function handleMessage(
         safeSend(conn.socket, { type: "knock-result", to: toNum, ok: false, reason: "gone" });
         break;
       }
-      const host = info.hostPin ? reg.clients.get(info.hostPin) : null;
+      // The approver must be someone who is actually IN the room and connected —
+      // M45's gate refuses anyone else, so alerting them would leave the knocker
+      // waiting on a prompt that can never be honoured. v2.99.47: check that up
+      // front and answer "gone" instead (the knocker's client shows "that call
+      // has ended" rather than "asked the host…" forever). Host succession in
+      // leaveRoom means a live call normally always has a present host.
+      const roomNow = reg.rooms.get(info.roomId);
+      const hostPresent =
+        info.hostPin && roomNow?.has(info.hostPin) ? reg.clients.get(info.hostPin) : null;
+      const host = hostPresent ?? null;
       if (!host) {
         safeSend(conn.socket, { type: "knock-result", to: toNum, ok: false, reason: "gone" });
         break;
@@ -1908,8 +1972,27 @@ export function handleMessage(
       // Membership is the right test rather than `rid === self.roomId`, because
       // a host whose call is on HOLD is still in the room's member Set (v2.97.1)
       // and must remain able to approve.
-      if (!meta || !room || !isModerator(meta, conn.pin) || !room.has(conn.pin)) break;
-      if (!meta.knocks || !meta.knocks.has(knockerPin)) break;
+      // v2.99.47: a rejected gate REPLIES. Silence here read as a broken button
+      // to a host tapping Approve, and left the knocker waiting forever.
+      if (!meta || !room || !isModerator(meta, conn.pin) || !room.has(conn.pin)) {
+        // NOT `forbidden`/`gone`: the client treats both as FATAL to a peerless
+        // call, so replying with one could hang up the approver's OWN call. A
+        // dedicated code keeps this informational.
+        safeSend(conn.socket, {
+          type: "error",
+          code: "knockfail",
+          message: "You're no longer in that call.",
+        });
+        break;
+      }
+      if (!meta.knocks || !meta.knocks.has(knockerPin)) {
+        safeSend(conn.socket, {
+          type: "error",
+          code: "knockfail",
+          message: "That request is no longer waiting.",
+        });
+        break;
+      }
       meta.knocks.delete(knockerPin);
       const knocker = reg.clients.get(knockerPin);
       if (!knocker) break; // knocker vanished while we deliberated

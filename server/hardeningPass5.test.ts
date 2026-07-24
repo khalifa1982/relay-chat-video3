@@ -398,7 +398,10 @@ describe("M35 — register cannot create a second row for an existing email", ()
       LOCAL.indexOf('app.post("/api/auth/register"'),
       LOCAL.indexOf('app.get("/api/auth/status"'),
     );
-    expect(reg).toMatch(/if \(await findAnyUserByEmail\(email\)\) \{/);
+    // v2.99.47 keeps the refusal but branches the MESSAGE (a row with no
+    // passwordHash can never sign in here, so "sign in instead" was a dead end).
+    expect(reg).toMatch(/const other = await findAnyUserByEmail\(email\);/);
+    expect(reg).toMatch(/if \(other\) \{/);
     expect(reg).toMatch(/error: "exists"/);
     // …and does so BEFORE inserting.
     expect(reg.indexOf("findAnyUserByEmail")).toBeLessThan(reg.indexOf("createLocalUser("));
@@ -584,7 +587,11 @@ describe("M36 — a concurrent burst cannot exceed the PIN try cap", () => {
     // The claim must carry BOTH guards: live lock state + the slot bound.
     expect(fn).toMatch(/isNull\(users\.loginPinLockedAt\)/);
     expect(fn).toMatch(/COALESCE\(\$\{users\.loginPinAttempts\}, 0\) <= \$\{PIN_MAX_ATTEMPTS\}/);
-    expect(fn).toMatch(/if \(!gotSlot\) return \{ outcome: "locked" \};/);
+    // v2.99.47: the no-slot branch now also HEALS a row whose slots are spent
+    // but whose lock never latched (see M49), then still refuses.
+    expect(fn).toMatch(/if \(!gotSlot\) \{/);
+    expect(fn).toMatch(/return \{ outcome: "locked" \};/);
+    expect(fn).toMatch(/latchLockAndAlert\(db, row\)/);
     // …and it must come BEFORE the secret is tested.
     expect(fn.indexOf("gotSlot")).toBeLessThan(fn.indexOf("verifyPassword("));
   });

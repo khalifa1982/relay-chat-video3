@@ -413,10 +413,46 @@ export function startRelay(root: HTMLElement): RelayHandle {
    * given implicitly by dialing with video — no `video-request` was ever sent.
    * `outgoingDial` can't stand in for it either, since it is cleared at
    * establishment while a consent frame often arrives before the transport even
-   * exists. Hence this dedicated flag, set at BOTH consent points and cleared by
-   * the per-call reset below (consent is per-call).
+   * exists. Hence this dedicated flag, set at BOTH consent points.
+   *
+   * ── SELF-REVIEW (v2.99.47): THE FIRST VERSION WAS A PLAIN BOOLEAN, AND THAT
+   * LEFT THE BYPASS OPEN ── it was cleared only in `hangUp`, but a call can be
+   * left WITHOUT hanging up: `switchCall` abandons an unanswered outgoing dial
+   * with a bare `leave` and joins the incoming room, and `parkActiveAsHeld`
+   * moves the active call to hold. So: victim taps Video call → flag set →
+   * attacker dials → victim taps "End call & answer" → the flag survives into
+   * the ATTACKER's call → one `video-accept` frame turns the victim's camera on.
+   * Exactly the forced-hot-camera outcome M37 existed to close.
+   *
+   * Fixed by keying the offer to the ROOM it was made for instead of to a
+   * lifecycle hook. A flag set for one call cannot authorize another, so the
+   * guarantee no longer depends on remembering to clear it at every exit — new
+   * call-switch paths added later are safe by construction. Until the room is
+   * known (an outgoing dial offers video before the server names the room) it
+   * is PENDING: the `room` ack — the server's reply to OUR OWN invite, and the
+   * only place a room is provably the one our dial created — binds it to the real
+   * id. Joining any OTHER room (accepting an incoming ring, switching, resuming)
+   * never binds, so the offer stays unbound and authorizes nothing.
    */
-  let videoOfferedByUs = false;
+  let videoOfferPending = false;          // we offered; the room isn't named yet
+  let videoOfferedForRoom: string | null = null;  // …and now it is
+  /** Our own dial's room is now known — an offer made for it becomes bound. */
+  function bindVideoOfferToRoom(rid: string | null) {
+    if (videoOfferPending) { videoOfferedForRoom = rid; videoOfferPending = false; }
+  }
+  /**
+   * Consent is strictly per-call. Called wherever the active call CHANGES
+   * without a hangUp — switch-to-incoming, park-as-held, swap — so neither our
+   * offer nor an earlier approval can leak into the next conversation.
+   * (`videoApproved` leaking mattered on its own: it disables the gate, so a
+   * still-live camera would publish to the new peer with no agreement.)
+   */
+  function resetVideoConsent() {
+    videoApproved = false;
+    videoOfferedForRoom = null;
+    videoOfferPending = false;
+    clearVideoReq();
+  }
   function videoGateActive(): boolean {
     return inCall && !videoApproved && !callIsGroup;
   }
@@ -447,7 +483,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function requestVideoUpgrade() {
     if (videoReqT) { toast("Video request already sent — waiting for them…"); return; }
-    videoOfferedByUs = true; // M37: we asked, so a matching accept is legitimate
+    // M37: we asked, so a matching accept is legitimate — bound to THIS room.
+    // (Mid-call, the room is always already known.)
+    if (roomId) videoOfferedForRoom = roomId; else videoOfferPending = true;
     sendWS({ type: "video-request" });
     toast("Video request sent — their camera prompt is up. Video starts when they accept.");
     videoReqT = setTimeout(() => {
@@ -463,10 +501,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function onVideoAccept() {
     if (!inCall) return;
     // M37: only honor an accept that answers OUR offer (a mid-call
-    // `video-request`, or a video dial we placed). An unsolicited one is a peer
-    // trying to switch our camera on without consent — drop it silently rather
-    // than toasting, so the frame reveals nothing about whether it landed.
-    if (!videoOfferedByUs) return;
+    // `video-request`, or a video dial we placed) IN THIS CALL. An unsolicited
+    // one — or one that answers an offer made in a call we have since left — is
+    // a peer trying to switch our camera on without consent; drop it silently
+    // rather than toasting, so the frame reveals nothing about whether it landed.
+    // Room equality is the WHOLE guard: an offer whose room was never bound (an
+    // abandoned dial) authorizes nothing. Fail-closed by construction — if a
+    // future path forgets to bind, video simply doesn't auto-enable and a camera
+    // tap re-offers it.
+    if (videoOfferedForRoom === null || videoOfferedForRoom !== roomId) return;
     unlockApprovedVideo();
     toast("Video is on — both sides. 🎥");
   }
@@ -737,6 +780,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
         break;
       case "room":
         roomId = m.roomId || null;
+        // M37 (v2.99.47): this ack answers OUR OWN invite, so this room is the
+        // one our dial created — the single place a pending video offer may be
+        // bound. Every other way of entering a room deliberately leaves it
+        // unbound, which is what stops an abandoned dial's offer authorizing a
+        // camera in someone else's call.
+        bindVideoOfferToRoom(roomId);
         captureSelfRole(m); // the creator is the host
         // Group call: now that the room exists, ring the remaining invitees.
         if (pendingGroupInvites.length) {
@@ -835,19 +884,33 @@ export function startRelay(root: HTMLElement): RelayHandle {
         //   • JOIN (`self`/`full`/`forbidden`) — WE couldn't join (7th mesh /
         //     11th SFU accept, full party line). Fatal to a peerless joiner; the
         //     aloneInCall() guard spares any LIVE call (host-only forbidden).
-        const reachErr = m.code === "offline" || m.code === "nonexistent" || m.code === "gone";
+        // `unavailable` (v2.99.47) is the OFFLINE-DIAL THROTTLE: unreachable for
+        // now, but the server never resolved the number, so it is deliberately
+        // NOT voicemail-eligible below — offering to leave a message for a
+        // possibly-nonexistent number loses whatever the user records.
+        const reachErr =
+          m.code === "offline" || m.code === "nonexistent" || m.code === "gone" ||
+          m.code === "unavailable";
         const joinErr = m.code === "self" || m.code === "full" || m.code === "forbidden";
         // v2.99.36: `nohold` answers an `end-active` whose held room was already
         // gone — there is nothing to resume, so complete the hang-up NOW (that
         // branch skipped hangUp and would otherwise sit here with the camera and
         // mic still captured until the fail-closed timer fired).
+        // v2.99.47: a knock approve/deny that the server refused (we've left the
+        // call, or the request already resolved). Purely informational — it must
+        // never be classified with the fatal reachability/join codes, since the
+        // approver may be sitting alone in a perfectly good call of their own.
+        if (m.code === "knockfail") {
+          toast(m.message || "That request is no longer waiting.", true);
+          break;
+        }
         if (m.code === "nohold" && inCall) {
           cancelEndActiveFallback();
           dropHeld();
           hangUp("end-active-nohold");
           return;
         }
-        if (addInviteOfflineGuard && (m.code === "offline" || m.code === "nonexistent")) {
+        if (addInviteOfflineGuard && (m.code === "offline" || m.code === "nonexistent" || m.code === "unavailable")) {
           // Offline/nonexistent error for an in-call add-to-call invite (the "+"
           // pad) — the server just reports the addee is unreachable; never tear
           // down the call we're already in. (v2.99.11 split offline vs
@@ -2129,7 +2192,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       inCall = true;
       // M37: dialing with the camera live IS our video consent, so a matching
       // `video-accept` from the callee is legitimate even with no video-request.
-      videoOfferedByUs = camOn;
+      videoOfferPending = camOn; videoOfferedForRoom = null;
       outgoingDial = { pin: target, video: camOn };
       enterCallUI("Calling…", { outgoing: true });
       emitPhase("dialing");
@@ -2170,7 +2233,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     if (!inCall) {
       inCall = true;
-      videoOfferedByUs = !opts?.voice; // M37 — a video dial offers video
+      videoOfferPending = !opts?.voice; videoOfferedForRoom = null; // M37 — a video dial offers video
       outgoingDial = { pin: target, name: opts?.displayName, video: !opts?.voice };
       enterCallUI(opts?.voice ? "Voice call…" : "Calling…", { outgoing: true });
       emitPhase("dialing");
@@ -2211,7 +2274,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     callIsGroup = true; // conferences bypass the 1:1 video-consent gate
     if (!inCall) {
       inCall = true;
-      videoOfferedByUs = !opts?.voice; // M37 — a video group dial offers video
+      videoOfferPending = !opts?.voice; videoOfferedForRoom = null; // M37 — a video group dial offers video
       outgoingDial = { pin: clean.length + " people", name: "Group call", video: !opts?.voice, group: true };
       enterCallUI(opts?.voice ? "Voice call…" : "Calling…", { outgoing: true });
       emitPhase("dialing");
@@ -2603,6 +2666,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // `hold`/`leave` needed, which also avoids the old switch race. Atomic.
       parkActiveAsHeld();
     }
+    // M37 (v2.99.47): a different conversation starts here — neither our video
+    // offer nor an approval from the call we just left may carry into it.
+    resetVideoConsent();
     roomId = w.roomId;
     enterCallUI("Connecting…");
     sendWS({ type: "accept", roomId: w.roomId });
@@ -2629,6 +2695,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     for (const id in parking) heldPeers[id] = parking[id];
     heldRoomId = parkingRoom;
     heldLabel = parkingLabel;
+    // M37 (v2.99.47): the active conversation changes here too. `onResumed`
+    // re-grants approval for the genuinely-established call we're returning to;
+    // until then the gate stays closed rather than inheriting the other call's.
+    resetVideoConsent();
     roomId = resumingRoom;
     sendWS({ type: "swap" });
     // onResumed (server reply) re-renders the now-active call + thaws media.
@@ -4437,7 +4507,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // the identity provably EXISTS — so openThread-by-number succeeds and the
     // voice/text message is deliverable. A NONEXISTENT number returns the
     // distinct "server-error:nonexistent" reason, which is excluded (no thread
-    // to send to). "no-answer"/"peer-rejected" still qualify as before.
+    // to send to), and so is v2.99.47's "server-error:unavailable" (the offline-
+    // dial throttle fires before the number is resolved, so existence is
+    // unproven and a recorded message would have nowhere to go).
+    // "no-answer"/"peer-rejected" still qualify as before.
     if (
       d && !d.group &&
       (reason === "no-answer" || reason === "peer-rejected" || reason === "server-error:offline")
@@ -6007,7 +6080,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     clearDialTimeout(); // an ended call must never fire a stale "No answer."
     clearFailDial(); // an explicit End during the failure card mustn't re-fire
     videoApproved = false; callIsGroup = false; // consent is per-call
-    videoOfferedByUs = false; // M37 — our video OFFER is per-call too
+    videoOfferedForRoom = null; videoOfferPending = false; // M37 — the OFFER is per-call too
     clearVideoReq();
     hideVideoAsk();
     clearConnSeq();

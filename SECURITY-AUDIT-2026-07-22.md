@@ -600,3 +600,82 @@ Verified that the in-app paths are unaffected: `/i/:pin` uses wouter's client-si
 ### Verification (round 5 pt.5)
 
 `pnpm check` clean; `pnpm test` **1703 passing / 1 skipped**; `pnpm build` clean. New `server/hardeningPass7.test.ts` (24), including a behavioural check that a forged chat pin loses to the transport-proven one. Two stale pins were updated to the new shapes rather than weakened: `contacts.test.ts`'s additive-DDL rule now admits `ADD UNIQUE INDEX`, and `androidAudioCamera.test.ts`'s chat-dedup pin now expects the threaded sender identity.
+
+---
+
+## Round 6 — red-teaming my own fixes (2026-07-24, v2.99.47)
+
+Rounds 1–5 hunted vulnerabilities. This round asked a different question of the
+29 fixes shipped that day: **how did each one make the app worse for a
+legitimate user, or leave the invariant it claimed only half-shut?** Security
+work that breaks calling is a net loss, and a fix that only *looks* closed is
+worse than a known gap. Eight items survived verification.
+
+The most important result is that **one of the fixes did not actually close its
+hole**, and two others broke working features.
+
+### The fix that was still open — forced camera-on (MED)
+
+**Where:** `client/src/lib/relayClient.ts`.
+
+M37 gated `onVideoAccept` on a boolean, "did we offer video?", cleared in
+`hangUp`. But **a call can be left without hanging up**: `switchCall` abandons an
+unanswered outgoing dial with a bare `leave`, and `parkActiveAsHeld` / `swapCall`
+move the active call to hold. So the offer survived into the *next* call:
+
+1. Victim taps **Video call** on a contact — the flag is set.
+2. While it rings unanswered, the attacker dials the victim.
+3. Victim taps **"End call & answer"** — `switchCall` joins the attacker's room,
+   flag intact.
+4. Attacker sends one `{type:"video-accept"}` frame. The victim's camera turns on
+   and publishes, with "Video is on — both sides 🎥" as the only notice.
+
+**Fix.** Keyed to the **room** the offer was made for, not to a lifecycle hook:
+`videoOfferPending` + `videoOfferedForRoom`, and `onVideoAccept` requires
+`videoOfferedForRoom === roomId`. A pending offer is bound **only** by the `room`
+ack — the server's reply to our own invite, the one place a room is provably the
+one our dial created. Every other way of entering a room leaves it unbound, so it
+matches nothing. The guarantee no longer depends on remembering to clear a flag
+at each exit, and a forgotten binding fails *closed* (video simply doesn't
+auto-enable). `resetVideoConsent()` at the switch points additionally stops
+`videoApproved` leaking, which mattered on its own: it disables the gate, so a
+still-live camera would publish to a new peer with no agreement.
+
+### Regressions in my own fixes
+
+| ID | Sev | From | What broke |
+|----|-----|------|-----------|
+| **M53/M56** | MED | M45 | M45's `room.has(approver)` gate was correct, but `hostPin` never moved when the host left — so History's "Live now · Join" prompted an absent host whose Approve tap hit the gate and returned **silently**. Fixed with host succession in `leaveRoom` (co-host first, else longest-standing connected member; ghosts skipped) plus non-silent refusals. The reply uses a **new** `knockfail` code, not `forbidden`/`gone`: those are in the client's fatal sets and would have hung up the approver's own call. |
+| **M52** | MED | M38 | The widened upload denylist rejected everyday `.xml` / `.js` attachments (the Messages paperclip has no `accept` filter). The same M38 change had already fixed this at the serving end — the proxy downgrades every non-inline-safe type to an octet-stream attachment — so the widening was redundant *and* costly. Restored to the pre-M38 set. |
+| **M55** | LOW | M40 | The throttled dial replied `offline`, which is voicemail-eligible — so a mistyped number offered "leave a voice message", recorded up to 60s, then failed with the recording lost. Now `unavailable`: unreachable, never voicemail-eligible, still leaks nothing. |
+| **M49** | LOW | M36 | M36 splits claim-then-latch; a death in between (pm2 restarts on every push, across the ~100 ms scrypt verify) left `attempts=4, lockedAt=NULL` — refusing even the **correct** PIN while `loginProbe` reported `locked:false`. New `pinSlotsSpent()` derives the state from both fields; the no-slot branch heals the row into a real, visible lock and sends the alert the interrupted attempt owed. |
+| **M51** | MED | M29+M35 | M29's wipe is correct and stays (the server cannot tell a self-registration from an attacker pre-registering someone else's address). But the 409 that followed said "sign in instead", pointing at a password login that 401s forever with no reset route in the app. It now names the way in: "signs in with an email code". |
+
+### Incomplete closures
+
+| ID | Sev | What was still open |
+|----|-----|---------------------|
+| **M54** | MED | v2.99.44 closed the 65 s group-dial hang for three replies but not the two in the async offline branch (`nonexistent`, the resolver-failure `.catch`), which carried no `pin` — and the client drains outstanding invitees *by pin*. A group dial including one unregistered number still hung. Both fixed; the pin that counted three sites now asserts the class invariant. |
+| **M50** | MED | M35 closed duplicate accounts at `/api/auth/register` but not at the OTP door: `consumeOtp` was an unguarded UPDATE, so two verifies of the same code both reached `createOtpUser`, and `users.email` has no unique index. A later sign-in could then land on the orphan row — the exact diversion M35 prevents. Now an atomic claim (`isNull(consumedAt)` + `affectedRows`), with `verifyOtp` refusing a lost race before creating anything, plus `ORDER BY id` so historical duplicates resolve stably. |
+
+### Accepted residuals
+
+- **No password-reset route.** No client posts to `/api/auth/*`; adding a way to
+  write a password onto an existing account would be new attack surface on a dead
+  surface. Signposting the working sign-in is the proportionate fix.
+- **Fresh guest identities reset the M40 dial budget.** Bounded per-IP by
+  `guestMintGate`; enumeration of the 10⁶ space stays weeks-long, and another
+  layer risks another availability regression — which is this round's whole lesson.
+- **A live call is no longer rejoinable by number once the *dialled* party
+  leaves.** The History card correctly disappears rather than dead-ending, so this
+  is honest degradation, not a hang.
+
+### Verification (round 6)
+
+`pnpm verify` (one script — `check && test && build`, no pipe to swallow an exit
+code) green: **1745 passing / 1 skipped**, typecheck and production build clean.
+New `server/selfReviewPass2.test.ts` (11, including `pinSlotsSpent` exercised
+directly) and `server/selfReviewRelay.test.ts` (12 behavioural tests against the
+real signaling handler, including the exact M45 dead-end scenario). Nine stale
+pins across seven files were rewritten to the **stronger** invariants, never
+relaxed to match the new code.

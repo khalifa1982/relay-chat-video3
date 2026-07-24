@@ -42,7 +42,10 @@ describe("M45 — knock-approve requires live room membership", () => {
   it("keeps the pending-knock gate and the client-supplied roomId lookup", () => {
     // The roomId stays client-supplied on purpose (a held-call host must be able
     // to approve), which is exactly why membership had to be asserted.
-    expect(c).toMatch(/if \(!meta\.knocks \|\| !meta\.knocks\.has\(knockerPin\)\) break;/);
+    // v2.99.47: the gate REPLIES before breaking (silence read as a broken
+    // Approve button), with a code that can't hang up the approver's own call.
+    expect(c).toMatch(/if \(!meta\.knocks \|\| !meta\.knocks\.has\(knockerPin\)\) \{/);
+    expect(c).toMatch(/code: "knockfail"/);
   });
 });
 

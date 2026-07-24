@@ -114,10 +114,21 @@ describe("L1 — an all-declined group dial fails instantly, not after 65s", () 
     }
   });
 
-  it("the server names WHICH invitee an offline error is about", () => {
+  it("the server names WHICH invitee EVERY reachability error is about", () => {
     // Without this the caller cannot attribute an error to an invitee, so the
     // last-one-resolved bookkeeping is impossible. Additive field.
-    const sites = [...RELAY.matchAll(/code: "offline",\s*\n(?:\s*\/\/[^\n]*\n)*\s*pin: to,/g)];
-    expect(sites.length).toBe(3);
+    //
+    // v2.99.47 widened this from counting three `offline` sites to covering the
+    // whole class: two replies in the async offline branch (`nonexistent` and the
+    // resolver-failure `offline`) still lacked a pin, which left a group dial
+    // hanging on "Ringing…" until the 65s backstop — the very hang this test
+    // exists to prevent. Codes also grew `unavailable` (the throttle), so a
+    // fixed count of one spelling is the wrong invariant.
+    const invite = RELAY.slice(RELAY.indexOf('case "invite"'), RELAY.indexOf('case "accept"'));
+    const replies = [...invite.matchAll(/code: "(offline|nonexistent|unavailable)",?([^\n]*)\n((?:\s*\/\/[^\n]*\n)*\s*[^\n]*)/g)];
+    expect(replies.length).toBeGreaterThanOrEqual(5);
+    for (const r of replies) {
+      expect(`${r[2]}${r[3]}`, `reply for code ${r[1]} must carry pin`).toMatch(/pin:/);
+    }
   });
 });

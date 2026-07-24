@@ -128,6 +128,7 @@ import {
   attemptPinLogin,
   clearLoginPin,
   isValidPin,
+  pinSlotsSpent,
   setLoginPin as setLoginPinDb,
   unlockLoginPin,
 } from "./authPin";
@@ -2229,7 +2230,17 @@ export const v2OtpAuthRouter = router({
           message: left > 0 ? `Incorrect code. ${left} attempt${left === 1 ? "" : "s"} left.` : "Too many attempts — request a new code.",
         });
       }
-      await consumeOtp(row.id);
+      // v2.99.47: consumption is the RACE WINNER, not a side effect. Two
+      // verifies carrying the same valid code both cleared `latestOtp`; without
+      // this guard both proceeded to createOtpUser and one email could end up
+      // owning two user rows (users.email has no unique index), so a later
+      // sign-in could land on the orphan account. Only the consumer continues.
+      if (!(await consumeOtp(row.id))) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "That code was already used — request a new one.",
+        });
+      }
       // Resolve or create the user account (register rows carry the name).
       let userId = (await findUserByEmailAny(email))?.id ?? null;
       if (!userId) userId = await createOtpUser({ email, firstName: row.firstName, lastName: row.lastName });
@@ -2313,12 +2324,19 @@ export const v2OtpAuthRouter = router({
       const user = await findUserByEmailAny(email);
       if (!user) return { unregistered: true, hasPin: false, locked: false, preferPin: false };
       const u = user as typeof user & {
-        loginPinHash?: string | null; loginPinLockedAt?: Date | null; preferPinLogin?: boolean | null;
+        loginPinHash?: string | null; loginPinAttempts?: number | null;
+        loginPinLockedAt?: Date | null; preferPinLogin?: boolean | null;
       };
       return {
         unregistered: false,
         hasPin: Boolean(u.loginPinHash),
-        locked: Boolean(u.loginPinLockedAt),
+        // v2.99.47: spent attempt slots count as locked even when the lock field
+        // never latched (see pinSlotsSpent) — otherwise the probe says "not
+        // locked" and AuthPanel parks the user on a pad no entry can satisfy.
+        locked: pinSlotsSpent({
+          loginPinAttempts: u.loginPinAttempts ?? 0,
+          loginPinLockedAt: u.loginPinLockedAt ?? null,
+        }),
         preferPin: Boolean(u.preferPinLogin),
       };
     }),
@@ -2397,13 +2415,19 @@ export const v2OtpAuthRouter = router({
   /** PIN state for the signed-in user (Profile / post-register step). */
   pinStatus: publicProcedure.query(async ({ ctx }) => {
     const user = ctx.user as (typeof ctx.user & {
-      loginPinHash?: string | null; loginPinLockedAt?: Date | null; preferPinLogin?: boolean | null;
+      loginPinHash?: string | null; loginPinAttempts?: number | null;
+      loginPinLockedAt?: Date | null; preferPinLogin?: boolean | null;
     }) | null;
     if (!user) return { signedIn: false, hasPin: false, locked: false, preferPin: false };
     return {
       signedIn: true,
       hasPin: Boolean(user.loginPinHash),
-      locked: Boolean(user.loginPinLockedAt),
+      // Same derived state as loginProbe (v2.99.47) — Profile must not show
+      // "PIN sign-in on" for a row whose slots are spent.
+      locked: pinSlotsSpent({
+        loginPinAttempts: user.loginPinAttempts ?? 0,
+        loginPinLockedAt: user.loginPinLockedAt ?? null,
+      }),
       preferPin: Boolean(user.preferPinLogin),
     };
   }),

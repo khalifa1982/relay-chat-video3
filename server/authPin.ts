@@ -118,6 +118,60 @@ export function lockEmailHtml(): string {
 }
 
 /**
+ * Latch the lock on a row whose slots are spent, and send the alert email —
+ * exactly once, no matter how many callers race here.
+ *
+ * The `isNull` guard is what makes it once-only: precisely one statement can
+ * transition the row to locked, and that same statement owns the email, so
+ * losers can neither re-latch nor duplicate the alert.
+ */
+async function latchLockAndAlert(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  row: { id: number; email: string | null },
+): Promise<void> {
+  const latch = await db
+    .update(users)
+    .set({ loginPinLockedAt: sql`NOW()` })
+    .where(and(eq(users.id, row.id), isNull(users.loginPinLockedAt)));
+  const iLatched =
+    Array.isArray(latch) && ((latch[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+  if (row.email && iLatched) {
+    // Best-effort — the lock itself never depends on email delivery. This is
+    // the owner's ONLY signal that their account is being brute-forced.
+    void sendEmail({
+      to: row.email,
+      subject: "RELAY: your account was locked after 4 wrong PIN entries",
+      html: lockEmailHtml(),
+    });
+  }
+}
+
+/**
+ * True when the row's attempt slots are spent — i.e. PIN sign-in cannot
+ * succeed — regardless of whether the lock field ever latched.
+ *
+ * ── SELF-REVIEW (v2.99.47): M36 could leave a row lying about its own state ──
+ * M36 splits a wrong attempt into two statements: claim a slot, then (on the
+ * spending entry) latch `loginPinLockedAt`. If the process dies in between —
+ * and this repo pm2-restarts the whole fleet on every push to `main`, right
+ * across the ~100ms scrypt verify that sits in that window — the row is left
+ * `attempts = 4, lockedAt = NULL`. The claim's `attempts <= 3` bound then
+ * refuses every future attempt INCLUDING THE CORRECT PIN, while `loginProbe`
+ * derived its answer purely from `lockedAt` and reported `locked: false`, so
+ * AuthPanel parked the user on a PIN pad where no entry could ever work, with
+ * no lock notice and no alert email (the latch that owns it never ran).
+ *
+ * Spent-ness is therefore derived from BOTH fields wherever it is reported,
+ * and `attemptPinLogin` heals such a row into a real, visible lock.
+ */
+export function pinSlotsSpent(row: {
+  loginPinAttempts: number | null;
+  loginPinLockedAt: Date | null;
+}): boolean {
+  return Boolean(row.loginPinLockedAt) || (row.loginPinAttempts ?? 0) > PIN_MAX_ATTEMPTS;
+}
+
+/**
  * Full attempt handler with persistence + the lock email. Returns the verdict
  * for the router to translate into HTTP shapes.
  */
@@ -162,11 +216,27 @@ export async function attemptPinLogin(row: PinUserRow, pin: string): Promise<Pin
   // mysql2 returns [ResultSetHeader]; affectedRows>0 means THIS statement won a slot.
   const gotSlot =
     Array.isArray(claim) && ((claim[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
-  // No slot ⇒ the row is locked, or its slots are already spent (which is only
-  // reachable if a prior attempt latched the lock, or died between claiming and
-  // latching — either way refuse, and an email code still unlocks via
-  // unlockLoginPin). Fail CLOSED.
-  if (!gotSlot) return { outcome: "locked" };
+  // No slot ⇒ the row is locked, or its slots are spent without the lock having
+  // latched (a prior attempt died in between — see pinSlotsSpent). Refuse
+  // either way; an email code still unlocks via unlockLoginPin. Fail CLOSED.
+  if (!gotSlot) {
+    // HEAL the second case: a spent-but-unlatched row is invisible to anything
+    // reading `loginPinLockedAt`, so latch it now. This makes the state the
+    // probe reports agree with the state the claim enforces, and delivers the
+    // alert email the interrupted attempt owed the account owner.
+    const [live] = await db
+      .select({
+        attempts: users.loginPinAttempts,
+        lockedAt: users.loginPinLockedAt,
+      })
+      .from(users)
+      .where(eq(users.id, row.id))
+      .limit(1);
+    if (live && !live.lockedAt && (live.attempts ?? 0) > PIN_MAX_ATTEMPTS) {
+      await latchLockAndAlert(db, row);
+    }
+    return { outcome: "locked" };
+  }
 
   // Slot won — now, and only now, is it legitimate to test the secret.
   if (verifyPassword(pin, row.loginPinHash)) {
@@ -184,24 +254,7 @@ export async function attemptPinLogin(row: PinUserRow, pin: string): Promise<Pin
     .limit(1);
   const attempts = after?.attempts ?? PIN_MAX_ATTEMPTS + 1;
   if (attempts > PIN_MAX_ATTEMPTS) {
-    // Latch guarded on `isNull` so exactly ONE statement transitions the row to
-    // locked; that same statement owns sending the alert email, so concurrent
-    // losers can't duplicate it.
-    const latch = await db
-      .update(users)
-      .set({ loginPinLockedAt: sql`NOW()` })
-      .where(and(eq(users.id, row.id), isNull(users.loginPinLockedAt)));
-    const iLatched =
-      Array.isArray(latch) && ((latch[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
-    if (row.email && iLatched) {
-      // Best-effort — the lock itself never depends on email delivery. This is
-      // the owner's ONLY signal that their account is being brute-forced.
-      void sendEmail({
-        to: row.email,
-        subject: "RELAY: your account was locked after 4 wrong PIN entries",
-        html: lockEmailHtml(),
-      });
-    }
+    await latchLockAndAlert(db, row);
     return { outcome: "locked-now" };
   }
   return { outcome: "wrong", attemptsLeft: PIN_MAX_ATTEMPTS - attempts + 1 };

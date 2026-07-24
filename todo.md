@@ -6568,6 +6568,110 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       additive-DDL rule now allows ADD UNIQUE INDEX; androidAudioCamera.test.ts's chat-dedup pin now
       expects the threaded sender). Suite 1662 passed / 1 skipped; check + build green.
 
+## v2.99.47 — self-review round 2: regressions and half-closures in MY OWN fixes (2026-07-24)
+- [x] A second red-team pass over the 29 fixes shipped today, looking for ways each one made the app
+      WORSE for a legitimate user or left the invariant it claimed only half-shut. Eight items, every
+      one verified against source before touching anything.
+- [x] (M53, MED — REGRESSION from M45) HISTORY'S "JOIN" BECAME A DEAD END. M45 added
+      `room.has(conn.pin)` to the knock-approve gate — correct, since `roomMeta` outlives membership and
+      a departed host (or a kicked co-host) must not keep admitting people. But `hostPin` was written
+      only at room creation and by an explicit `makehost`, and NOTHING moved it when the host left. So
+      for a group call that outlived its creator: the knock alert still went to the absent host, whose
+      Approve tap hit the new gate and returned SILENTLY — the knocker sat on "Asked the host to let you
+      in…" forever, and nobody still in the call was ever asked. Fixed at the root with HOST SUCCESSION:
+      `leaveRoom` now promotes a successor when the departing pin is the host (an existing co-host
+      first — already trusted by the original host — else the longest-standing CONNECTED member; ghosts
+      are skipped, since handing the role to a disconnected pin recreates the vacancy) and broadcasts
+      `role{host}`. This also restores mute/pin/kick for the rest of the call, which had silently
+      belonged to nobody.
+- [x] (M53b/M56, MED) THE SAME FAILURE, MADE NON-SILENT. The `knock` handler now checks that a
+      moderator is actually IN the room before promising anything, and answers `knock-result{gone}`
+      ("that call has ended") when not; a refused `knock-approve`/`knock-deny` REPLIES instead of
+      `break`ing. Deliberately with a NEW code `knockfail`, not `forbidden`/`gone`: those two are in the
+      client's FATAL sets, so replying with either could have hung up the approver's OWN call — the
+      exact class of self-inflicted regression this pass exists to catch.
+- [x] (M54, MED — INCOMPLETE CLOSURE of v2.99.44's L1) A GROUP DIAL STILL HUNG FOR 65s. The client
+      drains its outstanding-invitee set BY PIN, and two replies in the async offline branch — the
+      `nonexistent` case and the resolver-failure `.catch` — carried no `pin`. So a group dial including
+      one unregistered or mistyped number could never drain to zero: the caller sat on "Ringing…" until
+      the 65s no-answer backstop, which is the very hang v2.99.44 set out to close (its three sibling
+      replies already carried the field). Both now do. The stale pin that counted three `offline` sites
+      was rewritten to assert the CLASS invariant instead: every reachability reply in the invite path
+      names its invitee.
+- [x] (M55, LOW — REGRESSION from M40) VOICEMAIL OFFERED FOR A NUMBER THAT MAY NOT EXIST. The
+      offline-dial throttle replied `code:"offline"`, which the client treats as voicemail-eligible —
+      but the throttle fires BEFORE the number is resolved, so on a mistyped digit the user was offered
+      "leave a voice message", recorded up to 60s, and the send then failed against a non-existent
+      identity with the recording lost. It now replies `unavailable` with a generic message: still
+      classified as unreachable (so a group dial promotes the next invitee) but never voicemail-eligible,
+      and it still leaks nothing about whether the number is real.
+- [x] (M52, MED — REGRESSION from M38) ORDINARY .xml / .js ATTACHMENTS STARTED FAILING. M38 widened the
+      upload denylist to the whole XML + JavaScript families, but the same change fixed the problem at
+      the layer that actually decides whether bytes can execute: the storage proxy serves only
+      `INLINE_SAFE_TYPE` as itself and downgrades everything else to `application/octet-stream` +
+      `Content-Disposition: attachment`, and a file the browser saves cannot run in our origin. The
+      Messages paperclip has no `accept` filter and browsers report `feed.xml` as `text/xml` and
+      `app.js` as `text/javascript`, so attaching an everyday file began answering 400. Redundant
+      defence that breaks a working feature is a bad trade — restored to the pre-M38 set (markup a
+      browser renders as a document, plus the two executable-download types) with the load-bearing
+      guarantee left where it belongs. The M38 pins were rewritten accordingly, including explicit
+      "must be allowed" cases for every type the door now admits.
+- [x] (M49, LOW — REGRESSION from M36) A PIN ROW COULD LIE ABOUT BEING LOCKED. M36 splits a wrong
+      attempt into claim-a-slot then latch-the-lock. If the process dies in between — and this repo
+      pm2-restarts the fleet on every push to `main`, right across the ~100ms scrypt verify in that
+      window — the row is left `attempts=4, lockedAt=NULL`. The claim bound then refused every later
+      attempt INCLUDING THE CORRECT PIN, while `loginProbe` read only `lockedAt` and reported
+      `locked:false`, so AuthPanel parked the user on a pad where no entry could ever work, with no lock
+      notice and no alert email (the latch that owns it never ran). New `pinSlotsSpent()` derives the
+      state from BOTH fields and is used by `loginProbe` and `pinStatus`; the no-slot branch re-reads
+      live state and HEALS a spent-but-unlatched row into a real, visible lock (delivering the email the
+      interrupted attempt owed). The latch + alert moved into one `latchLockAndAlert` helper so both
+      call sites keep the once-only `isNull` guard.
+- [x] (M50, MED — INCOMPLETE CLOSURE of M35) ONE EMAIL COULD STILL OWN TWO ACCOUNTS. M35 closed
+      duplicate rows at `/api/auth/register`, but `consumeOtp` was an unguarded UPDATE returning void,
+      so two verifies carrying the SAME valid code both passed `latestOtp`'s un-consumed filter and both
+      ran on to `createOtpUser` — and `users.email` has no unique index. A later sign-in then resolves
+      to whichever row wins the lookup, i.e. the caller can land on an orphan account with its own
+      number, contacts and history: exactly the account-diversion harm M35 exists to prevent. Fixed with
+      the established atomic-claim pattern (`isNull(consumedAt)` in the WHERE + `affectedRows`), and
+      `verifyOtp` now treats a lost race as "that code was already used" BEFORE creating anything.
+      `findUserByEmailAny` also gained `ORDER BY id` so any historical duplicate resolves to the same
+      (original) row every time instead of an arbitrary one.
+- [x] (M51, MED — REGRESSION from M29+M35 together) A DESTROYED PASSWORD WITH NO WAY BACK. M29
+      correctly wipes a password attached to a never-verified row when the email's real owner proves
+      ownership by code — the server cannot distinguish a self-registration from an attacker
+      pre-registering someone else's address, so the wipe must stay. But a user who registers a
+      password, signs in with an email code before clicking the verification link, then tries to
+      re-register was told "An account with this email already exists. Sign in instead." — pointing at a
+      password login that answers 401 forever, with no password-reset route anywhere in the app. The 409
+      now branches on whether the row can sign in by password at all and names the way in ("signs in
+      with an email code"), which is this app's PRIMARY sign-in since v2.92 removed OAuth. Deliberately
+      NOT fixed by inventing a reset flow: no client posts to `/api/auth/*`, so that would be new
+      attack surface on a dead surface. Recorded as a residual instead.
+- [x] (M37 hardening, MED — the bypass I "closed" was still open) FORCED CAMERA-ON VIA CALL SWITCHING.
+      M37's `videoOfferedByUs` was a plain boolean cleared only in `hangUp` — but a call can be left
+      WITHOUT hanging up: `switchCall` abandons an unanswered outgoing dial with a bare `leave`, and
+      hold/swap park the active call. So: victim taps Video call → attacker dials → victim taps "End
+      call & answer" → the offer flag survives into the ATTACKER's call → one `video-accept` frame turns
+      the victim's camera on, with a cheerful "Video is on — both sides 🎥" as the only notice. Re-fixed
+      structurally by keying the offer to the ROOM it was made for (`videoOfferPending` +
+      `videoOfferedForRoom`, bound ONLY by the `room` ack — the server's reply to our own invite, the
+      one place a room is provably ours) so a flag set for one call cannot authorize another and future
+      call-switch paths are safe by construction. `resetVideoConsent()` at switch/swap additionally
+      stops `videoApproved` leaking, which mattered on its own: it disables the gate, so a still-live
+      camera would publish to a new peer with no agreement.
+- [x] Residuals accepted this round: no password-reset route (above); a determined attacker can still
+      reset the M40 per-caller dial budget by minting fresh guest identities (bounded by `guestMintGate`
+      per IP — enumeration of the 10^6 space stays weeks-long, and another layer risks another
+      availability regression); and a live call is no longer rejoinable by number once the DIALLED party
+      leaves (the History card correctly disappears rather than dead-ending, so this is honest
+      degradation, not a hang).
+- [x] Tests: `server/selfReviewPass2.test.ts` (11 — incl. `pinSlotsSpent` exercised directly),
+      `server/selfReviewRelay.test.ts` (12 — behavioural host-succession and knock-reply coverage
+      against the real signaling handler, including the exact M45 dead-end scenario). Nine stale pins
+      across seven files rewritten to the stronger invariants rather than relaxed. Suite 1745 passed /
+      1 skipped; `pnpm verify` green.
+
 ## v2.99.46 — process fix: the gate that let a broken commit reach main (2026-07-24)
 - [x] v2.99.45 was pushed with UNRESOLVED merge-conflict markers in three files (`shared/version.ts`,
       `client/src/app/updateChecker.test.ts`, `CLAUDE.md`), breaking the typecheck, four test files

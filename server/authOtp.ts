@@ -18,7 +18,7 @@
  * correctly-configured production (gated on NODE_ENV / RELAY_OTP_DEV_LOG).
  */
 import crypto from "crypto";
-import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lt, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { users, emailOtps } from "../drizzle/schema";
 import { hashPassword, verifyPassword, genToken } from "./authCrypto";
@@ -143,11 +143,36 @@ export async function recordOtpFailure(rowId: number, currentAttempts: number, n
   return after?.attempts ?? currentAttempts + 1;
 }
 
-/** Mark an OTP row consumed (single-use) after a successful verify. */
-export async function consumeOtp(rowId: number, nowMs = Date.now()): Promise<void> {
+/**
+ * Mark an OTP row consumed (single-use) after a successful verify.
+ *
+ * Returns TRUE only for the caller that actually consumed it — the same
+ * atomic-claim discipline as S1/S9/M36. `isNull(consumedAt)` in the WHERE makes
+ * MySQL serialize the transition per row, so exactly one of N concurrent
+ * verifies can win.
+ *
+ * ── SELF-REVIEW (v2.99.47) ── This used to be an unguarded UPDATE returning
+ * void, which made single-use advisory rather than enforced: two verifies
+ * carrying the SAME valid code (two tabs, two devices, a replayed POST) both
+ * passed `latestOtp`'s un-consumed filter, both "consumed" the row, and both
+ * ran on to `createOtpUser` — and since `users.email` carries no unique index,
+ * ONE address could end up with TWO user rows. A later sign-in then resolves to
+ * whichever row wins the lookup, so the caller can land on the orphan with its
+ * own number, contacts and message history — exactly the account-diversion harm
+ * M35 exists to prevent. M35 closed the `/api/auth/register` door; this closes
+ * the OTP one, at the same layer (the database) rather than at a call site.
+ *
+ * Callers must treat `false` as "that code was already used".
+ */
+export async function consumeOtp(rowId: number, nowMs = Date.now()): Promise<boolean> {
   const db = await getDb();
-  if (!db) return;
-  await db.update(emailOtps).set({ consumedAt: new Date(nowMs) }).where(eq(emailOtps.id, rowId));
+  if (!db) return false;
+  const res = await db
+    .update(emailOtps)
+    .set({ consumedAt: new Date(nowMs) })
+    .where(and(eq(emailOtps.id, rowId), isNull(emailOtps.consumedAt)));
+  // mysql2 returns [ResultSetHeader]; affectedRows>0 ⇒ THIS statement consumed it.
+  return Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
 }
 
 /** Periodic cleanup of expired OTP rows (wired next to the presence reaper). */
@@ -172,7 +197,17 @@ export async function sweepExpiredOtps(nowMs = Date.now()): Promise<void> {
 export async function findUserByEmailAny(email: string) {
   const db = await getDb();
   if (!db) return null;
-  const rows = await db.select().from(users).where(eq(users.email, email)).limit(10);
+  // v2.99.47: ORDER BY id — an unordered `select().limit(10)` has no guaranteed
+  // row order, so if an address ever does hold more than one row (historical
+  // duplicates predating the atomic consume + M35) successive sign-ins could
+  // resolve to DIFFERENT rows and the user would see two different accounts.
+  // Oldest-first makes the resolution stable and picks the original account.
+  const rows = await db
+    .select()
+    .from(users)
+    .where(eq(users.email, email))
+    .orderBy(asc(users.id))
+    .limit(10);
   if (rows.length === 0) return null;
   return (
     rows.find((r) => r.loginMethod === "otp") ??

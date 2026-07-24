@@ -43,10 +43,13 @@ describe("knock signaling authorization (server)", () => {
     // v2.99.43 (M45) added `room.has(conn.pin)`: roomMeta outlives membership, so
     // isModerator alone still said yes to a departed host — and to a KICKED
     // co-host, who could knock and then approve themselves back in.
+    // v2.99.47: both gates now REPLY before breaking — a silent `break` read as
+    // a broken Approve button to the host and left the knocker waiting forever.
     expect(c).toMatch(
-      /if \(!meta \|\| !room \|\| !isModerator\(meta, conn\.pin\) \|\| !room\.has\(conn\.pin\)\) break;/,
+      /if \(!meta \|\| !room \|\| !isModerator\(meta, conn\.pin\) \|\| !room\.has\(conn\.pin\)\) \{/,
     );
-    expect(c).toMatch(/if \(!meta\.knocks \|\| !meta\.knocks\.has\(knockerPin\)\) break;/);
+    expect(c).toMatch(/if \(!meta\.knocks \|\| !meta\.knocks\.has\(knockerPin\)\) \{/);
+    expect((c.match(/code: "knockfail"/g) || []).length).toBe(2);
     expect(c).toMatch(/admitToRoom\(reg, knockerPin, roomId\)/);
   });
   it("admitToRoom joins without a ring (host approval is the authz) + fans out peer-joined", () => {
