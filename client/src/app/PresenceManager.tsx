@@ -34,7 +34,14 @@ export function PresenceManager() {
     if (!inApp || !id) return;
     let cancelled = false;
     const tick = () => {
-      if (!cancelled) heartbeat.mutate();
+      if (cancelled) return;
+      // QA H6: never heartbeat a HIDDEN tab. onLeave (visibilitychange→hidden)
+      // already marked us offline; a blind 30s heartbeat would re-mark us online
+      // — flipping presence back on and firing false "X is back online" pushes to
+      // every watcher while the tab is still backgrounded. The visibilitychange
+      // handler re-heartbeats the instant we return to visible, so nothing is lost.
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      heartbeat.mutate();
     };
     tick();
     const interval = window.setInterval(tick, 30_000);

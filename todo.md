@@ -5411,3 +5411,21 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
 - OPEN: this is hardening, not a confirmed root-cause fix. The live symptom still needs the owner's
       https://your-chat.io/api/version value to tell "server not serving this build" (infra/DNS/CDN) apart
       from "the browser can't run the JS" (device-specific). The deployed CODE is verified sound.
+
+## v2.99.25 — heavy-QA sweep fixes, batch 3 (2026-07-24)
+- [x] H9 (HIGH) landing lookup errors showed "NO RELAY USER": the hero dialer's onLookup wrapper ended in
+      .catch(() => null), so a directory.lookup ERROR (shared-NAT rate-limit 429 / transient 500) resolved
+      as null — same as a genuine not-a-user — and rendered "NO RELAY USER" + disabled CALL for a REAL
+      online user; runLookup's fail-open .catch was dead code. FIX (Home.tsx): drop the .catch(() => null)
+      so a real rejection reaches runLookup's fail-open (FALLBACK → arm CALL → /i re-resolves). A genuine
+      not-found still RESOLVES to null → correct "NO RELAY USER".
+- [x] H4 (HIGH) stale wasRegistration misrouted a login into the broken setup screen: AuthPanel's
+      wasRegistration was set by submitRegister and never reset, so backing out of register + signing in to
+      an existing PIN-less account routed verifyCode into "Finish setting up" (where setLoginPin/
+      updateProfile 401). FIX: setWasRegistration(false) at the top of routeAfterProbe (runs before
+      submitRegister re-sets it true).
+- [x] H6 (HIGH) heartbeat re-marked a hidden tab online: PresenceManager's 30s tick had no visibility
+      check, so after onLeave marked the user offline the next tick re-marked them online (false "back
+      online" pushes) while backgrounded. FIX: tick returns early when document.visibilityState === "hidden"
+      (the visibilitychange handler re-heartbeats on return to visible).
+- [x] Tests: client/src/app/qaBatch3.test.ts (4 source pins). Suite 1424; build green.
