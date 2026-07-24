@@ -124,6 +124,17 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
   const invitee = invite.data;
   const isPartyLine = !!invitee?.partyLine;
   const inviteeName = invitee?.displayName?.trim() || "";
+  // v2.99.15 — a guest may only call an ONLINE user from a call link. A guest
+  // has no persistent thread to leave a message on (unlike a signed-in caller's
+  // post-dial voicemail card), so an offline callee — or a number that doesn't
+  // exist — BLOCKS the join here instead of ringing into the void. Party lines
+  // are always joinable (they never ring anyone). We wait for the lookup to
+  // resolve and FAIL OPEN on a lookup error (isError ⇒ not "resolved"), so a
+  // transient hiccup never strands a legitimate caller.
+  const inviteResolved = invite.isFetched && !invite.isError;
+  const numberNotFound = inviteResolved && !isPartyLine && !invitee;
+  const calleeOffline = inviteResolved && !isPartyLine && !!invitee && !invitee.isOnline;
+  const joinBlocked = numberNotFound || calleeOffline;
 
   return (
     <div className="dark relay-login relative min-h-svh overflow-hidden grid place-items-center bg-[#08090C] text-foreground p-5">
@@ -167,7 +178,7 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                     : invitee
                       ? invitee.isOnline
                         ? " · online now"
-                        : " · offline — we'll try to reach them"
+                        : " · offline — you can't call them right now"
                       : invite.isFetched
                         ? " · number not found"
                         : ""}
@@ -196,11 +207,18 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                 )}
                 <Button
                   type="submit"
-                  disabled={!name.trim() || startGuestPending}
+                  disabled={!name.trim() || startGuestPending || joinBlocked}
                   className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
                 >
                   {startGuestPending ? (
                     "Connecting…"
+                  ) : numberNotFound ? (
+                    "Number not found"
+                  ) : calleeOffline ? (
+                    <>
+                      <PhoneCall className="size-4" />
+                      They're offline — can't call
+                    </>
                   ) : (
                     <>
                       {isPartyLine ? <Users className="size-4" /> : <PhoneCall className="size-4" />}
@@ -208,6 +226,11 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                     </>
                   )}
                 </Button>
+                {calleeOffline && (
+                  <p className="mt-2.5 text-center text-xs text-muted-foreground">
+                    You can reach {inviteeName || "them"} once they're back online.
+                  </p>
+                )}
               </form>
 
               <button

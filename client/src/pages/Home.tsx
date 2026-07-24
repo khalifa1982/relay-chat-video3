@@ -71,6 +71,9 @@ const COPY = {
     dialerTitle: "RELAY DIALER", dialerOnline: "ONLINE",
     dialEnter: "ENTER ANY 6-DIGIT NUMBER", dialMore: (n: number) => `${n} MORE DIGIT${n > 1 ? "S" : ""}`,
     dialReady: "LINE READY — PRESS CALL", call: "CALL", clear: "CLEAR", demo: "DIAL A DEMO NUMBER",
+    dialChecking: "CHECKING NUMBER…", dialOnline: "ONLINE — READY TO CALL",
+    dialOffline: "OFFLINE — YOU CAN'T CALL THEM RIGHT NOW", dialNotFound: "NO RELAY USER WITH THIS NUMBER",
+    dialJoin: "JOIN CALL", dialParty: (n: number) => `PARTY LINE · ${n} ON THE LINE`,
     marquee: "PEER-TO-PEER ✦ NO ACCOUNTS ✦ NO INSTALLS ✦ FREE FOREVER ✦ ENCRYPTED IN TRANSIT ✦ BROWSER-NATIVE ✦ 6-DIGIT NUMBERS ✦ PEER-TO-PEER ✦ NO ACCOUNTS ✦ NO INSTALLS ✦ FREE FOREVER ✦",
     statsEyebrow: "LIVE NETWORK — REAL NUMBERS",
     statUsers: "REGISTERED USERS", statGuests: "GUESTS SERVED", statParties: "CALL PARTIES", statOnline: "ONLINE NOW",
@@ -127,6 +130,9 @@ const COPY = {
     dialerTitle: "لوحة اتصال RELAY", dialerOnline: "متصل",
     dialEnter: "أدخل أي رقم من 6 خانات", dialMore: (n: number) => `تبقّى ${n} ${n > 1 ? "خانات" : "خانة"}`,
     dialReady: "الخط جاهز — اضغط اتصال", call: "اتصال", clear: "مسح", demo: "جرِّب رقمًا تجريبيًا",
+    dialChecking: "جارٍ التحقق من الرقم…", dialOnline: "متصل — جاهز للاتصال",
+    dialOffline: "غير متصل — لا يمكنك الاتصال به الآن", dialNotFound: "لا يوجد مستخدم RELAY بهذا الرقم",
+    dialJoin: "الانضمام للمكالمة", dialParty: (n: number) => `خط جماعي · ${n} على الخط`,
     marquee: "ند-لِند ✦ بلا حسابات ✦ بلا تثبيت ✦ مجاني للأبد ✦ مشفَّر أثناء النقل ✦ داخل المتصفح ✦ أرقام من 6 خانات ✦ ند-لِند ✦ بلا حسابات ✦ بلا تثبيت ✦ مجاني للأبد ✦",
     statsEyebrow: "الشبكة الآن — أرقام حقيقية",
     statUsers: "مستخدمون مسجّلون", statGuests: "ضيوف تمّت خدمتهم", statParties: "أطراف المكالمات", statOnline: "متصلون الآن",
@@ -434,7 +440,8 @@ function markup(host: string, t: Copy, ar: boolean): string {
         <div data-lp="padTilt" style="background:rgba(255,255,255,.035);border:1px solid rgba(233,240,242,.1);border-radius:26px;padding:26px;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:0 30px 80px rgba(0,0,0,.5);transition:transform .25s ease-out;transform:perspective(900px)">
           <div style="display:flex;align-items:center;justify-content:space-between;font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.22em"><span style="color:rgba(148,162,172,.9)">${t.dialerTitle}</span><span style="display:flex;align-items:center;gap:6px;color:#6ff2ae"><span style="width:5px;height:5px;border-radius:50%;background:#6ff2ae;animation:lpBlink 1.6s infinite"></span>${t.dialerOnline}</span></div>
           <div data-lp="dialDisplay" dir="ltr" style="margin:22px 0 8px;text-align:center;font:500 30px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#e9f0f2;min-height:38px">· · · · · ·</div>
-          <div data-lp="dialStatus" style="text-align:center;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:rgba(148,162,172,.9);margin-bottom:20px">${t.dialEnter}</div>
+          <div data-lp="dialStatus" style="text-align:center;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:rgba(148,162,172,.9);margin-bottom:8px">${t.dialEnter}</div>
+          <div data-lp="dialPreview" style="display:none;text-align:center;font:500 12px 'Space Grotesk',sans-serif;margin-bottom:14px;min-height:18px"></div>
           <div dir="ltr" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">${keypad()}</div>
           <a data-lp="callBtn" href="/app" style="display:block;margin-top:14px;text-align:center;padding:15px;border-radius:14px;background:rgba(111,242,174,.12);border:1px solid rgba(111,242,174,.35);color:#6ff2ae;font:600 12px 'IBM Plex Mono',monospace;letter-spacing:.22em;opacity:.4;pointer-events:none;transition:all .3s">${t.call}</a>
           <div style="display:flex;justify-content:space-between;margin-top:14px;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.16em">
@@ -606,7 +613,26 @@ const DTMF: Record<string, [number, number]> = {
 
 type LoaderMsg = [number, string, string];
 
-function startLanding(host: HTMLElement, t: Copy, opts: { skipBoot: boolean; onToggleLang: () => void }): () => void {
+/** A directory.lookup result the landing dialer can preview (subset we use). */
+export interface DialLookup {
+  displayName?: string | null;
+  isOnline?: boolean;
+  partyLine?: boolean;
+  memberCount?: number;
+}
+
+function startLanding(
+  host: HTMLElement,
+  t: Copy,
+  opts: {
+    skipBoot: boolean;
+    onToggleLang: () => void;
+    /** Resolve a dialed 6-digit number to its owner (public directory.lookup).
+     *  Returns null for an unknown number. Used to preview name + online state
+     *  and to gate the CALL button (guests can only call an ONLINE user). */
+    onLookup?: (number: string) => Promise<DialLookup | null>;
+  }
+): () => void {
   const $ = (k: string) => host.querySelector<HTMLElement>(`[data-lp="${k}"]`);
   // FIRST action: prove JS is alive — this disarms the pure-CSS auto-clear
   // watchdog on the overlay (the JS watchdogs in runLoader take over from here).
@@ -627,26 +653,113 @@ function startLanding(host: HTMLElement, t: Copy, opts: { skipBoot: boolean; onT
   let fc = 0, rainA = 0, baseHue = 150;
   let num = "";
   let calling = false;
+  // v2.99.15 — live number resolution for the hero dialer. `dialTarget` holds
+  // the looked-up owner of the CURRENT 6-digit number (null = unknown/pending);
+  // `dialCallable` gates the CALL button. A guest may only dial an ONLINE user
+  // (or a party line); an offline user / unknown number can't be called from
+  // here. `FALLBACK` = the lookup failed (network) — let the call proceed to the
+  // /i flow, which re-resolves and gates offline itself.
+  const FALLBACK = Symbol("lookup-failed");
+  let dialTarget: DialLookup | null | typeof FALLBACK = null;
+  let dialCallable = false;
+  let lastLookedUp = "";
+  let lookupSeq = 0;
+  const escLp = (s: string) =>
+    s.replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string
+    ));
 
   /* ── dialer ── */
+  const setCallState = (armed: boolean, label: string) => {
+    const cb = $("callBtn");
+    dialCallable = armed;
+    if (!cb) return;
+    cb.textContent = label;
+    cb.style.opacity = armed ? "1" : ".4";
+    cb.style.pointerEvents = armed ? "auto" : "none";
+    cb.style.background = armed ? "#6ff2ae" : "rgba(111,242,174,.12)";
+    cb.style.color = armed ? "#06120b" : "#6ff2ae";
+    cb.style.boxShadow = armed ? "0 0 34px rgba(111,242,174,.4)" : "none";
+  };
+  const setPreview = (html: string) => {
+    const p = $("dialPreview");
+    if (!p) return;
+    if (!html) { p.style.display = "none"; p.innerHTML = ""; return; }
+    p.style.display = "block";
+    p.innerHTML = html; // name is escaped by callers via escLp
+  };
+  const applyLookup = (n: string, res: DialLookup | null) => {
+    const fmt = `${n.slice(0, 3)}-${n.slice(3)}`;
+    dialTarget = res;
+    if (!res) {
+      // No RELAY user owns this number — nothing to call.
+      setPreview(`<span style="color:#f2a9a9">${t.dialNotFound}</span>`);
+      setCallState(false, t.call);
+      return;
+    }
+    const name = escLp(res.displayName || fmt);
+    if (res.partyLine) {
+      setPreview(`<b style="color:#e9f0f2">${name}</b> <span style="color:rgba(148,162,172,.85)">· ${t.dialParty(res.memberCount || 0)}</span>`);
+      setCallState(true, `${t.dialJoin} ↗`);
+      return;
+    }
+    if (res.isOnline) {
+      setPreview(`<b style="color:#e9f0f2">${name}</b> <span style="color:#6ff2ae">· ${t.dialerOnline}</span>`);
+      setCallState(true, `${t.call} ${fmt} ↗`);
+    } else {
+      // OFFLINE → a guest can't reach them from the landing page.
+      setPreview(`<b style="color:#e9f0f2">${name}</b> <span style="color:rgba(148,162,172,.8)">· ${t.dialOffline}</span>`);
+      setCallState(false, t.call);
+    }
+  };
+  const runLookup = (n: string) => {
+    lastLookedUp = n;
+    dialTarget = null;
+    setPreview(`<span style="color:rgba(148,162,172,.85)">${t.dialChecking}</span>`);
+    setCallState(false, t.call);
+    if (!opts.onLookup) {
+      // No resolver wired (unit/preview) — behave like the pre-v2.99.15 dialer:
+      // arm the button and let the /i flow resolve + gate.
+      dialTarget = FALLBACK;
+      setPreview("");
+      setCallState(true, `${t.call} ${n.slice(0, 3)}-${n.slice(3)} ↗`);
+      return;
+    }
+    const seq = ++lookupSeq;
+    void Promise.resolve(opts.onLookup(n))
+      .then((res) => {
+        if (seq !== lookupSeq || num !== n) return; // stale / number changed
+        applyLookup(n, res);
+      })
+      .catch(() => {
+        if (seq !== lookupSeq || num !== n) return;
+        // Lookup failed — don't strand the caller; let /i re-resolve + gate.
+        dialTarget = FALLBACK;
+        setPreview("");
+        setCallState(true, `${t.call} ${n.slice(0, 3)}-${n.slice(3)} ↗`);
+      });
+  };
   const syncDial = () => {
-    const el = $("dialDisplay"), st = $("dialStatus"), cb = $("callBtn");
+    const el = $("dialDisplay"), st = $("dialStatus");
     const chars: string[] = [];
     for (let i = 0; i < 6; i++) chars.push(num[i] || "·");
     if (el) el.textContent = chars.join(" ");
     const len = num.length, full = len === 6;
     if (st) {
-      st.textContent = full ? t.dialReady : len ? t.dialMore(6 - len) : t.dialEnter;
+      st.textContent = full ? t.dialChecking : len ? t.dialMore(6 - len) : t.dialEnter;
       st.style.color = full ? "#6ff2ae" : "rgba(148,162,172,.9)";
     }
-    if (cb) {
-      cb.textContent = full ? `${t.call} ${num.slice(0, 3)}-${num.slice(3)} ↗` : t.call;
-      cb.style.opacity = full ? "1" : ".4";
-      cb.style.pointerEvents = full ? "auto" : "none";
-      cb.style.background = full ? "#6ff2ae" : "rgba(111,242,174,.12)";
-      cb.style.color = full ? "#06120b" : "#6ff2ae";
-      cb.style.boxShadow = full ? "0 0 34px rgba(111,242,174,.4)" : "none";
+    if (!full) {
+      // Below 6 digits: nothing to call yet — clear any prior preview/target.
+      dialTarget = null;
+      lastLookedUp = "";
+      lookupSeq++; // invalidate any in-flight lookup
+      setPreview("");
+      setCallState(false, t.call);
+      return;
     }
+    // Full number: resolve once (guard against re-firing on repeated syncDial).
+    if (num !== lastLookedUp) runLookup(num);
   };
   const beep = (d: string) => {
     try {
@@ -683,11 +796,24 @@ function startLanding(host: HTMLElement, t: Copy, opts: { skipBoot: boolean; onT
   const demoDial = () => {
     if (demoT) return;
     num = "";
+    syncDial();
     demoT = setInterval(() => {
       num += Math.floor(Math.random() * 10);
       beep(num.slice(-1));
       syncDial();
-      if (num.length >= 6) { clearInterval(demoT!); demoT = null; }
+      if (num.length >= 6) {
+        clearInterval(demoT!);
+        demoT = null;
+        // A demo number is random — almost never a real user, so the live
+        // lookup would land on "not found" and disable CALL, making the demo
+        // feel broken. Cancel that in-flight lookup and arm the button in
+        // FALLBACK mode so the dial cinematic still plays end-to-end.
+        lookupSeq++;
+        lastLookedUp = num;
+        dialTarget = FALLBACK;
+        setPreview("");
+        setCallState(true, `${t.call} ${num.slice(0, 3)}-${num.slice(3)} ↗`);
+      }
     }, 150);
   };
 
@@ -791,6 +917,11 @@ function startLanding(host: HTMLElement, t: Copy, opts: { skipBoot: boolean; onT
   const callNow = (e: Event) => {
     e.preventDefault();
     if (num.length !== 6 || calling) return;
+    // Gate: only proceed for a callable target — an ONLINE user, a party line,
+    // or a lookup that couldn't resolve (let /i re-check). An offline user or an
+    // unknown number is blocked here (the button is already disabled, but guard
+    // the handler too in case of a race).
+    if (!dialCallable) return;
     calling = true;
     const n = num, fmt = `${n.slice(0, 3)}-${n.slice(3)}`;
     const nb = $("nodeB");
@@ -1347,6 +1478,10 @@ export default function Home() {
     refetchInterval: 30_000,
     refetchOnWindowFocus: false,
   });
+  // Public, rate-limited number→owner resolver for the hero dialer's live
+  // preview (name + online state). utils.fetch is imperative — the landing
+  // page is raw DOM, so the engine calls this as digits are entered.
+  const utils = trpc.useUtils();
   useEffect(() => {
     const root = rootRef.current;
     const d = stats.data;
@@ -1385,6 +1520,11 @@ export default function Home() {
               return next;
             });
           },
+          onLookup: (number: string) =>
+            utils.directory.lookup
+              .fetch({ number })
+              .then((r) => (r as DialLookup | null) ?? null)
+              .catch(() => null),
         })
       : undefined;
     bootedOnceRef.current = true;

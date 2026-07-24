@@ -5156,3 +5156,28 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       server/storageProxy.test.ts updated (legal key streams 200, no Location header); new
       server/mediaUrlLockdown.test.ts (source-level streaming invariants). Suite 1369 passed / 1
       skipped; check + build green.
+
+## v2.99.15 — functional landing dialer + guest online-only calls (owner) (2026-07-24)
+- [x] OWNER: on the main page, type a number → it AUTO-shows the target's name + "he is online" → Dial
+      → asks the visitor's name → gives a random RELAY number → rings the callee to accept — BUT only
+      if online; a guest can't call an offline user.
+- [x] LANDING HERO DIALER (client/src/pages/Home.tsx): the React shell now passes an imperative
+      `onLookup` (utils.directory.lookup.fetch — the PUBLIC rate-limited resolver) into startLanding.
+      When the 6th digit lands, runLookup resolves the owner and applyLookup writes a live preview
+      into a new `data-lp="dialPreview"` node: name + "ONLINE" (green) for an online user, name +
+      "OFFLINE — you can't call them" (CALL disabled) for offline, "NO RELAY USER WITH THIS NUMBER"
+      for unknown, "PARTY LINE · N on the line" + JOIN for a line.
+- [x] GATE: a new `dialCallable` flag arms CALL only for an online user / party line / a lookup that
+      ERRORED (fallback to /i, which re-resolves); callNow also guards `if (!dialCallable) return`.
+      Display names are escLp-escaped before innerHTML (no XSS). "DIAL A DEMO NUMBER" cancels its
+      in-flight lookup and arms in fallback mode so the cinematic still plays.
+- [x] GUEST OFFLINE BLOCK (OnboardingGate.tsx, the /i/<pin> join card): a guest has no persistent
+      thread to leave a message on, so an offline callee (or unknown number) now DISABLES "Join call"
+      (`joinBlocked = numberNotFound || calleeOffline`, party lines exempt, FAILS OPEN on a lookup
+      error) with "They're offline — can't call" + "you can reach them once they're back online",
+      replacing the old "offline — we'll try to reach them" allow-through.
+- [x] NOTE: directory.lookup returns only `displayName` (no first/last split) — shown as-is; a true
+      first/last split would need a small server change, deferred (displayName satisfies "the name").
+- [x] Tests: client/src/pages/Home.test.ts +3 (lookup wiring, online/party-line/offline/unknown gate,
+      name escaping), client/src/app/callLinkJoin.test.ts +3 (guest offline block, fail-open, copy).
+      Suite 1375 passed / 1 skipped; check + build green.
