@@ -60,9 +60,20 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
   const pick = pickAudioMime();
   if (!pick) throw new Error("Voice recording isn't supported by this browser.");
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const rec = pick.mimeType
-    ? new MediaRecorder(stream, { mimeType: pick.mimeType })
-    : new MediaRecorder(stream);
+  // v2.99.36: the ONLY release of this mic used to be inside rec.onstop, so a
+  // MediaRecorder that fails to construct or start (unsupported mime
+  // substitution, device yanked, browser quirk) threw with the microphone still
+  // captured — the mic indicator stayed on with no handle left to stop it.
+  // Anything that throws before we return a handle must release the mic.
+  let rec: MediaRecorder;
+  try {
+    rec = pick.mimeType
+      ? new MediaRecorder(stream, { mimeType: pick.mimeType })
+      : new MediaRecorder(stream);
+  } catch (e) {
+    stream.getTracks().forEach((t) => t.stop());
+    throw e;
+  }
   const chunks: Blob[] = [];
   const startedAt = Date.now();
   let cancelled = false;
@@ -89,7 +100,13 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
     };
   });
 
-  rec.start();
+  try {
+    rec.start();
+  } catch (e) {
+    // Same reasoning as the construction guard above: never leave the mic open.
+    stream.getTracks().forEach((t) => t.stop());
+    throw e;
+  }
   if (opts?.maxMs && opts.maxMs > 0) {
     capT = setTimeout(() => {
       try {

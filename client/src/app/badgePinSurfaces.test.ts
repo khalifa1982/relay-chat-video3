@@ -32,7 +32,10 @@ describe("PIN shows on every 1:1 username surface (v2.99.10)", () => {
   });
   it("Messages thread-list rows show the peer PIN on 1:1 threads", () => {
     const m = read("client/src/pages/app/Messages.tsx");
-    expect(m).toMatch(/t\.kind !== "group" && t\.peerNumber && \/\^\\d\{6\}\$\/\.test\(t\.peerNumber\)/);
+    // v2.99.37: the row derives a formatted `pin` (1:1 only) up front and renders
+    // it on the second line, instead of inlining the guard in JSX.
+    expect(m).toMatch(/isDm && t\.peerNumber && \/\^\\d\{6\}\$\/\.test\(t\.peerNumber\)/);
+    expect(m).toMatch(/\$\{t\.peerNumber\.slice\(0, 3\)\}-\$\{t\.peerNumber\.slice\(3\)\}/);
   });
   it("Contacts rows already render name + badge + formatted PIN", () => {
     const c = read("client/src/pages/app/Contacts.tsx");

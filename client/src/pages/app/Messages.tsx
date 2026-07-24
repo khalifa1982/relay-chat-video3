@@ -318,145 +318,192 @@ export default function MessagesPage() {
                     </button>
                     {open &&
                       cat.rows.map((t) => {
+                        /* v2.99.37 — THREAD ROW REDESIGN (owner brief + the
+                           Snapchat chat-list reference they supplied; picked by
+                           a 3-design / 3-judge panel, winner "Quiet Two-Line"
+                           with the judges' agreed grafts).
+
+                           SHAPE: a 60px avatar (its own button — status ring +
+                           presence LED), then exactly TWO text lines:
+                             line 1  NAME (19px) + tier mark ............ time
+                             line 2  [muted] PIN · preview-or-typing · N new
+                           No dividers — separation is whitespace (~92px rhythm),
+                           which is the "not compact, flexible for the eyes" the
+                           owner asked for.
+
+                           DELIBERATELY GONE: the per-row message / voice / video
+                           buttons. The conversation's own top bar already has
+                           voice + video, and a "message" action is meaningless
+                           inside Messages — so the whole row is ONE tap to open.
+
+                           Robustness notes (both were real bugs here before):
+                           no fixed row height anywhere (a hard-coded 16px line
+                           clipped a badge), and nothing competes for the width
+                           (an action cluster once squeezed it to "A…"). The PIN
+                           and time carry dir=ltr + unicode-bidi:isolate so they
+                           stay intact beside an Arabic (RTL) name. */
                         const isActive = activeConvoId === t.conversationId;
-                        const isDm = t.kind !== "group" && !(me && t.peerIdentityId === me.id);
+                        const isGroup = t.kind === "group";
+                        const isNotes = !!me && !isGroup && t.peerIdentityId === me.id;
+                        const isDm = !isGroup && !isNotes;
+                        const displayName = isGroup
+                          ? t.title || "Group"
+                          : isNotes
+                            ? "Notes to self"
+                            : t.peerDisplayName || t.peerNumber || "Unknown";
+                        const typing = typingConvos.includes(t.conversationId);
+                        const muted = isThreadMuted(t.conversationId);
+                        const unread = t.unreadCount > 0;
+                        const tier = isDm ? roleFromFlags(t.peerRole, t.peerVerified) : null;
+                        // NNN-NNN — 1:1 only (a group has no number; notes-to-self is me).
+                        const pin =
+                          isDm && t.peerNumber && /^\d{6}$/.test(t.peerNumber)
+                            ? `${t.peerNumber.slice(0, 3)}-${t.peerNumber.slice(3)}`
+                            : null;
+                        const preview = t.lastMessageAt
+                          ? previewOf(t.lastMessageKind ?? "text", t.lastMessageBody)
+                          : "No messages yet";
                         return (
                           <div
                             key={t.conversationId}
                             className={
-                              "flex flex-col px-4 md:px-5 py-2.5 border-b border-border last:border-b-0 transition-colors " +
-                              (isActive ? "bg-muted/40" : "hover:bg-muted/30")
+                              "flex items-center gap-3.5 rounded-2xl mx-1.5 my-0.5 px-3 py-3.5 transition-colors " +
+                              (isActive ? "bg-muted/45" : "hover:bg-muted/25 active:bg-muted/35")
                             }
                           >
-                            {/* Line 1 — avatar + FULL name/badge/PIN/time + preview.
-                                The action buttons moved to their own line below
-                                (v2.99.33, owner) so the name is never squeezed to
-                                "A…"; everything on this line gets the full width. */}
-                            <div className="flex items-center gap-2.5">
-                            {/* The avatar sits OUTSIDE the open-thread button —
-                                it's its own button (status/profile) and nested
-                                buttons are invalid HTML. */}
-                            <div className="relative shrink-0">
-                                {t.kind === "group" ? (
-                                  <div
-                                    className="size-[42px] rounded-full grid place-items-center"
-                                    style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
-                                    aria-label="Group conversation"
-                                  >
-                                    <Users className="size-5" />
-                                  </div>
-                                ) : me && t.peerIdentityId === me.id ? (
-                                  <div
-                                    className="size-[42px] rounded-full grid place-items-center"
-                                    style={{ background: "rgba(251,191,36,.16)", color: "#fbbf24" }}
-                                    aria-label="Notes to yourself"
-                                  >
-                                    <StickyNote className="size-5" />
-                                  </div>
-                                ) : (
-                                  /* Real profile photo + status ring (v2.96);
-                                     tapping opens their status/profile. */
-                                  <PeerAvatar
-                                    number={t.peerNumber}
-                                    name={t.peerDisplayName}
-                                    avatarUrl={t.peerAvatarUrl}
-                                    size={42}
-                                  >
-                                    {/* Presence LED: green = online, grey = offline
-                                        (red used to read as "busy/error" — v2.88). */}
-                                    <span
-                                      aria-label={t.peerIsOnline ? "Online" : "Offline"}
-                                      className={
-                                        "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
-                                        (t.peerIsOnline
-                                          ? "bg-[color:var(--relay-online)]"
-                                          : "bg-[color:var(--relay-offline)]")
-                                      }
-                                    />
-                                  </PeerAvatar>
-                                )}
-                              </div>
+                            {/* Avatar — its OWN button (status ring → status viewer /
+                                profile), so it must stay OUTSIDE the open-thread
+                                button: nested buttons are invalid HTML. The fixed
+                                64px box keeps every row's text aligned whether or
+                                not PeerAvatar adds its ~5px ring. */}
+                            <div className="grid size-16 shrink-0 place-items-center">
+                              {isGroup ? (
+                                <div
+                                  className="grid size-[60px] place-items-center rounded-full"
+                                  style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
+                                  aria-label="Group conversation"
+                                >
+                                  <Users className="size-7" />
+                                </div>
+                              ) : isNotes ? (
+                                <div
+                                  className="grid size-[60px] place-items-center rounded-full"
+                                  style={{ background: "rgba(251,191,36,.16)", color: "#fbbf24" }}
+                                  aria-label="Notes to yourself"
+                                >
+                                  <StickyNote className="size-7" />
+                                </div>
+                              ) : (
+                                <PeerAvatar
+                                  number={t.peerNumber}
+                                  name={t.peerDisplayName}
+                                  avatarUrl={t.peerAvatarUrl}
+                                  size={60}
+                                >
+                                  <span
+                                    aria-label={t.peerIsOnline ? "Online" : "Offline"}
+                                    className={
+                                      "absolute bottom-0 right-0 size-[15px] rounded-full border-2 border-card " +
+                                      (t.peerIsOnline
+                                        ? "bg-[color:var(--relay-online)]"
+                                        : "bg-[color:var(--relay-offline)]")
+                                    }
+                                  />
+                                </PeerAvatar>
+                              )}
+                            </div>
+
+                            {/* One button holds BOTH text lines (judge graft): the
+                                whole text column is the tap target, the text stays
+                                selectable, and a screen reader reads the label once
+                                instead of the label plus the same content again. */}
                             <button
                               type="button"
                               onClick={() => setLocation(`/app/messages?c=${t.conversationId}`)}
-                              className="flex-1 min-w-0 flex items-start gap-3 text-left"
+                              aria-current={isActive ? "true" : undefined}
+                              aria-label={
+                                `Open conversation with ${displayName}` +
+                                (unread ? `, ${t.unreadCount} unread` : "") +
+                                (typing ? ", typing now" : "")
+                              }
+                              className="flex min-h-[58px] min-w-0 flex-1 flex-col justify-center gap-[3px] rounded-xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                             >
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1.5 min-w-0">
-                                  {isThreadMuted(t.conversationId) && (
-                                    <BellOff className="size-3.5 shrink-0 text-muted-foreground" />
-                                  )}
-                                  <span className="font-semibold text-[14.5px] truncate">{t.peerDisplayName || t.peerNumber}</span>
-                                  <RoleBadge role={roleFromFlags(t.peerRole, t.peerVerified)} size={14} />
-                                  {/* v2.99.10 (owner): the PIN shows on 1:1 rows too. */}
-                                  {t.kind !== "group" && t.peerNumber && /^\d{6}$/.test(t.peerNumber) && (
-                                    <span className="font-mono text-[10.5px] text-muted-foreground shrink-0" dir="ltr">
-                                      {t.peerNumber.slice(0, 3)}-{t.peerNumber.slice(3)}
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="mt-0.5">
-                                  {typingConvos.includes(t.conversationId) ? (
-                                    <div className="text-xs font-medium text-[color:var(--relay-online)] truncate animate-pulse">
-                                      typing…
-                                    </div>
-                                  ) : (
-                                    <div className="text-[12.5px] text-muted-foreground truncate">
-                                      {t.lastMessageAt ? previewOf(t.lastMessageKind ?? "text", t.lastMessageBody) : "No messages yet"}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                              {t.lastMessageAt && (
-                                <div className="text-[10.5px] font-mono text-muted-foreground shrink-0 pt-0.5">
-                                  {timeAgo(t.lastMessageAt)}
-                                </div>
-                              )}
-                            </button>
-                            </div>
-                            {/* Line 2 — quick actions on their own row (indented
-                                past the avatar) so they're fully tappable and never
-                                crowd the name: message (orange) + DM voice (green) /
-                                video (blue), with the unread badge. */}
-                            <div className="flex items-center gap-1.5 pl-[52px] mt-1.5">
-                              {t.unreadCount > 0 && (
+                              {/* LINE 1 — the name owns the width; only the small
+                                  tier mark and the right-aligned time share it. */}
+                              <div className="flex min-w-0 items-center gap-1.5">
                                 <span
-                                  className="inline-flex min-w-[20px] h-[20px] px-1.5 rounded-full text-white text-[10.5px] items-center justify-center font-extrabold mr-auto"
-                                  style={{ background: "linear-gradient(135deg,#fb923c,#c2410c)" }}
+                                  dir="auto"
+                                  className={
+                                    "min-w-0 truncate text-[19px] leading-[1.2] tracking-[-0.01em] text-foreground " +
+                                    (unread ? "font-bold" : "font-semibold")
+                                  }
                                 >
-                                  {t.unreadCount > 99 ? "99+" : t.unreadCount} unread
+                                  {displayName}
                                 </span>
-                              )}
-                              {t.unreadCount === 0 && <span className="mr-auto" />}
-                              <AccentCircle
-                                rgb="251,146,60"
-                                hex="#fb923c"
-                                title="Message"
-                                onClick={() => setLocation(`/app/messages?c=${t.conversationId}`)}
-                              >
-                                <MessageSquare className="size-4" />
-                              </AccentCircle>
-                              {isDm && (
-                                <>
-                                  <AccentCircle
-                                    rgb="34,197,94"
-                                    hex="#22c55e"
-                                    title="Voice call"
-                                    onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(t.peerNumber)}&voice=1`)}
+                                {tier && (
+                                  /* caption={false}: the stacked tier word is ~22px
+                                     tall and has overflowed a one-line row before. */
+                                  <RoleBadge role={tier} size={16} caption={false} className="shrink-0" />
+                                )}
+                                {t.lastMessageAt && (
+                                  <span
+                                    dir="ltr"
+                                    className={
+                                      "ms-auto shrink-0 pl-1 text-[11.5px] tabular-nums [unicode-bidi:isolate] " +
+                                      (unread ? "font-semibold text-[#fb923c]" : "text-muted-foreground")
+                                    }
                                   >
-                                    <Phone className="size-4" />
-                                  </AccentCircle>
-                                  <AccentCircle
-                                    rgb="56,189,248"
-                                    hex="#38bdf8"
-                                    title="Video call"
-                                    onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(t.peerNumber)}&video=1`)}
+                                    {timeAgo(t.lastMessageAt)}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* LINE 2 — one quiet run. Only the preview flexes, so
+                                  the PIN and the unread count can never be clipped;
+                                  it may wrap rather than starve the preview. */}
+                              <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[14px] leading-snug text-muted-foreground">
+                                {muted && <BellOff aria-label="Muted" className="size-3.5 shrink-0 opacity-70" />}
+                                {pin && (
+                                  <>
+                                    <span
+                                      dir="ltr"
+                                      className="shrink-0 font-mono text-[12px] tabular-nums tracking-tight text-foreground/55 [unicode-bidi:isolate]"
+                                    >
+                                      {pin}
+                                    </span>
+                                    <span aria-hidden="true" className="shrink-0 select-none opacity-40">·</span>
+                                  </>
+                                )}
+                                {typing ? (
+                                  <span className="flex shrink-0 items-center gap-1 font-medium text-[color:var(--relay-online)]">
+                                    typing
+                                    <span className="flex items-end gap-[2px]" aria-hidden="true">
+                                      {[0, 1, 2].map((i) => (
+                                        <span
+                                          key={i}
+                                          className="size-[3px] rounded-full bg-current motion-safe:animate-pulse"
+                                          style={{ animationDelay: `${i * 160}ms` }}
+                                        />
+                                      ))}
+                                    </span>
+                                  </span>
+                                ) : (
+                                  <span
+                                    dir="auto"
+                                    className={"min-w-0 flex-1 truncate " + (unread ? "text-foreground/90" : "")}
                                   >
-                                    <Video className="size-4" />
-                                  </AccentCircle>
-                                </>
-                              )}
-                            </div>
+                                    {preview}
+                                  </span>
+                                )}
+                                {unread && (
+                                  /* Colour + weight, not a heavy pill (the reference's
+                                     "2 New Chats" treatment). */
+                                  <span className="shrink-0 font-semibold text-[13px] text-[#fb923c]">
+                                    {t.unreadCount > 99 ? "99+" : t.unreadCount} new
+                                  </span>
+                                )}
+                              </div>
+                            </button>
                           </div>
                         );
                       })}
@@ -978,6 +1025,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   // lives in the SHARED client/src/lib/voiceNote.ts since v2.88 — the same
   // helpers power the after-dial voicemail prompt.
   const recordingRef = useRef<VoiceRecording | null>(null);
+  // Still mounted? Guards the mic-acquisition await (v2.99.36) AND releases a
+  // live recording if the user navigates away mid-record.
+  const recorderAliveRef = useRef(true);
+  useEffect(() => {
+    recorderAliveRef.current = true;
+    return () => {
+      recorderAliveRef.current = false;
+      try { recordingRef.current?.cancel(); } catch { /* */ }
+      recordingRef.current = null;
+    };
+  }, []);
   const [recording, setRecording] = useState(false);
 
   // Safety net: if the conversation unmounts while recording, cancel so the
@@ -998,6 +1056,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     }
     try {
       const rec = await startVoiceRecording();
+      // v2.99.36: if this thread view unmounted while the mic was being
+      // acquired, nothing will ever hold this handle — cancel it at once or the
+      // microphone stays captured (indicator lit) with no way to stop it.
+      if (!recorderAliveRef.current) { rec.cancel(); return; }
       recordingRef.current = rec;
       setRecording(true);
       void rec.done

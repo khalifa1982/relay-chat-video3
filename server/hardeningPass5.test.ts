@@ -204,11 +204,17 @@ describe("M29 — an unverified pre-planted credential is destroyed on OTP claim
     expect(fn).toMatch(/eq\(users\.emailVerified, false\)/);
   });
 
-  it("runs BEFORE markUserEmailVerified at BOTH OTP claim sites", () => {
+  it("runs BEFORE markUserEmailVerified at EVERY OTP claim site", () => {
     // Ordering is load-bearing: the helper's own guard is emailVerified=false,
     // so flipping the flag first would make it a no-op.
+    //
+    // There were TWO claim sites when this was written (verifyOtp + the
+    // RELAY_OTP_REGISTER_BYPASS branch of register). v2.99.39 DELETED the bypass
+    // entirely — SES is out of the sandbox — so verifyOtp is now the only path
+    // that can mark an address verified. This asserts the ordering at whatever
+    // sites exist rather than a fixed count, so it survives either shape.
     const sites = [...ROUTERS.matchAll(/await markUserEmailVerified\(userId\);/g)];
-    expect(sites.length).toBeGreaterThanOrEqual(2);
+    expect(sites.length).toBeGreaterThanOrEqual(1);
     for (const m of sites) {
       const before = ROUTERS.slice(Math.max(0, m.index! - 700), m.index!);
       expect(before, "clearUnverifiedCredentials precedes this markUserEmailVerified").toMatch(
@@ -260,31 +266,37 @@ describe("M30 — status.post gates a supplied mediaKey for EVERY kind", () => {
   });
 });
 
-/* ── M31: the register bypass is create-only ───────────────────────────── */
+/* ── M31: the register bypass is GONE (superseded) ─────────────────────── */
 
-describe("M31 — RELAY_OTP_REGISTER_BYPASS cannot sign you in as an existing account", () => {
-  const branch = ROUTERS.slice(
-    ROUTERS.indexOf("if (otpRegisterBypassEnabled()) {"),
-    ROUTERS.indexOf("await unlockLoginPin(userId);"),
-  );
-
-  it("refuses when the address already has an account", () => {
-    expect(branch).toMatch(/if \(await findUserByEmailAny\(email\)\) \{/);
-    expect(branch).toMatch(/code: "CONFLICT"/);
+describe("M31 — the RELAY_OTP_REGISTER_BYPASS branch no longer exists at all", () => {
+  // M31 hardened the bypass branch to be CREATE-ONLY, because as written it let
+  // anyone who knew a registered address obtain a session as that user. v2.99.39
+  // goes further and DELETES the branch and its env-flag reader: AWS approved SES
+  // production access, so registration always mints and emails a real code and
+  // the account is only created by verifyOtp. Removal strictly supersedes the
+  // hardening — there is no branch left to get wrong, and a stale
+  // RELAY_OTP_REGISTER_BYPASS=1 in a server .env now has no effect because
+  // nothing reads it. The full removal is pinned in otpRegisterBypass.test.ts.
+  it("neither the branch nor its flag reader survives in the router", () => {
+    expect(ROUTERS).not.toMatch(/otpRegisterBypassEnabled/);
+    expect(ROUTERS).not.toMatch(/bypass: true/);
   });
 
-  it("only ever MINTS a new user — never adopts a resolved id", () => {
-    expect(branch).toMatch(/let userId = await createOtpUser\(/);
-    // The pre-fix shape resolved an existing row into userId first.
-    expect(branch).not.toMatch(/let userId = \(await findUserByEmailAny\(email\)\)\?\.id \?\? null;/);
+  it("register always mints a code and dispatches it — no conditional path", () => {
+    const reg = ROUTERS.slice(
+      ROUTERS.indexOf("  register: publicProcedure"),
+      ROUTERS.indexOf("  verifyOtp: publicProcedure"),
+    );
+    expect(reg).toMatch(/const code = await mintOtp\(\{ email, purpose: "register"/);
+    expect(reg).toMatch(/const sent = await dispatchOtp\(email, code\);/);
+    // No branch may skip the code and hand back a session.
+    expect(reg).not.toMatch(/setSessionCookie/);
+    expect(reg).not.toMatch(/createOtpUser/);
   });
 
-  it("the refusal precedes account creation and session issuance", () => {
-    expect(branch.indexOf("CONFLICT")).toBeLessThan(branch.indexOf("createOtpUser"));
-  });
-
-  it("documents that this is unauthenticated-takeover territory, not just unproven signup", () => {
-    expect(branch).toMatch(/CREATE-ONLY/);
+  it("the only markUserEmailVerified caller is the code-verifying path", () => {
+    const idx = ROUTERS.indexOf("await markUserEmailVerified(userId);");
+    expect(idx).toBeGreaterThan(ROUTERS.indexOf("  verifyOtp: publicProcedure"));
   });
 });
 

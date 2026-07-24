@@ -48,8 +48,13 @@ describe("role badge is wired into every primary identity surface", () => {
     ["client/src/app/AppShell.tsx", /<RoleBadge role=\{roleFromFlags\(me\.role, me\.verified\)\}/],
     ["client/src/pages/app/Profile.tsx", /<RoleBadge role=\{roleFromFlags\(me\.role, me\.verified\)\}/],
     ["client/src/pages/app/Contacts.tsx", /<RoleBadge role=\{roleFromFlags\(c\.role, c\.verified\)\}/],
-    ["client/src/pages/app/Messages.tsx", /<RoleBadge role=\{roleFromFlags\(t\.peerRole, t\.peerVerified\)\}/],
-    ["client/src/pages/app/Dialer.tsx", /<RoleBadge role=\{roleFromFlags\(previewIdentity\.role, previewIdentity\.verified\)\}/],
+    // v2.99.37: the redesigned thread row computes the tier first, then renders a
+    // caption-less mark beside the name (a stacked caption clipped a row before).
+    ["client/src/pages/app/Messages.tsx", /const tier = isDm \? roleFromFlags\(t\.peerRole, t\.peerVerified\) : null;[\s\S]{0,6500}<RoleBadge role=\{tier\} size=\{16\} caption=\{false\}/],
+    // v2.99.36: the Dialer preview computes the tier first (`tier`) and renders a
+    // CAPTION-LESS mark with the tier word inline, because the stacked caption
+    // overflowed the one-line row and collided with the keypad.
+    ["client/src/pages/app/Dialer.tsx", /const tier = roleFromFlags\(previewIdentity\.role, previewIdentity\.verified\);[\s\S]{0,1600}<RoleBadge role=\{tier\} size=\{13\} caption=\{false\} \/>/],
     ["client/src/app/PeerOverlays.tsx", /<RoleBadge role=\{roleFromFlags\(p\.role, p\.verified\)\}/],
   ];
   for (const [file, re] of sites) {

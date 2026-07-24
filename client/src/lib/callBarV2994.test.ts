@@ -19,7 +19,8 @@ const CLIENT = fs.readFileSync(path.resolve(__dirname, "relayClient.ts"), "utf8"
 
 describe("control bar: labeled colored chips (v2.99.4)", () => {
   it("every bar button wraps its icon in .ctrl-ic and carries a .ctrl-lbl", () => {
-    for (const id of ["micBtn", "camBtn", "flipCamBtn", "screenBtn", "qualityBtn", "audioBtn", "pipBtn", "filterBtn", "addBtn", "hostBtn", "chatBtn", "moreBtn"]) {
+    // v2.99.36 (owner): moreBtn removed; recordBtn is now a bar chip instead.
+    for (const id of ["micBtn", "camBtn", "flipCamBtn", "screenBtn", "qualityBtn", "audioBtn", "pipBtn", "filterBtn", "addBtn", "hostBtn", "chatBtn", "recordBtn"]) {
       const btn = RELAY_MARKUP.match(new RegExp(`<button[^>]*id="${id}"[^>]*>([\\s\\S]*?)</button>`));
       expect(btn, `#${id} must exist`).toBeTruthy();
       expect(btn![1], `#${id} needs the icon chip`).toContain('class="ctrl-ic"');
@@ -40,7 +41,6 @@ describe("control bar: labeled colored chips (v2.99.4)", () => {
     expect(RELAY_CSS).toMatch(/#audioBtn \.ctrl-ic\{color:#fb923c/);
     expect(RELAY_CSS).toMatch(/#filterBtn \.ctrl-ic\{color:#e879f9/);
     expect(RELAY_CSS).toMatch(/#hostBtn \.ctrl-ic\{color:#facc15/);
-    expect(RELAY_CSS).toMatch(/#moreBtn \.ctrl-ic\{color:#cbd5e1/);
   });
   it("state classes restyle the CHIP (the button itself is now a transparent column)", () => {
     expect(RELAY_CSS).toMatch(/\.ctrl\.off \.ctrl-ic\{background:rgba\(255,92,114/);
@@ -56,21 +56,34 @@ describe("control bar: labeled colored chips (v2.99.4)", () => {
   });
 });
 
-describe("⋯ More menu: Record + Diagnostics rows (v2.99.4)", () => {
-  it("has the menu with a labeled Record row (same #recordBtn id — JS untouched) and a Diagnostics row", () => {
-    expect(RELAY_MARKUP).toMatch(/id="moreMenu"/);
-    expect(RELAY_MARKUP).toMatch(/id="moreBtn"/);
+describe("v2.99.36 (owner): the ⋯ More menu + Diagnostics panel are REMOVED", () => {
+  it("no More button/menu and no Diagnostics UI remain in the markup", () => {
+    expect(RELAY_MARKUP).not.toMatch(/id="moreMenu"/);
+    expect(RELAY_MARKUP).not.toMatch(/id="moreBtn"/);
+    expect(RELAY_MARKUP).not.toMatch(/id="diagMenuBtn"/);
+    expect(RELAY_MARKUP).not.toMatch(/id="diagBtn"/);
+    expect(RELAY_MARKUP).not.toMatch(/id="diagOverlay"/);
+    expect(RELAY_MARKUP).not.toMatch(/Diagnostics/);
+  });
+  it("Record survives as a normal labeled bar chip (feature kept, menu gone)", () => {
     const rec = RELAY_MARKUP.match(/<button[^>]*id="recordBtn"[^>]*>([\s\S]*?)<\/button>/);
     expect(rec).toBeTruthy();
-    expect(rec![0]).toMatch(/class="mm-item"/);
+    expect(rec![0]).toMatch(/class="ctrl"/);
     expect(rec![0]).toMatch(/style="display:none"/); // revealed only when recording is configured
-    expect(rec![1]).toContain("Record call");
-    expect(RELAY_MARKUP).toMatch(/id="diagMenuBtn"[\s\S]{0,400}Diagnostics/);
+    expect(rec![1]).toContain("ctrl-lbl");
+    expect(rec![1]).toContain("Record");
+    expect(CLIENT).toMatch(/\$\("recordBtn"\) as HTMLElement \| null\)\?\.addEventListener\("click"/);
   });
-  it("is wired: moreBtn toggles, diag row opens diagnostics, outside click dismisses", () => {
-    expect(CLIENT).toMatch(/\$\("moreBtn"\) as HTMLElement \| null\)\?\.addEventListener\("click"/);
-    expect(CLIENT).toMatch(/\$\("diagMenuBtn"\) as HTMLElement \| null\)\?\.addEventListener\("click"/);
-    expect(CLIENT).toMatch(/if \(outside\("moreMenu", "moreBtn"\)\)/);
+  it("the wiring, the toggleDiag panel and the '?' shortcut are gone", () => {
+    expect(CLIENT).not.toMatch(/moreMenu/);
+    expect(CLIENT).not.toMatch(/moreBtn/);
+    expect(CLIENT).not.toMatch(/function toggleDiag/);
+    expect(CLIENT).not.toMatch(/diagMenuBtn/);
+    expect(CLIENT).not.toMatch(/e\.key === "\?"/);
+  });
+  it("but the internal diag() event log is KEPT for console debugging", () => {
+    expect(CLIENT).toMatch(/function diag\(line: string\)/);
+    expect(CLIENT).toMatch(/diagLog\.push\(entry\)/);
   });
 });
 

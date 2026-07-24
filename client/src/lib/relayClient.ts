@@ -781,6 +781,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
         //     aloneInCall() guard spares any LIVE call (host-only forbidden).
         const reachErr = m.code === "offline" || m.code === "nonexistent" || m.code === "gone";
         const joinErr = m.code === "self" || m.code === "full" || m.code === "forbidden";
+        // v2.99.36: `nohold` answers an `end-active` whose held room was already
+        // gone — there is nothing to resume, so complete the hang-up NOW (that
+        // branch skipped hangUp and would otherwise sit here with the camera and
+        // mic still captured until the fail-closed timer fired).
+        if (m.code === "nohold" && inCall) {
+          cancelEndActiveFallback();
+          dropHeld();
+          hangUp("end-active-nohold");
+          return;
+        }
         if (addInviteOfflineGuard && (m.code === "offline" || m.code === "nonexistent")) {
           // Offline/nonexistent error for an in-call add-to-call invite (the "+"
           // pad) — the server just reports the addee is unreachable; never tear
@@ -1483,10 +1493,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   async function recoverDeadLocalTrack(kind: string) {
     if (!inCall || !localStream) return;
+    const genR = mediaGen;
     diag("local " + kind + " track ENDED — attempting reacquire");
     if (kind === "audio") {
       try {
         const fresh = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
+      // v2.99.36: the call may have ended while this recovery was acquiring —
+      // installing the stream then would strand a live mic forever.
+      if (mediaStale(genR) || !inCall || !localStream) { stopStream(fresh); return; }
         const at = fresh.getAudioTracks()[0];
         if (!at) throw new Error("no-track");
         at.onended = () => { void recoverDeadLocalTrack("audio"); };
@@ -1539,7 +1553,71 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (track) { await replaceVideoEverywhere(track); syncCamEnabled(); }
     }
   }
-  async function ensureMedia(): Promise<MediaStream> {
+  /**
+   * Release the local camera + mic (and the filter pipeline wrapping them) in
+   * ONE place, so every "we're not in a call any more" path actually frees the
+   * devices.
+   *
+   * v2.99.36 (owner bug): "when I finish the call and I minimize the browser,
+   * the mic and the camera is still active — I cannot even have another call".
+   * A held capture keeps the OS/browser indicator lit AND keeps the device
+   * exclusive, so another tab/app (or the next call) can't acquire it. The
+   * self-preview element's srcObject is cleared too: a <video> holding a
+   * reference to a (stopped) capture stream can keep some browsers' indicator
+   * on and pins the stream object alive.
+   */
+  function releaseLocalMedia(reason: string) {
+    // Invalidate every in-flight acquisition: anything still awaiting
+    // getUserMedia when we release must NOT install its stream afterwards (it
+    // would be an orphan no end path can ever stop — a permanently lit camera).
+    mediaGen++;
+    if (pipeline) { try { pipeline.destroy(); } catch { /* */ } pipeline = null; }
+    if (localStream) {
+      try { localStream.getTracks().forEach(t => t.stop()); } catch { /* */ }
+      localStream = null;
+    }
+    processedStream = null;
+    try {
+      const selfV = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
+      if (selfV) selfV.srcObject = null;
+    } catch { /* */ }
+    diag("released local camera/mic (" + reason + ")");
+  }
+
+  /**
+   * Monotonic media generation (v2.99.36). Bumped by releaseLocalMedia on every
+   * release. Any async acquisition captures it BEFORE awaiting getUserMedia and
+   * re-checks it after: a mismatch (or `destroyed`) means the call ended while
+   * the prompt/acquisition was in flight, so the freshly acquired tracks are
+   * stopped instead of installed. Without this, every acquire-after-await path
+   * (ensureMedia, flipCamera, reacquireCameraForPublish, recoverDeadLocalTrack)
+   * could strand a live camera/mic that NO end path stops.
+   */
+  let mediaGen = 0;
+  /** Stop a stream's tracks, best-effort. */
+  function stopStream(s: MediaStream | null | undefined) {
+    if (!s) return;
+    try { s.getTracks().forEach(t => t.stop()); } catch { /* */ }
+  }
+  /** True when an acquisition started at `gen` is now stale (released/destroyed). */
+  function mediaStale(gen: number) {
+    return destroyed || gen !== mediaGen;
+  }
+  /** In-flight ensureMedia, so concurrent callers SHARE one acquisition instead
+   *  of each running getUserMedia and orphaning the loser's stream. */
+  let ensureMediaInFlight: Promise<MediaStream> | null = null;
+
+  function ensureMedia(): Promise<MediaStream> {
+    if (ensureMediaInFlight) return ensureMediaInFlight;
+    const p = ensureMediaInner().finally(() => {
+      if (ensureMediaInFlight === p) ensureMediaInFlight = null;
+    });
+    ensureMediaInFlight = p;
+    return p;
+  }
+
+  async function ensureMediaInner(): Promise<MediaStream> {
+    const gen = mediaGen;
     // Reuse a live camera/mic — don't re-prompt. But only if the cached MIC is
     // actually ALIVE: tracks can die BETWEEN calls (phone-call interrupt,
     // Bluetooth swap, device unplugged while idle) and reusing a dead stream
@@ -1554,10 +1632,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
       processedStream = null;
     }
     try {
-      localStream = await acquireRawStream(facingMode);
-    } catch {
+      const raw = await acquireRawStream(facingMode);
+      // The call may have ended (or the engine been destroyed) while the OS
+      // prompt / acquisition was in flight — never install an orphan.
+      if (mediaStale(gen)) { stopStream(raw); throw new Error("media-released-during-acquire"); }
+      localStream = raw;
+    } catch (firstErr) {
+      if ((firstErr as Error)?.message === "media-released-during-acquire") throw firstErr;
       try {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
+        const audioOnly = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
+        if (mediaStale(gen)) { stopStream(audioOnly); throw new Error("media-released-during-acquire"); }
+        localStream = audioOnly;
         camOn = false;
         // Reflect the fallback on the camera BUTTON too — it used to keep its
         // "on" look, so tapping it toggled a camera that didn't exist and the
@@ -1565,6 +1650,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
         $("camBtn")?.classList.add("off");
         toast("No camera found — joining with audio only. Tap the camera button to retry once it's available.");
       } catch (e2) {
+        if ((e2 as Error)?.message === "media-released-during-acquire") throw e2;
         toast("Mic/camera blocked. Allow access in your browser, then retry.", true);
         throw e2;
       }
@@ -1651,17 +1737,39 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // cached so the later ensureMedia() call during a dial is instant and does not
   // pop a fresh OS prompt (which on mobile was dropping the call).
   let mediaPrimed = false;
+  /**
+   * Warm the camera/mic PERMISSION at login so the OS prompt is handled while
+   * the user is idle — NOT in the middle of placing a call (on mobile, prompting
+   * during the invite made the page lose focus and dropped the call).
+   *
+   * v2.99.36 (owner bug: "when I finish the call ... the mic and the camera is
+   * still active — I cannot even have another call"): this used to call
+   * ensureMedia() and deliberately KEEP the stream ("we warm the stream and keep
+   * it ready"), so the camera + mic were held live for the entire time the user
+   * sat in the app with no call at all. That lit the device indicator
+   * permanently and — because capture is exclusive — stopped another tab/app
+   * (or the next call) from acquiring the devices.
+   *
+   * Now we warm only the PERMISSION: acquire briefly, then release immediately.
+   * The permission grant persists for the origin, so the real in-call
+   * ensureMedia() still won't prompt — with zero capture while idle.
+   */
   async function primeMedia() {
-    if (mediaPrimed || localStream) return;
+    if (mediaPrimed || localStream || inCall) return;
     const banner = $("mediaBanner");
     try {
-      await ensureMedia();
-      mediaPrimed = true;
+      const probe = await navigator.mediaDevices.getUserMedia({
+        audio: AUDIO_CONSTRAINTS,
+        video: true,
+      });
+      // Release the devices at once — we only wanted the grant.
+      try { probe.getTracks().forEach(t => t.stop()); } catch { /* */ }
+      mediaPrimed = true; // sticky: the grant doesn't need re-warming
       if (banner) banner.style.display = "none";
-      // Show a tiny self-preview confirmation so the user sees mic/cam are live.
-      toast("Camera & mic ready");
+      diag("media permission warmed (devices released — not held while idle)");
     } catch {
-      // ensureMedia already toasted; show a persistent banner with a retry.
+      // Denied / no devices: show a persistent banner with a retry. Never block
+      // the lobby — a dial re-attempts acquisition and reports failure itself.
       if (banner) banner.style.display = "flex";
     }
   }
@@ -1721,6 +1829,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   async function flipCamera() {
     if (flipBusy) return;
+    const genF = mediaGen;
     if (!localStream) { toast("Camera isn't active yet.", true); return; }
     if (screenSharing) { toast("Stop screen sharing to flip the camera.", true); return; }
     flipBusy = true;
@@ -1735,12 +1844,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // covers the failure case that used to be Android's reason to overlap.
       oldVideo.forEach(t => t.stop());
       const nuVideo = await acquireFlippedCameraWithRetry(next);
+      // v2.99.36: the call may have ended mid-flip (End tapped while the new
+      // camera was being acquired) — release it instead of installing an orphan.
+      if (mediaStale(genF)) { stopStream(nuVideo); return; }
       if (!nuVideo || nuVideo.getVideoTracks().length === 0) {
         toast("Couldn't switch camera — this device may only have one.", true);
         {
           // We already stopped the old camera — bring the original facing back so
           // the user isn't left with a dead tile.
           const recover = await acquireFlippedCameraWithRetry(facingMode);
+          if (mediaStale(genF)) { stopStream(recover); return; }
           const rv = recover?.getVideoTracks()[0];
           if (rv) {
             localStream = new MediaStream([...audioTracks, rv]);
@@ -2236,6 +2349,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function cancelSoloEndGrace() {
     if (soloEndT) { clearTimeout(soloEndT); soloEndT = null; }
   }
+  /** Fail-closed window for `end-active` (v2.99.36): if the server never answers
+   *  `resumed` (the held room was already reaped, so it promotes nothing and
+   *  replies nothing), force a real hang-up instead of wedging in a call whose
+   *  camera/mic are still captured. Generous — a resume is normally instant. */
+  const END_ACTIVE_RESUME_MS = 4000;
+  let endActiveT: ReturnType<typeof setTimeout> | null = null;
+  function cancelEndActiveFallback() {
+    if (endActiveT) { clearTimeout(endActiveT); endActiveT = null; }
+  }
   function armSoloEndGrace(nm: string) {
     cancelSoloEndGrace();
     soloEndT = setTimeout(() => {
@@ -2487,6 +2609,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (livekitEnabled) teardownLivekit();
     sendWS({ type: "end-active" });
     addSysMsg("Ended this line — resuming your held call…");
+    // FAIL CLOSED (v2.99.36, owner: "I cannot even have another call"). This
+    // branch deliberately skips hangUp — the ONLY function that releases the
+    // camera/mic — and depends entirely on the server answering `resumed`. If
+    // the held room is already gone the server promotes nothing and replies
+    // NOTHING, so the engine wedged: inCall stayed true, localStream + pipeline
+    // stayed captured (indicator lit), and because `heldRoomId` was still set
+    // every further End tap re-entered this same silent branch — a permanent
+    // no-op that also blocked any new call (programmaticDial requires !inCall).
+    // Now: if no `resumed` arrives, force a real hang-up so the devices are
+    // always released and the UI returns to idle.
+    if (endActiveT) clearTimeout(endActiveT);
+    endActiveT = setTimeout(() => {
+      endActiveT = null;
+      if (destroyed || !inCall) return;
+      diag("end-active: no `resumed` from the server — forcing a full hang-up");
+      dropHeld();
+      hangUp("end-active-no-resume");
+    }, END_ACTIVE_RESUME_MS);
   }
 
   // Server confirmed a swap / end-active: the named room is now ACTIVE. Thaw its
@@ -2494,6 +2634,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   async function onResumed(m: Msg) {
     const rid = m.roomId || null;
     if (!rid) return;
+    // The resume landed — disarm the end-active fail-closed fallback.
+    if (endActiveT) { clearTimeout(endActiveT); endActiveT = null; }
+    // v2.99.36: if the room we're resuming IS the one we had on hold, nothing is
+    // held any more. onResumed was written for swapCall (which re-sets heldRoomId
+    // itself), so the end-active path used to leave heldRoomId === roomId — and a
+    // stale heldRoomId is what wedged the NEXT End tap into the silent
+    // non-hangUp branch (camera/mic never released, End a permanent no-op).
+    if (heldRoomId === rid) { heldRoomId = null; heldLabel = null; }
     roomId = rid;
     inCall = true;
     videoApproved = true; // resuming an established call — consent already settled
@@ -4139,40 +4287,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       sendWS({ type: "signal", to: pin, data: { sdp: peer.pc.localDescription } });
     } catch (e) { console.warn("ice restart failed", e); }
   }
-  function toggleDiag() {
-    const o = $("diagOverlay");
-    if (!o) return;
-    o.classList.toggle("open");
-    const box = $("diagBody");
-    if (box) {
-      const lines = [
-        "cid=" + cid,
-        "pin=" + (me.pin || "-"),
-        "name=" + (me.name || "-"),
-        "sse=" + (ws ? ["CONNECTING", "OPEN", "CLOSED"][ws.readyState] || "?" : "none"),
-        "ice servers=" + iceConfig.iceServers.map(s => s.urls).join(", "),
-        "peers=" + Object.keys(peers).length,
-        ...Object.entries(peers).map(([p, e]) =>
-          "  " + p + " name=" + e.name +
-          " conn=" + e.pc.connectionState +
-          " ice=" + e.pc.iceConnectionState +
-          " gather=" + e.pc.iceGatheringState +
-          " sig=" + e.pc.signalingState +
-          " remote=" + (e.remoteSet ? "y" : "n") +
-          " stream=" + (e.gotStream ? "y" : "n")),
-        "",
-        "--- device capabilities (cross-platform QA) ---",
-        ...buildCapabilityReport(probeBrowserMedia()).rows.map(
-          r => "  " + (r.supported ? "✓" : "✗") + " " + r.label + (r.note ? " — " + r.note : "")
-        ),
-        "",
-        "--- recent events ---",
-        ...diagLog,
-      ];
-      box.textContent = lines.join("\n");
-      box.scrollTop = box.scrollHeight;
-    }
-  }
+  // v2.99.36: the on-screen Diagnostics panel was removed (owner request).
+  // diag() above keeps the in-memory rolling event log for console debugging.
 
   // ---------- video grid ----------
   // ---------- live connection status + 10s reconnect window ----------
@@ -5087,7 +5203,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function onVisibilityChange() {
     if (typeof document === "undefined") return;
     if (document.hidden) {
-      if (!inCall) return;
+      if (!inCall) {
+        // v2.99.36 (owner: "when I finish the call and I minimize the browser,
+        // the mic and the camera is still active"): backgrounding with NO call
+        // in progress must never leave the devices captured. Normally nothing is
+        // held here (hangUp released them), so this is a belt-and-braces sweep
+        // for any path that left a stream behind. In-call backgrounding is
+        // untouched — the call keeps its media.
+        if (localStream || pipeline) releaseLocalMedia("hidden-while-idle");
+        return;
+      }
       // Keep OUTGOING video live even with a filter on (independent of PiP).
       void bgSwapVideo(true);
       if (!autoPipPref() || !pipSupported()) return;
@@ -5403,6 +5528,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // track. Returns the track to publish (processed when a filter is on), or null.
   async function reacquireCameraForPublish(): Promise<MediaStreamTrack | null> {
     if (!localStream) return null;
+    const genP = mediaGen;
     try {
       // Plain SAME-facing acquisition FIRST: acquireFlippedCamera is built for
       // flipping and deliberately avoids the current device — using it alone
@@ -5417,6 +5543,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
         });
       } catch { /* fall through to the flip helper */ }
       if (!fresh || fresh.getVideoTracks().length === 0) fresh = await acquireFlippedCamera(facingMode);
+      // v2.99.36: the call may have ended while this re-acquisition was in
+      // flight — stop the fresh camera rather than reinstalling it into a dead
+      // call (nothing would ever stop it, leaving the camera light on).
+      if (mediaStale(genP) || !localStream) { stopStream(fresh); return null; }
       const v = fresh?.getVideoTracks()[0];
       if (!v) return null;
       // Re-arm the death watch on the fresh track (the old watcher died with
@@ -5768,6 +5898,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // The user explicitly ended the call — don't auto-rejoin it on a later reload.
     clearPendingRejoin();
     stopRingtone();
+    cancelEndActiveFallback();
     loudspeakerDisable(); // stop the loudspeaker scan + release the audio context
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     pendingRing = null;
@@ -5837,15 +5968,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // The server stops the egress when the room empties; just reset local UI.
     recordingOn = false;
     updateRecordingUI();
-    if (pipeline) { try { pipeline.destroy(); } catch { /* */ } pipeline = null; }
-    if (localStream) {
-      localStream.getTracks().forEach(t => t.stop());
-      localStream = null;
-      micOn = true; camOn = true;
-      $("micBtn")?.classList.remove("off");
-      $("camBtn")?.classList.remove("off");
-    }
-    processedStream = null;
+    // Release the camera + mic through the ONE helper (v2.99.36) so the device
+    // indicator goes out the moment the call ends and the next call / another
+    // app can acquire them.
+    releaseLocalMedia("hang-up:" + reason);
+    micOn = true; camOn = true;
+    $("micBtn")?.classList.remove("off");
+    $("camBtn")?.classList.remove("off");
     show("lobby"); renderRecents();
     // Let a promoted call-waiting caller ring through now that the old call
     // is fully torn down (mirror of onRing's incoming-ring presentation).
@@ -5896,12 +6025,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (e.key === "Escape" && $("addpad")?.classList.contains("open")) {
       e.preventDefault();
       closeAddPad();
-      return;
-    }
-    // Diagnostics shortcut works on any screen (lower- and upper-case).
-    if (e.key === "?" || (e.shiftKey && e.key === "/")) {
-      e.preventDefault();
-      toggleDiag();
       return;
     }
     if (!$("lobby")?.classList.contains("active")) return;
@@ -6016,7 +6139,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     };
     if (outside("addpad", "addBtn")) closeAddPad();
     if (outside("audioMenu", "audioBtn")) closeAudioMenu();
-    if (outside("moreMenu", "moreBtn")) $("moreMenu")?.classList.remove("open");
     // Tile menu closes on any outside click (its ⋮ openers live on tiles).
     const tm = $("tileMenu");
     if (tm && tm.classList.contains("open") && !tm.contains(t) && !(t as HTMLElement)?.closest?.(".tile-menu-btn")) closeTileMenu();
@@ -6036,17 +6158,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const sb = $("screenBtn") as HTMLElement | null;
     if (sb) sb.style.display = "";
   }
+  // Record is a normal bar chip now (v2.99.36: the ⋯ More menu + Diagnostics
+  // panel were removed at the owner's request).
   ($("recordBtn") as HTMLElement | null)?.addEventListener("click", () => {
-    $("moreMenu")?.classList.remove("open");
     toggleRecording();
-  });
-  // ⋯ More menu (v2.99.4): Record + Diagnostics rows live here.
-  ($("moreBtn") as HTMLElement | null)?.addEventListener("click", () => {
-    $("moreMenu")?.classList.toggle("open");
-  });
-  ($("diagMenuBtn") as HTMLElement | null)?.addEventListener("click", () => {
-    $("moreMenu")?.classList.remove("open");
-    toggleDiag();
   });
   ($("qualityBtn") as HTMLElement | null)?.addEventListener("click", toggleQuality);
   updateQualityBtn();
@@ -6083,12 +6198,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
   ($("chatEmojiBtn") as HTMLElement | null)?.addEventListener("click", toggleChatEmojis);
   ($("chatField") as HTMLElement | null)?.addEventListener("keydown", onChatField as EventListener);
   ($("addInput") as HTMLElement | null)?.addEventListener("keydown", onAddInput as EventListener);
-  ($("diagBtn") as HTMLElement | null)?.addEventListener("click", toggleDiag);
-  ($("diagClose") as HTMLElement | null)?.addEventListener("click", toggleDiag);
-  ($("diagCopy") as HTMLElement | null)?.addEventListener("click", () => {
-    const box = $("diagBody"); if (!box) return;
-    navigator.clipboard.writeText(box.textContent || "").then(() => toast("Diagnostics copied"));
-  });
   document.addEventListener("keydown", onDocKey);
   // Click a video tile to spotlight it big (click it again to unpin).
   ($("videoGrid") as HTMLElement | null)?.addEventListener("click", onGridClick);
@@ -6277,6 +6386,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       destroyed = true;
       stopHoldMusic();
       cancelSoloEndGrace();
+      cancelEndActiveFallback();
       // Logout / engine teardown → don't carry a pending auto-rejoin into the
       // next session, and release the loudspeaker context.
       if (rejoinWatchT) { clearTimeout(rejoinWatchT); rejoinWatchT = null; }
@@ -6311,10 +6421,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
       }
       screenSharing = false;
       screenBusy = false;
-      if (localStream) {
-        localStream.getTracks().forEach(t => t.stop());
-        localStream = null;
-      }
+      // Engine teardown (logout / unmount): free the camera + mic and the filter
+      // pipeline through the shared helper (v2.99.36).
+      releaseLocalMedia("engine-destroy");
       teardownSpeakerMonitor();
       teardownLocalLevelMonitor();
       stopStatsSampler();
