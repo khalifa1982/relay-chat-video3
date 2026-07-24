@@ -5429,3 +5429,18 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       online" pushes) while backgrounded. FIX: tick returns early when document.visibilityState === "hidden"
       (the visibilitychange handler re-heartbeats on return to visible).
 - [x] Tests: client/src/app/qaBatch3.test.ts (4 source pins). Suite 1424; build green.
+
+## v2.99.26 — heavy-QA sweep fixes, batch 4 (storage-media) (2026-07-24)
+- [x] H5 (HIGH) avatar laundering via an absolute URL: identity.updateProfile ran keyInOwnerNamespace only
+      for a RELATIVE /manus-storage/ avatarUrl, but isIdentityAvatarKey suffix-matches, so an ABSOLUTE
+      https://host/manus-storage/<victim-key> avatarUrl bypassed the gate and made the storage proxy serve
+      another user's private attachment (or burned view-once media) to anyone. FIX (v2routers.ts): validate
+      the key after the LAST /manus-storage/ (lastIndexOf) so both relative + absolute shapes are gated.
+- [x] M10 (MED) unauthenticated storage-proxy DoS: /manus-storage/* had no rate limit and each request
+      could trigger an identities full-scan (avatar rescue on unindexed TEXT avatarUrl). FIX
+      (storageProxy.ts): per-IP token bucket (240 burst / ~4/s) BEFORE any key sanitize/authorize DB work,
+      429 on flood, honors RELAY_RATELIMIT_OFF.
+- [x] Tests: server/qaBatch4.test.ts (2 source pins). Suite 1426; build green.
+- QA-sweep progress: 16 of 37 confirmed findings fixed (v2.99.22–26). Remaining: M2/M19/L1/L7 (group-call
+      invitee handling), M13/M14/M18 (contacts/directory), M15/M16/L5 (status), M20/L8 (allocation races),
+      M6 (draft debounce), M12/L4 (presence), L2/L3 (auth), M11 (server ephemeral content gating).

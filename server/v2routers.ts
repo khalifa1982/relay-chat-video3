@@ -406,19 +406,26 @@ export const v2AuthRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
-      // SECURITY (avatar-laundering, F2): a `/manus-storage/` avatar key MUST live
-      // in the caller's OWN upload namespace. Without this a user could point
-      // avatarUrl at ANOTHER user's private attachment key — authorizeStorageKey's
-      // "is this some identity's current avatar?" rescue would then classify that
-      // key as a semi-public avatar and the storage proxy would serve it to
-      // anyone, even unauthenticated (and it survives the sender's unsend). Mirrors
-      // the keyInOwnerNamespace gate already on attachments.register and
-      // status.post. Absolute (https) and data: URIs are untouched — they never
-      // resolve through our storage proxy.
-      if (input.avatarUrl && input.avatarUrl.startsWith("/manus-storage/")) {
-        const key = input.avatarUrl.slice("/manus-storage/".length);
-        if (!keyInOwnerNamespace(key, me.id, s3Config()?.prefix ?? "")) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid avatar image." });
+      // SECURITY (avatar-laundering, F2 + QA H5): an avatar URL that references
+      // our storage MUST point into the caller's OWN upload namespace. Without
+      // this a user could set avatarUrl to ANOTHER user's private attachment key
+      // — authorizeStorageKey's "is this some identity's current avatar?" rescue
+      // (isIdentityAvatarKey) matches the key as a SUFFIX (`%/manus-storage/<key>`),
+      // so the storage proxy would serve that key to anyone, even unauthenticated
+      // (and it survives the sender's unsend). The ORIGINAL gate only covered a
+      // RELATIVE `/manus-storage/…` URL — an ABSOLUTE `https://host/manus-storage/
+      // <victim-key>` slipped straight past it (that suffix still matches the
+      // rescue). Validate the key after the LAST `/manus-storage/` so BOTH shapes
+      // are gated. Pure data:/external-CDN URLs (no `/manus-storage/`) never
+      // resolve through our proxy, so they're untouched.
+      if (input.avatarUrl) {
+        const marker = "/manus-storage/";
+        const mi = input.avatarUrl.lastIndexOf(marker);
+        if (mi !== -1) {
+          const key = input.avatarUrl.slice(mi + marker.length);
+          if (!keyInOwnerNamespace(key, me.id, s3Config()?.prefix ?? "")) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid avatar image." });
+          }
         }
       }
       // updateIdentityProfile sanitizes mobiles/socials/status server-side.

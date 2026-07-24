@@ -4,6 +4,15 @@ import { ENV } from "./env";
 import { s3Config, s3PresignGetUrl, sanitizeS3Key } from "../s3";
 import { createContext } from "./context";
 import { authorizeStorageKey } from "../v2db";
+import { createRateLimiter, clientIpOf } from "../rateLimit";
+
+/* Per-IP rate limit for the UNAUTHENTICATED media proxy (QA M10). Each request
+ * can trigger DB work (attachment lookup + the avatar-rescue's identities scan),
+ * so an anonymous loop over guessed `status_…`/`avatar_…` keys was an easy DB-CPU
+ * DoS with no cap. Generous — a chat screen legitimately bursts many images at
+ * once (240 burst, ~4/s sustained per IP) — so only a true flood is throttled.
+ * Honors RELAY_RATELIMIT_OFF like the other gates. */
+const storageIpLimiter = createRateLimiter({ capacity: 240, refillPerSec: 4 });
 
 /* In-process signed-URL cache (v2.88). Every /manus-storage view used to pay a
  * presign round-trip to Forge and told the browser `no-store`, so a chat
@@ -51,6 +60,14 @@ function cacheSet(key: string, url: string, now: number): void {
 
 export function registerStorageProxy(app: Express) {
   app.get("/manus-storage/*", async (req, res) => {
+    // QA M10: cap the unauthenticated media proxy per IP before any DB work.
+    if (
+      process.env.RELAY_RATELIMIT_OFF !== "1" &&
+      !storageIpLimiter.allow(clientIpOf(req), Date.now())
+    ) {
+      res.status(429).send("Too many requests");
+      return;
+    }
     const rawKey = (req.params as Record<string, string>)[0];
     if (!rawKey) {
       res.status(400).send("Missing storage key");

@@ -124,8 +124,12 @@ describe("F1 — the POST /api/relay/send handler stamps a server-only owned num
 
 describe("F2 — updateProfile gates a /manus-storage avatar key on the caller's namespace", () => {
   const src = read("server/v2routers.ts");
-  it("rejects a foreign-namespace avatar key on write", () => {
-    expect(src).toMatch(/input\.avatarUrl\.startsWith\("\/manus-storage\/"\)/);
+  it("rejects a foreign-namespace avatar key on write (relative AND absolute — QA H5)", () => {
+    // v2.99.26 (H5): the gate was widened from a relative-only
+    // `startsWith("/manus-storage/")` check to `lastIndexOf("/manus-storage/")`
+    // so an ABSOLUTE https://host/manus-storage/<victim-key> URL is gated too
+    // (isIdentityAvatarKey suffix-matches, so the absolute shape laundered keys).
+    expect(src).toMatch(/lastIndexOf\(marker\)/);
     expect(src).toMatch(/keyInOwnerNamespace\(key, me\.id, s3Config\(\)\?\.prefix \?\? ""\)/);
   });
 });
