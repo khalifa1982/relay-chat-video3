@@ -554,3 +554,49 @@ The sweep reported that Android release builds of the production `applicationId`
 ### Verification (round 5 pt.4)
 
 `pnpm check` clean; `pnpm test` **1638 passing / 1 skipped**; `pnpm build` clean. `server/hardeningPass6.test.ts` grows to 35, including a bounded-regex timing check on the worst accepted input and per-command assertions that every SSM command decodes the region rather than interpolating it.
+
+## Round 5 pt.5 — the verified-and-queued list
+
+Five items were confirmed during the class sweep but deliberately held back from the pass that shipped three HIGH fixes, because four of them sit in the call path — the most delicate code in the app — and bundling them behind one version bump would have been a bad trade against a green suite. Taken here one at a time and shipped as v2.99.43. **One turned out to be wrong on inspection and is recorded below as a refutation rather than a fix.**
+
+### H26 — moderator powers outlived room membership (MED)
+
+**Where:** `server/relay.ts`, the `knock-approve` / `knock-deny` and `mod`→`kick` handlers.
+**Problem.** Two defects that chain into one.
+
+`knock-approve` gated only on `isModerator(meta, conn.pin)` — but it takes `roomId` from the **client**, and `roomMeta` outlives membership (the roster is add-only, and nothing clears `hostPin`/`cohosts` when someone leaves). So a **former host** who had already hung up could name the old room and admit an outsider into a call they were no longer part of. Note the asymmetry that hid this: the `mod` handler derives its room from trusted server state (`self.roomId`) and is therefore inherently bound to the caller's live call; this handler is not.
+
+Worse, `kick` called `leaveRoom(reg, target)`, which only drops membership — it never touched `meta.cohosts`. A **kicked co-host therefore kept their role**, could knock (permitted, since they were in the roster), and could then satisfy both of `knock-approve`'s gates to **approve themselves straight back in**. The kick was undoable by its own target.
+
+**Fix.** `knock-approve` additionally requires `room.has(conn.pin)`. Membership is the right test rather than `rid === self.roomId`, because a host whose call is on **hold** is still in the room's member Set (v2.97.1) and must remain able to approve. And `kick` now revokes the target's co-host role and any pending knock before removing them, then broadcasts `role: null` so no client keeps rendering host controls for them.
+
+### H27 — in-call chat trusted the frame's self-declared sender (MED)
+
+**Where:** `client/src/lib/relayClient.ts` `receiveChatFrame`.
+**Problem.** A chat frame is just JSON on a data channel, and both `name` and `pin` were read straight out of it. Any participant could publish `{name:"Alice", pin:"<alice's pin>", text:"…"}` and have it render as a message from Alice — **including her avatar**, since the identity chip resolves the photo by pin. On a party line it could be aimed at everyone at once.
+**Fix.** Both transports already know who actually sent the bytes: the mesh has one data channel **per peer** (so `setupDC`'s `pin` is authenticated by the channel itself), and LiveKit hands `DataReceived` the sending participant, whose identity comes from the server-minted join token. `receiveChatFrame` now takes that proven identity, prefers it over anything the frame claims, and resolves the display name from the roster (`nameOf`). The parameter is optional so any legacy caller degrades to the old behaviour rather than dropping messages.
+
+### H28 — duplicate identities per user (MED, data integrity)
+
+**Where:** `server/v2db.ts` `ensureUserIdentity` / `getIdentityByUserId`.
+**Problem.** `ensureUserIdentity` is a check-then-insert (read by `userId`, else create a fresh identity **with a new 6-digit number**) with no unique constraint behind it. Two concurrent sign-ins for the same account — a double-tapped Sign in, two devices at once, an OTP verify racing a PIN login — could each observe "no identity yet" and each mint one. On top of that, `getIdentityByUserId` used a bare `.limit(1)` with **no ordering**, so MySQL could return either row per query.
+
+The user-visible result is the long-standing report in this project's own history: *"my number changes randomly"* / *"this device shows a different number"* — plus messages and contacts splitting across two identities, and an extra number burned from the finite space.
+
+**Fix.** Layered, because the two halves solve different problems. `orderBy(asc(identities.id))` makes resolution **deterministic even where duplicate rows already exist in production**, so every surface immediately agrees on one identity. A `UNIQUE` index on `identities.userId` (boot migrator) then stops new duplicates being created at all. NULL is repeatable under a MySQL unique index, so guest identities are entirely unaffected; and because the migrator catches per item, a deployment that already contains duplicates logs and boots normally rather than failing — the index lands on the next boot after reconciliation.
+
+### H29 — `?to=` placed a call with no user gesture (MED)
+
+**Where:** `client/src/pages/app/Dialer.tsx`.
+**Problem.** The Dialer auto-dials `?to=<pin>` so that tapping "call" in Messages/Contacts connects immediately — but the effect could not distinguish an in-app route change from a user **arriving** on that URL. Microphone permission is granted per-origin and persists, so for any regular RELAY user a link such as `https://<host>/app/dialer?to=<attacker-pin>` turned a single click into a live outbound call to a number the attacker chose, with `getUserMedia` succeeding silently, `?video=1` adding the camera, and the attacker's side free to auto-answer.
+**Fix.** A route module cannot make this distinction itself: `Dialer.tsx` is lazily loaded, so its module scope is first evaluated *at* the navigation in question, by which point `window.location.search` carries `?to=` either way. New `client/src/lib/bootUrl.ts` is imported by `main.tsx` and therefore evaluated exactly once when the document boots, before any routing — a `to=` present there means the user arrived on the URL, so the pad is **prefilled** instead (one deliberate tap).
+
+Verified that the in-app paths are unaffected: `/i/:pin` uses wouter's client-side `<Redirect>` and Contacts/Messages use `setLocation`, so `to` is not in their boot URL and they still connect immediately. The one legitimate full-page navigation — the *"<name> is back online — tap to call them now"* alert the user explicitly armed — keeps its single tap through a one-time, same-origin `sessionStorage` intent marker, which a link cannot forge and cannot carry to somebody else.
+
+### Refuted, not fixed
+
+**"`/api/relay/send` resolves the full identity context before checking the rate limit."** It does not. The limiter is `app.use` middleware on that path registered at `server/_core/index.ts:141`, and `attachRelay` is called at `:206`; Express runs middleware in **registration order**, so the limiter already precedes the POST handler that calls `createContext` — and only a `register` message calls it at all. Pinned as a refutation in `hardeningPass7.test.ts` so the claim is not re-raised.
+
+### Verification (round 5 pt.5)
+
+`pnpm check` clean; `pnpm test` **1703 passing / 1 skipped**; `pnpm build` clean. New `server/hardeningPass7.test.ts` (24), including a behavioural check that a forged chat pin loses to the transport-proven one. Two stale pins were updated to the new shapes rather than weakened: `contacts.test.ts`'s additive-DDL rule now admits `ADD UNIQUE INDEX`, and `androidAudioCamera.test.ts`'s chat-dedup pin now expects the threaded sender identity.
