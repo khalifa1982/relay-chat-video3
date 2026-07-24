@@ -5371,3 +5371,23 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       H5/M10 (avatar laundering + storage DoS); H6/M12 (presence re-online); H9/L6 (landing dialer);
       M2/M19/L1/L7 (group-call invitee handling); M13/M14/M18 (contacts/directory); M15/M16/L5 (status);
       M20/L8 (number-allocation races); M4/M5/M6 (messaging composer state); L2/L3/L4.
+
+## v2.99.23 — heavy-QA sweep fixes, batch 2 (ephemeral-message security) (2026-07-24)
+- [x] H2 (HIGH) view-once extractable via the menu: a still-LOCKED view-once/disappearing received
+      message exposed its plaintext through the context menu — Copy wrote m.body to the clipboard, Reply
+      surfaced it in the composer — and neither burned it, so it was re-copyable indefinitely; plus
+      replyingTo omitted meta so previewOf's disappearing-guard was bypassed and the reply bar printed the
+      raw body. FIX (Messages.tsx): suppress the !mine menu while `locked = isExpiring && !revealed.has(id)
+      && !burned` (return null), and carry meta on replyingTo (type + setter + draft-reconstruct) so
+      previewOf masks it to "⏱ Disappearing message" everywhere.
+- [x] M3 (MED) group disappearing burned for all: a disappearing message in a group is one shared row, so
+      the first opener burns it for everyone. Gated the composer toggle to 1:1 (!isGroup), the convo-switch
+      effect keeps expire null on entry, and the send re-guards (const exp = isGroup ? null : expire).
+- [x] M5 (MED) reply target leaked across threads: replyingTo wasn't reset on conversationId change → a
+      reply banner from one thread posted with the wrong replyToId in the next. FIX: reset on
+      conversationId change; the draft-reconstruct effect re-hydrates the new thread's own saved reply.
+- [x] Tests: client/src/pages/app/qaBatch2.test.ts (5 source pins). Suite 1418; build green.
+- DEFERRED: M11 (full server-side content-gating-until-consume) — needs a consume-to-reveal content-
+      delivery redesign (list would return only lock metadata; consumeExpiring would return the body +
+      a one-time media grant). The casual UI-extraction vector (H2) is now closed and previewOf masks
+      quotes; M11 is the remaining defense-in-depth against reading the raw tRPC response.
