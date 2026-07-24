@@ -52,7 +52,9 @@ describe("multi-call engine fixes (source-pinned)", () => {
 describe("group-call picker uses the real cap", () => {
   it("GroupCallScreen reads engine.maxParticipants (no hardcoded 10)", () => {
     const gcs = read("client/src/pages/app/GroupCallScreen.tsx");
-    expect(gcs).toMatch(/const MAX_PARTICIPANTS = engine\.maxParticipants/);
+    // v2.99.27 (QA M19): reserve the caller's own slot — engine.maxParticipants
+    // is the TOTAL room cap (incl. the caller), so invitees cap at cap−1.
+    expect(gcs).toMatch(/const MAX_PARTICIPANTS = Math\.max\(1, engine\.maxParticipants - 1\)/);
     // The old module-level constant is gone.
     expect(gcs).not.toMatch(/const MAX_PARTICIPANTS = 10/);
   });
