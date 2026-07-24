@@ -5345,3 +5345,29 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       anything" is a STALE CACHED bundle → hard-refresh.
 - [x] Rebased onto a parallel session's v2.99.20 (dbbe1700 hardening pass) — version bumped to 2.99.21 to
       avoid the collision. Tests: Home.test.ts +2. Suite 1408; build green.
+
+## v2.99.22 — heavy-QA sweep fixes, batch 1 (owner: "activate the heavy QA") (2026-07-24)
+The heavy-QA workflow (57 agents, 43 candidates, 37 adversarially-verified) surfaced a large queue.
+This batch ships the clearest HIGH findings; the rest are queued for following batches.
+- [x] H1 (HIGH) group call collapsed on a decline: the reject handler (server/relay.ts) reaped the
+      caller's size-1 dial room via leaveRoom the instant ANY invitee declined, but leaveRoom doesn't
+      cancelPendingRings — so the other invitees kept ringing with pendingRings pointing at a deleted room
+      and got error{gone} on accept, killing the whole conference over one decline. FIX: only reap when
+      `target.ringing.size === 0` (the decliner was already removed just above), so an in-progress group
+      dial survives. Distinct from v2.99.19 #46 (that was the OFFLINE-first-invitee client path).
+- [x] H7/H8/M1 (HIGH) blocked-caller missed-call bypass: onMissedCall (server/_core/index.ts) recorded
+      History + fired a missed-call push/email with no block check → a blocked caller's offline/declined
+      dials were a repeatable push/email/history-injection channel. FIX: isNumberBlockedBy(callee.id,
+      info.callerPin) guard at the top of the hook (fail-open on DB error), matching onInvite/onPageCallee.
+- [x] H3 (HIGH) dead thread search: the Messages thread-list useMemo filtered by threadSearch but omitted
+      it from its deps ([threads.data, me]) → typing returned the cached unfiltered list. FIX: add
+      threadSearch to the dep array.
+- [x] M8 (MED) premature session logout: the v2.99.19 reaper's 95-day idle cutoff was < the 365-day cookie
+      TTL, force-logging-out valid sessions up to ~270 days early. FIX: raise the cutoff to 372 days
+      (365 + 7 grace). Corrects #51(d).
+- [x] Tests: server/qaBatch1.test.ts (5 — behavioural relay tests for H1 + source pins). Suite 1413; build green.
+- DEFERRED to later batches: H8's missed-call email throttle (needs a cooldown column); H2/M3/M11
+      (view-once menu leak + server content release before burn); H4/M7/M9 (auth approval edges);
+      H5/M10 (avatar laundering + storage DoS); H6/M12 (presence re-online); H9/L6 (landing dialer);
+      M2/M19/L1/L7 (group-call invitee handling); M13/M14/M18 (contacts/directory); M15/M16/L5 (status);
+      M20/L8 (number-allocation races); M4/M5/M6 (messaging composer state); L2/L3/L4.

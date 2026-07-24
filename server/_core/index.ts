@@ -223,6 +223,15 @@ async function startServer() {
       try {
         const callee = await getIdentityByNumber(info.calleePin);
         if (!callee) return;
+        // QA H7/H8/M1: a BLOCKED caller must not reach the callee through the
+        // missed-call path either. The live-invite paths already suppress the
+        // notification when the callee blocked the caller, but this hook (fired
+        // on a cancelled offline dial or a decline) recorded History + fired a
+        // "Missed call from B" push/email with no block check — turning a block
+        // into a repeatable push/email/history-injection channel. Skip it
+        // ENTIRELY when blocked (history + push + email), matching the invite
+        // guards. Fail-open on a DB hiccup so a genuine miss is never dropped.
+        if (await isNumberBlockedBy(callee.id, info.callerPin).catch(() => false)) return;
         const caller = await getIdentityByNumber(info.callerPin);
         if (caller) {
           await recordMissedCall({
@@ -415,9 +424,13 @@ async function startServer() {
   }, 10 * 60_000).unref();
   // Reap the sessions ledger every 30 min: dead new-device approval rows (never
   // approved after 30 min — they'd otherwise inflate the pending-device bell
-  // forever) + sessions idle past the longest cookie TTL (95 days). Best-effort.
+  // forever) + sessions idle PAST THE LONGEST COOKIE TTL. QA M8: the default
+  // session cookie is 1 YEAR (SESSION_TTL_MS = 365d in authLocal.ts), so the
+  // original 95-day idle cutoff deleted still-valid session rows and force-
+  // logged-out users up to ~270 days early (sessionState reads the reaped row as
+  // "revoked"). Use 365d + 7d grace so a row outlives every cookie it backs.
   setInterval(() => {
-    reapStaleSessions(30 * 60_000, 95 * 24 * 60 * 60_000).catch((err) =>
+    reapStaleSessions(30 * 60_000, 372 * 24 * 60 * 60_000).catch((err) =>
       console.warn("[sessions reaper]", err),
     );
   }, 30 * 60_000).unref();

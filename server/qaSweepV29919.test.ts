@@ -175,6 +175,8 @@ describe("v2.99.19 QA — #51 unsend clears the phantom unread badge + email coo
   it("a session reaper drops dead pending-approval rows + long-idle sessions", () => {
     expect(db).toMatch(/export async function reapStaleSessions/);
     expect(db).toMatch(/isNotNull\(sessions\.pendingApproval\), lt\(sessions\.pendingApproval/);
-    expect(core).toMatch(/reapStaleSessions\(30 \* 60_000, 95 \* 24 \* 60 \* 60_000\)/);
+    // v2.99.22 (QA M8): the idle cutoff was raised 95d → 372d so it outlives the
+    // 365-day cookie TTL (95d prematurely force-logged-out valid sessions).
+    expect(core).toMatch(/reapStaleSessions\(30 \* 60_000, 372 \* 24 \* 60 \* 60_000\)/);
   });
 });
