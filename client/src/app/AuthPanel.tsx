@@ -198,6 +198,17 @@ export function AuthPanel({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [approvalStatus.data?.status, stage]);
+  // De-strand the waiting screen (v2.99.19): approval requires ANOTHER device
+  // active in the last ~12 min, but that device may be closed now and can never
+  // tap Approve — leaving the user stuck watching a spinner. After a short wait
+  // with no response, surface a prominent, honest escape (sign in with the PIN,
+  // which bypasses approval). Fails toward the user getting in, never locked out.
+  const [waitStalled, setWaitStalled] = useState(false);
+  useEffect(() => {
+    if (stage !== "waiting") { setWaitStalled(false); return; }
+    const t = setTimeout(() => setWaitStalled(true), 35_000);
+    return () => clearTimeout(t);
+  }, [stage]);
 
   // v2.87 PIN state
   const [pin, setPin] = useState("");
@@ -572,18 +583,29 @@ export function AuthPanel({
               </p>
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
+            {waitStalled && (
+              <div className="rounded-xl bg-muted/40 p-3 text-xs text-muted-foreground">
+                No response yet — your other device may be offline or closed. You
+                can sign in with your 4-digit PIN instead (no approval needed).
+              </div>
+            )}
             <Button
               type="button"
               variant="secondary"
               className="h-11 w-full rounded-xl"
+              onClick={() => { setPin(""); setLock("idle"); setError(null); setNotice(null); setStage("pin"); }}
+              disabled={busy}
+            >
+              Sign in with your PIN instead
+            </Button>
+            <button
+              type="button"
+              className="w-full text-center text-xs text-muted-foreground underline-offset-2 hover:underline disabled:opacity-60"
               onClick={() => { setStage("email"); setError(null); setNotice(null); }}
               disabled={busy}
             >
               Cancel
-            </Button>
-            <p className="text-center text-xs text-muted-foreground">
-              Have your 4-digit PIN? It signs you in instantly, no approval needed.
-            </p>
+            </button>
           </div>
         )}
 

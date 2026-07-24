@@ -26,6 +26,7 @@ import {
   like,
   lt,
   lte,
+  ne,
   or,
   sql,
 } from "drizzle-orm";
@@ -714,6 +715,18 @@ export async function claimOfflineMessageEmail(userId: number, cooldownMs: numbe
   return Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
 }
 
+/** Release a claim made by `claimOfflineMessageEmail` when the email FAILED to
+ *  send (v2.99.19). Clears the cooldown watermark so the NEXT offline message
+ *  can retry, instead of a transient mailer failure silently suppressing every
+ *  notification for the whole cooldown window. Safe to reset to NULL: no other
+ *  code writes this column, and no concurrent claim can have won inside the
+ *  just-stamped cooldown, so this only ever un-does OUR failed stamp. */
+export async function releaseOfflineMessageEmailClaim(userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users).set({ lastMessageEmailAt: null }).where(eq(users.id, userId));
+}
+
 export interface PresenceLite {
   identityId: number;
   isOnline: boolean;
@@ -1232,6 +1245,32 @@ export async function revokeSession(userId: number, sid: string): Promise<boolea
     return affected > 0;
   } catch {
     return false;
+  }
+}
+
+/** Housekeeping reaper (v2.99.19): keep the sessions ledger bounded and — more
+ *  importantly — drop DEAD pending-approval rows. A new-device sign-in that's
+ *  never approved leaves its `pendingApproval` row forever: it can't authenticate,
+ *  but it keeps counting as a "pending device" (inflating the approval bell on the
+ *  account's other devices). Delete pending rows whose wait began before
+ *  `pendingMaxAgeMs` ago (the waiting device gave up long ago) and long-idle rows
+ *  older than `sessionMaxAgeMs` (past the longest cookie TTL). Best-effort; never
+ *  throws. */
+export async function reapStaleSessions(
+  pendingMaxAgeMs: number,
+  sessionMaxAgeMs: number,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    const pendingCutoff = new Date(Date.now() - pendingMaxAgeMs);
+    await db
+      .delete(sessions)
+      .where(and(isNotNull(sessions.pendingApproval), lt(sessions.pendingApproval, pendingCutoff)));
+    const idleCutoff = new Date(Date.now() - sessionMaxAgeMs);
+    await db.delete(sessions).where(lt(sessions.lastSeenAt, idleCutoff));
+  } catch (e) {
+    console.warn("[sessions reaper]", (e as Error)?.message || "");
   }
 }
 
@@ -1922,6 +1961,25 @@ export async function deleteMessage(input: {
     .update(messages)
     .set({ deletedAt: new Date(), body: null, attachmentId: null })
     .where(and(eq(messages.id, input.messageId), eq(messages.senderIdentityId, input.identityId)));
+  // unreadCount is a stored per-recipient counter (bumped +1 on send, reset to 0
+  // on read) — NOT derived from message ids. Unsending an as-yet-UNREAD message
+  // therefore leaves a phantom badge: the row is gone from listThreads (deletedAt
+  // filter) but the count still includes it, so the recipient sees "1 unread" for
+  // a message that no longer exists (v2.99.19). Decrement (floored at 0) for every
+  // participant except the sender who hadn't yet read past this message.
+  await db
+    .update(conversationParticipants)
+    .set({ unreadCount: sql`GREATEST(${conversationParticipants.unreadCount} - 1, 0)` })
+    .where(
+      and(
+        eq(conversationParticipants.conversationId, row.conversationId),
+        ne(conversationParticipants.identityId, input.identityId),
+        or(
+          isNull(conversationParticipants.lastReadMessageId),
+          lt(conversationParticipants.lastReadMessageId, input.messageId)
+        )
+      )
+    );
   return row.conversationId;
 }
 

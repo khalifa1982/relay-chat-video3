@@ -563,11 +563,30 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const [revealed, setRevealed] = useState<
     Map<number, { body: string | null; attachment: Msg["attachment"]; until: number | null }>
   >(() => new Map());
+  // Blob object-URLs minted for revealed view-once/expiring MEDIA, keyed by
+  // message id. The burn revokes the SERVER url (attachmentId nulled → the
+  // proxy 403s), so a revealed copy that merely kept the server url would show
+  // a broken image the instant it burned. We fetch the bytes into a local blob
+  // BEFORE burning and point the copy at that; these must be URL.revokeObjectURL'd
+  // when the reveal ends (countdown purge, thread switch, unmount) or they leak.
+  const objectUrlsRef = useRef<Map<number, string>>(new Map());
+  function revokeReveal(id: number) {
+    const u = objectUrlsRef.current.get(id);
+    if (u) { URL.revokeObjectURL(u); objectUrlsRef.current.delete(id); }
+  }
+  function revokeAllReveals() {
+    objectUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
+    objectUrlsRef.current.clear();
+  }
   useEffect(() => {
-    // Reveals are per-thread; switching conversations drops them.
+    // Reveals are per-thread; switching conversations drops them (and frees any
+    // local blobs minted for revealed media).
+    revokeAllReveals();
     setRevealed(new Map());
     setExpire(null);
   }, [conversationId]);
+  // Free any outstanding blobs when the thread view unmounts.
+  useEffect(() => () => revokeAllReveals(), []);
   const consumeExpiring = trpc.messages.consumeExpiring.useMutation({
     onSuccess: () => {
       utils.messages.list.invalidate({ conversationId });
@@ -587,6 +606,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         next.forEach((v, k) => {
           if (v.until != null && v.until <= now) {
             next.delete(k);
+            revokeReveal(k); // free the local blob whose window just closed
             changed = true;
           }
         });
@@ -596,18 +616,42 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     }, 300);
     return () => clearInterval(t);
   }, [revealed]);
-  function revealExpiring(m: Msg) {
+  const [revealing, setRevealing] = useState<number | null>(null);
+  async function revealExpiring(m: Msg) {
     const exp = m.meta as { expire?: "once" | 5 | 10 | 30 } | null;
     const mode = exp?.expire;
     if (mode == null) return;
+    if (revealed.has(m.id) || revealing != null) return; // ignore double-taps
+    setRevealing(m.id);
+    let localAttachment = m.attachment ?? null;
+    // Capture the MEDIA bytes into a local blob BEFORE we burn. The burn nulls
+    // attachmentId server-side, so the proxy immediately 403s the original url
+    // — a copy that kept that url would render as a broken image. A blob url
+    // survives the burn (and the thumbUrl is dropped so the <img> loads the
+    // full local blob, not the now-revoked thumbnail key). If the fetch fails
+    // we fall back to the server url (best-effort; still burns).
+    if (localAttachment?.url) {
+      try {
+        const resp = await fetch(localAttachment.url, { credentials: "include" });
+        if (resp.ok) {
+          const blob = await resp.blob();
+          const objUrl = URL.createObjectURL(blob);
+          objectUrlsRef.current.set(m.id, objUrl);
+          localAttachment = { ...localAttachment, url: objUrl, thumbUrl: null };
+        }
+      } catch {
+        /* offline / transient — keep the server url as a best-effort fallback */
+      }
+    }
     const until = mode === "once" ? null : Date.now() + mode * 1000;
     setRevealed((prev) => {
       const next = new Map(prev);
-      next.set(m.id, { body: m.body ?? null, attachment: m.attachment ?? null, until });
+      next.set(m.id, { body: m.body ?? null, attachment: localAttachment, until });
       return next;
     });
-    // Burn immediately — the content is destroyed for BOTH sides; what the
-    // reader sees from here on is the local copy captured above.
+    setRevealing(null);
+    // Burn now — the content is destroyed for BOTH sides; what the reader sees
+    // from here on is the local copy (blob) captured above.
     consumeExpiring.mutate({ messageId: m.id });
   }
   const removeMutation = trpc.messages.remove.useMutation({
@@ -1375,17 +1419,19 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         </>
                       );
                     }
+                    const loadingThis = revealing === m.id;
                     return (
                       <button
                         type="button"
                         onClick={() => revealExpiring(m)}
-                        className="my-0.5 flex w-56 max-w-full items-center gap-2.5 rounded-xl bg-[#a78bfa]/10 px-2.5 py-2 text-left transition hover:bg-[#a78bfa]/20 active:scale-[0.98]"
+                        disabled={loadingThis}
+                        className="my-0.5 flex w-56 max-w-full items-center gap-2.5 rounded-xl bg-[#a78bfa]/10 px-2.5 py-2 text-left transition hover:bg-[#a78bfa]/20 active:scale-[0.98] disabled:opacity-70"
                       >
                         <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#a78bfa]/15 text-[#a78bfa]">
-                          <Timer className="size-4" />
+                          <Timer className={"size-4" + (loadingThis ? " animate-spin" : "")} />
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block text-[13px] font-semibold">Tap to view</span>
+                          <span className="block text-[13px] font-semibold">{loadingThis ? "Opening…" : "Tap to view"}</span>
                           <span className="block text-[11px] text-muted-foreground">
                             {exp!.expire === "once"
                               ? "Can be viewed once, then it disappears"

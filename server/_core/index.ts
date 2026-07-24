@@ -15,7 +15,7 @@ import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
 import { registerV2Events, publishToIdentity, publishPresenceTo } from "../v2events";
 import { registerV2Offline } from "../v2offline";
-import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy, getPresenceAudienceIds } from "../v2db";
+import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, reapStaleSessions, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy, getPresenceAudienceIds } from "../v2db";
 import { sendPushToIdentity } from "../webPush";
 import { registerWellKnown } from "../wellKnown";
 import { registerSeo } from "../seo";
@@ -413,6 +413,14 @@ async function startServer() {
   setInterval(() => {
     reapExpiredStatuses().catch((err) => console.warn("[status reaper]", err));
   }, 10 * 60_000).unref();
+  // Reap the sessions ledger every 30 min: dead new-device approval rows (never
+  // approved after 30 min — they'd otherwise inflate the pending-device bell
+  // forever) + sessions idle past the longest cookie TTL (95 days). Best-effort.
+  setInterval(() => {
+    reapStaleSessions(30 * 60_000, 95 * 24 * 60 * 60_000).catch((err) =>
+      console.warn("[sessions reaper]", err),
+    );
+  }, 30 * 60_000).unref();
   // tRPC API
   app.use(
     "/api/trpc",

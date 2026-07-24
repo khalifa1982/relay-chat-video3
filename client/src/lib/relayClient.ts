@@ -771,16 +771,49 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "ice":          onIceServers(m); break;
       case "error": {
         toast(m.message || "Something went wrong.", true);
-        // full/forbidden = a rejected JOIN → fatal to a peerless joiner (7th mesh
-        // /11th SFU accept, or a full-party-line dial) so it exits cleanly; the
-        // aloneInCall() guard below spares any LIVE call (host-only forbidden).
-        const fatalCode = m.code === "offline" || m.code === "self" || m.code === "gone" ||
-          m.code === "full" || m.code === "forbidden" || m.code === "nonexistent";
-        if (addInviteOfflineGuard && m.code === "offline") {
-          // Offline error for an add-to-call invite — don't tear down our call.
+        // Two very different failure classes share the `error` envelope:
+        //   • REACHABILITY (`offline`/`nonexistent`/`gone`) — the INVITEE we rang
+        //     couldn't be reached. In a group call or party line this must NOT
+        //     tear the whole call down just because one invitee didn't pick up
+        //     (mirrors how `rejected`/`busy` already spare a parked call).
+        //   • JOIN (`self`/`full`/`forbidden`) — WE couldn't join (7th mesh /
+        //     11th SFU accept, full party line). Fatal to a peerless joiner; the
+        //     aloneInCall() guard spares any LIVE call (host-only forbidden).
+        const reachErr = m.code === "offline" || m.code === "nonexistent" || m.code === "gone";
+        const joinErr = m.code === "self" || m.code === "full" || m.code === "forbidden";
+        if (addInviteOfflineGuard && (m.code === "offline" || m.code === "nonexistent")) {
+          // Offline/nonexistent error for an in-call add-to-call invite (the "+"
+          // pad) — the server just reports the addee is unreachable; never tear
+          // down the call we're already in. (v2.99.11 split offline vs
+          // nonexistent, so the guard must accept BOTH.)
           addInviteOfflineGuard = false;
           if (addInviteGuardT) { clearTimeout(addInviteGuardT); addInviteGuardT = null; }
-        } else if (fatalCode && inCall && aloneInCall()) {
+          break;
+        }
+        // GROUP-DIAL BOOTSTRAP: a group dial rings the FIRST invitee to create
+        // the room, then the `room` ack flushes the rest (see programmaticGroupDial
+        // + the `room` case). If that first invitee is unreachable, v2.99.11 means
+        // NO room is ever created — so `room` never arrives, the remaining
+        // invitees are never rung, and (without this) the fatal branch below
+        // would kill the entire group dial over one offline person. Instead,
+        // promote the next pending invitee as the new bootstrap; only fail once
+        // every invitee is exhausted. Sent one at a time — never all-at-once —
+        // so we never race several room-creating invites into duplicate rooms.
+        if (reachErr && callIsGroup && outgoingDial && !establishedOnce && !roomId && aloneInCall()) {
+          if (pendingGroupInvites.length) {
+            const next = pendingGroupInvites.shift()!;
+            sendWS({ type: "invite", to: next, video: camOn });
+          } else {
+            failDial(m.message || "Nobody could be reached.", "server-error:" + (m.code || "?"));
+          }
+          break;
+        }
+        // A reachability error inside an ESTABLISHED parked call (a group/party-
+        // line add-invite once the room exists) never ends the call — stay on it.
+        if (reachErr && inParkedCall()) break;
+        // Everything else: fatal to a peerless dialer/joiner. A LIVE call (peers
+        // present) is spared by aloneInCall().
+        if ((reachErr || joinErr) && inCall && aloneInCall()) {
           if (outgoingDial && !establishedOnce) {
             failDial(m.message || "They're unreachable right now.", "server-error:" + (m.code || "?"));
           } else {
@@ -5673,10 +5706,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (n >= cap - 1) { toast(`Call is full (${cap} people max).`, true); return; }
     addInviting = true;
     try { await ensureMedia(); } catch { addInviting = false; return; }
-    // Online → the server rings them in; offline/nonexistent → the server replies
-    // with an "offline" error and the generic handler toasts
-    // "That number doesn't exist or is offline." Either way the pad closes itself.
-    // Arm the offline guard so that error doesn't tear down the call we're in.
+    // Online → the server rings them in; offline → error{offline}; unknown →
+    // error{nonexistent} (v2.99.11 split the two). The generic handler toasts
+    // the message either way and the pad closes itself. Arm the offline guard so
+    // BOTH of those errors leave the call we're already in untouched.
     addInviteOfflineGuard = true;
     if (addInviteGuardT) clearTimeout(addInviteGuardT);
     addInviteGuardT = setTimeout(() => { addInviteOfflineGuard = false; addInviteGuardT = null; }, 6000);
