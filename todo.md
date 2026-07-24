@@ -5328,3 +5328,20 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
 - [x] Tests: `storageProxy.test.ts` (+3), `awsOps.test.ts` (+3), plus source-pinned coverage for the
       block-bypass, push IDOR, attachment-URL, OAuth fail-closed, and cidToPin-reaper fixes. Suite
       1392 passed / 1 skipped; check + build green.
+
+## v2.99.21 — the Arabic language toggle actually activates now (owner: "not active") (2026-07-24)
+- [x] ROOT CAUSE: v2.99.16's Arabic-parity CSS is all scoped to `.lp-root[dir="rtl"]`, but `dir="rtl"` was
+      only stamped on the INNER `[data-lp="root"]` div (a child of `.lp-root`), never on the outer React
+      `.lp-root` div — so the selector never matched, the Noto-Kufi-Arabic font + sizing never applied, and
+      Arabic rendered in the small fallback system face. This is why the owner saw the Arabic toggle as
+      "not active" (and why #40 "renders smaller" was never truly fixed).
+- [x] FIX (client/src/pages/Home.tsx): bind dir on `.lp-root` itself —
+      `<div className="lp-root" dir={lang === "ar" ? "rtl" : "ltr"}>`. Inner markup still stamps dir on its
+      own root (drives RTL layout); now the outer element carries it too so the CSS matches.
+- [x] HEADLESS-VERIFIED in Chromium (desktop + emulated phone with touch): toggle flips `.lp-root` dir
+      ltr→rtl, copy→Arabic, heading COMPUTED font → Noto Kufi Arabic; hit-test shows NO overlay on the
+      controls and the loader fully dismissed. DIAL PAD verified working in EN (5 5 5 · · ·) and AR
+      (7 8 9 · · ·) — so the keypad + toggle are functional in the current bundle; a live "can't click
+      anything" is a STALE CACHED bundle → hard-refresh.
+- [x] Rebased onto a parallel session's v2.99.20 (dbbe1700 hardening pass) — version bumped to 2.99.21 to
+      avoid the collision. Tests: Home.test.ts +2. Suite 1408; build green.
