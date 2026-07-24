@@ -2017,13 +2017,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
           .filter(t => /^\d{6}$/.test(t) && t !== me.pin)
       )
     );
-    // Clamp to the ACTIVE transport's cap: the SFU holds 10, the mesh only 6.
-    // Ringing more than the room can hold strands the overflow in a dead
-    // accept-into-full — so ring only what can connect, and say so (no silent drop).
-    const cap = livekitEnabled ? 10 : 6;
+    // Clamp to the ACTIVE transport's cap, RESERVING the caller's own slot
+    // (QA M19): the SFU room holds 10 and the mesh 6 INCLUDING us, so we can
+    // only ring cap−1 others — ringing the full cap would strand the last
+    // acceptee in an accept-into-full. Ring only what can connect, and say so.
+    const cap = (livekitEnabled ? 10 : 6) - 1;
     const clean = deduped.slice(0, cap);
     if (deduped.length > cap) {
-      toast(`This server supports up to ${cap} on a call — ringing the first ${cap}.`, true);
+      toast(`This server supports up to ${cap + 1} on a call — ringing the first ${cap}.`, true);
     }
     if (clean.length === 0) return false;
     try { await ensureMedia(); } catch { return false; }
@@ -2393,11 +2394,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!w) return;
     // If we somehow already hold a call, drop it — we only juggle two lines.
     if (heldRoomId) dropHeld();
-    // Put the CURRENT call on HOLD (keep its peers frozen) and accept the new one.
-    // The server's `accept` handler detects our prior real call and holds it
-    // (broadcasting peer-hold to its members) — no separate `hold`/`leave` needed,
-    // which also avoids the old switch race. One message = atomic.
-    parkActiveAsHeld();
+    if (outgoingDial && !establishedOnce) {
+      // QA M2: the CURRENT "call" is an UNANSWERED outgoing dial — an empty dial
+      // room with no peer that has accepted. Parking it as HELD is meaningless
+      // (there is nothing to resume) and would leave the dialed party ringing
+      // into a room we've abandoned; Swap/Resume would then enter a dead empty
+      // room. Cancel the dial instead — `leave` reaps that dial room and
+      // cancelPendingRings stops the outgoing ring — then accept the incoming.
+      // (No switch race: the leave targets the OLD dial room, the accept a
+      // DIFFERENT new room, so they can't fight over the same room.)
+      sendWS({ type: "leave", reason: "abandon-dial-for-incoming" });
+      outgoingDial = null;
+    } else {
+      // Put the CURRENT (established) call on HOLD (keep its peers frozen) and
+      // accept the new one. The server's `accept` handler detects our prior real
+      // call and holds it (broadcasting peer-hold to its members) — no separate
+      // `hold`/`leave` needed, which also avoids the old switch race. Atomic.
+      parkActiveAsHeld();
+    }
     roomId = w.roomId;
     enterCallUI("Connecting…");
     sendWS({ type: "accept", roomId: w.roomId });

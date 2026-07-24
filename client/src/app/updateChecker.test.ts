@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.99.26)", () => {
-    expect(APP_VERSION).toBe("2.99.26");
+  it("is the current release (2.99.27)", () => {
+    expect(APP_VERSION).toBe("2.99.27");
   });
 });
 
@@ -177,8 +177,12 @@ describe("call-routing fixes (v2.50)", () => {
   it("switchCall no longer sends an explicit switch-call leave (accept relocates atomically)", () => {
     const sc = RELAY_CLIENT.slice(
       RELAY_CLIENT.indexOf("function switchCall"),
-      RELAY_CLIENT.indexOf("function switchCall") + 1200,
+      RELAY_CLIENT.indexOf("function switchCall") + 1800,
     );
+    // An ESTABLISHED call is relocated atomically by the server's accept handler
+    // (no switch-call leave — the v2.50 race fix). v2.99.27 (QA M2) adds a leave
+    // ONLY on the abandon-an-unanswered-DIAL branch, which targets the OLD dial
+    // room (a DIFFERENT room from the one being accepted), so it can't race.
     expect(sc).not.toMatch(/type:\s*["']leave["'][^}]*switch-call/);
     expect(sc).toMatch(/type:\s*["']accept["']/);
   });

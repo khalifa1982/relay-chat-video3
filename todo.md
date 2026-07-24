@@ -5444,3 +5444,19 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
 - QA-sweep progress: 16 of 37 confirmed findings fixed (v2.99.22–26). Remaining: M2/M19/L1/L7 (group-call
       invitee handling), M13/M14/M18 (contacts/directory), M15/M16/L5 (status), M20/L8 (allocation races),
       M6 (draft debounce), M12/L4 (presence), L2/L3 (auth), M11 (server ephemeral content gating).
+
+## v2.99.27 — heavy-QA sweep fixes, batch 5 (group-call invitee handling) (2026-07-24)
+- [x] M19 (MED) group-picker off-by-one: the picker used engine.maxParticipants (TOTAL room cap incl. the
+      caller) as the count of OTHERS, so the last acceptee hit a full room. FIX: MAX_PARTICIPANTS =
+      max(1, maxParticipants-1) in GroupCallScreen.tsx + cap = (livekitEnabled?10:6)-1 in
+      programmaticGroupDial.
+- [x] L7 (LOW) picker accepted the caller's own number: toggle/addManual now reject engine.pin.
+- [x] M2 (MED) call-waiting parked a dead dial room: answering call-waiting during an UNANSWERED outgoing
+      dial ran parkActiveAsHeld on the empty dial room (nothing to resume; dialed party kept ringing).
+      FIX (switchCall): if outgoingDial && !establishedOnce, leave (reap dial room + cancelPendingRings)
+      instead of parking, then accept the incoming.
+- [x] Tests: client/src/pages/app/qaBatch5.test.ts (4 pins). Suite 1430; build green.
+- DEFERRED: L1 (group dial where everyone declines hangs 65s instead of failing instantly — needs
+      outstanding-invitee tracking + device testing).
+- QA-sweep progress: 19 of 37 confirmed findings fixed. Remaining: M13/M14/M18 (contacts/directory),
+      M15/M16/L5 (status), M20/L8 (allocation races), M6 (draft debounce), M12/L4 (presence), L1/L2/L3, M11.

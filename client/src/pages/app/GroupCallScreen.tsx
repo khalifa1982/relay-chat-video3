@@ -19,9 +19,12 @@ function initials(name: string): string {
  */
 export function GroupCallScreen({ onClose }: { onClose: () => void }) {
   const engine = useRelayEngine();
-  // Cap selection to what the ACTIVE transport can actually connect (mesh 6 /
-  // SFU 10) — over-selecting would ring people who then strand in a full room.
-  const MAX_PARTICIPANTS = engine.maxParticipants;
+  // Cap selection to what the ACTIVE transport can actually connect. QA M19:
+  // engine.maxParticipants is the TOTAL room cap (mesh 6 / SFU 10) INCLUDING the
+  // caller, but this picker counts the OTHERS to invite — so reserve the
+  // caller's own slot (−1), or the last person to accept hits a full room and
+  // bounces with error{full}.
+  const MAX_PARTICIPANTS = Math.max(1, engine.maxParticipants - 1);
   const contacts = trpc.contacts.list.useQuery(undefined, { staleTime: 15_000 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [manual, setManual] = useState("");
@@ -50,6 +53,7 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
   const atLimit = selected.size >= MAX_PARTICIPANTS;
 
   function toggle(number: string) {
+    if (number === engine.pin) return; // QA L7: you can't group-call yourself
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(number)) next.delete(number);
@@ -61,6 +65,10 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
   function addManual() {
     const n = manual.replace(/\D/g, "").slice(0, 6);
     if (!/^\d{6}$/.test(n)) return;
+    // QA L7: reject the caller's OWN number — programmaticGroupDial silently
+    // drops it anyway, which used to burn an invitee slot at the mesh cap and
+    // show the host as a participant of their own call.
+    if (n === engine.pin) { setManual(""); return; }
     if (selected.size >= MAX_PARTICIPANTS) return;
     setSelected((prev) => new Set(prev).add(n));
     setManual("");
