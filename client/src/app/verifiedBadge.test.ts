@@ -70,7 +70,9 @@ describe("role badge is wired into every primary identity surface", () => {
     const routers = read("server/v2routers.ts");
     expect(routers).toMatch(/getRolesByIdentityIds\(\[ctx\.identity\.id\]\)/); // whoami
     expect(routers).toMatch(/role: \(\(await getRolesByIdentityIds\(\[id\.id\]\)\)\.get\(id\.id\)/); // lookup
-    expect(routers).toMatch(/role: \(ident != null \? \(rolesById\.get\(ident\) \?\? "guest"\) : "guest"\)/); // contacts
+    // v2.99.28 (M14): an unresolved (non-RELAY) saved number now emits role null
+    // (no badge) instead of a false "guest"; a real identity still defaults guest.
+    expect(routers).toMatch(/role: \(ident != null \? \(rolesById\.get\(ident\) \?\? "guest"\) : null\) as IdentityRole \| null/); // contacts
     expect(routers).toMatch(/peerRole: \(rolesById\.get\(b\.otherIdentityId\) \?\? "guest"\)/); // threads
     const db = read("server/v2db.ts");
     // admin = owning user's users.role; registered = verified; guest otherwise.

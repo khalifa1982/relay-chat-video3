@@ -781,6 +781,15 @@ export const v2DirectoryRouter = router({
       if (target.id === me.id) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "That's your own number." });
       }
+      // M18: if the TARGET has blocked me, I must not be able to arm a
+      // back-online watch on them — otherwise blocking wouldn't stop a blocked
+      // caller from being told (with the target's name + a ready-to-dial link)
+      // the moment they come back online. Respond IDENTICALLY to "not a RELAY
+      // user" so the block itself is never revealed (mirrors the openThread /
+      // createGroup / call-invite block gates).
+      if (await isNumberBlockedBy(target.id, me.number)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "That number isn't a RELAY user yet." });
+      }
       await addOnlineWatch(me.id, target.id);
       return { ok: true, displayName: target.displayName, number: target.number };
     }),
@@ -895,7 +904,13 @@ export const v2ContactsRouter = router({
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
         presenceHidden: hidden,
         verified: ident != null ? (verifiedById.get(ident) ?? false) : false,
-        role: (ident != null ? (rolesById.get(ident) ?? "guest") : "guest") as IdentityRole,
+        // M14: a saved number that does NOT resolve to an identity is NOT a
+        // RELAY user (a made-up number, or one that never registered) — it must
+        // get NO badge. Returning "guest" here rendered a blue "✓ Guest" seal
+        // on a non-user. `null` (explicit) → roleFromFlags returns null → no
+        // badge; a REAL identity with no admin/registered flag still defaults
+        // to "guest" (correct — they ARE a guest RELAY user).
+        role: (ident != null ? (rolesById.get(ident) ?? "guest") : null) as IdentityRole | null,
         inCall: hidden ? false : inCallSet.has(r.number),
       };
     });

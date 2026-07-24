@@ -342,6 +342,13 @@ export default function ContactsPage() {
               {deletingContact
                 ? `${deletingContact.displayName || deletingContact.number} will be removed from your contacts. This can't be undone.`
                 : "This contact will be removed. This can't be undone."}
+              {deletingContact?.blocked && (
+                <span className="mt-2 block font-medium text-[#ff8d84]">
+                  Heads up: this contact is blocked. Because the block lives on the contact,
+                  removing them also unblocks them — they'll be able to call and message you
+                  again. Keep them blocked instead if you just want them out of sight.
+                </span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -388,8 +395,9 @@ function ContactRow({
     avatarUrl: string | null;
     favourite: boolean;
     verified: boolean;
-    /** Three-tier badge (v2.99.6): guest / registered / admin. */
-    role?: "guest" | "registered" | "admin";
+    /** Three-tier badge (v2.99.6): guest / registered / admin. `null` (v2.99.28
+     *  / M14) = a saved number that isn't a RELAY user → no badge. */
+    role?: "guest" | "registered" | "admin" | null;
     isOnline: boolean;
     /** Busy line (v2.88): in a live call right now. */
     inCall: boolean;
