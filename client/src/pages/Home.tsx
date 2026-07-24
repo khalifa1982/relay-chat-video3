@@ -719,6 +719,12 @@ function startLanding(
   const setPreview = (html: string) => {
     const p = $("dialPreview");
     if (!p) return;
+    // v2.99.35: while a RESOLVED preview line is showing (name · ONLINE /
+    // offline / not-found), the status line above it is redundant — and it
+    // was stuck on "CHECKING NUMBER…" forever (syncDial writes it, nothing
+    // ever resolved it), so the pad showed two contradicting lines at once.
+    const st = $("dialStatus");
+    if (st) st.style.display = html ? "none" : "";
     if (!html) { p.style.display = "none"; p.innerHTML = ""; return; }
     p.style.display = "block";
     p.innerHTML = html; // name is escaped by callers via escLp
@@ -757,6 +763,8 @@ function startLanding(
       // arm the button and let the /i flow resolve + gate.
       dialTarget = FALLBACK;
       setPreview("");
+      const st = $("dialStatus");
+      if (st) st.textContent = t.dialReady; // not "checking" — nothing is
       setCallState(true, `${t.call} ${n.slice(0, 3)}-${n.slice(3)} ↗`);
       return;
     }
@@ -771,6 +779,8 @@ function startLanding(
         // Lookup failed — don't strand the caller; let /i re-resolve + gate.
         dialTarget = FALLBACK;
         setPreview("");
+        const st = $("dialStatus");
+        if (st) st.textContent = t.dialReady; // resolved (fail-open), not "checking"
         setCallState(true, `${t.call} ${n.slice(0, 3)}-${n.slice(3)} ↗`);
       });
   };
@@ -822,10 +832,6 @@ function startLanding(
     if (!/[0-9]/.test(d) || num.length >= 6) return;
     num += d;
     syncDial();
-  };
-  const onKeyClick = (e: Event) => {
-    const k = (e.currentTarget as HTMLElement).dataset.lpKey;
-    if (k) press(k);
   };
   const clearDial = () => { num = ""; syncDial(); };
   const demoDial = () => {
@@ -1457,11 +1463,33 @@ function startLanding(
   // clickable (the reported symptom). The critical controls now attach up front
   // and the rest is wrapped so a failure can NEVER disable them or leave the
   // full-screen loader stuck over the page eating taps.
-  host.querySelectorAll<HTMLElement>("[data-lp-key]").forEach((b) => b.addEventListener("click", onKeyClick));
-  $("clearBtn")?.addEventListener("click", clearDial);
-  $("demoBtn")?.addEventListener("click", demoDial);
-  $("callBtn")?.addEventListener("click", callNow);
-  $("langBtn")?.addEventListener("click", opts.onToggleLang);
+  //
+  // v2.99.35 — ONE DELEGATED listener on the host wrapper, not per-node
+  // listeners. Per-node wiring died silently when React 19 re-applied
+  // dangerouslySetInnerHTML on an unrelated re-render (a fresh {__html}
+  // object identity each render — see the dsih memo in the shell below):
+  // every child node was rebuilt ~0.5s after mount when the live-stats query
+  // resolved, the wired nodes were discarded, and the whole landing went
+  // dead — keypad, CALL, and the AR/EN toggle (the owner's exact report,
+  // traced live with an instrumented innerHTML setter). The host wrapper is
+  // React-owned and never replaced — only its CHILDREN are — so delegation
+  // survives any innerHTML swap.
+  const onHostClick = (e: Event) => {
+    const target = e.target as HTMLElement | null;
+    const el = target?.closest?.(
+      "[data-lp-key],[data-lp='clearBtn'],[data-lp='demoBtn'],[data-lp='callBtn'],[data-lp='langBtn']",
+    ) as HTMLElement | null;
+    if (!el || !host.contains(el)) return;
+    const key = el.dataset.lpKey;
+    if (key) { press(key); return; }
+    switch (el.dataset.lp) {
+      case "clearBtn": clearDial(); break;
+      case "demoBtn": demoDial(); break;
+      case "callBtn": callNow(e); break;
+      case "langBtn": opts.onToggleLang(); break;
+    }
+  };
+  host.addEventListener("click", onHostClick);
   syncDial();
   const dismissLoader = () => {
     const ov = $("loader");
@@ -1510,6 +1538,7 @@ function startLanding(
     cancelAnimationFrame(threeRaf);
     cancelAnimationFrame(ldT);
     if (demoT) clearInterval(demoT);
+    host.removeEventListener("click", onHostClick);
     window.removeEventListener("mousemove", onMove);
     window.removeEventListener("scroll", onScroll);
     window.removeEventListener("resize", onResize);
@@ -1528,8 +1557,24 @@ export default function Home() {
   const rootRef = useRef<HTMLDivElement>(null);
   const [lang, setLang] = useState<Lang>(() => initialLang());
   const bootedOnceRef = useRef(false);
-  const t = COPY[lang];
-  const html = useMemo(() => markup(siteHost(), t, lang === "ar"), [lang]);
+  // ROOT-CAUSE FIX (v2.99.35, owner: "the dial pad… doesn't click; the Arabic
+  // tab is not active"): React 19 re-applies dangerouslySetInnerHTML whenever
+  // the {__html} OBJECT identity changes — even when the string inside is
+  // byte-identical. An inline `{{ __html: html }}` made a fresh object every
+  // render, so the first unrelated re-render (the live-stats query resolving
+  // ~0.5s after mount) re-set innerHTML on the live DOM, REBUILDING every
+  // node and silently discarding all of the engine's wiring (keypad, CALL,
+  // langBtn) while the [lang]-keyed effect saw no reason to re-run. Traced
+  // live with an instrumented innerHTML setter: identical string, new object,
+  // full DOM replacement at t≈565ms. The {__html} object is memoized so its
+  // identity only changes when the markup truly does — and the wiring effect
+  // below keys on THIS object, so if the DOM is ever replaced again the
+  // engine re-wires in the same commit. (Third belt: the engine's clicks ride
+  // one DELEGATED listener on the never-replaced host wrapper.)
+  const dsih = useMemo(
+    () => ({ __html: markup(siteHost(), COPY[lang], lang === "ar") }),
+    [lang],
+  );
 
   // LIVE NETWORK stats (carried from the previous landing, owner ask): written
   // imperatively into the design's strip so the static markup stays one string.
@@ -1597,7 +1642,10 @@ export default function Home() {
       document.documentElement.style.scrollBehavior = prevBehavior;
       stop?.();
     };
-  }, [lang]);
+    // Keyed on dsih (not just lang): the engine wires the exact DOM this
+    // markup object produced — if React ever swaps that DOM, re-wire with it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lang, dsih]);
 
   return (
     // dir MUST live on `.lp-root` itself: the RTL layout + Arabic-font/sizing
@@ -1609,7 +1657,7 @@ export default function Home() {
     // switch the whole page to RTL + the correct Arabic font.
     <div className="lp-root" dir={lang === "ar" ? "rtl" : "ltr"}>
       <style>{CSS}</style>
-      <div ref={rootRef} dangerouslySetInnerHTML={{ __html: html }} />
+      <div ref={rootRef} dangerouslySetInnerHTML={dsih} />
     </div>
   );
 }

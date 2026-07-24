@@ -5577,3 +5577,42 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       outstanding-invitee tracking + device testing).
 - QA-sweep progress: 19 of 37 confirmed findings fixed. Remaining: M13/M14/M18 (contacts/directory),
       M15/M16/L5 (status), M20/L8 (allocation races), M6 (draft debounce), M12/L4 (presence), L1/L2/L3, M11.
+
+## v2.99.35 — landing page structurally alive: React-19 innerHTML re-set killed all landing listeners (owner report) (2026-07-24)
+- [x] OWNER REPORT: "after the loading… the dial pad, it's not active. If you click, doesn't click. The
+      numbers doesn't show" + "the Arabic tab on the top on the landing page is not active — check both
+      directions" + the dial-a-user-directly flow (check exists → name-only entry → callee sees caller name).
+- [x] REPRODUCED against the real production build in headless Chromium: keypad clicks changed nothing,
+      the lang button was dead both ways, and the boot overlay was being cleared by the pure-CSS
+      lpAutoClear watchdog — not by the engine.
+- [x] ROOT CAUSE (instrumented DOMTokenList.add → addEventListener → MutationObserver → finally the
+      Element.innerHTML SETTER itself): React 19 re-applies dangerouslySetInnerHTML whenever the {__html}
+      OBJECT identity changes, even when the string is byte-identical. Home.tsx built `{{ __html: html }}`
+      inline — a fresh object every render — so the first unrelated re-render (the live-stats useQuery
+      resolving ~0.5s after mount) re-set innerHTML on the live DOM and REBUILT EVERY NODE, discarding all
+      engine wiring; the [lang]-keyed effect saw no change and never re-wired. Empirical timeline: markup
+      mounted ~170ms, engine wired ~450ms, DOM replaced ~565ms (same string hash, new object). This also
+      explains why v2.99.24's "wire controls first" hardening didn't cure the owner's report — the
+      controls WERE wired; the nodes they were wired to got thrown away 100ms later.
+- [x] FIX — three reinforcing layers in client/src/pages/Home.tsx: (1) the {__html} object is memoized
+      (dsih) so React only re-sets innerHTML when the markup truly changes; (2) the wiring effect keys on
+      [lang, dsih] so any future DOM replacement re-runs the engine in the same commit; (3) all
+      dialer/lang clicks moved off per-node listeners onto ONE DELEGATED click handler on the stable host
+      wrapper (React owns it; innerHTML only replaces its CHILDREN). The v2.99.15 live lookup, v2.99.21
+      RTL binding, and v2.99.24 wire-first ordering all survive unchanged on top.
+- [x] POLISH (found while verifying): dialStatus sat on "CHECKING NUMBER…" forever right above a RESOLVED
+      dialPreview ("Sara · ONLINE") — two contradicting lines. The status line now hides while a resolved
+      preview is showing, and the two FALLBACK (fail-open) paths flip it to "LINE READY — PRESS CALL".
+- [x] ALSO FIXED: client/index.html shipped <script src="%VITE_ANALYTICS_ENDPOINT%/umami"> VERBATIM
+      whenever the env was unset (vite keeps unknown %VARS% as-is) — every production page load requested
+      the bogus URL, got a 400, and logged a strict-MIME refusal. Tag removed; client/src/main.tsx now
+      injects analytics at runtime only when VITE_ANALYTICS_ENDPOINT/_WEBSITE_ID are configured.
+- [x] VERIFIED headlessly against the rebuilt production bundle (tRPC-batch-shaped lookup stubs): keypad
+      digits render AFTER the stats re-render that used to kill the page; found-online arms CALL,
+      found-offline disarms (guest rule), party line shows "JOIN CALL", not-found disarms, lookup outage
+      fail-opens; EN→AR flips dir=rtl + Arabic copy with the keypad still working; AR→EN restores; CALL on
+      a found number ran the cinematic and landed on /app/dialer?to=555001 (the name-only direct-join).
+      Screenshots: EN-found, EN-notfound, AR-found.
+- [x] server/v29935LandingAlive.test.ts (9 pins incl. the polish) + the v2.99.24 pin in Home.test.ts
+      updated to the delegated shape (same ordering invariant, new anchors). Suite 1480 passed / 1
+      skipped; check + build green.

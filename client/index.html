@@ -89,10 +89,12 @@
         });
       }
     </script>
-    <script
-      defer
-      src="%VITE_ANALYTICS_ENDPOINT%/umami"
-      data-website-id="%VITE_ANALYTICS_WEBSITE_ID%"></script>
+    <!-- Analytics is injected at runtime by main.tsx ONLY when
+         VITE_ANALYTICS_ENDPOINT is configured. A static tag here left the
+         literal "%VITE_ANALYTICS_ENDPOINT%/umami" in the built page whenever
+         the env was unset (vite keeps unknown %VARS% verbatim) — every
+         production page load requested /%VITE_ANALYTICS_ENDPOINT%/umami,
+         got a 400, and logged a strict-MIME refusal in the console. -->
   </body>
 
 </html>

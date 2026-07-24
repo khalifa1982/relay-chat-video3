@@ -242,16 +242,20 @@ describe("v2.99.21 — the Arabic toggle actually activates RTL (owner: 'not act
 });
 
 describe("v2.99.24 — landing controls wired before throwable init (rendered-but-dead hardening)", () => {
-  it("wires the language toggle in the same block as the keypad, BEFORE the decorative/boot init", () => {
-    // The keypad and langBtn must both be wired before the try-wrapped
-    // decorative init, so a throw in initReveals/Scramble/Matrix/bootThree
-    // can't leave the page rendered-but-dead. Anchors are unique strings.
-    const keypadAt = HOME_TSX.indexOf('querySelectorAll<HTMLElement>("[data-lp-key]")');
-    const langAt = HOME_TSX.indexOf('$("langBtn")?.addEventListener("click", opts.onToggleLang)');
+  it("wires keypad + language toggle (one delegated host listener since v2.99.35), BEFORE the decorative/boot init", () => {
+    // All controls — keypad, CLEAR, DEMO, CALL, langBtn — must be live before
+    // the try-wrapped decorative init, so a throw in initReveals/Scramble/
+    // Matrix/bootThree can't leave the page rendered-but-dead. Since v2.99.35
+    // they attach as ONE delegated listener on the host wrapper (per-node
+    // listeners died when React 19 re-set dangerouslySetInnerHTML and rebuilt
+    // every child node — see v29935LandingAlive.test.ts); the ordering
+    // invariant this pin protects is unchanged.
+    const wireAt = HOME_TSX.indexOf('host.addEventListener("click", onHostClick)');
     const decorTryAt = HOME_TSX.indexOf('window.addEventListener("mousemove", onMove');
-    expect(keypadAt).toBeGreaterThan(0);
-    expect(langAt).toBeGreaterThan(keypadAt);
-    expect(decorTryAt).toBeGreaterThan(langAt);
+    expect(wireAt).toBeGreaterThan(0);
+    expect(decorTryAt).toBeGreaterThan(wireAt);
+    // The delegated selector covers every control the per-node wiring did.
+    expect(HOME_TSX).toMatch(/\[data-lp-key\],\[data-lp='clearBtn'\],\[data-lp='demoBtn'\],\[data-lp='callBtn'\],\[data-lp='langBtn'\]/);
   });
   it("wraps the decorative + boot init in try/catch and force-dismisses the loader on failure", () => {
     expect(HOME_TSX).toMatch(/const dismissLoader = \(\) =>/);

@@ -26,6 +26,24 @@ queryClient.getMutationCache().subscribe(event => {
   }
 });
 
+// Analytics (v2.99.35): injected at runtime ONLY when configured. The old
+// static tag in index.html left the literal "%VITE_ANALYTICS_ENDPOINT%/umami"
+// in the built page whenever the env was unset (vite keeps unknown %VARS%
+// verbatim) — every production page load fetched that bogus URL, got a 400,
+// and logged a strict-MIME console error. import.meta.env values are inlined
+// at build time, so an unset endpoint compiles to a no-op here.
+{
+  const endpoint = import.meta.env.VITE_ANALYTICS_ENDPOINT as string | undefined;
+  const websiteId = import.meta.env.VITE_ANALYTICS_WEBSITE_ID as string | undefined;
+  if (endpoint && websiteId && !endpoint.startsWith("%")) {
+    const s = document.createElement("script");
+    s.defer = true;
+    s.src = `${endpoint}/umami`;
+    s.dataset.websiteId = websiteId;
+    document.body.appendChild(s);
+  }
+}
+
 const trpcClient = trpc.createClient({
   links: [
     httpBatchLink({
