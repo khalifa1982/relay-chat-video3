@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import {
   Bell,
   BellOff,
@@ -7,8 +7,11 @@ import {
   Copy,
   LogOut,
   Lock,
+  Mail,
+  MessageSquare,
   Monitor,
   Moon,
+  PhoneMissed,
   ScanFace,
   Share2,
   ShieldCheck,
@@ -368,6 +371,9 @@ export default function ProfilePage() {
 
         {/* notifications */}
         <NotificationsSection />
+
+        {/* email notifications (v2.99.13) — registered + email only */}
+        <EmailNotificationsSection />
 
         {/* sign-in PIN (v2.87) */}
         <LoginPinSection />
@@ -1124,6 +1130,131 @@ function NotificationsSection() {
           </div>
         </div>
       </div>
+    </section>
+  );
+}
+
+/* ============================================================
+   Email notifications (v2.99.13) — registered users with a linked
+   email choose whether RELAY emails them about (a) a call they missed
+   while offline and (b) a message that arrived while offline (the
+   message email is CONTENT-FREE — just "you have a new message"). Both
+   default ON. Guests / email-less accounts don't render this section.
+   ============================================================ */
+function EmailToggleRow({
+  icon,
+  title,
+  desc,
+  checked,
+  disabled,
+  onChange,
+}: {
+  icon: ReactNode;
+  title: string;
+  desc: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 p-4">
+      <div
+        className={
+          "shrink-0 size-10 grid place-items-center rounded-xl " +
+          (checked ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")
+        }
+      >
+        {icon}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="font-medium">{title}</div>
+        <p className="text-xs text-muted-foreground mt-0.5">{desc}</p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={`Toggle ${title}`}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={
+          "relative shrink-0 h-7 w-12 rounded-full transition-colors duration-200 disabled:opacity-50 " +
+          (checked
+            ? "bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))]"
+            : "bg-muted-foreground/30")
+        }
+        style={{ transitionTimingFunction: "var(--ease-out)" }}
+      >
+        <span
+          className={
+            "absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform duration-200 " +
+            (checked ? "translate-x-5" : "translate-x-0")
+          }
+          style={{ transitionTimingFunction: "var(--ease-out)" }}
+        />
+      </button>
+    </div>
+  );
+}
+
+function EmailNotificationsSection() {
+  const prefs = trpc.otpAuth.getNotificationPrefs.useQuery();
+  const utils = trpc.useUtils();
+  const setPrefs = trpc.otpAuth.setNotificationPrefs.useMutation({
+    onMutate: async (vars) => {
+      await utils.otpAuth.getNotificationPrefs.cancel();
+      const prev = utils.otpAuth.getNotificationPrefs.getData();
+      utils.otpAuth.getNotificationPrefs.setData(undefined, (old) =>
+        old
+          ? {
+              ...old,
+              ...(vars.missedCall !== undefined ? { missedCall: vars.missedCall } : {}),
+              ...(vars.message !== undefined ? { message: vars.message } : {}),
+            }
+          : old
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) utils.otpAuth.getNotificationPrefs.setData(undefined, ctx.prev);
+      toast.error("Couldn't update email notifications — try again.");
+    },
+    onSettled: () => {
+      utils.otpAuth.getNotificationPrefs.invalidate();
+    },
+  });
+
+  // Email notifications need a registered account with a linked email; guests
+  // and email-less accounts simply don't see this section.
+  if (!prefs.data?.signedIn || !prefs.data.hasEmail) return null;
+
+  const busy = setPrefs.isPending;
+  return (
+    <section className="space-y-3">
+      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+        Email notifications
+      </Label>
+      <div className="rounded-2xl border border-border bg-card/40 divide-y divide-border/60">
+        <EmailToggleRow
+          icon={<PhoneMissed className="size-5" />}
+          title="Missed calls"
+          desc="Email me when I miss a call while I'm offline."
+          checked={prefs.data.missedCall}
+          disabled={busy}
+          onChange={(v) => setPrefs.mutate({ missedCall: v })}
+        />
+        <EmailToggleRow
+          icon={<MessageSquare className="size-5" />}
+          title="New messages"
+          desc="Email me when a message arrives while I'm offline. We never include the message content."
+          checked={prefs.data.message}
+          disabled={busy}
+          onChange={(v) => setPrefs.mutate({ message: v })}
+        />
+      </div>
+      <p className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <Mail className="size-3.5" /> Sent to your account email. Message emails never contain the message itself.
+      </p>
     </section>
   );
 }

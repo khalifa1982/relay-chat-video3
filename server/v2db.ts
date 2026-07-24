@@ -668,6 +668,52 @@ export async function takeOnlineWatchers(targetId: number): Promise<number[]> {
   return rows.filter((r) => new Date(r.expiresAt).getTime() > now.getTime()).map((r) => r.watcherId);
 }
 
+/** Offline-message email cooldown (v2.99.13): at most one "you have a new
+ *  message" email per user per window, so a burst of messages while away
+ *  doesn't flood their inbox. */
+export const OFFLINE_MESSAGE_EMAIL_COOLDOWN_MS = 15 * 60 * 1000;
+
+/** Update a user's email-notification preferences (v2.99.13). Writes only the
+ *  keys present; a column left NULL means "enabled (default)" and false means
+ *  the user turned it off. */
+export async function setUserNotificationPrefs(
+  userId: number,
+  prefs: { emailNotifyMissedCall?: boolean; emailNotifyMessage?: boolean }
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  const set: Record<string, boolean> = {};
+  if (prefs.emailNotifyMissedCall !== undefined) set.emailNotifyMissedCall = prefs.emailNotifyMissedCall;
+  if (prefs.emailNotifyMessage !== undefined) set.emailNotifyMessage = prefs.emailNotifyMessage;
+  if (Object.keys(set).length === 0) return;
+  await db.update(users).set(set).where(eq(users.id, userId));
+}
+
+/** Atomically CLAIM the right to send ONE offline-message email to `userId`
+ *  (v2.99.13). Returns true — and stamps `lastMessageEmailAt = now` — only if
+ *  the emailNotifyMessage pref is on (NULL default = on, explicit false = off)
+ *  AND the cooldown has elapsed. A single conditional UPDATE, so concurrent
+ *  sends can't both claim (mirrors the v2.98.4 S1 PIN-lockout race fix). The
+ *  caller still resolves the address and does the (fail-safe) send. */
+export async function claimOfflineMessageEmail(userId: number, cooldownMs: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const cutoff = new Date(Date.now() - cooldownMs);
+  const res = await db
+    .update(users)
+    .set({ lastMessageEmailAt: new Date() })
+    .where(
+      and(
+        eq(users.id, userId),
+        or(isNull(users.emailNotifyMessage), eq(users.emailNotifyMessage, true)),
+        or(isNull(users.lastMessageEmailAt), lt(users.lastMessageEmailAt, cutoff))
+      )
+    );
+  // mysql2 returns [ResultSetHeader]; affectedRows>0 means THIS statement won
+  // the claim (pref on + cooldown elapsed).
+  return Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+}
+
 export interface PresenceLite {
   identityId: number;
   isOnline: boolean;
@@ -766,6 +812,12 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // New-device approval (v2.99.7): NULL = approved/normal (every legacy row);
     // non-NULL = sign-in is WAITING for approval from another device.
     { table: "sessions", column: "pendingApproval", ddl: "ADD COLUMN `pendingApproval` timestamp NULL" },
+    // Email-notification preferences (v2.99.13). NULL = ENABLED (historical
+    // default — the missed-call email always sent), so a user disables by
+    // storing false. lastMessageEmailAt is the offline-message email cooldown.
+    { table: "users", column: "emailNotifyMissedCall", ddl: "ADD COLUMN `emailNotifyMissedCall` boolean" },
+    { table: "users", column: "emailNotifyMessage", ddl: "ADD COLUMN `emailNotifyMessage` boolean" },
+    { table: "users", column: "lastMessageEmailAt", ddl: "ADD COLUMN `lastMessageEmailAt` timestamp NULL" },
     // Hot-path indexes (v2.88, mirrored in drizzle/schema.ts):
     //  - messages(conversationId, id): the listThreads groupwise-max + every
     //    listMessages page (ORDER BY id within a conversation).

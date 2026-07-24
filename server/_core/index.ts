@@ -244,6 +244,11 @@ async function startServer() {
         if (callee.userId == null) return; // guests have no email
         const user = await getUserById(callee.userId);
         if (!user?.email) return;
+        // Email-notification preference (v2.99.13): NULL/true = on (historical
+        // default), false = the user turned missed-call emails off in Profile.
+        // The push + History record above stay unconditional — only the EMAIL
+        // is preference-gated.
+        if (user.emailNotifyMissedCall === false) return;
         const callerLabel = info.callerName
           ? `${info.callerName} (${info.callerPin})`
           : info.callerPin;
