@@ -62,18 +62,56 @@ export function clearDraft(conversationId: number): void {
 export function useDraft(conversationId: number) {
   const [draft, setDraft] = useState<Draft>(() => getDraft(conversationId));
   const saveT = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Latest draft + the conversation it belongs to, tracked in refs so a
+  // flush (on thread switch / unmount / tab hide) writes the CURRENT text to
+  // the CORRECT conversation even though those code paths don't re-close over
+  // the latest `draft` / `conversationId` render values.
+  const draftRef = useRef<Draft>(draft);
+  const convRef = useRef<number>(conversationId);
 
-  // Conversation changed — load ITS draft (don't carry the prior one over).
+  /**
+   * M6: flush any pending debounced save IMMEDIATELY. The old cleanup just
+   * clearTimeout'd the pending save, so typing then switching threads within
+   * the 500ms debounce window silently dropped the draft — defeating the whole
+   * "navigating away mid-draft doesn't lose it" purpose. Now we write it first.
+   */
+  function flush() {
+    if (saveT.current) {
+      clearTimeout(saveT.current);
+      saveT.current = null;
+      saveDraftNow(convRef.current, draftRef.current);
+    }
+  }
+
+  // Conversation changed — FLUSH the prior conversation's pending draft (don't
+  // lose it), then load THIS conversation's draft (don't carry the prior over).
   useEffect(() => {
-    setDraft(getDraft(conversationId));
+    const loaded = getDraft(conversationId);
+    setDraft(loaded);
+    draftRef.current = loaded;
+    convRef.current = conversationId;
     return () => {
-      if (saveT.current) clearTimeout(saveT.current);
+      flush();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
+
+  // Flush on tab hide / reload so a draft typed <500ms before isn't lost.
+  useEffect(() => {
+    const onHide = () => flush();
+    window.addEventListener("pagehide", onHide);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onHide);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function update(next: Partial<Draft>) {
     setDraft((prev) => {
       const merged = { ...prev, ...next };
+      draftRef.current = merged;
       if (saveT.current) clearTimeout(saveT.current);
       saveT.current = setTimeout(() => saveDraftNow(conversationId, merged), 500);
       return merged;
@@ -85,6 +123,7 @@ export function useDraft(conversationId: number) {
       clearTimeout(saveT.current);
       saveT.current = null;
     }
+    draftRef.current = EMPTY;
     setDraft(EMPTY);
     clearDraft(conversationId);
   }

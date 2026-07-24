@@ -427,6 +427,13 @@ export function AuthPanel({
       // invalidate whoami yet: the pending cookie doesn't authenticate, so the
       // app would just bounce back to the gate.
       if ((res as { pending?: boolean })?.pending) {
+        // L2: this is a NEW pending session (fresh sid/cookie). The approval
+        // poll's cache can still hold a "denied" from a PRIOR attempt on this
+        // mount; react-query serves that cached value immediately on re-enter,
+        // and the waiting-stage effect would instantly bounce us back to email
+        // with a false "declined" before the server ever evaluates this new
+        // session. Reset the cache so the effect only acts on a FRESH result.
+        utils.otpAuth.sessionApprovalStatus.reset();
         setStage("waiting");
         return;
       }
@@ -435,6 +442,12 @@ export function AuthPanel({
       else onClose();
     } catch (err) {
       setError(messageOf(err, "That code didn't work."));
+      // L3: the code input auto-fires verifyCode the instant it reaches 6
+      // digits. If we leave the wrong code in place, deleting one digit and
+      // retyping re-fires and burns another of the 5 server attempts per
+      // single-character correction. Clear it (like the PIN path) so a
+      // correction is a fresh 6-digit entry = exactly one attempt.
+      setCode("");
     }
   }
 

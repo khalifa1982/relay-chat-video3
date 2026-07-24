@@ -5445,6 +5445,23 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       invitee handling), M13/M14/M18 (contacts/directory), M15/M16/L5 (status), M20/L8 (allocation races),
       M6 (draft debounce), M12/L4 (presence), L2/L3 (auth), M11 (server ephemeral content gating).
 
+## v2.99.31 — heavy-QA sweep fixes, batch 9 (draft + auth edges) (2026-07-24)
+- [x] M6 (MED) draft lost on a fast thread switch: useDraft debounced the save 500ms and its
+      conversation-change cleanup clearTimeout'd the pending save WITHOUT flushing — typing then switching
+      threads within 500ms dropped the draft. FIX (draftStore.ts): a flush() (backed by draftRef/convRef)
+      runs in the [conversationId] cleanup, plus a pagehide/visibilitychange flush for reload safety.
+- [x] L2 (LOW) stale "declined" bounced a retry: AuthPanel's approval poll (sessionApprovalStatus) cached
+      "denied" across the enabled:false toggle/remounts, so retrying a denied sign-in was instantly bounced
+      to email with a false "declined" before the server saw the new pending session. FIX:
+      utils.otpAuth.sessionApprovalStatus.reset() right before setStage("waiting").
+- [x] L3 (LOW) digit-correction burned OTP attempts: the code input auto-fires verifyCode at 6 digits and a
+      wrong code wasn't cleared, so deleting+retyping one digit re-fired and consumed one of the 5 attempts
+      per correction. FIX: setCode("") in the wrong-code catch.
+- [x] Tests: client/src/app/qaBatch9.test.ts (5 pins). 1451 tests. QA-sweep progress: 30 of 37 fixed.
+      DEFERRED to a dedicated presence batch: M12 (closing one of two tabs flips the identity offline) +
+      the reapStalePresence SELECT-then-UPDATE spurious-offline TOCTOU — they touch the live presence path
+      and need multi-tab coordination.
+
 ## v2.99.30 — heavy-QA sweep fixes, batch 8 (number-allocation races) (2026-07-24)
 - [x] M20 (MED) cross-table number collision: identities + party_lines share ONE 6-digit space, each with a
       per-TABLE unique key, but MySQL can't enforce uniqueness across two tables — so two concurrent
