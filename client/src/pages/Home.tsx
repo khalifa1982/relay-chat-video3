@@ -47,9 +47,33 @@ const P = [
   "/marketing/p10_6d299c17.jpg",
 ];
 
+/* Inline "launch" arrow for the Open-App pills. A bare "↗" (U+2197) used to
+   live inside the copy strings, but the v2.99.16 RTL rule forces
+   'Noto Kufi Arabic' on every element in Arabic — that face has no U+2197, so
+   iOS fell through to the emoji font and drew a boxed ↗️ beside the Arabic
+   label instead of a clean arrow (owner screenshot). An inline SVG renders
+   identically in every language, font and platform. Mirrored in RTL (below,
+   `.lp-arrow`) so it still points "outward" when text flows right-to-left. */
+const ARROW_NE = `<svg class="lp-arrow" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>`;
+
+/* Backspace / erase-one-digit glyph for the hero dialer (owner ask). NOT
+   mirrored in RTL: the dial display is a dir="ltr" island in both languages,
+   so digits always fill left→right and the erase always takes the rightmost
+   one — a left-pointing backspace stays the correct affordance. */
+const ARROW_BS = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 5H9l-7 7 7 7h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Z"/><path d="M18 9l-6 6"/><path d="M12 9l6 6"/></svg>`;
+
+/** Sentinel for the keypad cell that erases instead of entering a digit. */
+const BS_KEY = "bs";
+
 const KEYS: Array<[string, string]> = [
   ["1", ""], ["2", "ABC"], ["3", "DEF"], ["4", "GHI"], ["5", "JKL"], ["6", "MNO"],
-  ["7", "PQRS"], ["8", "TUV"], ["9", "WXYZ"], ["*", ""], ["0", "+"], ["#", ""],
+  // The erase key takes the bottom-right cell (owner ask). It replaces "#",
+  // which was pure decoration here — this pad only ever accepts 0-9 for a
+  // 6-digit RELAY number, so "#" did nothing but play a tone. Putting erase
+  // IN the grid gives it a full 54px touch target and, unlike a button beside
+  // the number display, it can never overlap the digits (it did exactly that
+  // in Arabic, where the RTL-mirrored button landed on top of the first digit).
+  ["7", "PQRS"], ["8", "TUV"], ["9", "WXYZ"], ["*", ""], ["0", "+"], [BS_KEY, ""],
 ];
 
 /* ── bilingual copy (owner ask: bring Arabic back to the new design). RELAY
@@ -61,7 +85,8 @@ const COPY = {
   en: {
     langBtn: "عربي",
     navHow: "HOW IT WORKS", navFeatures: "FEATURES", navPrivacy: "PRIVACY", navFaq: "FAQ",
-    openApp: "OPEN APP ↗",
+    openApp: "OPEN APP",
+    erase: "Erase last digit",
     loaderTagline: "the same encryption standard that armors bank traffic — applied to your voice",
     heroBadge: "LIVE — PEER-TO-PEER CALLS IN YOUR BROWSER",
     h1a: "Pick a name.", h1b: "Get a number.", h1c: "Dial anyone.",
@@ -120,7 +145,8 @@ const COPY = {
   ar: {
     langBtn: "EN",
     navHow: "كيف يعمل", navFeatures: "المزايا", navPrivacy: "الخصوصية", navFaq: "الأسئلة",
-    openApp: "افتح التطبيق ↗",
+    openApp: "افتح التطبيق",
+    erase: "حذف آخر رقم",
     loaderTagline: "نفس معيار التشفير الذي يحمي معاملات البنوك — مطبَّق على صوتك",
     heroBadge: "مباشر — مكالمات ند-لِند داخل متصفحك",
     h1a: "اختر اسمًا.", h1b: "احصل على رقم.", h1c: "اتصل بأي شخص.",
@@ -309,6 +335,11 @@ const CSS = `
    higher-specificity rule wins for them. */
 .lp-root[dir="rtl"] *{font-family:'Noto Kufi Arabic','Space Grotesk',sans-serif!important}
 .lp-root[dir="rtl"] [dir="ltr"],.lp-root[dir="rtl"] [dir="ltr"] *{font-family:'IBM Plex Mono','Noto Kufi Arabic',monospace!important}
+/* The launch arrow points "outward" in both directions (RTL mirrors it). */
+.lp-root[dir="rtl"] .lp-arrow{transform:scaleX(-1)}
+/* Erase key: dimmed by JS until there is a digit to erase; .lp-key supplies
+   the hover/active feedback, so full opacity on hover reads as "armed". */
+.lp-bs:hover{opacity:1!important}
 `;
 
 /** Per-tile Ken-Burns/speaking specs for the 10-person group grid. */
@@ -355,10 +386,15 @@ function pctStripLines(): string {
   return lines;
 }
 
-function keypad(): string {
-  return KEYS.map(
-    ([d, sub]) =>
-      `<button type="button" class="lp-key" data-lp-key="${d}" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;height:54px;border-radius:14px;background:rgba(255,255,255,.045);border:1px solid rgba(233,240,242,.09)"><span style="font:500 19px 'IBM Plex Mono',monospace;color:#e9f0f2;pointer-events:none">${d}</span><span style="font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:rgba(148,162,172,.65);min-height:9px;pointer-events:none">${sub}</span></button>`,
+function keypad(t: Copy): string {
+  const cell =
+    "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;height:54px;border-radius:14px;background:rgba(255,255,255,.045);border:1px solid rgba(233,240,242,.09)";
+  return KEYS.map(([d, sub]) =>
+    d === BS_KEY
+      ? // Erase cell: an icon, not a character. It carries data-lp (not
+        // data-lp-key) so the delegated handler routes it to backspace().
+        `<button type="button" class="lp-key lp-bs" data-lp="backBtn" aria-label="${t.erase}" title="${t.erase}" style="${cell};color:#e9f0f2;opacity:.35;transition:opacity .15s,transform .15s,background .15s">${ARROW_BS}</button>`
+      : `<button type="button" class="lp-key" data-lp-key="${d}" style="${cell}"><span style="font:500 19px 'IBM Plex Mono',monospace;color:#e9f0f2;pointer-events:none">${d}</span><span style="font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:rgba(148,162,172,.65);min-height:9px;pointer-events:none">${sub}</span></button>`,
   ).join("");
 }
 
@@ -442,7 +478,7 @@ function markup(host: string, t: Copy, ar: boolean): string {
     <a class="lp-navlink" href="#privacy">${t.navPrivacy}</a>
     <a class="lp-navlink" href="#faq">${t.navFaq}</a>
   </div>
-  <div style="display:flex;align-items:center;gap:10px"><button type="button" data-lp="langBtn" style="cursor:pointer;font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#e9f0f2;border:1px solid rgba(233,240,242,.25);border-radius:999px;padding:9px 14px;background:rgba(255,255,255,.04)">${t.langBtn}</button><a data-lp="dock" class="lp-dock" href="/app" style="font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.16em;color:#6ff2ae;border:1px solid rgba(111,242,174,.4);border-radius:999px;padding:10px 20px;background:rgba(111,242,174,.06);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)">${t.openApp}</a></div>
+  <div style="display:flex;align-items:center;gap:10px"><button type="button" data-lp="langBtn" style="cursor:pointer;font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#e9f0f2;border:1px solid rgba(233,240,242,.25);border-radius:999px;padding:9px 14px;background:rgba(255,255,255,.04)">${t.langBtn}</button><a data-lp="dock" class="lp-dock" href="/app" style="font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.16em;color:#6ff2ae;border:1px solid rgba(111,242,174,.4);border-radius:999px;padding:10px 20px;background:rgba(111,242,174,.06);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:inline-flex;align-items:center;gap:7px;white-space:nowrap">${t.openApp}${ARROW_NE}</a></div>
 </nav>
 
 <main style="position:relative;z-index:2">
@@ -468,8 +504,8 @@ function markup(host: string, t: Copy, ar: boolean): string {
           <div data-lp="dialDisplay" dir="ltr" style="margin:22px 0 8px;text-align:center;font:500 30px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#e9f0f2;min-height:38px">· · · · · ·</div>
           <div data-lp="dialStatus" style="text-align:center;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:rgba(148,162,172,.9);margin-bottom:8px">${t.dialEnter}</div>
           <div data-lp="dialPreview" style="display:none;text-align:center;font:500 12px 'Space Grotesk',sans-serif;margin-bottom:14px;min-height:18px"></div>
-          <div dir="ltr" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">${keypad()}</div>
-          <a data-lp="callBtn" href="/app" style="display:block;margin-top:14px;text-align:center;padding:15px;border-radius:14px;background:rgba(111,242,174,.12);border:1px solid rgba(111,242,174,.35);color:#6ff2ae;font:600 12px 'IBM Plex Mono',monospace;letter-spacing:.22em;opacity:.4;pointer-events:none;transition:all .3s">${t.call}</a>
+          <div dir="ltr" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">${keypad(t)}</div>
+          <a data-lp="callBtn" href="/app" style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px;text-align:center;padding:15px;border-radius:14px;background:rgba(111,242,174,.12);border:1px solid rgba(111,242,174,.35);color:#6ff2ae;font:600 12px 'IBM Plex Mono',monospace;letter-spacing:.22em;opacity:.4;pointer-events:none;transition:all .3s">${t.call}</a>
           <div style="display:flex;justify-content:space-between;margin-top:14px;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.16em">
             <button type="button" data-lp="clearBtn" style="background:none;border:none;cursor:pointer;color:rgba(148,162,172,.7);font:inherit;letter-spacing:inherit;padding:0">${t.clear}</button>
             <button type="button" data-lp="demoBtn" style="background:none;border:none;cursor:pointer;color:rgba(111,242,174,.8);font:inherit;letter-spacing:inherit;padding:0;border-bottom:1px dotted rgba(111,242,174,.5)">${t.demo}</button>
@@ -612,7 +648,7 @@ function markup(host: string, t: Copy, ar: boolean): string {
       <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:24px;margin-top:60px">
         <div style="font:400 11px 'IBM Plex Mono',monospace;letter-spacing:.18em;color:rgba(148,162,172,.7)"><span>${t.footTag}</span> <span dir="ltr">© 2026 RELAY · v${APP_VERSION}</span></div>
         <div style="display:flex;flex-wrap:wrap;gap:26px;font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.16em">
-          <a href="/app">${t.openApp}</a>
+          <a href="/app" style="display:inline-flex;align-items:center;gap:6px">${t.openApp}${ARROW_NE}</a>
           <a class="lp-footlink" href="#how">${t.navHow}</a>
           <a class="lp-footlink" href="#features">${t.navFeatures}</a>
           <a class="lp-footlink" href="#privacy">${t.navPrivacy}</a>
@@ -705,11 +741,17 @@ function startLanding(
     ));
 
   /* ── dialer ── */
-  const setCallState = (armed: boolean, label: string) => {
+  const setCallState = (armed: boolean, label: string, arrow = false) => {
     const cb = $("callBtn");
     dialCallable = armed;
     if (!cb) return;
+    // textContent (never innerHTML) for the label — it carries localized copy.
     cb.textContent = label;
+    // The launch arrow is a CONSTANT SVG appended after the text: a bare "↗"
+    // rendered as an emoji box in Arabic (the forced Noto Kufi Arabic face has
+    // no U+2197), exactly like the nav pill did. No interpolation here, so
+    // insertAdjacentHTML carries no injection surface.
+    if (arrow) cb.insertAdjacentHTML("beforeend", ARROW_NE);
     cb.style.opacity = armed ? "1" : ".4";
     cb.style.pointerEvents = armed ? "auto" : "none";
     cb.style.background = armed ? "#6ff2ae" : "rgba(111,242,174,.12)";
@@ -741,12 +783,12 @@ function startLanding(
     const name = escLp(dialLookupName(res) || fmt);
     if (res.partyLine) {
       setPreview(`<b style="color:#e9f0f2">${name}</b> <span style="color:rgba(148,162,172,.85)">· ${t.dialParty(res.memberCount || 0)}</span>`);
-      setCallState(true, `${t.dialJoin} ↗`);
+      setCallState(true, t.dialJoin, true);
       return;
     }
     if (res.isOnline) {
       setPreview(`<b style="color:#e9f0f2">${name}</b> <span style="color:#6ff2ae">· ${t.dialerOnline}</span>`);
-      setCallState(true, `${t.call} ${fmt} ↗`);
+      setCallState(true, `${t.call} ${fmt}`, true);
     } else {
       // OFFLINE → a guest can't reach them from the landing page.
       setPreview(`<b style="color:#e9f0f2">${name}</b> <span style="color:rgba(148,162,172,.8)">· ${t.dialOffline}</span>`);
@@ -765,7 +807,7 @@ function startLanding(
       setPreview("");
       const st = $("dialStatus");
       if (st) st.textContent = t.dialReady; // not "checking" — nothing is
-      setCallState(true, `${t.call} ${n.slice(0, 3)}-${n.slice(3)} ↗`);
+      setCallState(true, `${t.call} ${n.slice(0, 3)}-${n.slice(3)}`, true);
       return;
     }
     const seq = ++lookupSeq;
@@ -781,7 +823,7 @@ function startLanding(
         setPreview("");
         const st = $("dialStatus");
         if (st) st.textContent = t.dialReady; // resolved (fail-open), not "checking"
-        setCallState(true, `${t.call} ${n.slice(0, 3)}-${n.slice(3)} ↗`);
+        setCallState(true, `${t.call} ${n.slice(0, 3)}-${n.slice(3)}`, true);
       });
   };
   const syncDial = () => {
@@ -790,6 +832,10 @@ function startLanding(
     for (let i = 0; i < 6; i++) chars.push(num[i] || "·");
     if (el) el.textContent = chars.join(" ");
     const len = num.length, full = len === 6;
+    // The erase key keeps its grid cell (removing it would reflow the pad) but
+    // dims to show there is nothing to erase yet.
+    const bs = $("backBtn");
+    if (bs) bs.style.opacity = len ? "1" : ".35";
     if (st) {
       st.textContent = full ? t.dialChecking : len ? t.dialMore(6 - len) : t.dialEnter;
       st.style.color = full ? "#6ff2ae" : "rgba(148,162,172,.9)";
@@ -806,31 +852,94 @@ function startLanding(
     // Full number: resolve once (guard against re-firing on repeated syncDial).
     if (num !== lastLookedUp) runLookup(num);
   };
-  const beep = (d: string) => {
+  /* ── key tones (owner: "make tone when you click each number as sound") ──
+     Real DTMF pairs, one per key. Two things kept the previous implementation
+     effectively silent: (1) it scheduled the oscillators at `ac.currentTime`
+     in the SAME tick it called `ac.resume()` — resume is ASYNC, so on iOS the
+     context was still suspended when the note was scheduled, and by the time
+     it actually started running that timestamp was already in the past, so
+     the note was dropped (the classic iOS Web Audio race); and (2) the peak
+     gain was 0.045 (≈ -27 dBFS) — inaudible over any ambient noise even when
+     it did fire. Now the context is unlocked on the first real gesture, a
+     suspended context resumes and THEN schedules, every note starts at a
+     small lookahead so it can never be scheduled in the past, and the peak is
+     a clearly audible 0.18.
+     PLATFORM LIMIT (not a bug we can fix): on iPhone the hardware mute switch
+     silences Web Audio outright — no web page can override that. */
+  const TONE_PEAK = 0.18;
+  const ensureAc = (): AudioContext | null => {
+    if (!ac) {
+      try {
+        const Ctor =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (!Ctor) return null;
+        ac = new Ctor();
+      } catch {
+        return null; // audio is decorative — never break the dialer
+      }
+    }
+    return ac;
+  };
+  const playTones = (freqs: number[], ms = 150) => {
+    const c = ensureAc();
+    if (!c) return;
+    const fire = () => {
+      if (!alive || c.state !== "running") return;
+      try {
+        const t0 = c.currentTime + 0.005; // lookahead: never schedule in the past
+        const dur = ms / 1000;
+        const g = c.createGain();
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(TONE_PEAK, t0 + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        g.connect(c.destination);
+        for (const fr of freqs) {
+          const o = c.createOscillator();
+          o.type = "sine";
+          o.frequency.value = fr;
+          o.connect(g);
+          o.start(t0);
+          o.stop(t0 + dur + 0.01);
+        }
+      } catch { /* decorative */ }
+    };
+    // A suspended context MUST resume before the note is scheduled.
+    if (c.state === "suspended") void c.resume().then(fire).catch(() => {});
+    else fire();
+  };
+  /** iOS only starts an AudioContext from inside a real user gesture. */
+  let audioUnlocked = false;
+  const unlockAudio = () => {
+    if (audioUnlocked) return;
+    audioUnlocked = true;
+    const c = ensureAc();
+    if (!c) return;
     try {
-      const f = DTMF[d];
-      if (!f) return;
-      if (!ac) ac = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-      if (ac.state === "suspended") void ac.resume();
-      const g = ac.createGain();
-      g.gain.setValueAtTime(0.001, ac.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.045, ac.currentTime + 0.012);
-      g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.13);
-      g.connect(ac.destination);
-      f.forEach((fr) => {
-        const o = ac!.createOscillator();
-        o.type = "sine";
-        o.frequency.value = fr;
-        o.connect(g);
-        o.start();
-        o.stop(ac!.currentTime + 0.14);
-      });
-    } catch { /* audio is decorative */ }
+      if (c.state === "suspended") void c.resume();
+      // A 1-sample silent buffer played during the gesture completes the unlock.
+      const src = c.createBufferSource();
+      src.buffer = c.createBuffer(1, 1, 22050);
+      src.connect(c.destination);
+      src.start(0);
+    } catch { /* best effort */ }
+  };
+  const beep = (d: string) => {
+    const f = DTMF[d];
+    if (f) playTones(f);
   };
   const press = (d: string) => {
     beep(d);
     if (!/[0-9]/.test(d) || num.length >= 6) return;
     num += d;
+    syncDial();
+  };
+  /** Erase the last digit (owner ask). Softer, lower two-tone than a DTMF
+   *  digit so an erase is audibly distinct from entering a number. */
+  const backspace = () => {
+    if (!num) return;
+    playTones([420, 310], 105);
+    num = num.slice(0, -1);
     syncDial();
   };
   const clearDial = () => { num = ""; syncDial(); };
@@ -853,7 +962,7 @@ function startLanding(
         lastLookedUp = num;
         dialTarget = FALLBACK;
         setPreview("");
-        setCallState(true, `${t.call} ${num.slice(0, 3)}-${num.slice(3)} ↗`);
+        setCallState(true, `${t.call} ${num.slice(0, 3)}-${num.slice(3)}`, true);
       }
     }, 150);
   };
@@ -1477,7 +1586,7 @@ function startLanding(
   const onHostClick = (e: Event) => {
     const target = e.target as HTMLElement | null;
     const el = target?.closest?.(
-      "[data-lp-key],[data-lp='clearBtn'],[data-lp='demoBtn'],[data-lp='callBtn'],[data-lp='langBtn']",
+      "[data-lp-key],[data-lp='clearBtn'],[data-lp='demoBtn'],[data-lp='callBtn'],[data-lp='langBtn'],[data-lp='backBtn']",
     ) as HTMLElement | null;
     if (!el || !host.contains(el)) return;
     const key = el.dataset.lpKey;
@@ -1487,9 +1596,14 @@ function startLanding(
       case "demoBtn": demoDial(); break;
       case "callBtn": callNow(e); break;
       case "langBtn": opts.onToggleLang(); break;
+      case "backBtn": backspace(); break;
     }
   };
   host.addEventListener("click", onHostClick);
+  // Unlock the key tones on the first real gesture — pointerdown fires BEFORE
+  // the click that plays the first tone, so even the very first keypress is
+  // audible (iOS starts every AudioContext suspended).
+  host.addEventListener("pointerdown", unlockAudio, { once: true, passive: true });
   syncDial();
   const dismissLoader = () => {
     const ov = $("loader");
@@ -1539,6 +1653,7 @@ function startLanding(
     cancelAnimationFrame(ldT);
     if (demoT) clearInterval(demoT);
     host.removeEventListener("click", onHostClick);
+    host.removeEventListener("pointerdown", unlockAudio);
     window.removeEventListener("mousemove", onMove);
     window.removeEventListener("scroll", onScroll);
     window.removeEventListener("resize", onResize);

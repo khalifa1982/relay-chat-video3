@@ -5616,3 +5616,46 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
 - [x] server/v29935LandingAlive.test.ts (9 pins incl. the polish) + the v2.99.24 pin in Home.test.ts
       updated to the delegated shape (same ordering invariant, new anchors). Suite 1480 passed / 1
       skipped; check + build green.
+
+## v2.99.36 — landing polish: Arabic Open-App icon, dial-pad erase key, audible key tones (owner asks) (2026-07-24)
+- [x] OWNER (screenshot + notes): "In the arabic the open app icon is not showing"; "in the dial pad both
+      in arabic and english landing page make delete number icons so if you enter you can erase it";
+      "make tone when you click each number as sound".
+- [x] (1) ARABIC OPEN-APP ICON — the pill's copy string ended in a bare `↗` (U+2197). The v2.99.16 RTL rule
+      forces 'Noto Kufi Arabic' on EVERY element in Arabic, that face has no U+2197, so iOS fell through to
+      the emoji font and painted a boxed ↗️ next to the Arabic label. FIX: the arrow is an inline SVG
+      (ARROW_NE) — identical in every language/font/platform — mirrored in RTL via `.lp-arrow`.
+- [x] SECOND INSTANCE of the same defect found while writing the pin (my own test caught it): the CALL
+      button label also ended in `↗`, and the button is NOT inside a `dir="ltr"` island, so in Arabic it
+      rendered the identical emoji box. `setCallState` gained an `arrow` flag: the label stays textContent
+      (it carries localized copy) and only the CONSTANT SVG is appended via insertAdjacentHTML, so there is
+      no interpolation/injection surface. Verified live: `document.body.innerText` contains no U+2197 at all.
+- [x] (2) ERASE KEY — now occupies the keypad's bottom-right cell, replacing `#` (pure decoration here: the
+      pad only accepts 0-9 for a 6-digit RELAY number, so `#` did nothing but play a tone). Dims to .35 when
+      there is nothing to erase, removes one digit per tap, no-ops when empty, localized aria-label/title.
+- [x] REAL BUG caught mid-build and fixed: the FIRST implementation put the erase button beside the number
+      display (absolute, `inset-inline-end`). In English it covered the 6th placeholder dot; in ARABIC,
+      where it mirrors to the leading edge, it landed ON TOP of the first digit — the display is simply too
+      wide to share that row. Moving it into the grid removes the overlap by construction and gives it a
+      full 54px-tall touch target. Pinned by a no-overlap assertion measured in the browser.
+- [x] (3) KEY TONES — DTMF existed but was effectively silent for two reasons, both fixed: (a) the
+      oscillators were scheduled at `ac.currentTime` in the SAME tick as the ASYNC `ac.resume()`, so on iOS
+      the note's start time had already elapsed by the time the context actually ran (the classic iOS Web
+      Audio race) — a suspended context now resumes and THEN schedules, and every note starts at a +5ms
+      lookahead so it can never be scheduled in the past; (b) the peak gain was 0.045 (≈ -27 dBFS),
+      inaudible — now 0.18. The context is also unlocked on the first real gesture (1-sample silent buffer
+      on pointerdown, the standard iOS unlock). Erase gets its own softer 420/310Hz tone.
+- [x] HONEST LIMIT documented in-source (not papered over): on iPhone the hardware mute/silent switch
+      silences Web Audio outright — no web page can override that.
+- [x] VERIFIED headlessly on an emulated phone against the REAL built bundle, instrumenting AudioContext:
+      exactly 2 oscillators per keypress at the correct DTMF frequencies (770/1336 for "5", 941/1336 for
+      "0"), peak 0.18, ZERO notes scheduled in the past, the iOS silent-buffer unlock firing on first touch;
+      the erase key overlapping neither the display nor any key in EITHER language, erasing one digit per
+      tap and no-opping when empty; the Arabic pill AND the Arabic CALL button both painting mirrored SVG
+      arrows with no U+2197 anywhere on the page.
+- [x] Also proved a scare was NOT a bug: one Arabic keypad tap registered a neighbouring digit in an early
+      run. Re-tested — key 7 correct 5/5 by coordinate, correct via raw touchscreen, and all 10 digits
+      correct by direct dispatch, with the visual grid order intact (123456789*0#). It was a synthetic-tap
+      artifact of the pad's 3D perspective tilt (Playwright's hover moves the surface between measuring and
+      tapping); real touch input never triggers that tilt.
+- [x] `server/v29936LandingPolish.test.ts` (15 pins). Suite 1495 passed / 1 skipped; check + build green.
