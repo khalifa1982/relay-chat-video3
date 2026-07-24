@@ -9,7 +9,10 @@ import { VideoRecordSheet } from "@/app/VideoRecordSheet";
 
 /**
  * Rich user status (v2.95) — WhatsApp/story-style ephemeral updates: text,
- * image+caption, video+caption, or audio, visible to your contacts for 24h.
+ * image+caption, video+caption, or audio, visible for 24h to anyone who has
+ * you saved in their contacts (M16: the audience is people who saved YOUR
+ * number, not people you saved — statusAudienceAuthorized gates on the viewer
+ * having saved the owner, so the poster-side copy must say so).
  *
  * - <StatusStrip/> is the horizontal ring row (mounted atop the Messages tab):
  *   "My status" first, then contacts with active statuses (bright ring = unseen).
@@ -52,6 +55,50 @@ type StatusItem = {
 function initials(name: string): string {
   const p = (name || "").trim().split(/\s+/).slice(0, 2);
   return p.map((s) => s[0]?.toUpperCase() ?? "").join("").slice(0, 2) || "?";
+}
+
+/**
+ * M15: read a video/audio file's true playback length so the story slide runs
+ * for its real duration instead of the flat 5s DEFAULT_ITEM_MS. Loads the file
+ * into an off-DOM media element and reads `.duration` on loadedmetadata.
+ * Recorded WebM/MediaRecorder blobs often report Infinity until seeked to the
+ * end, so we nudge currentTime to force a finite durationchange. Resolves null
+ * (→ the 5s fallback) on any error, an unreadable duration, or a 3s timeout, so
+ * a weird file can never hang the post.
+ */
+function readMediaDurationMs(file: File): Promise<number | null> {
+  const kind = /^video\//.test(file.type) ? "video" : /^audio\//.test(file.type) ? "audio" : null;
+  if (kind == null || typeof document === "undefined") return Promise.resolve(null);
+  return new Promise<number | null>((resolve) => {
+    const el = document.createElement(kind);
+    el.preload = "metadata";
+    (el as HTMLMediaElement).muted = true;
+    const url = URL.createObjectURL(file);
+    let done = false;
+    const finish = (ms: number | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { el.removeAttribute("src"); el.load(); } catch { /* ignore */ }
+      URL.revokeObjectURL(url);
+      resolve(ms);
+    };
+    const tryRead = (): boolean => {
+      const d = el.duration;
+      if (Number.isFinite(d) && d > 0) { finish(Math.round(d * 1000)); return true; }
+      return false;
+    };
+    const timer = setTimeout(() => finish(null), 3000);
+    el.onloadedmetadata = () => {
+      if (tryRead()) return;
+      // Infinity duration (WebM) — seek far past the end to coerce a real value.
+      try { el.currentTime = 1e101; } catch { finish(null); }
+    };
+    el.ondurationchange = () => { tryRead(); };
+    el.ontimeupdate = () => { tryRead(); };
+    el.onerror = () => finish(null);
+    el.src = url;
+  });
 }
 
 /* ───────────────────────── Strip ───────────────────────── */
@@ -102,7 +149,7 @@ export function StatusStrip() {
 
         {others.length === 0 && !myGroup && (
           <span className="text-xs text-muted-foreground/80 pl-1">
-            Share a photo, video, or a line — visible to your contacts for 24h.
+            Share a photo, video, or a line — visible for 24h to anyone who has you in their contacts.
           </span>
         )}
       </div>
@@ -194,15 +241,24 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
         if (!file) { setPosting(false); return; }
         const kind = mediaKindOf(file);
         if (!kind) { toast.error("Pick an image, video, or audio file."); setPosting(false); return; }
+        // M15: for video/audio, capture the real playback length so the viewer
+        // holds the slide for its true duration (not a flat 5s). Best-effort —
+        // null falls back to DEFAULT_ITEM_MS server- and viewer-side.
+        let durationMs: number | undefined;
+        if (kind === "video" || kind === "audio") {
+          const ms = await readMediaDurationMs(file);
+          if (ms && ms > 0) durationMs = Math.min(10 * 60_000, ms);
+        }
         const { storageKey } = await uploadStatusMedia(file, { mimeType: file.type });
         await post.mutateAsync({
           kind,
           mediaKey: storageKey,
           mimeType: file.type,
           text: caption.trim() || undefined,
+          durationMs,
         });
       }
-      toast.success("Status posted — visible to your contacts for 24h.");
+      toast.success("Status posted — visible for 24h to anyone who has you in their contacts.");
       onPosted();
     } catch (e) {
       toast.error((e as Error)?.message || "Couldn't post your status.");
@@ -362,6 +418,13 @@ export function StatusViewer({
   const rafRef = useRef<number | null>(null);
   const startRef = useRef<number>(0);
   const elapsedRef = useRef<number>(0);
+  // L5: distinguish a quick TAP (navigate) from a press-and-HOLD (pause). The
+  // tap-zone buttons overlay the body, so without this a hold-to-pause fired
+  // prev()/next() on release — on the first item prev() just restarted it,
+  // which read as "holding restarts the story". A release after HOLD_MS is a
+  // hold, so navigation is suppressed and only the pause/resume happens.
+  const pressStartRef = useRef<number>(0);
+  const HOLD_MS = 220;
 
   const group = groups[gi];
   const item = group?.items[ii];
@@ -446,14 +509,14 @@ export function StatusViewer({
       {/* body */}
       <div
         className="relative flex-1"
-        onPointerDown={() => setPaused(true)}
+        onPointerDown={() => { pressStartRef.current = Date.now(); setPaused(true); }}
         onPointerUp={() => setPaused(false)}
         onPointerLeave={() => setPaused(false)}
       >
         <StatusBody item={item} />
-        {/* tap zones */}
-        <button type="button" aria-label="Previous" onClick={prev} className="absolute inset-y-0 left-0 w-1/3" />
-        <button type="button" aria-label="Next" onClick={next} className="absolute inset-y-0 right-0 w-1/3" />
+        {/* tap zones — navigate only on a quick tap; a press-and-hold pauses. */}
+        <button type="button" aria-label="Previous" onClick={() => { if (Date.now() - pressStartRef.current < HOLD_MS) prev(); }} className="absolute inset-y-0 left-0 w-1/3" />
+        <button type="button" aria-label="Next" onClick={() => { if (Date.now() - pressStartRef.current < HOLD_MS) next(); }} className="absolute inset-y-0 right-0 w-1/3" />
         {/* desktop chevrons */}
         <button type="button" onClick={prev} className="absolute left-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/40 p-2 md:block"><ChevronLeft className="size-5" /></button>
         <button type="button" onClick={next} className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/40 p-2 md:block"><ChevronRight className="size-5" /></button>
