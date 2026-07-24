@@ -89,12 +89,14 @@ describe("PresenceManager — client beacon wiring", () => {
     expect(PRESENCE_MANAGER).toMatch(/JSON\.stringify\(\{\s*deviceId:\s*getDeviceId\(\)\s*\}\)/);
   });
   it("fires on pagehide AND visibilitychange→hidden (mobile Safari often skips pagehide)", () => {
-    expect(PRESENCE_MANAGER).toMatch(/addEventListener\(\s*["']pagehide["']\s*,\s*onLeave/);
+    // v2.99.32 (M12): the pagehide/beforeunload handler is now onClose = () => onLeave(true)
+    // (a real close frees this tab's ref-count slot); visibility→hidden calls onLeave(false).
+    expect(PRESENCE_MANAGER).toMatch(/addEventListener\(\s*["']pagehide["']\s*,\s*onClose/);
     expect(PRESENCE_MANAGER).toMatch(/addEventListener\(\s*["']visibilitychange["']\s*,\s*onVisibility/);
     expect(PRESENCE_MANAGER).toMatch(/visibilityState\s*===\s*["']hidden["']/);
   });
   it("heartbeats immediately on return-to-visible so a tab switch flips right back online", () => {
-    expect(PRESENCE_MANAGER).toMatch(/else if \(!cancelled\) heartbeat\.mutate\(\)/);
+    expect(PRESENCE_MANAGER).toMatch(/else if \(!cancelled\) \{\s*\n\s*heartbeat\.mutate\(\)/);
   });
   it("keeps the tRPC goOffline as the non-beacon fallback and removes every listener on cleanup", () => {
     expect(PRESENCE_MANAGER).toMatch(/goOffline\.mutate\(\)/);

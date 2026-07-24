@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { getDeviceId } from "@/lib/deviceId";
+import { makeTabId, touchTab, removeTab, otherTabsAlive } from "./tabPresence";
 
 /**
  * Owns the SINGLE presence heartbeat + go-offline beacon for the whole app.
@@ -29,10 +30,14 @@ export function PresenceManager() {
   const id = whoami.data?.id;
   const heartbeat = trpc.directory.heartbeat.useMutation();
   const goOffline = trpc.directory.goOffline.useMutation();
+  // A stable per-tab id for the M12 multi-tab ref-count (see tabPresence.ts).
+  const tabIdRef = useRef<string>("");
 
   useEffect(() => {
     if (!inApp || !id) return;
     let cancelled = false;
+    if (!tabIdRef.current) tabIdRef.current = makeTabId();
+    const tabId = tabIdRef.current;
     const tick = () => {
       if (cancelled) return;
       // QA H6: never heartbeat a HIDDEN tab. onLeave (visibilitychange→hidden)
@@ -42,10 +47,11 @@ export function PresenceManager() {
       // handler re-heartbeats the instant we return to visible, so nothing is lost.
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       heartbeat.mutate();
+      touchTab(id, tabId, Date.now()); // M12: record this tab as live
     };
     tick();
     const interval = window.setInterval(tick, 30_000);
-    const onLeave = () => {
+    const beaconOffline = () => {
       // sendBeacon is the ONLY channel the browser guarantees to flush after
       // the page is gone. Body: a plain JSON string (⇒ text/plain — Blob
       // content-types can trip beacon restrictions), carrying the deviceId
@@ -62,19 +68,34 @@ export function PresenceManager() {
         /* ignore */
       }
     };
-    const onVisibility = () => {
-      if (document.visibilityState === "hidden") onLeave();
-      else if (!cancelled) heartbeat.mutate(); // back → online instantly
+    const onLeave = (closing: boolean) => {
+      const now = Date.now();
+      if (closing) removeTab(id, tabId, now); // real close/unmount — free my slot first
+      // M12: another live tab of this identity keeps presence — do NOT beacon
+      // offline (else contacts blink offline and the surviving tab's next
+      // heartbeat fires a false "back online" watcher push). A single tab (no
+      // others) still beacons instantly; a storage error fails safe to a beacon.
+      if (otherTabsAlive(id, tabId, now)) return;
+      beaconOffline();
     };
-    window.addEventListener("pagehide", onLeave);
-    window.addEventListener("beforeunload", onLeave);
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") onLeave(false);
+      else if (!cancelled) {
+        heartbeat.mutate(); // back → online instantly
+        touchTab(id, tabId, Date.now());
+      }
+    };
+    const onClose = () => onLeave(true);
+    window.addEventListener("pagehide", onClose);
+    window.addEventListener("beforeunload", onClose);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
-      window.removeEventListener("pagehide", onLeave);
-      window.removeEventListener("beforeunload", onLeave);
+      window.removeEventListener("pagehide", onClose);
+      window.removeEventListener("beforeunload", onClose);
       document.removeEventListener("visibilitychange", onVisibility);
+      removeTab(id, tabId, Date.now()); // leaving /app — free my slot
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inApp, id]);
