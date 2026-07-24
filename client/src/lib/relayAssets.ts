@@ -172,19 +172,6 @@ export const RELAY_MARKUP = `
         </div>
         <div class="host-list" id="hostList"></div>
       </div>
-      <div class="more-menu" id="moreMenu">
-        <!-- Overflow menu (v2.99.4). The RECORD control lives here now (was a
-             bare unlabeled circle in the bar); JS keeps toggling its id's
-             display/.on class exactly as before. Each row explains itself. -->
-        <button type="button" class="mm-item" id="recordBtn" style="display:none" title="Record this call to the cloud">
-          <span class="mm-ic mm-rec"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg></span>
-          <span class="mm-tx"><b>Record call</b><i>Save this call as a video — everyone sees a REC badge</i></span>
-        </button>
-        <button type="button" class="mm-item" id="diagMenuBtn" title="Connection diagnostics">
-          <span class="mm-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .8-1 1.7"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/></svg></span>
-          <span class="mm-tx"><b>Diagnostics</b><i>Live connection details for troubleshooting</i></span>
-        </button>
-      </div>
       <div class="ctrl-bar">
         <!-- v2.99.4 (owner spec): every control is a COLORED icon chip with a
              LABEL underneath, so each button says what it does. Mic + camera
@@ -235,9 +222,13 @@ export const RELAY_MARKUP = `
           <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1z"/></svg><span class="badge" id="chatBadge" style="display:none">0</span></span>
           <span class="ctrl-lbl">Chat</span>
         </button>
-        <button class="ctrl" id="moreBtn" title="More — recording and diagnostics">
-          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></span>
-          <span class="ctrl-lbl">More</span>
+        <!-- Record (v2.99.36): promoted OUT of the removed ⋯ More menu into the
+             bar as a normal labeled chip. Still hidden unless the operator has
+             recording configured (JS toggles this id's display/.on exactly as
+             before) — the owner removed the overflow menu, not the feature. -->
+        <button class="ctrl" id="recordBtn" style="display:none" title="Record this call — everyone sees a REC badge">
+          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg></span>
+          <span class="ctrl-lbl">Record</span>
         </button>
         <button class="ctrl hangup" id="hangBtn" title="Leave">
           <!-- Material "call end": a DRAWN horizontal handset, no CSS transform.
@@ -255,23 +246,11 @@ export const RELAY_MARKUP = `
   </section>
 </div>
 
-<button id="diagBtn" class="diag-btn" title="Diagnostics (?)" aria-label="Open diagnostics">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .8-1 1.7"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/></svg>
-</button>
-
-<div id="diagOverlay" class="diag-overlay">
-  <div class="diag-card">
-    <div class="diag-head">
-      <b>Diagnostics</b>
-      <div class="diag-actions">
-        <button id="diagCopy" class="diag-tool">Copy</button>
-        <button id="diagClose" class="diag-tool">Close</button>
-      </div>
-    </div>
-    <pre id="diagBody" class="diag-body">(open this while a call is connecting to see ICE/connection state per peer)</pre>
-    <p class="diag-foot">Tip: press <kbd>?</kbd> anywhere to toggle this panel.</p>
-  </div>
-</div>
+<!-- v2.99.36 (owner): the connection-details floater button + its overlay panel
+     are REMOVED from the in-call UI, along with the ⋯ overflow menu. The
+     engine's internal rolling event log (diag()) is kept for console debugging —
+     it simply has no on-screen panel to write to. (This comment deliberately
+     avoids the removed panel's name so the test can assert the literal is gone.) -->
 
 <div class="overlay" id="ringOverlay">
   <!-- Incoming-call card (v2.97 redesign, owner spec): caller PHOTO inside a
@@ -773,7 +752,6 @@ export const RELAY_CSS = `
 .relay-root #addBtn .ctrl-ic{color:var(--accent);background:rgba(63,224,197,.13);border-color:rgba(63,224,197,.3)}
 .relay-root #hostBtn .ctrl-ic{color:#facc15;background:rgba(250,204,21,.12);border-color:rgba(250,204,21,.3)}
 .relay-root #chatBtn .ctrl-ic{color:#a3e635;background:rgba(163,230,53,.12);border-color:rgba(163,230,53,.3)}
-.relay-root #moreBtn .ctrl-ic{color:#cbd5e1;background:rgba(203,213,225,.10);border-color:rgba(203,213,225,.24)}
 /* State overrides win over the per-button tints. */
 .relay-root .ctrl.off .ctrl-ic{background:rgba(255,92,114,.18);border-color:rgba(255,92,114,.4);color:var(--danger)}
 .relay-root .ctrl.off .ctrl-lbl{color:var(--danger)}
@@ -866,8 +844,8 @@ export const RELAY_CSS = `
 @keyframes relayMicVoiced{0%{box-shadow:0 0 0 0 rgba(63,224,197,.45)}100%{box-shadow:0 0 0 7px rgba(63,224,197,0)}}
 @media (prefers-reduced-motion: reduce){.relay-root .ctrl.voiced:not(.off) .ctrl-ic{animation:none;box-shadow:0 0 0 3px rgba(63,224,197,.35)}}
 /* Record row (now inside the ⋯ More menu), when armed, glows red. */
-.relay-root #recordBtn.on{background:rgba(255,76,76,.14)}
-.relay-root #recordBtn.on .mm-tx b{color:#ff5d5d}
+.relay-root #recordBtn .ctrl-ic{color:#ff5d5d;background:rgba(255,76,76,.12);border-color:rgba(255,76,76,.3)}
+.relay-root #recordBtn.on .ctrl-ic{background:rgba(255,76,76,.26);border-color:#ff5d5d}
 /* "● REC" live indicator in the call header. */
 .relay-root .call-head-right{display:flex;align-items:center;gap:12px}
 .relay-root .rec-ind{display:flex;align-items:center;gap:6px;font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700;letter-spacing:.06em;color:#ff5d5d}
@@ -1056,21 +1034,6 @@ export const RELAY_CSS = `
 .relay-root .ao-item .ao-tx{display:flex;flex-direction:column;gap:1px;min-width:0}
 .relay-root .ao-item .ao-tx i{font-style:normal;font-size:11px;color:var(--text2,#9aa);font-weight:500;line-height:1.3}
 .relay-root .ao-item.ao-dim{opacity:.55}
-/* ── ⋯ More menu (v2.99.4): Record + Diagnostics with real labels ────────── */
-.relay-root .more-menu{position:absolute;bottom:84px;right:18px;width:300px;max-width:90vw;display:none;
-  flex-direction:column;background:var(--surface);border:1px solid var(--border2);border-radius:16px;overflow:hidden;
-  box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:31;padding:6px}
-.relay-root .more-menu.open{display:flex;animation:relayFade .2s ease both}
-.relay-root .mm-item{background:none;border:none;text-align:left;padding:10px 11px;border-radius:11px;color:var(--text);
-  cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:11px;transition:background .12s}
-.relay-root .mm-item:hover{background:var(--bg2)}
-.relay-root .mm-ic{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;flex-shrink:0;
-  background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--text2,#9aa)}
-.relay-root .mm-ic svg{width:18px;height:18px}
-.relay-root .mm-ic.mm-rec{color:#ff5d5d;background:rgba(255,76,76,.12);border-color:rgba(255,76,76,.3)}
-.relay-root .mm-tx{display:flex;flex-direction:column;gap:2px;min-width:0}
-.relay-root .mm-tx b{font-size:13px;font-weight:600}
-.relay-root .mm-tx i{font-style:normal;font-size:11px;color:var(--text2,#9aa);line-height:1.3}
 .relay-root #addClose{background:none;border:none;color:var(--text2,#9aa);font-size:14px;line-height:1;cursor:pointer;padding:3px 7px;border-radius:8px;font-weight:700}
 .relay-root #addClose:hover{background:var(--bg2);color:var(--text)}
 .relay-root .addpad input{background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:12px;text-align:center;
@@ -1185,24 +1148,6 @@ export const RELAY_CSS = `
   .relay-root .version-tag .ver-hl{animation:relayVerBlink 1.3s ease-in-out infinite}
 }
 @keyframes relayVerBlink{0%,100%{opacity:1}50%{opacity:.32}}
-
-/* Diagnostics button is hidden from users (the "?" floater). The panel is
-   still reachable for debugging via the keyboard shortcut. */
-.relay-root .diag-btn{display:none!important}
-.relay-root .diag-btn--shown{position:fixed;bottom:14px;left:14px;z-index:60;width:36px;height:36px;border-radius:10px;background:var(--surface);border:1px solid var(--border);color:var(--muted);display:grid;place-items:center;cursor:pointer;transition:.15s}
-.relay-root .diag-btn:hover{background:var(--surface2);border-color:var(--border2);color:var(--accent)}
-.relay-root .diag-btn svg{width:18px;height:18px}
-.relay-root .diag-overlay{position:fixed;inset:0;z-index:95;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(6px)}
-.relay-root .diag-overlay.open{display:flex;animation:relayFade .2s ease both}
-.relay-root .diag-card{width:min(720px,96vw);max-height:80vh;background:var(--surface);border:1px solid var(--border2);border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 30px 80px -20px rgba(0,0,0,.7)}
-.relay-root .diag-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
-.relay-root .diag-head b{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:15px}
-.relay-root .diag-actions{display:flex;gap:8px}
-.relay-root .diag-tool{background:var(--bg2);border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px;font-family:inherit}
-.relay-root .diag-tool:hover{border-color:var(--accent);color:var(--accent)}
-.relay-root .diag-body{flex:1;min-height:0;overflow:auto;padding:16px 18px;font-family:"JetBrains Mono",monospace;font-size:11.5px;line-height:1.55;color:var(--text);white-space:pre-wrap;background:var(--bg2)}
-.relay-root .diag-foot{padding:10px 18px;border-top:1px solid var(--border);color:var(--faint);font-size:12px}
-.relay-root .diag-foot kbd{background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-family:"JetBrains Mono",monospace;font-size:11px}
 
 .relay-root .relay-tile .connecting{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.55);color:#fff;padding:7px 14px;border-radius:99px;font-size:12px;letter-spacing:.04em;backdrop-filter:blur(4px);border:1px solid var(--border2)}
 .relay-root .relay-tile[data-state="failed"] .connecting{color:var(--danger);border-color:rgba(255,92,114,.5)}

@@ -18,18 +18,11 @@ const ROUTERS = read("server/v2routers.ts");
  *       who saved you (was: only people who saved you), so posting appears to
  *       your contacts. Authorization, realtime fan-out, and the feed all match.
  */
-describe("v2.99.33 — Messages thread row is two-line (full name + actions below)", () => {
-  it("the row is a vertical stack (flex-col), not a single cramped line", () => {
-    expect(MESSAGES).toMatch(/"flex flex-col px-4 md:px-5 py-2\.5 border-b/);
-  });
-  it("the action buttons sit on their own line, indented past the avatar", () => {
-    expect(MESSAGES).toMatch(/flex items-center gap-1\.5 pl-\[52px\] mt-1\.5/);
-  });
-  it("the full name still renders with badge + PIN + typing indicator", () => {
-    expect(MESSAGES).toMatch(/<span className="font-semibold text-\[14\.5px\] truncate">\{t\.peerDisplayName \|\| t\.peerNumber\}<\/span>/);
-    expect(MESSAGES).toMatch(/typingConvos\.includes\(t\.conversationId\)/);
-  });
-});
+// NOTE: v2.99.33's "two lines with the action buttons on row 2" is SUPERSEDED by
+// the v2.99.37 redesign below — the owner removed the per-row buttons entirely
+// ("no need to put message, dial, voice … you will see it in the top bar"), so
+// the row is now avatar + two TEXT lines and nothing else. The redesign is
+// pinned in messagesRowRedesign.test.ts; this file keeps only the status half.
 
 describe("v2.99.33 — status visibility is either-direction (post reaches your contacts)", () => {
   it("statusAudienceAuthorized authorizes when EITHER side saved the other", () => {

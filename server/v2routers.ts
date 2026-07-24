@@ -1962,23 +1962,11 @@ async function cooldownOk(email: string) {
   return !last || Date.now() - last >= OTP_RESEND_COOLDOWN_MS;
 }
 
-/**
- * EMAIL-DELIVERY-OUTAGE STOPGAP (v2.97.2, owner directive 2026-07-22): the
- * operator's SES account is sandboxed pending AWS's production-access review,
- * so AWS refuses OTP emails to anyone but a pre-verified address — every new
- * registration failed with "couldn't send your code". While this flag is on,
- * REGISTRATION skips minting/emailing a code and signs the caller in
- * immediately (a deliberate, TEMPORARY trust reduction: email ownership is no
- * longer proven at signup — accepted by the owner to keep registration usable
- * during the outage). Existing-user LOGIN (requestOtp/verifyOtp/loginWithPin)
- * is completely UNCHANGED — this affects brand-new accounts only.
- * Read PER-CALL (no code change to flip back): unset it, or set it to
- * anything but "1", once SES production access is approved, then restart the
- * app — full email verification resumes automatically. Default OFF.
- */
-function otpRegisterBypassEnabled(): boolean {
-  return process.env.RELAY_OTP_REGISTER_BYPASS === "1";
-}
+// NOTE (v2.99.35): the v2.97.2 `RELAY_OTP_REGISTER_BYPASS` email-outage stopgap
+// has been REMOVED now that the operator's SES account is out of the AWS
+// sandbox (production access approved 2026-07-24). Registration ALWAYS mints +
+// emails a real verification code again — email ownership is proven at signup,
+// unconditionally, so a stale env flag can never silently re-disable it.
 
 /** How recently another session must have been active for a NEW sign-in to
  *  require its approval (v2.99.7). Matches "another device is online right now"
@@ -2045,56 +2033,18 @@ export const v2OtpAuthRouter = router({
       return { ok: sent, unregistered: false, sent };
     }),
 
-  /** Registration: capture first/last name + email, email a code (user created on verify).
-   *  RELAY_OTP_REGISTER_BYPASS=1 (email-outage stopgap, see the flag's doc
-   *  comment above) skips the code entirely and signs the caller in now. */
+  /** Registration: capture first/last name + email, email a code. The user row is
+   *  created by verifyOtp, so an address is never registered unproven. */
   register: publicProcedure
     .input(z.object({ firstName: NameSchema, lastName: NameSchema, email: EmailSchema }))
     .mutation(async ({ ctx, input }) => {
       otpGate(ctx);
       const email = normalizeEmail(input.email);
       if (!isValidEmail(email)) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter a valid email." });
-      if (otpRegisterBypassEnabled()) {
-        // Create the user (if new), upgrade the guest identity, sign in — just
-        // without ever proving the email address (see the flag's doc comment).
-        //
-        // SECURITY (M31): this branch is CREATE-ONLY. It used to `findUserByEmailAny`
-        // first and sign the caller in as whatever it resolved, which — on an
-        // unauthenticated `publicProcedure` whose entire input is a name and an
-        // email — meant that with the flag on, ANYONE who knew a registered
-        // user's email address could obtain a full session as that user. No code,
-        // no password, nothing to intercept. That is unauthenticated account
-        // takeover of every existing account, which is far beyond the trade this
-        // stopgap was accepted for ("email ownership isn't proven AT SIGNUP while
-        // it's on"). Signing IN is what `requestOtp` / `loginWithPin` are for, and
-        // both still demand a real credential; `register` has no business
-        // resolving a pre-existing account at all.
-        //
-        // So: refuse when the address already has an account, and only ever mint
-        // a genuinely NEW one. That keeps the flag's actual purpose (letting new
-        // users onboard while SES is sandboxed) fully intact.
-        if (await findUserByEmailAny(email)) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: "An account with this email already exists. Sign in instead.",
-          });
-        }
-        let userId = await createOtpUser({ email, firstName: input.firstName, lastName: input.lastName });
-        if (!userId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create your account." });
-        // M29: burn any credential planted on this row while it was still
-        // unverified BEFORE flipping emailVerified — otherwise an attacker who
-        // pre-registered this address via /api/auth/register keeps a working
-        // password on the account the real owner is about to claim.
-        await clearUnverifiedCredentials(userId);
-        await markUserEmailVerified(userId);
-        await unlockLoginPin(userId);
-        const guestToken = (ctx.req.cookies?.[GUEST_COOKIE] as string | undefined) ?? null;
-        const displayName = `${input.firstName} ${input.lastName}`.trim() || email.split("@")[0];
-        const identity = await ensureUserIdentity({ userId, displayName, guestToken });
-        await markIdentityVerified(identity.id, { firstName: input.firstName, lastName: input.lastName });
-        setSessionCookie(ctx.res, userId, rememberToTtlMs(undefined), await startSession(ctx, userId));
-        return { ok: true, sent: false, bypass: true };
-      }
+      // Real email verification (SES out of sandbox): mint a code and email it.
+      // The recipient must enter it (verifyOtp) to prove the address before the
+      // account is created/verified — the v2.97.2 sign-in-without-a-code stopgap
+      // is gone.
       if (!(await cooldownOk(email))) return { ok: true, sent: true, cooldown: true };
       const code = await mintOtp({ email, purpose: "register", firstName: input.firstName, lastName: input.lastName });
       const sent = await dispatchOtp(email, code);

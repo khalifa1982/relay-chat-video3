@@ -60,6 +60,15 @@ export function roleFromFlags(
   return verified ? "registered" : "guest";
 }
 
+/** The tier word for a role ("Guest"/"Registered"/"Admin"), or null when there
+ *  is no badge. Exported so a caller can render the label INLINE next to a
+ *  caption-less mark (the Dialer preview does this — a stacked caption
+ *  overflowed its one-line row and collided with the keypad). */
+export function roleLabel(role: IdentityRole | null | undefined): string | null {
+  if (!role || !ROLE_META[role]) return null;
+  return ROLE_META[role].label;
+}
+
 export function RoleBadge({
   role,
   size = 14,

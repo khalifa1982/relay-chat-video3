@@ -17,8 +17,9 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
-import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
+import { RoleBadge, roleFromFlags, roleLabel } from "@/app/VerifiedBadge";
 import { openPeerProfile } from "@/app/PeerOverlays";
+import { playDtmf, disposeDtmf } from "@/lib/dtmf";
 import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useRelayEngine } from "@/app/RelayEngine";
@@ -197,6 +198,7 @@ export default function DialerPage() {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (/^[0-9]$/.test(e.key)) {
         setDialed((s) => (s.length < 6 ? s + e.key : s));
+        if (dialed.length < 6) playDtmf(e.key); // same tone as tapping the pad
       } else if (e.key === "Backspace") {
         setDialed((s) => s.slice(0, -1));
       } else if (e.key === "Enter") {
@@ -213,9 +215,16 @@ export default function DialerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dialed, phase]);
 
+  // Close the keypad-tone AudioContext when the dial pad goes away (it is
+  // output-only, so it never held the mic — this just frees the context).
+  useEffect(() => () => disposeDtmf(), []);
+
   function tap(d: string) {
     if (dialed.length >= 6 && /[0-9]/.test(d)) return;
     setDialed((s) => s + d);
+    // Owner spec: a real dial-pad TONE per key (standard DTMF dual tone), so
+    // dialling sounds like a phone. Output-only WebAudio — never touches the mic.
+    playDtmf(d);
     if (typeof navigator !== "undefined" && "vibrate" in navigator) {
       try { navigator.vibrate(8); } catch { /* ignore */ }
     }
@@ -420,7 +429,7 @@ export default function DialerPage() {
               backdrop-blur-2xl backdrop-saturate-150
               border border-border/50
               shadow-2xl shadow-black/20
-              flex flex-col
+              flex flex-col overflow-y-auto
             "
             style={{
               // Internal rows: number area / keypad / call row, with no scroll.
@@ -461,9 +470,15 @@ export default function DialerPage() {
                 )}
               </div>
 
-              {/* Sub-line: hint or live preview */}
+              {/* Sub-line: hint or live preview.
+                  v2.99.36 (owner screenshot): this was a FIXED h-4 (16px) row,
+                  but the resolved-user preview puts name + tier badge + presence
+                  in it — and RoleBadge stacks its caption under the mark (~22px),
+                  so the badge overflowed the row and collided with the keypad
+                  below ("it's overlap"). Now a min-height that can grow to two
+                  lines, so nothing is ever clipped or overlapping. */}
               <div
-                className="mt-1.5 text-[0.78rem] h-4 text-muted-foreground"
+                className="mt-1.5 text-[0.78rem] min-h-4 text-muted-foreground"
                 aria-live="polite"
               >
                 {ghost.mode === "ghost" ? (
@@ -497,20 +512,37 @@ export default function DialerPage() {
                         statusOverride: previewIdentity.statusOverride,
                         inCall: previewIdentity.inCall,
                       });
+                      // Two clean LINES instead of one crowded row (owner: the
+                      // name, badge and presence overlapped). Line 1 = name +
+                      // tier mark with the tier word INLINE (caption={false}, so
+                      // the badge no longer stacks text under the mark and
+                      // spills into the keypad); line 2 = presence on its own.
+                      const tier = roleFromFlags(previewIdentity.role, previewIdentity.verified);
+                      const tierWord = roleLabel(tier);
                       return (
-                        <span>
-                          {/* Name → profile popup (v2.96): see who it is BEFORE
-                              dialing — avatar, status, one-tap add-to-contacts. */}
-                          <button
-                            type="button"
-                            onClick={() => openPeerProfile(previewIdentity.number)}
-                            className="font-semibold text-foreground underline-offset-2 hover:underline"
-                            aria-label={`View ${previewIdentity.displayName}'s profile`}
-                          >
-                            {previewIdentity.displayName}
-                          </button>
-                          <RoleBadge role={roleFromFlags(previewIdentity.role, previewIdentity.verified)} size={13} className="ml-1" />
-                          {" · "}
+                        <span className="flex flex-col items-center gap-0.5 leading-tight">
+                          <span className="flex items-center justify-center gap-1 max-w-full">
+                            {/* Name → profile popup (v2.96): see who it is BEFORE
+                                dialing — avatar, status, one-tap add-to-contacts. */}
+                            <button
+                              type="button"
+                              onClick={() => openPeerProfile(previewIdentity.number)}
+                              className="font-semibold text-foreground underline-offset-2 hover:underline truncate"
+                              aria-label={`View ${previewIdentity.displayName}'s profile`}
+                            >
+                              {previewIdentity.displayName}
+                            </button>
+                            {tier && (
+                              <span className="inline-flex items-center gap-0.5 shrink-0">
+                                <RoleBadge role={tier} size={13} caption={false} />
+                                {tierWord && (
+                                  <span className="text-[0.66rem] font-semibold text-muted-foreground">
+                                    {tierWord}
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                          </span>
                           <span
                             className={
                               st.busy
@@ -696,11 +728,18 @@ export default function DialerPage() {
                 a contact that isn't a real RELAY user. (During the lookup, and
                 on a lookup error, nonexistent is false, so Save still shows for
                 a real user the moment it resolves — or optimistically.) */}
+            {/* v2.99.36 (owner: "save to contact is not showing"): the card is a
+                no-scroll flex column sized to its rows, so this EXTRA row was
+                clipped by the bottom of the card / tab bar. It is now a
+                shrink-0 centred row (and the card can scroll as a safety valve),
+                so the pill is always fully visible and tappable. */}
             {/^\d{6}$/.test(dialed) && dialed !== myNumber && !previewIdentity?.partyLine && !nonexistent ? (
-              <QuickAddContact
-                number={dialed}
-                displayName={previewIdentity?.displayName || dialed}
-              />
+              <div className="shrink-0 flex justify-center pt-1 pb-0.5">
+                <QuickAddContact
+                  number={dialed}
+                  displayName={previewIdentity?.displayName || dialed}
+                />
+              </div>
             ) : null}
           </div>
         </section>

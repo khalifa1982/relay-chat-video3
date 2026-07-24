@@ -41,6 +41,18 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
   const [text, setText] = useState("");
   const [textState, setTextState] = useState<"idle" | "sending" | "sent">("idle");
   const recRef = useRef<VoiceRecording | null>(null);
+  // Still mounted? Guards the mic-acquisition await (v2.99.36) and releases a
+  // live recording if the prompt closes mid-record — otherwise the microphone
+  // stays captured with no handle left to stop it.
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      try { recRef.current?.cancel(); } catch { /* */ }
+      recRef.current = null;
+    };
+  }, []);
 
   // Elapsed ticker while recording (also proves the 60s cap visually).
   useEffect(() => {
@@ -67,6 +79,7 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
     }
     try {
       const rec = await startVoiceRecording({ maxMs: VOICEMAIL_MAX_MS });
+      if (!aliveRef.current) { rec.cancel(); return; }
       recRef.current = rec;
       setElapsedMs(0);
       setRecState("recording");

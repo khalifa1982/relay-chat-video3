@@ -1997,7 +1997,16 @@ export function handleMessage(
       // hold, resume it (promote held → active). With nothing held this is just a
       // plain hang-up of the current call.
       leaveRoom(reg, conn.pin);
-      promoteHeldRoom(reg, conn, self);
+      // ALWAYS answer (v2.99.36). promoteHeldRoom returns false — sending
+      // NOTHING — when the held room is already gone (reaped, or its last member
+      // left). The client's end-active branch deliberately skips its own
+      // hang-up and waits for `resumed`, so that silence wedged it in a call
+      // whose camera/mic were still captured and whose End button had become a
+      // no-op ("I cannot even have another call"). A `nohold` error lets the
+      // client tear down immediately instead of waiting out its fallback timer.
+      if (!promoteHeldRoom(reg, conn, self)) {
+        safeSend(conn.socket, { type: "error", code: "nohold", message: "Call ended." });
+      }
       break;
     }
 
