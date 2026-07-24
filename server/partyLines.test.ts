@@ -33,11 +33,14 @@ describe("shared 6-digit number space", () => {
     // numberTaken consults identities AND party_lines…
     expect(V2DB).toMatch(/async function numberTaken/);
     expect(V2DB).toMatch(/\.from\(partyLines\)\s*\n?\s*\.where\(eq\(partyLines\.number, candidate\)\)/);
-    // …and both allocateNumber and allocatePartyLineNumber go through it.
+    // …via the shared allocator both delegate to (v2.99.30 M20 refactor).
+    expect(V2DB).toMatch(/async function allocateSharedNumber/);
+    const shared = V2DB.slice(V2DB.indexOf("async function allocateSharedNumber"));
+    expect(shared.slice(0, 500)).toMatch(/numberTaken\(db, candidate\)/);
     const allocIdentity = V2DB.slice(V2DB.indexOf("export async function allocateNumber"));
-    expect(allocIdentity.slice(0, 500)).toMatch(/numberTaken\(db, candidate\)/);
+    expect(allocIdentity.slice(0, 200)).toMatch(/allocateSharedNumber\(db\)/);
     const allocLine = V2DB.slice(V2DB.indexOf("export async function allocatePartyLineNumber"));
-    expect(allocLine.slice(0, 500)).toMatch(/numberTaken\(db, candidate\)/);
+    expect(allocLine.slice(0, 400)).toMatch(/allocateSharedNumber\(db\)/);
   });
   it("party_lines is created by the boot migrator with a UNIQUE number, mirrored in drizzle", () => {
     expect(V2DB).toMatch(/CREATE TABLE IF NOT EXISTS \\`party_lines\\`/);

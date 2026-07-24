@@ -108,15 +108,50 @@ async function numberTaken(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, c
   return false;
 }
 
+/**
+ * M20: atomically RESERVE a candidate in the shared `number_reservations`
+ * ledger. Returns true when this call won the reservation (INSERT succeeded),
+ * false when another concurrent allocation already holds it (duplicate-key →
+ * the caller retries with a fresh candidate). FAILS OPEN on any other error
+ * (e.g. the table doesn't exist yet on a first boot before the migrator ran):
+ * we return true so allocation proceeds EXACTLY as it did before this ledger
+ * existed — the per-table UNIQUE keys + numberTaken remain the backstop, so
+ * the ledger can only ever ADD cross-table safety, never remove correctness.
+ */
+async function tryReserveNumber(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  candidate: string,
+): Promise<boolean> {
+  try {
+    await db.execute(sql`INSERT INTO \`number_reservations\` (\`number\`) VALUES (${candidate})`);
+    return true;
+  } catch (e) {
+    const msg = (e as Error)?.message || "";
+    if (/duplicate/i.test(msg)) return false; // lost the race — retry a new candidate
+    return true; // table missing / transient hiccup → behave as pre-ledger
+  }
+}
+
+/** Shared allocator for the ONE 6-digit number space (identities + party
+ *  lines). numberTaken guards pre-existing rows; tryReserveNumber closes the
+ *  cross-table NEW-vs-NEW race atomically. */
+async function allocateSharedNumber(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+): Promise<string> {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const candidate = randomDigits6();
+    if (RESERVED_PREFIXES.some((p) => candidate.startsWith(p))) continue;
+    if (await numberTaken(db, candidate)) continue;
+    if (await tryReserveNumber(db, candidate)) return candidate;
+    // else: a concurrent allocation just reserved this candidate — retry.
+  }
+  throw new Error("could not allocate a unique 6-digit number");
+}
+
 export async function allocateNumber(): Promise<string> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
-  for (let attempt = 0; attempt < 25; attempt++) {
-    const candidate = randomDigits6();
-    if (RESERVED_PREFIXES.some((p) => candidate.startsWith(p))) continue;
-    if (!(await numberTaken(db, candidate))) return candidate;
-  }
-  throw new Error("could not allocate a unique 6-digit number");
+  return allocateSharedNumber(db);
 }
 
 export function newGuestToken(): string {
@@ -961,6 +996,25 @@ export async function ensureSchemaExtensions(): Promise<void> {
         \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY \`party_lines_number_unique\` (\`number\`),
         KEY \`party_lines_owner_idx\` (\`ownerIdentityId\`)
+      )`,
+    },
+    {
+      // M20 (v2.99.30): a SHARED reservation ledger across the one 6-digit
+      // number space. identities and party_lines each have a per-table UNIQUE
+      // key on `number`, but MySQL can't enforce uniqueness ACROSS two tables,
+      // so two concurrent allocations targeting DIFFERENT tables could both
+      // pass the check-then-insert `numberTaken` gate and claim the same fresh
+      // number (a collision permanently shadows a person or unreachables a
+      // line). Every allocator now first INSERTs the candidate here (PK on
+      // `number`), so the unique key serializes concurrent allocations across
+      // BOTH tables — one wins, the loser gets a duplicate-key and retries.
+      // Monotonic (never trimmed): a number handed out is never recycled, so a
+      // deleted user's number can't later misroute to someone else.
+      name: "number_reservations",
+      ddl: `CREATE TABLE IF NOT EXISTS \`number_reservations\` (
+        \`number\` varchar(6) NOT NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`number\`)
       )`,
     },
     {
@@ -3008,12 +3062,9 @@ export const MAX_PARTY_LINES_PER_OWNER = 10;
 export async function allocatePartyLineNumber(): Promise<string> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
-  for (let attempt = 0; attempt < 25; attempt++) {
-    const candidate = randomDigits6();
-    if (RESERVED_PREFIXES.some((p) => candidate.startsWith(p))) continue;
-    if (!(await numberTaken(db, candidate))) return candidate;
-  }
-  throw new Error("could not allocate a unique 6-digit number");
+  // Same shared allocator identities use — so a party line and an identity can
+  // never both claim the same fresh number (M20: cross-table reservation).
+  return allocateSharedNumber(db);
 }
 
 export async function createPartyLine(input: {
@@ -3024,6 +3075,9 @@ export async function createPartyLine(input: {
   if (!db) throw new Error("database unavailable");
   const title = input.title.trim().slice(0, 64);
   if (!title) throw new Error("title required");
+  // Fast pre-check (a clean error before we allocate/insert in the common
+  // over-cap case). This alone is check-then-insert — RACY — so the true cap
+  // is enforced deterministically AFTER the insert below (L8).
   const owned = await db
     .select({ id: partyLines.id })
     .from(partyLines)
@@ -3034,19 +3088,35 @@ export async function createPartyLine(input: {
   // The unique index on `number` is the true guard; retry on a lost race.
   for (let attempt = 0; attempt < 3; attempt++) {
     const number = await allocatePartyLineNumber();
+    let insertId: number;
     try {
       const ins = await db.insert(partyLines).values({
         number,
         ownerIdentityId: input.ownerIdentityId,
         title,
       });
-      const insertId = Number(ins[0].insertId);
-      const [row] = await db.select().from(partyLines).where(eq(partyLines.id, insertId)).limit(1);
-      if (row) return row;
+      insertId = Number(ins[0].insertId);
     } catch (e) {
       const msg = (e as Error)?.message || "";
       if (!/duplicate/i.test(msg)) throw e; // only a number race retries
+      continue;
     }
+    // L8: the pre-check above is racy (two concurrent creates at count 9 both
+    // pass, both insert → 11). Enforce the cap atomically by this row's
+    // id-RANK: count the owner's rows with id <= ours. Since id is monotonic
+    // and unique, concurrent racers get DISTINCT ranks, so exactly the rows
+    // ranked > MAX self-delete (each deletes only its OWN id — no double
+    // delete) and the set converges to exactly MAX.
+    const [rankRow] = await db
+      .select({ rank: sql<number>`count(*)` })
+      .from(partyLines)
+      .where(and(eq(partyLines.ownerIdentityId, input.ownerIdentityId), lte(partyLines.id, insertId)));
+    if (Number(rankRow?.rank ?? 0) > MAX_PARTY_LINES_PER_OWNER) {
+      await db.delete(partyLines).where(eq(partyLines.id, insertId)).catch(() => {});
+      throw new Error(`You can have at most ${MAX_PARTY_LINES_PER_OWNER} party lines.`);
+    }
+    const [row] = await db.select().from(partyLines).where(eq(partyLines.id, insertId)).limit(1);
+    if (row) return row;
   }
   throw new Error("could not allocate a party line number");
 }
