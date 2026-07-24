@@ -642,9 +642,18 @@ type LoaderMsg = [number, string, string];
 /** A directory.lookup result the landing dialer can preview (subset we use). */
 export interface DialLookup {
   displayName?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
   isOnline?: boolean;
   partyLine?: boolean;
   memberCount?: number;
+}
+
+/** The owner asked the preview to show "the name first and last." Registered
+ *  users carry firstName/lastName; prefer "First Last", else the displayName. */
+function dialLookupName(res: DialLookup): string {
+  const full = [res.firstName, res.lastName].filter((s) => s && s.trim()).join(" ").trim();
+  return full || (res.displayName || "").trim();
 }
 
 function startLanding(
@@ -723,7 +732,7 @@ function startLanding(
       setCallState(false, t.call);
       return;
     }
-    const name = escLp(res.displayName || fmt);
+    const name = escLp(dialLookupName(res) || fmt);
     if (res.partyLine) {
       setPreview(`<b style="color:#e9f0f2">${name}</b> <span style="color:rgba(148,162,172,.85)">· ${t.dialParty(res.memberCount || 0)}</span>`);
       setCallState(true, `${t.dialJoin} ↗`);

@@ -5221,3 +5221,19 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       nonexistent is false — offline users stay callable per v2.99.11's leave-a-message flow).
 - [x] Tests: client/src/pages/app/dialerNonexistent.test.ts (5). Suite 1382 passed / 1 skipped; check
       + build green.
+
+## v2.99.18 — first+last name on the dialer (#43) + animated avatars (#45) (owner, transcript re-audit) (2026-07-24)
+- [x] #43: directory.lookup returns firstName/lastName; the landing hero dialer composes "First Last"
+      via dialLookupName() (falls back to displayName, escLp-escaped). Registered users already had
+      displayName="First Last", so this makes "show the name first and last" explicit.
+- [x] #45 (owner: "an animated icon also"): new client/src/lib/animatedAvatar.ts — a dependency-free
+      GIF89a + LZW encoder (216-colour web-safe palette, NETSCAPE2.0 loop-forever) renders a picked
+      emoji as a looping GIF (10-frame bounce/pulse). AvatarPicker gains an "Animated ✨" toggle; an
+      animated pick uploads image/gif through the SAME uploadAvatarImage bare path (bytes pass through
+      untouched — uploadBare never re-encodes, so animation survives), and the v2.99.14 streaming
+      proxy relays image/gif so it animates on EVERY surface and syncs like a photo.
+- [x] Headless-verified in Chromium: valid GIF89a, decodes at 160×160, 10 GCE frames + NETSCAPE loop.
+- [x] Tests: animatedAvatar.test.ts (4 Node encoder checks); Home.test.ts XSS pin updated. Suite 1386
+      passed / 1 skipped; check + build green.
+- NOTE: found via a full re-audit of the conversation transcript after the owner flagged missed items;
+  the heavy QA sweep (#35) ran in parallel and surfaced real bugs now queued for v2.99.19.
