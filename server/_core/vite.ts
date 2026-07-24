@@ -3,10 +3,31 @@ import fs from "fs";
 import { type Server } from "http";
 import { nanoid } from "nanoid";
 import path from "path";
-import { createServer as createViteServer } from "vite";
-import viteConfig from "../../vite.config";
 
+/**
+ * `vite` is imported DYNAMICALLY and the config is loaded BY VITE, on purpose.
+ *
+ * This module is only ever reached in development — the production entry calls
+ * `serveStatic` and never touches it. But static top-level imports are hoisted
+ * and evaluated when the module graph loads, so `import … from "vite"` plus
+ * a default-import of the root vite config file put `vite` AND every dev-only
+ * plugin the config imports (`@vitejs/plugin-react`, `@tailwindcss/vite`, …)
+ * into `dist/index.js` as top-level imports: `node dist/index.js` then required
+ * five devDependencies at boot just to serve static files. Today's deploy runs a
+ * full `pnpm install`, so they happen to be present; the day anything installs
+ * with `--prod` (or prunes), production stops booting for dependencies it never
+ * uses.
+ *
+ * So: `await import("vite")` keeps that reference lazy, and instead of
+ * importing the config module we hand vite the config file's PATH (a string,
+ * which bundles to nothing) and let vite load and compile it — exactly what
+ * `vite build` does. That also makes the config single-sourced: this used to
+ * spread the imported config while telling vite there was no config file at
+ * all, which quietly bypassed vite's own config resolution.
+ */
 export async function setupVite(app: Express, server: Server) {
+  const { createServer: createViteServer } = await import("vite");
+
   const serverOptions = {
     middlewareMode: true,
     hmr: { server },
@@ -14,8 +35,7 @@ export async function setupVite(app: Express, server: Server) {
   };
 
   const vite = await createViteServer({
-    ...viteConfig,
-    configFile: false,
+    configFile: path.resolve(import.meta.dirname, "../..", "vite.config.ts"),
     server: serverOptions,
     appType: "custom",
   });

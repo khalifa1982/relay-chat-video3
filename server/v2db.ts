@@ -738,20 +738,32 @@ export async function takeOnlineWatchers(targetId: number): Promise<number[]> {
 /** Offline-message email cooldown (v2.99.13): at most one "you have a new
  *  message" email per user per window, so a burst of messages while away
  *  doesn't flood their inbox. */
-export const OFFLINE_MESSAGE_EMAIL_COOLDOWN_MS = 15 * 60 * 1000;
+export const OFFLINE_MESSAGE_EMAIL_COOLDOWN_MS = 60 * 60 * 1000;
+
+/** How long a recipient must have been gone before a message email is worth
+ *  sending (v2.99.40). Presence flips offline the instant a tab is hidden, so
+ *  without this a phone that locks for ten seconds mid-conversation earns an
+ *  email for a message its owner is about to read anyway. */
+export const OFFLINE_MESSAGE_EMAIL_MIN_AWAY_MS = 5 * 60 * 1000;
+
+/** Hard ceiling on offline-message emails per user per UTC day (v2.99.40).
+ *  The cooldown alone allows ~24/day; this is the backstop that keeps RELAY
+ *  well inside "transactional" behaviour no matter how the cooldown is tuned. */
+export const OFFLINE_MESSAGE_EMAIL_MAX_PER_DAY = 3;
 
 /** Update a user's email-notification preferences (v2.99.13). Writes only the
  *  keys present; a column left NULL means "enabled (default)" and false means
  *  the user turned it off. */
 export async function setUserNotificationPrefs(
   userId: number,
-  prefs: { emailNotifyMissedCall?: boolean; emailNotifyMessage?: boolean }
+  prefs: { emailNotifyMissedCall?: boolean; emailNotifyMessage?: boolean; pushEnabled?: boolean }
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
   const set: Record<string, boolean> = {};
   if (prefs.emailNotifyMissedCall !== undefined) set.emailNotifyMissedCall = prefs.emailNotifyMissedCall;
   if (prefs.emailNotifyMessage !== undefined) set.emailNotifyMessage = prefs.emailNotifyMessage;
+  if (prefs.pushEnabled !== undefined) set.pushEnabled = prefs.pushEnabled;
   if (Object.keys(set).length === 0) return;
   await db.update(users).set(set).where(eq(users.id, userId));
 }
@@ -765,20 +777,127 @@ export async function setUserNotificationPrefs(
 export async function claimOfflineMessageEmail(userId: number, cooldownMs: number): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
-  const cutoff = new Date(Date.now() - cooldownMs);
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - cooldownMs);
+  // UTC midnight of "today" — the bucket the daily counter belongs to.
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+  // STEP 1 — roll the day over, if it hasn't been rolled already.
+  //
+  // This is deliberately its OWN statement, and the daily counter deliberately
+  // does NOT reset itself inside the claim below. The obvious one-statement
+  // version (`SET count = IF(day <=> today, count + 1, 1), day = today`) leans
+  // on MySQL evaluating SET assignments left to right so the IF reads the OLD
+  // day — but the emitted ORDER IS NOT OURS TO CHOOSE: drizzle's
+  // `buildUpdateSet` walks `Object.keys(table columns)`, i.e. the order the
+  // columns are DECLARED IN THE SCHEMA, not the order of the object literal
+  // passed to `.set()`. `messageEmailDay` is declared before
+  // `messageEmailsToday`, so the day would be overwritten FIRST, the IF would
+  // always see `today`, and the counter would never reset — the cap would decay
+  // to one email per day forever and the counter would grow without bound.
+  // Verified against drizzle-orm 0.44.6's mysql dialect, and unpleasant to spot
+  // from the call site, so this code does not depend on assignment order at all.
+  //
+  // Idempotent and race-safe: concurrent rollovers write the SAME values, and
+  // the WHERE means an already-rolled row is untouched. A rollover racing a
+  // claim across the midnight boundary can at worst grant or cost one email in
+  // that instant, which is immaterial against a 3-per-day budget.
+  try {
+    await db
+      .update(users)
+      .set({ messageEmailsToday: 0, messageEmailDay: today })
+      .where(
+        and(
+          eq(users.id, userId),
+          or(isNull(users.messageEmailDay), sql`NOT (${users.messageEmailDay} <=> ${today})`)
+        )
+      );
+  } catch {
+    // A failed rollover must not grant an email it hasn't budgeted for: fall
+    // through to the claim, which still enforces pref + cooldown + the cap
+    // against whatever the counter currently says (fails toward FEWER emails).
+  }
+
+  // STEP 2 — the atomic claim. A pure increment now: no day logic in the SET, so
+  // the statement is correct regardless of the order the columns are emitted in.
   const res = await db
     .update(users)
-    .set({ lastMessageEmailAt: new Date() })
+    .set({
+      lastMessageEmailAt: now,
+      messageEmailsToday: sql`COALESCE(${users.messageEmailsToday}, 0) + 1`,
+    })
     .where(
       and(
         eq(users.id, userId),
         or(isNull(users.emailNotifyMessage), eq(users.emailNotifyMessage, true)),
-        or(isNull(users.lastMessageEmailAt), lt(users.lastMessageEmailAt, cutoff))
+        or(isNull(users.lastMessageEmailAt), lt(users.lastMessageEmailAt, cutoff)),
+        // Daily budget, evaluated against the pre-update row — so two concurrent
+        // claims at count = CAP-1 can't both win.
+        sql`COALESCE(${users.messageEmailsToday}, 0) < ${OFFLINE_MESSAGE_EMAIL_MAX_PER_DAY}`
       )
     );
   // mysql2 returns [ResultSetHeader]; affectedRows>0 means THIS statement won
-  // the claim (pref on + cooldown elapsed).
+  // the claim (pref on + cooldown elapsed + budget left).
   return Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+}
+
+/** True when this identity has at least one live push subscription (Web Push or
+ *  FCM) — i.e. we can reach their device directly and an email is redundant
+ *  (v2.99.40). Fails CLOSED for email purposes: on any DB trouble it returns
+ *  true ("assume reachable"), so a hiccup suppresses a nudge rather than
+ *  emailing someone who did not need it. */
+export async function hasPushSubscription(identityId: number): Promise<boolean> {
+  try {
+    const db = await getDb();
+    if (!db) return true;
+    const rows = await db
+      .select({ id: pushSubscriptions.id })
+      .from(pushSubscriptions)
+      .where(eq(pushSubscriptions.identityId, identityId))
+      .limit(1);
+    return rows.length > 0;
+  } catch {
+    return true;
+  }
+}
+
+/** Can we actually deliver a push to this identity right now (v2.99.42)?
+ *
+ *  BOTH conditions matter, and checking only the first was a real bug: nothing
+ *  deletes the `push_subscriptions` row when a user turns the push switch off,
+ *  so a subscription can exist for someone `sendPushToIdentity` will refuse to
+ *  send to. The offline-message email used "has a subscription" as its stand-in
+ *  for "reachable", which meant push-off + message-email-on produced NEITHER a
+ *  push nor an email — silently, forever, for that combination. */
+export async function pushReachable(identityId: number): Promise<boolean> {
+  const [hasSub, enabled] = await Promise.all([
+    hasPushSubscription(identityId),
+    pushEnabledForIdentity(identityId),
+  ]);
+  return hasSub && enabled;
+}
+
+/** Is push delivery enabled for the account behind this identity (v2.99.40)?
+ *  NULL/true = on (the historical default: having a subscription meant push),
+ *  explicit false = the user turned it off in Profile. Guests have no user row
+ *  and are always on. Fails OPEN on DB trouble so a hiccup can't silence a
+ *  ringing call. */
+export async function pushEnabledForIdentity(identityId: number): Promise<boolean> {
+  try {
+    const db = await getDb();
+    if (!db) return true;
+    const rows = await db
+      .select({ pushEnabled: users.pushEnabled })
+      .from(identities)
+      .innerJoin(users, eq(identities.userId, users.id))
+      .where(eq(identities.id, identityId))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return true; // guest / no linked account
+    return row.pushEnabled !== false;
+  } catch {
+    return true;
+  }
 }
 
 /** Release a claim made by `claimOfflineMessageEmail` when the email FAILED to
@@ -790,7 +909,16 @@ export async function claimOfflineMessageEmail(userId: number, cooldownMs: numbe
 export async function releaseOfflineMessageEmailClaim(userId: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  await db.update(users).set({ lastMessageEmailAt: null }).where(eq(users.id, userId));
+  // Also give the day's budget slot back (v2.99.40) — a send that never left
+  // must not spend one of the three. GREATEST floors it at 0 so a rollback can
+  // never drive the counter negative.
+  await db
+    .update(users)
+    .set({
+      lastMessageEmailAt: null,
+      messageEmailsToday: sql`GREATEST(COALESCE(${users.messageEmailsToday}, 0) - 1, 0)`,
+    })
+    .where(eq(users.id, userId));
 }
 
 export interface PresenceLite {
@@ -897,6 +1025,10 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "users", column: "emailNotifyMissedCall", ddl: "ADD COLUMN `emailNotifyMissedCall` boolean" },
     { table: "users", column: "emailNotifyMessage", ddl: "ADD COLUMN `emailNotifyMessage` boolean" },
     { table: "users", column: "lastMessageEmailAt", ddl: "ADD COLUMN `lastMessageEmailAt` timestamp NULL" },
+    // v2.99.40 — push master switch + the daily offline-email budget.
+    { table: "users", column: "pushEnabled", ddl: "ADD COLUMN `pushEnabled` boolean" },
+    { table: "users", column: "messageEmailDay", ddl: "ADD COLUMN `messageEmailDay` timestamp NULL" },
+    { table: "users", column: "messageEmailsToday", ddl: "ADD COLUMN `messageEmailsToday` int" },
     // Hot-path indexes (v2.88, mirrored in drizzle/schema.ts):
     //  - messages(conversationId, id): the listThreads groupwise-max + every
     //    listMessages page (ORDER BY id within a conversation).

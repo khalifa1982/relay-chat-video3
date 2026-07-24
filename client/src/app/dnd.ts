@@ -7,6 +7,7 @@
  *   - incoming calls are auto-declined client-side by the relay engine.
  */
 import { useEffect, useState } from "react";
+import { syncAlertPrefsToSw } from "./swPrefs";
 
 const KEY = "relay_dnd";
 const listeners = new Set<(on: boolean) => void>();
@@ -25,6 +26,10 @@ export function setDnd(on: boolean): void {
   } catch {
     /* storage may be unavailable (private mode) — listeners still fire */
   }
+  // Mirror to the service worker (v2.99.42): a Web Push reaches the OS without
+  // going through the page, so DND has to be enforced there too or it would only
+  // silence alerts while a tab happens to be open.
+  syncAlertPrefsToSw();
   listeners.forEach((l) => {
     try {
       l(on);

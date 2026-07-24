@@ -66,22 +66,30 @@ describe("v2.99.13 — offline-message email on the send path (content-free + th
   const routers = read("server/v2routers.ts");
   it("messageWaitingHtml is CONTENT-FREE — no body/sender interpolation", () => {
     const seg = routers.slice(routers.indexOf("function messageWaitingHtml"), routers.indexOf("export const NumberSchema"));
-    expect(seg).toMatch(/You have a new message waiting on RELAY/);
+    // v2.99.40: the nudge coalesces (one email can stand for several
+    // messages), so the copy went plural — "messages waiting", never a count.
+    expect(seg).toMatch(/You have messages waiting on RELAY/);
     expect(seg).toMatch(/we don't include message contents in email/i);
     // the ONLY interpolation is the appUrl button — no ${body}, ${sender}, etc.
     const interpolations = seg.match(/\$\{[^}]+\}/g) || [];
-    expect(interpolations.every((s) => /appUrl|button/.test(s))).toBe(true);
+    // v2.99.40 adds the unsubscribe link; still no body/sender interpolation.
+    expect(interpolations.every((s) => /appUrl|button|unsub/.test(s))).toBe(true);
   });
   it("the send procedure emails every OFFLINE recipient with an account email, atomically throttled", () => {
     const seg = routers.slice(routers.indexOf("Offline-message EMAIL"), routers.indexOf("Offline auto-reply"));
-    expect(seg).toMatch(/emailEnabled\(\) && peerIds\.length > 0/);
-    expect(seg).toMatch(/getPresenceForIds\(peerIds\)/);
-    expect(seg).toMatch(/if \(onlineById\.get\(pid\)\) continue;/); // offline only
+    // v2.99.40: presence is resolved ONCE for both the new push and this email,
+    // so the loop walks the precomputed offline set instead of re-filtering.
+    expect(seg).toMatch(/emailEnabled\(\) && offlinePeerIds\.length > 0/);
+    expect(routers).toMatch(/offlinePeerIds = peerIds\.filter\(\(pid\) => !presenceById\.get\(pid\)\?\.isOnline\)/);
     expect(seg).toMatch(/if \(!peer\?\.userId\) continue;/); // guests skipped
     expect(seg).toMatch(/if \(!user\?\.email\) continue;/); // email required
     expect(seg).toMatch(/claimOfflineMessageEmail\(\s*peer\.userId,\s*OFFLINE_MESSAGE_EMAIL_COOLDOWN_MS\s*\)/);
     expect(seg).toMatch(/sendEmail\(\{/);
-    expect(seg).toMatch(/html: messageWaitingHtml\(\{ appUrl \}\)/);
+    // v2.99.42: the URL is hoisted into a const so the same value can also go
+    // into the explicit text/plain part (stripHtml would have eaten the href).
+    expect(seg).toMatch(/const unsubscribeUrl = unsubscribeLink\(peer\.userId\);/);
+    expect(seg).toMatch(/html: messageWaitingHtml\(\{ appUrl, unsubscribeUrl \}\)/);
+    expect(seg).toMatch(/text: messageWaitingText\(\{ appUrl, unsubscribeUrl \}\)/);
   });
 });
 
@@ -105,8 +113,13 @@ describe("v2.99.13 — Profile email-notifications section", () => {
   it("renders an EmailNotificationsSection with two toggles, gated on a registered email", () => {
     expect(profile).toMatch(/function EmailNotificationsSection/);
     expect(profile).toMatch(/<EmailNotificationsSection \/>/);
-    // hides for guests / email-less accounts
-    expect(profile).toMatch(/if \(!prefs\.data\?\.signedIn \|\| !prefs\.data\.hasEmail\) return null;/);
+    // v2.99.40: the section is now "Notifications" and also carries the PUSH
+    // switch, which isn't an email pref — so it shows for any signed-in account
+    // and only the two EMAIL rows are gated on a linked address. Guests still
+    // see nothing (the prefs live on the user row).
+    expect(profile).toMatch(/if \(!prefs\.data\?\.signedIn\) return null;/);
+    expect(profile).toMatch(/const hasEmail = prefs\.data\.hasEmail;/);
+    expect(profile).toMatch(/\{hasEmail && \(/);
     // two toggles wired to the mutation
     expect(profile).toMatch(/setPrefs\.mutate\(\{ missedCall: v \}\)/);
     expect(profile).toMatch(/setPrefs\.mutate\(\{ message: v \}\)/);

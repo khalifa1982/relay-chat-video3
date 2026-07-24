@@ -22,24 +22,36 @@
  *                                 verify the provider's webhook signature
  * ────────────────────────────────────────────────────────────────────────── */
 import crypto from "crypto";
-import { type Express } from "express";
+import { type Express, type Request, type Response } from "express";
 import {
   getConversationParticipantIds,
   sendMessage,
   getIdentityById,
   getIdentityByUserId,
   getOrCreateDmConversation,
+  setUserNotificationPrefs,
 } from "./v2db";
 import { getUserById, getUserByOpenId } from "./db";
 import { publishToIdentity } from "./v2events";
 import { stripHtml } from "./email";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
+import { verifyUnsubscribeToken } from "./unsubscribe";
 
 // SECURITY (S11): the inbound webhook was unthrottled. Add a modest per-IP token
 // bucket — a legitimate provider (Resend Inbound) fires occasional webhooks, so
 // this never bites real traffic but caps abuse/replay floods. Honors
 // RELAY_RATELIMIT_OFF like the other gates.
 const inboundIpLimiter = createRateLimiter({ capacity: 60, refillPerSec: 1 });
+// The unsubscribe route is unauthenticated and does a DB read+write per POST,
+// so it gets its OWN modest bucket (a shared one would let unsubscribe traffic
+// starve the provider webhook, and vice versa). Swept like every other limiter.
+const unsubscribeIpLimiter = createRateLimiter({ capacity: 30, refillPerSec: 0.5 });
+setInterval(() => unsubscribeIpLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
+
+/** Escape a value destined for a double-quoted HTML attribute. */
+function escapeHtmlAttr(v: string): string {
+  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 setInterval(() => inboundIpLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
 
 export interface InboundConfig {
@@ -306,12 +318,125 @@ export function verifyWebhookSignature(
 }
 
 /**
+ * Mount `/api/email/unsubscribe` (v2.99.42) — the opt-out carried by the
+ * offline-message nudge's `List-Unsubscribe` header and its footer link.
+ *
+ * GET NEVER WRITES; only POST does. That split is the whole point, not
+ * pedantry: the token appears twice in the recipient's inbox, and mail security
+ * gateways routinely FETCH links found in mail to detonate them (Microsoft Safe
+ * Links, Proofpoint/Barracuda URL rewriting, corporate AV scanners). Express
+ * also answers HEAD from `app.get`. So a handler that wrote on GET would let a
+ * scanner silently unsubscribe someone before they ever opened the message —
+ * they'd just stop getting notifications, with nothing to explain why. Exactly
+ * the failure RFC 8058 introduced one-click POST to avoid.
+ *
+ * So GET renders a confirm page whose button POSTs (no sign-in, still one
+ * click), and the RFC 8058 flow is unaffected because a mail client honouring
+ * `List-Unsubscribe-Post` POSTs on its own.
+ *
+ * Neither verb needs a session: the token IS the authorization. It can only
+ * turn message email OFF — never on, and it reaches no other setting — so a
+ * leaked link costs at most one channel the user re-enables in Profile.
+ */
+export function registerEmailUnsubscribe(app: Express): void {
+  const page = (res: Response, title: string, detail: string, status: number, formAction?: string) => {
+    // formAction is only ever passed a token that has ALREADY verified, so it is
+    // `<digits>.<base64url>` by construction; escaped anyway, because reflecting
+    // a query parameter into markup is how this kind of page grows an XSS.
+    const button = formAction
+      ? `<form method="post" action="${escapeHtmlAttr(formAction)}" style="margin:26px 0 0">` +
+        `<button type="submit" style="appearance:none;border:0;cursor:pointer;background:#3FE0C5;color:#04201B;` +
+        `font:600 15px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:14px 24px;border-radius:12px">` +
+        `Unsubscribe me</button></form>`
+      : "";
+    res
+      .status(status)
+      .type("html")
+      .send(
+        `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
+          `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+          `<meta name="robots" content="noindex">` +
+          `<title>${title} · RELAY</title></head>` +
+          `<body style="margin:0;background:#0E1014;color:#F5F7FA;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">` +
+          `<div style="max-width:440px;margin:12vh auto;padding:0 24px;text-align:center">` +
+          `<div style="font-size:20px;font-weight:800;letter-spacing:-0.02em">RELAY</div>` +
+          `<h1 style="font-size:22px;margin:20px 0 10px">${title}</h1>` +
+          `<p style="font-size:15px;line-height:1.6;color:#A7B0BF;margin:0">${detail}</p>` +
+          button +
+          `</div></body></html>`
+      );
+  };
+  const badLink = (res: Response) =>
+    page(
+      res,
+      "That link didn't work",
+      "It may have been altered in transit. You can turn message emails off any time in RELAY under Profile → Notifications.",
+      400
+    );
+
+  // GET / HEAD — read-only. Verify the token so a broken link still says so,
+  // then offer the button. No write happens on this path.
+  app.get("/api/email/unsubscribe", (req: Request, res: Response) => {
+    const raw = typeof req.query.t === "string" ? req.query.t : "";
+    const userId = raw ? verifyUnsubscribeToken(raw) : null;
+    if (!userId) {
+      badLink(res);
+      return;
+    }
+    page(
+      res,
+      "Turn off message emails?",
+      "We'll stop emailing you when messages arrive while you're offline. Calls and messages still reach you in the app, and you can turn these emails back on in Profile → Notifications.",
+      200,
+      `/api/email/unsubscribe?t=${encodeURIComponent(raw)}`
+    );
+  });
+
+  // POST — the only writing path. Used by the confirm button above AND by mail
+  // clients doing RFC 8058 one-click (whose body we don't need to read).
+  app.post("/api/email/unsubscribe", async (req: Request, res: Response) => {
+    if (
+      process.env.RELAY_RATELIMIT_OFF !== "1" &&
+      !unsubscribeIpLimiter.allow(clientIpOf(req), Date.now())
+    ) {
+      res.status(429).type("text").send("Too many requests — please try again shortly.");
+      return;
+    }
+    const raw = typeof req.query.t === "string" ? req.query.t : "";
+    const userId = raw ? verifyUnsubscribeToken(raw) : null;
+    if (!userId) {
+      badLink(res);
+      return;
+    }
+    try {
+      await setUserNotificationPrefs(userId, { emailNotifyMessage: false });
+      page(
+        res,
+        "You're unsubscribed",
+        "We won't email you about new messages again. Calls and messages still arrive in the app as normal, and you can turn these emails back on in Profile → Notifications.",
+        200
+      );
+    } catch {
+      // The write failed — say so honestly rather than claiming success for
+      // something that didn't happen.
+      page(
+        res,
+        "We couldn't save that",
+        "Something went wrong on our side. Please try the link again, or turn message emails off in RELAY under Profile → Notifications.",
+        500
+      );
+    }
+  });
+}
+
+/**
  * Mount POST /api/email/inbound — the provider (Resend Inbound) webhook. Always
  * replies 200 on OUR processing errors (so the provider doesn't retry forever);
  * a failed SIGNATURE check is the one 401. No-op (200, disabled) until
  * INBOUND_EMAIL_DOMAIN is set.
  */
 export function registerEmailInbound(app: Express): void {
+  registerEmailUnsubscribe(app);
   // The global express.json() parses req.body AND stashes the exact bytes on
   // req.rawBody for this path (see _core/index.ts) — we verify the signature
   // over rawBody and read the already-parsed payload from req.body.

@@ -87,6 +87,22 @@ export function parseSmtpReply(line: string): { code: number; more: boolean } {
   return { code: Number.isFinite(code) ? code : 0, more: line.charAt(3) === "-" };
 }
 
+/** Render extra headers, refusing anything that could break out of its own
+ *  header line. A CR or LF in a header value is the classic header-injection
+ *  vector (it would let a value append `Bcc:` or start the body), so a name or
+ *  value containing one is DROPPED rather than sanitized — every caller here
+ *  supplies a fixed header, so a rejected one means a bug, not lost data. */
+export function extraHeaderLines(headers?: Record<string, string>): string[] {
+  if (!headers) return [];
+  const out: string[] = [];
+  for (const [name, value] of Object.entries(headers)) {
+    if (!/^[A-Za-z0-9-]+$/.test(name)) continue;
+    if (/[\r\n]/.test(value)) continue;
+    out.push(`${name}: ${value}`);
+  }
+  return out;
+}
+
 /** Build the full RFC 822 message (headers + multipart/alternative body). */
 export function buildMimeMessage(input: {
   from: string;
@@ -97,6 +113,10 @@ export function buildMimeMessage(input: {
   replyTo?: string;
   date?: Date;
   messageId?: string;
+  /** Extra RFC 822 headers, e.g. List-Unsubscribe (v2.99.40). CR/LF in a name
+   *  or value is dropped — a header value is attacker-adjacent data and a bare
+   *  newline would let it inject arbitrary headers or a body. */
+  headers?: Record<string, string>;
 }): string {
   const boundary = "relay-" + crypto.randomBytes(12).toString("hex");
   const date = (input.date ?? new Date()).toUTCString();
@@ -113,6 +133,7 @@ export function buildMimeMessage(input: {
     `Date: ${date}`,
     `Message-ID: ${messageId}`,
     ...(input.replyTo ? [`Reply-To: ${input.replyTo}`] : []),
+    ...extraHeaderLines(input.headers),
     "MIME-Version: 1.0",
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
     "",
@@ -225,6 +246,8 @@ export async function smtpSend(input: {
   html: string;
   text: string;
   replyTo?: string;
+  /** Extra RFC 822 headers (e.g. List-Unsubscribe). See extraHeaderLines. */
+  headers?: Record<string, string>;
 }): Promise<SmtpSendResult> {
   const cfg = smtpConfig();
   if (!cfg) return { ok: false, error: "smtp not configured" };
@@ -278,6 +301,7 @@ export async function smtpSend(input: {
       html: input.html,
       text: input.text,
       replyTo: input.replyTo,
+      headers: input.headers,
     });
     w.write(dotStuff(mime) + "\r\n.\r\n");
     await expect(250, "message accept");

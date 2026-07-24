@@ -90,9 +90,15 @@ import {
   releaseOfflineMessageEmailClaim,
   setUserNotificationPrefs,
   OFFLINE_MESSAGE_EMAIL_COOLDOWN_MS,
+  OFFLINE_MESSAGE_EMAIL_MIN_AWAY_MS,
+  hasPushSubscription,
+  pushReachable,
+  type PresenceLite,
+
 } from "./v2db";
 import { sendEmail, emailEnabled, wrapEmailDocument } from "./email";
 import { appBaseUrl } from "./appUrl";
+import { unsubscribeHeaders, unsubscribeLink } from "./unsubscribe";
 import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
@@ -144,19 +150,60 @@ import { pinsInCallAsync, partyLineLiveCountsAsync, liveRoomFor } from "./relay"
  * button (same rule as the missed-call email — a relative href is dead in a
  * mail client and a Host-derived one is spoofable).
  */
-function messageWaitingHtml(opts: { appUrl: string | null }): string {
+function messageWaitingHtml(opts: { appUrl: string | null; unsubscribeUrl?: string | null }): string {
   const button = opts.appUrl
     ? `\n    <a href="${opts.appUrl}/app" style="display:inline-block;background:#3FE0C5;color:#04201B;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:12px">Open RELAY</a>`
+    : "";
+  // A visible one-click opt-out, not just the List-Unsubscribe header (v2.99.40)
+  // — plenty of mail clients don't surface the header, and this is the one email
+  // RELAY sends that the recipient didn't ask for. The link needs no sign-in.
+  const unsub = opts.unsubscribeUrl
+    ? ` <a href="${opts.unsubscribeUrl}" style="color:#8A93A2;text-decoration:underline">Unsubscribe from these emails.</a>`
     : "";
   return wrapEmailDocument(
     `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0E1014">
     <div style="font-size:20px;font-weight:800;letter-spacing:-0.02em">RELAY</div>
-    <p style="font-size:16px;line-height:1.5;margin:18px 0 6px">You have a new message waiting on RELAY.</p>
-    <p style="font-size:14px;color:#5A6271;margin:0 0 22px">Log in to read it — we don't include message contents in email.</p>${button}
-    <p style="font-size:12px;color:#8A93A2;margin-top:28px">You're receiving this because message notifications are on for your RELAY account. You can turn them off in Profile → Notifications.</p>
+    <p style="font-size:16px;line-height:1.5;margin:18px 0 6px">You have messages waiting on RELAY.</p>
+    <p style="font-size:14px;color:#5A6271;margin:0 0 22px">Log in to read them — we don't include message contents in email.</p>${button}
+    <p style="font-size:12px;color:#8A93A2;margin-top:28px">You're receiving this because message notifications are on for your RELAY account. You can turn them off in Profile → Notifications.${unsub}</p>
   </div>`,
-    "New message · RELAY"
+    "Messages waiting · RELAY"
   );
+}
+
+/**
+ * text/plain twin of `messageWaitingHtml`. Written by hand rather than derived,
+ * because `stripHtml` drops anchors together with their hrefs — so the derived
+ * fallback mentioned the unsubscribe link without ever giving its URL.
+ */
+function messageWaitingText(opts: { appUrl: string | null; unsubscribeUrl?: string | null }): string {
+  const lines = [
+    "RELAY",
+    "",
+    "You have messages waiting on RELAY.",
+    "Log in to read them — we don't include message contents in email.",
+  ];
+  if (opts.appUrl) lines.push("", `Open RELAY: ${opts.appUrl}/app`);
+  lines.push(
+    "",
+    "You're receiving this because message notifications are on for your RELAY account.",
+    "You can turn them off in Profile → Notifications."
+  );
+  if (opts.unsubscribeUrl) lines.push(`Or unsubscribe here: ${opts.unsubscribeUrl}`);
+  return lines.join("\n");
+}
+
+/**
+ * How long this identity has been away, in ms — or null when we can't tell
+ * (no presence row, no timestamp). Callers treat null as "no opinion" and fall
+ * through rather than guessing, so a missing row never suppresses a
+ * notification on its own.
+ */
+function awayForMs(presence: PresenceLite | undefined): number | null {
+  if (!presence || presence.isOnline) return null;
+  const seen = presence.lastSeenAt ? new Date(presence.lastSeenAt).getTime() : NaN;
+  if (!Number.isFinite(seen)) return null;
+  return Math.max(0, Date.now() - seen);
 }
 
 export const NumberSchema = z
@@ -1438,27 +1485,86 @@ export const v2MessagesRouter = router({
         /* push is best-effort; polling is the safety net */
       }
 
+      // NEW-MESSAGE WEB PUSH (v2.99.40). The fan-out above is an SSE hint — it
+      // only reaches a tab that is currently connected, which is exactly the
+      // case where the user does NOT need telling. A missed call has woken the
+      // device since v2.83 and a voicemail since v2.88, but a plain message
+      // never did: a phone with RELAY installed and closed stayed silent until
+      // its owner happened to open the app. So push every OFFLINE recipient.
+      //
+      // Content-free by the same rule as the email (owner: "WITHOUT the
+      // content") — the sender's name, never a word of the message. One tag per
+      // conversation, so ten messages replace each other instead of stacking
+      // ten notifications. `sendPushToIdentity` already no-ops when the user
+      // turned push off or has no subscription, so this needs no gate of its
+      // own; everything is best-effort and never affects the delivered message.
+      let offlinePeerIds: number[] = [];
+      const presenceById = new Map<number, PresenceLite>();
+      try {
+        if (peerIds.length > 0) {
+          const presences = await getPresenceForIds(peerIds);
+          for (const p of presences) presenceById.set(p.identityId, p);
+          offlinePeerIds = peerIds.filter((pid) => !presenceById.get(pid)?.isOnline);
+          // A voicemail already pushed its own, better-worded notification.
+          if (!input.meta?.voicemail) {
+            const from = me.displayName || me.number;
+            for (const pid of offlinePeerIds) {
+              sendPushToIdentity(pid, {
+                kind: "message",
+                title: from,
+                body: "Sent you a message — tap to read it.",
+                tag: `relay-msg-${input.conversationId}`,
+                url: `/app/messages?c=${input.conversationId}`,
+              }).catch(() => {});
+            }
+          }
+        }
+      } catch {
+        /* a presence hiccup costs a notification, never the message */
+      }
+
       // Offline-message EMAIL (v2.99.13, owner: "if somebody sent me a message
       // and I'm offline, email me — WITHOUT the content — 'you received a
-      // message, log in to see it'; I can disable it in Profile"). For every
-      // OFFLINE recipient (1:1 or group) with a linked account email and the
-      // preference on, send a content-free nudge — throttled to at most one per
-      // recipient per cooldown (claimOfflineMessageEmail is an atomic, race-safe
-      // pref+cooldown check). This runs only on the real client→peers send path
-      // (the internal offline auto-reply below is a separate sendMessage call,
-      // never this procedure), so it never emails for system messages. Fully
-      // best-effort: a failure here never affects the delivered message.
+      // message, log in to see it'; I can disable it in Profile"). Content-free
+      // nudge to an offline recipient with a linked address and the pref on.
+      // This runs only on the real client→peers send path (the internal offline
+      // auto-reply below is a separate sendMessage call, never this procedure),
+      // so it never emails for system messages. Fully best-effort: a failure
+      // here never affects the delivered message.
+      //
+      // v2.99.40 tightens it to LAST RESORT, because this is the one place
+      // RELAY can generate mail from someone else's action — the failure mode is
+      // an unhappy recipient and an SES sending reputation we don't get back.
+      // Four rules, on top of the existing pref + atomic claim:
+      //   1. Only when we CANNOT reach the device instead. A recipient with a
+      //      push subscription just got the notification above; emailing them
+      //      too is pure noise.
+      //   2. Only once they've actually been away a while. Presence flips
+      //      offline the moment a tab hides, so a phone that locks for ten
+      //      seconds mid-conversation would otherwise earn an email for a
+      //      message its owner is already reading.
+      //   3. One per hour, not per 15 minutes (the cooldown constant), and it
+      //      coalesces by design: the mail says "you have messages waiting",
+      //      never a per-message count, so a burst is one accurate email.
+      //   4. At most 3 per UTC day, enforced in the same atomic claim.
+      // Rules 3–4 live in claimOfflineMessageEmail so they're race-safe.
       try {
-        if (emailEnabled() && peerIds.length > 0) {
-          const presences = await getPresenceForIds(peerIds);
-          const onlineById = new Map(presences.map((p) => [p.identityId, p.isOnline]));
-          for (const pid of peerIds) {
-            if (onlineById.get(pid)) continue; // only offline recipients
+        if (emailEnabled() && offlinePeerIds.length > 0) {
+          for (const pid of offlinePeerIds) {
             const peer = await getIdentityById(pid);
             if (!peer?.userId) continue; // guests have no email
             const user = await getUserById(peer.userId);
             if (!user?.email) continue;
-            // Atomic: only fires when the pref is on AND the cooldown elapsed.
+            // Rule 2 — been gone long enough to actually miss this?
+            const away = awayForMs(presenceById.get(pid));
+            if (away !== null && away < OFFLINE_MESSAGE_EMAIL_MIN_AWAY_MS) continue;
+            // Rule 1 — a reachable device makes the email redundant. "Reachable"
+            // must mean BOTH a live subscription AND the push switch on: nothing
+            // deletes the subscription row when the switch is turned off, so
+            // testing only the row would leave a push-off user with no push AND
+            // no email, which is the opposite of what this rule is for.
+            if (await pushReachable(pid)) continue;
+            // Atomic: pref on AND cooldown elapsed AND daily budget left.
             const claimed = await claimOfflineMessageEmail(
               peer.userId,
               OFFLINE_MESSAGE_EMAIL_COOLDOWN_MS
@@ -1466,16 +1572,35 @@ export const v2MessagesRouter = router({
             if (!claimed) continue;
             const appUrl = appBaseUrl();
             const claimUserId = peer.userId;
-            sendEmail({
+            const unsubscribeUrl = unsubscribeLink(peer.userId);
+            void sendEmail({
               to: user.email,
-              subject: "You have a new message on RELAY",
-              html: messageWaitingHtml({ appUrl }),
-            }).catch(() => {
-              // The nudge didn't send — release the cooldown claim so the next
-              // offline message retries, rather than suppressing notifications
-              // for the whole cooldown after one transient mailer failure.
-              void releaseOfflineMessageEmailClaim(claimUserId);
-            });
+              subject: "You have messages waiting on RELAY",
+              html: messageWaitingHtml({ appUrl, unsubscribeUrl }),
+              // An explicit text/plain part, because the default is
+              // stripHtml(html) and that deletes every <a> along with its href —
+              // so a text-only client saw the words "Unsubscribe from these
+              // emails" with no URL behind them, which is the one case the
+              // visible link exists for.
+              text: messageWaitingText({ appUrl, unsubscribeUrl }),
+              // One-click unsubscribe. Required by bulk-sender rules and, more
+              // to the point, the honest thing to offer: the recipient never
+              // asked for this mail. The link works without signing in.
+              headers: unsubscribeHeaders(peer.userId),
+            })
+              // RELEASE ON A FAILED SEND. This has to inspect the RESULT, not
+              // hang off .catch(): sendEmail is documented never to throw and
+              // resolves {ok:false} on every failure path, so the .catch() this
+              // replaces was dead code — a refused or throttled SES send kept the
+              // claim, and the recipient paid the full cooldown plus one of three
+              // daily slots for a mail that never left.
+              .then((r) => {
+                if (!r.ok) void releaseOfflineMessageEmailClaim(claimUserId);
+              })
+              .catch(() => {
+                // Defensive: if it ever does throw, still give the claim back.
+                void releaseOfflineMessageEmailClaim(claimUserId);
+              });
           }
         }
       } catch {
@@ -2276,13 +2401,16 @@ export const v2OtpAuthRouter = router({
       email?: string | null;
       emailNotifyMissedCall?: boolean | null;
       emailNotifyMessage?: boolean | null;
+      pushEnabled?: boolean | null;
     }) | null;
-    if (!user) return { signedIn: false, hasEmail: false, missedCall: true, message: true };
+    if (!user) return { signedIn: false, hasEmail: false, missedCall: true, message: true, push: true };
     return {
       signedIn: true,
       hasEmail: Boolean(user.email),
       missedCall: user.emailNotifyMissedCall !== false,
       message: user.emailNotifyMessage !== false,
+      // v2.99.40: NULL/true = on, matching the email prefs.
+      push: user.pushEnabled !== false,
     };
   }),
 
@@ -2291,6 +2419,7 @@ export const v2OtpAuthRouter = router({
       z.object({
         missedCall: z.boolean().optional(),
         message: z.boolean().optional(),
+        push: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2299,8 +2428,9 @@ export const v2OtpAuthRouter = router({
       await setUserNotificationPrefs(user.id, {
         emailNotifyMissedCall: input.missedCall,
         emailNotifyMessage: input.message,
+        pushEnabled: input.push,
       });
-      return { ok: true, missedCall: input.missedCall, message: input.message };
+      return { ok: true, missedCall: input.missedCall, message: input.message, push: input.push };
     }),
 
   /* ── device list + remote logout (v2.99.1) ──────────────────────────

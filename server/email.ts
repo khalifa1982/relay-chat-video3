@@ -23,6 +23,9 @@ export interface SendEmailInput {
   text?: string;
   from?: string;
   replyTo?: string | string[];
+  /** Extra RFC 822 headers, e.g. List-Unsubscribe (v2.99.40). Honoured by the
+   *  built-in SMTP client; the Resend fallback takes them as `headers` too. */
+  headers?: Record<string, string>;
 }
 
 export interface SendEmailResult {
@@ -131,6 +134,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
       html: input.html,
       text: input.text ?? stripHtml(input.html),
       replyTo,
+      headers: input.headers,
     });
     if (r.ok) return { ok: true };
     // v2.92: MAIL_PROVIDER=smtp means SMTP is authoritative — a failure is a
@@ -167,6 +171,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
     text: input.text ?? stripHtml(input.html),
   };
   if (input.replyTo) body.reply_to = input.replyTo; // Resend uses snake_case
+  if (input.headers) body.headers = input.headers; // e.g. List-Unsubscribe
   try {
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",

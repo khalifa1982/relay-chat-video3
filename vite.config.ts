@@ -215,7 +215,13 @@ export default defineConfig({
     ],
     fs: {
       strict: true,
-      deny: ["**/.*"],
+      // This list REPLACES vite's defaults rather than extending them
+      // (`mergeWithDefaults` assigns arrays), so it has to be complete on its
+      // own. `**/.*` alone is not: picomatch only matches a dotted LAST segment,
+      // so `.git/config` and `key.pem` both fall through it — and this repo's
+      // `.git/config` carries credentials in its remote URL. Verified against
+      // picomatch directly, not assumed.
+      deny: ["**/.*", "**/.git/**", "*.{crt,pem}"],
     },
   },
 });

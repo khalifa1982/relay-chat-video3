@@ -12,6 +12,7 @@
  *     that case the UI shows an "Add to Home Screen" tip instead of a broken
  *     enable button.
  */
+import { syncAlertPrefsToSw } from "./swPrefs";
 
 export function pushSupported(): boolean {
   return (
@@ -66,6 +67,11 @@ export async function ensurePushSubscription(
 ): Promise<boolean> {
   if (!pushSupported() || !vapidPublicKey) return false;
   if (Notification.permission !== "granted") return false;
+  // Seed the worker's copy of this device's mute/DND state before any push can
+  // arrive (v2.99.42). Both are localStorage settings the worker can't read, and
+  // a message push reaches the OS without going through the page — so without
+  // this the very first muted-thread message would still buzz the phone.
+  syncAlertPrefsToSw();
   try {
     const reg = await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();

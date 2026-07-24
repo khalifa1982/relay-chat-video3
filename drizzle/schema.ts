@@ -50,6 +50,18 @@ export const users = mysqlTable("users", {
   /** Cooldown watermark: last time we sent an offline-message email to this
    *  user, so N messages while away don't produce N emails. */
   lastMessageEmailAt: timestamp("lastMessageEmailAt"),
+  /* Notification preferences + email budget (v2.99.40). Additive + nullable via
+     ensureSchemaExtensions(); NULL = enabled, matching the columns above. */
+  /** Master switch for Web Push / FCM notifications. NULL/true = on, false =
+   *  off. A user can revoke at the browser level too, but that is invisible to
+   *  us and not portable across their devices — this is the in-app control. */
+  pushEnabled: boolean("pushEnabled"),
+  /** Day (UTC, midnight-truncated) that `messageEmailsToday` counts. */
+  messageEmailDay: timestamp("messageEmailDay"),
+  /** Offline-message emails already sent on `messageEmailDay`. Hard-capped, so
+   *  a busy day can never turn RELAY into a mail flood (and can never put the
+   *  SES reputation at risk). Reset implicitly when the day rolls over. */
+  messageEmailsToday: int("messageEmailsToday"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),

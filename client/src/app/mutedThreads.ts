@@ -5,6 +5,7 @@
  * in-app; only the alert is suppressed (gated in useRealtime).
  */
 import { useEffect, useState } from "react";
+import { syncAlertPrefsToSw } from "./swPrefs";
 
 const KEY = "relay_muted_threads";
 const listeners = new Set<() => void>();
@@ -26,6 +27,10 @@ function write(set: Set<number>): void {
   } catch {
     /* storage unavailable — listeners still fire so UI stays consistent */
   }
+  // Mirror to the service worker: since v2.99.42 the server pushes for new
+  // messages, and a push bypasses the page — so the worker has to know which
+  // threads are muted or it would buzz the phone for one.
+  syncAlertPrefsToSw();
   listeners.forEach((l) => {
     try {
       l();
