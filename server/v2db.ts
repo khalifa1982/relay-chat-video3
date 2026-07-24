@@ -2125,6 +2125,57 @@ export async function consumeExpiringMessage(input: {
   return { conversationId: row.conversationId, participantIds: pids };
 }
 
+/**
+ * M11 (server-side content gating): a RECIPIENT reveals a locked expiring
+ * message. The content (body + attachment) is WITHHELD from `messages.list`
+ * for a locked message, so the ONLY way to see it is through here — this
+ * captures the content, then burns it (view-once: destroyed for everyone,
+ * exactly like consumeExpiringMessage), and returns the captured content so
+ * the caller can hand it to the revealer once. Same authorization as
+ * consumeExpiringMessage (participant, not the sender, not already consumed).
+ */
+export async function revealExpiringMessage(input: {
+  messageId: number;
+  identityId: number;
+}): Promise<{
+  conversationId: number;
+  participantIds: number[];
+  body: string | null;
+  attachmentId: number | null;
+} | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.id, input.messageId))
+    .limit(1);
+  if (!row || row.deletedAt) return null;
+  const meta = (row.meta ?? null) as { expire?: unknown; consumedAt?: unknown } | null;
+  if (!meta || meta.expire == null || meta.consumedAt != null) return null;
+  if (row.senderIdentityId === input.identityId) return null;
+  const pids = await getConversationParticipantIds(row.conversationId);
+  if (!pids.includes(input.identityId)) return null;
+  const capturedBody = row.body ?? null;
+  const capturedAttachmentId = row.attachmentId ?? null;
+  // Burn — same as consumeExpiringMessage (keep the attachments ROW per F3 so
+  // the lingering S3 object stays classified `attachment` and fails CLOSED).
+  await db
+    .update(messages)
+    .set({
+      body: null,
+      attachmentId: null,
+      meta: { ...meta, consumedAt: Date.now() },
+    })
+    .where(eq(messages.id, input.messageId));
+  return {
+    conversationId: row.conversationId,
+    participantIds: pids,
+    body: capturedBody,
+    attachmentId: capturedAttachmentId,
+  };
+}
+
 export async function markThreadRead(input: {
   conversationId: number;
   identityId: number;

@@ -8,6 +8,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { s3Config } from "./s3";
+import { storageGetSignedUrl } from "./storage";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb, getUserById } from "./db";
@@ -47,6 +48,7 @@ import {
   createGroupConversation,
   deleteMessage,
   consumeExpiringMessage,
+  revealExpiringMessage,
   getPresenceAudienceIds,
   getPresenceForIds,
   isGuestPresenceHidden,
@@ -1191,19 +1193,31 @@ export const v2MessagesRouter = router({
         .map((r) => r.attachmentId)
         .filter((x): x is number => typeof x === "number");
       const attById = new Map((await getAttachmentsByIds(attIds)).map((a) => [a.id, a]));
-      return rows.map((r) => ({
-        id: r.id,
-        conversationId: r.conversationId,
-        senderIdentityId: r.senderIdentityId,
-        kind: r.kind,
-        body: r.body,
-        meta: r.meta,
-        status: r.status,
-        createdAt: r.createdAt,
-        editedAt: r.editedAt,
-        attachment: r.attachmentId ? (attById.get(r.attachmentId) ?? null) : null,
-        replyToId: r.replyToId ?? null,
-      }));
+      return rows.map((r) => {
+        // M11: WITHHOLD the content of a locked expiring message — a recipient
+        // must reveal it via `revealExpiring` (which burns it), so the secret is
+        // no longer readable straight out of the raw list response. The sender
+        // always sees their own; a consumed message is already null in the DB
+        // and renders as "disappeared".
+        const m = (r.meta ?? null) as { expire?: unknown; consumedAt?: unknown } | null;
+        const isExpiring = m?.expire != null;
+        const consumed = m?.consumedAt != null;
+        const locked = isExpiring && !consumed && r.senderIdentityId !== me.id;
+        return {
+          id: r.id,
+          conversationId: r.conversationId,
+          senderIdentityId: r.senderIdentityId,
+          kind: r.kind,
+          body: locked ? null : r.body,
+          meta: r.meta,
+          status: r.status,
+          createdAt: r.createdAt,
+          editedAt: r.editedAt,
+          attachment: locked ? null : r.attachmentId ? (attById.get(r.attachmentId) ?? null) : null,
+          replyToId: r.replyToId ?? null,
+          locked,
+        };
+      });
     }),
 
   /** Search message bodies within one conversation. */
@@ -1526,6 +1540,59 @@ export const v2MessagesRouter = router({
         /* best-effort */
       }
       return { ok: true };
+    }),
+
+  /**
+   * M11 (server-side content gating): reveal a LOCKED expiring message. The
+   * body + attachment are WITHHELD from `messages.list` for a locked message
+   * (see the `locked` gate there), so a recipient can no longer read the secret
+   * out of the raw list response without burning it — this is the only path to
+   * the content, and it BURNS the message (view-once: gone for everyone). Media
+   * is returned INLINE as a data URL: the server reads the object while it still
+   * has access, so the immediate burn can't race the client's fetch (the old
+   * client-fetch-then-burn flow is retired). Text returns `body`.
+   */
+  revealExpiring: publicProcedure
+    .input(z.object({ messageId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      statusGate(ctx); // reuse the generic per-IP throttle
+      const res = await revealExpiringMessage({ messageId: input.messageId, identityId: me.id });
+      if (!res) return { ok: false as const };
+      // Tell every participant the row changed so their list refetches and shows
+      // the "disappeared" placeholder (the burn already nulled the content).
+      try {
+        for (const pid of res.participantIds) {
+          publishToIdentity(pid, { kind: "message", conversationId: res.conversationId, from: me.id });
+        }
+      } catch {
+        /* best-effort */
+      }
+      // Inline the media bytes (data URL) so the revealer renders a LOCAL copy —
+      // the burn above already revoked the storage key, so there's no live url
+      // to hand back. Bounded: skip inlining above ~30MB (view-once media is
+      // small in practice); a miss just yields no media, never a hang.
+      let media: { dataUrl: string; mimeType: string } | null = null;
+      if (res.attachmentId != null) {
+        try {
+          const [att] = await getAttachmentsByIds([res.attachmentId]);
+          if (att?.storageKey) {
+            const signed = await storageGetSignedUrl(att.storageKey);
+            const resp = await fetch(signed);
+            const len = Number(resp.headers.get("content-length") ?? 0);
+            if (resp.ok && len <= 30 * 1024 * 1024) {
+              const buf = Buffer.from(await resp.arrayBuffer());
+              if (buf.length <= 30 * 1024 * 1024) {
+                const mime = att.mimeType || "application/octet-stream";
+                media = { dataUrl: `data:${mime};base64,${buf.toString("base64")}`, mimeType: mime };
+              }
+            }
+          }
+        } catch {
+          /* best-effort — the reader still gets the text body / a burned card */
+        }
+      }
+      return { ok: true as const, body: res.body, media };
     }),
 });
 

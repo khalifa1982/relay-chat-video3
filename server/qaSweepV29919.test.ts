@@ -129,23 +129,20 @@ describe("v2.99.19 QA — #46 group-dial does not collapse when an invitee is of
   });
 });
 
-describe("v2.99.19 QA — #47 view-once media is captured to a local blob before the burn", () => {
+describe("view-once media survives the burn (v2.99.19 #47 → v2.99.34 M11)", () => {
   const src = read("../client/src/pages/app/Messages.tsx");
-  it("revealExpiring fetches the bytes and mints an object URL before consumeExpiring", () => {
+  it("revealExpiring gets the content from the server reveal endpoint (which burns it)", () => {
+    // M11 retired the client fetch-then-burn flow: the content is withheld from
+    // messages.list, so revealExpiring calls the server, which returns the media
+    // INLINE as a data URL (survives the immediate burn — no live url to race).
     expect(src).toMatch(/async function revealExpiring/);
-    expect(src).toMatch(/URL\.createObjectURL\(blob\)/);
-    // the revoked thumbnail key is dropped so the <img> loads the full blob
-    expect(src).toMatch(/url: objUrl, thumbUrl: null/);
-    // and the fetch happens before the destructive burn
-    const fetchIdx = src.indexOf("await fetch(localAttachment.url");
-    const burnIdx = src.indexOf("consumeExpiring.mutate({ messageId: m.id })");
-    expect(fetchIdx).toBeGreaterThan(0);
-    expect(burnIdx).toBeGreaterThan(fetchIdx);
+    expect(src).toMatch(/await revealExpiringMutation\.mutateAsync\(\{ messageId: m\.id \}\)/);
+    expect(src).toMatch(/url: res\.media\.dataUrl/);
+    expect(src).toMatch(/thumbUrl: null/);
   });
-  it("object URLs are revoked on purge / thread switch / unmount (no leak)", () => {
+  it("the reveal-media cleanup helpers still exist (harmless for data URLs)", () => {
     expect(src).toMatch(/function revokeReveal/);
     expect(src).toMatch(/function revokeAllReveals/);
-    expect(src).toMatch(/revokeReveal\(k\)/);
   });
 });
 

@@ -197,9 +197,11 @@ describe("self-destructing messages (v2.96)", () => {
     );
     expect(MESSAGES).toMatch(/setExpire\(null\); \/\/ per-send setting/);
   });
-  it("the recipient's locked bubble reveals a LOCAL copy and burns server-side", () => {
+  it("the recipient's locked bubble reveals via the server (which burns it) — v2.99.34 M11", () => {
     expect(MESSAGES).toMatch(/function revealExpiring\(m: Msg\)/);
-    expect(MESSAGES).toMatch(/consumeExpiring\.mutate\(\{ messageId: m\.id \}\)/);
+    // M11: content is withheld from list; reveal goes through the server
+    // endpoint, which returns it once and burns it (no client consumeExpiring).
+    expect(MESSAGES).toMatch(/await revealExpiringMutation\.mutateAsync\(\{ messageId: m\.id \}\)/);
     expect(MESSAGES).toMatch(/Tap to view/);
     expect(MESSAGES).toMatch(/This message has disappeared/);
   });
