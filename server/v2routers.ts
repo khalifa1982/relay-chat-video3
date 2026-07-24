@@ -83,6 +83,7 @@ import {
   listPartyLines,
   MAX_PARTY_LINES_PER_OWNER,
   claimOfflineMessageEmail,
+  releaseOfflineMessageEmailClaim,
   setUserNotificationPrefs,
   OFFLINE_MESSAGE_EMAIL_COOLDOWN_MS,
 } from "./v2db";
@@ -1322,11 +1323,17 @@ export const v2MessagesRouter = router({
             );
             if (!claimed) continue;
             const appUrl = appBaseUrl();
+            const claimUserId = peer.userId;
             sendEmail({
               to: user.email,
               subject: "You have a new message on RELAY",
               html: messageWaitingHtml({ appUrl }),
-            }).catch(() => {});
+            }).catch(() => {
+              // The nudge didn't send — release the cooldown claim so the next
+              // offline message retries, rather than suppressing notifications
+              // for the whole cooldown after one transient mailer failure.
+              void releaseOfflineMessageEmailClaim(claimUserId);
+            });
           }
         }
       } catch {

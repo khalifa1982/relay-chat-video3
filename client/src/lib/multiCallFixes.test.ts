@@ -13,12 +13,17 @@ const engine = read("client/src/lib/relayClient.ts");
  */
 describe("multi-call engine fixes (source-pinned)", () => {
   it("§4a: error{full}/forbidden are fatal to a peerless joiner", () => {
-    // The fatal set must include full + forbidden so an over-cap accept / a
-    // full-party-line dial fails cleanly instead of stranding in a dead call.
-    const m = engine.match(/const fatalCode =[^;]*;/s);
+    // v2.99.19 split the error codes: full/forbidden are JOIN errors (WE
+    // couldn't join — an over-cap accept / a full-party-line dial), which must
+    // still fail cleanly for a peerless joiner instead of stranding in a dead
+    // call. (Reachability errors — offline/nonexistent — are handled separately
+    // so a group call isn't torn down by one offline invitee.)
+    const m = engine.match(/const joinErr =[^;]*;/s);
     expect(m).toBeTruthy();
     expect(m![0]).toMatch(/"full"/);
     expect(m![0]).toMatch(/"forbidden"/);
+    // Both classes reach the fatal branch for a peerless dialer/joiner.
+    expect(engine).toMatch(/\(reachErr \|\| joinErr\) && inCall && aloneInCall\(\)/);
   });
 
   it("§2b: onRingCancel dismisses a cancelled call-waiting popup", () => {

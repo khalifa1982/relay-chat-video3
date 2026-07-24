@@ -5237,3 +5237,50 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       passed / 1 skipped; check + build green.
 - NOTE: found via a full re-audit of the conversation transcript after the owner flagged missed items;
   the heavy QA sweep (#35) ran in parallel and surfaced real bugs now queued for v2.99.19.
+
+## v2.99.19 — QA-sweep fixes (#35 findings; several are v2.99.11 offline-rework regressions) (2026-07-24)
+- [x] #46 (HIGH) GROUP CALL COLLAPSED IF ANY INVITEE OFFLINE: a group dial rings the FIRST invitee to
+      CREATE the room, then the `room` ack flushes the rest. v2.99.11 means an OFFLINE first invitee
+      returns error{offline} and NO room is created — so the remaining invitees were never rung AND the
+      client's fatal-error branch tore the whole dial down over one offline person. Fixed in
+      client/src/lib/relayClient.ts: the error handler now splits `reachErr` (offline/nonexistent/gone —
+      the INVITEE is unreachable) from `joinErr` (self/full/forbidden — WE couldn't join). During a
+      group-dial BOOTSTRAP (callIsGroup && outgoingDial && !establishedOnce && !roomId && aloneInCall),
+      a reachErr PROMOTES the next pendingGroupInvites entry as the new bootstrap (one at a time — never
+      all-at-once, which would race duplicate rooms) and only failDials once every invitee is exhausted.
+      A reachErr inside an ESTABLISHED parked call (`inParkedCall()`) never ends the call. joinErr stays
+      fatal to a peerless joiner.
+- [x] #47 (HIGH) VIEW-ONCE MEDIA BROKE FOR THE RECIPIENT: opening an expiring media message burned it
+      (consumeExpiring nulls attachmentId → the storage proxy 403s the url) BEFORE the recipient could
+      see it — a kept server url rendered as a broken image the instant it burned. Fixed in
+      client/src/pages/app/Messages.tsx: revealExpiring is now async — it FETCHes the bytes into a local
+      blob object-URL (and drops thumbUrl) BEFORE calling consumeExpiring, so the reader views a local
+      copy that survives the burn. Object URLs are tracked and URL.revokeObjectURL'd on countdown purge /
+      thread switch / unmount (no leak). A brief "Opening…" spinner covers the fetch.
+- [x] #48 (MED) OFFLINE RESOLVER FIRED A STALE ERROR: the invite handler's offline branch
+      (server/relay.ts) awaited onPageCallee then only checked the caller still existed — not that its
+      ctxEpoch was unchanged. A hang-up or channel-takeover during the await (both bump ctxEpoch) could
+      fire error{offline}/{nonexistent} + a phantom miss into the caller's NEW context. Both `.then`/
+      `.catch` now re-check `callerNow.ctxEpoch === ctxEpoch` (same discipline as the party-line settle).
+- [x] #49 (MED) MULTI-DEVICE HANG-UP LEFT OTHER DEVICES RINGING: the invite fans the ring to EVERY one
+      of the callee's devices, but cancelPendingRings (server/relay.ts) only cancelled the primary socket
+      — a caller hanging up before answer left the callee's OTHER devices ringing until their own timeout.
+      cancelPendingRings now fans ring-cancel to all `reg.devices` (multi-device) mirroring the ring.
+- [x] #50 (MED) NEW-DEVICE APPROVAL COULD STRAND A LOGIN: approval requires another device active in the
+      last ~12 min, but that device may be closed and never tap Approve. AuthPanel's waiting screen now
+      always offers a "Sign in with your PIN instead" escape (PIN bypasses approval by design) and, after
+      35s with no response, an honest "the other device may be offline or closed" note. Fails toward the
+      user getting in.
+- [x] #51 (LOW batch): (a) the in-call add-person offline guard now accepts BOTH offline + nonexistent
+      (v2.99.11 split them). (b) UNSEND cleared a phantom unread badge: unreadCount is a stored per-
+      recipient counter, so unsending an as-yet-unread message left the badge lit for a message that's
+      gone — deleteMessage (v2db.ts) now decrements (floored at 0) every non-sender recipient who hadn't
+      read past it. (c) OFFLINE-MESSAGE EMAIL: a failed send used to keep the cooldown watermark, silently
+      suppressing notifications for the whole window — releaseOfflineMessageEmailClaim rolls it back on
+      failure so the next message retries. (d) SESSION REAPER: reapStaleSessions (every 30 min) drops dead
+      pending-approval rows (never approved after 30 min — they inflated the approval bell forever) + rows
+      idle past the longest cookie TTL (95 days).
+- [x] Tests: server/qaSweepV29919.test.ts (14 — behavioural relay tests for #48 ctxEpoch guard + #49
+      multi-device cancel fan-out; source-pins for the client + DB fixes). Two pre-existing pins updated
+      to the refactored error handler (multiCallFixes §4a → joinErr; updateChecker add-guard regex).
+      Suite 1400 passed / 1 skipped; check + build green.

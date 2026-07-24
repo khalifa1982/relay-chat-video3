@@ -703,8 +703,20 @@ export function cancelPendingRings(reg: RelayRegistry, callerPin: string): strin
   if (!c || c.ringing.size === 0) return [];
   const pins = Array.from(c.ringing);
   pins.forEach(calleePin => {
-    const callee = reg.clients.get(calleePin);
-    if (callee) safeSend(callee.socket, { type: "ring-cancel", from: callerPin });
+    const cancelMsg = { type: "ring-cancel", from: callerPin };
+    // Multi-device: the invite rang EVERY one of the callee's devices (see the
+    // devs.forEach fan-out in the invite handler), so the cancel must reach all
+    // of them — otherwise a caller who hangs up BEFORE the callee answers leaves
+    // the callee's OTHER devices ringing until their own client-side timeout.
+    // Mirror the ring fan-out; fall back to the single primary socket when
+    // multi-device is off or no device set is registered.
+    const devs = multiDeviceEnabled() ? reg.devices.get(calleePin) : undefined;
+    if (devs && devs.size > 0) {
+      devs.forEach(sock => safeSend(sock, cancelMsg));
+    } else {
+      const callee = reg.clients.get(calleePin);
+      if (callee) safeSend(callee.socket, cancelMsg);
+    }
     // The call is over — a later (re)connect must not get this ring redelivered.
     clearPendingRing(reg, calleePin, { from: callerPin });
   });
@@ -1397,8 +1409,16 @@ export function handleMessage(
           }
           onPageCallee({ calleePin: to, callerPin, callerName: me.name, roomId: "", video: wantVideo })
             .then(info => {
+              // Stale-continuation guard — the SAME discipline the party-line
+              // resolver applies at `settle` (line ~1526). onPageCallee awaits
+              // the DB; while it's out the caller may have hung up or had their
+              // channel taken over (both bump ctxEpoch). An identity dial keys on
+              // ctxEpoch (a sibling group-dial invite moves only dialEpoch, so
+              // those coexist). A moved epoch ⇒ this offline result belongs to a
+              // dial that no longer exists — drop it, so we never fire a stray
+              // error / phantom miss into the caller's NEW context.
               const callerNow = reg.clients.get(callerPin);
-              if (!callerNow) return; // caller vanished while we resolved
+              if (!callerNow || callerNow.ctxEpoch !== ctxEpoch) return;
               if (info && info.exists) {
                 safeSend(callerSocket, {
                   type: "error",
@@ -1415,7 +1435,8 @@ export function handleMessage(
             })
             .catch(() => {
               const callerNow = reg.clients.get(callerPin);
-              if (callerNow) safeSend(callerSocket, { type: "error", code: "offline", message: "They're offline right now." });
+              if (!callerNow || callerNow.ctxEpoch !== ctxEpoch) return;
+              safeSend(callerSocket, { type: "error", code: "offline", message: "They're offline right now." });
             });
           return;
         }

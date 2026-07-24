@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.99.18)", () => {
-    expect(APP_VERSION).toBe("2.99.18");
+  it("is the current release (2.99.19)", () => {
+    expect(APP_VERSION).toBe("2.99.19");
   });
 });
 
@@ -184,9 +184,13 @@ describe("call-routing fixes (v2.50)", () => {
   });
   it("an offline error from an add-to-call invite does not tear down the call", () => {
     expect(RELAY_CLIENT).toMatch(/addInviteOfflineGuard/);
-    // The error handler checks the guard before the alone-in-call hangUp.
+    // The error handler checks the guard before the alone-in-call hangUp — and
+    // v2.99.19 widened it to BOTH offline + nonexistent (the add-to-call "+"
+    // pad can hit either code depending on whether the number is a real user).
     const errCase = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf('case "error"'));
-    expect(errCase.slice(0, 600)).toMatch(/addInviteOfflineGuard\s*&&\s*m\.code === ["']offline["']/);
+    expect(errCase.slice(0, 1600)).toMatch(
+      /addInviteOfflineGuard\s*&&\s*\(m\.code === ["']offline["']\s*\|\|\s*m\.code === ["']nonexistent["']\)/,
+    );
   });
 });
 
