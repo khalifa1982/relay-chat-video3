@@ -599,7 +599,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   }, [conversationId]);
   // Free any outstanding blobs when the thread view unmounts.
   useEffect(() => () => revokeAllReveals(), []);
-  const consumeExpiring = trpc.messages.consumeExpiring.useMutation({
+  // M11: the content of a locked expiring message is WITHHELD from
+  // messages.list — revealing fetches it via this endpoint, which returns it
+  // ONCE and burns it server-side (view-once: gone for everyone). Media comes
+  // back as a data URL (survives the burn — no live storage url to race), so
+  // there's no client-side fetch/blob/revoke to manage anymore.
+  const revealExpiringMutation = trpc.messages.revealExpiring.useMutation({
     onSuccess: () => {
       utils.messages.list.invalidate({ conversationId });
       utils.messages.threads.invalidate();
@@ -635,36 +640,33 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     if (mode == null) return;
     if (revealed.has(m.id) || revealing != null) return; // ignore double-taps
     setRevealing(m.id);
-    let localAttachment = m.attachment ?? null;
-    // Capture the MEDIA bytes into a local blob BEFORE we burn. The burn nulls
-    // attachmentId server-side, so the proxy immediately 403s the original url
-    // — a copy that kept that url would render as a broken image. A blob url
-    // survives the burn (and the thumbUrl is dropped so the <img> loads the
-    // full local blob, not the now-revoked thumbnail key). If the fetch fails
-    // we fall back to the server url (best-effort; still burns).
-    if (localAttachment?.url) {
-      try {
-        const resp = await fetch(localAttachment.url, { credentials: "include" });
-        if (resp.ok) {
-          const blob = await resp.blob();
-          const objUrl = URL.createObjectURL(blob);
-          objectUrlsRef.current.set(m.id, objUrl);
-          localAttachment = { ...localAttachment, url: objUrl, thumbUrl: null };
+    let body: string | null = null;
+    let attachment: Msg["attachment"] = null;
+    try {
+      // Fetch the withheld content from the server, which burns it as it returns.
+      const res = await revealExpiringMutation.mutateAsync({ messageId: m.id });
+      if (res.ok) {
+        body = res.body ?? null;
+        if (res.media) {
+          // A data: URL renders directly and survives the burn — no fetch/blob.
+          attachment = {
+            ...(m.attachment ?? {}),
+            url: res.media.dataUrl,
+            thumbUrl: null,
+            mimeType: res.media.mimeType,
+          } as unknown as Msg["attachment"];
         }
-      } catch {
-        /* offline / transient — keep the server url as a best-effort fallback */
       }
+    } catch {
+      /* transient — the next list refetch will show the burned card */
     }
     const until = mode === "once" ? null : Date.now() + mode * 1000;
     setRevealed((prev) => {
       const next = new Map(prev);
-      next.set(m.id, { body: m.body ?? null, attachment: localAttachment, until });
+      next.set(m.id, { body, attachment, until });
       return next;
     });
     setRevealing(null);
-    // Burn now — the content is destroyed for BOTH sides; what the reader sees
-    // from here on is the local copy (blob) captured above.
-    consumeExpiring.mutate({ messageId: m.id });
   }
   const removeMutation = trpc.messages.remove.useMutation({
     // Optimistically drop the message from the visible list the instant the user
@@ -1382,7 +1384,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                        countdown (view-once: until they leave the thread). */
                     const exp = m.meta as { expire?: "once" | 5 | 10 | 30; consumedAt?: number } | null;
                     const expiring = exp?.expire != null;
-                    const burned = expiring && (exp?.consumedAt != null || (!m.body && !m.attachment));
+                    // M11: the server now WITHHOLDS a locked message's body +
+                    // attachment (`m.locked`), so "empty content" alone no longer
+                    // means burned — a locked message is tap-to-view, and only a
+                    // real consume (consumedAt) is burned.
+                    const serverLocked = (m as { locked?: boolean }).locked === true;
+                    const burned = expiring && !serverLocked && exp?.consumedAt != null;
                     const copy = expiring ? revealed.get(m.id) : undefined;
                     const chip = (label: string) => (
                       <div

@@ -5445,6 +5445,21 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       invitee handling), M13/M14/M18 (contacts/directory), M15/M16/L5 (status), M20/L8 (allocation races),
       M6 (draft debounce), M12/L4 (presence), L2/L3 (auth), M11 (server ephemeral content gating).
 
+## v2.99.34 — M11: server-side ephemeral content gating (2026-07-24)
+- [x] M11 (the final heavy-QA-sweep item; owner: "finish the M11"): messages.list returned the full body +
+      attachment for an un-consumed view-once/disappearing message, so a recipient reading the raw tRPC
+      response (or fetching attachment.url) saw the secret without burning it. FIX (server): list WITHHOLDS
+      the content of a LOCKED message (isExpiring && !consumedAt && sender≠me) — body:null, attachment:null,
+      + a `locked` flag. The only path to the content is the new revealExpiring mutation → revealExpiringMessage
+      (captures body+attachmentId, then burns: nulls both + consumedAt, keeps the attachments row per F3);
+      the router INLINES media as a data: URL (storageGetSignedUrl server-side, ≤30MB base64) so the immediate
+      burn can't race a client fetch. Client: the tap-to-view card calls revealExpiringMutation and renders
+      res.body/res.media.dataUrl; `burned` keys on the server locked flag + consumedAt. The old client
+      fetch-then-burn flow is retired; consumeExpiring endpoint kept for back-compat.
+- [x] Tests: server/m11ContentGating.test.ts (8 pins); qaSweepV29919 #47 + peerIdentityBatch v2.96 reveal
+      pins updated. 1471 tests. THIS CLOSES THE HEAVY-QA SWEEP — all 37 findings addressed (33 fixed +
+      documented accepted residuals).
+
 ## v2.99.33 — owner feedback: Messages row layout + status visibility (2026-07-24)
 - [x] (1) Thread rows cramped — name truncated to "A…": the DIRECT rows put name + badge + PIN + time AND
       the 4 action buttons on one line, squeezing the name. FIX (Messages.tsx): the row is a vertical stack
