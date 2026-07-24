@@ -5130,3 +5130,29 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
 - [x] Tests: server/emailNotifyPrefs.test.ts (11 — schema/migrator, atomic claim, NULL=on across all
       three read sites, content-free email, gating order, tRPC, Profile section). Suite 1361 passed /
       1 skipped; check + build green.
+
+## v2.99.14 — media URL lockdown: stream bytes, never redirect to a presigned URL (owner) (2026-07-24)
+- [x] OWNER: a video-note URL `/manus-storage/relay-chat/62/..._video-note_....webm` could be opened
+      + copied OUTSIDE the app on desktop; "everything should be encrypted, cannot be traced — the
+      file/voice/video/image link shown in the browser or app stays in the app."
+- [x] ROOT CAUSE (pre-fix recon): NOT missing authz — video/voice/file/image are participant-gated
+      attachments; the relative `/manus-storage/<key>` URL already 403s a non-participant/anon. The
+      leak was that the proxy answered an AUTHORIZED request with a 307 redirect to a
+      session-independent presigned S3/Forge URL (300s TTL). Following the redirect exposed that raw
+      URL in the address bar/devtools, and it was copyable + replayable by anyone for its lifetime.
+- [x] FIX (server/_core/storageProxy.ts): no more redirect. Resolve the presigned URL SERVER-SIDE
+      only, fetch it, and STREAM the bytes back through the cookie-gated route
+      (Readable.fromWeb(upstream.body).pipe(res)). Range-aware (forward Range; relay
+      206/Content-Range/Accept-Ranges so video/audio seek). Cache-Control: private (never public);
+      X-Content-Type-Options: nosniff. Browser only ever sees `/manus-storage/<key>`.
+- [x] FAIL-OPEN CLOSED: an `unknown` (orphaned/guessed) key is refused to an anonymous caller
+      (kind==="unknown" && identityId==null → 403). Avatars stay semi-public (pre-onboarding invite
+      previews) but also stream, so even they never leak a presigned URL. Attachment + status gating
+      unchanged.
+- [x] TRADEOFF: media bytes now transit the app server (S3→app→client), ~2× egress on media —
+      acceptable for RELAY's volume and the necessary cost of "stays in the app". The 60s
+      presigned-URL cache is kept but used only server-side (never handed to the client).
+- [x] Tests: server/_core/storageProxy.test.ts rewritten (no redirect; unknown+anon → 403; streams);
+      server/storageProxy.test.ts updated (legal key streams 200, no Location header); new
+      server/mediaUrlLockdown.test.ts (source-level streaming invariants). Suite 1369 passed / 1
+      skipped; check + build green.

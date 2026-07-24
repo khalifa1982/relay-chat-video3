@@ -6,6 +6,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * uploader or a conversation participant can, and the check fails CLOSED. The DB
  * layer (authorizeStorageKey) and identity resolution (createContext) are mocked
  * so this pins the PROXY's enforcement independent of the DB.
+ *
+ * v2.99.14: the proxy no longer 307-REDIRECTS to a presigned storage URL (that
+ * URL was session-independent and copyable/replayable outside the app). It now
+ * STREAMS the bytes through this cookie-gated route. The storage backends are
+ * mocked to "not configured" so an AUTHORIZED request deterministically stops
+ * at the config check (500) WITHOUT a network fetch — every assertion here is
+ * about the authorization verdict (403 / not-403) and the fact that no redirect
+ * to a presigned URL is ever emitted.
  */
 const { mockCreateContext, mockAuthorize } = vi.hoisted(() => ({
   mockCreateContext: vi.fn(),
@@ -13,6 +21,10 @@ const { mockCreateContext, mockAuthorize } = vi.hoisted(() => ({
 }));
 vi.mock("./context", () => ({ createContext: mockCreateContext }));
 vi.mock("../v2db", () => ({ authorizeStorageKey: mockAuthorize }));
+// Storage backends unconfigured → an authorized request halts at the config
+// guard (500) before any network I/O, keeping the test hermetic.
+vi.mock("../s3", () => ({ s3Config: () => null, s3PresignGetUrl: () => "" }));
+vi.mock("./env", () => ({ ENV: { forgeApiUrl: undefined, forgeApiKey: undefined } }));
 
 import { registerStorageProxy } from "./storageProxy";
 
@@ -26,10 +38,16 @@ function mkRes() {
   return {
     statusCode: 0,
     body: null as any,
+    headersSent: false,
+    redirectCalls: 0,
     status(c: number) { this.statusCode = c; return this; },
-    send(b: any) { this.body = b; return this; },
+    send(b: any) { this.body = b; this.headersSent = true; return this; },
     set() { return this; },
-    redirect(code: number, url: string) { this.statusCode = code; this.body = url; return this; },
+    setHeader() { return this; },
+    on() { return this; },
+    end() { this.headersSent = true; return this; },
+    destroy() { return this; },
+    redirect(code: number, url: string) { this.redirectCalls++; this.statusCode = code; this.body = url; return this; },
     json(o: any) { this.body = o; return this; },
   };
 }
@@ -57,28 +75,40 @@ describe("storage proxy — participant-only file access", () => {
     expect(r.statusCode).toBe(403);
   });
 
-  it("ALLOWS a message attachment to a participant / uploader (not 403)", async () => {
+  it("ALLOWS a message attachment to a participant / uploader (not 403) and NEVER redirects to a presigned URL", async () => {
     asIdentity(7);
     mockAuthorize.mockResolvedValue({ kind: "attachment", authorized: true });
     const r = mkRes();
     await handler()(mkReq("relay-chat/9/photo_ab12.jpg"), r);
     expect(r.statusCode).not.toBe(403);
+    // v2.99.14: the browser must never be handed a shareable storage URL.
+    expect(r.redirectCalls).toBe(0);
   });
 
-  it("SERVES an unknown key (avatar/other) to anonymous — avatars are semi-public, not 403", async () => {
+  it("REFUSES an unknown key to anonymous — no presigned URL for a guessed/orphaned object (v2.99.14, 403)", async () => {
     asIdentity(null);
     mockAuthorize.mockResolvedValue({ kind: "unknown" });
     const r = mkRes();
-    await handler()(mkReq("relay-chat/3/avatar_zz99.jpg"), r);
-    expect(r.statusCode).not.toBe(403);
+    await handler()(mkReq("relay-chat/3/orphan_zz99.bin"), r);
+    expect(r.statusCode).toBe(403);
   });
 
-  it("SERVES an unknown key (avatar) to an authenticated identity (not 403)", async () => {
+  it("SERVES an avatar/unknown key to an authenticated identity (not 403, still no redirect)", async () => {
     asIdentity(7);
     mockAuthorize.mockResolvedValue({ kind: "unknown" });
     const r = mkRes();
     await handler()(mkReq("relay-chat/3/avatar_zz99.jpg"), r);
     expect(r.statusCode).not.toBe(403);
+    expect(r.redirectCalls).toBe(0);
+  });
+
+  it("SERVES a semi-public avatar even to anonymous (invite previews), and never redirects", async () => {
+    asIdentity(null);
+    mockAuthorize.mockResolvedValue({ kind: "avatar", authorized: true });
+    const r = mkRes();
+    await handler()(mkReq("relay-chat/3/avatar_zz99.jpg"), r);
+    expect(r.statusCode).not.toBe(403);
+    expect(r.redirectCalls).toBe(0);
   });
 
   it("fails CLOSED (503) when the auth check throws — never leaks on a DB blip", async () => {

@@ -23,7 +23,7 @@ import { registerStorageProxy, _clearStorageProxyCache } from "./_core/storagePr
 
 // This suite exercises the TRAVERSAL GUARD (segment-wise), which runs BEFORE the
 // participant-only authorization added later. Stub the auth to pass so a legal
-// key reaches the presign/307 — the authorization decision table itself is
+// key reaches the streaming path — the authorization decision table itself is
 // covered by server/_core/storageProxy.test.ts.
 vi.mock("./_core/context", () => ({
   createContext: async () => ({ identity: { id: 5 } }),
@@ -49,6 +49,18 @@ beforeEach(() => {
     process.env[k] = v;
   }
   _clearStorageProxyCache();
+  // v2.99.14: the proxy now STREAMS bytes (it fetches the presigned URL
+  // server-side instead of redirecting the browser to it). Stub that upstream
+  // fetch so a legal key completes deterministically with no real network.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "content-type": "image/png", "content-length": "3" },
+      })
+    )
+  );
 });
 afterEach(() => {
   for (const [k, v] of Object.entries(savedEnv)) {
@@ -56,6 +68,7 @@ afterEach(() => {
     else process.env[k] = v;
   }
   _clearStorageProxyCache();
+  vi.unstubAllGlobals();
 });
 
 /** GET `rawPath` with Node's http client — the request-target is sent
@@ -88,12 +101,13 @@ async function rawGet(
 }
 
 describe("storage proxy traversal guard (segment-wise, v2.91 review D2)", () => {
-  it('serves a legal key whose FILENAME contains ".." ("photo..2020.png"-style) with a 307', async () => {
+  it('STREAMS a legal key whose FILENAME contains ".." ("photo..2020.png"-style) — 200, and NEVER redirects to a presigned URL (v2.99.14)', async () => {
     const { status, location } = await rawGet("/manus-storage/relay-chat/5/a..b_hash.png");
-    expect(status).toBe(307);
-    expect(location).toContain("test-bucket.s3.ap-south-1.amazonaws.com");
-    expect(location).toContain("/relay-chat/5/a..b_hash.png");
-    expect(location).toContain("X-Amz-Signature=");
+    // Legal key passes the segment-wise guard and is streamed back through the
+    // proxy (200), NOT 307-redirected — so the browser never sees a shareable
+    // presigned storage URL (no Location header).
+    expect(status).toBe(200);
+    expect(location).toBeUndefined();
   });
 
   it('rejects a real ".." PATH SEGMENT with 400', async () => {
