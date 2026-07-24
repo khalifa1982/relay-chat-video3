@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { Readable } from "node:stream";
 import { ENV } from "./env";
 import { s3Config, s3PresignGetUrl } from "../s3";
 import { createContext } from "./context";
@@ -108,72 +109,116 @@ export function registerStorageProxy(app: Express) {
         res.status(403).send("Forbidden");
         return;
       }
+      // v2.99.14: an UNKNOWN key (no attachment row, not status, not a current
+      // avatar) is an orphaned or GUESSED object — never serve it to an
+      // anonymous caller. (Avatars stay semi-public so pre-onboarding invite
+      // previews still resolve; the streaming below means even those never
+      // leak a shareable storage URL.) Closes the old fail-open where any
+      // unclassified key was world-readable.
+      if (authz.kind === "unknown" && identityId == null) {
+        res.status(403).send("Forbidden");
+        return;
+      }
     } catch (e) {
       console.error("[StorageProxy] authz error:", e);
       res.status(503).send("Storage temporarily unavailable");
       return;
     }
 
+    // ── Resolve the backing object's presigned URL — SERVER-ONLY ─────────────
+    // v2.99.14 (owner: "the file URL shown in the browser/app must stay in the
+    // app; nothing traceable"): we NO LONGER 307-redirect the browser to this
+    // presigned URL. That URL is session-independent — once it surfaces in the
+    // address bar or devtools (following the old redirect) it is copyable and
+    // replayable by ANYONE for its lifetime (exactly how a video-note leaked).
+    // The presigned URL is now used only here, to fetch the bytes, which we
+    // STREAM back through this cookie-gated route. The browser only ever sees
+    // `/manus-storage/<key>`; no shareable storage URL is ever emitted.
     const now = Date.now();
-    const cached = cacheGet(key, now);
-    if (cached) {
-      res.set("Cache-Control", "private, max-age=60");
-      res.redirect(307, cached);
-      return;
-    }
-
-    // ── Native S3 branch (v2.91) — presign locally, no network round-trip.
-    // Same 60s cache + 307 semantics as the Forge branch below; the presigned
-    // GET's 300s expiry comfortably outlives the cache window.
-    const s3 = s3Config();
-    if (s3) {
-      try {
-        const url = s3PresignGetUrl(s3, key, 300);
-        cacheSet(key, url, now);
-        res.set("Cache-Control", "private, max-age=60");
-        res.redirect(307, url);
-      } catch (err) {
-        console.error("[StorageProxy] s3 presign failed:", err);
-        res.status(502).send("Storage proxy error");
+    let upstreamUrl = cacheGet(key, now);
+    if (!upstreamUrl) {
+      const s3 = s3Config();
+      if (s3) {
+        try {
+          upstreamUrl = s3PresignGetUrl(s3, key, 300);
+        } catch (err) {
+          console.error("[StorageProxy] s3 presign failed:", err);
+          res.status(502).send("Storage proxy error");
+          return;
+        }
+      } else if (ENV.forgeApiUrl && ENV.forgeApiKey) {
+        try {
+          const forgeUrl = new URL(
+            "v1/storage/presign/get",
+            ENV.forgeApiUrl.replace(/\/+$/, "") + "/",
+          );
+          forgeUrl.searchParams.set("path", key);
+          const forgeResp = await fetch(forgeUrl, {
+            headers: { Authorization: `Bearer ${ENV.forgeApiKey}` },
+          });
+          if (!forgeResp.ok) {
+            const body = await forgeResp.text().catch(() => "");
+            console.error(`[StorageProxy] forge error: ${forgeResp.status} ${body}`);
+            res.status(502).send("Storage backend error");
+            return;
+          }
+          const parsed = (await forgeResp.json()) as { url?: string };
+          if (!parsed.url) {
+            res.status(502).send("Empty signed URL from backend");
+            return;
+          }
+          upstreamUrl = parsed.url;
+        } catch (err) {
+          console.error("[StorageProxy] forge presign failed:", err);
+          res.status(502).send("Storage proxy error");
+          return;
+        }
+      } else {
+        res.status(500).send("Storage proxy not configured");
+        return;
       }
-      return;
+      cacheSet(key, upstreamUrl, now);
     }
 
-    if (!ENV.forgeApiUrl || !ENV.forgeApiKey) {
-      res.status(500).send("Storage proxy not configured");
-      return;
-    }
-
+    // ── Stream the bytes through us (Range-aware; upstreamUrl never leaves) ───
     try {
-      const forgeUrl = new URL(
-        "v1/storage/presign/get",
-        ENV.forgeApiUrl.replace(/\/+$/, "") + "/",
-      );
-      forgeUrl.searchParams.set("path", key);
-
-      const forgeResp = await fetch(forgeUrl, {
-        headers: { Authorization: `Bearer ${ENV.forgeApiKey}` },
+      const range = req.headers.range;
+      const upstream = await fetch(upstreamUrl, range ? { headers: { Range: range } } : undefined);
+      if (!upstream.ok && upstream.status !== 206) {
+        // A cached presigned URL may have gone stale — drop it so the next hit
+        // re-presigns instead of serving the error again.
+        signedUrlCache.delete(key);
+        res.status(upstream.status === 404 ? 404 : 502).send("Storage backend error");
+        return;
+      }
+      res.status(upstream.status);
+      // Relay only the content headers the browser needs to render + seek media.
+      for (const h of ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"]) {
+        const v = upstream.headers.get(h);
+        if (v) res.setHeader(h, v);
+      }
+      if (!upstream.headers.get("accept-ranges")) res.setHeader("Accept-Ranges", "bytes");
+      // Content-addressed + immutable keys → a short PRIVATE cache is safe and
+      // avoids re-streaming on every render. Never `public` (that would be the
+      // very shareability we're removing).
+      res.setHeader("Cache-Control", "private, max-age=60");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      if (!upstream.body) {
+        res.end();
+        return;
+      }
+      const nodeStream = Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]);
+      nodeStream.on("error", (err) => {
+        console.error("[StorageProxy] stream error:", err);
+        if (!res.headersSent) res.status(502).end();
+        else res.destroy();
       });
-
-      if (!forgeResp.ok) {
-        const body = await forgeResp.text().catch(() => "");
-        console.error(`[StorageProxy] forge error: ${forgeResp.status} ${body}`);
-        res.status(502).send("Storage backend error");
-        return;
-      }
-
-      const { url } = (await forgeResp.json()) as { url: string };
-      if (!url) {
-        res.status(502).send("Empty signed URL from backend");
-        return;
-      }
-
-      cacheSet(key, url, now);
-      res.set("Cache-Control", "private, max-age=60");
-      res.redirect(307, url);
+      // Client aborted (tab closed / seek) → stop pulling from upstream.
+      res.on("close", () => nodeStream.destroy());
+      nodeStream.pipe(res);
     } catch (err) {
-      console.error("[StorageProxy] failed:", err);
-      res.status(502).send("Storage proxy error");
+      console.error("[StorageProxy] stream failed:", err);
+      if (!res.headersSent) res.status(502).send("Storage proxy error");
     }
   });
 }
