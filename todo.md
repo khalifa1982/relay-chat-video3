@@ -5445,6 +5445,21 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       invitee handling), M13/M14/M18 (contacts/directory), M15/M16/L5 (status), M20/L8 (allocation races),
       M6 (draft debounce), M12/L4 (presence), L2/L3 (auth), M11 (server ephemeral content gating).
 
+## v2.99.29 — heavy-QA sweep fixes, batch 7 (status stories) (2026-07-24)
+- [x] M15 (MED) video/audio status always ran 5s: the viewer's itemMs already honored item.durationMs, but
+      the composer never captured/sent a duration → always null → flat 5s DEFAULT_ITEM_MS. FIX
+      (Status.tsx): readMediaDurationMs(file) reads .duration on loadedmetadata (currentTime=1e101 nudge for
+      Infinity-duration WebM, 3s timeout + error fallback → null); submit() passes durationMs for video/audio
+      (server accepts 0–10min; viewer caps the slide at 60s).
+- [x] M16 (MED) status-audience copy was backwards: composer toast + strip hint said "visible to your
+      contacts" (people you saved) but statusAudienceAuthorized gates on the VIEWER having saved the owner —
+      a status is seen by people who saved YOUR number. FIX: copy → "visible for 24h to anyone who has you in
+      their contacts" (enforcement unchanged — no visibility change, corrective labeling only).
+- [x] L5 (LOW) press-hold restarted the story: the tap-zone buttons' onClick fired on release even after a
+      press-and-hold (which pauses), so holding then releasing navigated — on the first item prev() restarted
+      it. FIX: pressStartRef stamped on onPointerDown; tap zones navigate only on a quick tap (< HOLD_MS 220ms).
+- [x] Tests: client/src/pages/app/qaBatch7.test.ts (5 pins). 1441 tests. QA-sweep progress: 25 of 37 fixed.
+
 ## v2.99.28 — heavy-QA sweep fixes, batch 6 (contacts/directory) (2026-07-24)
 - [x] M18 (MED) blocked-watcher back-online bypass: directory.watchOnline armed a call-back-alert watch
       with NO block check, so a user the target BLOCKED could still be told (with the target's name + a
