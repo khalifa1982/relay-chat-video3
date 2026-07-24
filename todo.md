@@ -5203,3 +5203,21 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
       (build break); removed them. Keep comments inside the CSS template backtick-free.
 - [x] Tests: client/src/pages/Home.test.ts +2 (Arabic webfont + RTL font rules; active-speaker sweep
       keyframe + staggered/combined anim). Suite 1377 passed / 1 skipped; check + build green.
+
+## v2.99.17 — Dialer: a nonexistent number offers no actions (owner) (2026-07-24)
+- [x] OWNER screenshot: dialing "888 888" showed "No RELAY user with this number" YET still lit active
+      Voice/Video/Group call buttons AND a "Save 888-888 to contacts" pill. You can't call, group-call,
+      or save a number that isn't a real RELAY user.
+- [x] client/src/pages/app/Dialer.tsx: new `nonexistent` flag = 6-digit && not-self &&
+      previewQuery.isSuccess && !previewIdentity — keyed on isSuccess (a SUCCESSFUL directory.lookup
+      resolve to null: not a user, not a party line) so a lookup ERROR / still-loading FAILS OPEN
+      (actions stay enabled; the dial then surfaces the real error — a hiccup never blocks a real
+      number).
+- [x] `callable` gains `&& !nonexistent` (Voice + Video already disabled={!callable}); the Group Call
+      button — previously ALWAYS enabled — gains disabled={nonexistent} (still opens the picker on an
+      empty/partial pad, blocked only for a confirmed-dead 6-digit number); the v2.99.8 Save pill gains
+      `&& !nonexistent`; startCallNow early-returns on nonexistent defensively.
+- [x] Existing-but-OFFLINE users + party lines unaffected (they resolve to a real previewIdentity, so
+      nonexistent is false — offline users stay callable per v2.99.11's leave-a-message flow).
+- [x] Tests: client/src/pages/app/dialerNonexistent.test.ts (5). Suite 1382 passed / 1 skipped; check
+      + build green.

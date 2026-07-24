@@ -227,6 +227,9 @@ export default function DialerPage() {
 
   function startCallNow(opts?: { voice?: boolean }) {
     if (dialed.length !== 6) return;
+    // Defensive: the buttons are disabled for a nonexistent number, but never
+    // dial one even if a click slips through (v2.99.17).
+    if (nonexistent) return;
     // Label the engine's dial-progress card with the callee's directory name
     // when the 6-digit preview already resolved it (best-effort — the server's
     // "ringing" ack also carries the name for raw-number dials).
@@ -267,8 +270,16 @@ export default function DialerPage() {
   // signaling pin (enginePin), NOT the v2 identity number, otherwise the
   // shown number can never actually be dialed.
   const myNumber = enginePin ?? me?.number ?? null;
+  // v2.99.17 (owner: dialing a number that doesn't exist should offer NO
+  // actions — no call, no message, no save). A number is NONEXISTENT only when
+  // the public lookup RESOLVED SUCCESSFULLY to nothing (isSuccess + null data —
+  // not a user, not a party line). We key on isSuccess so a lookup ERROR or a
+  // still-loading query FAILS OPEN (actions stay enabled; the dial itself then
+  // surfaces the real error) — a transient hiccup never blocks a real number.
+  const nonexistent =
+    /^\d{6}$/.test(dialed) && dialed !== myNumber && previewQuery.isSuccess && !previewIdentity;
   const callable =
-    /^\d{6}$/.test(dialed) && dialed !== myNumber && engineReady;
+    /^\d{6}$/.test(dialed) && dialed !== myNumber && engineReady && !nonexistent;
 
   const ghost = useMemo(
     () => ghostNumberRule({ typed: dialed, ownNumber: myNumber }),
@@ -642,9 +653,11 @@ export default function DialerPage() {
                 <div className="flex flex-col items-center gap-1.5">
                   <button
                     type="button"
+                    disabled={nonexistent}
                     onClick={() => setShowGroup(true)}
                     className="
                       rounded-full text-white grid place-items-center
+                      disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none
                       active:scale-[0.94] transition-transform duration-150
                     "
                     style={{
@@ -657,7 +670,7 @@ export default function DialerPage() {
                       transitionTimingFunction: "var(--ease-out)",
                     }}
                     aria-label="Group call"
-                    title="Group call — ring up to 10 people into one room"
+                    title={nonexistent ? "That number isn't on RELAY" : "Group call — ring up to 10 people into one room"}
                   >
                     <Users className="size-6" strokeWidth={2.2} />
                   </button>
@@ -677,12 +690,13 @@ export default function DialerPage() {
               ) : null}
             </div>
 
-            {/* Quick-add (v2.99.8): offer Save for ANY complete 6-digit number
-                that isn't yours, isn't a party line, and isn't already saved —
-                even when the directory has no match yet (owner: "while you're
-                typing the number on the pad it will give you Save if this
-                contact is not in your contact list"). */}
-            {/^\d{6}$/.test(dialed) && dialed !== myNumber && !previewIdentity?.partyLine ? (
+            {/* Quick-add (v2.99.8): offer Save for a complete 6-digit number
+                that isn't yours, isn't a party line, and isn't already saved.
+                v2.99.17 (owner): NOT for a NONEXISTENT number — you can't save
+                a contact that isn't a real RELAY user. (During the lookup, and
+                on a lookup error, nonexistent is false, so Save still shows for
+                a real user the moment it resolves — or optimistically.) */}
+            {/^\d{6}$/.test(dialed) && dialed !== myNumber && !previewIdentity?.partyLine && !nonexistent ? (
               <QuickAddContact
                 number={dialed}
                 displayName={previewIdentity?.displayName || dialed}
