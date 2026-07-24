@@ -5181,3 +5181,25 @@ uploaded there, so each one 307-redirected to S3 and 404'd. Verified live: `.io`
 - [x] Tests: client/src/pages/Home.test.ts +3 (lookup wiring, online/party-line/offline/unknown gate,
       name escaping), client/src/app/callLinkJoin.test.ts +3 (guest offline block, fail-open, copy).
       Suite 1375 passed / 1 skipped; check + build green.
+
+## v2.99.16 — landing polish: Arabic sizing parity (#40) + live group-call grid (#41) (owner) (2026-07-24)
+- [x] #40 (owner: "the Arabic version renders smaller than English"). ROOT CAUSE: every element
+      hardcodes a LATIN face ('Space Grotesk'/'IBM Plex Mono') in its inline font shorthand and
+      FONTS_HREF loaded only those, so Arabic glyphs fell back to a smaller SYSTEM Arabic face and the
+      whole RTL layout looked shrunken. FIX: load Noto Kufi Arabic in FONTS_HREF and force it for RTL
+      text — `.lp-root[dir="rtl"] *{font-family:'Noto Kufi Arabic',… !important}` (inline font
+      shorthands aren't !important, so a stylesheet font-family !important overrides ONLY the family,
+      keeping sizes), plus a later higher-specificity rule keeping the dial/keypad/percent LTR islands
+      ([dir=ltr]) monospace.
+- [x] #41 (owner: "make the talk moving, not fixed images"). The 10-up group-call grid already had
+      subtle Ken-Burns but read as static — added a ROTATING ACTIVE-SPEAKER SWEEP: a green ring
+      overlay (its own span, so it never fights the container's speaking box-shadow) on every tile
+      running a shared 20s @keyframes lpActive at a staggered -i*2s delay, so the highlight rotates
+      around the grid; the container also gets a transform-only lpTalk scale pulse (comma-combined
+      with any existing speaking anim so both run). All motion stays under the existing
+      prefers-reduced-motion gate. Headless-verified the ring sweeps (tile0 opacity .95 while tile1
+      is 0 at the same instant).
+- [x] CAVEAT fixed mid-build: two backticks inside a CSS comment terminated the CSS template literal
+      (build break); removed them. Keep comments inside the CSS template backtick-free.
+- [x] Tests: client/src/pages/Home.test.ts +2 (Arabic webfont + RTL font rules; active-speaker sweep
+      keyframe + staggered/combined anim). Suite 1377 passed / 1 skipped; check + build green.

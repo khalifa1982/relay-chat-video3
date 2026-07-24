@@ -208,3 +208,19 @@ describe("v2.99.15 — hero dialer resolves the number + gates on online (owner)
     expect(HOME_TSX).toMatch(/escLp\(res\.displayName/);
   });
 });
+
+describe("v2.99.16 — Arabic parity (#40) + live group-call grid (#41)", () => {
+  it("loads an Arabic webfont and forces it for RTL text (fixes the smaller-Arabic fallback)", () => {
+    expect(HOME_TSX).toMatch(/Noto\+Kufi\+Arabic/);
+    expect(HOME_TSX).toMatch(/\.lp-root\[dir="rtl"\] \*\{font-family:'Noto Kufi Arabic'/);
+    // the dialer/keypad LTR islands stay monospace (later, higher-specificity rule)
+    expect(HOME_TSX).toMatch(/\.lp-root\[dir="rtl"\] \[dir="ltr"\].*font-family:'IBM Plex Mono'/);
+  });
+  it("the group-call grid gets a rotating active-speaker sweep so it reads as a live call", () => {
+    expect(HOME_TSX).toMatch(/@keyframes lpActive/);
+    expect(HOME_TSX).toMatch(/animation:lpActive 20s \$\{delay\} infinite/);
+    // the sweep is staggered per tile and combines (not clobbers) the speaking anim
+    expect(HOME_TSX).toMatch(/const delay = `\$\{-i \* 2\}s`/);
+    expect(HOME_TSX).toMatch(/g\.spk \? `lpTalk 20s \$\{delay\} infinite, \$\{g\.spk\}`/);
+  });
+});

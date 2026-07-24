@@ -242,6 +242,13 @@ const CSS = `
 @keyframes lpKb3{0%{transform:scale(1.06) translate(.9%,1.3%)}100%{transform:scale(1.13) translate(-1%,-1.2%)}}
 @keyframes lpSpkA2{0%,21%{box-shadow:0 0 0 2px rgba(111,242,174,.7),0 0 24px rgba(111,242,174,.25)}27%,96%{box-shadow:0 0 0 1px rgba(233,240,242,.09)}100%{box-shadow:0 0 0 2px rgba(111,242,174,.7),0 0 24px rgba(111,242,174,.25)}}
 @keyframes lpSpkO2{0%,21%{opacity:1}27%,96%{opacity:.12}100%{opacity:1}}
+/* Active-speaker sweep (v2.99.16): a green ring lights each tile in turn so the
+   grid reads as a LIVE moving call, not fixed photos. Each tile's ring runs the
+   same 20s loop at a staggered -2s delay, so the highlight rotates around the
+   10-up. Reduced-motion kills it via the global .lp-root * rule below. */
+@keyframes lpActive{0%,13%,100%{opacity:0}3%,10%{opacity:.95}}
+/* A soft "talking" scale pulse for the active window — subtle, transform-only. */
+@keyframes lpTalk{0%,13%,100%{transform:scale(1)}5%,8%{transform:scale(1.018)}}
 /* ZERO-JS loader failsafes (v2.95.9). The engine's FIRST action is adding
    .lp-js-ok to the overlay, which disarms this CSS watchdog (the JS watchdogs
    take over). If the engine never runs or dies before that, pure CSS fades the
@@ -291,6 +298,17 @@ const CSS = `
      reduced-motion visitor behind the loader if the engine never runs. */
   [data-lp="loader"]:not(.lp-js-ok){animation:lpAutoClear .5s ease 5.6s forwards!important}
 }
+/* Arabic parity (v2.99.16, owner: "the Arabic version renders smaller than
+   English"). ROOT CAUSE: every element hardcodes a LATIN face ('Space Grotesk'
+   / 'IBM Plex Mono') inside its inline font shorthand, so Arabic glyphs fell
+   back to a smaller system Arabic face — the whole RTL layout looked shrunken.
+   FIX: load a real Arabic webfont (Noto Kufi Arabic, in FONTS_HREF) and force it
+   for RTL text. Inline font shorthands are NOT !important, so a stylesheet
+   font-family !important overrides ONLY the family (sizes/weights untouched).
+   The dialer/keypad/percent LTR islands (dir=ltr) stay monospace — that later,
+   higher-specificity rule wins for them. */
+.lp-root[dir="rtl"] *{font-family:'Noto Kufi Arabic','Space Grotesk',sans-serif!important}
+.lp-root[dir="rtl"] [dir="ltr"],.lp-root[dir="rtl"] [dir="ltr"] *{font-family:'IBM Plex Mono','Noto Kufi Arabic',monospace!important}
 `;
 
 /** Per-tile Ken-Burns/speaking specs for the 10-person group grid. */
@@ -313,8 +331,16 @@ const eqBars = (anim: string, w = 2.5, h = 10) =>
 
 function groupTiles(): string {
   return GC.map((g, i) => {
-    const anim = g.spk ? `;animation:${g.spk}` : "";
-    return `<div style="position:relative;border-radius:12px;overflow:hidden;background:linear-gradient(150deg,#101820,#0b1016);border:1px solid rgba(233,240,242,.08);aspect-ratio:4/3${anim}"><img src="${P[i]}" alt="${g.n}" loading="lazy" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;animation:${g.kb}"><span style="position:absolute;left:8px;bottom:7px;padding:3px 8px;border-radius:999px;background:rgba(10,13,16,.7);font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#e9f0f2">${g.n}</span>${g.muted ? MUTE_SVG : g.eq ? eqBars(g.eq) : ""}</div>`;
+    // Active-speaker sweep (v2.99.16): a green ring + a subtle scale pulse that
+    // lights each tile in turn (staggered -2s over a shared 20s loop), so the
+    // grid reads as a LIVE moving call. The ring is its OWN overlay so it never
+    // fights the container's per-tile speaking box-shadow. The container's
+    // scale pulse (lpTalk) is COMMA-combined with any per-tile speaking anim so
+    // both run (a second `animation:` would clobber the first).
+    const delay = `${-i * 2}s`;
+    const containerAnim = g.spk ? `lpTalk 20s ${delay} infinite, ${g.spk}` : `lpTalk 20s ${delay} infinite`;
+    const ring = `<span style="position:absolute;inset:0;border-radius:12px;border:2px solid #6ff2ae;box-shadow:0 0 22px rgba(111,242,174,.45),inset 0 0 18px rgba(111,242,174,.18);opacity:0;pointer-events:none;animation:lpActive 20s ${delay} infinite"></span>`;
+    return `<div style="position:relative;border-radius:12px;overflow:hidden;background:linear-gradient(150deg,#101820,#0b1016);border:1px solid rgba(233,240,242,.08);aspect-ratio:4/3;animation:${containerAnim}"><img src="${P[i]}" alt="${g.n}" loading="lazy" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;animation:${g.kb}"><span style="position:absolute;left:8px;bottom:7px;padding:3px 8px;border-radius:999px;background:rgba(10,13,16,.7);font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#e9f0f2">${g.n}</span>${g.muted ? MUTE_SVG : g.eq ? eqBars(g.eq) : ""}${ring}</div>`;
   }).join("");
 }
 
@@ -1463,7 +1489,7 @@ function startLanding(
 
 const FONTS_ID = "lp-fonts";
 const FONTS_HREF =
-  "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap";
+  "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Kufi+Arabic:wght@400;500;600;700&display=swap";
 
 export default function Home() {
   const rootRef = useRef<HTMLDivElement>(null);
