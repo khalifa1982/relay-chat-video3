@@ -860,6 +860,54 @@ export async function claimOfflineMessageEmail(userId: number, cooldownMs: numbe
   return Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
 }
 
+/** Missed-call email cooldown (v2.99.44, closing the H8 follow-up deferred in
+ *  v2.99.22). The missed-call email had NO throttle at all: it was gated on the
+ *  block check, the pref and "not a deliberate decline", then sent — so someone
+ *  dialling you repeatedly produced one email per attempt. Ten minutes bounds a
+ *  burst while still telling you promptly about a call you actually missed. */
+export const MISSED_CALL_EMAIL_COOLDOWN_MS = 10 * 60 * 1000;
+
+/** Atomically CLAIM the right to send ONE missed-call email to `userId`
+ *  (v2.99.44). Same shape as `claimOfflineMessageEmail`: a single conditional
+ *  UPDATE, so two simultaneous missed calls can't both claim, and the verdict
+ *  comes from `affectedRows` rather than a prior read. The pref itself is checked
+ *  by the caller (it has the user row in hand), so this is purely the cooldown.
+ *  Returns false on DB trouble — failing toward NOT sending, since a duplicate
+ *  email is the failure mode being prevented here. */
+export async function claimMissedCallEmail(userId: number, cooldownMs: number): Promise<boolean> {
+  try {
+    const db = await getDb();
+    if (!db) return false;
+    const cutoff = new Date(Date.now() - cooldownMs);
+    const res = await db
+      .update(users)
+      .set({ lastMissedCallEmailAt: new Date() })
+      .where(
+        and(
+          eq(users.id, userId),
+          or(isNull(users.lastMissedCallEmailAt), lt(users.lastMissedCallEmailAt, cutoff))
+        )
+      );
+    return Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Give back a missed-call claim whose email failed to send (v2.99.44), so one
+ *  transient mailer failure doesn't silence the next ten minutes of misses.
+ *  Mirrors `releaseOfflineMessageEmailClaim`; safe because nothing else writes
+ *  this column and no concurrent claim can have won inside the fresh cooldown. */
+export async function releaseMissedCallEmailClaim(userId: number): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.update(users).set({ lastMissedCallEmailAt: null }).where(eq(users.id, userId));
+  } catch {
+    /* best effort */
+  }
+}
+
 /** True when this identity has at least one live push subscription (Web Push or
  *  FCM) — i.e. we can reach their device directly and an email is redundant
  *  (v2.99.40). Fails CLOSED for email purposes: on any DB trouble it returns
@@ -1048,6 +1096,8 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "users", column: "pushEnabled", ddl: "ADD COLUMN `pushEnabled` boolean" },
     { table: "users", column: "messageEmailDay", ddl: "ADD COLUMN `messageEmailDay` timestamp NULL" },
     { table: "users", column: "messageEmailsToday", ddl: "ADD COLUMN `messageEmailsToday` int" },
+    // v2.99.44 — missed-call email cooldown (H8).
+    { table: "users", column: "lastMissedCallEmailAt", ddl: "ADD COLUMN `lastMissedCallEmailAt` timestamp NULL" },
     // Hot-path indexes (v2.88, mirrored in drizzle/schema.ts):
     //  - messages(conversationId, id): the listThreads groupwise-max + every
     //    listMessages page (ORDER BY id within a conversation).

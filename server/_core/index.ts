@@ -15,7 +15,11 @@ import { attachRelay } from "../relay";
 import { registerV2Upload } from "../v2upload";
 import { registerV2Events, publishToIdentity, publishPresenceTo } from "../v2events";
 import { registerV2Offline } from "../v2offline";
-import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, reapStaleSessions, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy, getPresenceAudienceIds } from "../v2db";
+import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, reapStaleSessions, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy, getPresenceAudienceIds,
+  claimMissedCallEmail,
+  releaseMissedCallEmailClaim,
+  MISSED_CALL_EMAIL_COOLDOWN_MS,
+} from "../v2db";
 import { sendPushToIdentity } from "../webPush";
 import { registerWellKnown } from "../wellKnown";
 import { registerSeo } from "../seo";
@@ -268,6 +272,14 @@ async function startServer() {
         // The push + History record above stay unconditional — only the EMAIL
         // is preference-gated.
         if (user.emailNotifyMissedCall === false) return;
+        // THROTTLE (v2.99.44, closing the H8 follow-up deferred in v2.99.22).
+        // This email had no rate limit of any kind, so someone dialling you
+        // repeatedly produced one email per attempt — the same unbounded shape
+        // the offline-message nudge was tightened out of. One atomic claim per
+        // cooldown window; the push and the History record above stay
+        // unconditional, so a throttled email never costs you the record of the
+        // call itself.
+        if (!(await claimMissedCallEmail(callee.userId, MISSED_CALL_EMAIL_COOLDOWN_MS))) return;
         const callerLabel = info.callerName
           ? `${info.callerName} (${info.callerPin})`
           : info.callerPin;
@@ -289,12 +301,16 @@ async function startServer() {
             /* reply-to is best-effort */
           }
         }
-        await sendEmail({
+        const sent = await sendEmail({
           to: user.email,
           subject: `Missed call from ${callerLabel} on RELAY`,
           html: missedCallHtml({ callerLabel, appUrl }),
           replyTo,
         });
+        // Give the claim back when the send FAILED. sendEmail never throws — it
+        // resolves {ok:false} — so this has to inspect the result; a `.catch`
+        // here would be dead code (the same trap the message nudge was caught in).
+        if (!sent.ok) await releaseMissedCallEmailClaim(callee.userId);
       } catch (err) {
         console.warn("[missed-call email]", err);
       }
