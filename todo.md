@@ -5391,3 +5391,23 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       delivery redesign (list would return only lock metadata; consumeExpiring would return the body +
       a one-time media grant). The casual UI-extraction vector (H2) is now closed and previewOf masks
       quotes; M11 is the remaining defense-in-depth against reading the raw tRPC response.
+
+## v2.99.24 — landing robustness: interactive controls wired before throwable init (2026-07-24)
+- [x] Owner (after clearing cache + reopening on a real phone): the landing dial pad is "not active" and
+      the ع/EN language button "is not clickable". NOT reproducible in-sandbox — the exact DEPLOYED
+      artifact (strip-manus-runtime'd index.html + real bundle) passes every headless Chromium check
+      (desktop + emulated phone/touch): keypad updates, toggle → .lp-root dir=rtl + Noto Kufi Arabic font,
+      no JS errors, no overlay, loader dismissed. The sandbox network blocks ALL outbound hosts (even
+      google.com 403s), so the live site can't be loaded from here to diagnose directly.
+- [x] DEFENSIVE FIX (client/src/pages/Home.tsx startLanding): the "renders but nothing clickable" symptom
+      is the signature of the interactive wiring never attaching. All interactive controls — keypad, Clear,
+      Call, AND the language toggle — plus syncDial() are now wired FIRST, before any decorative/3D/audio/
+      boot code. The decorative init (onScroll/initReveals/initScramble/initMatrix) and the boot/fx block
+      (fxLoop/runLoader/bootThree) are each wrapped in try/catch; a dismissLoader() on the boot-catch
+      guarantees the opaque full-screen loader can't sit over the page swallowing taps if boot throws
+      before clearing it. Previously $("langBtn") was wired AFTER initReveals/Scramble/Matrix, so a throw
+      in any of those (a stricter/older browser's WebGL/AudioContext/rAF quirk) killed the toggle.
+- [x] Tests: Home.test.ts +2 (control-wiring-order + try/catch pins). Suite 1420; check + build green.
+- OPEN: this is hardening, not a confirmed root-cause fix. The live symptom still needs the owner's
+      https://your-chat.io/api/version value to tell "server not serving this build" (infra/DNS/CDN) apart
+      from "the browser can't run the JS" (device-specific). The deployed CODE is verified sound.
