@@ -6568,6 +6568,32 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       additive-DDL rule now allows ADD UNIQUE INDEX; androidAudioCamera.test.ts's chat-dedup pin now
       expects the threaded sender). Suite 1662 passed / 1 skipped; check + build green.
 
+## v2.99.46 — process fix: the gate that let a broken commit reach main (2026-07-24)
+- [x] v2.99.45 was pushed with UNRESOLVED merge-conflict markers in three files (`shared/version.ts`,
+      `client/src/app/updateChecker.test.ts`, `CLAUDE.md`), breaking the typecheck, four test files
+      and the production build. The deploy workflow's build step failed, so `your-chat.io` kept
+      serving v2.99.44 and no user was affected — the gate that was supposed to stop it BEFORE the
+      push is what failed. Markers removed; `CLAUDE.md` needed real reconstruction because stacked
+      rebases had left NESTED markers, i.e. two rival truncated changelog chains — the v2.99.45 entry
+      now sits ahead of the intact .44 → .43 → .42 → … chain instead of one side silently winning.
+- [x] ROOT CAUSE, and the actual lesson: the pre-push command was
+      `pnpm check 2>&1 | tail -2 && pnpm test … && pnpm build …`. A shell pipeline's exit status is
+      the LAST command's, so `tail` (always 0) masked the failing typecheck and `&&` sailed straight
+      on to the push. This is not a one-off slip; any `gate | head/tail/grep && next` reads as a
+      passing gate. Two durable guards, because "remember not to do that" is not a guard:
+- [x] (1) `pnpm verify` = `pnpm check && pnpm test && pnpm build` as ONE package script. There is no
+      pipe to insert and nothing to truncate, so the three gates cannot be decoupled from their exit
+      codes by how the command happens to be typed at the call site.
+- [x] (2) `server/repoHygiene.test.ts` — a tripwire that fails the SUITE on a stray `<<<<<<<`/`>>>>>>>`
+      line in any tracked text file (ts/tsx/js/json/md/css/html/yml/sql/sh/kt/java; node_modules,
+      dist, build, coverage and the mobile native dirs skipped). The typecheck only covers compiled
+      sources — `CLAUDE.md`'s markers would have passed every existing gate — and the suite is the one
+      gate every workflow runs. Verified the tripwire actually FIRES by planting a marker file and
+      watching it fail, then pass again once removed (a guard nobody has seen fail is not a guard).
+      It also pins that `verify` exists, chains all three gates, and contains no `|`.
+- [x] Corrected the v2.99.45 test count in both changelogs (claimed 1706, actual 1717).
+- [x] Suite 1721 passed / 1 skipped; check + build green — run through `pnpm verify` this time.
+
 ## v2.99.45 — self-review: two availability regressions in MY OWN fixes (2026-07-24)
 - [x] Red-teamed today's 29 shipped fixes for REGRESSIONS rather than new vulnerabilities — the fixes
       went out fast, several into the call path and auth, and most are guarded by source pins rather
