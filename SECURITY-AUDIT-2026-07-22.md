@@ -394,3 +394,42 @@ Recorded so the negative result is trustworthy rather than merely unstated:
 ## Verification (round 5)
 
 `pnpm check` clean; `pnpm test` **1540 passing / 1 skipped**; `pnpm build` clean. New `server/hardeningPass5.test.ts` (44 tests) — including a real arithmetic **simulation of MySQL's left-to-right assignment order** so H4's off-by-one cannot silently return, and the actual attribute-breakout payloads H1's pin guard must reject. Four stale pre-existing source pins were updated to the corrected shapes rather than weakened (`m11ContentGating` ×2, `peerIdentityBatch`, `qaBatch8`).
+
+## Round 5 pt.2 (same sweep, later-reporting classes)
+
+The class-based sweep ran on a 4-core box, so its agents were capped at 2 concurrent and reported in waves. The findings above shipped as v2.99.37; these arrived after and shipped as v2.99.38.
+
+### H11 — `RELAY_OTP_REGISTER_BYPASS` was unauthenticated account takeover (HIGH)
+
+**Where:** `server/v2routers.ts` `otpAuth.register`.
+**Problem.** The bypass branch called `findUserByEmailAny(email)` and signed the caller in as whatever it resolved. `register` is a `publicProcedure` whose entire input is a first name, last name, and email — so with the flag enabled, **anyone who knew a registered user's email address could obtain a full session as that user**: no code, no password, nothing to intercept. The trade this stopgap was accepted for (v2.97.2) was *"email ownership isn't proven at signup while it's on"*; unauthenticated takeover of every **existing** account was never part of that.
+**Fix.** The branch is now **create-only**: it refuses with `CONFLICT` when the address already has an account, and only ever mints a new one — which keeps the flag's actual purpose (onboarding new users while SES is sandboxed) fully intact. Signing in remains `requestOtp` / `loginWithPin`, both of which still demand a real credential.
+**Operator note.** The flag lives in `/home/relay/.env`, not in repo config, so its current production state isn't visible from the tree. It should be unset now that SES production access should be approved.
+
+### H12 — `BLOCKED_MIME` bypass via a multi-valued Content-Type (HIGH)
+
+**Where:** `server/v2upload.ts`.
+**Problem.** `ALLOWED_MIME` and `BLOCKED_MIME` are both start-anchored, so each only ever inspected the **first** media type in the client-supplied `?mime=` value. `image/png,text/html` therefore passes `ALLOWED_MIME` (it starts with `image/`) and misses `BLOCKED_MIME` (it does not start with any blocked type). The value was stored and later replayed **verbatim as the `Content-Type`** of a same-origin response — exactly the stored-XSS shape `BLOCKED_MIME` exists to prevent, since header parsers disagree about which of several listed types wins.
+**Fix.** New exported `normalizeMimeType` reduces the input to a canonical `type/subtype` essence (parameters dropped, case-folded) and requires it to be exactly **one** RFC 2045 token media type — no commas, no whitespace, no second type. Applied at both `mimeType` sources (raw query and legacy JSON body) *before* any allow/deny test or storage write, so the gates and the stored header operate on a value that cannot mean two things.
+
+### H13 — account diversion: a second `users` row per email (MED)
+
+**Where:** `server/authLocal.ts` `/api/auth/register`.
+**Problem.** The other half of H2. `findLocalUserByEmail` deliberately matches only rows that *have* a `passwordHash`, so it is blind to OAuth and email-code accounts — and registration therefore inserted a **second** `users` row for an address that was already taken. Because `findUserByEmailAny` ranks a `local` row **above** a legacy OAuth row, the victim's email-code sign-in then resolved to the attacker's empty row. With the OAuth sign-in UI removed in v2.92, the email code is that user's only remaining way in, so their real account — number, contacts, message history — became unreachable. (H2's fix clears the planted credential so the attacker can't log in; this closes the other direction, where the victim is routed away from their own account.)
+**Fix.** New `findAnyUserByEmail` refuses registration when **any** row already holds the address — one account per email. The unverified-local resend path is unchanged.
+
+### H14 — gzip request-body amplification on `/api/v2/upload` (MED)
+
+**Where:** `server/_core/index.ts`.
+**Problem.** body-parser inflates `Content-Encoding: gzip`/`deflate` request bodies by default and enforces `limit` against the **decompressed** stream. The 41 MB ceiling therefore still held, but the attacker's cost to reach it collapsed by roughly three orders of magnitude: a few tens of KB of compressed zeros expands to the full 41 MB of server-side buffering. That compounds the known ordering weakness on this route — the per-IP/per-identity upload rate limit lives *inside* the handler, so it only runs after the body has already been buffered.
+**Fix.** `inflate: false` on both upload parsers. No client compresses an upload body (browsers never gzip request bodies on their own; the native app streams raw bytes), so refusing encoded bodies here has no functional cost.
+
+### H15 — storage-proxy rate limiter was never swept (LOW)
+
+**Where:** `server/_core/storageProxy.ts`.
+**Problem.** Every other limiter in the codebase pairs itself with a periodic `sweep`; this one shipped without one, so its per-IP `Map` grew for the entire process lifetime — one entry per distinct IP that ever loaded a single image, never released — on the app's only fully anonymous, high-fan-out endpoint.
+**Fix.** Added the matching 30-minute sweep.
+
+### Verification (round 5 pt.2)
+
+`pnpm check` clean; `pnpm test` **1555 passing / 1 skipped**; `pnpm build` clean. `server/hardeningPass5.test.ts` grows to 59, including behavioral `normalizeMimeType` coverage of the actual bypass payloads (comma-lists, whitespace, case variants) and a check that normalization does not launder a dangerous type past the blocked list.

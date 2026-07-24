@@ -83,6 +83,32 @@ async function findLocalUserByEmail(email: string) {
   return rows.find((r) => !!r.passwordHash) ?? null;
 }
 
+/**
+ * Any user row with this email, regardless of how it signs in.
+ *
+ * SECURITY (M35): `findLocalUserByEmail` above deliberately matches only rows
+ * that HAVE a `passwordHash`, so it is blind to OAuth and email-code (otp)
+ * accounts. Registration therefore couldn't see that an address was already
+ * taken by one of those, and happily inserted a SECOND `users` row for the same
+ * email. That is what makes account DIVERSION possible: `findUserByEmailAny`
+ * (the resolver the email-code sign-in uses) prefers an `otp` row, then a
+ * `local` row, then anything — so for a legacy OAuth user, an attacker-created
+ * `local` row OUTRANKS the victim's real account. The victim's email code then
+ * signs them into the attacker's empty row and their real account — number,
+ * contacts, message history — becomes unreachable, and since the OAuth sign-in
+ * UI was removed in v2.92 the email code is their ONLY remaining way in.
+ *
+ * (M29 clears a pre-planted credential, so the attacker cannot log into the row;
+ * this closes the other half — the victim must not be routed away from their own
+ * account in the first place. One account per email address.)
+ */
+async function findAnyUserByEmail(email: string) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return rows[0] ?? null;
+}
+
 async function createLocalUser(email: string, passwordHash: string): Promise<number | null> {
   const db = await getDb();
   if (!db) return null;
@@ -301,6 +327,15 @@ export function registerLocalAuth(app: Express): void {
         return;
       }
 
+      // M35: `findLocalUserByEmail` only sees password-bearing rows, so an
+      // OAuth / email-code account for this address is invisible to the check
+      // above. Refuse rather than insert a duplicate row for the same email —
+      // a second row would OUTRANK the victim's real account in
+      // findUserByEmailAny and divert their only sign-in path to it.
+      if (await findAnyUserByEmail(email)) {
+        res.status(409).json({ error: "exists", message: "An account with this email already exists. Sign in instead." });
+        return;
+      }
       const userId = await createLocalUser(email, hashPassword(password));
       if (!userId) { res.status(503).json({ error: "unavailable", message: "Service unavailable. Try again." }); return; }
       // Give them an identity row now (guest cookie migrated if present) so their

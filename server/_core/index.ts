@@ -159,11 +159,21 @@ async function startServer() {
   //                      computed over the original payload — a re-serialized
   //                      object won't byte-match).
   //   everywhere else  — 1 MB JSON/urlencoded; every other payload fits.
+  // SECURITY (M34): `inflate: false` on BOTH upload parsers. body-parser inflates
+  // a gzip/deflate request body by default and enforces `limit` against the
+  // DECOMPRESSED stream — so the 41 MB ceiling still holds, but the COST TO THE
+  // ATTACKER of reaching it collapses: a few tens of KB of compressed zeros
+  // expands to the full 41 MB of server-side buffering. That compounds the known
+  // ordering weakness on this route (the per-IP/per-identity upload rate limit
+  // lives INSIDE the handler, so it only runs AFTER the body is already buffered),
+  // turning a bounded cost into a ~1000x amplified one. No client compresses an
+  // upload body — browsers never gzip request bodies on their own, and the native
+  // app streams raw bytes — so refusing encoded bodies here costs nothing real.
   app.use(
     "/api/v2/upload",
-    express.raw({ type: "application/octet-stream", limit: "41mb" })
+    express.raw({ type: "application/octet-stream", limit: "41mb", inflate: false })
   );
-  app.use("/api/v2/upload", express.json({ limit: "15mb" }));
+  app.use("/api/v2/upload", express.json({ limit: "15mb", inflate: false }));
   app.use(
     "/api/email/inbound",
     express.json({

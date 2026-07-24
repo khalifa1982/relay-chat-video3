@@ -13,6 +13,13 @@ import { createRateLimiter, clientIpOf } from "../rateLimit";
  * once (240 burst, ~4/s sustained per IP) — so only a true flood is throttled.
  * Honors RELAY_RATELIMIT_OFF like the other gates. */
 const storageIpLimiter = createRateLimiter({ capacity: 240, refillPerSec: 4 });
+/* M33: sweep idle buckets. Every OTHER limiter in the codebase pairs itself with
+ * a periodic sweep (directoryGate, otpGate, statusGate, the SSE open limiter…);
+ * this one shipped without it, so its per-IP Map grew for the lifetime of the
+ * process on the app's only fully anonymous, high-fan-out endpoint — one entry
+ * per distinct IP that ever loaded a single image, never released. A slow but
+ * unbounded leak, and trivially accelerated by spraying source addresses. */
+setInterval(() => storageIpLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
 
 /* In-process signed-URL cache (v2.88). Every /manus-storage view used to pay a
  * presign round-trip to Forge and told the browser `no-store`, so a chat

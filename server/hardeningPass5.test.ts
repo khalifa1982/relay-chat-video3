@@ -260,6 +260,139 @@ describe("M30 — status.post gates a supplied mediaKey for EVERY kind", () => {
   });
 });
 
+/* ── M31: the register bypass is create-only ───────────────────────────── */
+
+describe("M31 — RELAY_OTP_REGISTER_BYPASS cannot sign you in as an existing account", () => {
+  const branch = ROUTERS.slice(
+    ROUTERS.indexOf("if (otpRegisterBypassEnabled()) {"),
+    ROUTERS.indexOf("await unlockLoginPin(userId);"),
+  );
+
+  it("refuses when the address already has an account", () => {
+    expect(branch).toMatch(/if \(await findUserByEmailAny\(email\)\) \{/);
+    expect(branch).toMatch(/code: "CONFLICT"/);
+  });
+
+  it("only ever MINTS a new user — never adopts a resolved id", () => {
+    expect(branch).toMatch(/let userId = await createOtpUser\(/);
+    // The pre-fix shape resolved an existing row into userId first.
+    expect(branch).not.toMatch(/let userId = \(await findUserByEmailAny\(email\)\)\?\.id \?\? null;/);
+  });
+
+  it("the refusal precedes account creation and session issuance", () => {
+    expect(branch.indexOf("CONFLICT")).toBeLessThan(branch.indexOf("createOtpUser"));
+  });
+
+  it("documents that this is unauthenticated-takeover territory, not just unproven signup", () => {
+    expect(branch).toMatch(/CREATE-ONLY/);
+  });
+});
+
+/* ── M32: MIME type is canonicalized before any allow/deny test ─────────── */
+
+describe("M32 — upload MIME cannot be a multi-valued Content-Type", () => {
+  const UPLOAD = read("v2upload.ts");
+
+  it("normalizes at BOTH mimeType sources, before the gates", () => {
+    expect(UPLOAD).toMatch(/mimeType = normalizeMimeType\(String\(req\.query\.mime \|\| ""\)\) \?\? "";/);
+    expect(UPLOAD).toMatch(/mimeType = normalizeMimeType\(body\.mimeType\) \?\? "";/);
+    expect(UPLOAD).not.toMatch(/mimeType = String\(req\.query\.mime \|\| ""\);/);
+    expect(UPLOAD).not.toMatch(/^\s*mimeType = body\.mimeType;$/m);
+  });
+
+  /** The real exported predicate, exercised against the bypass payloads. */
+  it("rejects comma-lists and other multi-valued / malformed shapes", async () => {
+    const { normalizeMimeType } = await import("./v2upload");
+    // The bypass: start-anchored ALLOWED/BLOCKED only ever saw the FIRST type.
+    expect(normalizeMimeType("image/png,text/html")).toBeNull();
+    expect(normalizeMimeType("image/png, image/svg+xml")).toBeNull();
+    expect(normalizeMimeType("text/html,image/png")).toBeNull();
+    expect(normalizeMimeType("image/png text/html")).toBeNull();
+    expect(normalizeMimeType("")).toBeNull();
+    expect(normalizeMimeType("notamimetype")).toBeNull();
+    expect(normalizeMimeType("/png")).toBeNull();
+  });
+
+  it("canonicalizes a legitimate type (params dropped, case-folded)", async () => {
+    const { normalizeMimeType } = await import("./v2upload");
+    expect(normalizeMimeType("image/png")).toBe("image/png");
+    expect(normalizeMimeType("IMAGE/PNG")).toBe("image/png");
+    expect(normalizeMimeType("video/webm; codecs=vp9")).toBe("video/webm");
+    expect(normalizeMimeType("  audio/mp4  ")).toBe("audio/mp4");
+  });
+
+  it("still lets the blocked list catch a normalized dangerous type", async () => {
+    const { normalizeMimeType } = await import("./v2upload");
+    const BLOCKED =
+      /^(image\/svg\+xml|text\/html|application\/xhtml\+xml|application\/javascript|application\/x-msdownload|application\/x-sh)/i;
+    // Normalization must not launder these into something the gate misses.
+    for (const evil of ["image/svg+xml", "TEXT/HTML; charset=utf-8", "application/javascript"]) {
+      const n = normalizeMimeType(evil);
+      expect(n).not.toBeNull();
+      expect(BLOCKED.test(n!), `${evil} must stay blocked`).toBe(true);
+    }
+  });
+});
+
+/* ── M33/M34: limiter sweep + no request-body inflation on upload ───────── */
+
+describe("M33 — the storage-proxy limiter is swept", () => {
+  it("pairs its limiter with a periodic sweep like every other gate", () => {
+    const PROXY = read("_core", "storageProxy.ts");
+    expect(PROXY).toMatch(/storageIpLimiter\.sweep\(/);
+    expect(PROXY).toMatch(/setInterval\(\(\) => storageIpLimiter\.sweep\(/);
+    expect(PROXY).toMatch(/\.unref\(\)/);
+  });
+});
+
+describe("M34 — upload parsers refuse encoded bodies (no gzip amplification)", () => {
+  const INDEX = read("_core", "index.ts");
+  it("sets inflate:false on BOTH /api/v2/upload parsers", () => {
+    const seg = INDEX.slice(INDEX.indexOf('"/api/v2/upload"'), INDEX.indexOf('"/api/email/inbound"'));
+    expect(seg).toMatch(/limit: "41mb", inflate: false/);
+    expect(seg).toMatch(/limit: "15mb", inflate: false/);
+  });
+  it("explains the amplification it removes", () => {
+    expect(INDEX).toMatch(/M34/);
+    expect(INDEX).toMatch(/DECOMPRESSED/);
+  });
+});
+
+/* ── M35: one account per email (no diverting row) ─────────────────────── */
+
+describe("M35 — register cannot create a second row for an existing email", () => {
+  const LOCAL = read("authLocal.ts");
+
+  it("adds an any-loginMethod existence lookup", () => {
+    expect(LOCAL).toMatch(/async function findAnyUserByEmail\(email: string\)/);
+  });
+
+  it("refuses registration when ANY row already holds the address", () => {
+    const reg = LOCAL.slice(
+      LOCAL.indexOf('app.post("/api/auth/register"'),
+      LOCAL.indexOf('app.get("/api/auth/status"'),
+    );
+    expect(reg).toMatch(/if \(await findAnyUserByEmail\(email\)\) \{/);
+    expect(reg).toMatch(/error: "exists"/);
+    // …and does so BEFORE inserting.
+    expect(reg.indexOf("findAnyUserByEmail")).toBeLessThan(reg.indexOf("createLocalUser("));
+  });
+
+  it("keeps the unverified-local resend path intact (no behaviour regression)", () => {
+    const reg = LOCAL.slice(
+      LOCAL.indexOf('app.post("/api/auth/register"'),
+      LOCAL.indexOf('app.get("/api/auth/status"'),
+    );
+    expect(reg).toMatch(/findLocalUserByEmail\(email\)/);
+    expect(reg).toMatch(/resent: true/);
+  });
+
+  it("documents the diversion it closes", () => {
+    expect(LOCAL).toMatch(/findUserByEmailAny/);
+    expect(LOCAL).toMatch(/One account per email address\./);
+  });
+});
+
 /* ── M25: both attempt ladders match MySQL's assignment semantics ───────── */
 
 /**

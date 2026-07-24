@@ -61,6 +61,37 @@ const MAX_BASE64_BYTES = 10 * 1024 * 1024;
 // Thumbnails (v2.89): a ≤512px webp/jpeg is a few tens of KB; 2 MB is generous.
 const MAX_THUMB_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Normalize a client-supplied MIME type to its bare `type/subtype` essence, or
+ * return null when it isn't a single well-formed media type.
+ *
+ * SECURITY (M32): `mimeType` comes straight off the `?mime=` query string (or the
+ * legacy JSON body) and is (a) matched against ALLOWED_MIME / BLOCKED_MIME and
+ * (b) handed to `storagePut`, which makes it the `Content-Type` the storage proxy
+ * later serves. Both of those regexes are START-ANCHORED, so they only ever
+ * inspected the FIRST type in the string — which a COMMA-LIST slips straight
+ * past: `image/png,text/html` starts with `image/`, so ALLOWED_MIME accepts it,
+ * and it does NOT start with any blocked type, so BLOCKED_MIME misses it. The
+ * value was then stored and replayed verbatim as a multi-valued Content-Type on
+ * a same-origin response — precisely the stored-XSS shape `BLOCKED_MIME` exists
+ * to prevent, since header parsers disagree about which of the listed types wins.
+ *
+ * Rather than trying to enumerate every malformed shape, reduce to a canonical
+ * essence FIRST and demand it be exactly one RFC-shaped `type/subtype` (RFC 2045
+ * token characters only — so no commas, no whitespace, no second type). The
+ * allow/deny checks and the stored header then operate on a value that cannot
+ * mean two things.
+ */
+export function normalizeMimeType(raw: string): string | null {
+  // Drop parameters (`; charset=…`), then trim and case-fold — a media type is
+  // case-insensitive, and matching on the folded form removes `Text/HTML` tricks.
+  const essence = (raw || "").split(";")[0].trim().toLowerCase();
+  if (!essence) return null;
+  // Single type/subtype of RFC 2045 token chars. Notably excludes "," and space.
+  if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(essence)) return null;
+  return essence;
+}
+
 function safeName(name: string | undefined, fallback: string) {
   const trimmed = (name || "").trim();
   if (!trimmed) return fallback;
@@ -112,13 +143,17 @@ export function registerV2Upload(app: Express) {
       if (Buffer.isBuffer(req.body)) {
         // RAW path: bytes in the body, metadata in the query string.
         buf = req.body;
-        mimeType = String(req.query.mime || "");
+        // M32: canonicalize BEFORE any allow/deny test or storage write, so a
+        // comma-list (`image/png,text/html`) can't slip past the start-anchored
+        // ALLOWED_MIME/BLOCKED_MIME checks and land in a served Content-Type.
+        mimeType = normalizeMimeType(String(req.query.mime || "")) ?? "";
         filename = typeof req.query.filename === "string" ? req.query.filename : undefined;
         width = qnum(req.query.width);
         height = qnum(req.query.height);
         durationMs = qnum(req.query.durationMs);
         if (!mimeType) {
-          return res.status(400).json({ error: "mime query parameter is required" });
+          // Empty OR rejected by normalizeMimeType (malformed / multi-valued).
+          return res.status(400).json({ error: "a single valid mime query parameter is required" });
         }
         // ── THUMBNAIL mode (v2.89): `?thumb=1` stores the bytes and returns
         // {storageKey,url} WITHOUT creating an attachment row. The client
@@ -212,7 +247,8 @@ export function registerV2Upload(app: Express) {
         if (typeof dataBase64 !== "string" || typeof body.mimeType !== "string") {
           return res.status(400).json({ error: "dataBase64 and mimeType are required" });
         }
-        mimeType = body.mimeType;
+        // M32: same canonicalization as the raw path above.
+        mimeType = normalizeMimeType(body.mimeType) ?? "";
         filename = typeof body.filename === "string" ? body.filename : undefined;
         width = typeof body.width === "number" ? body.width : undefined;
         height = typeof body.height === "number" ? body.height : undefined;

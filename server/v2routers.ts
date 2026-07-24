@@ -2055,11 +2055,31 @@ export const v2OtpAuthRouter = router({
       const email = normalizeEmail(input.email);
       if (!isValidEmail(email)) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter a valid email." });
       if (otpRegisterBypassEnabled()) {
-        // Same account/session outcome as a successful verifyOtp — resolve or
-        // create the user, upgrade the guest identity, sign in — just without
-        // ever proving the email address (see the flag's doc comment above).
-        let userId = (await findUserByEmailAny(email))?.id ?? null;
-        if (!userId) userId = await createOtpUser({ email, firstName: input.firstName, lastName: input.lastName });
+        // Create the user (if new), upgrade the guest identity, sign in — just
+        // without ever proving the email address (see the flag's doc comment).
+        //
+        // SECURITY (M31): this branch is CREATE-ONLY. It used to `findUserByEmailAny`
+        // first and sign the caller in as whatever it resolved, which — on an
+        // unauthenticated `publicProcedure` whose entire input is a name and an
+        // email — meant that with the flag on, ANYONE who knew a registered
+        // user's email address could obtain a full session as that user. No code,
+        // no password, nothing to intercept. That is unauthenticated account
+        // takeover of every existing account, which is far beyond the trade this
+        // stopgap was accepted for ("email ownership isn't proven AT SIGNUP while
+        // it's on"). Signing IN is what `requestOtp` / `loginWithPin` are for, and
+        // both still demand a real credential; `register` has no business
+        // resolving a pre-existing account at all.
+        //
+        // So: refuse when the address already has an account, and only ever mint
+        // a genuinely NEW one. That keeps the flag's actual purpose (letting new
+        // users onboard while SES is sandboxed) fully intact.
+        if (await findUserByEmailAny(email)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "An account with this email already exists. Sign in instead.",
+          });
+        }
+        let userId = await createOtpUser({ email, firstName: input.firstName, lastName: input.lastName });
         if (!userId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create your account." });
         // M29: burn any credential planted on this row while it was still
         // unverified BEFORE flipping emailVerified — otherwise an attacker who

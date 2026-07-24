@@ -5739,3 +5739,41 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       order (so the off-by-one can't silently return) and the actual XSS payloads the pin guard must
       reject; 4 stale pre-existing pins updated to the new shapes (m11ContentGating ×2, peerIdentityBatch,
       qaBatch8). Suite 1540 passed / 1 skipped; check + build green.
+
+## v2.99.38 — hardening pass 5 pt.2: remaining class-sweep findings (2026-07-24)
+- [x] (1) HIGH RELAY_OTP_REGISTER_BYPASS was unauthenticated ACCOUNT TAKEOVER, not just unproven
+      signup: the bypass branch of otpAuth.register (a publicProcedure whose whole input is a name +
+      email) called findUserByEmailAny and signed the caller in as WHATEVER IT RESOLVED. With the flag
+      on, anyone knowing a registered user's email got a full session as them — no code, no password.
+      The accepted trade was "email ownership isn't proven AT SIGNUP"; taking over EXISTING accounts
+      never was. Branch is now CREATE-ONLY: refuses with CONFLICT when the address already has an
+      account, only ever mints a new one. Signing in stays requestOtp/loginWithPin (real credentials).
+      NOTE for the owner: this flag is set in /home/relay/.env, not in repo config, so I can't tell
+      from here whether it's currently on — worth unsetting it now that SES should be approved.
+- [x] (2) HIGH BLOCKED_MIME bypass via a multi-valued Content-Type: ALLOWED_MIME and BLOCKED_MIME are
+      both START-ANCHORED, so they only inspected the FIRST type of the client-supplied ?mime= value.
+      "image/png,text/html" passes ALLOWED (starts image/) and misses BLOCKED (doesn't start with a
+      blocked type); the value was then stored and replayed verbatim as the Content-Type of a
+      same-origin response — the stored-XSS shape BLOCKED_MIME exists to stop, since header parsers
+      disagree about which listed type wins. New exported normalizeMimeType() reduces to a canonical
+      type/subtype essence (params dropped, case-folded) and requires exactly ONE RFC-2045-token media
+      type (no commas, no whitespace), applied at BOTH mimeType sources before any gate or storage write.
+- [x] (3) ACCOUNT DIVERSION — the other half of M29: /api/auth/register's findLocalUserByEmail matches
+      only rows that HAVE a passwordHash, so it's blind to OAuth/otp accounts and inserted a SECOND
+      users row for the same email. findUserByEmailAny ranks a "local" row ABOVE a legacy OAuth row, so
+      the victim's email code signed them into the attacker's empty row — and with the OAuth UI removed
+      in v2.92 the email code is their ONLY way in, so their real account (number, contacts, history)
+      became unreachable. New findAnyUserByEmail refuses registration when ANY row holds the address;
+      the unverified-local resend path is untouched.
+- [x] (4) GZIP AMPLIFICATION on /api/v2/upload: body-parser inflates encoded bodies by default and
+      enforces `limit` against the DECOMPRESSED stream — so the 41MB ceiling held, but the cost to
+      REACH it collapsed ~1000x (tens of KB of compressed zeros → 41MB buffered). That compounds the
+      known ordering weakness that this route's rate limit runs INSIDE the handler, i.e. after
+      buffering. inflate:false on both upload parsers — no client compresses an upload body (browsers
+      never gzip request bodies; the native app streams raw), so it costs nothing real.
+- [x] (5) The storage-proxy rate limiter was NEVER SWEPT. Every other limiter here pairs itself with a
+      periodic sweep; this one shipped without, so its per-IP Map grew for the whole process lifetime
+      on the app's only fully anonymous, high-fan-out endpoint. Added the sweep.
+- [x] Tests: hardeningPass5.test.ts grows to 59, incl. behavioral normalizeMimeType coverage of the
+      real bypass payloads (comma-lists, whitespace, case) and proof the blocked list still catches a
+      normalized dangerous type. Suite 1555 passed / 1 skipped; check + build green.
