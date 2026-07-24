@@ -633,7 +633,23 @@ export async function reapStalePresence(
     .update(presence)
     .set({ isOnline: false })
     .where(and(eq(presence.isOnline, true), lt(presence.lastSeenAt, cutoff)));
-  return victims;
+  // L4/TOCTOU: a victim that HEARTBEAT back online between the SELECT above and
+  // this UPDATE is NOT flipped by the UPDATE (its lastSeenAt is now fresh, so the
+  // WHERE no longer matches it) — yet it was captured in `victims`. Returning it
+  // would fan a spurious "went offline" for a user who is actually online. Re-
+  // confirm each candidate is GENUINELY offline now and return only those.
+  if (victims.length === 0) return victims;
+  const ids = victims.map((v) => v.id);
+  try {
+    const confirmed = await db
+      .select({ id: identities.id, number: identities.number })
+      .from(presence)
+      .innerJoin(identities, eq(identities.id, presence.identityId))
+      .where(and(inArray(presence.identityId, ids), eq(presence.isOnline, false)));
+    return confirmed;
+  } catch {
+    return victims; // re-check failed — fall back to the pre-fix behaviour
+  }
 }
 
 /**

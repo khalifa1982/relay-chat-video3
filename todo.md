@@ -5445,6 +5445,24 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       invitee handling), M13/M14/M18 (contacts/directory), M15/M16/L5 (status), M20/L8 (allocation races),
       M6 (draft debounce), M12/L4 (presence), L2/L3 (auth), M11 (server ephemeral content gating).
 
+## v2.99.32 — heavy-QA sweep fixes, batch 10 (presence) (2026-07-24)
+- [x] M12 (MED) closing one of two tabs flipped the identity offline: presence is one boolean per identity
+      but every tab runs its own PresenceManager, so closing one of two tabs beaconed offline (contacts blink)
+      and the surviving tab's next heartbeat fired a false "X is back online" watcher push. FIX: a
+      browser-scoped last-tab ref-count (new client/src/app/tabPresence.ts) — each tab records tabId→ts in a
+      per-identity localStorage map on every visible heartbeat (touchTab); onLeave only beacons when no OTHER
+      tab is fresh (otherTabsAlive, TAB_FRESH_MS=45s); a real close removeTab's its slot; a single tab still
+      beacons instantly; fails safe (storage error → beacon fires; 2-min reaper backstop). Pure helpers
+      (anyOtherTabFresh/pruneTabs) unit-tested.
+- [x] L4 (LOW) reaper spurious-offline TOCTOU: reapStalePresence SELECTed victims then UPDATEd — a victim
+      that heartbeat back online in between wasn't flipped but was still returned to broadcast offline. FIX:
+      after the UPDATE, re-confirm each candidate is genuinely isOnline=false and return only those (fallback
+      to victims on a re-check error).
+- [x] Tests: client/src/app/qaBatch10.test.ts (9 pins incl. behavioural ref-count logic); v2offline.test.ts
+      pins updated to the onClose/onVisibility restructure. 1460 tests. QA-sweep: 32 of 37 fixed.
+      REMAINING: M11 (server-side ephemeral content-gating redesign — larger, flagged to owner) + documented
+      accepted residuals.
+
 ## v2.99.31 — heavy-QA sweep fixes, batch 9 (draft + auth edges) (2026-07-24)
 - [x] M6 (MED) draft lost on a fast thread switch: useDraft debounced the save 500ms and its
       conversation-change cleanup clearTimeout'd the pending save WITHOUT flushing — typing then switching
