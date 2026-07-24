@@ -5445,6 +5445,23 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       invitee handling), M13/M14/M18 (contacts/directory), M15/M16/L5 (status), M20/L8 (allocation races),
       M6 (draft debounce), M12/L4 (presence), L2/L3 (auth), M11 (server ephemeral content gating).
 
+## v2.99.30 — heavy-QA sweep fixes, batch 8 (number-allocation races) (2026-07-24)
+- [x] M20 (MED) cross-table number collision: identities + party_lines share ONE 6-digit space, each with a
+      per-TABLE unique key, but MySQL can't enforce uniqueness across two tables — so two concurrent
+      allocations to DIFFERENT tables could both pass the check-then-insert numberTaken gate and claim the
+      same fresh number (a collision permanently shadows a person / unreachables a line). FIX (v2db.ts): a
+      shared number_reservations ledger (boot migrator, PK on `number`); allocateSharedNumber (both allocators
+      delegate) runs numberTaken THEN atomically INSERTs the candidate via tryReserveNumber (dup-key → retry;
+      any other error incl. table-missing → fail OPEN, behaves as pre-ledger). Monotonic — a handed-out number
+      is never recycled.
+- [x] L8 (LOW) party-line cap race: createPartyLine's cap was owned.length >= MAX then insert (check-then-act)
+      — two concurrent creates at 9 both passed → 11. FIX: keep the fast pre-check, but enforce the cap
+      deterministically AFTER insert by id-RANK (count of the owner's rows with id <= insertId); rows ranked
+      > MAX self-delete (each deletes only its OWN id) and reject → converges to exactly MAX.
+- [x] Tests: server/qaBatch8.test.ts (5 pins); partyLines.test.ts allocator pins updated to the shared
+      allocator refactor. 1446 tests. QA-sweep progress: 27 of 37 fixed.
+      DEFERRED: rare leaked reservations on a post-reserve insert failure (900k space, cosmetic — no reaper).
+
 ## v2.99.29 — heavy-QA sweep fixes, batch 7 (status stories) (2026-07-24)
 - [x] M15 (MED) video/audio status always ran 5s: the viewer's itemMs already honored item.durationMs, but
       the composer never captured/sent a duration → always null → flat 5s DEFAULT_ITEM_MS. FIX
