@@ -29,6 +29,21 @@ import {
 } from "./recording";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
 import { createContext } from "./_core/context";
+
+/**
+ * M40: per-CALLER-pin budget for dials to a number with no live connection —
+ * the invite handler's offline-resolution branch (see its comment for why that
+ * branch specifically). Module-scoped because `handleMessage` is, and keyed on
+ * the server-resolved caller pin rather than an IP, so it follows the identity
+ * rather than the network path.
+ *
+ * 20 burst then ~1 per 4s: a person dialling a handful of offline contacts in a
+ * row never notices, while a scraper walking the 10^6 number space for
+ * existence + display names drops from "under two hours" to implausible. Honors
+ * RELAY_RATELIMIT_OFF like every other gate.
+ */
+const offlineDialLimiter = createRateLimiter({ capacity: 20, refillPerSec: 0.25 });
+setInterval(() => offlineDialLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
 import {
   busEnabled,
   initBusyStateSync,
@@ -1406,6 +1421,34 @@ export function handleMessage(
           // email when they next open the app (that's how they "see it on return").
           if (process.env.RELAY_DIAG === "1" || process.env.NODE_ENV === "development") {
             console.log(`[relay-diag]    invite -> ${to} OFFLINE: target ${target ? "in-grace (dead socket)" : "not registered"}`);
+          }
+          // SECURITY (M40): throttle THIS branch — dials to a number with no live
+          // connection — per calling pin. It is the app's last unthrottled
+          // number→identity oracle and a third-party spam amplifier:
+          //   • the two replies differ by design ("<Name> is offline right now."
+          //     for a real identity vs "That number doesn't exist.") so it leaks
+          //     existence AND the display name over the whole 10^6 space. The
+          //     tRPC resolvers were gated for exactly this (F5's directoryGate,
+          //     120 burst / ~60 per minute); this path never was, and the
+          //     signaling limiter is a FLOOD guard (~200/s) that a scraper simply
+          //     stays under — full enumeration in well under two hours.
+          //   • each pass also calls onMissedCall, writing a History row and
+          //     firing a missed-call push AND email at the victim. Unlike the
+          //     offline-MESSAGE email there is no cooldown on it, so this is a
+          //     mailbox flood against a third party (and a sender-reputation risk
+          //     for the operator's domain) driven by a stranger.
+          // Scoped deliberately to the OFFLINE branch: a dial to an ONLINE user
+          // never reaches here, so normal calling and group dials (which fan many
+          // invites at once) are untouched — which is why this avoids the
+          // previously-rejected idea of capping invites in general. Generous
+          // enough that a person dialling several offline contacts never notices.
+          if (process.env.RELAY_RATELIMIT_OFF !== "1" && !offlineDialLimiter.allow(callerPin, Date.now())) {
+            safeSend(callerSocket, {
+              type: "error",
+              code: "offline",
+              message: "They're offline right now.",
+            });
+            return;
           }
           onPageCallee({ calleePin: to, callerPin, callerName: me.name, roomId: "", video: wantVideo })
             .then(info => {

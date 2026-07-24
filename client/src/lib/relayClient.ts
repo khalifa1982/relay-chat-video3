@@ -371,6 +371,29 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let callIsGroup = false;
   let videoReqT: ReturnType<typeof setTimeout> | null = null; // our outstanding request
   function clearVideoReq() { if (videoReqT) { clearTimeout(videoReqT); videoReqT = null; } }
+  /**
+   * SECURITY (M37): did WE offer video on this call? `video-accept` may only turn
+   * our camera on when we did.
+   *
+   * `onVideoAccept` used to check nothing but `inCall`, so an UNSOLICITED
+   * `video-accept` frame from any call peer ran `unlockApprovedVideo()` and
+   * forced the recipient's camera on mid-voice-call — a complete bypass of the
+   * v2.81 mutual-consent protocol, whose entire promise is that a camera only
+   * transmits after BOTH sides agree. The victim got a cheerful "Video is on —
+   * both sides 🎥" toast as their only notice. On a party line (joinable by
+   * number) one frame could do it to every participant at once.
+   *
+   * `videoReqT` alone is not a sufficient guard: there are TWO legitimate ways
+   * to receive `video-accept`, and only one of them involves an outstanding
+   * request. A VIDEO DIAL answered with the Video button also replies
+   * `video-accept` (see the answer path), and there the caller's consent was
+   * given implicitly by dialing with video — no `video-request` was ever sent.
+   * `outgoingDial` can't stand in for it either, since it is cleared at
+   * establishment while a consent frame often arrives before the transport even
+   * exists. Hence this dedicated flag, set at BOTH consent points and cleared by
+   * the per-call reset below (consent is per-call).
+   */
+  let videoOfferedByUs = false;
   function videoGateActive(): boolean {
     return inCall && !videoApproved && !callIsGroup;
   }
@@ -401,6 +424,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function requestVideoUpgrade() {
     if (videoReqT) { toast("Video request already sent — waiting for them…"); return; }
+    videoOfferedByUs = true; // M37: we asked, so a matching accept is legitimate
     sendWS({ type: "video-request" });
     toast("Video request sent — their camera prompt is up. Video starts when they accept.");
     videoReqT = setTimeout(() => {
@@ -415,6 +439,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function onVideoAccept() {
     if (!inCall) return;
+    // M37: only honor an accept that answers OUR offer (a mid-call
+    // `video-request`, or a video dial we placed). An unsolicited one is a peer
+    // trying to switch our camera on without consent — drop it silently rather
+    // than toasting, so the frame reveals nothing about whether it landed.
+    if (!videoOfferedByUs) return;
     unlockApprovedVideo();
     toast("Video is on — both sides. 🎥");
   }
@@ -2066,6 +2095,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const target = dialed; dialed = ""; refreshDisplay(); closeAddPad();
     if (!inCall) {
       inCall = true;
+      // M37: dialing with the camera live IS our video consent, so a matching
+      // `video-accept` from the callee is legitimate even with no video-request.
+      videoOfferedByUs = camOn;
       outgoingDial = { pin: target, video: camOn };
       enterCallUI("Calling…", { outgoing: true });
       emitPhase("dialing");
@@ -2106,6 +2138,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     if (!inCall) {
       inCall = true;
+      videoOfferedByUs = !opts?.voice; // M37 — a video dial offers video
       outgoingDial = { pin: target, name: opts?.displayName, video: !opts?.voice };
       enterCallUI(opts?.voice ? "Voice call…" : "Calling…", { outgoing: true });
       emitPhase("dialing");
@@ -2146,6 +2179,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     callIsGroup = true; // conferences bypass the 1:1 video-consent gate
     if (!inCall) {
       inCall = true;
+      videoOfferedByUs = !opts?.voice; // M37 — a video group dial offers video
       outgoingDial = { pin: clean.length + " people", name: "Group call", video: !opts?.voice, group: true };
       enterCallUI(opts?.voice ? "Voice call…" : "Calling…", { outgoing: true });
       emitPhase("dialing");
@@ -5907,6 +5941,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     clearDialTimeout(); // an ended call must never fire a stale "No answer."
     clearFailDial(); // an explicit End during the failure card mustn't re-fire
     videoApproved = false; callIsGroup = false; // consent is per-call
+    videoOfferedByUs = false; // M37 — our video OFFER is per-call too
     clearVideoReq();
     hideVideoAsk();
     clearConnSeq();

@@ -455,16 +455,15 @@ describe("M25 — PIN lockout ladder (MySQL left-to-right UPDATE assignment)", (
     expect(runLadder(2, CAP, buggy).persisted).not.toBe(CAP + 1);
   });
 
-  it("the source no longer double-counts the increment", () => {
-    const stmt = AUTH_PIN.slice(AUTH_PIN.indexOf("loginPinLockedAt: sql`CASE WHEN"));
-    expect(stmt.slice(0, 200)).toMatch(
-      /COALESCE\(\$\{users\.loginPinAttempts\}, 0\) > \$\{PIN_MAX_ATTEMPTS\}/,
-    );
-    expect(stmt.slice(0, 200)).not.toMatch(/0\) \+ 1 > \$\{PIN_MAX_ATTEMPTS\}/);
-  });
-
-  it("documents WHY the +1 is absent, so it isn't 'fixed' back", () => {
-    expect(AUTH_PIN).toMatch(/LEFT TO RIGHT/);
+  it("no longer computes the lock inside a same-statement CASE at all (M36)", () => {
+    // v2.99.39 restructured this: the lock is latched by its OWN guarded UPDATE
+    // from the PERSISTED count, so the MySQL assignment-order hazard cannot
+    // apply to the PIN ladder any more. The double-counted CASE must be gone.
+    expect(AUTH_PIN).not.toMatch(/loginPinLockedAt: sql`CASE WHEN/);
+    expect(AUTH_PIN).not.toMatch(/0\) \+ 1 > \$\{PIN_MAX_ATTEMPTS\}/);
+    // The threshold is now evaluated in JS against the read-back value.
+    expect(AUTH_PIN).toMatch(/if \(attempts > PIN_MAX_ATTEMPTS\) \{/);
+    expect(AUTH_PIN).toMatch(/\.set\(\{ loginPinLockedAt: sql`NOW\(\)` \}\)/);
   });
 });
 
@@ -557,6 +556,84 @@ describe("M27 — avatarUrl rejects arbitrary external URLs", () => {
     expect(allowed("//attacker.example/x.png")).toBe(false);
     expect(allowed("/manus-storage/relay-chat/7/avatar_ab12.jpg")).toBe(true);
     expect(allowed("data:image/png;base64,iVBORw0KGgo=")).toBe(true);
+  });
+});
+
+/* ── M36: PIN verification is bounded by an atomic slot claim ───────────── */
+
+describe("M36 — a concurrent burst cannot exceed the PIN try cap", () => {
+  it("claims a slot with a guarded UPDATE before verifying anything", () => {
+    const fn = AUTH_PIN.slice(
+      AUTH_PIN.indexOf("export async function attemptPinLogin"),
+      AUTH_PIN.length,
+    );
+    // The claim must carry BOTH guards: live lock state + the slot bound.
+    expect(fn).toMatch(/isNull\(users\.loginPinLockedAt\)/);
+    expect(fn).toMatch(/COALESCE\(\$\{users\.loginPinAttempts\}, 0\) <= \$\{PIN_MAX_ATTEMPTS\}/);
+    expect(fn).toMatch(/if \(!gotSlot\) return \{ outcome: "locked" \};/);
+    // …and it must come BEFORE the secret is tested.
+    expect(fn.indexOf("gotSlot")).toBeLessThan(fn.indexOf("verifyPassword("));
+  });
+
+  it("no longer gates on the caller's snapshot of loginPinLockedAt", () => {
+    // The pre-fix gate — a stale field from a row the CALLER read — is what let
+    // N concurrent requests all reach verifyPassword. Scoped to attemptPinLogin:
+    // the pure `judgePinAttempt` helper still decides from a snapshot BY DESIGN,
+    // which is fine because it is advisory/test-only (and now says so loudly).
+    const fn = AUTH_PIN.slice(
+      AUTH_PIN.indexOf("export async function attemptPinLogin"),
+      AUTH_PIN.length,
+    );
+    expect(fn).not.toMatch(/if \(row\.loginPinLockedAt\) return \{ outcome: "locked" \};/);
+  });
+
+  it("the advisory helper is marked as NOT an enforcement path", () => {
+    const judge = AUTH_PIN.slice(
+      AUTH_PIN.indexOf("ADVISORY ONLY"),
+      AUTH_PIN.indexOf("export function judgePinAttempt"),
+    );
+    expect(judge).toMatch(/NOT AN ENFORCEMENT PATH/);
+    expect(judge).toMatch(/attemptPinLogin/);
+  });
+
+  it("latches the lock with its own isNull-guarded UPDATE so the alert email sends exactly once", () => {
+    expect(AUTH_PIN).toMatch(/const iLatched =/);
+    expect(AUTH_PIN).toMatch(/if \(row\.email && iLatched\)/);
+  });
+
+  /**
+   * Model the DB guard: `WHERE lockedAt IS NULL AND attempts <= cap`. However
+   * many requests arrive at once, MySQL serializes them per row, so only the
+   * ones that still satisfy the predicate win a slot — and only a winner may
+   * verify. This is the property the old snapshot gate did not have.
+   */
+  function simulateBurst(concurrent: number, cap: number) {
+    let attempts = 0;
+    let locked = false;
+    let verifications = 0;
+    for (let i = 0; i < concurrent; i++) {
+      if (locked || attempts > cap) continue; // claim fails → refused, no verify
+      attempts += 1;
+      verifications += 1; // slot won → this attempt gets to test the PIN
+      if (attempts > cap) locked = true; // wrong answer latches on the last slot
+    }
+    return { verifications, attempts, locked };
+  }
+
+  it("bounds verifications to cap+1 even under a 10,000-request burst", () => {
+    const CAP = 3;
+    const burst = simulateBurst(10_000, CAP);
+    expect(burst.verifications).toBe(CAP + 1); // 4 — not 10,000
+    expect(burst.locked).toBe(true);
+  });
+
+  it("still allows the full documented ladder for a legitimate user", () => {
+    const CAP = 3;
+    expect(simulateBurst(1, CAP).verifications).toBe(1);
+    expect(simulateBurst(3, CAP).locked).toBe(false); // 3 wrong tries = warn only
+    expect(simulateBurst(4, CAP).locked).toBe(true); // the 4th locks
+    // …and the 4th try IS verified, so a correct 4th entry can still succeed.
+    expect(simulateBurst(4, CAP).verifications).toBe(4);
   });
 });
 

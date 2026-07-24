@@ -78,6 +78,15 @@ export type PinVerdict =
  * Pure decision: given the stored row and an entered PIN, what happens?
  * (DB writes + the lock email are applied by the caller — this stays
  * unit-testable without a database.)
+ *
+ * ⚠️ ADVISORY ONLY — NOT AN ENFORCEMENT PATH. Currently referenced only by
+ * tests, where it documents the ladder's shape. It decides from a SNAPSHOT of
+ * the row, so it cannot bound how many PINs get verified concurrently: N
+ * simultaneous requests would all see the same `loginPinLockedAt: null` and all
+ * reach `verifyPassword`, which is exactly the brute-force bypass M36 closed in
+ * `attemptPinLogin`. Do NOT wire this into a login route. Real attempts must go
+ * through `attemptPinLogin`, which claims an attempt slot atomically in the
+ * database BEFORE testing the secret.
  */
 export function judgePinAttempt(row: {
   loginPinHash: string | null;
@@ -115,63 +124,78 @@ export function lockEmailHtml(): string {
 export async function attemptPinLogin(row: PinUserRow, pin: string): Promise<PinVerdict> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
-  // Non-mutating verdicts first — they never touch the counter.
   if (!row.loginPinHash) return { outcome: "no-pin" };
-  if (row.loginPinLockedAt) return { outcome: "locked" };
+
+  // ── SECURITY (M36): CLAIM AN ATTEMPT SLOT ATOMICALLY, BEFORE VERIFYING ──
+  //
+  // The lockout used to be gated on `row.loginPinLockedAt` — a field from a
+  // snapshot the CALLER read (loginWithPin does its own findUserByEmailAny),
+  // and `verifyPassword` then ran regardless of the row's LIVE state. So N
+  // concurrent requests all read an unlocked row, all passed the gate, and all
+  // got a PIN checked. The S1 fix made the counter arithmetic race-free, which
+  // stopped increments being LOST — but it never bounded how many
+  // VERIFICATIONS could happen, so the "3 tries then lock" guarantee wasn't
+  // actually enforced per attempt: a burst could test many of the 10^4 PINs in
+  // one window, held back only by the per-IP bucket rather than the cap.
+  //
+  // Fixed by inverting the order: every attempt must first WIN a slot from the
+  // database, and only a winner is allowed to verify. The guard is the WHERE
+  // clause, so MySQL serializes it per row and exactly PIN_MAX_ATTEMPTS + 1
+  // slots can ever be claimed between unlocks — no matter how many requests
+  // arrive at once, whether they interleave, or which instance they hit.
+  //
+  // `COALESCE(attempts,0) <= PIN_MAX_ATTEMPTS` is the slot bound: the count can
+  // climb 0→1→2→3→4 and then stops matching, so the FOURTH try is still
+  // verified (a correct 4th succeeds, exactly as before — the lock latches only
+  // on a wrong 4th, below). `isNull(lockedAt)` refuses an already-locked row
+  // using LIVE state rather than the caller's snapshot.
+  const claim = await db
+    .update(users)
+    .set({ loginPinAttempts: sql`COALESCE(${users.loginPinAttempts}, 0) + 1` })
+    .where(
+      and(
+        eq(users.id, row.id),
+        isNull(users.loginPinLockedAt),
+        sql`COALESCE(${users.loginPinAttempts}, 0) <= ${PIN_MAX_ATTEMPTS}`,
+      ),
+    );
+  // mysql2 returns [ResultSetHeader]; affectedRows>0 means THIS statement won a slot.
+  const gotSlot =
+    Array.isArray(claim) && ((claim[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+  // No slot ⇒ the row is locked, or its slots are already spent (which is only
+  // reachable if a prior attempt latched the lock, or died between claiming and
+  // latching — either way refuse, and an email code still unlocks via
+  // unlockLoginPin). Fail CLOSED.
+  if (!gotSlot) return { outcome: "locked" };
+
+  // Slot won — now, and only now, is it legitimate to test the secret.
   if (verifyPassword(pin, row.loginPinHash)) {
+    // Correct: release every slot for next time.
     await db.update(users).set({ loginPinAttempts: 0 }).where(eq(users.id, row.id));
     return { outcome: "ok" };
   }
 
-  // WRONG pin. SECURITY: increment + lock-on-threshold ATOMICALLY in one
-  // statement, guarded on the row still being unlocked. The old code read the
-  // count, decided the verdict, then wrote `stale+1` — so N concurrent wrong
-  // guesses all observed attempts=0 and each wrote 1, losing increments and
-  // letting an attacker blow past the 3-try cap to brute-force the 10^4 PIN
-  // space. Deciding from the PERSISTED post-increment value (below) closes the
-  // lost-update race: once the count crosses the cap the row locks and every
-  // later guess fails the `IS NULL` guard.
-  // MySQL EVALUATES SINGLE-TABLE `UPDATE` SET ASSIGNMENTS LEFT TO RIGHT, and a
-  // later assignment sees the ALREADY-UPDATED value of an earlier one (an
-  // explicitly documented MySQL deviation from standard SQL). So by the time the
-  // CASE below runs, `loginPinAttempts` is ALREADY `old + 1` — do NOT add another
-  // `+ 1` here. The original `... + 1 > PIN_MAX_ATTEMPTS` double-counted, making
-  // the effective test `old + 2 > 3`, which broke the ladder in two ways:
-  //   • the row locked on the THIRD wrong PIN, not the fourth (the UI's
-  //     "attempts left" counter and the lock email's "four times in a row" copy
-  //     both promise four), and
-  //   • the persisted count could then only ever reach 3, while the lock-alert
-  //     email below requires exactly `PIN_MAX_ATTEMPTS + 1` (4) — so the email
-  //     was UNREACHABLE and an account owner was NEVER told their account was
-  //     being brute-forced. Locking early is fail-safe; silently dropping the
-  //     alert is not.
-  // Comparing the post-increment value directly restores both: `old + 1 > 3`
-  // locks on the 4th wrong entry and persists 4, which the email condition sees.
-  const res = await db
-    .update(users)
-    .set({
-      loginPinAttempts: sql`COALESCE(${users.loginPinAttempts}, 0) + 1`,
-      loginPinLockedAt: sql`CASE WHEN COALESCE(${users.loginPinAttempts}, 0) > ${PIN_MAX_ATTEMPTS} THEN NOW() ELSE ${users.loginPinLockedAt} END`,
-    })
-    .where(and(eq(users.id, row.id), isNull(users.loginPinLockedAt)));
-  // mysql2 returns [ResultSetHeader]; affectedRows>0 means THIS statement
-  // modified the row (i.e. it ran while still unlocked), which we use to send
-  // the lock email exactly once (the statement that crosses the threshold).
-  const thisStmtApplied =
-    Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
-
+  // WRONG. Read the persisted post-increment count — authoritative, since the
+  // claim above was atomic — and latch the lock when it has passed the cap.
   const [after] = await db
-    .select({ attempts: users.loginPinAttempts, lockedAt: users.loginPinLockedAt })
+    .select({ attempts: users.loginPinAttempts })
     .from(users)
     .where(eq(users.id, row.id))
     .limit(1);
   const attempts = after?.attempts ?? PIN_MAX_ATTEMPTS + 1;
-  if (after?.lockedAt) {
-    // The crossing statement is the one that both applied and pushed the
-    // persisted count to exactly cap+1; concurrent no-op guesses (guard failed)
-    // don't re-send.
-    if (row.email && thisStmtApplied && attempts === PIN_MAX_ATTEMPTS + 1) {
-      // Best-effort — the lock itself never depends on email delivery.
+  if (attempts > PIN_MAX_ATTEMPTS) {
+    // Latch guarded on `isNull` so exactly ONE statement transitions the row to
+    // locked; that same statement owns sending the alert email, so concurrent
+    // losers can't duplicate it.
+    const latch = await db
+      .update(users)
+      .set({ loginPinLockedAt: sql`NOW()` })
+      .where(and(eq(users.id, row.id), isNull(users.loginPinLockedAt)));
+    const iLatched =
+      Array.isArray(latch) && ((latch[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    if (row.email && iLatched) {
+      // Best-effort — the lock itself never depends on email delivery. This is
+      // the owner's ONLY signal that their account is being brute-forced.
       void sendEmail({
         to: row.email,
         subject: "RELAY: your account was locked after 4 wrong PIN entries",

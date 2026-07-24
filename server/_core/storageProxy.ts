@@ -236,6 +236,29 @@ export function registerStorageProxy(app: Express) {
         const v = upstream.headers.get(h);
         if (v) res.setHeader(h, v);
       }
+      // SECURITY (M38): the Content-Type above originates from the UPLOADER (it's
+      // whatever `?mime=` was stored with), and this response is SAME-ORIGIN, so
+      // relaying it verbatim let an attacker choose how the victim's browser
+      // interprets their bytes. `nosniff` below stops the browser guessing, but it
+      // also means the DECLARED type is obeyed — which is the problem, not the
+      // cure. The upload denylist is the first line of defence, yet it is a
+      // denylist over a very broad allowlist (`text/*`, `application/*`), so
+      // anything it forgot — or anything already stored before it was tightened —
+      // would still be honoured here.
+      //
+      // Serve only types that are genuinely safe to render inline as themselves;
+      // everything else is downgraded to an opaque download. A file the browser
+      // saves cannot execute in our origin, which makes this robust WITHOUT
+      // needing to enumerate every dangerous type. This matches how the client
+      // already presents attachments (images/video/audio inline, documents as a
+      // download card), so it costs nothing in practice.
+      const declared = (upstream.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+      const INLINE_SAFE_TYPE =
+        /^(image\/(png|jpeg|jpg|gif|webp|avif|bmp|x-icon)|video\/(mp4|webm|ogg|quicktime)|audio\/(mpeg|mp3|mp4|aac|ogg|wav|webm|x-m4a|m4a)|application\/pdf)$/;
+      if (!INLINE_SAFE_TYPE.test(declared)) {
+        res.setHeader("Content-Type", "application/octet-stream");
+        res.setHeader("Content-Disposition", "attachment");
+      }
       if (!upstream.headers.get("accept-ranges")) res.setHeader("Accept-Ranges", "bytes");
       // Content-addressed + immutable keys → a short PRIVATE cache is safe and
       // avoids re-streaming on every render. Never `public` (that would be the

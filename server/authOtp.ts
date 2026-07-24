@@ -124,12 +124,14 @@ export async function recordOtpFailure(rowId: number, currentAttempts: number, n
     .update(emailOtps)
     .set({
       attempts: sql`COALESCE(${emailOtps.attempts}, 0) + 1`,
-      // Same MySQL left-to-right assignment semantics as the PIN ladder in
-      // authPin.ts: this CASE already sees `attempts` as `old + 1`, so adding
-      // another `+ 1` double-counted and burned the code on the FOURTH wrong
-      // guess instead of the fifth (`old + 2 >= 5`). Fail-safe in direction, but
-      // it silently contradicts OTP_MAX_ATTEMPTS. Compare the post-increment
-      // value directly.
+      // MySQL EVALUATES SINGLE-TABLE `UPDATE` SET ASSIGNMENTS LEFT TO RIGHT, and
+      // a later assignment reads the value an earlier one JUST WROTE (a
+      // documented deviation from standard SQL). So this CASE already sees
+      // `attempts` as `old + 1` — adding another `+ 1` double-counted and burned
+      // the code on the FOURTH wrong guess instead of the fifth
+      // (`old + 2 >= 5`). Fail-safe in direction, but it silently contradicts
+      // OTP_MAX_ATTEMPTS and the "attempts left" copy. Compare the
+      // post-increment value directly.
       consumedAt: sql`CASE WHEN COALESCE(${emailOtps.attempts}, 0) >= ${OTP_MAX_ATTEMPTS} THEN ${new Date(nowMs)} ELSE ${emailOtps.consumedAt} END`,
     })
     .where(and(eq(emailOtps.id, rowId), isNull(emailOtps.consumedAt)));

@@ -512,6 +512,17 @@ export const v2AuthRouter = router({
    */
   regenerateNumber: publicProcedure.mutation(async ({ ctx }) => {
     const me = requireIdentity(ctx);
+    // SECURITY (M41): the sibling of M21. Each regeneration permanently claims
+    // another of the ~980,000 six-digit numbers — `numberTaken` treats any
+    // existing row as taken and M20's reservation ledger is monotonic, so the
+    // old number is never recycled either. Unthrottled, ONE authenticated
+    // account could therefore drain the shared space on its own and break number
+    // allocation for every future signup, which is exactly the permanent,
+    // unrecoverable onboarding DoS M21 closed on the guest-minting side. It also
+    // renumbers the caller across every contact who saved them, so hammering it
+    // is abusive regardless. Reuse the guest-mint budget: nobody legitimately
+    // changes their number more than a handful of times.
+    guestMintGate(ctx);
     const result = await regenerateIdentityNumber(me.id);
     const fresh = await getIdentityById(me.id);
     return {

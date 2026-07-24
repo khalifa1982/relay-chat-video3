@@ -433,3 +433,77 @@ The class-based sweep ran on a 4-core box, so its agents were capped at 2 concur
 ### Verification (round 5 pt.2)
 
 `pnpm check` clean; `pnpm test` **1555 passing / 1 skipped**; `pnpm build` clean. `server/hardeningPass5.test.ts` grows to 59, including behavioral `normalizeMimeType` coverage of the actual bypass payloads (comma-lists, whitespace, case variants) and a check that normalization does not launder a dangerous type past the blocked list.
+
+## Round 5 pt.3 (final sweep classes)
+
+12 of the 14 class agents reported in the end. These are the findings from the last wave, shipped as v2.99.39.
+
+### H16 — the PIN lockout was bypassable by concurrency (HIGH)
+
+**Where:** `server/authPin.ts` `attemptPinLogin`, reached from `otpAuth.loginWithPin`.
+**Problem.** The lockout gated on `row.loginPinLockedAt` — a field from a snapshot the **caller** had already read (`loginWithPin` does its own `findUserByEmailAny`) — and then ran `verifyPassword` regardless of the row's live state. N simultaneous requests therefore all observed an unlocked row, all passed the gate, and all had a PIN checked.
+
+This is the half of S1 that the earlier fix did not reach. S1 made the *counter* race-free, which stopped increments being lost — but it never bounded how many **verifications** could occur, so "three tries then lock" was not actually enforced per attempt. A burst could test a large fraction of the 10⁴ PIN space in one window, held back only by the per-IP `otpGate` bucket rather than by the cap itself.
+
+**Fix.** Inverted the order so the database, not a snapshot, is the gate. Every attempt must first **win a slot**:
+
+```
+UPDATE users SET loginPinAttempts = COALESCE(loginPinAttempts,0) + 1
+ WHERE id = ? AND loginPinLockedAt IS NULL
+   AND COALESCE(loginPinAttempts,0) <= PIN_MAX_ATTEMPTS
+```
+
+with the verdict taken from `affectedRows`; only a winner is allowed to call `verifyPassword`. MySQL serializes that per row, so at most `PIN_MAX_ATTEMPTS + 1` verifications can ever happen between unlocks — regardless of how many requests arrive at once, how they interleave, or which instance they hit. The documented ladder is preserved exactly: the fourth try is still verified (so a correct fourth entry still succeeds), and a wrong fourth latches the lock through its own `IS NULL`-guarded UPDATE, which also owns sending the alert email exactly once.
+
+The pure `judgePinAttempt` helper is referenced only by tests; it decides from a snapshot *by design*, so it now carries an explicit "ADVISORY ONLY — NOT AN ENFORCEMENT PATH" warning to stop it being wired into a login route later.
+
+### H17 — an unsolicited `video-accept` forced a peer's camera on (HIGH)
+
+**Where:** `client/src/lib/relayClient.ts` `onVideoAccept`.
+**Problem.** The handler checked nothing but `inCall`, then called `unlockApprovedVideo()`. Any participant in a call could therefore send an unsolicited `video-accept` frame and switch the recipient's camera on mid-voice-call — a complete bypass of the v2.81 mutual-consent protocol, whose entire promise is that a camera transmits only after both sides agree. The victim's only notice was a cheerful "Video is on — both sides 🎥" toast. On a party line, which is joinable by number, one frame could do it to every participant at once.
+**Fix.** A new per-call `videoOfferedByUs` flag, required before an accept is honoured. `videoReqT` alone would not do: there are **two** legitimate ways to receive `video-accept`, and only one involves an outstanding request — a video **dial** answered with the Video button also replies `video-accept`, and there the caller's consent was implicit in dialing, with no `video-request` ever sent. `outgoingDial` can't stand in either, since it is cleared at establishment while consent frames often arrive before the transport exists. The flag is set at both consent points and cleared by the existing per-call reset; an unsolicited accept is dropped **silently**, so the frame reveals nothing about whether it landed.
+
+### H18 — attacker-chosen `Content-Type` served same-origin (HIGH)
+
+**Where:** `server/v2upload.ts` `BLOCKED_MIME` + `server/_core/storageProxy.ts`.
+**Problem.** The proxy relays the stored content type verbatim, and that type is whatever the uploader supplied. `X-Content-Type-Options: nosniff` stops the browser guessing — but it also means the **declared** type is obeyed, which is the problem rather than the cure. So the upload denylist was the only real defence, and it was a denylist over an allowlist that admits `text/*` and `application/*` wholesale. The entire XML family was missing: a document served as `text/xml`, `application/xml`, `text/xsl` or `application/xslt+xml` is parsed as XML, and XML carrying SVG or XHTML namespaces with a `<script>` element executes in some browsers — precisely the outcome `image/svg+xml` is blocked for. The other JavaScript media types (`text/javascript`, `application/ecmascript`, `application/x-javascript`) were missing too; only `application/javascript` was listed.
+**Fix.** Both layers. The denylist now covers the XML and script families. Independently, the proxy serves only an **inline-safe set** (common image/video/audio types plus `application/pdf`) as itself and downgrades anything else to `application/octet-stream` with `Content-Disposition: attachment`. A file the browser saves cannot execute in our origin, which makes the mitigation robust without needing to enumerate every dangerous type — and it also covers rows stored *before* the denylist was tightened. It matches how the client already presents attachments (media inline, documents as a download card), so it costs nothing in practice.
+
+### H19 — `auth.me` shipped the caller's credential hashes to the browser (MED)
+
+**Where:** `server/routers.ts`.
+**Problem.** `getUserById` performs an unprojected `db.select()`, and `auth.me` returned `ctx.user` verbatim — so every call serialized the caller's entire `users` row, including their scrypt `passwordHash` and their `loginPinHash`. Those then live in JS memory, the React Query cache, devtools/HAR captures, anything a browser extension can read, and any client error report that captures query state. It is the caller's own hash, so this is not cross-user disclosure — but it converts any read-only client-side foothold (an XSS such as H1, a malicious extension) into offline credential cracking, and the PIN hash covers only 10⁴ possibilities, so recovering it effectively hands over the account.
+**Fix.** Both fields are stripped before the response. Done as a **denylist** rather than an allowlist projection so no field the client already consumes can silently disappear; server-side callers that genuinely need the hashes read them from their own query, not from `ctx.user`.
+
+### H20 — the signaling offline dial was an enumeration oracle and a spam amplifier (MED)
+
+**Where:** `server/relay.ts`, the `invite` handler's offline-resolution branch.
+**Problem.** Two issues on one path. Its replies differ *by design* — `"<Name> is offline right now."` for a real identity versus `"That number doesn't exist."` for an unknown one — so it leaks both existence and display name across the whole 10⁶ number space. The tRPC resolvers were gated for exactly this in F5 (`directoryGate`, 120 burst / ~60 per minute), but this path never was, and the signaling limiter is a **flood** guard (~200/s) that a scraper simply stays under: full enumeration in well under two hours. Separately, each pass also calls `onMissedCall`, writing a History row and firing a missed-call push **and email** at the target — and unlike the offline-*message* email there is no cooldown on it, making this a mailbox flood against a third party, driven by a stranger, plus a sender-reputation risk for the operator's domain.
+**Fix.** A per-caller-pin `offlineDialLimiter` (20 burst, ~1 per 4s), scoped **only** to this branch. A dial to an online user never reaches it, so normal calling and group dials — which fan many invites at once — are untouched; that scoping is what makes this acceptable where the previously-rejected idea of capping invites in general was not. The throttled reply is the generic offline message, and it returns before resolving the identity or recording any miss.
+
+### H21 — `identity.regenerateNumber` had no throttle (MED)
+
+**Where:** `server/v2routers.ts`. The sibling of H5. Each call permanently claims another of the ~980,000 six-digit numbers, and the old one is never recycled (`numberTaken` treats any existing row as taken; the M20 ledger is monotonic) — so a single authenticated account could drain the shared space and break allocation for every future signup. Now behind the same mint budget.
+
+### Verified and queued (not changed in this pass)
+
+Confirmed against source but deliberately not rushed into the same commit — several sit in the call-setup path, the most delicate code in the app:
+
+- signaling `knock-approve` does not re-check that the approver is still in the room, and `kick` does not revoke co-host;
+- in-call chat trusts the frame's self-declared sender name (impersonation — cosmetic next to the XSS in H1, which is fixed);
+- `ensureUserIdentity` is a check-then-insert with no unique index on `identities.userId`;
+- the Dialer's `?to=` parameter places an outgoing call with no user gesture;
+- member sign-out does not revoke its session-ledger row, and password logins mint sid-less cookies;
+- `/api/relay/send` resolves the full identity context before the rate-limit check.
+
+### Product decision, not a defect
+
+The status audience rule means **anyone who saves your six-digit number can see your story posts** — contacts are self-service with no consent step, so this is viewer-granted rather than owner-granted visibility. That is a product choice about how `status` is scoped, not a bug, so it is flagged here rather than changed.
+
+### Verification (round 5 pt.3)
+
+`pnpm check` clean; `pnpm test` **1582 passing / 1 skipped**; `pnpm build` clean. New `server/hardeningPass6.test.ts` (22) plus M36 coverage in `hardeningPass5.test.ts`, including a simulation of the DB guard proving a 10,000-request burst yields exactly `cap + 1` PIN verifications, and behavioural coverage of the real `BLOCKED_MIME` and `INLINE_SAFE_TYPE` predicates. Three stale pins were retargeted to the new mechanisms rather than weakened.
+
+### Correction to H11 (register bypass) — superseded by removal
+
+H11 hardened the `RELAY_OTP_REGISTER_BYPASS` branch to be create-only. Between that shipping and this round, the stopgap was **deleted outright** (v2.99.39) because AWS approved the operator's SES production access on 2026-07-24: registration now always mints and emails a real verification code, and the account is created only by `verifyOtp`. Removal strictly supersedes the hardening — there is no branch left to get wrong, and a stale `RELAY_OTP_REGISTER_BYPASS=1` in a server `.env` has no effect because nothing reads it. The operator note attached to H11 ("worth unsetting the flag") is therefore resolved. H11's regression test was retargeted to pin the absence of the branch rather than the shape of its guard.

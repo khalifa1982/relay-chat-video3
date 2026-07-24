@@ -21,7 +21,36 @@ import {
 export const appRouter = router({
   system: systemRouter,
   auth: router({
-    me: publicProcedure.query((opts) => opts.ctx.user),
+    /**
+     * SECURITY (M39): NEVER ship credential material to the browser.
+     *
+     * `ctx.user` is whatever `getUserById` returned, and that does an
+     * unprojected `db.select()` — so this handler was serialising the caller's
+     * ENTIRE `users` row, including their scrypt `passwordHash` and their
+     * `loginPinHash`, into the `auth.me` response on every page load. Those then
+     * live in JS memory, the React Query cache, devtools/HAR captures, anything
+     * a browser extension can read, and any client error report that includes
+     * query state. It is the caller's OWN hash, so this is not cross-user
+     * disclosure — but it converts any read-only client-side foothold (an XSS
+     * like the in-call chat one, a malicious extension) into offline credential
+     * cracking. And the PIN hash covers a 10^4 space, so it does not survive
+     * even a trivial offline attack — recovering it hands over the account.
+     *
+     * Stripped as a DENYLIST rather than an allowlist projection so no field the
+     * client already consumes can silently disappear. Server-side callers that
+     * genuinely need the hashes (loginWithPin) read them from their own query,
+     * not from `ctx.user`, so nothing else is affected.
+     */
+    me: publicProcedure.query((opts) => {
+      const u = opts.ctx.user;
+      if (!u) return null;
+      const {
+        passwordHash: _passwordHash,
+        loginPinHash: _loginPinHash,
+        ...safe
+      } = u as typeof u & { passwordHash?: unknown; loginPinHash?: unknown };
+      return safe;
+    }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });

@@ -50,8 +50,12 @@ describe("S1 — attemptPinLogin increments the lockout counter atomically", () 
     expect(src).toMatch(/COALESCE\(\$\{users\.loginPinAttempts\}, 0\) \+ 1/);
     expect(src).toMatch(/isNull\(users\.loginPinLockedAt\)/);
     // The verdict is derived from the PERSISTED post-increment value, not the
-    // stale caller-passed count.
-    expect(src).toMatch(/\.select\(\{ attempts: users\.loginPinAttempts, lockedAt: users\.loginPinLockedAt \}\)/);
+    // stale caller-passed count. (v2.99.39 / M36 tightened this further: the
+    // increment is now an atomic SLOT CLAIM that must succeed BEFORE the PIN is
+    // verified at all, so the read-back selects just the count and the live lock
+    // state is enforced by the claim's WHERE clause instead of a second column.)
+    expect(src).toMatch(/\.select\(\{ attempts: users\.loginPinAttempts \}\)/);
+    expect(src).toMatch(/COALESCE\(\$\{users\.loginPinAttempts\}, 0\) <= \$\{PIN_MAX_ATTEMPTS\}/);
   });
 });
 
