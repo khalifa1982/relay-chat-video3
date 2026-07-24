@@ -5,6 +5,7 @@
  */
 import { useEffect } from "react";
 import { trpc } from "@/lib/trpc";
+import { markDialIntent } from "@/lib/bootUrl";
 import { notify, playCallRing, playMessageChime } from "./notifications";
 import { isThreadMuted } from "./mutedThreads";
 import { setTyping, clearTyping } from "./typingStore";
@@ -243,7 +244,14 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
               tag: `relay-online-${payload.number}`,
               url: dialUrl,
               onClick: () => {
-                if (typeof window !== "undefined") window.location.href = dialUrl;
+                if (typeof window !== "undefined") {
+                  // M48: this is a full document load, so mark it as OUR
+                  // navigation — the user armed this alert and tapped it, so it
+                  // should still connect in one tap. An attacker's link cannot
+                  // set this (sessionStorage is same-origin and per-tab).
+                  markDialIntent(payload.number);
+                  window.location.href = dialUrl;
+                }
               },
             });
             // In-app toast with a one-tap call action (lazy import keeps this

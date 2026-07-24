@@ -3276,8 +3276,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
         try { if ((room as any).canPlaybackAudio === false) armAudioUnlock(); } catch { /* */ }
       });
     }
-    room.on(RoomEventEnum.DataReceived, (payload: Uint8Array) => {
-      try { receiveChatFrame(new TextDecoder().decode(payload)); } catch { /* */ }
+    // M46: LiveKit hands us the SENDING participant; its identity is the pin
+    // from the server-minted join token, so it's authenticated. Prefer it over
+    // whatever the frame claims about itself.
+    room.on(RoomEventEnum.DataReceived, (payload: Uint8Array, participant?: { identity?: string }) => {
+      try {
+        receiveChatFrame(new TextDecoder().decode(payload), participant?.identity);
+      } catch { /* */ }
     });
     // LiveKit drives its OWN reconnection (Reconnecting → Reconnected), and its
     // retry window is longer than our 10s mesh window. So on the SFU path we
@@ -5337,17 +5342,41 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function newChatId(): string {
     return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
   }
-  function receiveChatFrame(raw: string) {
+  /**
+   * SECURITY (M46 — in-call chat impersonation): prefer the sender identity the
+   * TRANSPORT proves over the one the frame claims.
+   *
+   * A chat frame is just JSON on a data channel, and both `name` and `pin` were
+   * taken straight from it — so any participant could publish
+   * `{name:"Alice", pin:"<alice's pin>", text:"…"}` and have it render as a
+   * message from Alice, complete with her avatar (the chip resolves the photo by
+   * pin). In a call about anything sensitive that is a convincing forgery, and on
+   * a party line it can be aimed at everyone at once.
+   *
+   * Both transports already know who actually sent the bytes: the mesh has one
+   * data channel PER PEER (so `setupDC`'s `pin` is authenticated by the channel
+   * itself), and LiveKit hands `DataReceived` the sending participant, whose
+   * identity comes from the server-minted join token. Use that, and take the
+   * display name from the roster (`nameOf`) rather than the payload. `senderPin`
+   * is optional so any future/legacy caller without a proven identity still
+   * degrades to the old behaviour rather than dropping messages.
+   */
+  function receiveChatFrame(raw: string, senderPin?: string) {
     try {
       const d = JSON.parse(raw);
       if (!markChatSeen(d.id)) return; // duplicate — skip
-      // v2.99.4: frames carry the sender's PIN (older clients simply omit it).
-      addChatMsg(d.name, d.text, false, typeof d.pin === "string" ? d.pin : undefined);
+      const trusted = senderPin && /^\d{6}$/.test(senderPin) ? senderPin : undefined;
+      // v2.99.4: frames carry the sender's PIN (older clients simply omit it) —
+      // but a proven identity always wins over the frame's self-declaration.
+      const pin = trusted ?? (typeof d.pin === "string" ? d.pin : undefined);
+      const name = trusted ? nameOf(trusted) : d.name;
+      addChatMsg(name, d.text, false, pin);
     } catch { /* */ }
   }
   function setupDC(pin: string, dc: RTCDataChannel) {
     dc.onopen = () => addToRecents(pin, (peers[pin] || { name: "" }).name);
-    dc.onmessage = e => receiveChatFrame(e.data as string);
+    // M46: this channel belongs to exactly one peer, so `pin` IS the sender.
+    dc.onmessage = e => receiveChatFrame(e.data as string, pin);
   }
   // Returns the number of peers the message was actually handed to (so the
   // caller can warn the user when a send reached nobody). On the SFU path we

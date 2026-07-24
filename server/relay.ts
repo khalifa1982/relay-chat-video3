@@ -1864,7 +1864,24 @@ export function handleMessage(
       // Only the room's HOST or a co-host may approve/deny, and only a knock
       // that's actually pending (guards against a forged approve for an
       // arbitrary pin → unsolicited call injection).
-      if (!meta || !room || !isModerator(meta, conn.pin)) break;
+      //
+      // SECURITY (M45): the approver must ALSO still be IN the room. Unlike the
+      // `mod` case — which derives its room from trusted server state
+      // (`self.roomId`) and so is inherently bound to the caller's live call —
+      // this handler takes `roomId` from the CLIENT, and `roomMeta` outlives
+      // membership (the roster is add-only, and nothing clears `hostPin` /
+      // `cohosts` when someone leaves). So `isModerator` alone kept saying yes
+      // to people who had already gone, which meant:
+      //   • a FORMER host who hung up could still name the old roomId and admit
+      //     an outsider into a call they are no longer part of; and
+      //   • worse, a KICKED co-host (whose role was never revoked — see the
+      //     `kick` case) could knock and then APPROVE THEMSELVES straight back
+      //     in, since both gates were satisfied. The kick was undoable by its
+      //     own target.
+      // Membership is the right test rather than `rid === self.roomId`, because
+      // a host whose call is on HOLD is still in the room's member Set (v2.97.1)
+      // and must remain able to approve.
+      if (!meta || !room || !isModerator(meta, conn.pin) || !room.has(conn.pin)) break;
       if (!meta.knocks || !meta.knocks.has(knockerPin)) break;
       meta.knocks.delete(knockerPin);
       const knocker = reg.clients.get(knockerPin);
@@ -2229,9 +2246,25 @@ export function handleMessage(
             safeSend(conn.socket, { type: "error", code: "forbidden", message: "Only the host can remove a co-host." });
             break;
           }
+          // SECURITY (M45): strip the target's MODERATOR ROLE as part of the
+          // removal. `leaveRoom` only drops membership — it never touched
+          // `meta.cohosts`, so a kicked co-host stayed a co-host in the room's
+          // metadata and got their powers back intact the moment they were back
+          // in the room by ANY route (a re-invite, an auto-rejoin, or — before
+          // the guard added above — knocking and approving themselves). A removal
+          // that leaves the removed party able to mute, pin and kick the people
+          // who removed them is not a removal. Also drop any knock they have
+          // pending so the kick can't be immediately undone by a queued request.
+          if (meta) {
+            meta.cohosts.delete(target);
+            meta.knocks?.delete(target);
+          }
           // Tell the target they were removed, then force them out of the room.
           sendTo(target, { type: "kicked", by: conn.pin });
           leaveRoom(reg, target); // removes membership + broadcasts peer-left + reaps if empty
+          // Everyone still in the room learns the role is gone, so no client
+          // keeps rendering them with host controls.
+          broadcastToRoom(reg, rid, { type: "role", pin: target, role: null });
           break;
         }
         case "pin": {

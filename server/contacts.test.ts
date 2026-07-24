@@ -93,13 +93,16 @@ describe("ensureSchemaExtensions — additive only (never destructive)", () => {
     expect(fnBody.length).toBeGreaterThan(50);
   });
 
-  it("every DDL string is an ADD COLUMN or ADD INDEX — no DROP/RENAME/TRUNCATE/DELETE", () => {
+  it("every DDL string is an ADD COLUMN or ADD [UNIQUE] INDEX — no DROP/RENAME/TRUNCATE/DELETE", () => {
     const ddls = [...fnBody.matchAll(/ddl:\s*"([^"]+)"/g)].map((m) => m[1]);
     expect(ddls.length).toBeGreaterThan(0);
     for (const d of ddls) {
       // v2.88 widened the migrator to also apply hot-path INDEXES — still
-      // strictly additive (an index never touches data).
-      expect(d, d).toMatch(/^ADD (COLUMN|INDEX) /);
+      // strictly additive (an index never touches data). v2.99.43 (M47) adds a
+      // UNIQUE index (one identity per user); also additive, and the migrator's
+      // per-item catch means it simply logs and moves on where existing rows
+      // would violate it, so boot is never blocked.
+      expect(d, d).toMatch(/^ADD (COLUMN|(UNIQUE )?INDEX) /);
     }
     expect(fnBody).not.toMatch(/\bDROP\b/i);
     expect(fnBody).not.toMatch(/\bTRUNCATE\b/i);

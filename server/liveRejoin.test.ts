@@ -38,9 +38,14 @@ describe("knock signaling authorization (server)", () => {
     expect(c).toMatch(/safeSend\(host\.socket, knockMsg\)/);
     expect(c).toMatch(/meta\.cohosts\.forEach/);
   });
-  it("approve/deny requires a moderator AND a pending knock (no forged admit)", () => {
+  it("approve/deny requires a moderator, ROOM MEMBERSHIP, AND a pending knock (no forged admit)", () => {
     const c = RELAY.slice(RELAY.indexOf('case "knock-approve":'), RELAY.indexOf('case "refresh-ice"'));
-    expect(c).toMatch(/if \(!meta \|\| !room \|\| !isModerator\(meta, conn\.pin\)\) break;/);
+    // v2.99.43 (M45) added `room.has(conn.pin)`: roomMeta outlives membership, so
+    // isModerator alone still said yes to a departed host — and to a KICKED
+    // co-host, who could knock and then approve themselves back in.
+    expect(c).toMatch(
+      /if \(!meta \|\| !room \|\| !isModerator\(meta, conn\.pin\) \|\| !room\.has\(conn\.pin\)\) break;/,
+    );
     expect(c).toMatch(/if \(!meta\.knocks \|\| !meta\.knocks\.has\(knockerPin\)\) break;/);
     expect(c).toMatch(/admitToRoom\(reg, knockerPin, roomId\)/);
   });

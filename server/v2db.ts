@@ -29,6 +29,7 @@ import {
   ne,
   or,
   sql,
+  asc,
 } from "drizzle-orm";
 import {
   attachments,
@@ -344,10 +345,28 @@ export async function bindDeviceIdToIdentity(
 export async function getIdentityByUserId(userId: number): Promise<ResolvedIdentity | null> {
   const db = await getDb();
   if (!db) return null;
+  // SECURITY / INTEGRITY (M47): ORDER BY id — always resolve to the OLDEST
+  // identity for this user.
+  //
+  // `ensureUserIdentity` is a check-then-insert (read by userId, then create a
+  // fresh identity) with no unique constraint behind it, so two concurrent
+  // sign-ins for the same account — a double-tapped Sign in, two devices at
+  // once, an OTP verify racing a PIN login — could each see "no identity yet"
+  // and each mint one, leaving the user with TWO identity rows and TWO 6-digit
+  // numbers. With a bare `.limit(1)` and no ordering, MySQL may then return
+  // EITHER row per query, so the same account reports different numbers on
+  // different requests and its messages/contacts split across both. That is
+  // precisely the long-standing "my number changes randomly / this device shows
+  // a different number" symptom.
+  //
+  // Ordering makes resolution DETERMINISTIC even where duplicate rows already
+  // exist in production, so every surface agrees on one identity; the unique
+  // index added by the boot migrator stops new duplicates being created at all.
   const rows = await db
     .select()
     .from(identities)
     .where(eq(identities.userId, userId))
+    .orderBy(asc(identities.id))
     .limit(1);
   return rows.length > 0 ? rowToResolved(rows[0]) : null;
 }
@@ -1049,6 +1068,20 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // of the signed-url cache). Without these it was a full table scan.
     { table: "attachments", column: "attachments_key_idx", ddl: "ADD INDEX `attachments_key_idx` (`storageKey`)" },
     { table: "attachments", column: "attachments_thumbkey_idx", ddl: "ADD INDEX `attachments_thumbkey_idx` (`thumbKey`)" },
+    // M47: one identity per registered user. `ensureUserIdentity` is a
+    // check-then-insert, so without this two concurrent sign-ins for the same
+    // account could each mint an identity — giving one user two rows and two
+    // 6-digit numbers, after which lookups returned whichever MySQL felt like
+    // (the historical "my number changes randomly" report). NULL is allowed
+    // any number of times by a MySQL UNIQUE index, so guest identities
+    // (userId NULL) are entirely unaffected.
+    //
+    // If a deployment ALREADY contains duplicates this ALTER fails, and the
+    // loop below logs and moves on exactly like every other additive step —
+    // boot is never blocked. The ordering fix in getIdentityByUserId keeps such
+    // a deployment self-consistent meanwhile, and the index lands on the next
+    // boot after the duplicates are reconciled.
+    { table: "identities", column: "identities_user_unique", ddl: "ADD UNIQUE INDEX `identities_user_unique` (`userId`)" },
   ];
   for (const a of adds) {
     try {

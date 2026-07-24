@@ -52,9 +52,12 @@ describe("v2.66 communication reliability (verified)", () => {
   it("in-call chat frames carry an id and duplicates are dropped on reconnect/redelivery", () => {
     expect(CLIENT).toMatch(/const seenChatIds = new Set<string>\(\);/);
     expect(CLIENT).toMatch(/function markChatSeen\(id: string\): boolean/);
-    // both receive paths funnel through the dedup guard
-    expect(CLIENT).toMatch(/dc\.onmessage = e => receiveChatFrame\(e\.data as string\)/);
-    expect(CLIENT).toMatch(/receiveChatFrame\(new TextDecoder\(\)\.decode\(payload\)\)/);
+    // Both receive paths funnel through the dedup guard. v2.99.43 (M46) also
+    // threads the TRANSPORT-PROVEN sender into each call — the mesh channel's
+    // own pin, and LiveKit's sending participant — so a frame can no longer
+    // declare who it came from.
+    expect(CLIENT).toMatch(/dc\.onmessage = e => receiveChatFrame\(e\.data as string, pin\)/);
+    expect(CLIENT).toMatch(/receiveChatFrame\(new TextDecoder\(\)\.decode\(payload\), participant\?\.identity\)/);
   });
 
   it("sendChat warns when a message reached no peers (delivery feedback)", () => {

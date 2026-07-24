@@ -1,5 +1,8 @@
 import { trpc } from "@/lib/trpc";
 import { DEVICE_ID_HEADER, getDeviceId } from "@/lib/deviceId";
+// M48: capture the boot URL before any routing, so the Dialer can tell an in-app
+// "call" tap from someone ARRIVING on /app/dialer?to=… (see lib/bootUrl.ts).
+import "@/lib/bootUrl";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
 import { createRoot } from "react-dom/client";

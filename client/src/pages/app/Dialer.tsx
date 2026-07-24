@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
+import { bootedWithDialTarget, consumeDialIntent } from "@/lib/bootUrl";
 import { RoleBadge, roleFromFlags, roleLabel } from "@/app/VerifiedBadge";
 import { openPeerProfile } from "@/app/PeerOverlays";
 import { playDtmf, disposeDtmf } from "@/lib/dtmf";
@@ -150,6 +151,25 @@ export default function DialerPage() {
     );
     if (!to || to === enginePin) return;
     autoDialedRef.current = true;
+    // SECURITY (M48): only auto-dial when the intent came from INSIDE the app.
+    // If the document was LOADED with ?to=, the user arrived on this URL — a
+    // clicked or pasted link, or a reload — and mic permission is already
+    // granted for this origin, so dialing here would hand a live microphone
+    // (plus the camera, with ?video=1) to an attacker-chosen number off a single
+    // click. Prefill the pad instead so placing the call is one deliberate tap.
+    // In-app taps from Messages/Contacts and the /i/<pin> invite flow route here
+    // client-side, so `to` was NOT in the boot URL for them and they still
+    // connect immediately, unchanged.
+    // A matching one-time intent means WE navigated here (the back-online
+    // notification the user armed and tapped), so it stays a single tap.
+    const intended = consumeDialIntent() === to;
+    if (bootedWithDialTarget() && !intended) {
+      setDialed(to);
+      try {
+        window.history.replaceState(null, "", "/app/dialer");
+      } catch { /* */ }
+      return;
+    }
     // Deep-links carry the intent: ?video=1 is the ONLY thing that places a
     // video dial — everything else (including the bare /i/<pin> invite links)
     // is voice-first per the v2.81 protocol.
