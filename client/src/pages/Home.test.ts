@@ -190,3 +190,21 @@ describe("Home.tsx — RELAY Landing (design port)", () => {
     }
   });
 });
+
+describe("v2.99.15 — hero dialer resolves the number + gates on online (owner)", () => {
+  it("resolves the dialed number via public directory.lookup and previews name + online", () => {
+    expect(HOME_TSX).toMatch(/onLookup/);
+    expect(HOME_TSX).toMatch(/utils\.directory\.lookup\s*\.fetch\(\{ number \}\)/);
+    expect(HOME_TSX).toMatch(/data-lp="dialPreview"/);
+  });
+  it("gates the CALL button on a callable target — online user or party line; offline + unknown are blocked", () => {
+    expect(HOME_TSX).toMatch(/res\.isOnline/);
+    expect(HOME_TSX).toMatch(/res\.partyLine/);
+    expect(HOME_TSX).toMatch(/dialCallable/);
+    expect(HOME_TSX).toMatch(/if \(!dialCallable\) return;/);
+  });
+  it("escapes the looked-up display name before it reaches innerHTML (no XSS)", () => {
+    expect(HOME_TSX).toMatch(/const escLp =/);
+    expect(HOME_TSX).toMatch(/escLp\(res\.displayName/);
+  });
+});

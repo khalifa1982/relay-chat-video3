@@ -55,3 +55,19 @@ describe("OnboardingGate — focused call-link join UI", () => {
     expect(src).toMatch(/Join the line/);
   });
 });
+
+describe("v2.99.15 — a guest can't call an OFFLINE user from a call link", () => {
+  const GATE = read("client/src/app/OnboardingGate.tsx");
+  it("blocks the join when the callee is offline or the number is unknown (party lines exempt)", () => {
+    expect(GATE).toMatch(/const calleeOffline = inviteResolved && !isPartyLine && !!invitee && !invitee\.isOnline/);
+    expect(GATE).toMatch(/const numberNotFound = inviteResolved && !isPartyLine && !invitee/);
+    expect(GATE).toMatch(/const joinBlocked = numberNotFound \|\| calleeOffline/);
+    expect(GATE).toMatch(/disabled=\{!name\.trim\(\) \|\| startGuestPending \|\| joinBlocked\}/);
+  });
+  it("fails OPEN on a lookup error so a transient hiccup never strands a real caller", () => {
+    expect(GATE).toMatch(/invite\.isFetched && !invite\.isError/);
+  });
+  it("tells an offline-blocked guest they can reach them once back online", () => {
+    expect(GATE).toMatch(/They're offline — can't call/);
+  });
+});
