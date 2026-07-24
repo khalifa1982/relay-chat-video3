@@ -1570,7 +1570,14 @@ export default function Home() {
   }, [lang]);
 
   return (
-    <div className="lp-root">
+    // dir MUST live on `.lp-root` itself: the RTL layout + Arabic-font/sizing
+    // rules are scoped to `.lp-root[dir="rtl"]` (see CSS). The inner markup also
+    // stamps dir on its own `[data-lp="root"]`, but that is a CHILD of `.lp-root`
+    // — so without this the `.lp-root[dir="rtl"]` selector never matched and the
+    // Noto-Kufi-Arabic font/sizing never activated (Arabic rendered in the small
+    // fallback system face). Binding it to `lang` here makes the toggle actually
+    // switch the whole page to RTL + the correct Arabic font.
+    <div className="lp-root" dir={lang === "ar" ? "rtl" : "ltr"}>
       <style>{CSS}</style>
       <div ref={rootRef} dangerouslySetInnerHTML={{ __html: html }} />
     </div>

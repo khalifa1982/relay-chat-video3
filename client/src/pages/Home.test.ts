@@ -227,3 +227,16 @@ describe("v2.99.16 — Arabic parity (#40) + live group-call grid (#41)", () => 
     expect(HOME_TSX).toMatch(/g\.spk \? `lpTalk 20s \$\{delay\} infinite, \$\{g\.spk\}`/);
   });
 });
+
+describe("v2.99.21 — the Arabic toggle actually activates RTL (owner: 'not active')", () => {
+  it("binds dir on the .lp-root element itself, so the .lp-root[dir=rtl] font/sizing rules match", () => {
+    // The whole v2.99.16 Arabic-parity CSS is scoped to `.lp-root[dir="rtl"]`,
+    // but dir was only ever set on the INNER [data-lp="root"] (a child) — so the
+    // selector never matched and the Arabic font/sizing never activated. The
+    // outer React `.lp-root` must carry dir, bound to lang.
+    expect(HOME_TSX).toMatch(/className="lp-root" dir=\{lang === "ar" \? "rtl" : "ltr"\}/);
+  });
+  it("still stamps dir on the inner markup root (drives the RTL layout)", () => {
+    expect(HOME_TSX).toMatch(/dir="\$\{ar \? "rtl" : "ltr"\}"/);
+  });
+});
