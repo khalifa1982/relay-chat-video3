@@ -54,13 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-<<<<<<< HEAD
-  it("is the current release (2.99.44)", () => {
-    expect(APP_VERSION).toBe("2.99.44");
-=======
   it("is the current release (2.99.45)", () => {
     expect(APP_VERSION).toBe("2.99.45");
->>>>>>> 890b7a8 (v2.99.45 — self-review: two availability regressions in my own fixes)
   });
 });
 

@@ -6600,4 +6600,4 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       throttle degrades one invitee instead of collapsing the call.
 - [x] Tests: hardeningPass5.test.ts's M21 pin rewritten to assert the BETTER invariant (gate meters the
       allocating branch, not the reuse paths) + a budget pin; hardeningPass6.test.ts gains M40 budget
-      and reachErr-classification pins. Suite 1706 passed / 1 skipped; check + build green.
+      and reachErr-classification pins. Suite 1717 passed / 1 skipped; check + build green.
