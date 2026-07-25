@@ -176,6 +176,7 @@ describe("M38 — dangerous media types are blocked at upload AND at the proxy",
     for (const ok of ["image/png", "image/webp", "video/mp4", "audio/mpeg", "application/pdf"]) {
       expect(SAFE.test(ok), `${ok} renders inline`).toBe(true);
     }
+
     // Every type the door-level denylist deliberately admits (v2.99.47) must be
     // caught HERE — this is the layer that actually prevents execution.
     for (const bad of [
@@ -190,6 +191,49 @@ describe("M38 — dangerous media types are blocked at upload AND at the proxy",
     ]) {
       expect(SAFE.test(bad), `${bad} must be forced to download`).toBe(false);
     }
+  });
+
+  /**
+   * v2.99.49 — the serve set must match what a DEVICE hands back, not only what
+   * RELAY's own encoders produce. The avatar and Status pickers upload the raw
+   * File (`uploadBare`, no re-encode) and the door only tests `^image/`, so an
+   * iPhone HEIC or an Android 3GPP stored fine and was then served as an opaque
+   * download. The two gates disagreed.
+   */
+  it("admits the media types a phone actually produces", () => {
+    const m = PROXY.match(/const INLINE_SAFE_TYPE =\s*\n?\s*(\/\^\([^\n]+\/);/);
+    // eslint-disable-next-line no-eval
+    const SAFE: RegExp = eval(m![1]);
+    for (const ok of [
+      "image/heic", "image/heif", "image/tiff", "image/apng",
+      "video/3gpp", "video/x-m4v", "video/x-matroska", "video/quicktime",
+      "audio/flac", "audio/x-wav", "audio/3gpp", "audio/x-m4a",
+    ]) {
+      expect(SAFE.test(ok), `${ok} should render inline`).toBe(true);
+    }
+  });
+
+  /**
+   * The PROPERTY that must hold for every future addition. The allowlist exists
+   * to force anything a browser could interpret as MARKUP in our origin into a
+   * download; widening it for a media container is fine, widening it for a
+   * text/XML/script type would silently re-open the stored-XSS shape M38 closed.
+   */
+  it("can never admit a markup or script media type, however it grows", () => {
+    const m = PROXY.match(/const INLINE_SAFE_TYPE =\s*\n?\s*(\/\^\([^\n]+\/);/);
+    // eslint-disable-next-line no-eval
+    const SAFE: RegExp = eval(m![1]);
+    for (const dangerous of [
+      "text/html", "text/plain", "text/xml", "text/xsl", "text/csv",
+      "application/xml", "application/xhtml+xml", "application/xslt+xml",
+      "image/svg+xml", "application/javascript", "text/javascript",
+      "application/ecmascript", "application/x-javascript",
+      "application/x-msdownload", "application/x-sh", "application/octet-stream",
+    ]) {
+      expect(SAFE.test(dangerous), `${dangerous} must be forced to download`).toBe(false);
+    }
+    // Structural belt: the pattern must not mention the text top-level type.
+    expect(m![1]).not.toMatch(/text\\?\//);
   });
 });
 

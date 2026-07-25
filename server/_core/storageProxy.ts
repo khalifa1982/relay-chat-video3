@@ -263,8 +263,23 @@ export function registerStorageProxy(app: Express) {
       // already presents attachments (images/video/audio inline, documents as a
       // download card), so it costs nothing in practice.
       const declared = (upstream.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+      // The set covers what a DEVICE hands back, not only what RELAY produces.
+      // v2.99.45's self-review enumerated the encoders in voiceNote/videoNote/
+      // emojiAvatar and concluded the list was complete — but the avatar and
+      // Status pickers upload the RAW `File` with `mimeType: file.type` and no
+      // re-encode (uploadBare), and the upload door only tests `^image/`, so an
+      // iPhone `image/heic` or an Android `video/3gpp` stores fine and then got
+      // downgraded to an opaque download by the serve side. The two gates
+      // disagreed; that is the bug, and widening the serve side is the right
+      // direction because narrowing the door would REJECT a legitimate photo.
+      //
+      // INVARIANT for anything added here: binary media containers ONLY. Never a
+      // text/*, XML-family, XHTML, SVG or script media type — those are exactly
+      // what this allowlist exists to force into a download, and a browser can
+      // interpret them as markup in our origin. Pinned by a property test in
+      // hardeningPass6.test.ts.
       const INLINE_SAFE_TYPE =
-        /^(image\/(png|jpeg|jpg|gif|webp|avif|bmp|x-icon)|video\/(mp4|webm|ogg|quicktime)|audio\/(mpeg|mp3|mp4|aac|ogg|wav|webm|x-m4a|m4a)|application\/pdf)$/;
+        /^(image\/(png|jpeg|jpg|gif|webp|avif|bmp|x-icon|apng|heic|heif|tiff)|video\/(mp4|webm|ogg|quicktime|x-m4v|3gpp|3gpp2|x-matroska|mpeg)|audio\/(mpeg|mp3|mp4|aac|ogg|wav|wave|x-wav|webm|x-m4a|m4a|flac|3gpp)|application\/pdf)$/;
       if (!INLINE_SAFE_TYPE.test(declared)) {
         res.setHeader("Content-Type", "application/octet-stream");
         res.setHeader("Content-Disposition", "attachment");

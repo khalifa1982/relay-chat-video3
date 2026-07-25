@@ -6568,6 +6568,37 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       additive-DDL rule now allows ADD UNIQUE INDEX; androidAudioCamera.test.ts's chat-dedup pin now
       expects the threaded sender). Suite 1662 passed / 1 skipped; check + build green.
 
+## v2.99.50 — the serve set now matches what a PHONE hands back (2026-07-25)
+- [x] Closes the one surviving item from the red-team pass over today's fixes. Its verification panel
+      refuted all 22 candidates (19 were already fixed in v2.99.47/.48 while the panel was still
+      running, so the described triggers no longer reproduced), and one left a LOW-severity kernel that
+      I then confirmed against source myself rather than taking the agent's word for it.
+- [x] TWO GATES I WROTE TODAY DISAGREED. M38's `INLINE_SAFE_TYPE` (storageProxy) serves only a small
+      allowlist as itself and downgrades everything else to `application/octet-stream` +
+      `Content-Disposition: attachment`. v2.99.45's self-review checked that list against every MIME
+      type RELAY's own encoders PRODUCE — but the avatar and Status pickers upload the RAW `File` with
+      `mimeType: file.type` and no re-encode (`uploadBare`), and the upload door only tests `^image/`
+      (`v2upload.ts:214`). So an iPhone `image/heic` or an Android `video/3gpp` stored fine and was then
+      served as an opaque download. Verified in source: the door admits it, the serve set does not.
+- [x] FIXED BY WIDENING THE SERVE SIDE, not narrowing the door — narrowing would REJECT a legitimate
+      photo, which is the class of regression this whole run has been undoing. Added the binary media
+      containers a device actually produces: image/heic|heif|tiff|apng, video/x-m4v|3gpp|3gpp2|
+      x-matroska|mpeg, audio/flac|wave|x-wav|3gpp.
+- [x] IMPACT IS HONESTLY LOW, recorded so the next reader doesn't over- or under-rate it: every avatar
+      surface already falls back to an initials disc (`PeerOverlays.tsx` `onError`, and the incoming-ring
+      card does the same), `Content-Disposition` is ignored for `<img>`/`<video>` subresource loads, and
+      HEIC doesn't decode in Chrome/Firefox at all — so those avatars were blank before this too. The
+      real defect was two gates disagreeing, which is a latent trap regardless of today's blast radius.
+- [x] Added the PROPERTY that makes future widening safe: a test asserting `INLINE_SAFE_TYPE` can never
+      admit a markup or script media type (text/*, the XML family, XHTML, SVG, the JavaScript types,
+      octet-stream), plus a structural check that the pattern never mentions the `text` top-level type.
+      That is the invariant M38 exists to hold; the specific list is free to grow under it.
+- [x] Also corrected a factual error introduced by the parallel session's bulk renumbering: the
+      `repoHygiene.test.ts` header said "v2.99.49 shipped with unresolved merge-conflict markers". That
+      was v2.99.45. v2.99.49 shipped clean.
+- [x] Suite 1835 passed / 1 skipped; `pnpm verify` green. Rebased onto the parallel session's v2.99.49
+      (their guest-upgrade fix + the five closed residuals) and renumbered from .49 → .50.
+
 ## v2.99.49 — guest registration keeps your number + data; the five accepted residuals CLOSED; desktop status composer (2026-07-25)
 - [x] OWNER DATA LOSS (two screenshots, both numbers side by side): used RELAY as a guest on 601-586 — contacts
       saved, messages exchanged, calls made — registered with their email, verified the code, and landed on
