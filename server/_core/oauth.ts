@@ -48,7 +48,7 @@ export function registerOAuthRoutes(app: Express) {
         if (user) {
           const guestToken =
             (req.cookies?.[GUEST_COOKIE] as string | undefined) ?? null;
-          // THE FIFTH MINTING SITE (v2.99.53). v2.99.49 fixed four call sites and
+          // THE FIFTH MINTING SITE (v2.99.54). v2.99.49 fixed four call sites and
           // missed this one, so it kept the original bug shape: cookie-only, which
           // for any browser whose guest identity is device-resolved falls through
           // to allocateNumber() and strands the guest row. It was the worst of the
