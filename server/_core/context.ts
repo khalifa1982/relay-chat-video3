@@ -3,6 +3,7 @@ import type { User } from "../../drizzle/schema";
 import { sdk } from "./sdk";
 import { getUserById } from "../db";
 import { readLocalSession } from "../authLocal";
+import { deviceIdFromRequest } from "../deviceIdHeader";
 import {
   bindDeviceIdToIdentity,
   ensureUserIdentity,
@@ -14,7 +15,7 @@ import {
 } from "../v2db";
 
 export const GUEST_COOKIE = "relay_guest";
-export const DEVICE_ID_HEADER = "x-relay-device-id";
+export { DEVICE_ID_HEADER } from "../deviceIdHeader";
 
 export type TrpcContext = {
   req: CreateExpressContextOptions["req"];
@@ -51,19 +52,15 @@ function maybeTouchSession(sid: string): void {
 }
 
 /**
- * Pull the device id from the inbound request header. Validate shape
- * defensively so a malformed header can't poison downstream lookups.
+ * Pull the device id from the inbound request header.
+ *
+ * The shape rule itself lives in `server/deviceIdHeader.ts` so the non-tRPC
+ * routes that also mint identities read the header identically — two places
+ * disagreeing about which identity a browser is using is exactly what orphaned
+ * people's guest data at registration (v2.99.49).
  */
 export function extractDeviceId(req: CreateExpressContextOptions["req"]): string | null {
-  const raw = req.headers[DEVICE_ID_HEADER];
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (trimmed.length < 8 || trimmed.length > 64) return null;
-  // Hex-only — the client mints it from crypto.getRandomValues, so any
-  // non-hex character is a sign of a bogus header.
-  if (!/^[a-f0-9]+$/i.test(trimmed)) return null;
-  return trimmed.toLowerCase();
+  return deviceIdFromRequest(req);
 }
 
 export async function createContext(
@@ -114,10 +111,19 @@ export async function createContext(
   // Registered user takes precedence — ensure they have an identity row.
   if (user) {
     try {
+      // `deviceId` matters here for the same reason it does at registration
+      // (v2.99.49): this call MINTS a fresh 6-digit number when the account has
+      // no identity yet, so if it can't see the browser's guest row it silently
+      // strands that row's number, contacts, messages and history. The guest
+      // cookie alone doesn't see it once the cookie is cleared, expired or
+      // dropped by ITP — the device id does, and `getIdentityByDeviceId` only
+      // ever returns an UNCLAIMED row, so this can only adopt a guest, never
+      // take an identity that already belongs to an account.
       identity = await ensureUserIdentity({
         userId: user.id,
         displayName: user.name || "User",
         guestToken,
+        deviceId,
       });
     } catch {
       identity = null;

@@ -48,6 +48,13 @@ export function genToken(bytes = 32): string {
 }
 
 /** Timing-safe equality for two hex token strings of equal length. */
+/** sha256 hex of a secret. Used for the push CLAIM (v2.99.49): the server only
+ *  ever stores the hash, so a database read cannot yield a token that would let
+ *  someone re-bind a push endpoint. */
+export function sha256Hex(value: string): string {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
 export function safeEqualHex(a: string, b: string): boolean {
   try {
     const ba = Buffer.from(String(a), "hex");

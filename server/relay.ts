@@ -67,7 +67,7 @@ const offlineDialLimiter = createRateLimiter({ capacity: 60, refillPerSec: 0.5 }
 /**
  * The key M40's offline-dial budget is charged against.
  *
- * ── SELF-REVIEW (v2.99.48): KEYING ON THE PIN MEANT THE LIMITER NEVER BOUND ──
+ * ── SELF-REVIEW (v2.99.49): KEYING ON THE PIN MEANT THE LIMITER NEVER BOUND ──
  * A caller with no cookie is assigned a FRESH RANDOM pin by `genPin` at register
  * time, and `/api/relay/stream` can be reopened about once a second. So an
  * anonymous loop — new cid, register, 60 invites, discard, repeat — minted a new
@@ -1148,7 +1148,7 @@ export interface RelayMessage {
    * the legacy client-requested-pin behavior is preserved.
    */
   __ownedNumber?: string | null;
-  /** SERVER-ONLY, stamped alongside __ownedNumber (v2.99.48). Stripped from any
+  /** SERVER-ONLY, stamped alongside __ownedNumber (v2.99.49). Stripped from any
    *  client payload first, exactly like __ownedNumber. Lets per-caller budgets
    *  fall back to the address when the caller has no verified identity. */
   __clientIp?: string | null;
@@ -1289,7 +1289,7 @@ export function handleMessage(
     //     cid-owned pin or a freshly allocated one.
     //   • field ABSENT (undefined) → a direct handleMessage call (unit tests):
     //     keep the legacy client-requested-pin behavior.
-    // v2.99.48: remember whether the caller's number was PROVEN, not just claimed.
+    // v2.99.49: remember whether the caller's number was PROVEN, not just claimed.
     // Only a cookie-resolved pin is unmintable, and every per-caller budget keyed
     // on the pin depends on that (see offlineDialKey). Field absent = a direct
     // handleMessage call (unit tests), which keeps legacy behaviour and is treated
@@ -1593,7 +1593,7 @@ export function handleMessage(
                   type: "error",
                   code: "offline",
                   pin: to,
-                  // v2.99.48: the NAME is only for a caller who proved who they
+                  // v2.99.49: the NAME is only for a caller who proved who they
                   // are. An unverified caller (no cookie ⇒ a genPin'd throwaway
                   // pin) is exactly the enumeration case, and a named reply
                   // turned existence-probing into name-harvesting across the
@@ -3042,7 +3042,7 @@ export function attachRelay(
         owned = null;
       }
       (message as RelayMessage).__ownedNumber = owned;
-      // v2.99.48: also record the ADDRESS, so a caller with no verified identity
+      // v2.99.49: also record the ADDRESS, so a caller with no verified identity
       // is budgeted per-IP instead of per-pin (which they can re-mint freely).
       try {
         (message as RelayMessage).__clientIp = clientIpOf(req);

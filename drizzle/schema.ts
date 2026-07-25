@@ -39,6 +39,14 @@ export const users = mysqlTable("users", {
   loginPinAttempts: int("loginPinAttempts"),
   loginPinLockedAt: timestamp("loginPinLockedAt"),
   preferPinLogin: boolean("preferPinLogin"),
+  /* Password-login attempt ladder (v2.99.49), closing the v2.99.20 residual
+     "no per-account password-login lockout (only per-IP)". Additive + nullable
+     via ensureSchemaExtensions(); NULL = never failed.
+     DELIBERATELY SEPARATE from the loginPin* pair: sharing those columns would
+     let a password brute-force lock out PIN sign-in — which IS a live UI path —
+     so the fix would introduce a cross-channel denial of service. */
+  loginPwAttempts: int("loginPwAttempts"),
+  loginPwLockedAt: timestamp("loginPwLockedAt"),
   /* Email-notification preferences (v2.99.13). Additive + nullable via
      ensureSchemaExtensions(). NULL is treated as ENABLED (the historical
      default — the missed-call email always sent), so existing users keep
@@ -546,6 +554,13 @@ export const pushSubscriptions = mysqlTable(
     /** Transport: "webpush" (browsers/PWA; null = legacy rows) or "fcm"
         (the native Android app — endpoint holds the FCM device token). */
     kind: varchar("kind", { length: 10 }),
+    /** Proof-of-possession for a RE-BIND (v2.99.49): sha256 of a secret the
+     *  browser mints once and keeps in localStorage. Closes the hijack where
+     *  anyone who learned an endpoint could re-point it at their own identity and
+     *  silently kill the owner's notifications. NULL = a row created before this
+     *  existed; those are re-bound on a keys match instead (see
+     *  upsertPushSubscription) so the account-switch flow never breaks. */
+    claimHash: varchar("claimHash", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({

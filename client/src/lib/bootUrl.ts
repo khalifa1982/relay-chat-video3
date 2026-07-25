@@ -17,7 +17,7 @@
  * either way. This module is imported by `main.tsx`, so it is evaluated exactly
  * once when the document boots, before any routing has happened.
  *
- * ── SELF-REVIEW (v2.99.48): THE FIRST VERSION LEFT TWO WAYS IN AND BROKE ONE
+ * ── SELF-REVIEW (v2.99.49): THE FIRST VERSION LEFT TWO WAYS IN AND BROKE ONE
  * WORKING FLOW ──
  *
  *  1. It tested the RAW search string with `/(^|[?&])to=/`, while the value that
@@ -109,7 +109,7 @@ export function bootedWithDialTarget(): boolean {
  * entry distinguishes "our own navigation" from "a URL somebody sent you".
  * Single-use: consuming it clears it, so a reload can't silently re-dial.
  *
- * NOTE (v2.99.48): a Web Push tap cannot use this — a service worker has no
+ * NOTE (v2.99.49): a Web Push tap cannot use this — a service worker has no
  * access to `sessionStorage` — so that path deliberately lands on a prefilled
  * pad and needs one confirming tap. That is the honest tradeoff, not a bug.
  */

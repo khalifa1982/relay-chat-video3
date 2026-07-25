@@ -51,6 +51,10 @@ export function useSignOut(me: { isGuest: boolean } | null | undefined): {
       /* even if the server round-trip fails, the local teardown below still
          severs the device binding — the next whoami mints a fresh identity */
     }
+    // NOTE (v2.99.49): deliberately does NOT clear `relay_push_claim`. That value
+    // identifies this BROWSER PROFILE as the owner of its push subscription, not
+    // the signed-out identity — clearing it would make the next account's
+    // re-bind unprovable and force an endpoint rotation on every sign-out.
     resetDeviceId();
     clearRelayChannel();
     window.location.href = "/app";

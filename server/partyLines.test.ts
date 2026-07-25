@@ -36,7 +36,7 @@ describe("shared 6-digit number space", () => {
     // …via the shared allocator both delegate to (v2.99.30 M20 refactor).
     expect(V2DB).toMatch(/async function allocateSharedNumber/);
     const shared = V2DB.slice(V2DB.indexOf("async function allocateSharedNumber"));
-    // Window widened for v2.99.48's global mint budget, which now sits at the
+    // Window widened for v2.99.49's global mint budget, which now sits at the
     // top of the shared allocator; the candidate loop below it is unchanged.
     expect(shared.slice(0, 900)).toMatch(/numberTaken\(db, candidate\)/);
     const allocIdentity = V2DB.slice(V2DB.indexOf("export async function allocateNumber"));
