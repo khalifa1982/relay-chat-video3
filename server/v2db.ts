@@ -553,17 +553,36 @@ export async function ensureUserIdentity(input: {
     // Conditional on `userId IS NULL`, so this can only ever claim an UNCLAIMED
     // guest row — it can never steal an identity that already belongs to another
     // account, however the candidate was resolved.
-    const res = await db
-      .update(identities)
-      .set({
-        userId: input.userId,
-        displayName: input.displayName.trim().slice(0, 64) || undefined,
-        guestToken: null,
-        guestExpiresAt: null,
-      })
-      .where(and(eq(identities.id, candidateId), isNull(identities.userId)));
-    const claimed =
-      Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    //
+    // Wrapped because `identities.userId` carries a UNIQUE index
+    // (identities_user_unique, installed by the boot migrator): if a concurrent
+    // sign-in for the same account already claimed or minted an identity between
+    // our getIdentityByUserId read and this write, the UPDATE violates it and
+    // throws. The mint path below anticipates exactly that race and resolves to
+    // the winner; the claim path did not, and the asymmetry was unintentional —
+    // an uncaught throw here surfaces as a 500 from verifyOtp AFTER the one-time
+    // code has already been consumed, so the user is told their code was already
+    // used and has to request another for a registration that half-completed.
+    let claimed = false;
+    try {
+      const res = await db
+        .update(identities)
+        .set({
+          userId: input.userId,
+          displayName: input.displayName.trim().slice(0, 64) || undefined,
+          guestToken: null,
+          guestExpiresAt: null,
+        })
+        .where(and(eq(identities.id, candidateId), isNull(identities.userId)));
+      claimed =
+        Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    } catch {
+      // Lost the race. The winner is another identity for this same account, and
+      // resolving to it is strictly better than throwing — and better than
+      // falling through to mint, which would allocate a second number.
+      const winner = await getIdentityByUserId(input.userId);
+      if (winner) return winner;
+    }
     if (!claimed) continue;
     const refreshed = await getIdentityById(candidateId);
     if (refreshed) return refreshed; // SAME number, SAME contacts/messages/history
@@ -639,6 +658,79 @@ export async function updateIdentityProfile(
   await db.update(identities).set(set).where(eq(identities.id, id));
 }
 
+/* ── the number-copy registry ──────────────────────────────────────────────
+ *
+ * RELAY calls you two things. Your IDENTITY ROW is who you are: contacts,
+ * messages, conversation membership, call logs and statuses all reference it by
+ * numeric id, so they follow you through every transition — registering,
+ * a new device, a cleared cookie, a renumber — with nothing to migrate. Your
+ * 6-DIGIT NUMBER is how other people reach you, and wherever it is STORED
+ * rather than referenced, that storage is a COPY that can go stale.
+ *
+ * Every stale copy is a user-visible glitch: a dead call-back button, a wrong
+ * PIN shown as fact, a contact that no longer reaches anyone, a presence dot
+ * stuck grey. Before v2.99.54 the guarantee lived inside one function that
+ * happened to know about `contacts` — so History's number copies rotted
+ * silently on every renumber, and nothing would have caught a new table
+ * repeating the mistake.
+ *
+ * This registry is the guarantee instead. Every column in the schema that holds
+ * a 6-digit number must appear here with how it stays correct, and
+ * `server/numberContinuity.test.ts` reads `drizzle/schema.ts` and FAILS THE
+ * BUILD if one does not. Adding a number-bearing column without deciding its
+ * strategy is therefore impossible to ship.
+ *
+ *   "identity"     the source of truth — the identity's own number.
+ *   "renumber"     a stored copy, rewritten inside regenerateIdentityNumber's
+ *                  transaction (all-or-nothing with the identity move).
+ *   "live"         a frozen historical copy that is never rewritten, because it
+ *                  is RESOLVED from the identity at read time. Preferred: it is
+ *                  correct for renumbers that already happened, needs no
+ *                  migration, and cannot drift.
+ *   "not-a-person" a number belonging to something other than a person, which a
+ *                  person renumbering must NOT touch.
+ */
+export const NUMBER_BEARING_COLUMNS = [
+  {
+    table: "identities",
+    column: "number",
+    strategy: "identity",
+    note: "The number itself. regenerateIdentityNumber is the only writer.",
+  },
+  {
+    table: "contacts",
+    column: "number",
+    strategy: "renumber",
+    note:
+      "How everyone else reaches you. Rewritten so contacts keep working — and " +
+      "so a block placed on your old number FOLLOWS you rather than being shed.",
+  },
+  {
+    table: "conference_participants",
+    column: "number",
+    strategy: "renumber",
+    note: "Scoped by identityId, so it can only ever rewrite this person's own row.",
+  },
+  {
+    table: "conference_history",
+    column: "dialedNumber",
+    strategy: "live",
+    note:
+      "History's call-back target. Resolved through the roster's identityId in " +
+      "calls.conferenceHistory, so it dials who you actually called, not a " +
+      "number they have since left behind. Party-line numbers pass through " +
+      "unchanged (a line is not a person).",
+  },
+  {
+    table: "party_lines",
+    column: "number",
+    strategy: "not-a-person",
+    note:
+      "The LINE's own dialable number, from the same space but owned by the line, " +
+      "not its creator. Renumbering a person must never move it.",
+  },
+] as const;
+
 /**
  * Pure planner for renumbering: given every contact row that references EITHER
  * the old OR the new number, decide which rows to UPDATE to the new number and
@@ -670,6 +762,12 @@ export function planRenumber(
  * every contact that saved the OLD number is rewritten to the NEW one, so people
  * keep reaching them without re-adding. Collisions with a stale (ownerId,new)
  * contact are resolved by dropping the stale row first. Returns the old/new pair.
+ *
+ * Everything with strategy "renumber" in NUMBER_BEARING_COLUMNS moves here, in
+ * ONE transaction with the identity itself, so the system is never half-moved.
+ * The "live" copies are deliberately NOT rewritten — they are resolved from the
+ * identity when read, which is also why renumbers that happened BEFORE this
+ * release come out correct with no backfill.
  */
 export async function regenerateIdentityNumber(
   identityId: number
@@ -701,6 +799,19 @@ export async function regenerateIdentityNumber(
     if (plan.updateIds.length > 0) {
       await tx.update(contacts).set({ number: newNumber }).where(inArray(contacts.id, plan.updateIds));
     }
+    // The conference-history join rows carry a frozen copy of the number beside
+    // the identityId. Scoped by identityId, so this can only ever rewrite THIS
+    // person's own rows — never a namesake's, and never a row whose number
+    // merely happens to match.
+    await tx
+      .update(conferenceParticipants)
+      .set({ number: newNumber })
+      .where(
+        and(
+          eq(conferenceParticipants.identityId, identityId),
+          eq(conferenceParticipants.number, oldNumber)
+        )
+      );
   });
   // Committed — the new number is genuinely bound (v2.99.49). The OLD number's
   // reservation stays forever on purpose: it WAS handed out, and recycling it

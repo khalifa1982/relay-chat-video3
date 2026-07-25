@@ -78,7 +78,13 @@ describe("avatars everywhere (v2.96)", () => {
     expect(V2ROUTERS).toMatch(/liveAvatarByNumber\.get\(r\.number\) \?\? r\.avatarUrl/);
   });
   it("conferenceHistory participants carry live avatarUrls (one batched query)", () => {
-    expect(V2ROUTERS).toMatch(/avatarByNumber\.get\(p\.number\)/);
+    // v2.99.54 strengthened this: the lookup used to key on the roster's FROZEN
+    // number, so a person who regenerated their number silently lost their photo
+    // from everybody's History. It now resolves by identityId, with the
+    // by-number lookup kept only for guests who never had an identity.
+    expect(V2ROUTERS).toMatch(/getIdentitiesByIds\(rosterIds\)/);
+    expect(V2ROUTERS).toMatch(/avatarUrl: live\?\.avatarUrl \?\?/);
+    expect(V2ROUTERS).toMatch(/avatarByNumber\.get\(frozenNumber\)/);
   });
   it("PeerAvatar rings: gradient for unseen, subtle for seen, click opens status/profile", () => {
     expect(PEER_OVERLAYS).toMatch(/from-\[#06d6a0\] via-\[#0ea5e9\] to-\[#8b5cf6\]/);

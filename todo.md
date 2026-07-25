@@ -6568,6 +6568,109 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       additive-DDL rule now allows ADD UNIQUE INDEX; androidAudioCamera.test.ts's chat-dedup pin now
       expects the threaded sender). Suite 1662 passed / 1 skipped; check + build green.
 
+## v2.99.54 — identity continuity: data is welded to the person, not to their number (2026-07-25)
+- [x] OWNER, after the v2.99.49 data-loss fix: "what I care is that it should not be repeated again to any other
+      users and in the future and should be systematic. If you were a guest and you have data and you decide to
+      register, you should not lose your data. You should stay with your data. It will move with you whenever you
+      are moving. You can regenerate the number, but you will not lose your data. But your number is hooked to
+      other contact lists — it will be updated automatically. So you need a mature system, no glitches."
+- [x] THE STRUCTURAL INSIGHT. RELAY names a person TWICE. The identity row is referenced by NUMERIC ID — contacts,
+      messages, thread membership, call logs, statuses all point at it, so they follow the person through every
+      transition with nothing to migrate. The 6-digit NUMBER is what OTHER people store, and every place it is
+      stored is a COPY THAT CAN ROT. Registration lost the owner's data because the upgrade could not find their
+      identity row; renumbering rotted History because the propagation guarantee lived inside one function that
+      happened to know about `contacts`. One root cause, two symptoms.
+- [x] NUMBER CONTINUITY. `conference_history.dialedNumber` is what History.tsx:721 uses for the call-back button,
+      so after anyone regenerated their number that button dialled a number they no longer owned (dead, never a
+      stranger — the reservation ledger never recycles); the same stale value was DISPLAYED as "PIN NNNNNN" as if
+      it were fact; the presence dot looked it up and stuck grey forever; and the avatar resolved BY NUMBER, so a
+      renumbered person silently lost their photo from everybody's History. conference_participants.number and the
+      JSON roster froze every participant's number at call time.
+      FIX: new NUMBER_BEARING_COLUMNS in server/v2db.ts declares every schema column holding a 6-digit number and
+      how it stays correct — `identity` (source of truth), `renumber` (rewritten inside the transaction), `live`
+      (never rewritten; resolved from the identity at read time), `not-a-person` (a party line's own number, which
+      a person renumbering must never touch). regenerateIdentityNumber also moves conference_participants.number,
+      scoped by identityId so it can only rewrite that person's own rows. calls.conferenceHistory resolves the
+      roster BY identityId (live number, name, avatar) and maps the frozen dialedNumber through the roster to a
+      live call-back target — so renumbers that ALREADY happened come out correct with NO backfill.
+- [x] THE PART THAT MAKES IT STICK: server/numberContinuity.test.ts reads drizzle/schema.ts and FAILS THE BUILD if
+      any number-bearing column has no declared strategy. Verified by planting a fake column and watching it fail,
+      naming the column — not passing vacuously.
+- [x] AUDIT FINDINGS AGAINST MY OWN v2.99.49 FIX (51-agent adversarial pass; three landed).
+- [x] MY TESTS DID NOT TEST WHAT THEY CLAIMED. "the PIN / legacy sign-in path too" anchored with
+      indexOf("await ensureUserIdentity({"), which first occurs 17 chars INSIDE verifyOtp's own
+      `const identity = await ensureUserIdentity({` — so it re-read verifyOtp and never looked at the PIN site
+      5,626 chars later. PROVEN by reverting the PIN path to the pre-fix cookie-only shape, i.e. reintroducing the
+      exact bug that cost the owner their data: all 20 tests still passed. A test that cannot fail when its bug
+      returns is worse than no test, because it reports safety. Rewritten to enumerate every call per file, assert
+      the COUNT as well as the contents, and walk every server source to assert the complete set of minting sites;
+      each rewritten test verified to FAIL against its reintroduced bug.
+- [x] Also vacuous: "minting is the LAST resort" compared two indexOf results; on pre-fix code the candidate loop
+      was absent (-1) and allocate was at 959, so -1 < 959 and it PASSED against the code it was written to
+      reject. Both indices are now required to exist first.
+- [x] A FIFTH MINTING SITE WAS MISSED: /api/oauth/callback still passed the cookie ONLY — the original bug shape on
+      a still-mounted route — and was the worst of the five, because without resolvedIdentityId the stranded-guest
+      warning could not fire, so it stranded people SILENTLY.
+- [x] THAT SITE ALSO DESTROYED THE RECOVERY EVIDENCE: clearCookie ran unconditionally, "regardless of whether the
+      migration happened". The guest token is the only half of guest identity that survives a browser close, so
+      dropping it after a failed claim converts a RECOVERABLE orphan into a permanent one. Now cleared only when
+      the identity we ended up with really IS this browser's guest row (resolved BEFORE the claim, since a
+      successful claim nulls the token), with a warning on non-adoption. isGuest is deliberately NOT the test — it
+      is equally false for a freshly minted identity, i.e. for exactly the failure case.
+- [x] THE CLAIM WAS UNGUARDED AGAINST THE PER-USER UNIQUE INDEX while the mint path directly below it handles that
+      race. An uncaught throw there surfaces as a 500 from verifyOtp AFTER consumeOtp burned the code, so the user
+      is told the code was already used and must request another for a half-completed registration. The claim now
+      resolves to the race winner, like the mint path.
+- [x] THE VIDEO-CONSENT PROMPT (owner screenshot, mid-call after enabling the camera): the card ran off the RIGHT
+      edge — name cut to "a Hasan", button to "Turn on vide" — colliding with the Minimize/Fit chrome and the
+      "Connected" status, washed-out over live video. ROOT CAUSE MEASURED IN HEADLESS CHROMIUM: centred with
+      transform:translateX(-50%) but entered with animation:relayFade … both, whose final keyframe is
+      transform:none — fill-mode both makes that PERSIST, wiping the centring so the card's LEFT edge sat at
+      exactly 50% of the viewport. 390px: left 195, right 429 (39px off); 375px: 47px off; 320px: 74px off;
+      1280px: just fits — which is WHY it shipped, broken only on phones. Computed transform read
+      matrix(1,0,0,1,0,0), the identity: direct proof. Positioning no longer involves transform at all (inset:0 +
+      margin:auto + intrinsic size against .relay-root, which is position:fixed;inset:0); entrance animates
+      OPACITY ONLY; opaque instead of translucent-over-blur, surroundings dimmed by a spread box-shadow (not
+      hit-tested, so hang-up stays tappable).
+- [x] THE SAME TRAP WAS ALREADY FOUND AND FIXED ONCE for .addpad, whose comment spells it out verbatim, and never
+      swept — so this was the same bug in a second place. videoAskCentring.test.ts now guards the WHOLE stylesheet:
+      it fails the build if any element centred with translateX(-50%) applies relayFade. Proven to fire against the
+      pre-fix shape and proven NOT to flag .call-waiting/.held-bar, which restate the transform in their own cwIn
+      keyframes and are correct by construction.
+- [x] DEAD CODE AND DEPENDENCIES (owner: "delete whatever not ours and it's zero value"). 12 files, 4,292 lines,
+      6 packages, each verified unreferenced by a precise import check and by confirming no test touches it:
+      _core/dataApi|heartbeat|imageGeneration|llm|map|voiceTranscription (Manus template helpers for features RELAY
+      does not have), DashboardLayout + DashboardLayoutSkeleton, Map.tsx, ComponentShowcase.tsx (1437 lines),
+      data/landingCopy.ts (1075 lines, superseded — Home.tsx carries its own and scripts/gen-landing-copy.mjs
+      regenerates it), shared/types.ts. Packages: ws + @types/ws (POINTED — this architecture DELIBERATELY refuses
+      WebSocket because the gateway downgrades the upgrade, so it was a dep for the one thing the rules forbid),
+      @types/google.maps, framer-motion, add (the `pnpm add add` typo), and pnpm as a devDependency (redundant
+      against the packageManager pin ci.yml calls "the single source of truth", and contradictory: ^10.15.1 vs the
+      pinned 10.4.1). KEPT DELIBERATELY: the unreferenced shadcn/ui primitives — CLAUDE.md mandates shadcn for new
+      UI and they tree-shake out of the bundle, so pruning the sanctioned kit is an architectural call, flagged.
+- [ ] STILL OPEN, stated plainly to the owner rather than implied as done:
+      (a) their 601-586 identity is STILL ORPHANED. The audit confirmed it retains BOTH its guest token and its
+          device id while the empty 737-582 row has deviceId NULL, so it is still resolvable; twelve of thirteen
+          data linkages are keyed on the identity's numeric id, so re-attaching restores contacts/messages/threads/
+          call history/statuses with NO row rewriting, and because the number never moves nobody who saved
+          601-586 was ever broken. All three design judges independently picked "Adopt-and-Retire" (bearer-proof
+          recovery at request time + a freeze-and-dossier migration + an operator merge tool). Designed, not built.
+      (b) GUEST IDENTITY IS SESSION-SCOPED BY CONSTRUCTION — both halves (sessionStorage device id, session cookie)
+          die when the browser closes, so closing the browser as a guest still strands the number and everything on
+          it, and nothing ever reaps the row. This is the architectural reason data does not yet "move with you" in
+          every case, and it is the real answer to the owner's requirement.
+      (c) the verification email hitting spam is mostly DOMAIN REPUTATION (SES production access and the OTP path
+          both went live the day before). My initial theory was WRONG: Message-ID, Date, MIME-Version, a proper
+          multipart/alternative with a matching text/plain part and clean copy were all audited present. Small
+          repo-side wins remain (base64-encoding a pure-ASCII plain part, three absent machine-mail headers, an
+          unvalidated From display name); SPF/DKIM/DMARC are DNS work.
+      (d) other verified loss paths not yet fixed: ANY sign-in from a browser holding a live guest session strands
+          that guest silently with no warning; expired guest rows keep their 6-digit number forever so the shared
+          space only shrinks; an unapproved new-device sign-in leaves a cookie the 30-minute reaper makes
+          permanently unusable; and genPin checks only the in-memory registry, never the identities table.
+- [x] Tests: server/numberContinuity.test.ts, client/src/lib/videoAskCentring.test.ts (12),
+      server/guestUpgrade.test.ts 20 -> 24. Suite 1879 passed / 1 skipped; check + build green.
+
 ## v2.99.53 — the Android workflow catches up with the unsigned release (2026-07-25)
 - [x] v2.99.52's Gradle change WORKED — the CI run reported `BUILD SUCCESSFUL in 35m 16s` with
       `:app:assembleRelease`, `:app:packageRelease` and `:app:bundleRelease` all green. The job still

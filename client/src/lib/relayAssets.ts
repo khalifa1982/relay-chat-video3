@@ -1072,21 +1072,54 @@ export const RELAY_CSS = `
 .relay-root .conn-step.done .conn-tick::after{content:"✓";color:#04201B;font-size:13px;font-weight:800;line-height:1}
 /* Call waiting — a second incoming call during an active call */
 .relay-root .call-waiting{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:36;display:none;align-items:center;gap:14px;background:rgba(20,23,29,.92);border:1px solid var(--border2);border-radius:16px;padding:10px 12px 10px 16px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
-/* ── mutual-consent video prompt (1:1): "X wants to start video" ── */
-.relay-root .video-ask{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:37;display:none;align-items:center;gap:14px;background:rgba(20,23,29,.94);border:1px solid rgba(124,92,255,.4);border-radius:16px;padding:10px 12px 10px 16px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
-.relay-root .video-ask.show{display:flex;animation:relayFade .25s ease both}
-.relay-root .va-info{display:flex;align-items:center;gap:10px;min-width:0}
-.relay-root .va-cam{font-size:22px;line-height:1}
-.relay-root .va-meta{display:flex;flex-direction:column;min-width:0}
-.relay-root .va-meta b{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.relay-root .va-sub{font-size:12px;color:var(--muted)}
-.relay-root .va-actions{display:flex;gap:8px}
-.relay-root .va-btn{border:none;border-radius:12px;padding:9px 14px;font-family:inherit;font-weight:700;font-size:13px;cursor:pointer;transition:.15s;white-space:nowrap}
-.relay-root .va-decline{background:rgba(255,255,255,.08);color:var(--muted);border:1px solid var(--border2)}
-.relay-root .va-decline:hover{color:var(--text)}
-.relay-root .va-accept{background:rgba(124,92,255,.2);color:#c4b5ff;border:1px solid rgba(124,92,255,.5)}
-.relay-root .va-accept:hover{background:rgba(124,92,255,.32)}
-@media (max-width:680px){.relay-root .video-ask{flex-direction:column;gap:10px;top:10px;padding:12px 14px}.relay-root .va-actions{width:100%}.relay-root .va-btn{flex:1}}
+/* ── mutual-consent video prompt (1:1): "X wants to start video" ──
+   CENTRED IN THE SCREEN VIA AUTO MARGINS, NOT transform (v2.99.54, owner
+   screenshot: on their phone this card ran off the RIGHT edge — the name was
+   cut to "a Hasan", the primary button to "Turn on vide" — while colliding with
+   the Minimize/Fit chrome and the "Connected" status line).
+
+   THE SAME TRAP .addpad ABOVE ALREADY DOCUMENTS: this used
+   left:50%;transform:translateX(-50%) for centring and animation:relayFade
+   … both for the entrance. relayFade's to keyframe is transform:none, and
+   fill-mode both makes that value PERSIST after the animation — so it wiped
+   the translateX(-50%) and left the card's LEFT edge sitting at exactly 50% of
+   the viewport, i.e. guaranteed overflow on any screen. The fix was applied to
+   .addpad when it was noticed there and never swept; this is the second site.
+   .call-waiting and .held-bar are safe because their cwIn keyframes
+   restate translateX(-50%) in BOTH frames.
+
+   So: no transform is involved in positioning at all, and the entrance animates
+   OPACITY ONLY — no future keyframe can knock this off-centre again. inset:0
+   resolves against .relay-root, which is position:fixed;inset:0, so auto
+   margins put it dead centre of the screen (where the owner asked for it, and
+   where it collides with no other call chrome).
+
+   Also made legible rather than translucent: the old card was
+   rgba(20,23,29,.94) + backdrop-filter:blur(16px) layered over live video
+   and tile borders, which is what read as washed-out. It is opaque now, with a
+   wide dimming scrim painted by a single spread box-shadow — box-shadow is not
+   hit-tested, so the call controls underneath stay tappable while the decision
+   is unmistakable. */
+.relay-root .video-ask{position:absolute;inset:0;margin:auto;
+  width:max-content;max-width:min(92vw,400px);height:max-content;
+  z-index:37;display:none;flex-direction:column;align-items:center;gap:16px;
+  background:#141824;border:1px solid rgba(124,92,255,.55);border-radius:20px;
+  padding:20px 20px 18px;text-align:center;
+  box-shadow:0 0 0 100vmax rgba(4,5,8,.62),0 30px 80px -22px rgba(0,0,0,.85),0 0 44px -14px rgba(124,92,255,.5)}
+.relay-root .video-ask.show{display:flex;animation:vaIn .22s ease both}
+@keyframes vaIn{from{opacity:0}to{opacity:1}}
+.relay-root .va-info{display:flex;flex-direction:column;align-items:center;gap:10px;min-width:0;max-width:100%}
+.relay-root .va-cam{font-size:34px;line-height:1}
+.relay-root .va-meta{display:flex;flex-direction:column;gap:5px;min-width:0;max-width:100%}
+.relay-root .va-meta b{font-size:17px;font-weight:800;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.relay-root .va-sub{font-size:13.5px;line-height:1.45;color:#C3CBD9}
+.relay-root .va-actions{display:flex;gap:10px;width:100%}
+.relay-root .va-btn{flex:1;min-height:46px;border:none;border-radius:13px;padding:11px 14px;font-family:inherit;font-weight:700;font-size:15px;cursor:pointer;transition:.15s;white-space:nowrap}
+.relay-root .va-decline{background:rgba(255,255,255,.07);color:#C3CBD9;border:1px solid var(--border2)}
+.relay-root .va-decline:hover{background:rgba(255,255,255,.12);color:var(--text)}
+.relay-root .va-accept{background:#6D4AFF;color:#fff;border:1px solid #8B6DFF;box-shadow:0 8px 22px -10px rgba(109,74,255,.9)}
+.relay-root .va-accept:hover{background:#7C5CFF}
+@media (max-width:380px){.relay-root .video-ask{padding:16px 14px 14px;gap:13px}.relay-root .va-btn{font-size:14px;padding:11px 10px}}
 .relay-root .call-waiting.show{display:flex;animation:cwIn .3s cubic-bezier(0.23,1,0.32,1) both}
 @keyframes cwIn{from{opacity:0;transform:translateX(-50%) translateY(-16px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 .relay-root .call-waiting .cw-info{font-size:14px;color:var(--text);display:flex;align-items:center;gap:9px}

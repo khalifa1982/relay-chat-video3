@@ -37,6 +37,22 @@ const V2DB = read("v2db.ts");
 const ROUTERS = read("v2routers.ts");
 const CONTEXT = read("_core", "context.ts");
 const AUTHLOCAL = read("authLocal.ts");
+const OAUTH = read("_core", "oauth.ts");
+
+/** Every server source file, so "these are all the minting sites" is a fact
+ *  checked against the tree rather than a list kept up to date by hand. */
+const SOURCES: Array<{ name: string; src: string }> = (function walk(dir, prefix): Array<{ name: string; src: string }> {
+  const out: Array<{ name: string; src: string }> = [];
+  for (const e of fs.readdirSync(path.resolve(__dirname, dir), { withFileTypes: true })) {
+    if (e.isDirectory()) {
+      if (e.name === "node_modules") continue;
+      out.push(...walk(path.join(dir, e.name), prefix + e.name + "/"));
+    } else if (e.name.endsWith(".ts") && !e.name.endsWith(".test.ts")) {
+      out.push({ name: prefix + e.name, src: read(dir, e.name) });
+    }
+  }
+  return out;
+})(".", "");
 
 const ENSURE = V2DB.slice(
   V2DB.indexOf("export async function ensureUserIdentity"),
@@ -134,9 +150,16 @@ describe("claiming a guest row can never steal someone else's identity", () => {
   });
 
   it("minting a new number is the LAST resort, after every candidate failed", () => {
-    expect(ENSURE.indexOf("for (const candidateId of candidates)")).toBeLessThan(
-      ENSURE.indexOf("const number = await allocateNumber();")
-    );
+    // Both indices must EXIST before their order means anything. The first
+    // version of this test compared the two indexOf results directly, and on
+    // pre-fix code the candidate loop was absent (-1) while allocate was at 959
+    // — so `-1 < 959` and the test passed against the very code it was written
+    // to reject.
+    const loop = ENSURE.indexOf("for (const candidateId of candidates)");
+    const mint = ENSURE.indexOf("const number = await allocateNumber();");
+    expect(loop, "the candidate loop exists at all").toBeGreaterThan(-1);
+    expect(mint, "the mint path exists at all").toBeGreaterThan(-1);
+    expect(loop).toBeLessThan(mint);
   });
 
   it("says out loud when an account already has an identity and a guest is stranded", () => {
@@ -149,39 +172,112 @@ describe("claiming a guest row can never steal someone else's identity", () => {
 });
 
 describe("every path that can mint an identity passes both hints", () => {
-  it("verifyOtp — the path the owner actually hit", () => {
-    const call = ROUTERS.slice(
-      ROUTERS.indexOf("const identity = await ensureUserIdentity({"),
-      ROUTERS.indexOf("const identity = await ensureUserIdentity({") + 260
+  /* EVERY call site is checked INDEPENDENTLY, by enumerating all of them rather
+     than reaching for indexOf.
+     The first version of this suite used `ROUTERS.indexOf("await
+     ensureUserIdentity({")` to locate the PIN site — but that substring first
+     occurs 17 characters INSIDE verifyOtp's own `const identity = await
+     ensureUserIdentity({`, so the test re-read verifyOtp and never looked at the
+     PIN path at all. Proven by reverting the PIN site to the pre-fix cookie-only
+     shape: all 20 tests still passed. A test that cannot fail when the bug it
+     covers is reintroduced is worse than no test, because it reports safety. */
+  function callsIn(src: string): string[] {
+    return [...src.matchAll(/ensureUserIdentity\(\{/g)].map((m) =>
+      src.slice(m.index as number, (m.index as number) + 320)
     );
-    expect(call).toMatch(/resolvedIdentityId: ctx\.identity\?\.id \?\? null/);
-    expect(call).toMatch(/deviceId: ctx\.deviceId \?\? null/);
-  });
+  }
 
-  it("the PIN / legacy sign-in path too", () => {
-    // Same adoption semantics, so signing in doesn't renumber either.
-    const at = ROUTERS.indexOf("await ensureUserIdentity({");
-    const call = ROUTERS.slice(at, at + 300);
-    expect(call).toMatch(/resolvedIdentityId: ctx\.identity\?\.id \?\? null/);
-    expect(call).toMatch(/deviceId: ctx\.deviceId \?\? null/);
+  it("v2routers has exactly TWO minting sites and BOTH pass both hints", () => {
+    const calls = callsIn(ROUTERS);
+    expect(calls.length, "verifyOtp + the PIN/legacy sign-in path").toBe(2);
+    for (const [i, call] of calls.entries()) {
+      expect(call, `v2routers site ${i + 1} passes the resolved identity`).toMatch(
+        /resolvedIdentityId: ctx\.identity\?\.id \?\? null/
+      );
+      expect(call, `v2routers site ${i + 1} passes the device id`).toMatch(
+        /deviceId: ctx\.deviceId \?\? null/
+      );
+    }
+    // And they really are the two distinct paths, not one counted twice.
+    expect(ROUTERS.indexOf("const identity = await ensureUserIdentity({")).toBeGreaterThan(0);
+    expect(ROUTERS).toMatch(/case "ok": \{[\s\S]{0,900}?ensureUserIdentity\(\{/);
   });
 
   it("createContext — which mints on ANY request when the account has no identity", () => {
-    const call = CONTEXT.slice(
-      CONTEXT.indexOf("identity = await ensureUserIdentity({"),
-      CONTEXT.indexOf("identity = await ensureUserIdentity({") + 220
-    );
-    expect(call).toMatch(/guestToken,/);
-    expect(call).toMatch(/deviceId,/);
+    const calls = callsIn(CONTEXT);
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toMatch(/guestToken,/);
+    expect(calls[0]).toMatch(/deviceId,/);
   });
 
   it("POST /api/auth/register — the legacy password route", () => {
-    const call = AUTHLOCAL.slice(
-      AUTHLOCAL.indexOf("await ensureUserIdentity({"),
-      AUTHLOCAL.indexOf("await ensureUserIdentity({") + 260
+    const calls = callsIn(AUTHLOCAL);
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toMatch(/guestToken,/);
+    expect(calls[0]).toMatch(/deviceId: deviceIdFromRequest\(req\)/);
+  });
+
+  it("the OAuth callback — the FIFTH site, missed by v2.99.49", () => {
+    // It kept the original cookie-only shape on a still-mounted route, and was
+    // the worst of the five: without resolvedIdentityId the stranded-guest
+    // warning could not fire, so it stranded people silently.
+    const calls = callsIn(OAUTH);
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toMatch(/guestToken,/);
+    expect(calls[0]).toMatch(/deviceId: deviceIdFromRequest\(req\)/);
+  });
+
+  it("and there are no OTHER minting sites anywhere in the tree", () => {
+    // The guard that makes the four tests above exhaustive rather than a list
+    // someone has to remember to extend.
+    const files = SOURCES.filter((f) => /ensureUserIdentity\(\{/.test(f.src));
+    expect(files.map((f) => f.name).sort()).toEqual(
+      ["_core/context.ts", "_core/oauth.ts", "authLocal.ts", "v2routers.ts"].sort()
     );
-    expect(call).toMatch(/guestToken,/);
-    expect(call).toMatch(/deviceId: deviceIdFromRequest\(req\)/);
+  });
+});
+
+describe("the OAuth callback no longer destroys the recovery evidence", () => {
+  it("keeps the guest cookie when adoption did NOT happen", () => {
+    // The token is the only half of guest identity that survives a browser close.
+    // Clearing it after a failed claim turns a recoverable orphan into a
+    // permanent one, which is what the old unconditional clearCookie did.
+    expect(OAUTH).toMatch(/const guestBefore = guestToken/);
+    expect(OAUTH).toMatch(/if \(!guestBefore \|\| identity\.id === guestBefore\.id\) \{/);
+    expect(OAUTH).toMatch(/console\.warn\([\s\S]{0,200}not adopted by user/);
+    // Resolved BEFORE the claim, because a successful claim nulls the token.
+    expect(OAUTH.indexOf("const guestBefore")).toBeLessThan(
+      OAUTH.indexOf("await v2db.ensureUserIdentity({")
+    );
+  });
+
+  it("does not decide adoption from the identity's guest flag", () => {
+    // That flag is equally false for a freshly minted identity — i.e. for exactly
+    // the failure case this guard exists for. Checked against CODE only: the
+    // surrounding comment names the flag in order to warn about it, and an
+    // assertion that a word is absent from the file would be satisfied by
+    // deleting the warning.
+    const block = OAUTH.slice(OAUTH.indexOf("const guestBefore"), OAUTH.indexOf("const sessionToken"))
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("//"))
+      .join("\n");
+    expect(block).not.toMatch(/identity\.isGuest/);
+  });
+});
+
+describe("losing the per-user unique-index race cannot break a registration", () => {
+  it("the claim resolves to the winner instead of throwing", () => {
+    const claim = ENSURE.slice(
+      ENSURE.indexOf("for (const candidateId of candidates)"),
+      ENSURE.indexOf("// Fresh permanent identity.")
+    );
+    expect(claim).toMatch(/try \{/);
+    expect(claim).toMatch(/\} catch \{[\s\S]*?getIdentityByUserId\(input\.userId\)/);
+    // An uncaught throw here surfaces as a 500 from verifyOtp AFTER consumeOtp
+    // has burned the code, so the user is told the code was already used.
+    expect(ROUTERS.indexOf("consumeOtp")).toBeLessThan(
+      ROUTERS.indexOf("const identity = await ensureUserIdentity({")
+    );
   });
 });
 
