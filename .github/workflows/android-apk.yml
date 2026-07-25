@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
           java-version: "17"
@@ -49,14 +49,14 @@ jobs:
           ./gradlew --no-daemon assembleDebug bundleRelease
 
       - name: Upload NATIVE debug APK (installable)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: RELAY-NATIVE-debug-apk
           path: mobile/app/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
       - name: Upload NATIVE Play bundle (AAB, unsigned)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: RELAY-NATIVE-release-aab
           path: mobile/app/android/app/build/outputs/bundle/release/app-release.aab
@@ -85,7 +85,7 @@ jobs:
           echo "Signed native bundle ready."
 
       - name: Upload SIGNED NATIVE Play bundle (only when signing ran)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: RELAY-NATIVE-release-aab-SIGNED
           path: /tmp/RELAY-NATIVE-release-signed.aab
@@ -98,13 +98,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
         with:
           gradle-version: "8.11.1"
 
@@ -113,21 +113,21 @@ jobs:
         run: gradle --no-daemon assembleDebug assembleRelease bundleRelease
 
       - name: Upload debug APK (installable)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: RELAY-debug-apk
           path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
       - name: Upload release APK (unsigned)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: RELAY-release-apk-unsigned
           path: mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
 
       - name: Upload Play Store bundle (AAB, unsigned)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: RELAY-release-aab
           path: mobile/android/app/build/outputs/bundle/release/app-release.aab
@@ -164,7 +164,7 @@ jobs:
           echo "Signed bundle ready."
 
       - name: Upload SIGNED Play bundle (only when signing ran)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: RELAY-release-aab-SIGNED
           path: /tmp/RELAY-release-signed.aab

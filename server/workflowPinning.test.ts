@@ -21,18 +21,30 @@ import path from "node:path";
  * those jobs can read the decoded keystore, and a repointed mutable tag is how it
  * would get there.
  *
- * PENDING_SHA below is the honest part: three actions are still on `@v4` because
- * resolving a tag to a commit requires reading those upstream repositories, which
- * this session cannot do (its GitHub access is scoped to this repo alone). Rather
- * than exempt the files wholesale — which would let a NEW unpinned action slip in
- * unnoticed — the gap is enumerated. So the rule is: everything must be pinned
- * EXCEPT these three exact specs, and adding a fourth fails. Resolve one with
+ * v2.99.56 CLOSES the gap PENDING_SHA existed to document. The three remaining
+ * `@v4` refs (actions/setup-java, actions/upload-artifact,
+ * gradle/actions/setup-gradle) are now commit SHAs, so PENDING_SHA is empty and
+ * every action in all three workflows is pinned.
  *
- *     gh api repos/actions/setup-java/git/ref/tags/v4 --jq .object.sha
+ * How they were resolved, since it matters if anyone repeats it: this session's
+ * GitHub *API* access is scoped to this repo (api.github.com returns 403 for
+ * anything else), but `git ls-remote https://github.com/<owner>/<repo>
+ * refs/tags/v4 'refs/tags/v4^{}'` is NOT scoped and answers the question better —
+ * one call gives both the ref and, for an ANNOTATED tag, the commit it
+ * dereferences to.
  *
- * (for a tag that points at a tag object, follow it with
- * `gh api repos/<owner>/<repo>/git/tags/<sha> --jq .object.sha`), then delete its
- * entry here and put the SHA in the workflow with a `# v4` comment.
+ * That distinction was not academic. gradle/actions v4 IS annotated: the ref is a
+ * tag OBJECT (0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d) and the commit is
+ * ed408507eac070d1f99cc633dbcf757c94c7933a. `--jq .object.sha` on the ref API
+ * returns the tag object, so pinning that value would have put a non-commit SHA
+ * in `uses:`. Always pin the commit. (actions/setup-java v4 = v4.8.0 and
+ * actions/upload-artifact v4 = v4.6.2 are lightweight tags — ref == commit. The
+ * pre-existing actions/checkout and actions/setup-node pins were verified against
+ * upstream at the same time: both are v4.4.0 and both are current.)
+ *
+ * PENDING_SHA stays as an (empty) mechanism rather than being deleted: if some
+ * future action genuinely cannot be resolved, enumerate it there instead of
+ * exempting a whole file. Shrink it; never grow it.
  */
 const ROOT = path.resolve(__dirname, "..");
 const CREDENTIAL_WORKFLOWS = [
@@ -41,12 +53,9 @@ const CREDENTIAL_WORKFLOWS = [
   ".github/workflows/native-rn.yml",
 ];
 
-/** Actions whose SHA is not yet resolved. Shrink this; never grow it. */
-const PENDING_SHA = new Set([
-  "actions/setup-java@v4",
-  "actions/upload-artifact@v4",
-  "gradle/actions/setup-gradle@v4",
-]);
+/** Actions whose SHA is not yet resolved. Shrink this; never grow it.
+ *  Empty since v2.99.56 — every action in the covered workflows is pinned. */
+const PENDING_SHA = new Set<string>([]);
 
 /** `uses: owner/repo@ref` → the ref, ignoring comments. Local actions are skipped. */
 function actionRefs(yaml: string): { raw: string; ref: string }[] {
@@ -104,6 +113,36 @@ describe("production-credential workflows pin every action to a SHA", () => {
       }
     });
   }
+
+  it("PENDING_SHA is empty — no action anywhere is excused from being pinned", () => {
+    // The gap closed in v2.99.56. Re-adding an entry is a REGRESSION, not a
+    // routine edit: it means a mutable tag is once again running in a job that
+    // holds either production credentials or the upload keystore. If a tag truly
+    // cannot be resolved, resolve it with `git ls-remote` (see the header) before
+    // reaching for this list.
+    expect([...PENDING_SHA]).toEqual([]);
+    const floating = CREDENTIAL_WORKFLOWS.flatMap((wf) =>
+      actionRefs(fs.readFileSync(path.join(ROOT, wf), "utf8"))
+        .filter((r) => !/^[0-9a-f]{40}$/.test(r.ref))
+        .map((r) => `${wf}: ${r.raw}`),
+    );
+    expect(floating, `these are not pinned to a commit SHA: ${floating.join(", ")}`).toEqual([]);
+  });
+
+  it("no pin is an annotated-tag OBJECT sha (gradle/actions v4 is the trap)", () => {
+    // `gh api .../git/ref/tags/v4 --jq .object.sha` returns the TAG OBJECT for an
+    // annotated tag, which is not a commit. The one known instance is pinned to
+    // its dereferenced commit; assert the tag object appears in no workflow.
+    const TAG_OBJECTS = ["0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d"]; // gradle/actions v4
+    for (const wf of CREDENTIAL_WORKFLOWS) {
+      const yaml = fs.readFileSync(path.join(ROOT, wf), "utf8");
+      for (const obj of TAG_OBJECTS) {
+        expect(yaml, `${wf} pins a tag OBJECT, not a commit: ${obj}`).not.toContain(obj);
+      }
+    }
+    const gradle = fs.readFileSync(path.join(ROOT, ".github/workflows/android-apk.yml"), "utf8");
+    expect(gradle).toContain("gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a");
+  });
 
   it("the PENDING_SHA list only excuses actions that are actually still unpinned", () => {
     // A stale entry is worse than none: it would silently exempt an action that

@@ -23,7 +23,7 @@ jobs:
           node-version: "22"
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
           java-version: "17"
@@ -83,7 +83,7 @@ jobs:
           ./gradlew --no-daemon assembleDebug assembleRelease bundleRelease
 
       - name: Upload debug APK (installable — Milestone build)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: RELAY-RN-debug-apk
           path: mobile/native/android/app/build/outputs/apk/debug/app-debug.apk
@@ -104,7 +104,7 @@ jobs:
       # §F device pass on such a run, use the RELAY-RN-debug-apk artifact above
       # (installs side-by-side as org.yourchat.relay.next).
       - name: Upload release APK (production-behavior test build)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: RELAY-RN-release-apk
           # GLOB, deliberately (v2.99.53): AGP names the output
@@ -118,7 +118,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload release AAB (signed when the signing secrets are configured)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: RELAY-RN-release-aab
           path: mobile/native/android/app/build/outputs/bundle/release/app-release.aab
@@ -163,7 +163,7 @@ jobs:
           echo "Signed RN bundle verified and staged."
 
       - name: Upload SIGNED Play bundle (only when signing ran)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: RELAY-RN-release-aab-SIGNED
           # Staged by the verify step above, from $RUNNER_TEMP. The NAME is the

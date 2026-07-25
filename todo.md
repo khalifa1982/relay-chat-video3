@@ -7231,3 +7231,43 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
 - [x] Tests: hardeningPass5.test.ts's M21 pin rewritten to assert the BETTER invariant (gate meters the
       allocating branch, not the reuse paths) + a budget pin; hardeningPass6.test.ts gains M40 budget
       and reachErr-classification pins. Suite 1717 passed / 1 skipped; check + build green.
+
+## v2.99.56 — action pinning closed: the last three floating @v4 refs are commit SHAs (2026-07-24)
+- [x] CONTEXT: v2.99.55 pinned checkout + setup-node in both Android workflows but left three actions on
+      `@v4` — actions/setup-java, actions/upload-artifact, gradle/actions/setup-gradle — with the honest
+      note that resolving a tag to a commit needed upstream repo reads the session couldn't do. It
+      enumerated them in `PENDING_SHA` rather than exempting the two files wholesale.
+- [x] THE BLOCKER WAS NARROWER THAN STATED. The GitHub *API* is genuinely scoped: `api.github.com` returns
+      403 ("GitHub access to this repository is not enabled for this session") for anything outside this
+      repo, and there is no `gh`/`hub` CLI in this environment. But the GIT PROTOCOL is not scoped —
+      `git ls-remote https://github.com/<owner>/<repo> refs/tags/v4 'refs/tags/v4^{}'` works, and it
+      answers the question BETTER than the API call: one invocation returns both the ref and, for an
+      annotated tag, the commit it dereferences to.
+- [x] RESOLVED (15 `uses:` lines across the two Android workflows):
+      - actions/setup-java            v4 = v4.8.0 → c1e323688fd81a25caa38c78aa6df2d33d3e20d9  (lightweight)
+      - actions/upload-artifact       v4 = v4.6.2 → ea165f8d65b6e75b540449e92b4886f43607fa02  (lightweight)
+      - gradle/actions/setup-gradle   v4 = v4.4.3 → ed408507eac070d1f99cc633dbcf757c94c7933a  (ANNOTATED)
+- [x] THE ANNOTATED-TAG TRAP MATTERED — this is the one that would have broken CI. gradle/actions v4 is an
+      ANNOTATED tag: `refs/tags/v4` is a tag OBJECT (0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d) and the
+      commit is ed408507eac070d1f99cc633dbcf757c94c7933a. The `gh api …/git/ref/tags/v4 --jq .object.sha`
+      recipe returns the TAG OBJECT for such a tag, so following it literally would have put a non-commit
+      sha in `uses:`. Only one of the three was affected; the other two are lightweight (ref == commit).
+      A new test asserts that tag-object sha appears in NO workflow, so the trap can't be walked into later.
+- [x] ALSO VERIFIED (not assumed) the two pins v2.99.55 already placed: actions/checkout@11d5960… and
+      actions/setup-node@49933ea… are both genuinely v4.4.0 upstream, and both are exactly what each repo's
+      `v4` currently points at. Neither was a fabricated or stale sha.
+- [x] `PENDING_SHA` is now EMPTY and kept as a mechanism rather than deleted: a future genuinely-unresolvable
+      action gets enumerated there instead of exempting a whole file. New guard `PENDING_SHA is empty` fails
+      if anyone re-adds an entry AND independently re-checks that every ref in all three workflows is a
+      40-hex sha, so the exemption path cannot quietly reopen.
+- [x] TRIPWIRES RE-VERIFIED BY MUTATION (5/5 fire): un-pin one action ⇒ FAIL; add a PENDING_SHA entry ⇒
+      FAIL; pin gradle to the tag OBJECT ⇒ FAIL; `@main` ⇒ FAIL; a SHA with no `# tag` comment ⇒ FAIL.
+- [x] MY FIRST VERIFICATION RUN WAS INVALID and was redone. It reverted each mutation with
+      `git checkout -- <file>`, which discarded the UNCOMMITTED work under test — so from case 3 onward the
+      tests ran against the original committed file and three cases reported a false PASS (and the pins to
+      android-apk.yml plus the test edits had to be re-applied). The harness now reverts from byte-exact
+      backup copies and hard-aborts if a mutation target string is absent, which is what would have caught
+      the neutered mutations immediately.
+- [x] Suite 1932 passed / 1 skipped; check + build green. (One transient local failure — roundsGaps.test.ts's
+      built-bundle assertion — was a STALE `dist/` from an older revision of this checkout, not a code
+      problem: `dist/` is gitignored so CI never saw it, and it passed immediately after `pnpm build`.)
