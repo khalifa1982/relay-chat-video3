@@ -56,7 +56,17 @@ describe("v2.99.34 M11 — revealExpiring returns the content once and burns it"
       ROUTERS.indexOf("revealExpiring: publicProcedure"),
       ROUTERS.indexOf("/* ── attachments router"),
     );
-    expect(fn).toMatch(/revealExpiringMessage\(\{ messageId: input\.messageId, identityId: me\.id \}\)/);
+    // v2.99.57 added `maxAttachmentBytes` so the size ceiling is evaluated BEFORE
+    // the irreversible burn (an over-cap attachment used to be destroyed and the
+    // reader told it succeeded), so the call is no longer a single-line literal.
+    // Pin the arguments individually.
+    expect(fn).toMatch(/revealExpiringMessage\(\{/);
+    expect(fn).toMatch(/messageId: input\.messageId,/);
+    expect(fn).toMatch(/identityId: me\.id,/);
+    expect(fn).toMatch(/maxAttachmentBytes: REVEAL_MAX_INLINE_BYTES,/);
+    // …and the refusal must be reported honestly rather than as an empty success.
+    expect(fn).toMatch(/if \(res\.tooLarge\) \{/);
+    expect(fn).toMatch(/tooLarge: true as const/);
     expect(fn).toMatch(/storageGetSignedUrl\(att\.storageKey\)/);
     expect(fn).toMatch(/data:\$\{mime\};base64,/);
     // bounded so a huge object never hangs the reveal. v2.99.37 (M23): the cap

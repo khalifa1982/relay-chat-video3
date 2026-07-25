@@ -693,6 +693,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     try {
       // Fetch the withheld content from the server, which burns it as it returns.
       const res = await revealExpiringMutation.mutateAsync({ messageId: m.id });
+      if (!res.ok && "tooLarge" in res && res.tooLarge) {
+        // v2.99.57: NOTHING was burned — the message is intact. Say so, instead of
+        // falling through to the generic path that would leave a blank card.
+        toast.error("This attachment is too large to open here. It hasn't been used up.");
+        setRevealing(null);
+        return;
+      }
       if (res.ok) {
         got = true;
         body = res.body ?? null;

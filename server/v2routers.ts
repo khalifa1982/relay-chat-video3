@@ -35,6 +35,7 @@ import {
   getStatusViewCounts,
   getContactNumbersForOwner,
   getIdentityIdsWhoSaved,
+  getBlockedNumbersForOwner,
   statusAudienceAuthorized,
   countActiveStatuses,
   ownersWhoBlockedNumber,
@@ -1767,15 +1768,26 @@ export const v2MessagesRouter = router({
         // any identity could push a spurious "typing…" event into strangers'
         // conversations by iterating conversation ids.
         if (!participants.includes(me.id)) return { ok: true };
-        for (const pid of participants) {
-          if (pid !== me.id) {
-            publishToIdentity(pid, {
-              kind: "typing",
-              conversationId: input.conversationId,
-              from: me.id,
-            });
-          }
-        }
+        // …and a BLOCKED sender reaches nobody (v2.99.57). `messages.send` has
+        // always been block-gated, but `typing` was not — so someone who had been
+        // blocked could still make "X is typing…" appear on the blocker's screen,
+        // repeatedly and at will. A block that stops the messages but not the
+        // presence of the person is not a block. Per-recipient, because a group
+        // thread may contain both people who blocked me and people who didn't.
+        const others = participants.filter((pid) => pid !== me.id);
+        const blocks = await Promise.all(
+          others.map((pid) =>
+            isNumberBlockedBy(pid, me.number).catch(() => false), // fail OPEN
+          ),
+        );
+        others.forEach((pid, i) => {
+          if (blocks[i]) return;
+          publishToIdentity(pid, {
+            kind: "typing",
+            conversationId: input.conversationId,
+            from: me.id,
+          });
+        });
       } catch {
         /* best-effort */
       }
@@ -1845,8 +1857,19 @@ export const v2MessagesRouter = router({
       }
       let reservedBytes = 0;
       try {
-      const res = await revealExpiringMessage({ messageId: input.messageId, identityId: me.id });
+      const res = await revealExpiringMessage({
+        messageId: input.messageId,
+        identityId: me.id,
+        // Checked BEFORE the burn (v2.99.57): over-cap media used to be destroyed
+        // and the reader told it succeeded.
+        maxAttachmentBytes: REVEAL_MAX_INLINE_BYTES,
+      });
       if (!res) return { ok: false as const };
+      if (res.tooLarge) {
+        // Nothing was burned — the message is still there. Say so honestly rather
+        // than reporting a success that delivered nothing.
+        return { ok: false as const, tooLarge: true as const };
+      }
       // Tell every participant the row changed so their list refetches and shows
       // the "disappeared" placeholder (the burn already nulled the content).
       try {
@@ -3016,7 +3039,25 @@ export const v2StatusRouter = router({
       new Set<number>([me.id, ...contactIdents.map((i) => i.id), ...savedMeIds]),
     );
     const blockedMe = await ownersWhoBlockedNumber(candidateIds.filter((id) => id !== me.id), me.number);
-    const ownerIds = candidateIds.filter((id) => id === me.id || !blockedMe.has(id));
+    // …and drop anyone *I* blocked (v2.99.57). `getContactNumbersForOwner` already
+    // excludes contacts I blocked, but `savedMeIds` is the OTHER direction — people
+    // who saved MY number — and it only filters out savers who blocked me. So a
+    // person I had blocked, who had saved me, stayed in my feed: their status text
+    // and the fact they posted leaked, while `statusAudienceAuthorized` correctly
+    // refused their MEDIA, which merely rendered as a broken image. Two
+    // independently-written gates disagreeing, which is the trap this codebase keeps
+    // paying for; the block must hide them here too.
+    const iBlocked = await getBlockedNumbersForOwner(me.id);
+    const blockedIdents = iBlocked.size
+      ? new Set(
+          (await getIdentitiesByNumbers(Array.from(iBlocked)))
+            .filter((i) => iBlocked.has(i.number))
+            .map((i) => i.id),
+        )
+      : new Set<number>();
+    const ownerIds = candidateIds.filter(
+      (id) => id === me.id || (!blockedMe.has(id) && !blockedIdents.has(id)),
+    );
     const rows = await getActiveStatusesForOwners(ownerIds);
     const owners = await getIdentitiesByIds(Array.from(new Set(rows.map((r) => r.identityId))));
     const ownerById = new Map(owners.map((o) => [o.id, o]));

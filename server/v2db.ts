@@ -2580,10 +2580,26 @@ export async function deleteMessage(input: {
     .where(eq(messages.id, input.messageId))
     .limit(1);
   if (!row || row.senderIdentityId !== input.identityId || row.deletedAt) return null;
-  await db
+  // ATOMIC CLAIM (v2.99.57), the same shape as `burnExpiringMessage`. The
+  // read-then-write above is a check-then-act: two concurrent unsends of one
+  // message both passed the `row.deletedAt` check and both ran the decrement
+  // below, so every other participant's stored `unreadCount` was reduced once PER
+  // racing request — corrupting counts for messages that were never unsent, and
+  // permanently, since the counter is stored rather than derived. Only the caller
+  // that actually flips `deletedAt` may proceed.
+  const claim = await db
     .update(messages)
     .set({ deletedAt: new Date(), body: null, attachmentId: null })
-    .where(and(eq(messages.id, input.messageId), eq(messages.senderIdentityId, input.identityId)));
+    .where(
+      and(
+        eq(messages.id, input.messageId),
+        eq(messages.senderIdentityId, input.identityId),
+        isNull(messages.deletedAt),
+      ),
+    );
+  const claimed =
+    Array.isArray(claim) && ((claim[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+  if (!claimed) return null; // lost the race — another unsend already did the work
   // unreadCount is a stored per-recipient counter (bumped +1 on send, reset to 0
   // on read) — NOT derived from message ids. Unsending an as-yet-UNREAD message
   // therefore leaves a phantom badge: the row is gone from listThreads (deletedAt
@@ -2699,12 +2715,19 @@ export async function consumeExpiringMessage(input: {
 export async function revealExpiringMessage(input: {
   messageId: number;
   identityId: number;
-}): Promise<{
-  conversationId: number;
-  participantIds: number[];
-  body: string | null;
-  attachmentId: number | null;
-} | null> {
+  /** Refuse — WITHOUT burning — when the attachment exceeds this (v2.99.57). */
+  maxAttachmentBytes?: number;
+}): Promise<
+  | {
+      conversationId: number;
+      participantIds: number[];
+      body: string | null;
+      attachmentId: number | null;
+      tooLarge?: false;
+    }
+  | { tooLarge: true }
+  | null
+> {
   const db = await getDb();
   if (!db) return null;
   const [row] = await db
@@ -2720,6 +2743,23 @@ export async function revealExpiringMessage(input: {
   if (!pids.includes(input.identityId)) return null;
   const capturedBody = row.body ?? null;
   const capturedAttachmentId = row.attachmentId ?? null;
+  // SIZE CHECK BEFORE THE BURN (v2.99.57). The caller inlines the media as a data
+  // URL because the burn revokes the storage key — but it evaluated its ~30MB
+  // ceiling AFTER burning, so a larger view-once attachment was destroyed, the
+  // inline threw, and the reader was told `ok: true` with no media. The content was
+  // gone, the sender was told it had been seen, and nothing reported a failure.
+  // Refusing here leaves the message intact so it can still be opened on a device
+  // or build that can handle it.
+  if (input.maxAttachmentBytes != null && capturedAttachmentId != null) {
+    const [att] = await db
+      .select({ sizeBytes: attachments.sizeBytes })
+      .from(attachments)
+      .where(eq(attachments.id, capturedAttachmentId))
+      .limit(1);
+    if (att && Number(att.sizeBytes) > input.maxAttachmentBytes) {
+      return { tooLarge: true };
+    }
+  }
   // Burn — same as consumeExpiringMessage (keep the attachments ROW per F3 so
   // the lingering S3 object stays classified `attachment` and fails CLOSED).
   // ATOMIC (M22): only the caller that actually flips `consumedAt` may receive
@@ -3246,6 +3286,25 @@ export async function getContactNumbersForOwner(ownerId: number): Promise<string
     .from(contacts)
     .where(eq(contacts.ownerId, ownerId));
   return rows.filter((r) => r.blocked !== true).map((r) => r.number);
+}
+
+/**
+ * Numbers `ownerId` has BLOCKED (v2.99.57).
+ *
+ * The complement of the filter above, needed because "who saved me" and "who I
+ * saved" are different directions and only the second was block-filtered. A block
+ * must hide statuses BOTH ways, which `statusAudienceAuthorized` enforces — but
+ * `status.feed` builds its candidate set independently, so the two disagreed:
+ * someone I blocked who had saved my number still appeared in my feed.
+ */
+export async function getBlockedNumbersForOwner(ownerId: number): Promise<Set<string>> {
+  const db = await getDb();
+  if (!db) return new Set();
+  const rows = await db
+    .select({ number: contacts.number })
+    .from(contacts)
+    .where(and(eq(contacts.ownerId, ownerId), eq(contacts.blocked, true)));
+  return new Set(rows.map((r) => r.number));
 }
 
 /** Identity ids of everyone who has SAVED `number` as a (non-blocked) contact —

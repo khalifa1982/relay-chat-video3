@@ -27,6 +27,7 @@ import { users, emailVerifications } from "../drizzle/schema";
 import { ensureUserIdentity } from "./v2db";
 import { deviceIdFromRequest } from "./deviceIdHeader";
 import { sendEmail, emailEnabled, wrapEmailDocument } from "./email";
+import { clearUnverifiedCredentials } from "./authOtp";
 import {
   hashPassword,
   verifyPassword,
@@ -292,6 +293,14 @@ async function consumeToken(token: string, nowMs: number): Promise<number | null
     .update(emailVerifications)
     .set({ consumedAt: new Date(nowMs) })
     .where(eq(emailVerifications.id, row.id));
+  // M29's OTHER HALF (v2.99.57). Marking a still-UNVERIFIED row verified while
+  // leaving whatever password/PIN it carries is the account pre-hijacking vector:
+  // an attacker registers with the victim's address and sets a password, the
+  // victim receives the link (it goes to THEIR mailbox) and clicks it, and the
+  // attacker's password is now live on a verified account. v2.99.37 #2 fixed this
+  // at both OTP claim sites and this third one was missed. Scoped to unverified
+  // rows, so a legitimate local user who verified via their own link keeps theirs.
+  await clearUnverifiedCredentials(row.userId).catch(() => {});
   await db.update(users).set({ emailVerified: true }).where(eq(users.id, row.userId));
   return row.userId;
 }
@@ -536,12 +545,52 @@ export function registerLocalAuth(app: Express): void {
   });
 
   // Verify link target — consume the token, flip verified, show the page.
+  /* VERIFY — GET IS READ-ONLY (v2.99.57).
+   *
+   * This used to consume the token and flip `emailVerified` on a GET. Mail
+   * security gateways (Microsoft Safe Links, Proofpoint, corporate AV) FETCH links
+   * found in mail to detonate them, and express answers HEAD from `app.get` — so
+   * the account was verified before the recipient ever opened the message, without
+   * any human action. Combined with the pre-hijacking vector above, that means an
+   * attacker's password could go live on the victim's address with the victim
+   * never having clicked anything.
+   *
+   * Exactly the defect already fixed for `/api/email/unsubscribe` in v2.99.42, and
+   * the same shape of fix: GET verifies the token's FORM and renders a page whose
+   * button POSTs; POST is the only path that mutates. No sign-in is involved
+   * either way, so the flow is unchanged for a real person — one extra tap.
+   */
+  const verifyTokenOk = (t: string) => /^[a-f0-9]{16,128}$/i.test(t);
   app.get("/api/auth/verify", async (req: Request, res: Response) => {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
+    const token = (req.query?.token ?? "").toString();
+    if (!verifyTokenOk(token)) { res.status(400).send(verifiedPage(false)); return; }
+    // The token is the ONLY value reaching the markup and it has just been
+    // validated as hex, so it cannot carry markup; escaped regardless.
+    const safe = token.replace(/[^a-f0-9]/gi, "");
+    res.status(200).send(
+      wrapEmailDocument(
+        `<div style="font:16px/1.5 system-ui,sans-serif;padding:32px;text-align:center">
+           <h1 style="font-size:20px;margin:0 0 12px">Confirm your email</h1>
+           <p style="margin:0 0 20px;color:#444">Tap the button to finish verifying this address.</p>
+           <form method="POST" action="/api/auth/verify">
+             <input type="hidden" name="token" value="${safe}">
+             <button type="submit" style="font:600 16px system-ui;padding:12px 22px;border:0;border-radius:10px;background:#2563eb;color:#fff;cursor:pointer">Verify my email</button>
+           </form>
+         </div>`,
+        "Confirm your email",
+      ),
+    );
+  });
+
+  app.post("/api/auth/verify", async (req: Request, res: Response) => {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    if (!gate(req, res)) return;
     try {
-      const token = (req.query?.token ?? "").toString();
-      if (!/^[a-f0-9]{16,128}$/i.test(token)) { res.status(400).send(verifiedPage(false)); return; }
+      const token = (req.body?.token ?? req.query?.token ?? "").toString();
+      if (!verifyTokenOk(token)) { res.status(400).send(verifiedPage(false)); return; }
       const userId = await consumeToken(token, Date.now());
       res.status(userId ? 200 : 400).send(verifiedPage(!!userId));
     } catch (e) {

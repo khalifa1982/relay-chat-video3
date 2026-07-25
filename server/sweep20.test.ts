@@ -428,3 +428,132 @@ describe("storage in-flight accounting — behavioural", () => {
     expect(rel).toMatch(/if \(n <= 0\) inflightByIp\.delete\(ip\);/);
   });
 });
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BATCH 4 — authorization, data integrity, and honest failure.
+   ══════════════════════════════════════════════════════════════════════════ */
+const ROUTERS = fs.readFileSync(path.join(ROOT, "server/v2routers.ts"), "utf8");
+const AUTHLOCAL = fs.readFileSync(path.join(ROOT, "server/authLocal.ts"), "utf8");
+
+describe("R-STATUSBLOCK (10, 18) — the feed drops people I blocked, not just people who blocked me", () => {
+  const feed = ROUTERS.slice(ROUTERS.indexOf("  feed: publicProcedure"), ROUTERS.indexOf("  mine: publicProcedure"));
+
+  it("filters BOTH directions", () => {
+    // `getContactNumbersForOwner` excludes contacts I blocked, but `savedMeIds` is
+    // the other direction and only excluded savers who blocked ME. So someone I had
+    // blocked, who had saved my number, stayed in my feed.
+    expect(feed).toMatch(/blockedMe\.has\(id\)/);
+    expect(feed).toMatch(/blockedIdents\.has\(id\)/);
+    expect(feed).toMatch(/getBlockedNumbersForOwner\(me\.id\)/);
+  });
+
+  it("…and my OWN statuses are never filtered out by it", () => {
+    expect(feed).toMatch(/id === me\.id \|\| \(!blockedMe\.has\(id\) && !blockedIdents\.has\(id\)\)/);
+  });
+
+  it("the predicate this restores agreement with checks both directions too", () => {
+    // The bug was two independently-written gates disagreeing: the media 403'd
+    // (correct) while the text leaked (wrong), so it surfaced as a broken image.
+    const fn = V2DB.slice(
+      V2DB.indexOf("export async function statusAudienceAuthorized"),
+      V2DB.indexOf("export async function statusAudienceAuthorized") + 2600,
+    );
+    expect(fn).toMatch(/isNumberBlockedBy\(ownerId, requester\.number\)/);
+    expect(fn).toMatch(/isNumberBlockedBy\(requesterId, owner\.number\)/);
+  });
+});
+
+describe("R-REVEAL-ORDER (15, 20) — over-cap view-once media is not destroyed", () => {
+  it("the size is checked BEFORE the burn", () => {
+    const fn = V2DB.slice(
+      V2DB.indexOf("export async function revealExpiringMessage"),
+      V2DB.indexOf("export async function markThreadRead"),
+    );
+    expect(fn.indexOf("maxAttachmentBytes")).toBeLessThan(fn.indexOf("burnExpiringMessage("));
+    expect(fn).toMatch(/return \{ tooLarge: true \};/);
+    // …and the refusal must happen without burning, i.e. before the claim.
+    expect(fn.indexOf("tooLarge: true")).toBeLessThan(fn.indexOf("burnExpiringMessage("));
+  });
+
+  it("the router passes its own inline ceiling and reports the refusal honestly", () => {
+    expect(ROUTERS).toMatch(/maxAttachmentBytes: REVEAL_MAX_INLINE_BYTES,/);
+    expect(ROUTERS).toMatch(/return \{ ok: false as const, tooLarge: true as const \};/);
+  });
+
+  it("the client says the message is still there rather than showing a blank card", () => {
+    const msgs = fs.readFileSync(path.join(ROOT, "client/src/pages/app/Messages.tsx"), "utf8");
+    expect(msgs).toMatch(/"tooLarge" in res && res\.tooLarge/);
+    expect(msgs).toMatch(/hasn't been used up/);
+  });
+});
+
+describe("R-VERIFY-GET (12, 25) — GET /api/auth/verify no longer mutates", () => {
+  it("GET only renders a confirm form; POST is the only writer", () => {
+    // Mail security gateways FETCH links to detonate them, and express answers HEAD
+    // from app.get — so the account was verified before the recipient opened the
+    // message. Same defect and same fix shape as /api/email/unsubscribe (v2.99.42).
+    const get = AUTHLOCAL.slice(
+      AUTHLOCAL.indexOf('app.get("/api/auth/verify"'),
+      AUTHLOCAL.indexOf('app.post("/api/auth/verify"'),
+    );
+    expect(get).not.toMatch(/consumeToken\(/);
+    expect(get).toMatch(/<form method="POST" action="\/api\/auth\/verify">/);
+    const post = AUTHLOCAL.slice(AUTHLOCAL.indexOf('app.post("/api/auth/verify"'));
+    expect(post).toMatch(/consumeToken\(token, Date\.now\(\)\)/);
+    // The POST is rate-limited like the other auth routes.
+    expect(post).toMatch(/if \(!gate\(req, res\)\) return;/);
+  });
+
+  it("the token is the only value reaching the markup, and it is escaped anyway", () => {
+    expect(AUTHLOCAL).toMatch(/const safe = token\.replace\(\/\[\^a-f0-9\]\/gi, ""\);/);
+  });
+
+  it("verifying clears a credential set before the address was proven (M29's third site)", () => {
+    // An attacker registers with the victim's email and sets a password; the link
+    // goes to the VICTIM's mailbox, they click, and the attacker's password is now
+    // live on a verified account.
+    const fn = AUTHLOCAL.slice(
+      AUTHLOCAL.indexOf("async function consumeToken"),
+      AUTHLOCAL.indexOf("/* ── session cookie"),
+    );
+    expect(fn).toMatch(/clearUnverifiedCredentials\(row\.userId\)/);
+    expect(fn.indexOf("clearUnverifiedCredentials")).toBeLessThan(
+      fn.indexOf("set({ emailVerified: true })"),
+    );
+  });
+});
+
+describe("Finding 37 — a blocked user cannot show 'typing…' on the blocker's screen", () => {
+  const fn = ROUTERS.slice(ROUTERS.indexOf("  typing: publicProcedure"), ROUTERS.indexOf("  typing: publicProcedure") + 1800);
+
+  it("checks the block per RECIPIENT, after the membership check", () => {
+    // A group thread can contain both people who blocked me and people who didn't.
+    expect(fn).toMatch(/isNumberBlockedBy\(pid, me\.number\)/);
+    expect(fn.indexOf("participants.includes(me.id)")).toBeLessThan(fn.indexOf("isNumberBlockedBy"));
+  });
+
+  it("fails OPEN on a DB error", () => {
+    // A block-check outage must not silently kill typing indicators for everyone.
+    expect(fn).toMatch(/\.catch\(\(\) => false\)/);
+  });
+});
+
+describe("Finding 36 — deleteMessage is an atomic claim", () => {
+  const fn = V2DB.slice(
+    V2DB.indexOf("export async function deleteMessage"),
+    V2DB.indexOf("export async function deleteMessage") + 2200,
+  );
+
+  it("only the caller that flips deletedAt runs the unread decrement", () => {
+    // `unreadCount` is stored, not derived, so a double decrement corrupts counts
+    // for messages that were never unsent — permanently.
+    expect(fn).toMatch(/isNull\(messages\.deletedAt\)/);
+    expect(fn).toMatch(/affectedRows \?\? 0\) > 0/);
+    expect(fn).toMatch(/if \(!claimed\) return null;/);
+    expect(fn.indexOf("if (!claimed) return null;")).toBeLessThan(fn.indexOf("GREATEST("));
+  });
+
+  it("the sender-ownership check is retained", () => {
+    expect(fn).toMatch(/eq\(messages\.senderIdentityId, input\.identityId\)/);
+  });
+});

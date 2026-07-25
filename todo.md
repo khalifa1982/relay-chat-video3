@@ -7232,6 +7232,94 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       allocating branch, not the reuse paths) + a budget pin; hardeningPass6.test.ts gains M40 budget
       and reachErr-classification pins. Suite 1717 passed / 1 skipped; check + build green.
 
+## v2.99.57 — 20-expert security sweep: 46 confirmed findings, batches 1–4 (2026-07-25)
+- [x] OWNER: "get me 20 securies expert and scan the whole web apps for bugs or errors and fix it without my approvals".
+      20 experts, one per vulnerability class / surface, each briefed with a recon map of the ~55 already-closed
+      classes and 16 documented accepted residuals — without that briefing the report would have been mostly
+      noise, since the previous red-team panel refuted 19 of 22 candidates purely because they were already
+      fixed. 65 candidates raised; every one judged by THREE independent skeptics with different lenses
+      (can an attacker reach it / is it still true in current source / write the concrete exploit), each
+      instructed to default to REFUTED. 46 survived, 19 were killed. 217 agents total.
+- [x] **R-GENPIN (1, 8, 45) HIGH — an anonymous register could seize a real user's number.** `genPin` excluded
+      only `reg.clients`, so a client with no resolvable cookie could be handed a number belonging to an
+      identity that merely had no live SSE stream. Not just a collision: multi-device ring is on fleet-wide so
+      inbound dials fanned to the squatter, `deliverPendingRing` handed over a ring in flight,
+      `sendRejoinIfInRoom` dropped them into a live call with the member list and a LiveKit token, and the ring
+      card rendered the VICTIM's name, avatar and badge because the caller is resolved BY PIN. Two layers:
+      `genPin` now excludes `pinRoom`/`heldRoom` and uses `crypto.randomInt` (v2.99.20 #9 fixed
+      `randomDigits6` and missed this second minting site), and `pinIsAddressable` makes an unverified
+      registration un-ringable, un-rejoinable and un-pageable. The rejoin gate is
+      `verifiedClaim(pin) || pin === effectiveOwned`, NOT `verifiedClaim` alone — without the second clause an
+      ordinary reload whose `createContext` hiccupped would have lost its call.
+- [x] **Finding 2 HIGH — a parked peer could harvest the victim's live mic and camera.** The S2 gate counts a
+      HELD room as shared and is evaluated from the SENDER's side, but the relayed frame carried no room. So a
+      peer whose call the victim had parked could hand-craft a `signal`, land in `onSignal` with no matching
+      peer, and have `createPeer` built around the victim's CURRENTLY live stream — mic, and camera too, because
+      `createPeer` flips `callIsGroup` and that makes `consentOk` true. A total bypass of the mutual-consent
+      protocol. The server now stamps the authorizing room; the client routes on it via a new pure
+      `signalDisposition`. Deliberately does NOT gate the ACTIVE-room case on a client roster: the server has
+      already established the sender shares that room, and a roster check would refuse legitimate mesh offers
+      arriving before the `peer-joined` ack. Unstamped frames fail OPEN.
+- [x] **Finding 7 HIGH — the boot-URL dial guard was blind to `/i/<non-digit-prefixed-pin>`.** It required a
+      digit immediately after `/i/` while App.tsx strips EVERY non-digit, so `/i/x555555` was invisible to the
+      guard and fully dialable: one click, live mic, attacker-chosen number. M48 for the third time — a guard
+      parsing differently from the code it guards. Now uses the consumer's own normalization, and a test
+      asserts the two AGREE on every input rather than on cases someone thought of.
+- [x] **Finding 4 HIGH — ReDoS in `normalizeEmail`.** M42 bounded the same quadratic regex in
+      `parseInboundAddress` only; this function runs it over the same untrusted headers on a route accepting
+      5MB. One request stalls every SSE stream and call on the fleet. The cap now lives IN the function, so a
+      caller added later inherits it — a per-call-site cap is exactly what failed the first time.
+- [x] **Findings 3, 5/9, 6 HIGH — three surfaces had a RATE limit but no OCCUPANCY limit.** The media proxy
+      never counted concurrent streams (a free guest, authorized as the uploader of their own 40MB file, could
+      accumulate them until the 1GB single process OOM-restarted, dropping every call); `contacts` was
+      unbounded and fully enriched on every list; push subscriptions were uncapped and fanned out with
+      `Promise.all`. Fixed with an in-flight ceiling released from ONE idempotent handler (a double decrement
+      would be worse than the leak), a header-phase-only upstream timeout (an abort signal also kills body
+      streaming, so a whole-request deadline would cancel legitimate large downloads), an idle-based stall
+      watchdog (wall-clock would break `<video>` seeking), an insert-RANK contact cap that never refuses an
+      UPDATE (a user at the ceiling must still be able to BLOCK someone), a `listContacts` limit equal to the
+      cap rather than pagination (the client sorts over the whole list; a short page would silently HIDE
+      contacts), oldest-first push eviction gated on the row being ours, and a fixed-size send pool.
+- [x] **Finding 38 availability — `MAX_STREAMS_PER_IP = 25` locked out shared egress.** Documented as "far
+      above any legitimate device count" and it was not: per-IP, two streams per tab, so ~12 tabs across a
+      CGNAT population exhausted it and the refusal is a hard 429 that removes calling entirely. Raised an
+      order of magnitude in both files; the FLOOD defence is the open-rate limiter, untouched. Also fixed an
+      off-by-one where a tab refresh at the ceiling was refused by the user's own superseded stream.
+- [x] **R-MODSCOPE (13, 33) MEDIUM — moderation reached HELD members and acted on their OTHER call.**
+      `room.has(target)` is true for someone who parked the call, so `force-mute` was applied in a different
+      call and `kick` called `leaveRoom`, which acts on the target's ACTIVE room — kicking a held member
+      dropped an unrelated call and left them still a member here. Now distinguishes active from roster
+      membership; the knock APPROVER is deliberately left alone (M53 exists so a host on hold can still admit).
+- [x] **Finding 14 MEDIUM — no host succession when the host's SSE is grace-reaped.** M53 covered `leaveRoom`;
+      a host whose connection simply dies reaches the reap branch, which promoted nobody, so moderation
+      returned forbidden for everyone and a History "Join" knock vanished.
+- [x] **R-STATUSBLOCK (10, 18) MEDIUM — `status.feed` missed "I blocked them".** `savedMeIds` excluded savers
+      who blocked ME but not people I had blocked, so their status text leaked while `statusAudienceAuthorized`
+      correctly refused the media — surfacing as a broken image. Two independently-written gates disagreeing.
+- [x] **R-REVEAL-ORDER (15, 20) MEDIUM — over-cap view-once media was destroyed and reported as success.** The
+      ~30MB inline ceiling was evaluated AFTER the irreversible burn. Now checked before, from
+      `attachments.sizeBytes`, and a refusal says the message is still there.
+- [x] **R-VERIFY-GET (12, 25) MEDIUM — `GET /api/auth/verify` mutated.** Mail security gateways fetch links to
+      detonate them and express answers HEAD from `app.get`, so an account was verified before the recipient
+      opened the message. Same defect and fix as `/api/email/unsubscribe` (v2.99.42): GET renders a confirm
+      form, POST is the only writer. Also M29's THIRD claim site — verifying now clears a credential set before
+      the address was proven, closing the pre-hijacking path where an attacker's password goes live on the
+      victim's verified account.
+- [x] Findings 36, 37 LOW — `deleteMessage` is now an atomic claim (concurrent unsends each decremented other
+      participants' STORED `unreadCount`, corrupting counts permanently), and `messages.typing` is block-gated
+      per recipient, fail-open (a blocked user could put "X is typing…" on the blocker's screen at will).
+- [x] Eight stale pins rewritten to the stronger invariant rather than relaxed; 41 new pins verified to FAIL
+      against the pre-change sources. 2000 tests; `pnpm verify` green.
+- [ ] REMAINING from the 46 (documented, not yet fixed): the OTP-register family (an existing account's address
+      is accepted, skipping new-device approval and rewriting the identity name; the per-recipient cooldown
+      keys on the exact string so `+alias` bypasses it; anyone knowing an address can burn every sign-in code),
+      the clustered-mode findings (26, 27 — virtual sockets have no real `alive()`, and a leader change
+      deregisters browsers whose SSE stayed open), `regenerateIdentityNumber` reading `oldNumber` outside its
+      transaction, the global mint budget being a fleet-wide onboarding kill switch, the inbound-email reply
+      block gate, `messages.list` aggregate byte budget, sign-out not removing the push subscription, DND on
+      `contact-online` pushes, the FCM re-bind claim, `aws-ops.yml` pinning, and `directoryGate` charging one
+      token for a 100-number `presenceMany`.
+
 ## v2.99.56 — action pinning closed: the last three floating @v4 refs are commit SHAs (2026-07-24)
 - [x] CONTEXT: v2.99.55 pinned checkout + setup-node in both Android workflows but left three actions on
       `@v4` — actions/setup-java, actions/upload-artifact, gradle/actions/setup-gradle — with the honest
