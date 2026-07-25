@@ -7530,3 +7530,29 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       which is where DATABASE_URL actually lives.
 - [x] `verify` treats an unhealthy relay as a WARNING, not a hard failure: it is a status report, and a
       relay problem should be loud without masking the rest of the output.
+
+## v2.99.63 — turn-fix: diagnose (and safely fix) TCP/443 on the TURN relays (2026-07-25)
+- [x] The v2.99.62 in-VPC health check reported `turn:<host>:443?transport=tcp` DOWN on BOTH relays, while
+      udp/3478, tcp/3478 and turns/5349 all complete real authenticated allocations. That is worse than
+      "2 of 8 endpoints": :443 exists precisely for networks that block UDP and non-standard ports, and on
+      such a network the other three candidates are also unusable — so those users have NO relay path and
+      calls sit on "connecting…".
+- [x] A connect timeout has two causes with different fixes — a security group dropping tcp/443, or coturn
+      not listening on it — so the new `turn-fix` action DIAGNOSES BY DEFAULT (`turn_apply` defaults to
+      false). Production networking is not changed on a guess.
+- [x] It derives the relay list from the APP FLEET'S OWN env (`TURN_HOSTS`), so the thing it checks can
+      never drift from what clients are actually told to use; resolves each host and finds its EC2 instance
+      BY PUBLIC IP rather than by tag, so a rename or retag does not break it.
+- [x] Reports, per relay: whether tcp/443 is permitted by its security groups, and — when the relay hosts
+      are SSM-managed from this account — what is actually LISTENING on 443/3478/5349 plus the
+      `listening-port` lines from turnserver.conf. When they are NOT managed it says so plainly rather than
+      implying it checked.
+- [x] With `turn_apply=true` its ONLY mutation is opening tcp/443 inbound on the relay security groups.
+      Pinned by a test asserting the apply-gate precedes the single `authorize-security-group-ingress` call,
+      that the input is boolean and defaults to false, and that the diagnose-only path exists.
+- [x] It deliberately does NOT rewrite coturn's config: those hosts may sit outside this role's control, and
+      the better fix is TLS on 443 rather than plaintext — `alt-tls-listening-port=443` in turnserver.conf
+      plus `TURN_TLS_PORT=443` via env-set. TLS on 443 is indistinguishable from HTTPS so DPI firewalls pass
+      it; plaintext TURN on 443 is exactly what they drop. The action prints that recipe when the security
+      groups already permit 443, i.e. when the listener is the remaining gap.
+- [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.

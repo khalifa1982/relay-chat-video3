@@ -67,7 +67,12 @@ on:
         type: choice
         required: true
         default: verify
-        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set]
+        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix]
+      turn_apply:
+        description: "turn-fix only: actually APPLY the fix (open tcp/443 on the relay security groups + add coturn's alt TLS listener). Off = diagnose only."
+        type: boolean
+        required: false
+        default: false
       env_key:
         description: "env-set only: the /home/relay/.env variable name to upsert (e.g. RELAY_OTP_REGISTER_BYPASS)"
         type: string
@@ -740,6 +745,134 @@ jobs:
             # relay problem should be loud without masking the rest of it.
             echo "::warning::TURN check reported unhealthy endpoints — see the output above."
           fi
+
+      # ────────────────────────────────────────────────────────────────
+      - name: turn-fix — find why TCP/443 is dead on the TURN relays and (opt-in)
+          fix it, so the one candidate restrictive networks allow actually works
+        if: inputs.action == 'turn-fix'
+        env:
+          APPLY: ${{ inputs.turn_apply }}
+        run: |
+          set -uo pipefail
+          echo "=================================================================="
+          echo "TURN :443  —  DIAGNOSE${APPLY:+ / APPLY=$APPLY}"
+          echo "=================================================================="
+          # WHY THIS MATTERS: turn:<host>:443?transport=tcp exists for networks
+          # that block UDP and non-standard ports. On such a network the other
+          # three candidates (udp/3478, tcp/3478, turns/5349) are ALL unusable,
+          # so 443 being dead means those users have no relay at all — calls sit
+          # on "connecting…". The health check in `verify` reports it DOWN on
+          # both relays; this figures out which layer is at fault before
+          # changing anything.
+
+          # Relay addresses come from the app fleet's own config, so this can
+          # never drift from what clients are actually told to use.
+          HOSTS=$(aws ssm send-command --targets "Key=tag:Name,Values=relay-app" \
+            --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 1 \
+            --parameters 'commands=["set -a; . /home/relay/.env 2>/dev/null; set +a; echo TURNHOSTS=${TURN_HOSTS:-$TURN_HOST}"]' \
+            --query 'Command.CommandId' --output text 2>/dev/null) || HOSTS=""
+          RELAYS=""
+          if [ -n "$HOSTS" ]; then
+            for i in $(seq 1 20); do
+              S=$(aws ssm list-command-invocations --command-id "$HOSTS" --query 'CommandInvocations[].Status' --output text)
+              case "$S" in *InProgress*|*Pending*|"") sleep 3 ;; *) break ;; esac
+            done
+            RELAYS=$(aws ssm list-command-invocations --command-id "$HOSTS" --details \
+              --query 'CommandInvocations[0].CommandPlugins[0].Output' --output text \
+              | sed -n 's/^TURNHOSTS=//p' | tr ',' ' ')
+          fi
+          [ -n "$RELAYS" ] || { echo "::error::could not read TURN_HOSTS from the fleet"; exit 1; }
+          echo "relay hosts: $RELAYS"
+
+          # Resolve to IPs, then find the EC2 instance behind each one. Matching on
+          # address rather than a tag means this keeps working if the relays are
+          # renamed or retagged.
+          IPS=""
+          for h in $RELAYS; do
+            ip=$(getent hosts "$h" | awk '{print $1}' | head -1)
+            [ -n "$ip" ] || ip="$h"
+            echo "  $h -> $ip"
+            IPS="$IPS $ip"
+          done
+
+          echo
+          echo "── security groups: is tcp/443 even allowed inbound? ──"
+          NEEDS_SG=""
+          for ip in $IPS; do
+            IID=$(aws ec2 describe-instances --filters "Name=ip-address,Values=$ip" \
+              --query 'Reservations[0].Instances[0].InstanceId' --output text 2>/dev/null)
+            if [ -z "$IID" ] || [ "$IID" = "None" ]; then
+              echo "  $ip: no EC2 instance found with this public IP (elastic IP on something else, or describe denied)"
+              continue
+            fi
+            SGS=$(aws ec2 describe-instances --instance-ids "$IID" \
+              --query 'Reservations[0].Instances[0].SecurityGroups[].GroupId' --output text)
+            echo "  $ip = $IID  sg: $SGS"
+            OPEN=no
+            for sg in $SGS; do
+              HIT=$(aws ec2 describe-security-groups --group-ids "$sg" \
+                --query "SecurityGroups[0].IpPermissions[?IpProtocol=='tcp' && FromPort<=\`443\` && ToPort>=\`443\`]" --output text)
+              [ -n "$HIT" ] && OPEN=yes
+            done
+            if [ "$OPEN" = "yes" ]; then
+              echo "    tcp/443 IS permitted by the security group"
+            else
+              echo "    tcp/443 is NOT permitted  <-- this alone explains the timeout"
+              NEEDS_SG="$NEEDS_SG $IID:$(echo $SGS | awk '{print $1}')"
+            fi
+          done
+
+          echo
+          echo "── the relay hosts themselves: is anything LISTENING on 443? ──"
+          MANAGED=$(aws ssm describe-instance-information \
+            --query 'InstanceInformationList[].[InstanceId,IPAddress]' --output text 2>/dev/null)
+          echo "$MANAGED" | sed 's/^/    ssm-managed: /'
+          RELAY_IIDS=""
+          for ip in $IPS; do
+            IID=$(echo "$MANAGED" | awk -v ip="$ip" '$2==ip {print $1}')
+            [ -n "$IID" ] && RELAY_IIDS="$RELAY_IIDS $IID"
+          done
+          if [ -n "$RELAY_IIDS" ]; then
+            C=$(aws ssm send-command --instance-ids $RELAY_IIDS --document-name AWS-RunShellScript \
+              --parameters 'commands=["echo HOST=$(hostname); (ss -lnt || netstat -lnt) 2>/dev/null | grep -E \":(443|3478|5349) \" || echo NO_LISTENERS_ON_443_3478_5349; grep -hoE \"^[a-z-]*listening-port=[0-9]+\" /etc/turnserver.conf /etc/coturn/turnserver.conf 2>/dev/null || true"]' \
+              --query 'Command.CommandId' --output text 2>/dev/null) || C=""
+            if [ -n "$C" ]; then
+              for i in $(seq 1 20); do
+                S=$(aws ssm list-command-invocations --command-id "$C" --query 'CommandInvocations[].Status' --output text)
+                case "$S" in *InProgress*|*Pending*|"") sleep 3 ;; *) break ;; esac
+              done
+              aws ssm list-command-invocations --command-id "$C" --details \
+                --query 'CommandInvocations[].CommandPlugins[0].Output' --output text | sed 's/^/    /'
+            fi
+          else
+            echo "    the relay hosts are NOT ssm-managed from this account/role —"
+            echo "    their coturn config cannot be inspected or changed from here."
+          fi
+
+          echo
+          if [ "${APPLY}" != "true" ]; then
+            echo "DIAGNOSE ONLY — nothing changed. Re-run with turn_apply=true to open tcp/443"
+            echo "on the relay security groups (the only part that is safe to automate)."
+            exit 0
+          fi
+
+          if [ -z "$NEEDS_SG" ]; then
+            echo "Security groups already permit tcp/443 — the gap is coturn not LISTENING there."
+            echo "That is a config change on the relay hosts, not a network one:"
+            echo "  add   alt-tls-listening-port=443   to turnserver.conf and restart coturn,"
+            echo "  then set TURN_TLS_PORT=443 (env-set) so clients are told turns:<host>:443."
+            echo "TLS on 443 is deliberately better than plaintext TURN on 443: it is"
+            echo "indistinguishable from HTTPS, so DPI firewalls pass it."
+            exit 0
+          fi
+          for pair in $NEEDS_SG; do
+            SG=${pair#*:}
+            echo "opening tcp/443 inbound on $SG"
+            aws ec2 authorize-security-group-ingress --group-id "$SG" \
+              --ip-permissions 'IpProtocol=tcp,FromPort=443,ToPort=443,IpRanges=[{CidrIp=0.0.0.0/0,Description="TURN over TCP/443 - firewall-penetrating relay candidate"}]' \
+              && echo "  opened" || echo "  FAILED (may already exist, or ec2:AuthorizeSecurityGroupIngress denied)"
+          done
+          echo "Re-run the 'verify' action to confirm :443 now allocates."
 
       # ────────────────────────────────────────────────────────────────
       - name: iam-grant-ses — owner-directed attach of the SES ops policy to

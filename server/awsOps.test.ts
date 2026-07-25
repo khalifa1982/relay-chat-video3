@@ -27,7 +27,7 @@ describe("aws-ops.yml — trigger + auth safety", () => {
     expect(OPS).not.toMatch(/\n\s*pull_request:/);
   });
   it("offers the ops actions with verify as the safe default (v2.97.2 adds ses/ses-ssm/iam-grant-ses/env-set)", () => {
-    expect(OPS).toMatch(/options: \[verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set\]/);
+    expect(OPS).toMatch(/options: \[verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix\]/);
     expect(OPS).toMatch(/default: verify/);
   });
   it("region input defaults to ap-south-1; auth prefers access keys but falls back to the deploy OIDC role", () => {
@@ -43,6 +43,23 @@ describe("aws-ops.yml — trigger + auth safety", () => {
     // v2.97.1: no ops secrets configured ⇒ assume the deploy pipeline's role.
     expect(OPS).toMatch(/role-to-assume: arn:aws:iam::342494841476:role\/relay-github-deploy/);
   });
+  it("turn-fix DIAGNOSES by default — production networking is never changed on a guess", () => {
+    // The action inspects the relay security groups and listeners and stops.
+    // Only an explicit turn_apply=true opens tcp/443, and even then it will not
+    // touch coturn's own config (that lives on hosts this role may not manage).
+    expect(OPS).toMatch(/turn_apply:/);
+    const inp = OPS.slice(OPS.indexOf("turn_apply:"), OPS.indexOf("env_key:"));
+    expect(inp).toMatch(/type: boolean/);
+    expect(inp).toMatch(/default: false/);
+    expect(OPS).toMatch(/DIAGNOSE ONLY — nothing changed/);
+    // the only mutation it can make, and it is gated
+    const step = OPS.slice(OPS.indexOf("turn-fix — find why"));
+    const gate = step.indexOf('if [ "${APPLY}" != "true" ]');
+    const mutate = step.indexOf("authorize-security-group-ingress");
+    expect(gate).toBeGreaterThan(-1);
+    expect(mutate).toBeGreaterThan(gate); // the gate precedes the only write
+  });
+
   it("degrades gracefully to OIDC (not a hard failure) when the ops secrets are absent", () => {
     // v2.97.1 replaced the old hard-fail gate with an auth-method DETECTOR:
     // keys present → access-key auth; keys absent → warn + fall back to the
