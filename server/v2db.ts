@@ -525,12 +525,17 @@ export async function ensureUserIdentity(input: {
   /* Claim the guest identity this browser is ACTUALLY using. Tried in the same
      order of authority as createContext: the already-resolved identity first
      (which is device-id-aware), then the cookie token, then the device id. */
-  const candidates = new Set<number>();
-  if (input.resolvedIdentityId) candidates.add(input.resolvedIdentityId);
+  // A plain array with an explicit dedupe rather than a Set: this project sets no
+  // `target`, so it compiles as ES5 and iterating a Set is a type error.
+  const candidates: number[] = [];
+  const addCandidate = (id: number | null | undefined) => {
+    if (id && !candidates.includes(id)) candidates.push(id);
+  };
+  addCandidate(input.resolvedIdentityId);
   if (input.guestToken) {
     try {
       const byToken = await getIdentityByGuestToken(input.guestToken);
-      if (byToken) candidates.add(byToken.id);
+      addCandidate(byToken?.id);
     } catch {
       /* a lookup hiccup must not cost the number */
     }
@@ -538,7 +543,7 @@ export async function ensureUserIdentity(input: {
   if (input.deviceId) {
     try {
       const byDevice = await getIdentityByDeviceId(input.deviceId);
-      if (byDevice) candidates.add(byDevice.id);
+      addCandidate(byDevice?.id);
     } catch {
       /* same */
     }

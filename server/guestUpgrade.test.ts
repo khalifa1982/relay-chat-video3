@@ -52,7 +52,7 @@ describe("the upgrade sees the identity the request actually resolved", () => {
   });
 
   it("tries candidates in the resolver's order of authority", () => {
-    const resolved = ENSURE.indexOf("candidates.add(input.resolvedIdentityId)");
+    const resolved = ENSURE.indexOf("addCandidate(input.resolvedIdentityId)");
     const byToken = ENSURE.indexOf("getIdentityByGuestToken(input.guestToken)");
     const byDevice = ENSURE.indexOf("getIdentityByDeviceId(input.deviceId)");
     for (const [name, at] of [["resolved", resolved], ["token", byToken], ["device", byDevice]] as const) {
@@ -79,8 +79,13 @@ describe("the upgrade sees the identity the request actually resolved", () => {
     expect(deviceBranch).toMatch(/try \{[\s\S]*\} catch \{/);
   });
 
-  it("candidates are a Set, so the same row is never claimed twice", () => {
-    expect(ENSURE).toMatch(/const candidates = new Set<number>\(\);/);
+  it("deduplicates, so the same row is never attempted twice", () => {
+    // The three sources routinely agree; without this, a claim that succeeded on
+    // the first candidate would be re-attempted and fail its own userId IS NULL
+    // gate. A plain array, not a Set: this project sets no tsconfig `target`, so
+    // it compiles as ES5 and iterating a Set is a type error.
+    expect(ENSURE).toMatch(/if \(id && !candidates\.includes\(id\)\) candidates\.push\(id\);/);
+    expect(ENSURE).not.toMatch(/new Set</);
   });
 });
 
