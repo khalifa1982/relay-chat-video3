@@ -62,7 +62,7 @@ jobs:
         # stale one — its old path pointed at a nonexistent entry file), and
         # patches/ must ship or `pnpm install` ENOENTs on the lockfile's
         # patched-dependency reference (both found via per-server SSM output).
-        run: tar -czf relay.tar.gz dist package.json pnpm-lock.yaml ecosystem.config.cjs $( [ -d patches ] && echo patches ) $( [ -d public ] && echo public ) drizzle.config.ts drizzle shared tsconfig.json
+        run: tar -czf relay.tar.gz dist package.json pnpm-lock.yaml ecosystem.config.cjs $( [ -d patches ] && echo patches ) $( [ -d public ] && echo public ) $( [ -d scripts ] && echo scripts ) drizzle.config.ts drizzle shared tsconfig.json
       - name: AWS auth (OIDC — no stored keys)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:

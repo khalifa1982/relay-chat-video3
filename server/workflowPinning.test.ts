@@ -230,7 +230,10 @@ describe("production-credential workflows pin every action to a SHA", () => {
     const yaml = fs.readFileSync(path.join(ROOT, ".github/workflows/deploy.yml"), "utf8");
     const tar = yaml.slice(yaml.indexOf("tar -czf relay.tar.gz"));
     const line = tar.slice(0, tar.indexOf("\n"));
-    for (const needed of ["ecosystem.config.cjs", "patches", "shared", "drizzle", "dist"]) {
+    // `scripts` carries the operational tools that must run ON an instance —
+    // turn-check.mjs (in-region, so it can reach :3478/:5349) and
+    // recover-orphan-identity.mjs (where DATABASE_URL actually lives).
+    for (const needed of ["ecosystem.config.cjs", "patches", "shared", "drizzle", "dist", "scripts"]) {
       expect(line, `the release tar must include ${needed}`).toContain(needed);
     }
     // …and the landing page must still be stripped of the Manus host runtime.

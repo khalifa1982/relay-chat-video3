@@ -7492,3 +7492,41 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       (keep `TURN_SECRET` identical to both coturns' static-auth-secret, and `TURN_TLS=1` since both relays
       report TLS live), then restart pm2. `TURN_HOST` can stay as-is; `TURN_HOSTS` takes precedence.
       The `env-set` action in aws-ops.yml does exactly this across the fleet.
+
+## v2.99.62 — multi-TURN activated on the fleet + a real in-VPC TURN health check (2026-07-25)
+- [x] ACTIVATED v2.99.61 on the fleet with two `env-set` runs: `TURN_HOSTS=13.232.119.83,13.204.23.58`
+      then `TURN_TLS=1`. Live `/api/relay/ice` went 3 → 6 → **8 TURN URLs** (both zones × udp, tcp:443,
+      tcp:3478, turns:5349). Both relays are now advertised to every client.
+- [x] FOUND WHILE VERIFYING: `TURN_TLS` had never been set, so the `turns:` candidate was not advertised
+      even for relay 1 — the certificate was live and doing nothing for clients. That is the candidate most
+      likely to cross corporate deep-packet-inspection networks. Caught by reading the live ICE output
+      rather than trusting the config.
+- [x] MY FIRST LIVENESS PROBE WAS WRONG AND I DISPROVED IT RATHER THAN REPORTING IT. It said 0/3 endpoints
+      alive on BOTH relays. The control: the known-alive public TURN server (openrelay.metered.ca) failed
+      the identical probe, replying `485454502f312e31` = ASCII "HTTP/1.1" — this sandbox's HTTP proxy
+      answering instead of the relay. Non-443 ports are blocked here outright (1.1.1.1:53 and
+      github.com:22 both time out), so :3478 and :5349 were never testable from this machine, and the
+      1-2ms "connect" on :443 was the local proxy, not a round trip to Mumbai. No evidence of any outage.
+- [x] NEW `scripts/turn-check.mjs`, wired into aws-ops.yml's `verify` and executed ON an app instance via
+      SSM. In-region so it can actually reach :3478/:5349, and the credentials never leave the VPC —
+      nothing is pasted into a third-party page and no secret is printed.
+- [x] It performs a REAL authenticated TURN Allocate, not a ping. Only an Allocate proves each relay's
+      `static-auth-secret` matches `TURN_SECRET`: a relay with the wrong secret answers STUN happily, shows
+      up healthy, and then refuses every allocation — silently breaking calls for whichever users get
+      steered to it. That is the precise failure mode a second relay introduces.
+- [x] Read-only with respect to the relay: every successful allocation is released immediately with a
+      zero-lifetime Refresh, so a repeated health check cannot accumulate allocations.
+- [x] VALIDATED THE PROTOCOL, not just the syntax: a local fake coturn that independently RECOMPUTES the
+      MESSAGE-INTEGRITY HMAC (the part most likely to be subtly wrong — its length field must count the MI
+      attribute while the bytes stop before it). Correct secret ⇒ Allocate success + relayed port;
+      MISMATCHED secret ⇒ "credentials REJECTED (err 401) — this relay's static-auth-secret differs from
+      TURN_SECRET", exit 1; TURN unconfigured ⇒ clean skip, exit 0.
+- [x] RE-MEASURED THE EXIT CODES WITHOUT A PIPE. The first run reported `exit=0` for the failing case
+      because `$?` after `node ... | grep` is grep's status — the same pipeline-masks-exit-status bug that
+      v2.99.46 exists to prevent. Real codes confirmed: 1 / 1 / 0.
+- [x] `deploy.yml` now ships `scripts/` in the release tar — it did not, so the instance had nothing to
+      execute. Pinned in workflowPinning.test.ts alongside the other tar entries (each of which was added
+      after a real per-server failure). This also puts `recover-orphan-identity.mjs` on the instances,
+      which is where DATABASE_URL actually lives.
+- [x] `verify` treats an unhealthy relay as a WARNING, not a hard failure: it is a status report, and a
+      relay problem should be loud without masking the rest of the output.
