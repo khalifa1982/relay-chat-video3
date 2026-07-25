@@ -681,11 +681,35 @@ export function iceServers(userId: string, ttlSecOverride?: number): IceServer[]
     { urls: "stun:stun.cloudflare.com:3478" },
   ];
   const TURN_SECRET = process.env.TURN_SECRET || "";
-  const TURN_HOST = process.env.TURN_HOST || "";
+  // MULTI-RELAY (v2.99.61). The fleet now runs one coturn per availability
+  // zone, so a zone loss must not take the relay path with it. `TURN_HOSTS` is
+  // a comma/whitespace separated list; `TURN_HOST` remains the single-relay
+  // spelling and is used when the list is absent, so an existing deployment is
+  // byte-identical until it opts in.
+  //
+  // Every relay is advertised with the SAME minted credential: coturn in
+  // `use-auth-secret` mode validates the HMAC against its own static-auth-secret,
+  // so relays sharing that secret all accept the same username/credential pair.
+  // The client gathers relay candidates from every one of them, which is what
+  // makes the failover automatic — if a zone drops, the peer already holds a
+  // candidate on the surviving relay instead of having to re-negotiate blind.
+  const turnHosts = (process.env.TURN_HOSTS || process.env.TURN_HOST || "")
+    .split(/[\s,]+/)
+    .map((h) => h.trim())
+    .filter(Boolean)
+    .filter((h, i, a) => a.indexOf(h) === i); // dedupe: a repeat would double-gather for nothing
+  const TURN_HOST = turnHosts[0] || "";
   // The relay's UDP and TCP listeners may sit behind different public IPs
   // (e.g. two separate Layer-4 load balancers). TURN_TCP_HOST overrides the
   // host used for the TCP/TLS candidates; it falls back to TURN_HOST.
-  const TURN_TCP_HOST = process.env.TURN_TCP_HOST || TURN_HOST;
+  //
+  // It is honoured ONLY in the single-relay case, which is the deployment it was
+  // written for (v2.92 R4C). With several relays each has its own address, so a
+  // single global TCP override cannot be correct for all of them — each relay
+  // uses its own host and this variable is ignored rather than silently
+  // pointing every relay's TCP candidates at one zone.
+  const singleRelay = turnHosts.length <= 1;
+  const TURN_TCP_HOST = (singleRelay && process.env.TURN_TCP_HOST) || TURN_HOST;
   const TURN_PORT = process.env.TURN_PORT || "3478";
   const TURN_TLS_PORT = process.env.TURN_TLS_PORT || "5349";
   const TURN_TLS = process.env.TURN_TLS === "1"; // only advertise turns: when a cert is configured
@@ -706,22 +730,30 @@ export function iceServers(userId: string, ttlSecOverride?: number): IceServer[]
       .createHmac("sha1", TURN_SECRET)
       .update(username)
       .digest("base64");
-    // UDP relay (primary path) on the UDP load balancer IP.
-    list.push({ urls: "turn:" + TURN_HOST + ":" + TURN_PORT + "?transport=udp", username, credential });
-    // TURN over TCP on port 443 (firewall/CGNAT-penetrating fallback). Port 443
-    // is virtually never blocked, so this path connects even on mobile/carrier
-    // and corporate networks that drop UDP and non-standard TCP ports like 3478.
-    // The L4 load balancer maps external 443 -> coturn 3478, so no coturn change
-    // is needed and relay media tunnels back to the client over this same TCP
-    // connection. This is the key fix for calls hanging on "connecting...".
     const TURN_TCP_ALT_PORT = process.env.TURN_TCP_ALT_PORT || "443";
-    list.push({ urls: "turn:" + TURN_TCP_HOST + ":" + TURN_TCP_ALT_PORT + "?transport=tcp", username, credential });
-    // TCP relay on the standard port (additional fallback) on the TCP LB IP.
-    list.push({ urls: "turn:" + TURN_TCP_HOST + ":" + TURN_PORT + "?transport=tcp", username, credential });
-    // TLS relay only when a certificate is actually provisioned on coturn,
-    // otherwise the turns: candidate just wastes time failing the handshake.
-    if (TURN_TLS) {
-      list.push({ urls: "turns:" + TURN_TCP_HOST + ":" + TURN_TLS_PORT + "?transport=tcp", username, credential });
+    // Emitted per relay, in the configured order. The single-relay case is
+    // byte-identical to the pre-v2.99.61 output (same URLs, same order), so
+    // opting in is the only thing that changes behaviour.
+    for (const host of turnHosts) {
+      // With one relay the TCP candidates may be pointed at a different IP via
+      // TURN_TCP_HOST; with several, each relay answers on its own address.
+      const tcpHost = singleRelay ? TURN_TCP_HOST : host;
+      // UDP relay (primary path) on the UDP load balancer IP.
+      list.push({ urls: "turn:" + host + ":" + TURN_PORT + "?transport=udp", username, credential });
+      // TURN over TCP on port 443 (firewall/CGNAT-penetrating fallback). Port 443
+      // is virtually never blocked, so this path connects even on mobile/carrier
+      // and corporate networks that drop UDP and non-standard TCP ports like 3478.
+      // The L4 load balancer maps external 443 -> coturn 3478, so no coturn change
+      // is needed and relay media tunnels back to the client over this same TCP
+      // connection. This is the key fix for calls hanging on "connecting...".
+      list.push({ urls: "turn:" + tcpHost + ":" + TURN_TCP_ALT_PORT + "?transport=tcp", username, credential });
+      // TCP relay on the standard port (additional fallback) on the TCP LB IP.
+      list.push({ urls: "turn:" + tcpHost + ":" + TURN_PORT + "?transport=tcp", username, credential });
+      // TLS relay only when a certificate is actually provisioned on coturn,
+      // otherwise the turns: candidate just wastes time failing the handshake.
+      if (TURN_TLS) {
+        list.push({ urls: "turns:" + tcpHost + ":" + TURN_TLS_PORT + "?transport=tcp", username, credential });
+      }
     }
   } else if (process.env.RELAY_DISABLE_PUBLIC_TURN !== "1") {
     // No operator TURN configured. Use OpenRelay's free public TURN as a

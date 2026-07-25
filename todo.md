@@ -7459,3 +7459,36 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       only the argument-validation and preflight paths were actually executed. The DB paths are UNRUN — which
       is precisely why the destructive half is opt-in behind `--apply` and the dry run is read-only.
       Run the dry run first; if the schema drifted, the preflight says so and writes nothing.
+
+## v2.99.61 — multi-relay TURN: the last wire in the symmetric two-zone build (2026-07-24)
+- [x] CONTEXT (owner's new network diagrams): the fleet is now symmetric — every layer exists twice across
+      ap-south-1a and ap-south-1b, including a coturn per zone (13.232.119.83 and 13.204.23.58, both
+      TLS-live). Everything in those diagrams is live EXCEPT one thing, and it was mine: the server only
+      ever advertised ONE relay. The ICE list is minted server-side at registration, so no amount of
+      infrastructure symmetry could fix it — losing a zone took the relay path down with it.
+- [x] NEW `TURN_HOSTS` — comma/whitespace separated list of relay hosts, precedence over `TURN_HOST`.
+      Every relay is advertised with every transport (UDP:3478, TCP:443, TCP:3478, and `turns:` when
+      `TURN_TLS=1`). Duplicates are deduped — re-gathering the same relay costs time for nothing.
+- [x] All relays share ONE minted credential, which is correct rather than convenient: coturn in
+      `use-auth-secret` mode validates the HMAC against its own static-auth-secret, so every relay holding
+      the same `TURN_SECRET` accepts the same username/credential pair. Clients then gather relay
+      candidates from BOTH zones, which is what makes the failover need no renegotiation — if a zone drops,
+      the peer is already holding a candidate on the survivor.
+- [x] `TURN_TCP_HOST` is honoured ONLY in the single-relay case it was written for (v2.92, UDP and TCP
+      behind two separate L4 load balancers). With a list it is deliberately IGNORED and each relay uses
+      its own address: one global TCP override would aim every relay's TCP candidates at a single zone and
+      quietly rebuild the exact single point of failure this change removes.
+- [x] BACKWARDS COMPATIBLE BY CONSTRUCTION: a deployment that only sets `TURN_HOST` gets a byte-identical
+      URL list to before — same URLs, same order — pinned by a test asserting the exact legacy output, so
+      opting in is the only thing that can change behaviour.
+- [x] VERIFIED IN A REAL BROWSER before shipping, rather than assuming: the resulting 11-entry ICE list
+      (3 STUN + 4 URLs × 2 relays) is accepted by `RTCPeerConnection` and survives `getConfiguration()`
+      intact — 11 supplied, 11 kept, nothing silently truncated.
+- [x] `server/multiTurn.test.ts` (8 tests); 4 of them verified to FAIL against the pre-change parser before
+      being kept. The existing 80 relay tests still pass unchanged. Suite 2021 passed / 1 skipped.
+- [x] OPS — the one step left, and it is a config change, not a deploy: set on BOTH app servers in
+      `/home/relay/.env`
+          TURN_HOSTS=13.232.119.83,13.204.23.58
+      (keep `TURN_SECRET` identical to both coturns' static-auth-secret, and `TURN_TLS=1` since both relays
+      report TLS live), then restart pm2. `TURN_HOST` can stay as-is; `TURN_HOSTS` takes precedence.
+      The `env-set` action in aws-ops.yml does exactly this across the fleet.
