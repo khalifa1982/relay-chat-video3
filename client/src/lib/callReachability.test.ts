@@ -70,7 +70,12 @@ describe("issue 1 — pre-ring dial drops", () => {
   it("SERVER: dead-but-in-grace callee sockets are detectable (alive) and divert to paging", () => {
     expect(SERVER).toMatch(/alive\?: \(\) => boolean/);
     expect(SERVER).toMatch(/alive: \(\) => !closed/);
-    expect(SERVER).toMatch(/!!target && \(!onPageCallee \|\| !target\.socket\.alive \|\| target\.socket\.alive\(\)\)/);
+    // v2.99.57 inserted `pinIsAddressable(target)` into the SAME conjunction (an
+    // unverified registration must be unreachable, like an unregistered number), so
+    // the old exact-expression pin no longer matches. Assert the PROPERTY instead:
+    // liveness is still evaluated, and it is still ANDed with the target existing.
+    expect(SERVER).toMatch(/const targetReachable =\s*\n\s*!!target &&/);
+    expect(SERVER).toMatch(/\(!onPageCallee \|\| !target\.socket\.alive \|\| target\.socket\.alive\(\)\)/);
   });
 
   it("SERVER: pending rings are recorded, redelivered on register, and cleared on accept/reject/cancel", () => {

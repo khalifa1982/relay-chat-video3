@@ -56,9 +56,17 @@ export const BOOT_PATH: string = hasWindow ? window.location.pathname : "";
  * `/app/call` is the legacy redirect into the same flow.
  */
 export function bootDialTarget(): string | null {
-  const fromPath = /^\/i\/(\d{1,6})/.exec(BOOT_PATH);
-  if (fromPath) {
-    const n = fromPath[1];
+  // MATCH THE WHOLE SEGMENT, then normalize it EXACTLY as the consumer does
+  // (App.tsx's `/i/:pin` route: `params.pin.replace(/\D/g, "").slice(0, 6)`).
+  //
+  // The previous `/^\/i\/(\d{1,6})/` required a digit immediately after `/i/`, so
+  // `/i/x555555` did not match here — while App.tsx stripped the `x` and redirected
+  // to `/app/dialer?to=555555`, which auto-dials. That is the M48 defect a third
+  // time: a guard that parses differently from the code it guards is not a guard.
+  // Anything under `/i/` is an arrival, so this can never return null.
+  const seg = /^\/i\/([^/?#]*)/.exec(BOOT_PATH);
+  if (seg) {
+    const n = seg[1].replace(/\D/g, "").slice(0, 6);
     if (/^\d{6}$/.test(n)) return n;
     return "*"; // an invite arrival with an unusable pin — still an arrival
   }

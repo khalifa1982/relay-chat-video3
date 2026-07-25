@@ -122,3 +122,72 @@ describe("the one-time same-origin intent marker", () => {
     expect(m.consumeDialIntent()).toBeNull();
   });
 });
+
+/* ─────────────────────────────────────────────────────────────────────────
+   v2.99.57 — the /i/<pin> guard must normalize the segment EXACTLY as the
+   consumer does.
+
+   M48 was "the guard regex tested the raw query string while the consumer used
+   URLSearchParams, which percent-decodes KEYS". This is the same defect a third
+   time, one layer over: the guard required a digit immediately after `/i/`
+   (`/^\/i\/(\d{1,6})/`), while App.tsx's route strips EVERY non-digit
+   (`params.pin.replace(/\D/g, "").slice(0, 6)`). So `/i/x555555` was invisible
+   to the guard and fully dialable by the consumer — one click, live mic, to a
+   number the attacker chose.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/** App.tsx's `/i/:pin` route normalization, copied verbatim from the consumer. */
+function consumerPin(seg: string): string {
+  return seg.replace(/\D/g, "").slice(0, 6);
+}
+
+describe("v2.99.57 — /i/<pin> arrivals can never slip past the guard", () => {
+  const SNEAKY = ["x555555", "+555555", ".555555", "%20555555", "-555555", "(555)555", "5x5x5x5x5x5x"];
+
+  for (const seg of SNEAKY) {
+    it(`/i/${seg} is detected as an arrival (was null before the fix)`, async () => {
+      const m = await bootAt(`/i/${seg}`, "");
+      const target = m.bootDialTarget();
+      // Never null: anything under /i/ is an arrival from outside the app.
+      expect(target).not.toBeNull();
+      // And when the consumer would resolve a real 6-digit number, the guard must
+      // name the SAME number — otherwise arrivedWithDialTarget() misses it.
+      const expected = consumerPin(seg);
+      if (/^\d{6}$/.test(expected)) {
+        expect(target).toBe(expected);
+        expect(m.arrivedWithDialTarget(expected)).toBe(true);
+      }
+    });
+  }
+
+  it("agrees with the consumer's normalization on every input", async () => {
+    for (const seg of [...SNEAKY, "555555", "55", "", "999999999999", "abc"]) {
+      const m = await bootAt(`/i/${seg}`, "");
+      const expected = consumerPin(seg);
+      const got = m.bootDialTarget();
+      if (/^\d{6}$/.test(expected)) {
+        expect(got, `/i/${seg}`).toBe(expected);
+      } else {
+        // Not a usable number, but still an arrival — must not be null.
+        expect(got, `/i/${seg}`).toBe("*");
+      }
+    }
+  });
+
+  it("does not widen beyond the FIRST path segment", async () => {
+    // `/^\/i\//` against the whole path would start flagging unrelated deep links.
+    const m = await bootAt("/app/messages/i/555555", "");
+    expect(m.bootDialTarget()).toBeNull();
+  });
+
+  it("a query or fragment after the segment does not leak into the pin", async () => {
+    const m = await bootAt("/i/555555", "?ref=x");
+    expect(m.bootDialTarget()).toBe("555555");
+  });
+
+  it("an in-app navigation is still NOT an arrival (one-tap calling intact)", async () => {
+    const m = await bootAt("/app/dialer", "");
+    expect(m.bootDialTarget()).toBeNull();
+    expect(m.arrivedWithDialTarget("555555")).toBe(false);
+  });
+});

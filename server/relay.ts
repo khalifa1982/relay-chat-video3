@@ -601,12 +601,62 @@ function safeSend(socket: RelaySocket, obj: unknown) {
   }
 }
 
+/**
+ * A throwaway signaling pin for a client we could NOT authenticate.
+ *
+ * This is not an allocator — it hands out a number that may well belong to a
+ * real identity, because the only thing it can consult is in-memory registry
+ * state (the register path must stay synchronous; its one permitted await is
+ * `createContext` up in the HTTP layer). `identities`, `party_lines` and
+ * `number_reservations` are all invisible from here, so a number whose owner
+ * simply has no live SSE stream looks free.
+ *
+ * That collision is made HARMLESS by `pinIsAddressable` rather than by this
+ * function: an unverified registration is never rung, never handed a room, and
+ * never handed a pending ring. Widening the exclusion set below only shrinks the
+ * window; it is defence in depth, not the fix.
+ */
 export function genPin(reg: RelayRegistry): string {
-  let pin: string;
-  do {
-    pin = String(Math.floor(100000 + Math.random() * 900000));
-  } while (reg.clients.has(pin));
-  return pin;
+  // Exclude every number this process knows is in use — including one whose
+  // client record has been reaped but whose ROOM membership survives for
+  // auto-rejoin (cleanupRegistryConn deliberately keeps pinRoom), which is
+  // exactly the case a `reg.clients`-only check missed.
+  const taken = (p: string) => reg.clients.has(p) || reg.pinRoom.has(p) || reg.heldRoom.has(p);
+  // CSPRNG: v2.99.20 #9 replaced Math.random() in `randomDigits6` for exactly
+  // this reason (V8's xorshift128+ state is recoverable from a few outputs, so
+  // a predictable pin can be pre-claimed) and missed this second site.
+  for (let i = 0; i < 200; i++) {
+    const pin = String(crypto.randomInt(100000, 1000000));
+    if (!taken(pin)) return pin;
+  }
+  // Exhaustion is not a real state (200 misses against ~900k needs the registry
+  // to be nearly full); scan rather than loop forever or throw into the register
+  // path, which would deny service to every new client.
+  for (let n = 100000; n < 1000000; n++) {
+    const pin = String(n);
+    if (!taken(pin)) return pin;
+  }
+  throw new Error("no free signaling pin");
+}
+
+/**
+ * May this number be DIALLED, rejoined, or handed a pending ring?
+ *
+ * Only when the registration behind it was proven — either the request's cookie
+ * resolved to that exact number (`verifiedPin`), or the record predates the
+ * check / came from a direct `handleMessage` call with no untrusted transport.
+ *
+ * Without this, `genPin` handing an anonymous client a number that belongs to a
+ * dormant identity was full impersonation: inbound dials fan to the squatter's
+ * socket (multi-device ring is on fleet-wide), `deliverPendingRing` hands over a
+ * ring already in flight, and the ring card renders the victim's name, avatar and
+ * verified badge because the callee resolves the caller BY PIN.
+ *
+ * Costs nothing legitimate: an unverified client holds a randomly minted number
+ * that was never published anywhere, so there is no one who could be dialling it.
+ */
+function pinIsAddressable(rec: { verifiedPin?: boolean } | undefined): boolean {
+  return !!rec && rec.verifiedPin !== false;
 }
 
 export function newRoomId(): string {
@@ -1411,12 +1461,23 @@ export function handleMessage(
     // Multi-device (v2.99.5): NOT when the call lives on another device that
     // kept the primary slot — sending the rejoin here dragged every freshly
     // opened secondary device straight into the primary's live call.
-    if (!keptPrimaryElsewhere) sendRejoinIfInRoom(reg, conn.socket, pin);
+    // A rejoin hands over the room id, the member list, ICE servers and (on the
+    // SFU path) a LiveKit publish token — so it must only ever go to a client that
+    // PROVED it owns this number, or to the very browser connection that was
+    // already registered under it. A fresh anonymous cid has neither, so a
+    // `genPin` collision with a number that is still a room member can no longer
+    // drop a stranger into a live call. `provenPin` (not `verifiedClaim` alone)
+    // keeps the ordinary reload working when `createContext` hiccups: the cid is
+    // unchanged, so the browser is still recognisably the one that was in the call.
+    const provenPin = verifiedClaim(pin) || (!!effectiveOwned && pin === effectiveOwned);
+    if (!keptPrimaryElsewhere && provenPin) sendRejoinIfInRoom(reg, conn.socket, pin);
     // Deliver any ring that's still live for this number: a reload mid-ring, or
     // a PAGED offline device the user just opened from the push notification.
     // Sent to THIS device's socket (a multi-device secondary must ring here,
     // not on the primary that is already ringing).
-    deliverPendingRing(reg, pin, conn.socket);
+    // Same gate: a ring already in flight for this number must not be handed to a
+    // client that cannot prove the number is theirs.
+    if (provenPin) deliverPendingRing(reg, pin, conn.socket);
     // Busy-line mirror (v2.91): a (re)registered client can change both party-
     // line CONNECTED counts and busy verdicts (rejoin restores roomId) without
     // crossing any join/leave funnel — sync the settled state.
@@ -1500,7 +1561,14 @@ export function handleMessage(
         // dead socket exactly like an unregistered number so the callee gets
         // PAGED (push + late ring on reconnect) instead.
         const targetReachable =
-          !!target && (!onPageCallee || !target.socket.alive || target.socket.alive());
+          !!target &&
+          // An UNVERIFIED registration is not this number (v2.99.57): `genPin` can
+          // hand an anonymous client a number whose owner merely has no live
+          // stream, and ringing it would deliver the victim's calls to the
+          // squatter. Treat it exactly like an unregistered number so the callee
+          // is paged and the caller gets an honest `offline`.
+          pinIsAddressable(target) &&
+          (!onPageCallee || !target.socket.alive || target.socket.alive());
         if (!targetReachable) {
           if (!onPageCallee) {
             // Legacy path (no paging hook — protocol unit tests, bare deploys):

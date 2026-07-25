@@ -231,6 +231,19 @@ export function normalizeEmail(raw: unknown): string {
     if (typeof o.address === "string") s = o.address;
     else if (typeof o.email === "string") s = o.email;
   }
+  // BOUND THE INPUT BEFORE THE MATCH (v2.99.57). `/<([^>]+)>/` against a value
+  // containing many `<` and no `>` retries `[^>]+` from every `<`, giving back one
+  // character at a time — quadratic. This route accepts 5MB of JSON, and Node is
+  // single-threaded, so one request stalls every SSE stream, signaling POST and API
+  // call on the fleet.
+  //
+  // M42 (v2.99.41) fixed exactly this pattern, but capped it in
+  // `parseInboundAddress` only — and this function runs the SAME regex over the
+  // SAME untrusted headers, reached from `extractFrom` and `isSupportRecipient`.
+  // The cap belongs HERE, where the regex is, so a caller added later inherits it
+  // instead of having to remember. RFC 5321 caps an addr-spec at 320 bytes, so
+  // 1024 refuses nothing real; callers already treat "" as "no address".
+  if (s.length > MAX_INBOUND_ADDRESS_LEN) return "";
   const angle = s.match(/<([^>]+)>/);
   return (angle ? angle[1] : s).trim().toLowerCase();
 }
