@@ -32,7 +32,12 @@ describe("aws-ops.yml — trigger + auth safety", () => {
   });
   it("region input defaults to ap-south-1; auth prefers access keys but falls back to the deploy OIDC role", () => {
     expect(OPS).toMatch(/default: ap-south-1/);
-    expect(OPS).toMatch(/aws-actions\/configure-aws-credentials@v4/);
+    // v2.99.58 PINNED this action to a commit SHA. aws-ops.yml assumes the same
+    // production role as deploy.yml, so a mutable `@v4` here was a tag the
+    // action's owner could repoint straight into those credentials. Assert the
+    // pinned form — the stronger property — rather than the old floating tag.
+    expect(OPS).toMatch(/aws-actions\/configure-aws-credentials@[0-9a-f]{40} # v4\./);
+    expect(OPS).not.toMatch(/aws-actions\/configure-aws-credentials@v\d/);
     expect(OPS).toMatch(/aws-access-key-id: \$\{\{ secrets\.AWS_ACCESS_KEY_ID \}\}/);
     expect(OPS).toMatch(/aws-secret-access-key: \$\{\{ secrets\.AWS_SECRET_ACCESS_KEY \}\}/);
     // v2.97.1: no ops secrets configured ⇒ assume the deploy pipeline's role.

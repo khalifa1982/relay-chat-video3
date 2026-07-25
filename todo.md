@@ -7359,3 +7359,36 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
 - [x] Suite 1932 passed / 1 skipped; check + build green. (One transient local failure — roundsGaps.test.ts's
       built-bundle assertion — was a STALE `dist/` from an older revision of this checkout, not a code
       problem: `dist/` is gitignored so CI never saw it, and it passed immediately after `pnpm build`.)
+
+## v2.99.58 — action pinning covers EVERY workflow; the hand-maintained list was the hole (2026-07-24)
+- [x] FOUND: `workflowPinning.test.ts` enforced pinning on a hand-written list — deploy.yml + the two Android
+      workflows. `aws-ops.yml` was NOT on it, and that file assumes the SAME production role as deploy.yml
+      (`role-to-assume: arn:aws:iam::342494841476:role/relay-github-deploy`, `permissions: id-token: write`)
+      while running an UNPINNED `aws-actions/configure-aws-credentials@v4`. So a mutable tag had a path to
+      exactly the credentials the rule was written to protect. `ci.yml` (checkout/setup-node/pnpm, all @v4)
+      was uncovered for the same reason.
+- [x] FIX: the covered set is READ FROM DISK (`readdirSync` over `.github/workflows`), not hand-listed. A new
+      workflow file is inside the rule the moment it lands rather than starting life silently exempt —
+      verified by dropping a temp workflow containing `@v4` and `@main` into the directory and watching the
+      suite fail naming that file.
+- [x] All 5 workflows / 17 action refs are pinned, each with a PRECISE version comment (`# v4.4.0` rather
+      than a bare `# v4`, which told a reviewer nothing about which release they were looking at).
+- [x] TWO MORE ANNOTATED TAGS surfaced while resolving these:
+      - aws-actions/configure-aws-credentials v4 → tag object ff717079ee2060e4bcee96c4779b553acc87447c,
+        commit 7474bc4690e29a8392af63c5b98e7449536d5c3a (v4.3.1)
+      - pnpm/action-setup v4 → tag object f40ffcd9367d9f12939873eb1018b921a783ffaa,
+        commit b906affcce14559ad1aafd4ab0e942779e9f58b1 (v4.3.0)
+      That makes 3 of the 7 distinct actions annotated — the `--jq .object.sha` trap is the COMMON case here,
+      not an oddity. Both pins deploy.yml already carried were verified to be the correct dereferenced
+      COMMITs, not tag objects. The annotated-tag guard now forbids all three tag-object shas by value.
+- [x] FIXED A BAD ASSERTION OF MY OWN: the per-file `refs.length >= 4` floor was calibrated for the three
+      large workflows and failed immediately when aws-ops.yml (2 refs) and ci.yml (3 refs) came into scope.
+      An arbitrary floor was never the right guard — it is now a PARSER CROSS-CHECK (the parser must find
+      exactly as many refs as an independent scan of `uses:` lines, minus local/docker forms), so a regex
+      change that blinded the parser diverges instead of passing, plus a single global floor where a floor
+      actually belongs.
+- [x] A stale `server/awsOps.test.ts` pin asserted the FLOATING `@v4` and so broke on the fix; updated to
+      assert the pinned form (and to forbid the floating one) — the stronger property.
+- [x] Tripwires re-verified 4/4 by mutation, with byte-exact backup reverts: aws-ops back on @v4 ⇒ FAIL,
+      aws creds pinned to the tag object ⇒ FAIL, pnpm pinned to its tag object ⇒ FAIL, a brand-new workflow
+      with unpinned actions ⇒ FAIL. Suite 2011 passed / 1 skipped; check green.
