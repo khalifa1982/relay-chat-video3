@@ -6568,6 +6568,33 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       additive-DDL rule now allows ADD UNIQUE INDEX; androidAudioCamera.test.ts's chat-dedup pin now
       expects the threaded sender). Suite 1662 passed / 1 skipped; check + build green.
 
+## v2.99.52 — the Android release build is never signed with the debug key (2026-07-25)
+- [x] `mobile/native/android/app/build.gradle` shipped the React Native template default,
+      `release { signingConfig signingConfigs.debug }`. Two distinct problems, not one: (1) a local or CI
+      `assembleRelease` produced a DEBUG-SIGNED artifact that looks shippable — nothing about the file
+      says "do not upload this"; and (2) `native-rn.yml` signs the AAB afterwards with the real upload
+      key, but `jarsigner` ADDS a signature rather than replacing one, so the bundle handed to Play
+      carried TWO signers, which Play can reject. The earlier note that "CI re-signs it so the store
+      artifact is fine" was optimistic on that second point.
+- [x] FIXED: release now signs with a REAL keystore when one is configured (env vars, which is how CI
+      would pass it, or gradle properties for a local release) and is otherwise UNSIGNED. An unsigned
+      artifact cannot be mistaken for a store build — that is the point — and the CI `jarsigner` step then
+      produces a single, correct signature. All of path/password/alias must be present AND the file must
+      exist, so a half-configured environment yields a visible unsigned build rather than an invisible
+      debug-signed one. No keystore or password is committed (`debug.keystore` with the universally-known
+      'android' password stays, deliberately).
+- [x] Verified BOTH directions: `server/androidSigning.test.ts` (6) passes on the fix and, run against the
+      pre-fix file, fails on 4 of 6 including the headline "never signed with the debug key". Source-pinned
+      rather than executed because there is no Android SDK in the unit environment — the real Gradle build
+      runs in `native-rn.yml`, which triggers on any push touching `mobile/native/**`, so this commit
+      verifies itself in CI.
+- [x] Deliberately did NOT restructure the release pipeline: letting Gradle sign from the same secrets and
+      dropping `jarsigner` entirely would be cleaner, but it is a bigger change to a path that only runs at
+      store-release time. The footgun is closed; that cleanup is available on request.
+- [x] Also confirmed the v2.99.51 SHA pins resolve in a real run (deploy `bf321bc`: each step name shows
+      its SHA), which additionally proves the owner's tightened OIDC trust policy still lets `main` deploy.
+- [x] Suite 1846 passed / 1 skipped; `pnpm verify` green.
+
 ## v2.99.51 — the production-credential job pins its actions to SHAs (2026-07-25)
 - [x] `deploy.yml` assumes the production deploy role via OIDC, so every action it runs holds credentials
       that can write the S3 release bucket and drive SSM on the live fleet — and all four were on the
