@@ -44,11 +44,21 @@ describe("relayCluster (phase-1 pure core)", () => {
   });
 
   it("inbound frame round-trips (cid/home/raw) and rejects malformed", () => {
+    // v2.99.59: the decoder NORMALISES `proxy` to a boolean, so a frame from an
+    // older instance (which omits the field) is explicitly non-proxied rather
+    // than undefined — the leader's routing branches on it.
     const f = { cid: "c1", home: "H", raw: { type: "invite", to: "314159" } };
-    expect(decodeInbound(encodeFrame(f))).toEqual(f);
+    expect(decodeInbound(encodeFrame(f))).toEqual({ ...f, proxy: false });
     // raw may be any JSON value, including a synthetic control message
     const ctl = { cid: "c2", home: "H", raw: { type: "__disconnect" } };
-    expect(decodeInbound(encodeFrame(ctl))).toEqual(ctl);
+    expect(decodeInbound(encodeFrame(ctl))).toEqual({ ...ctl, proxy: false });
+    // …and a genuine proxy frame survives the round trip.
+    const px = { cid: "c3", home: "H", raw: { type: "accept" }, proxy: true };
+    expect(decodeInbound(encodeFrame(px))).toEqual(px);
+    // Anything non-true is normalised to false — never a truthy string.
+    expect(decodeInbound('{"cid":"c","home":"H","raw":1,"proxy":"yes"}')).toEqual({
+      cid: "c", home: "H", raw: 1, proxy: false,
+    });
     for (const bad of ["{", "null", "{}", '{"cid":"c"}', '{"cid":1,"home":"H","raw":1}']) {
       expect(decodeInbound(bad)).toBeNull();
     }

@@ -7392,3 +7392,37 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
 - [x] Tripwires re-verified 4/4 by mutation, with byte-exact backup reverts: aws-ops back on @v4 ⇒ FAIL,
       aws creds pinned to the tag object ⇒ FAIL, pnpm pinned to its tag object ⇒ FAIL, a brand-new workflow
       with unpinned actions ⇒ FAIL. Suite 2011 passed / 1 skipped; check green.
+
+## v2.99.59 — half of all signaling messages were being dropped in production (task #38) (2026-07-24)
+- [x] Task #38 was a QA-sweep SUSPICION ("cookie-less /api/relay/send on the non-stream instance loses
+      replies") that nobody had confirmed. It is REAL, and I measured it against the live fleet rather than
+      reasoning about it: open ONE SSE stream for a cid, then POST 24 times for that same cid.
+      **12 of 24 returned 404 `channel not found`.** A control POST for an unknown cid also 404'd, proving
+      the probe could tell the two apart.
+- [x] MECHANISM: the SSE stream (`GET /api/relay/stream`) and every signaling message
+      (`POST /api/relay/send`) are separate HTTP requests. The ALB round-robins them across the two
+      instances with no stickiness, so a POST routinely lands on the instance that holds no `localDelivery`
+      entry for that cid. The clustered POST path answered 404 and dropped the message. `sendWS` retries 3×
+      with backoff, so ≈6% of messages were lost OUTRIGHT (0.5^4) and the survivors delayed by up to ~3s —
+      on the offer/answer/ICE path, where either outcome is call-fatal. This is very likely the substrate
+      under a long tail of "calls not ringing / dying seconds after dial" reports that earlier versions
+      chased as client-side bugs.
+- [x] FIX: a misrouted POST is PROXIED to the leader instead of refused (`clusterProxyInbound`). The
+      proxying instance does not know where the stream lives and is NOT allowed to claim it: the frame
+      carries `proxy:true`, and the leader ignores the claimed `home` entirely, routing the reply to the
+      home it already recorded in `homeOf` at `__connect` time.
+- [x] The no-home case is handled deliberately, not incidentally: if the leader has no recorded home for the
+      cid, the proxied frame is DROPPED. Binding the cid to the proxying instance (which has no stream)
+      would black-hole every subsequent reply for that channel — that failure mode has its own test.
+- [x] Security unchanged: the v2.99.49 anti-spoof rule (`f.home !== fromInstance` ⇒ drop) still applies to
+      normal frames, and a proxy frame is strictly safer than a normal one because its `home` claim is never
+      read at all.
+- [x] Rolling-deploy safe: `decodeInbound` normalises `proxy` to a boolean, so a frame published by a
+      not-yet-updated instance decodes as explicitly non-proxied instead of `undefined`.
+- [x] Pinned by an integration test replaying the exact production scenario — peer B's ACCEPT arriving as a
+      POST on the WRONG instance — asserting the reply reaches B at its true home, A sees `peer-joined`, and
+      the misroute does not re-home the cid. VERIFIED TO FAIL against the pre-fix 404 before being kept.
+      A second test covers the unknown-cid drop. Suite 2013 passed / 1 skipped; check green.
+- [x] NOTE for ops: an ALB stickiness policy (or the documented `/api/relay/*` target-group pin) would also
+      fix the routing, and is still worth having — it removes a Redis hop from every misrouted message. The
+      application no longer DEPENDS on it, which was the point.

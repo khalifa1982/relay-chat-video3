@@ -57,6 +57,12 @@ export interface InboundFrame {
   /** Raw signaling message: a `/api/relay/send` body, or a synthetic
    *  {type:"__register"|"__disconnect", ...} the proxy injects. */
   raw: unknown;
+  /** v2.99.59 — set when the publisher is NOT the home: a `/api/relay/send`
+   *  POST that the load balancer routed to an instance which does not hold this
+   *  cid's SSE stream. The leader must then IGNORE `home` and route replies to
+   *  the home it already recorded, because the publisher does not know it and
+   *  must not be able to claim it. See the affinity note in relay.ts. */
+  proxy?: boolean;
 }
 export interface OutboundFrame {
   /** Target browser's channel id. */
@@ -72,7 +78,7 @@ export function decodeInbound(raw: string): InboundFrame | null {
   try {
     const v = JSON.parse(raw);
     if (v && typeof v.cid === "string" && typeof v.home === "string" && "raw" in v) {
-      return { cid: v.cid, home: v.home, raw: v.raw };
+      return { cid: v.cid, home: v.home, raw: v.raw, proxy: v.proxy === true };
     }
   } catch {
     /* drop malformed */
@@ -196,7 +202,9 @@ async function electTick(): Promise<void> {
 }
 
 let started = false;
-let _onInbound: ((cid: string, home: string, raw: unknown) => void) | null = null;
+let _onInbound:
+  | ((cid: string, home: string, raw: unknown, proxy: boolean) => void)
+  | null = null;
 let _onOutbound: ((cid: string, obj: unknown) => void) | null = null;
 
 /**
@@ -206,7 +214,7 @@ let _onOutbound: ((cid: string, obj: unknown) => void) | null = null;
  * clusterEnabled().
  */
 export function startClusterRuntime(deps: {
-  onInbound: (cid: string, home: string, raw: unknown) => void;
+  onInbound: (cid: string, home: string, raw: unknown, proxy: boolean) => void;
   onOutbound: (cid: string, obj: unknown) => void;
 }): void {
   if (!clusterEnabled() || started) return;
@@ -234,7 +242,7 @@ export function startClusterRuntime(deps: {
     // short-circuits before publishing — so the equality already holds for OLD
     // publishers too.
     if (f.home !== fromInstance) return;
-    _onInbound?.(f.cid, f.home, f.raw);
+    _onInbound?.(f.cid, f.home, f.raw, f.proxy === true);
   });
 
   void electTick();
@@ -260,12 +268,28 @@ export function stopClusterRuntime(): void {
  *  ARE the leader, dispatched locally (no Redis hop). */
 export function clusterForwardInbound(cid: string, raw: unknown): void {
   if (_isLeader) {
-    _onInbound?.(cid, INSTANCE_ID, raw);
+    _onInbound?.(cid, INSTANCE_ID, raw, false);
     return;
   }
   const lid = _leaderId;
   if (!lid) return; // no leader known yet — the client resends on its next beat
   publishBus(sigInChannel(lid), { cid, home: INSTANCE_ID, raw } as InboundFrame);
+}
+
+/** NOT-THE-HOME → LEADER (v2.99.59). A `/api/relay/send` POST that the load
+ *  balancer routed to an instance holding no SSE stream for this cid. We cannot
+ *  answer it locally and we do NOT know (or get to assert) where the stream
+ *  lives — the leader looks the home up in its own map. Without this the POST
+ *  was answered 404 and the signaling message was simply lost; measured against
+ *  production, a two-instance ALB with no affinity lost HALF of them. */
+export function clusterProxyInbound(cid: string, raw: unknown): void {
+  if (_isLeader) {
+    _onInbound?.(cid, INSTANCE_ID, raw, true);
+    return;
+  }
+  const lid = _leaderId;
+  if (!lid) return;
+  publishBus(sigInChannel(lid), { cid, home: INSTANCE_ID, raw, proxy: true } as InboundFrame);
 }
 
 /** LEADER → HOME. An object the leader's registry produced for a peer, routed to

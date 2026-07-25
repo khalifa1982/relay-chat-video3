@@ -176,4 +176,75 @@ describe("cross-instance signaling (integration)", () => {
     expect(sig).toBeTruthy();
     expect(sig.data?.sdp).toBe("v=0-answer");
   });
+
+  /* ── v2.99.59 — instance affinity ─────────────────────────────────────────
+     The SSE stream and each `/api/relay/send` POST are separate HTTP requests,
+     so a load balancer without stickiness routes them to DIFFERENT instances.
+     Measured against production: 12 of 24 POSTs for a live cid landed on the
+     box that held no stream for it. That path used to answer 404 and drop the
+     signaling message; on offer/answer/ICE that is call-fatal.               */
+  it("a POST that lands on the WRONG instance is proxied, not dropped (the 404 bug)", async () => {
+    const aWrites: string[] = [];
+    const aRes: any = {
+      status() { return this; }, setHeader() {}, flushHeaders() {},
+      write(d: string) { aWrites.push(d); return true; }, end() {},
+      on(ev: string, cb: () => void) { if (ev === "close") closers.push(cb); },
+    };
+    routes["GET /api/relay/stream"]({ query: { cid: "cid-A" }, headers: {}, socket: { remoteAddress: "1.1.1.1" }, on() {} }, aRes);
+    const post = (cid: string, m: unknown) => {
+      let payload: any = null;
+      let code = 200;
+      const p = routes["POST /api/relay/send"](
+        { body: { cid, message: m }, headers: {}, socket: { remoteAddress: "1.1.1.1" } },
+        { status(c: number) { code = c; return this; }, json(o: any) { payload = o; return this; } },
+      );
+      return Promise.resolve(p).then(() => ({ code, payload }));
+    };
+    await post("cid-A", { type: "register", name: "Alice" });
+    const aPin = sseObjs(aWrites).find((o) => o.type === "registered").pin;
+
+    // B is homed on inst-B and rings.
+    const bOut: any[] = [];
+    busSub(sigOutChannel("inst-B"), (f: any) => bOut.push(f));
+    const injectB = (raw: unknown) => busPub(sigInChannel("LEADER"), { cid: "cid-B", home: "inst-B", raw });
+    injectB({ type: "__connect" });
+    injectB({ type: "register", name: "Bob" });
+    const bPin = bOut.map((f) => f.obj).find((o) => o?.type === "registered").pin;
+    await post("cid-A", { type: "invite", to: bPin });
+    const ring = bOut.map((f) => f.obj).find((o) => o?.type === "ring");
+    expect(ring).toBeTruthy();
+
+    // THE MISROUTE: B's ACCEPT arrives as a POST on THIS instance, which holds
+    // no SSE stream for cid-B. Pre-fix this returned 404 and the call silently
+    // never connected.
+    const r = await post("cid-B", { type: "accept", roomId: ring.roomId });
+    expect(r.code).toBe(200);
+    expect(r.payload).toMatchObject({ ok: true, proxied: true });
+
+    // The reply must reach B on ITS home instance…
+    expect(bOut.map((f) => f.obj).some((o) => o?.type === "joined")).toBe(true);
+    // …and A must see the call connect.
+    expect(sseObjs(aWrites).some((o) => o.type === "peer-joined")).toBe(true);
+
+    // …and the misrouted POST must NOT have re-homed cid-B onto this instance:
+    // a later bus message for B still comes back out on inst-B's channel.
+    const before = bOut.length;
+    injectB({ type: "signal", to: aPin, data: { sdp: "v=0-later" } });
+    expect(sseObjs(aWrites).some((o) => o.type === "signal" && o.data?.sdp === "v=0-later")).toBe(true);
+    expect(bOut.length).toBeGreaterThanOrEqual(before); // still addressable at its true home
+  });
+
+  it("a proxied POST for a cid nobody homes is dropped, never bound to the wrong instance", async () => {
+    // No __connect was ever seen for this cid, so the leader has no home for it
+    // and no reply could be delivered. It must NOT record the proxying instance
+    // as the home — that would send every later reply into a black hole.
+    const out: any[] = [];
+    busSub(sigOutChannel("inst-ghost"), (f: any) => out.push(f));
+    const res: any = { status() { return this; }, json() { return this; } };
+    await routes["POST /api/relay/send"](
+      { body: { cid: "cid-never-seen", message: { type: "accept", roomId: "nope" } }, headers: {}, socket: { remoteAddress: "9.9.9.9" } },
+      res,
+    );
+    expect(out).toEqual([]);
+  });
 });

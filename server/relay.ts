@@ -100,6 +100,7 @@ import {
   clusterEnabled,
   startClusterRuntime,
   clusterForwardInbound,
+  clusterProxyInbound,
   clusterDeliverOutbound,
   makeRemoteSocket,
 } from "./relayCluster";
@@ -2895,8 +2896,18 @@ export function attachRelay(
 
   // Leader-side processing of a forwarded frame. Runs the SAME registry +
   // handleMessage as the local path, but on a VIRTUAL socket per remote peer.
-  function leaderProcess(cid: string, home: string, raw: unknown): void {
-    homeOf.set(cid, home);
+  function leaderProcess(cid: string, home: string, raw: unknown, proxy = false): void {
+    // A PROXIED frame comes from an instance that does NOT hold this cid's SSE
+    // stream (the load balancer sent the POST to the wrong box). It cannot know
+    // the home, so its claim is ignored entirely and the home we already
+    // recorded wins. No recorded home ⇒ nothing could receive a reply anyway, so
+    // drop rather than bind the cid to an instance with no stream — doing that
+    // would send every subsequent reply into a black hole.
+    if (proxy) {
+      if (!homeOf.has(cid)) return;
+    } else {
+      homeOf.set(cid, home);
+    }
     let conn = reg.connections.get(cid);
     if (!conn) {
       const vsock = makeRemoteSocket(
@@ -3205,7 +3216,16 @@ export function attachRelay(
       // Home role: the browser is homed here (localDelivery), but the registry
       // runs on the leader — forward the message; any reply comes back over SSE.
       if (!localDelivery.has(cid)) {
-        res.status(404).json({ error: "channel not found" });
+        // INSTANCE AFFINITY (v2.99.59). The SSE stream and this POST are
+        // separate HTTP requests, so a load balancer with no stickiness routes
+        // them to DIFFERENT instances — measured against production: 12 of 24
+        // POSTs landed on the box with no stream for the cid. This used to
+        // answer 404 and drop the message on the floor; the client retries 3
+        // times, so ~6% were lost outright and the rest delayed by seconds, on
+        // the offer/answer/ICE path where that is call-fatal. Hand it to the
+        // leader instead, which knows the real home and routes the reply there.
+        clusterProxyInbound(cid, message);
+        res.json({ ok: true, proxied: true });
         return;
       }
       clusterForwardInbound(cid, message);
