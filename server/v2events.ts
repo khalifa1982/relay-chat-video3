@@ -187,7 +187,11 @@ export function registerV2Events(app: Express): void {
   const rateLimitOff = () => process.env.RELAY_RATELIMIT_OFF === "1";
   const openLimiter = createRateLimiter({ capacity: 30, refillPerSec: 1 });
   setInterval(() => openLimiter.sweep(Date.now(), 10 * 60_000), 10 * 60_000).unref();
-  const MAX_STREAMS_PER_IP = 25;
+  // v2.99.57: raised from 25 for the same reason as the signaling stream cap — it
+  // is per-IP, and a shared egress (CGNAT, an office, a café) puts many real users
+  // behind one address, where a hard 429 costs them realtime messaging entirely.
+  // The per-IP OPEN-RATE limiter remains the flood defence.
+  const MAX_STREAMS_PER_IP = 250;
   const streamsPerIp = new Map<string, number>();
 
   app.get("/api/v2/events", async (req: Request, res: Response) => {

@@ -2971,9 +2971,19 @@ export function attachRelay(
     stale.forEach((cid) => reg.cidToPin.delete(cid));
   }, 15 * 60_000).unref();
   // Concurrent SSE streams per IP — each open stream holds a socket + timer,
-  // so an attacker opening thousands exhausts the instance. ~25 is far above
-  // any legitimate device count behind one NAT hitting ONE Cloud Run instance.
-  const MAX_STREAMS_PER_IP = 25;
+  // so an attacker opening thousands exhausts the instance.
+  //
+  // v2.99.57: raised from 25, which was NOT "far above any legitimate device
+  // count". It is per-IP, and any shared egress puts a whole population behind one
+  // address — carrier CGNAT, an office, a school, a café. Every open tab holds one
+  // stream here AND one on /api/v2/events, so ~12 tabs across all users on that IP
+  // exhausted it, and the refusal is a hard 429 that leaves those users unable to
+  // call at all. This is the same misjudgement already corrected twice (the media
+  // proxy 240→600, `guestMintGate`). The FLOOD defence is `streamOpenLimiter`
+  // (30 burst / 1-per-second per IP), which is unchanged; this ceiling only exists
+  // to bound total held sockets, so it can be an order of magnitude higher without
+  // weakening anything.
+  const MAX_STREAMS_PER_IP = 250;
   const streamsPerIp = new Map<string, number>();
 
   // Public ICE config endpoint. Returns fresh, time-limited TURN/STUN
@@ -3006,7 +3016,12 @@ export function attachRelay(
         res.status(429).json({ error: "rate_limited" });
         return;
       }
-      if ((streamsPerIp.get(ip) ?? 0) >= MAX_STREAMS_PER_IP) {
+      // A RECONNECT of a cid we already hold REPLACES its stream rather than
+      // adding one (the old socket is closed a few lines below), so it must not be
+      // measured against the ceiling. Counting it first is why a plain tab refresh
+      // at the limit used to be refused — the user's own stream blocked them.
+      const isReplacement = clustered ? localDelivery.has(cid) : reg.connections.has(cid);
+      if (!isReplacement && (streamsPerIp.get(ip) ?? 0) >= MAX_STREAMS_PER_IP) {
         res.status(429).json({ error: "too_many_streams" });
         return;
       }

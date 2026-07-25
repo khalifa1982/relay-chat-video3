@@ -174,8 +174,13 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
   }
   const body = JSON.stringify(payload);
   let delivered = fcmDelivered;
-  await Promise.all(
-    subs.map(async (s) => {
+  // BOUNDED CONCURRENCY (v2.99.57). `Promise.all` over the whole list opened one
+  // TLS connection and one ECDH + AES-GCM encryption per subscription
+  // simultaneously. With the per-identity cap now in place that list is short, but
+  // this is the second half of the same fix: a group fan-out multiplies it by the
+  // number of recipients, and this is a 1GB single process that owns every call.
+  const PUSH_CONCURRENCY = 5;
+  const sendOne = async (s: (typeof subs)[number]) => {
       try {
         // Defense-in-depth (S8): never connect to a non-allowlisted host, even
         // if a legacy row predates the subscribe-time guard. Drop it.
@@ -200,6 +205,17 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
           // Subscription expired/revoked — prune so we stop paying for it.
           await deletePushSubscription(s.endpoint).catch(() => {});
         }
+      }
+  };
+  // A fixed pool of workers drains the queue; every subscription is still
+  // attempted, just never all at once.
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(PUSH_CONCURRENCY, subs.length) }, async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= subs.length) return;
+        await sendOne(subs[i]);
       }
     }),
   );

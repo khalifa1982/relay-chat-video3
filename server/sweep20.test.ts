@@ -264,3 +264,167 @@ describe("Finding 14 — a grace-reaped host is succeeded", () => {
     expect(branch.indexOf("reg.clients.delete(pin)")).toBeLessThan(branch.indexOf("promoteHostIfVacant"));
   });
 });
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BATCH 3 — resource exhaustion. This process is `instances: 1` with
+   `max_memory_restart: "1G"` and owns the whole in-memory signaling registry plus
+   every SSE stream, so an OOM restart drops every call on the fleet. Three
+   surfaces had a RATE limit but no OCCUPANCY limit, and one had an occupancy limit
+   so tight it locked out real users.
+
+   The recurring failure mode in this repo is the OPPOSITE of under-protection: a
+   guard sized against the threat rather than against real usage (a limiter that
+   blocked signup behind CGNAT; a media limiter that rendered broken images). Every
+   ceiling below is therefore asserted to be generous, not just present.
+   ══════════════════════════════════════════════════════════════════════════ */
+const PROXY = fs.readFileSync(path.join(ROOT, "server/_core/storageProxy.ts"), "utf8");
+const V2DB = fs.readFileSync(path.join(ROOT, "server/v2db.ts"), "utf8");
+const WEBPUSH = fs.readFileSync(path.join(ROOT, "server/webPush.ts"), "utf8");
+const EVENTS = fs.readFileSync(path.join(ROOT, "server/v2events.ts"), "utf8");
+
+describe("Finding 3 — the media proxy bounds CONCURRENT streams, not just arrivals", () => {
+  it("acquires a slot per request, capped per-IP and process-wide", () => {
+    expect(PROXY).toMatch(/const MAX_INFLIGHT_PER_IP = \d+;/);
+    expect(PROXY).toMatch(/const MAX_INFLIGHT_TOTAL = \d+;/);
+    expect(PROXY).toMatch(/const slot = limitsOff \? \{ release\(\) \{\} \} : acquireStream\(clientIp\);/);
+    expect(PROXY).toMatch(/res\.status\(429\)\.send\("Too many concurrent media streams"\)/);
+  });
+
+  it("releases from ONE idempotent handler bound to both close and finish", () => {
+    // Both events can fire for one response; a double decrement would corrupt the
+    // counter into permanent free capacity — worse than the leak it prevents.
+    expect(PROXY).toMatch(/res\.on\("close", \(\) => slot\.release\(\)\);/);
+    expect(PROXY).toMatch(/res\.on\("finish", \(\) => slot\.release\(\)\);/);
+    expect(PROXY).toMatch(/if \(released\) return;\s*\n\s*released = true;/);
+  });
+
+  it("the per-IP ceiling is generous enough for a media-heavy screen on shared egress", () => {
+    // A throttled media request renders as a BROKEN IMAGE; this endpoint's rate
+    // limiter has already been loosened once for exactly that reason.
+    const perIp = Number(/const MAX_INFLIGHT_PER_IP = (\d+);/.exec(PROXY)![1]);
+    expect(perIp).toBeGreaterThanOrEqual(40);
+    const total = Number(/const MAX_INFLIGHT_TOTAL = (\d+);/.exec(PROXY)![1]);
+    expect(total).toBeGreaterThan(perIp);
+  });
+
+  it("times out the HEADER phase only, never the body", () => {
+    // An abort signal on fetch tears down body streaming too, so using it as a
+    // whole-request deadline would cancel legitimate large or slow downloads.
+    expect(PROXY).toMatch(/const headerT = setTimeout\(\(\) => ac\.abort\(\), UPSTREAM_HEADER_MS\);/);
+    expect(PROXY).toMatch(/} finally \{\s*\n\s*clearTimeout\(headerT\);/);
+    expect(PROXY).not.toMatch(/AbortSignal\.timeout/);
+  });
+
+  it("the stall watchdog is IDLE-based and rearms on every chunk", () => {
+    // Wall-clock would break a slow-but-progressing transfer and `<video>` seeking.
+    expect(PROXY).toMatch(/nodeStream\.on\("data", armIdle\)/);
+    expect(PROXY).toMatch(/const STREAM_IDLE_MS = \d+_?\d*;/);
+    const idle = Number(/const STREAM_IDLE_MS = ([\d_]+);/.exec(PROXY)![1].replace(/_/g, ""));
+    expect(idle).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it("honours the RELAY_RATELIMIT_OFF kill switch", () => {
+    expect(PROXY).toMatch(/const limitsOff = process\.env\.RELAY_RATELIMIT_OFF === "1";/);
+  });
+});
+
+describe("Findings 5/9 — contacts is bounded, without hiding anyone's contacts", () => {
+  it("caps new rows per owner by insert RANK (race-safe), not count-then-insert", () => {
+    // Two concurrent inserts at CAP-1 would both pass a count-then-insert check;
+    // ids are monotonic and unique, so ranks are distinct and the excess self-deletes.
+    expect(V2DB).toMatch(/const MAX_CONTACTS_PER_OWNER = \d+;/);
+    expect(V2DB).toMatch(/lte\(contacts\.id, row\.id\)/);
+    expect(V2DB).toMatch(/if \(Number\(rank\) > MAX_CONTACTS_PER_OWNER\)/);
+  });
+
+  it("an UPDATE to an existing contact is never refused by the cap", () => {
+    // A user at the ceiling must still be able to rename, favourite, and above all
+    // BLOCK someone — refusing that would turn a DoS guard into a safety hole.
+    expect(V2DB).toMatch(/if \(!existing && row\) \{/);
+  });
+
+  it("listContacts is bounded by the SAME number, so no real user is truncated", () => {
+    // Deliberately not a small page: the Contacts screen sorts and filters over the
+    // whole list client-side, so a short page would silently HIDE contacts.
+    expect(V2DB).toMatch(/\.limit\(MAX_CONTACTS_PER_OWNER\)/);
+    const cap = Number(/const MAX_CONTACTS_PER_OWNER = (\d+);/.exec(V2DB)![1]);
+    expect(cap).toBeGreaterThanOrEqual(2000);
+  });
+});
+
+describe("Finding 6 — push subscriptions are capped and the fan-out is bounded", () => {
+  it("evicts OLDEST-first past the cap, so the live device is never dropped", () => {
+    expect(V2DB).toMatch(/const MAX_PUSH_SUBS_PER_IDENTITY = \d+;/);
+    expect(V2DB).toMatch(/\.orderBy\(asc\(pushSubscriptions\.id\)\)/);
+    expect(V2DB).toMatch(/mine\.length - MAX_PUSH_SUBS_PER_IDENTITY/);
+  });
+
+  it("evicts ONLY when the row is ours (a refused re-bind stays a pure no-op)", () => {
+    // Otherwise learning a victim's endpoint would let an attacker trim the
+    // victim's devices — the R1 hijack in a new costume.
+    const fn = V2DB.slice(V2DB.indexOf("export async function upsertPushSubscription"), V2DB.indexOf("export async function deletePushSubscription"));
+    expect(fn.indexOf("const owned =")).toBeLessThan(fn.indexOf("if (owned) {"));
+    expect(fn).toMatch(/if \(owned\) \{[\s\S]{0,600}pushSubscriptions\.id, excess/);
+  });
+
+  it("eviction failure never fails the subscribe", () => {
+    // That would cost the user ring-when-closed for a hygiene task.
+    expect(V2DB).toMatch(/\/\/ Eviction is hygiene, never a reason to fail a subscribe/);
+  });
+
+  it("the cap sits above a genuine multi-device user", () => {
+    const cap = Number(/const MAX_PUSH_SUBS_PER_IDENTITY = (\d+);/.exec(V2DB)![1]);
+    expect(cap).toBeGreaterThanOrEqual(8);
+  });
+
+  it("sends through a fixed-size pool instead of Promise.all over every row", () => {
+    expect(WEBPUSH).toMatch(/const PUSH_CONCURRENCY = \d+;/);
+    expect(WEBPUSH).toMatch(/Array\.from\(\{ length: Math\.min\(PUSH_CONCURRENCY, subs\.length\) \}/);
+    // Every subscription is still attempted — the pool drains a queue.
+    expect(WEBPUSH).toMatch(/if \(i >= subs\.length\) return;/);
+    expect(WEBPUSH).not.toMatch(/await Promise\.all\(\s*\n?\s*subs\.map\(/);
+  });
+});
+
+describe("Finding 38 — the SSE ceiling no longer locks out shared egress", () => {
+  it("both stream caps are raised an order of magnitude", () => {
+    for (const [name, src] of [["relay.ts", RELAY], ["v2events.ts", EVENTS]] as const) {
+      const m = /const MAX_STREAMS_PER_IP = (\d+);/.exec(src);
+      expect(m, `${name} declares the cap`).toBeTruthy();
+      expect(Number(m![1]), name).toBeGreaterThanOrEqual(200);
+    }
+  });
+
+  it("the FLOOD defence is untouched", () => {
+    // The ceiling bounds held sockets; the open-RATE limiter is what stops a flood,
+    // so raising the former weakens nothing.
+    expect(RELAY).toMatch(/streamOpenLimiter\.allow\(ip, Date\.now\(\)\)/);
+  });
+
+  it("a RECONNECT is not measured against the ceiling", () => {
+    // The increment used to happen before the superseded same-cid socket closed, so
+    // a plain tab refresh at the limit was refused by the user's own stream.
+    expect(RELAY).toMatch(/const isReplacement = clustered \? localDelivery\.has\(cid\) : reg\.connections\.has\(cid\);/);
+    expect(RELAY).toMatch(/if \(!isReplacement && \(streamsPerIp\.get\(ip\) \?\? 0\) >= MAX_STREAMS_PER_IP\)/);
+  });
+});
+
+describe("storage in-flight accounting — behavioural", () => {
+  it("the exported seam starts at zero and stays consistent", async () => {
+    // A real acquire/release cycle needs the express route; what is worth proving
+    // in-process is that the accounting is EXPORTED and observable, so a future
+    // leak is diagnosable rather than invisible.
+    const { storageInflight } = await import("./_core/storageProxy");
+    const before = storageInflight();
+    expect(before.total).toBeGreaterThanOrEqual(0);
+    expect(before.ips).toBeGreaterThanOrEqual(0);
+    // Idempotent release is the property that matters; assert it holds at the
+    // source level for the exact double-fire case (close AND finish).
+    const rel = PROXY.slice(PROXY.indexOf("release() {"), PROXY.indexOf("/** Test seam"));
+    expect(rel).toMatch(/if \(released\) return;/);
+    expect(rel).toMatch(/Math\.max\(0, inflightTotal - 1\)/);
+    // …and a per-IP counter that reaches zero is DELETED, not left at 0 forever
+    // (that was the M33 unbounded-Map leak on this same endpoint).
+    expect(rel).toMatch(/if \(n <= 0\) inflightByIp\.delete\(ip\);/);
+  });
+});

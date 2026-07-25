@@ -340,7 +340,14 @@ describe("R1 — an endpoint re-bind requires proof of possession", () => {
     // MySQL reports 0 affected for a matched-but-unchanged row, which is
     // indistinguishable from a refusal — reporting that as `owned: false` would
     // trigger a pointless endpoint rotation on every ordinary re-registration.
-    expect(fn).toMatch(/return \{ owned: !row \|\| row\.identityId === input\.identityId \};/);
+    // v2.99.57 hoisted the verdict into `const owned` so the per-identity eviction
+    // can run only when the row is OURS (a refused re-bind must stay a pure no-op
+    // and must never trim the victim's devices). Same property, so pin the
+    // EXPRESSION rather than the return statement it used to be inlined into.
+    expect(fn).toMatch(/const owned = !row \|\| row\.identityId === input\.identityId;/);
+    expect(fn).toMatch(/return \{ owned \};/);
+    // …and the eviction must be gated on it.
+    expect(fn).toMatch(/if \(owned\) \{/);
     // `affectedRows` may appear in the comment explaining WHY it isn't used; what
     // must not exist is the verdict being derived from it.
     expect(fn).not.toMatch(/affectedRows \?\? 0\) > 0/);

@@ -61,6 +61,20 @@ import {
 /* ── identity ─────────────────────────────────────────────────── */
 
 const RESERVED_PREFIXES = ["000", "111"]; // avoid trivially-confused numbers
+/** Per-owner contact ceiling (v2.99.57). Far above any real address book — the
+ *  point is that the table is BOUNDED, so `listContacts` and its enrichment
+ *  queries cannot be grown without limit by one free guest. `listContacts` uses
+ *  the same number as its LIMIT, so no legitimate user is ever truncated and the
+ *  client (which sorts and filters over the full list) needs no pagination. */
+const MAX_CONTACTS_PER_OWNER = 5000;
+/** Push endpoints kept per identity (v2.99.57). A real multi-device user has
+ *  perhaps 4-6 (phone + tablet + desktop + PWA + a reinstall or two), so this sits
+ *  comfortably above genuine use; the point is that `sendPushToIdentity` fans out
+ *  over this list, and an uncapped table turned one identity into an unbounded
+ *  burst of TLS connections and ECDH/AES-GCM operations in a 1GB single process.
+ *  Eviction is OLDEST-FIRST so the device in the user's hand is never the one
+ *  dropped. */
+const MAX_PUSH_SUBS_PER_IDENTITY = 12;
 const GUEST_DAYS = 30;
 
 export function pairKey(a: number, b: number): string {
@@ -1609,7 +1623,12 @@ export async function listContacts(ownerId: number) {
     .select()
     .from(contacts)
     .where(eq(contacts.ownerId, ownerId))
-    .orderBy(desc(contacts.favourite), desc(contacts.updatedAt));
+    .orderBy(desc(contacts.favourite), desc(contacts.updatedAt))
+    // Bounded by construction (v2.99.57). Equal to MAX_CONTACTS_PER_OWNER, so a
+    // real user is never truncated — deliberately NOT a small page, because the
+    // Contacts screen sorts and filters over the whole list client-side and a
+    // short page would silently HIDE contacts, which is worse than the DoS.
+    .limit(MAX_CONTACTS_PER_OWNER);
   return rows;
 }
 
@@ -1894,6 +1913,19 @@ export async function upsertContact(input: {
   for (const k of contactUpdateKeys(input)) {
     set[k] = (values as Record<string, unknown>)[k];
   }
+  // PER-OWNER CEILING (v2.99.57). `contacts` was unbounded: one free guest could
+  // upsert distinct 6-digit numbers indefinitely, and `listContacts` then selected
+  // and enriched every row — an OOM of the `instances: 1`, 1GB process that owns
+  // the signaling registry and every SSE stream.
+  //
+  // Only a genuinely NEW row is capped. An UPDATE to an existing contact must
+  // never be refused: a user at the ceiling still has to be able to rename,
+  // favourite, or — most importantly — BLOCK someone.
+  const [existing] = await db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(and(eq(contacts.ownerId, input.ownerId), eq(contacts.number, input.number)))
+    .limit(1);
   await db
     .insert(contacts)
     .values(values)
@@ -1903,7 +1935,22 @@ export async function upsertContact(input: {
     .from(contacts)
     .where(and(eq(contacts.ownerId, input.ownerId), eq(contacts.number, input.number)))
     .limit(1);
-  return rows[0];
+  const row = rows[0];
+  if (!existing && row) {
+    // Enforced by the new row's id-RANK, the same pattern `createPartyLine` uses:
+    // ids are monotonic and unique, so concurrent inserts get DISTINCT ranks and
+    // exactly the ones past the cap self-delete. A count-then-insert check would
+    // let two concurrent inserts at CAP-1 both pass.
+    const [{ rank } = { rank: 0 }] = await db
+      .select({ rank: sql<number>`count(*)` })
+      .from(contacts)
+      .where(and(eq(contacts.ownerId, input.ownerId), lte(contacts.id, row.id)));
+    if (Number(rank) > MAX_CONTACTS_PER_OWNER) {
+      await db.delete(contacts).where(eq(contacts.id, row.id));
+      throw new Error(`contact limit reached (${MAX_CONTACTS_PER_OWNER})`);
+    }
+  }
+  return row;
 }
 
 /** True when `ownerId` has a contact row for `number` marked BLOCKED. */
@@ -3802,7 +3849,32 @@ export async function upsertPushSubscription(input: {
     .from(pushSubscriptions)
     .where(eq(pushSubscriptions.endpoint, endpoint))
     .limit(1);
-  return { owned: !row || row.identityId === input.identityId };
+  const owned = !row || row.identityId === input.identityId;
+
+  // EVICT past the per-identity ceiling (v2.99.57). Only once this row is ours —
+  // a refused re-bind must stay a pure no-op and must never trim the victim's
+  // devices. Oldest-first (ascending id), so the device the user is holding right
+  // now is never the one dropped, and a NEW device always succeeds rather than
+  // being refused at the door.
+  if (owned) {
+    try {
+      const mine = await db
+        .select({ id: pushSubscriptions.id })
+        .from(pushSubscriptions)
+        .where(eq(pushSubscriptions.identityId, input.identityId))
+        .orderBy(asc(pushSubscriptions.id));
+      const excess = mine.slice(0, Math.max(0, mine.length - MAX_PUSH_SUBS_PER_IDENTITY));
+      if (excess.length) {
+        await db.delete(pushSubscriptions).where(
+          inArray(pushSubscriptions.id, excess.map((r) => r.id)),
+        );
+      }
+    } catch {
+      // Eviction is hygiene, never a reason to fail a subscribe — that would
+      // cost the user their ring-when-closed notifications.
+    }
+  }
+  return { owned };
 }
 
 export async function deletePushSubscription(endpoint: string): Promise<void> {
@@ -3844,7 +3916,11 @@ export async function listPushSubscriptions(
       kind: pushSubscriptions.kind,
     })
     .from(pushSubscriptions)
-    .where(eq(pushSubscriptions.identityId, identityId));
+    .where(eq(pushSubscriptions.identityId, identityId))
+    // Bounded (v2.99.57): `upsertPushSubscription` evicts past the same cap, so
+    // this only ever truncates a row that eviction is about to remove anyway.
+    .orderBy(desc(pushSubscriptions.id))
+    .limit(MAX_PUSH_SUBS_PER_IDENTITY);
   return rows;
 }
 

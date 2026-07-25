@@ -32,10 +32,16 @@ describe("v2.99.26 QA H5 — avatar ownership gate covers absolute /manus-storag
 describe("v2.99.26 QA M10 — the media proxy is rate-limited before DB work", () => {
   it("has a per-IP limiter that runs before the key lookup and honors RELAY_RATELIMIT_OFF", () => {
     expect(PROXY).toMatch(/const storageIpLimiter = createRateLimiter\(/);
-    expect(PROXY).toMatch(/process\.env\.RELAY_RATELIMIT_OFF !== "1"/);
-    expect(PROXY).toMatch(/storageIpLimiter\.allow\(clientIpOf\(req\), Date\.now\(\)\)/);
+    // v2.99.57 hoisted the IP and the env read so the new in-flight ceiling can
+    // share them (`const clientIp = clientIpOf(req)` / `const limitsOff = …`).
+    // Pin the PROPERTIES — the kill switch is honoured and the bucket is keyed on
+    // the resolved client IP — not the exact inlined expressions.
+    expect(PROXY).toMatch(/process\.env\.RELAY_RATELIMIT_OFF === "1"/);
+    expect(PROXY).toMatch(/const clientIp = clientIpOf\(req\);/);
+    expect(PROXY).toMatch(/storageIpLimiter\.allow\(clientIp, Date\.now\(\)\)/);
+    expect(PROXY).toMatch(/if \(!limitsOff && !storageIpLimiter\.allow\(/);
     // the 429 guard precedes the sanitize/authorize (DB) work
-    const guardAt = PROXY.indexOf("storageIpLimiter.allow");
+    const guardAt = PROXY.indexOf("!storageIpLimiter.allow");
     const keyAt = PROXY.indexOf("sanitizeS3Key(rawKey)");
     expect(guardAt).toBeGreaterThan(0);
     expect(guardAt).toBeLessThan(keyAt);

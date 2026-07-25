@@ -31,6 +31,69 @@ const storageIpLimiter = createRateLimiter({ capacity: 600, refillPerSec: 20 });
  * unbounded leak, and trivially accelerated by spraying source addresses. */
 setInterval(() => storageIpLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
 
+/* ── IN-FLIGHT STREAM CEILING (v2.99.57) ─────────────────────────────────────
+ * The limiter above bounds the ARRIVAL RATE of media requests; nothing bounded
+ * how many were open AT ONCE. Once a request is granted it is never re-examined,
+ * so a client that asks for media and then never reads the body accumulates
+ * streams indefinitely — each pinning an inbound socket, an upstream connection
+ * and its buffered body (~64-80 KiB apiece once backpressure engages). This
+ * process is `instances: 1` with `max_memory_restart: "1G"` and it owns the whole
+ * in-memory signaling registry plus every SSE stream, so an OOM restart drops
+ * every call on the fleet. And the attacker needs nothing but a free guest
+ * identity: as the uploader of their own 40MB file they are unconditionally
+ * authorized.
+ *
+ * `v2events.ts` already does exactly this for the sibling long-lived endpoint;
+ * this is the same accounting.
+ *
+ * Sized to be invisible to real use. A media-heavy chat screen opens a few dozen
+ * images at once, and a shared egress (CGNAT, an office, a café) multiplies that
+ * across people — this endpoint's rate limiter has ALREADY been loosened once
+ * (M44, 240→600) precisely because a throttled media request renders as a BROKEN
+ * IMAGE. So the per-IP ceiling sits well above a plausible screenful, and the
+ * process-wide ceiling is the actual backstop. */
+const MAX_INFLIGHT_PER_IP = 60;
+const MAX_INFLIGHT_TOTAL = 400;
+/** No BYTES for this long ⇒ the client has stopped reading; destroy the stream.
+ *  Idle, deliberately, never wall-clock: a large video on a slow connection is a
+ *  legitimate slow transfer, and `<video>` seeking opens and abandons Range
+ *  requests constantly. Only a stream making NO progress is abusive. */
+const STREAM_IDLE_MS = 45_000;
+/** Upstream must produce RESPONSE HEADERS within this long. Applied to the header
+ *  phase only — an abort signal on `fetch` also kills body streaming, so using it
+ *  as a whole-request timeout would cancel legitimate large downloads. */
+const UPSTREAM_HEADER_MS = 20_000;
+
+const inflightByIp = new Map<string, number>();
+let inflightTotal = 0;
+
+/** Reserve a stream slot, or null when a ceiling is hit. */
+function acquireStream(ip: string): { release: () => void } | null {
+  const mine = inflightByIp.get(ip) ?? 0;
+  if (inflightTotal >= MAX_INFLIGHT_TOTAL || mine >= MAX_INFLIGHT_PER_IP) return null;
+  inflightByIp.set(ip, mine + 1);
+  inflightTotal++;
+  let released = false;
+  return {
+    // Idempotent: `close` and `finish` can BOTH fire for one response, and a
+    // double decrement would corrupt the counter into permanent free capacity —
+    // worse than the leak this is here to prevent.
+    release() {
+      if (released) return;
+      released = true;
+      inflightTotal = Math.max(0, inflightTotal - 1);
+      const n = (inflightByIp.get(ip) ?? 1) - 1;
+      if (n <= 0) inflightByIp.delete(ip);
+      else inflightByIp.set(ip, n);
+    },
+  };
+}
+
+/** Test seam: current in-flight accounting. */
+export function storageInflight(): { total: number; ips: number } {
+  return { total: inflightTotal, ips: inflightByIp.size };
+}
+
 /* In-process signed-URL cache (v2.88). Every /manus-storage view used to pay a
  * presign round-trip to Forge and told the browser `no-store`, so a chat
  * screen with 20 avatars re-presigned all 20 on every render. Attachment keys
@@ -78,13 +141,24 @@ function cacheSet(key: string, url: string, now: number): void {
 export function registerStorageProxy(app: Express) {
   app.get("/manus-storage/*", async (req, res) => {
     // QA M10: cap the unauthenticated media proxy per IP before any DB work.
-    if (
-      process.env.RELAY_RATELIMIT_OFF !== "1" &&
-      !storageIpLimiter.allow(clientIpOf(req), Date.now())
-    ) {
+    const clientIp = clientIpOf(req);
+    const limitsOff = process.env.RELAY_RATELIMIT_OFF === "1";
+    if (!limitsOff && !storageIpLimiter.allow(clientIp, Date.now())) {
       res.status(429).send("Too many requests");
       return;
     }
+    // …and cap how many streams are OPEN AT ONCE (v2.99.57). The bucket above
+    // meters arrivals; without this, granted requests that are never read
+    // accumulate until the 1GB process is OOM-restarted, taking every call with
+    // it. Released from a single idempotent handler bound to both `close` and
+    // `finish` below.
+    const slot = limitsOff ? { release() {} } : acquireStream(clientIp);
+    if (!slot) {
+      res.status(429).send("Too many concurrent media streams");
+      return;
+    }
+    res.on("close", () => slot.release());
+    res.on("finish", () => slot.release());
     const rawKey = (req.params as Record<string, string>)[0];
     if (!rawKey) {
       res.status(400).send("Missing storage key");
@@ -232,7 +306,20 @@ export function registerStorageProxy(app: Express) {
     // ── Stream the bytes through us (Range-aware; upstreamUrl never leaves) ───
     try {
       const range = req.headers.range;
-      const upstream = await fetch(upstreamUrl, range ? { headers: { Range: range } } : undefined);
+      // Header-phase timeout only: an abort signal on `fetch` also tears down BODY
+      // streaming, so using it as a whole-request deadline would cancel a
+      // legitimate large or slow download. Cleared the moment headers arrive.
+      const ac = new AbortController();
+      const headerT = setTimeout(() => ac.abort(), UPSTREAM_HEADER_MS);
+      let upstream: Response;
+      try {
+        upstream = await fetch(upstreamUrl, {
+          signal: ac.signal,
+          ...(range ? { headers: { Range: range } } : {}),
+        });
+      } finally {
+        clearTimeout(headerT);
+      }
       if (!upstream.ok && upstream.status !== 206) {
         // A cached presigned URL may have gone stale — drop it so the next hit
         // re-presigns instead of serving the error again.
@@ -302,6 +389,23 @@ export function registerStorageProxy(app: Express) {
       });
       // Client aborted (tab closed / seek) → stop pulling from upstream.
       res.on("close", () => nodeStream.destroy());
+      // IDLE watchdog (v2.99.57): a client that stops reading applies backpressure,
+      // so no bytes flow while the stream stays open forever. Reset on every chunk,
+      // so a slow-but-progressing transfer is never interrupted.
+      let idleT: NodeJS.Timeout | null = null;
+      const armIdle = () => {
+        if (idleT) clearTimeout(idleT);
+        idleT = setTimeout(() => {
+          nodeStream.destroy();
+          res.destroy();
+        }, STREAM_IDLE_MS);
+      };
+      nodeStream.on("data", armIdle);
+      const clearIdle = () => { if (idleT) { clearTimeout(idleT); idleT = null; } };
+      nodeStream.on("end", clearIdle);
+      nodeStream.on("close", clearIdle);
+      res.on("close", clearIdle);
+      armIdle();
       nodeStream.pipe(res);
     } catch (err) {
       console.error("[StorageProxy] stream failed:", err);
