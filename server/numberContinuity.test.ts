@@ -1,5 +1,5 @@
 /* ============================================================
-   v2.99.50 — NUMBER CONTINUITY.
+   v2.99.53 — NUMBER CONTINUITY.
 
    Owner, after losing their guest data at registration: "it should not be
    repeated again to any other users and in the future and should be

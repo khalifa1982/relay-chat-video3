@@ -650,7 +650,7 @@ export async function updateIdentityProfile(
  *
  * Every stale copy is a user-visible glitch: a dead call-back button, a wrong
  * PIN shown as fact, a contact that no longer reaches anyone, a presence dot
- * stuck grey. Before v2.99.50 the guarantee lived inside one function that
+ * stuck grey. Before v2.99.53 the guarantee lived inside one function that
  * happened to know about `contacts` — so History's number copies rotted
  * silently on every renumber, and nothing would have caught a new table
  * repeating the mistake.

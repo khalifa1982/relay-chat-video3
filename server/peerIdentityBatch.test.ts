@@ -78,7 +78,7 @@ describe("avatars everywhere (v2.96)", () => {
     expect(V2ROUTERS).toMatch(/liveAvatarByNumber\.get\(r\.number\) \?\? r\.avatarUrl/);
   });
   it("conferenceHistory participants carry live avatarUrls (one batched query)", () => {
-    // v2.99.50 strengthened this: the lookup used to key on the roster's FROZEN
+    // v2.99.53 strengthened this: the lookup used to key on the roster's FROZEN
     // number, so a person who regenerated their number silently lost their photo
     // from everybody's History. It now resolves by identityId, with the
     // by-number lookup kept only for guests who never had an identity.

@@ -1073,7 +1073,7 @@ export const RELAY_CSS = `
 /* Call waiting — a second incoming call during an active call */
 .relay-root .call-waiting{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:36;display:none;align-items:center;gap:14px;background:rgba(20,23,29,.92);border:1px solid var(--border2);border-radius:16px;padding:10px 12px 10px 16px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
 /* ── mutual-consent video prompt (1:1): "X wants to start video" ──
-   CENTRED IN THE SCREEN VIA AUTO MARGINS, NOT transform (v2.99.51, owner
+   CENTRED IN THE SCREEN VIA AUTO MARGINS, NOT transform (v2.99.53, owner
    screenshot: on their phone this card ran off the RIGHT edge — the name was
    cut to "a Hasan", the primary button to "Turn on vide" — while colliding with
    the Minimize/Fit chrome and the "Connected" status line).
