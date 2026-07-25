@@ -3224,6 +3224,16 @@ export function attachRelay(
         // times, so ~6% were lost outright and the rest delayed by seconds, on
         // the offer/answer/ICE path where that is call-fatal. Hand it to the
         // leader instead, which knows the real home and routes the reply there.
+        //
+        // TRADE-OFF, recorded deliberately: an instance that is not the home
+        // cannot distinguish "homed elsewhere" from "no such cid", so a dead
+        // channel now also gets 200 instead of 404. Nothing regresses — the
+        // client never treated 404 as a signal (it retries blindly and the SSE
+        // close is what drives reconnect), and a dead channel's message was
+        // undeliverable either way. It also removes a cid-existence oracle,
+        // since the response is now uniform. Restoring the distinction would
+        // mean mirroring cid→home into Redis; an ALB stickiness policy is the
+        // cheaper cure and is the documented ops follow-up.
         clusterProxyInbound(cid, message);
         res.json({ ok: true, proxied: true });
         return;

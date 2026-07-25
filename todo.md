@@ -7426,3 +7426,36 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
 - [x] NOTE for ops: an ALB stickiness policy (or the documented `/api/relay/*` target-group pin) would also
       fix the routing, and is still worth having — it removes a Redis hop from every misrouted message. The
       application no longer DEPENDS on it, which was the point.
+
+## v2.99.60 — affinity fix verified live; orphan-identity recovery tool (2026-07-24)
+- [x] VERIFIED v2.99.59 IN PRODUCTION with the same probe that found the bug: 24/24 POSTs now return 200
+      (was 12/24 → 12 × 404). The signaling drop is closed on the live fleet.
+- [x] RECORDED A DELIBERATE CONSEQUENCE rather than leaving it to be discovered: an instance that is not the
+      home cannot tell "homed elsewhere" from "no such cid", so a DEAD cid now also gets 200 instead of 404.
+      Nothing regresses — the client never acted on the 404 (it retries blindly; the SSE close drives
+      reconnect) and a dead channel's message was undeliverable either way — and the uniform reply removes a
+      cid-existence oracle. The integration test asserts that response shape so it stays a decision rather
+      than drift. Restoring the distinction would require mirroring cid→home into Redis; ALB stickiness is
+      the cheaper cure and remains the ops follow-up.
+- [x] NEW `scripts/recover-orphan-identity.mjs` — the recovery CLAUDE.md has carried as "designed but not
+      yet built" since v2.99.54. Moves a pre-v2.99.49 orphaned guest identity (the owner's 601-586, which
+      still holds the contacts/messages/history) onto its registered account.
+- [x] SAFETY, because the only way this destroys data is by deleting a non-empty row:
+      - DRY RUN BY DEFAULT; nothing is written without `--apply`.
+      - Refuses unless the orphan is genuinely unclaimed (`userId IS NULL`) — never takes a row that
+        belongs to another account, and says which case it hit.
+      - Refuses unless the identity it would REPLACE is provably EMPTY across all seven
+        identity-referencing tables (messages, conversation_participants, contacts, call_history,
+        conference_participants, statuses, party_lines). There is deliberately NO override flag.
+      - One transaction, delete-then-adopt (forced by the unique index on identities.userId), with both
+        statements re-checking their preconditions in the WHERE clause so a concurrent change loses rather
+        than corrupts. Re-running after success is a no-op.
+- [x] TWO COLUMN NAMES WERE WRONG in my first draft — `contacts` uses `ownerId` (not `ownerIdentityId`) and
+      `call_history` splits into `callerIdentityId`/`calleeIdentityId` — caught by reading the schema
+      instead of trusting the guess. Now caught automatically too: a PREFLIGHT validates every table and
+      column against information_schema before a single row is read, so a future rename cannot silently
+      under-count the emptiness check (it refuses instead).
+- [x] HONEST LIMIT: no MySQL was reachable from this sandbox (docker client present, daemon not running), so
+      only the argument-validation and preflight paths were actually executed. The DB paths are UNRUN — which
+      is precisely why the destructive half is opt-in behind `--apply` and the dry run is read-only.
+      Run the dry run first; if the schema drifted, the preflight says so and writes nothing.

@@ -240,11 +240,21 @@ describe("cross-instance signaling (integration)", () => {
     // as the home — that would send every later reply into a black hole.
     const out: any[] = [];
     busSub(sigOutChannel("inst-ghost"), (f: any) => out.push(f));
-    const res: any = { status() { return this; }, json() { return this; } };
+    let code = 200;
+    let payload: any = null;
+    const res: any = { status(c: number) { code = c; return this; }, json(o: any) { payload = o; return this; } };
     await routes["POST /api/relay/send"](
       { body: { cid: "cid-never-seen", message: { type: "accept", roomId: "nope" } }, headers: {}, socket: { remoteAddress: "9.9.9.9" } },
       res,
     );
     expect(out).toEqual([]);
+    // DELIBERATE: the response is the same 200 a correctly-proxied message
+    // gets. An instance that is not the home cannot tell "homed elsewhere"
+    // from "no such cid", and answering 404 on that guess is exactly the bug
+    // this release fixes. Nothing regresses — the client never acted on the
+    // 404 (it retries blindly; the SSE close drives reconnect) — and the
+    // uniform reply also stops the endpoint being a cid-existence oracle.
+    expect(code).toBe(200);
+    expect(payload).toMatchObject({ ok: true, proxied: true });
   });
 });
