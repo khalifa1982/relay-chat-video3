@@ -553,17 +553,36 @@ export async function ensureUserIdentity(input: {
     // Conditional on `userId IS NULL`, so this can only ever claim an UNCLAIMED
     // guest row — it can never steal an identity that already belongs to another
     // account, however the candidate was resolved.
-    const res = await db
-      .update(identities)
-      .set({
-        userId: input.userId,
-        displayName: input.displayName.trim().slice(0, 64) || undefined,
-        guestToken: null,
-        guestExpiresAt: null,
-      })
-      .where(and(eq(identities.id, candidateId), isNull(identities.userId)));
-    const claimed =
-      Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    //
+    // Wrapped because `identities.userId` carries a UNIQUE index
+    // (identities_user_unique, installed by the boot migrator): if a concurrent
+    // sign-in for the same account already claimed or minted an identity between
+    // our getIdentityByUserId read and this write, the UPDATE violates it and
+    // throws. The mint path below anticipates exactly that race and resolves to
+    // the winner; the claim path did not, and the asymmetry was unintentional —
+    // an uncaught throw here surfaces as a 500 from verifyOtp AFTER the one-time
+    // code has already been consumed, so the user is told their code was already
+    // used and has to request another for a registration that half-completed.
+    let claimed = false;
+    try {
+      const res = await db
+        .update(identities)
+        .set({
+          userId: input.userId,
+          displayName: input.displayName.trim().slice(0, 64) || undefined,
+          guestToken: null,
+          guestExpiresAt: null,
+        })
+        .where(and(eq(identities.id, candidateId), isNull(identities.userId)));
+      claimed =
+        Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    } catch {
+      // Lost the race. The winner is another identity for this same account, and
+      // resolving to it is strictly better than throwing — and better than
+      // falling through to mint, which would allocate a second number.
+      const winner = await getIdentityByUserId(input.userId);
+      if (winner) return winner;
+    }
     if (!claimed) continue;
     const refreshed = await getIdentityById(candidateId);
     if (refreshed) return refreshed; // SAME number, SAME contacts/messages/history
