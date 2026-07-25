@@ -6568,6 +6568,32 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       additive-DDL rule now allows ADD UNIQUE INDEX; androidAudioCamera.test.ts's chat-dedup pin now
       expects the threaded sender). Suite 1662 passed / 1 skipped; check + build green.
 
+## v2.99.51 — the production-credential job pins its actions to SHAs (2026-07-25)
+- [x] `deploy.yml` assumes the production deploy role via OIDC, so every action it runs holds credentials
+      that can write the S3 release bucket and drive SSM on the live fleet — and all four were on the
+      MUTABLE major tag `@v4`, a pointer the action's owner can repoint at any commit with no diff in
+      this repo to review. Now pinned to full commit SHAs (owner-supplied), tag kept as a trailing
+      comment so a human reader can still see which release each SHA was.
+- [x] `server/workflowPinning.test.ts` enforces it: every `uses:` in a credential-holding workflow must
+      be a 40-hex SHA, never a branch or a floating tag, and must carry the `# <tag>` comment. Verified
+      the tripwire actually FIRES by reverting the pins and watching it fail while naming all four
+      offenders — then re-applying. Deliberately scoped to `deploy.yml` for now: `android-apk.yml` and
+      `native-rn.yml` hold the Android keystore secrets and should be pinned next, but they are unpinned
+      today and a failing test would block deploys rather than fix anything (the list names where to add
+      them).
+- [x] The same test also pins that the release tar still ships `ecosystem.config.cjs`, `patches/`,
+      `shared/` and `drizzle/`, and that the Manus-runtime strip step survives. Not a pinning concern —
+      but `deploy.yml` is exactly the file someone hand-edits to change SHAs, and an OLDER revision of it
+      is in circulation that drops those. Each was added after a real per-server failure: without
+      `ecosystem.config.cjs` pm2 starts a stale path with no entry file, and without `patches/` the
+      server's `pnpm install --frozen-lockfile` ENOENTs on the lockfile's patched-dependency reference.
+      A future edit that loses them now fails the suite instead of the fleet.
+- [x] OPERATOR ITEM CLOSED (owner did it): the deploy role's trust policy is scoped to
+      `repo:khalifa1982/relay-chat-video3:ref:refs/heads/main`, not `repo:...:*`. Note for later: it uses
+      `StringLike` where `StringEquals` would be stricter by construction — identical behaviour with no
+      wildcard in the value, but `StringLike` can quietly become permissive if the value is ever edited.
+- [x] Suite 1840 passed / 1 skipped; `pnpm verify` green.
+
 ## v2.99.50 — the serve set now matches what a PHONE hands back (2026-07-25)
 - [x] Closes the one surviving item from the red-team pass over today's fixes. Its verification panel
       refuted all 22 candidates (19 were already fixed in v2.99.47/.48 while the panel was still
