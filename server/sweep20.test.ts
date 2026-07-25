@@ -156,3 +156,111 @@ describe("normalizeEmail — bounded before the quadratic match", () => {
     expect(fn.indexOf("MAX_INBOUND_ADDRESS_LEN")).toBeLessThan(fn.indexOf("s.match("));
   });
 });
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Finding 2 — HIGH. A parked peer could inject SDP into the victim's ACTIVE call.
+
+   The S2 membership gate deliberately counts a HELD room as shared, and it is
+   evaluated from the SENDER's side — but the relayed frame carried no room, so the
+   receiver could not distinguish a held-room signal from a live-call one. A peer
+   whose call the victim had parked could therefore land in `onSignal` with no
+   matching `peers[from]`, have `createPeer` built around the victim's CURRENTLY
+   live stream, and receive the mic and camera from a different, private call.
+   ══════════════════════════════════════════════════════════════════════════ */
+describe("Finding 2 — a relayed signal names the room that authorized it", () => {
+  it("the server stamps roomId and derives it from the matching room", () => {
+    const sig = RELAY.slice(RELAY.indexOf('case "signal": {'), RELAY.indexOf('case "leave": {'));
+    // The room is chosen by WHICH clause matched, not blindly from the active room.
+    expect(sig).toMatch(
+      /const matchedRid =\s*\n?\s*!!activeRid && reg\.rooms\.get\(activeRid\)\?\.has\(to\) \? activeRid : heldRid;/,
+    );
+    expect(sig).toMatch(/if \(!matchedRid\) break;/);
+    expect(sig).toMatch(/roomId: matchedRid,/);
+    // …and the client never supplies it, so it cannot be forged.
+    expect(sig).not.toMatch(/roomId: (msg|String\(msg)/);
+  });
+
+  it("the client passes the frame's room into onSignal", () => {
+    const client = fs.readFileSync(path.join(ROOT, "client/src/lib/relayClient.ts"), "utf8");
+    expect(client).toMatch(/case "signal":\s+onSignal\(m\.from!, m\.data, m\.roomId\);/);
+    // The disposition is consulted BEFORE any peer is looked up or created.
+    const fn = client.slice(client.indexOf("async function onSignal("), client.indexOf("async function flushCand("));
+    expect(fn.indexOf("signalDisposition(")).toBeLessThan(fn.indexOf("let peer = peers[from]"));
+    expect(fn.indexOf("signalDisposition(")).toBeLessThan(fn.indexOf("createPeer("));
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+   R-MODSCOPE (findings 13, 33) — MEDIUM. Moderation reached HELD members and
+   acted on their OTHER call.
+
+   `room.has(target)` is true for someone who PARKED this call — the roster keeps
+   held members precisely so they can resume. So `force-mute` was delivered to a
+   member who was live in a different call and applied there, and `kick` called
+   `leaveRoom`, which removes the target from their ACTIVE room: kicking a held
+   member dropped an unrelated call AND left them a member of the room they were
+   kicked from. Bypassable and destructive at the same time.
+
+   Finding 14 — MEDIUM. No host succession when the host's SSE is grace-reaped.
+   ══════════════════════════════════════════════════════════════════════════ */
+describe("R-MODSCOPE — moderation is scoped to the room it was issued for", () => {
+  // `mod` is the LAST case in handleMessage, so slice to the end of the file.
+  const mod = RELAY.slice(RELAY.indexOf('case "mod": {'));
+
+  it("distinguishes ACTIVE membership from mere roster membership", () => {
+    expect(mod).toMatch(/const inActiveRoom = \(p: string\) =>/);
+    expect(mod).toMatch(/reg\.pinRoom\.get\(p\) \?\? reg\.clients\.get\(p\)\?\.roomId \?\? null\) === rid/);
+  });
+
+  it("mute and mute-all skip a member who parked this call", () => {
+    expect(mod).toMatch(/if \(!room\.has\(target\) \|\| !inActiveRoom\(target\)\) break;/);
+    expect(mod).toMatch(/if \(p !== conn\.pin && inActiveRoom\(p\)\) sendTo\(p, \{ type: "force-mute"/);
+  });
+
+  it("kick removes the target from THIS room, by whichever route they are in it", () => {
+    // The three cases: holding it, active in it, or a reaped connection whose
+    // membership survives for auto-rejoin.
+    expect(mod).toMatch(/if \(reg\.heldRoom\.get\(target\) === rid\) \{\s*\n\s*releaseHeldRoom\(reg, target\);/);
+    expect(mod).toMatch(/\} else if \(inActiveRoom\(target\)\) \{\s*\n\s*leaveRoom\(reg, target\);/);
+    expect(mod).toMatch(/reg\.rooms\.get\(rid\)\?\.delete\(target\);/);
+    // A bare `leaveRoom(reg, target)` as the ONLY removal path is the bug.
+    expect(mod).not.toMatch(/sendTo\(target, \{ type: "kicked"[^\n]*\}\);\s*\n\s*leaveRoom\(reg, target\);/);
+  });
+
+  it("moderation frames name their room, and the client honours it", () => {
+    expect(mod).toMatch(/type: "force-mute", on: action === "mute", by: conn\.pin, roomId: rid/);
+    expect(mod).toMatch(/type: "kicked", by: conn\.pin, roomId: rid/);
+    const client = fs.readFileSync(path.join(ROOT, "client/src/lib/relayClient.ts"), "utf8");
+    // Fails OPEN on a missing room (an older frame still applies).
+    expect(client).toMatch(/if \(!m\.roomId \|\| m\.roomId === roomId\) onForceMute\(m\)/);
+    // A kick for a PARKED call must not hang up the call we are actually on.
+    expect(client).toMatch(/if \(m\.roomId === heldRoomId\) dropHeld\(\);/);
+  });
+
+  it("does NOT add the active-room predicate to the knock APPROVER", () => {
+    // v2.99.43/M53: a host whose own call is on HOLD must still be able to admit
+    // a knocker. That gate is `room.has(conn.pin)` on the approver and must stay.
+    // Window must clear the long M45 rationale comment before the check itself.
+    const knock = RELAY.slice(
+      RELAY.indexOf('case "knock-approve"'),
+      RELAY.indexOf('case "refresh-ice"'),
+    );
+    expect(knock).toMatch(/room\.has\(conn\.pin\)/);
+    expect(knock).not.toMatch(/inActiveRoom\(conn\.pin\)/);
+  });
+});
+
+describe("Finding 14 — a grace-reaped host is succeeded", () => {
+  it("promoteHostIfVacant runs on the active-call reap branch, AFTER the delete", () => {
+    // v2.99.47's M53 fix covered `leaveRoom`; a host whose SSE simply dies reaches
+    // this branch instead, and moderation plus the History "Join" knock died with
+    // them. The call must come after `reg.clients.delete(pin)`, because the
+    // successor filter is `reg.clients.has(p)`.
+    const branch = RELAY.slice(
+      RELAY.indexOf('broadcastToRoom(reg, rid, { type: "peer-left", pin }, pin);'),
+      RELAY.indexOf("touchBusyState();", RELAY.indexOf('broadcastToRoom(reg, rid, { type: "peer-left", pin }, pin);')),
+    );
+    expect(branch).toMatch(/promoteHostIfVacant\(reg, rid, pin\);/);
+    expect(branch.indexOf("reg.clients.delete(pin)")).toBeLessThan(branch.indexOf("promoteHostIfVacant"));
+  });
+});

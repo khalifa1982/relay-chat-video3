@@ -220,6 +220,47 @@ export interface RelayHandle {
   setOnKnock: (cb: ((pin: string, name: string, roomId: string) => void) | null) => void;
 }
 
+/**
+ * What to do with an incoming `signal` frame, given which room it came from.
+ *
+ * v2.99.57. The server's S2 gate relays a signal when the sender shares EITHER
+ * the receiver's active room OR a held one, and it is evaluated from the
+ * SENDER's side. Until the frame carried `roomId`, the receiver could not tell
+ * those apart — so a peer whose call the receiver had PARKED could hand-craft a
+ * signal, land in `onSignal` with no matching `peers[from]`, and have a peer
+ * built around the receiver's CURRENTLY live stream: the mic (and, because
+ * `createPeer` flips `callIsGroup` when another peer exists, the camera) from a
+ * different, private call. That is a full bypass of the mutual-consent protocol.
+ *
+ * Pure and exported so the decision is unit-testable without a WebRTC stack.
+ *
+ *  - "current"  → handle normally (this is our live call).
+ *  - "held"     → route to an EXISTING held peer only; never build a new one,
+ *                 and never touch the live stream.
+ *  - "drop"     → a room we are not in, or a held room we have no peer for.
+ *
+ * Deliberately does NOT second-guess the CURRENT-room case with a member-list
+ * check. The server already established that the sender shares our active room
+ * before relaying, and adding a client-side roster gate there would refuse
+ * legitimate mesh offers that arrive before the `room`/`peer-joined` ack — the
+ * exact class of regression this repo has shipped before. The vulnerability was
+ * only ever the held room being indistinguishable from the active one.
+ */
+export function signalDisposition(s: {
+  frameRoom?: string | null;
+  roomId: string | null;
+  heldRoomId: string | null;
+  hasHeldPeer: boolean;
+}): "current" | "held" | "drop" {
+  // A frame with NO room means an older server (or a direct unit-test call).
+  // Fail OPEN: refusing every unstamped frame would tear down every in-flight
+  // call on the deploy that introduces this.
+  if (!s.frameRoom) return "current";
+  if (s.roomId && s.frameRoom === s.roomId) return "current";
+  if (s.heldRoomId && s.frameRoom === s.heldRoomId) return s.hasHeldPeer ? "held" : "drop";
+  return "drop";
+}
+
 export function startRelay(root: HTMLElement): RelayHandle {
   const $ = (id: string): HTMLElement | null => root.querySelector("#" + id);
 
@@ -853,7 +894,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
         if (livekitEnabled && lkParticipantTiles[goneP]) removeLkTile(goneP);
         break;
       }
-      case "force-mute":   onForceMute(m); break;
+      // v2.99.57: a moderation frame names the room it was issued for. Ignore one
+      // aimed at a call we are no longer in — the server now refuses to send it,
+      // so this is defence in depth. Fails OPEN on a missing room so an older
+      // frame still applies.
+      case "force-mute":   if (!m.roomId || m.roomId === roomId) onForceMute(m); break;
       case "role":         onRoleChange(m); break;
       case "host-pin":     onHostPin(m); break;
       case "peer-meta":
@@ -867,12 +912,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "video-accept":  onVideoAccept(); break;
       case "video-decline": onVideoDecline(); break;
       case "kicked":
+        if (m.roomId && m.roomId !== roomId) {
+          // A kick from a call we had PARKED must not hang up the call we are
+          // actually on. Drop the held call instead.
+          if (m.roomId === heldRoomId) dropHeld();
+          break;
+        }
         toast("You were removed from the call by the host.", true);
         hangUp("kicked");
         break;
       case "knock":        onKnock(m); break;
       case "knock-result": onKnockResult(m); break;
-      case "signal":       onSignal(m.from!, m.data); break;
+      case "signal":       onSignal(m.from!, m.data, m.roomId); break;
       case "ice":          onIceServers(m); break;
       case "error": {
         toast(m.message || "Something went wrong.", true);
@@ -4179,8 +4230,27 @@ export function startRelay(root: HTMLElement): RelayHandle {
       sendWS({ type: "signal", to: pin, data: { sdp: peer.pc.localDescription } });
     } catch (e) { console.warn("offer error", e); }
   }
-  async function onSignal(from: string, data?: Msg["data"]) {
+  async function onSignal(from: string, data?: Msg["data"], frameRoom?: string | null) {
     if (!data) return;
+    // v2.99.57 — a signal authorized by a HELD room must never reach the live
+    // call's media. See `signalDisposition` for the bypass this closes.
+    const disp = signalDisposition({
+      frameRoom,
+      roomId,
+      heldRoomId,
+      hasHeldPeer: !!heldPeers[from],
+    });
+    if (disp === "drop") {
+      diag("signal dropped (room " + (frameRoom || "?") + " is not ours)");
+      return;
+    }
+    if (disp === "held") {
+      // The held call's peers are frozen by design; a renegotiation for a parked
+      // call is not something we act on, and it must NOT be allowed to build a
+      // peer around the stream the ACTIVE call is using.
+      diag("signal for held room ignored (peer is parked)");
+      return;
+    }
     let peer = peers[from];
     if (data.sdp) {
       // A fresh OFFER for an EXISTING peer whose connection is already dead means

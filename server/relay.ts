@@ -2210,13 +2210,28 @@ export function handleMessage(
       // so both are covered. Mirrors the membership discipline of accept/reject.
       const activeRid = reg.pinRoom.get(conn.pin) ?? self.roomId;
       const heldRid = reg.heldRoom.get(conn.pin);
-      const shares =
-        (!!activeRid && reg.rooms.get(activeRid)?.has(to)) ||
-        (!!heldRid && reg.rooms.get(heldRid)?.has(to));
-      if (!shares) break;
+      // WHICH room authorized this relay (v2.99.57). The S2 gate above is
+      // evaluated from the SENDER's side and deliberately counts a HELD room as
+      // shared — but the relayed frame carried no room id, so the receiver could
+      // not tell a held-room signal from a current-call one.
+      //
+      // That was a media-consent bypass, not a cosmetic gap: A is in call H with
+      // V; V answers a second call and parks H, which moves A into V's
+      // `heldPeers` and out of `peers`. A then hand-crafts a `signal` to V. The
+      // gate passes (V is still in H's member set), V's client finds no
+      // `peers[A]`, and `onSignal` calls `createPeer(A, …)` — which attaches
+      // `processedStream || localStream`, i.e. V's LIVE mic from the call with
+      // C, and flips `callIsGroup` so the camera goes too, bypassing mutual
+      // consent. A silently receives V's audio and video from a private call.
+      const matchedRid =
+        !!activeRid && reg.rooms.get(activeRid)?.has(to) ? activeRid : heldRid;
+      if (!matchedRid) break;
       safeSend(target.socket, {
         type: "signal",
         from: conn.pin,
+        // The client never supplies this, so it cannot be forged or omitted.
+        // Named `roomId` to match every other frame that carries a room.
+        roomId: matchedRid,
         data: msg.data,
       });
       break;
@@ -2429,17 +2444,34 @@ export function handleMessage(
       const action = String(msg.action || "");
       const target = typeof msg.target === "string" ? msg.target : "";
       const sendTo = (p: string, obj: unknown) => { const c = reg.clients.get(p); if (c) safeSend(c.socket, obj); };
+      /**
+       * Is `p` ACTIVELY in this room, as opposed to merely a member of it?
+       *
+       * v2.99.57: `room.has(p)` is true for someone who PARKED this call and is
+       * now live in a different one — the roster keeps held members precisely so
+       * they can resume. Acting on `room.has` alone meant a host could reach into
+       * a member's OTHER call: `force-mute` was applied by their client to
+       * whatever call they were actually in, and `kick` called `leaveRoom`, which
+       * removes them from their ACTIVE room — so kicking a held member dropped an
+       * unrelated call and left them still a member of the room they were kicked
+       * from. Bypassable and destructive at once.
+       */
+      const inActiveRoom = (p: string) =>
+        (reg.pinRoom.get(p) ?? reg.clients.get(p)?.roomId ?? null) === rid;
       switch (action) {
         case "mute":
         case "unmute": {
-          if (!room.has(target)) break;
-          sendTo(target, { type: "force-mute", on: action === "mute", by: conn.pin });
+          // Must be IN this call, not merely a member who parked it.
+          if (!room.has(target) || !inActiveRoom(target)) break;
+          sendTo(target, { type: "force-mute", on: action === "mute", by: conn.pin, roomId: rid });
           break;
         }
         case "mute-all":
         case "unmute-all": {
           const on = action === "mute-all";
-          room.forEach(p => { if (p !== conn.pin) sendTo(p, { type: "force-mute", on, by: conn.pin }); });
+          room.forEach(p => {
+            if (p !== conn.pin && inActiveRoom(p)) sendTo(p, { type: "force-mute", on, by: conn.pin, roomId: rid });
+          });
           break;
         }
         case "cohost": {
@@ -2497,8 +2529,23 @@ export function handleMessage(
             meta.knocks?.delete(target);
           }
           // Tell the target they were removed, then force them out of the room.
-          sendTo(target, { type: "kicked", by: conn.pin });
-          leaveRoom(reg, target); // removes membership + broadcasts peer-left + reaps if empty
+          sendTo(target, { type: "kicked", by: conn.pin, roomId: rid });
+          // Remove them from THIS room (v2.99.57). `leaveRoom` acts on the
+          // target's ACTIVE room, so for a member who had parked this call it
+          // used to drop their unrelated live call and leave them a member here —
+          // a kick that both missed and did collateral damage.
+          if (reg.heldRoom.get(target) === rid) {
+            releaseHeldRoom(reg, target);
+          } else if (inActiveRoom(target)) {
+            leaveRoom(reg, target); // membership + peer-left + reap if empty
+          } else {
+            // A member of this room who is neither active in it nor holding it
+            // (a reaped connection whose membership survives for auto-rejoin).
+            reg.rooms.get(rid)?.delete(target);
+            reg.pinRoom.delete(target);
+            broadcastToRoom(reg, rid, { type: "peer-left", pin: target }, target);
+            promoteHostIfVacant(reg, rid, target);
+          }
           // Everyone still in the room learns the role is gone, so no client
           // keeps rendering them with host controls.
           broadcastToRoom(reg, rid, { type: "role", pin: target, role: null });
@@ -2784,6 +2831,18 @@ function cleanupRegistryConn(
             broadcastToRoom(reg, rid, { type: "peer-left", pin }, pin);
             reg.clients.delete(pin);
             reg.devices.delete(pin);
+            // HOST SUCCESSION (v2.99.57). v2.99.47's M53 fix gave `leaveRoom` a
+            // successor, but a host whose SSE simply DIES — a backgrounded phone,
+            // a dropped network — reaches this branch instead, and it never
+            // promoted anyone. `meta.hostPin` then named a member with no client
+            // record, so mute/pin/kick returned `forbidden` for everyone and a
+            // History "Join" knock went to an absent host and was silently
+            // dropped: exactly the dead end M53 exists to prevent.
+            //
+            // AFTER the delete, deliberately: promoteHostIfVacant filters
+            // candidates on `reg.clients.has(p)`, so calling it earlier would
+            // "promote" the host who just vanished.
+            promoteHostIfVacant(reg, rid, pin);
             maybeScheduleRoomReap(reg, rid);
             touchBusyState();
           } else {
