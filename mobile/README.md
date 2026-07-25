@@ -72,11 +72,31 @@ already in this repo; the steps only the account owner can perform are marked
 > **M6 ✅ (runbook + release pipeline)** — QA-TEST-PLAN §F adds the 9 RN
 > scenarios (waiting/hold/groups/rejoin/voice-notes/share/PiP/recording);
 > native-rn.yml now also emits **RELAY-RN-release-aab-SIGNED** (same 4
-> signing secrets as android-apk.yml); versionName 3.0.0 / versionCode 2.
+> signing secrets as android-apk.yml); versionName 3.1.0 / versionCode 3.
+>
+> **Signing (v2.99.55)**: GRADLE signs the RN release, not `jarsigner`. That
+> makes the bundle single-signed (jarsigner *adds* a signature rather than
+> replacing one, so the old flow could hand Play two signers) and it gives the
+> release APK v1+v2+v3 signatures, so a signed run produces an **installable**
+> release APK — at `targetSdk 36` a v1-only APK will not install on Android 11+.
+> With the secrets set, CI also fails the build rather than quietly emitting an
+> unsigned AAB if the keystore is incomplete (`RELAY_REQUIRE_SIGNED`). Without
+> the secrets the run stays green and the release is simply unsigned. Locally you
+> can sign by passing `-PRELAY_KEYSTORE_PATH` (absolute), `…_PASSWORD`,
+> `RELAY_KEY_ALIAS`, `RELAY_KEY_PASSWORD`. `android-apk.yml` still signs with
+> jarsigner — its TWA and Capacitor modules have no `signingConfig` at all.
+>
 > STORE SWAP: the RN app shares `applicationId org.yourchat.relay`, so the
 > swap is just uploading RELAY-RN-release-aab-SIGNED to the EXISTING Play
 > listing as the next release (staged rollout recommended) — no new listing,
-> installs update in place. **[YOU]** prerequisites before that upload:
+> installs update in place. **[YOU]** two checks that only bite at upload time:
+> (a) confirm the CI keystore really is the **upload key** — compare the SHA-256
+> in the workflow's `apksigner verify --print-certs` output against Play Console
+> → Test and release → App integrity → App signing → *Upload key certificate*
+> (with Play App Signing on, a wrong key is a recoverable rejection, not a
+> bricked listing); (b) `versionCode 3` must not already be live on Play — bump
+> it in `mobile/native/android/app/build.gradle` if it is. Then the other
+> **[YOU]** prerequisites before that upload:
 > (1) Firebase steps below (else no rings-when-closed), (2) the §F device
 > QA pass on two physical Androids — no device testing was possible from
 > the build environment, (3) signing secrets in GitHub if not already set.

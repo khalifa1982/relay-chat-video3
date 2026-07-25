@@ -15,10 +15,10 @@ jobs:
   android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
 
@@ -32,9 +32,53 @@ jobs:
         working-directory: mobile/native
         run: npm ci
 
+      # ── UPLOAD KEYSTORE (v2.99.55) ────────────────────────────────────────
+      # Staged BEFORE the Gradle build so Gradle itself can sign the release, which
+      # is what makes the result a SINGLE correct signature. Until v2.99.55 the
+      # build produced an unsigned bundle and `jarsigner` added a signature after
+      # the fact; jarsigner ADDS rather than replaces, so any pre-existing
+      # signature stayed and Play could see two signers.
+      #
+      # $RUNNER_TEMP, never the workspace: it is outside the checkout, so no
+      # artifact glob can ever pick the keystore up, and it is wiped with the job.
+      - name: Stage upload keystore (only when the secret exists)
+        id: keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_B64:-}" ]; then
+            echo "No ANDROID_KEYSTORE_BASE64 secret — the release stays UNSIGNED (mobile/README.md §3.2)."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ks="$RUNNER_TEMP/relay-upload.keystore"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$ks"
+          # `base64 -d` of an empty/whitespace secret EXITS 0 and leaves a 0-byte
+          # file, which File.exists() happily accepts. Fail here, loudly, instead
+          # of handing Gradle a garbage keystore.
+          test -s "$ks"
+          chmod 600 "$ks"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "path=$ks" >> "$GITHUB_OUTPUT"
+
       - name: Build debug APK + release APK + release AAB
         working-directory: mobile/native/android
+        env:
+          # Credentials reach ONLY this step — not $GITHUB_ENV (which exposes them
+          # to every later step in the job) and not `-P` args (which land in the
+          # process command line, visible to `ps` and liable to appear in Gradle
+          # failure output). GitHub masks registered secrets in logs, but the
+          # DECODED keystore bytes are not a registered secret and are not masked.
+          RELAY_KEYSTORE_PATH: ${{ steps.keystore.outputs.path }}
+          RELAY_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RELAY_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RELAY_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # Set only when we staged a keystore, so a half-configured secret set
+          # fails the build rather than yielding a green, unsigned, unshippable AAB.
+          RELAY_REQUIRE_SIGNED: ${{ steps.keystore.outputs.signed == 'true' && '1' || '' }}
         run: |
+          set -euo pipefail          # never `set -x`: it would echo the env above
           chmod +x gradlew
           ./gradlew --no-daemon assembleDebug assembleRelease bundleRelease
 
@@ -48,14 +92,17 @@ jobs:
       # Production-behavior build: no dev support, JS embedded, package
       # org.yourchat.relay.
       #
-      # NOTE (v2.99.53): since v2.99.52 this APK is UNSIGNED unless a real
-      # keystore is configured (it must never be signed with the debug key — see
-      # mobile/native/android/app/build.gradle). An unsigned APK CANNOT be
-      # installed on a device, so for the QA-TEST-PLAN §F device pass use the
-      # RELAY-RN-debug-apk artifact above (installs side-by-side as
-      # org.yourchat.relay.next), or set the RELAY_KEYSTORE_* properties to get a
-      # properly signed release build. This artifact is kept for inspection and
-      # for signing with the upload key.
+      # NOTE (v2.99.55): this APK is signed by GRADLE — with the upload key when
+      # ANDROID_KEYSTORE_BASE64 is configured, and otherwise UNSIGNED. It must
+      # never fall back to the debug key (see
+      # mobile/native/android/app/build.gradle).
+      #
+      # A signed run yields an INSTALLABLE release APK with v1+v2+v3 signatures
+      # (Gradle signs via apksigner; jarsigner would have produced v1 only, which
+      # does not install on Android 11+ at targetSdk 36). A secretless run yields
+      # an unsigned APK, which cannot be installed at all — for the QA-TEST-PLAN
+      # §F device pass on such a run, use the RELAY-RN-debug-apk artifact above
+      # (installs side-by-side as org.yourchat.relay.next).
       - name: Upload release APK (production-behavior test build)
         uses: actions/upload-artifact@v4
         with:
@@ -70,7 +117,7 @@ jobs:
           path: mobile/native/android/app/build/outputs/apk/release/app-release*.apk
           if-no-files-found: error
 
-      - name: Upload release AAB (unsigned)
+      - name: Upload release AAB (signed when the signing secrets are configured)
         uses: actions/upload-artifact@v4
         with:
           name: RELAY-RN-release-aab
@@ -80,31 +127,47 @@ jobs:
       # ── M6: READY-TO-UPLOAD signed bundle for the STORE SWAP ─────────────
       # Same secrets as android-apk.yml (mobile/README.md §3.2). The RN app
       # shares applicationId org.yourchat.relay, so this AAB uploads straight
-      # to the EXISTING Play listing as the next release. Without the secrets
-      # the step prints a note and the run stays green.
-      - name: Sign Play bundle (when signing secrets are configured)
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      # to the EXISTING Play listing as the next release.
+      #
+      # Gradle already signed it above (v2.99.55) — this step VERIFIES and names
+      # the artifact. jarsigner is still the right verifier for a bundle:
+      # `apksigner` cannot read an AAB, because APK Signature Scheme v2/v3 lives
+      # in an APK Signing Block that bundletool and Play never read on a bundle.
+      # Play validates the AAB's JAR signature against the registered upload
+      # certificate, which is exactly what Gradle produces.
+      #
+      # NOTE: jarsigner remains the SIGNER in android-apk.yml. Do not "unify"
+      # this — the TWA (mobile/android) and Capacitor (mobile/app) projects have
+      # no signingConfig at all, so removing jarsigner there would leave those
+      # releases permanently unsigned with no signer anywhere.
+      - name: Verify the release signature (when signing was configured)
+        if: steps.keystore.outputs.signed == 'true'
         run: |
-          if [ -z "$KEYSTORE_B64" ]; then
-            echo "No ANDROID_KEYSTORE_BASE64 secret — skipping signing (see mobile/README.md §3.2)."
-            exit 0
-          fi
-          echo "$KEYSTORE_B64" | base64 -d > /tmp/upload.keystore
-          cp mobile/native/android/app/build/outputs/bundle/release/app-release.aab /tmp/RELAY-RN-release-signed.aab
-          jarsigner -keystore /tmp/upload.keystore \
-            -storepass "$KEYSTORE_PASSWORD" \
-            -keypass "${KEY_PASSWORD:-$KEYSTORE_PASSWORD}" \
-            -sigalg SHA256withRSA -digestalg SHA-256 \
-            /tmp/RELAY-RN-release-signed.aab "$KEY_ALIAS"
-          echo "Signed RN bundle ready."
+          set -euo pipefail
+          aab=mobile/native/android/app/build/outputs/bundle/release/app-release.aab
+          apk=mobile/native/android/app/build/outputs/apk/release/app-release.apk
+          # `jarsigner -verify` alone can exit 0 on an UNSIGNED archive, so the
+          # grep is the deterministic gate, not the niceties.
+          jarsigner -verify -strict "$aab"
+          unzip -l "$aab" | grep -qE 'META-INF/.*\.(RSA|EC|DSA)'
+          # The APK is where v2/v3 actually matter: with targetSdk 36 a v1-only
+          # APK will not install on Android 11+, which is what signing an APK with
+          # jarsigner would have produced. Gradle signs via apksigner (v1+v2+v3).
+          apksigner="$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name apksigner -type f | sort -V | tail -1)"
+          test -n "$apksigner"        # never hardcode a build-tools version
+          "$apksigner" verify --print-certs -v "$apk"
+          # Keep the documented artifact NAME (mobile/README.md §3.2 tells the
+          # operator to upload RELAY-RN-release-aab-SIGNED), even though the
+          # mechanism that produces it has moved into Gradle.
+          cp "$aab" "$RUNNER_TEMP/RELAY-RN-release-signed.aab"
+          echo "Signed RN bundle verified and staged."
 
       - name: Upload SIGNED Play bundle (only when signing ran)
         uses: actions/upload-artifact@v4
         with:
           name: RELAY-RN-release-aab-SIGNED
-          path: /tmp/RELAY-RN-release-signed.aab
+          # Staged by the verify step above, from $RUNNER_TEMP. The NAME is the
+          # contract: it means "signed and uploadable to Play". `ignore` keeps a
+          # secretless run green with no artifact rather than a misleading one.
+          path: ${{ runner.temp }}/RELAY-RN-release-signed.aab
           if-no-files-found: ignore

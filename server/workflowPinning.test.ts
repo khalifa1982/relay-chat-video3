@@ -16,13 +16,37 @@ import path from "node:path";
  * The tag is kept as a trailing comment so a human can see which release a SHA
  * corresponded to; the test deliberately does NOT trust that comment.
  *
- * NOT yet enforced for `android-apk.yml` / `native-rn.yml`: those hold the Android
- * keystore secrets and should be pinned next, but they are unpinned today and a
- * failing test would block deploys rather than fix anything. The list below is
- * where to add them.
+ * v2.99.55 extends this to the two ANDROID workflows, which hold the upload
+ * keystore secrets (`ANDROID_KEYSTORE_BASE64` and friends) — an action running in
+ * those jobs can read the decoded keystore, and a repointed mutable tag is how it
+ * would get there.
+ *
+ * PENDING_SHA below is the honest part: three actions are still on `@v4` because
+ * resolving a tag to a commit requires reading those upstream repositories, which
+ * this session cannot do (its GitHub access is scoped to this repo alone). Rather
+ * than exempt the files wholesale — which would let a NEW unpinned action slip in
+ * unnoticed — the gap is enumerated. So the rule is: everything must be pinned
+ * EXCEPT these three exact specs, and adding a fourth fails. Resolve one with
+ *
+ *     gh api repos/actions/setup-java/git/ref/tags/v4 --jq .object.sha
+ *
+ * (for a tag that points at a tag object, follow it with
+ * `gh api repos/<owner>/<repo>/git/tags/<sha> --jq .object.sha`), then delete its
+ * entry here and put the SHA in the workflow with a `# v4` comment.
  */
 const ROOT = path.resolve(__dirname, "..");
-const CREDENTIAL_WORKFLOWS = [".github/workflows/deploy.yml"];
+const CREDENTIAL_WORKFLOWS = [
+  ".github/workflows/deploy.yml",
+  ".github/workflows/android-apk.yml",
+  ".github/workflows/native-rn.yml",
+];
+
+/** Actions whose SHA is not yet resolved. Shrink this; never grow it. */
+const PENDING_SHA = new Set([
+  "actions/setup-java@v4",
+  "actions/upload-artifact@v4",
+  "gradle/actions/setup-gradle@v4",
+]);
 
 /** `uses: owner/repo@ref` → the ref, ignoring comments. Local actions are skipped. */
 function actionRefs(yaml: string): { raw: string; ref: string }[] {
@@ -47,15 +71,28 @@ describe("production-credential workflows pin every action to a SHA", () => {
       expect(refs.length).toBeGreaterThanOrEqual(4);
     });
 
-    it(`${wf} — every ref is a full 40-hex commit SHA`, () => {
-      const unpinned = refs.filter((r) => !/^[0-9a-f]{40}$/.test(r.ref)).map((r) => r.raw);
+    it(`${wf} — every ref is a full 40-hex commit SHA (or a known-pending one)`, () => {
+      const unpinned = refs
+        .filter((r) => !/^[0-9a-f]{40}$/.test(r.ref))
+        .map((r) => r.raw)
+        .filter((raw) => !PENDING_SHA.has(raw));
       expect(unpinned, `pin these to a commit SHA: ${unpinned.join(", ")}`).toEqual([]);
     });
 
     it(`${wf} — no ref is a branch or a floating tag`, () => {
       for (const r of refs) {
+        if (PENDING_SHA.has(r.raw)) continue;
         expect(r.ref, r.raw).not.toMatch(/^v?\d+(\.\d+)*$/); // v4, v4.1, 4
         expect(r.ref, r.raw).not.toMatch(/^(main|master|latest|HEAD)$/i);
+      }
+    });
+
+    it(`${wf} — a ref is NEVER a mutable branch, pending or not`, () => {
+      // The pending exemption covers a floating TAG on a well-known first-party
+      // action. A branch ref is a different thing entirely and is never excusable.
+      for (const r of refs) {
+        expect(r.ref, r.raw).not.toMatch(/^(main|master|develop|latest|HEAD)$/i);
+        expect(r.ref, `${r.raw} — a ref must not be empty`).not.toBe("");
       }
     });
 
@@ -67,6 +104,27 @@ describe("production-credential workflows pin every action to a SHA", () => {
       }
     });
   }
+
+  it("the PENDING_SHA list only excuses actions that are actually still unpinned", () => {
+    // A stale entry is worse than none: it would silently exempt an action that
+    // someone later ADDED back unpinned. So every entry must correspond to a real
+    // unpinned `uses:` somewhere in the covered workflows.
+    const all = CREDENTIAL_WORKFLOWS.flatMap((wf) =>
+      actionRefs(fs.readFileSync(path.join(ROOT, wf), "utf8")).map((r) => r.raw),
+    );
+    for (const pending of PENDING_SHA) {
+      expect(all, `PENDING_SHA has a stale entry — delete it: ${pending}`).toContain(pending);
+    }
+  });
+
+  it("deploy.yml — the job that holds PRODUCTION credentials has no pending exemptions", () => {
+    // The Android workflows can carry a documented gap for a while; the workflow
+    // that can write the release bucket and drive SSM on the live fleet cannot.
+    const refs = actionRefs(fs.readFileSync(path.join(ROOT, ".github/workflows/deploy.yml"), "utf8"));
+    for (const r of refs) {
+      expect(r.ref, `${r.raw} must be a SHA — no exemptions in deploy.yml`).toMatch(/^[0-9a-f]{40}$/);
+    }
+  });
 
   it("deploy.yml still ships the files the fleet needs to boot", () => {
     // Not about pinning — but this file is the one people hand-edit when they

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { AUDIENCE_OPTIONS } from "@/app/statusAudience";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const src = read("client/src/pages/app/Status.tsx");
@@ -43,12 +44,24 @@ describe("v2.99.29/33 QA M16 — status audience copy matches the enforcement", 
   // v2.99.33 (owner) switched status to EITHER-DIRECTION visibility — a status
   // reaches your contacts AND anyone who saved you — so "your contacts" is now
   // ACCURATE poster-side copy (it was wrong-direction only under the old
-  // saved-you-only model). The composer says so, and mentions the follower side.
+  // saved-you-only model).
+  //
+  // v2.99.55 added a SECOND audience ("everyone"), so a single hardcoded string
+  // in the composer would now be wrong half the time. The copy moved into
+  // client/src/app/statusAudience.ts, one entry per option, and the composer
+  // picks the one matching what it actually sent. The invariant is stronger than
+  // before — it used to be "this literal appears somewhere in the file", which a
+  // second audience would have satisfied while showing the wrong text.
   it("the strip/poster copy says a status reaches your contacts", () => {
-    expect(src).toMatch(/visible for 24h to your contacts/);
+    expect(AUDIENCE_OPTIONS[0].posted).toMatch(/your contacts/);
   });
   it("the toast also mentions the anyone-who-saved-you direction", () => {
-    expect(src).toMatch(/your contacts and anyone who's saved you/);
+    expect(AUDIENCE_OPTIONS[0].posted).toMatch(/your contacts and anyone who's saved you/);
+  });
+  it("the confirmation is derived from the audience actually posted, not hardcoded", () => {
+    expect(src).toMatch(/Status posted — \$\{audienceOption\(effectiveAudience\)\.posted\}/);
+    // …and the value sent is the one the picker showed.
+    expect(src).toMatch(/audience: effectiveAudience/);
   });
 });
 

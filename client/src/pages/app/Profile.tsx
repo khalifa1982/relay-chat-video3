@@ -27,6 +27,7 @@ import { uploadAvatarImage } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
 import { useSignOut } from "@/app/useSignOut";
 import { AvatarPicker } from "@/app/AvatarPicker";
+import { AUDIENCE_OPTIONS } from "@/app/statusAudience";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { CountryFlag } from "@/app/CountryFlag";
 import { QRCodeSVG } from "qrcode.react";
@@ -375,6 +376,9 @@ export default function ProfilePage() {
 
         {/* email notifications (v2.99.13) — registered + email only */}
         <EmailNotificationsSection />
+
+        {/* who can watch my status (v2.99.55) — guests included */}
+        <StatusPrivacySection />
 
         {/* sign-in PIN (v2.87) */}
         <LoginPinSection />
@@ -1276,6 +1280,96 @@ function EmailNotificationsSection() {
           <Mail className="size-3.5" /> Sent to your account email. Message emails never contain the message itself.
         </p>
       )}
+    </section>
+  );
+}
+
+/* ============================================================
+   Status privacy (v2.99.55) — who can watch the stories I post.
+   Two options, per the owner's ask: everyone, or contacts only.
+
+   This is the DEFAULT for future posts, not a retroactive switch.
+   Each status stamps its own audience at insert, so flipping this
+   never widens something already published — a story posted to
+   contacts stays contacts-only for its whole 24h, whatever this
+   says later. The composer shows this value and can override it
+   for one post without changing the default.
+   ============================================================ */
+function StatusPrivacySection() {
+  const privacy = trpc.status.getPrivacy.useQuery();
+  const utils = trpc.useUtils();
+  const setPrivacy = trpc.status.setPrivacy.useMutation({
+    onMutate: async (vars) => {
+      await utils.status.getPrivacy.cancel();
+      const prev = utils.status.getPrivacy.getData();
+      utils.status.getPrivacy.setData(undefined, { audience: vars.audience });
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) utils.status.getPrivacy.setData(undefined, ctx.prev);
+      toast.error("Couldn't update who can see your status — try again.");
+    },
+    onSettled: () => {
+      utils.status.getPrivacy.invalidate();
+    },
+  });
+
+  // Guests post statuses too (statuses hang off the identity, not the user row),
+  // so this renders for everyone — it just needs the value to have loaded.
+  if (!privacy.data) return null;
+  const current = privacy.data.audience;
+  const busy = setPrivacy.isPending;
+
+  return (
+    <section className="space-y-3">
+      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+        Status privacy
+      </Label>
+      <div
+        className="rounded-2xl border border-border bg-card/40 divide-y divide-border/60"
+        role="radiogroup"
+        aria-label="Who can see my status"
+      >
+        {AUDIENCE_OPTIONS.map((opt) => {
+          const active = current === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              disabled={busy}
+              onClick={() => {
+                if (!active) setPrivacy.mutate({ audience: opt.value });
+              }}
+              className="flex w-full items-start gap-3 p-4 text-left disabled:opacity-60"
+            >
+              <span
+                className={`mt-0.5 shrink-0 ${active ? "text-primary" : "text-muted-foreground"}`}
+                aria-hidden
+              >
+                <opt.Icon className="size-5" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold">{opt.label}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">{opt.hint}</span>
+              </span>
+              <span
+                className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border-2 ${
+                  active ? "border-primary" : "border-border"
+                }`}
+                aria-hidden
+              >
+                {active && <span className="size-2.5 rounded-full bg-primary" />}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Applies to statuses you post from now on — anything already posted keeps the audience you
+        chose for it. Blocking someone always hides your status from them, whichever option is set.
+      </p>
     </section>
   );
 }

@@ -6,7 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useRelayEngine } from "./RelayEngine";
 import { RoleBadge, roleFromFlags } from "./VerifiedBadge";
-import { StatusViewer } from "@/pages/app/Status";
+import { StatusViewer, type FeedGroup } from "@/pages/app/Status";
 
 /**
  * Peer identity surfaces (v2.96, owner spec):
@@ -200,6 +200,25 @@ export function PeerOverlaysHost() {
   const groups = feed.data?.groups ?? [];
   const statusIdx = statusNumber ? groups.findIndex((g) => g.owner.number === statusNumber) : -1;
 
+  /* ── the "Everyone" discovery surface (v2.99.55) ──
+     The story FEED is bounded to my contacts and the people who saved me — it
+     has to be, because its reverse is what realtime status events fan out to,
+     and the reverse of "everyone" is every identity in the database. So a
+     status posted to "everyone" by someone I haven't saved is authorized but
+     absent from `groups`, which would leave the setting technically live and
+     practically invisible.
+
+     This is the pull side: while a profile is open I already have that person's
+     number, so ask for just their statuses. The server returns only what I'm
+     allowed to watch, and returns an empty list — not an error — for a
+     contacts-only poster, so it reveals nothing a contacts-only story wouldn't. */
+  const peerNumber = statusNumber ?? profileNumber;
+  const inFeed = !!peerNumber && groups.some((g) => g.owner.number === peerNumber);
+  const peerStatus = trpc.status.forNumber.useQuery(
+    { number: peerNumber ?? "" },
+    { enabled: !!peerNumber && !inFeed, staleTime: 20_000 },
+  );
+
   /* ── profile popup ── */
   const lookup = trpc.directory.lookup.useQuery(
     { number: profileNumber ?? "" },
@@ -226,17 +245,52 @@ export function PeerOverlaysHost() {
   });
 
   const p = lookup.data;
-  const statusInfo = usePeerStatusMap().get(profileNumber ?? "");
+  const feedStatusInfo = usePeerStatusMap().get(profileNumber ?? "");
+  /* Prefer the feed (it's already cached and covers contacts); fall back to the
+     per-number lookup so an "everyone" story from a non-contact still lights the
+     avatar and gives the tap somewhere to go. */
+  const statusInfo =
+    feedStatusInfo ??
+    (peerStatus.data && peerStatus.data.items.length > 0
+      ? { hasAny: true, hasUnseen: peerStatus.data.hasUnseen }
+      : undefined);
+
+  /* A viewer needs a FeedGroup. For a non-contact there is no feed entry, so
+     synthesize one from the per-number result + the directory lookup we already
+     have open. `isMe: false` is safe here: this host only ever opens for another
+     peer's number, and the server's own `mine`/feed paths own the self case. */
+  const syntheticGroups: FeedGroup[] =
+    statusNumber && !inFeed && peerStatus.data && peerStatus.data.items.length > 0
+      ? [
+          {
+            owner: {
+              id: 0,
+              number: statusNumber,
+              displayName: p?.displayName || "Someone",
+              avatarUrl: p?.avatarUrl ?? null,
+              isMe: false,
+            },
+            items: peerStatus.data.items,
+            hasUnseen: peerStatus.data.hasUnseen,
+            latestAt: peerStatus.data.items[peerStatus.data.items.length - 1].createdAt,
+          },
+        ]
+      : [];
+  const viewerGroups = statusIdx >= 0 ? groups : syntheticGroups;
+  const viewerIndex = statusIdx >= 0 ? statusIdx : 0;
 
   return (
     <>
-      {statusNumber != null && statusIdx >= 0 && (
+      {statusNumber != null && viewerGroups.length > 0 && (
         <StatusViewer
-          groups={groups}
-          startIndex={statusIdx}
+          groups={viewerGroups}
+          startIndex={viewerIndex}
           onClose={() => {
             setStatusNumber(null);
             utils.status.feed.invalidate();
+            // The synthesized group came from forNumber, so refresh THAT too or a
+            // just-watched story keeps its unseen ring until the cache expires.
+            utils.status.forNumber.invalidate();
           }}
         />
       )}

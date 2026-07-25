@@ -39,6 +39,10 @@ import {
   countActiveStatuses,
   ownersWhoBlockedNumber,
   getStatusAudienceIds,
+  getIdentityStatusAudience,
+  setIdentityStatusAudience,
+  getViewableStatusesOfOwner,
+  normalizeStatusAudience,
   type StatusRow,
   getIdentityByDeviceId,
   getIdentityById,
@@ -2871,7 +2875,20 @@ export function sanitizeStatusBg(v: string | undefined | null): string | null {
   return hex.test(s) || grad.test(s) ? s : null;
 }
 
-function publicStatus(r: StatusRow) {
+/** The two status-audience options (v2.99.55). */
+const StatusAudienceSchema = z.enum(["contacts", "everyone"]);
+
+/**
+ * The wire shape of a status.
+ *
+ * `own` adds `audience` — a per-post choice is useless if the author can't see
+ * what they picked. It is deliberately NOT sent for other people's statuses:
+ * whether someone's story is public or contacts-only is not something a viewer
+ * needs, and this codebase has been bitten by shipping fields nobody consumes
+ * (v2.99.40 #4 serialized the caller's own credential hashes into every
+ * `auth.me`). Send the minimum that the surface renders.
+ */
+function publicStatus(r: StatusRow, own = false) {
   return {
     id: r.id,
     kind: r.kind,
@@ -2880,6 +2897,7 @@ function publicStatus(r: StatusRow) {
     mediaUrl: r.mediaUrl,
     mimeType: r.mimeType,
     durationMs: r.durationMs,
+    ...(own ? { audience: normalizeStatusAudience(r.audience) } : {}),
     createdAt: r.createdAt,
     expiresAt: r.expiresAt,
   };
@@ -2916,6 +2934,8 @@ export const v2StatusRouter = router({
         mediaKey: z.string().max(256).optional(),
         mimeType: z.string().max(128).optional(),
         durationMs: z.number().int().min(0).max(10 * 60_000).optional(),
+        /** Per-post override; omitted ⇒ my saved default (v2.99.55). */
+        audience: StatusAudienceSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -2955,6 +2975,12 @@ export const v2StatusRouter = router({
         throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: `You can have up to ${STATUS_MAX_ACTIVE} active statuses.` });
       }
       const mediaUrl = mediaKey ? `/manus-storage/${mediaKey}` : null;
+      // v2.99.55 — resolve the audience ONCE, here, and store it on the row. An
+      // explicit per-post choice wins; otherwise fall back to my saved default.
+      // A DB hiccup reading the default resolves to "contacts" (the private
+      // option), so a failed read can never publish a post wider than intended.
+      const audience =
+        input.audience ?? (await getIdentityStatusAudience(me.id).catch(() => "contacts" as const));
       const row = await insertStatus({
         identityId: me.id,
         kind: input.kind,
@@ -2965,6 +2991,7 @@ export const v2StatusRouter = router({
         mediaUrl,
         mimeType: input.mimeType ?? null,
         durationMs: input.durationMs ?? null,
+        audience,
         ttlMs: STATUS_TTL_MS,
       });
       if (!row) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't post your status." });
@@ -3012,7 +3039,7 @@ export const v2StatusRouter = router({
           avatarUrl: o?.avatarUrl ?? null,
           isMe: oid === me.id,
         },
-        items: items.map(publicStatus),
+        items: items.map((it) => publicStatus(it, oid === me.id)),
         hasUnseen: oid !== me.id && items.some((it) => !viewed.has(it.id)),
         latestAt: latest.createdAt,
       };
@@ -3031,7 +3058,7 @@ export const v2StatusRouter = router({
     const me = requireIdentity(ctx);
     const rows = await getActiveStatusesForOwners([me.id]);
     const counts = await getStatusViewCounts(rows.map((r) => r.id));
-    return { items: rows.map((r) => ({ ...publicStatus(r), viewCount: counts.get(r.id) ?? 0 })) };
+    return { items: rows.map((r) => ({ ...publicStatus(r, true), viewCount: counts.get(r.id) ?? 0 })) };
   }),
 
   /** Delete one of my statuses. */
@@ -3057,9 +3084,59 @@ export const v2StatusRouter = router({
       // Only someone in the status's audience can register a view — otherwise a
       // stranger (even a guest with an attacker-chosen name) could enumerate
       // status ids and inject themselves into the owner's "Seen by" (review §5).
-      if (!(await statusAudienceAuthorized(me.id, st.identityId))) return { ok: false };
+      if (!(await statusAudienceAuthorized(me.id, st.identityId, st.audience))) return { ok: false };
       await recordStatusView(input.id, me.id);
       return { ok: true };
+    }),
+
+  /* ── who can watch my statuses (v2.99.55) ──────────────────────────
+     Two options, per the owner's ask: everyone, or contacts only. The value is
+     the DEFAULT for future posts; each status carries its own copy, so changing
+     this never reaches back into something already published. */
+
+  /** My default status audience. NULL in the DB ⇒ "contacts". */
+  getPrivacy: publicProcedure.query(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    return { audience: await getIdentityStatusAudience(me.id) };
+  }),
+
+  /** Change the default audience for FUTURE statuses. */
+  setPrivacy: publicProcedure
+    .input(z.object({ audience: StatusAudienceSchema }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      await setIdentityStatusAudience(me.id, input.audience);
+      return { ok: true, audience: input.audience };
+    }),
+
+  /**
+   * The active statuses of ONE person I'm allowed to watch, by number — the
+   * profile-visit surface that gives "everyone" its meaning.
+   *
+   * The story feed is bounded to my contacts and people who saved me (see
+   * getStatusAudienceIds for why it must stay bounded), so an "everyone" post by
+   * someone I haven't saved would otherwise be authorized but undiscoverable.
+   * This is the pull: I already have their number because I'm looking at their
+   * profile.
+   *
+   * Not an enumeration oracle — `directory.lookup` already exposes name and
+   * presence for any number, and this adds nothing for a contacts-only poster:
+   * they return the same empty list as someone with no story at all.
+   */
+  forNumber: publicProcedure
+    .input(z.object({ number: z.string().regex(/^\d{6}$/) }))
+    .query(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      statusGate(ctx);
+      const owner = await getIdentityByNumber(input.number);
+      if (!owner) return { items: [], hasUnseen: false };
+      const rows = await getViewableStatusesOfOwner(me.id, owner.id);
+      if (rows.length === 0) return { items: [], hasUnseen: false };
+      const viewed = await getViewedStatusIds(me.id, rows.map((r) => r.id));
+      return {
+        items: rows.map((r) => publicStatus(r, owner.id === me.id)),
+        hasUnseen: owner.id !== me.id && rows.some((r) => !viewed.has(r.id)),
+      };
     }),
 
   /** Who saw my status (owner-only; empty for anyone else). */

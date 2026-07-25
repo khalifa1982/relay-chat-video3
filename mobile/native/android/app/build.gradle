@@ -112,11 +112,42 @@ android {
     def ksPath = System.getenv("RELAY_KEYSTORE_PATH") ?: project.findProperty("RELAY_KEYSTORE_PATH")
     def ksPassword = System.getenv("RELAY_KEYSTORE_PASSWORD") ?: project.findProperty("RELAY_KEYSTORE_PASSWORD")
     def ksAlias = System.getenv("RELAY_KEY_ALIAS") ?: project.findProperty("RELAY_KEY_ALIAS")
+    // Groovy `?:` treats "" as falsy, so an EMPTY key-password secret correctly
+    // falls through to the store password. Keep that: a PKCS12 keystore (what
+    // `keytool -genkeypair` produces by default on JDK 9+, and what the README's
+    // generation command makes) REQUIRES the key and store passwords to be equal.
     def ksKeyPassword = System.getenv("RELAY_KEY_PASSWORD") ?: project.findProperty("RELAY_KEY_PASSWORD") ?: ksPassword
-    // All four must be present AND the file must exist — a half-configured
-    // keystore should fail loudly at config time, not silently fall back.
-    def hasUploadKeystore = ksPath?.toString() && ksPassword?.toString() && ksAlias?.toString() &&
-            file(ksPath.toString()).exists()
+
+    // `file()` resolves a RELATIVE path against THIS MODULE's directory
+    // (mobile/native/android/app), not the repo root and not the workflow's
+    // working-directory. A natural-looking relative value therefore misses,
+    // .exists() goes false, and the build goes quietly UNSIGNED — a green log
+    // with an unshippable artifact. Refuse the ambiguity outright.
+    def ksFile = ksPath?.toString() ? new File(ksPath.toString()) : null
+    if (ksFile != null && !ksFile.isAbsolute()) {
+        throw new GradleException("RELAY_KEYSTORE_PATH must be an ABSOLUTE path (got '${ksPath}')")
+    }
+    // `length() > 0` is load-bearing, not belt-and-braces: `base64 -d` of an
+    // EMPTY string exits 0 and leaves a 0-BYTE file (verified), and exists() is
+    // true for one. That is exactly what an absent CI secret decodes to, so
+    // exists() alone would flip this true and fail every secretless build while
+    // Gradle tried to load a garbage keystore.
+    def hasUploadKeystore = ksPassword?.toString() && ksAlias?.toString() &&
+            ksFile != null && ksFile.isFile() && ksFile.length() > 0
+
+    // Gradle is now the ONLY signer (v2.99.55 — jarsigner used to add a second
+    // signature on top). That removes the double-signer bug but changes a failure
+    // mode: jarsigner exited non-zero on a bad or empty password, whereas an
+    // incomplete keystore here just leaves the build UNSIGNED and green — and
+    // Play only rejects it at upload time, during a store swap. So CI sets this
+    // flag whenever it INTENDED to sign, and a mismatch fails the build instead.
+    def requireSigned = System.getenv("RELAY_REQUIRE_SIGNED") ?: project.findProperty("RELAY_REQUIRE_SIGNED")
+    if (requireSigned?.toString() && !hasUploadKeystore) {
+        throw new GradleException("RELAY_REQUIRE_SIGNED is set but the upload keystore is incomplete " +
+                "(path=${ksPath ? 'set' : 'MISSING'}, password=${ksPassword ? 'set' : 'MISSING'}, " +
+                "alias=${ksAlias ? 'set' : 'MISSING'}, " +
+                "file=${ksFile?.isFile() ? ksFile.length() + 'B' : 'MISSING'})")
+    }
 
     signingConfigs {
         debug {
@@ -127,7 +158,7 @@ android {
         }
         if (hasUploadKeystore) {
             release {
-                storeFile file(ksPath.toString())
+                storeFile ksFile          // already validated: absolute, non-empty
                 storePassword ksPassword.toString()
                 keyAlias ksAlias.toString()
                 keyPassword ksKeyPassword.toString()

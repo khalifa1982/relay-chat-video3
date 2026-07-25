@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { uploadStatusMedia } from "@/lib/uploadAttachment";
 import { videoRecorderSupported } from "@/lib/videoNote";
 import { VideoRecordSheet } from "@/app/VideoRecordSheet";
+import { AUDIENCE_OPTIONS, audienceOption } from "@/app/statusAudience";
 
 /**
  * Rich user status (v2.95) — WhatsApp/story-style ephemeral updates: text,
@@ -35,7 +36,7 @@ const BG_OPTIONS = [
 
 const DEFAULT_ITEM_MS = 5000; // text/image dwell time
 
-type FeedGroup = {
+export type FeedGroup = {
   owner: { id: number; number: string; displayName: string; avatarUrl: string | null; isMe: boolean };
   items: StatusItem[];
   hasUnseen: boolean;
@@ -49,6 +50,8 @@ type StatusItem = {
   mediaUrl: string | null;
   mimeType: string | null;
   durationMs: number | null;
+  /** Present only on MY OWN statuses (the server omits it for other people's). */
+  audience?: string | null;
   createdAt: string | Date;
   expiresAt: string | Date;
 };
@@ -209,6 +212,15 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
   const [recOpen, setRecOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const post = trpc.status.post.useMutation();
+  /* Audience for THIS post (v2.99.55). Starts from the saved default and can be
+     changed per post; `undefined` until the default loads, at which point the
+     server would apply the same value anyway, so nothing is lost by an early
+     submit. Changing it here does NOT change the saved default — that lives in
+     Profile → Status privacy, which is the deliberate split: a one-off story
+     shouldn't silently rewrite your standing preference. */
+  const privacy = trpc.status.getPrivacy.useQuery(undefined, { staleTime: 60_000 });
+  const [audience, setAudience] = useState<"contacts" | "everyone" | null>(null);
+  const effectiveAudience = audience ?? privacy.data?.audience ?? "contacts";
 
   useEffect(() => {
     if (!file) { setPreviewUrl(null); return; }
@@ -237,7 +249,12 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
       if (mode === "text") {
         const body = text.trim();
         if (!body) { toast.error("Write something first."); setPosting(false); return; }
-        await post.mutateAsync({ kind: "text", text: body, bgColor: BG_OPTIONS[bgIndex] });
+        await post.mutateAsync({
+          kind: "text",
+          text: body,
+          bgColor: BG_OPTIONS[bgIndex],
+          audience: effectiveAudience,
+        });
       } else {
         if (!file) { setPosting(false); return; }
         const kind = mediaKindOf(file);
@@ -257,9 +274,10 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           mimeType: file.type,
           text: caption.trim() || undefined,
           durationMs,
+          audience: effectiveAudience,
         });
       }
-      toast.success("Status posted — visible for 24h to your contacts and anyone who's saved you.");
+      toast.success(`Status posted — ${audienceOption(effectiveAudience).posted}.`);
       onPosted();
     } catch (e) {
       toast.error((e as Error)?.message || "Couldn't post your status.");
@@ -368,7 +386,38 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           )}
         </div>
 
-        <div className="px-3 pb-4">
+        {/* Who can watch THIS post (v2.99.55). Two options, per the owner's ask. */}
+        <div className="px-3 pb-1">
+          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Who can see this
+          </p>
+          <div className="flex gap-1.5">
+            {AUDIENCE_OPTIONS.map((opt) => {
+              const active = effectiveAudience === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setAudience(opt.value)}
+                  aria-pressed={active}
+                  className={`min-w-0 flex-1 rounded-xl border px-2.5 py-2 text-left transition-colors ${
+                    active
+                      ? "border-primary/60 bg-primary/10"
+                      : "border-border/60 text-muted-foreground hover:bg-muted/50"
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5 text-sm font-semibold">
+                    <opt.Icon className="size-3.5 shrink-0" />
+                    <span className="truncate">{opt.label}</span>
+                  </span>
+                  <span className="mt-0.5 block text-[11px] leading-snug opacity-80">{opt.hint}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="px-3 pb-4 pt-2">
           <Button
             type="button"
             onClick={submit}
@@ -538,12 +587,27 @@ export function StatusViewer({
         <div className="px-5 pb-3 text-center text-sm">{item.text}</div>
       )}
 
-      {/* owner footer: seen-by + delete */}
+      {/* owner footer: audience + seen-by + delete */}
       {isMine && (
-        <div className="flex items-center justify-between px-5 py-3">
+        <div className="flex items-center justify-between gap-3 px-5 py-3">
           <button type="button" onClick={() => { setPaused(true); setShowViewers(true); }} className="inline-flex items-center gap-1.5 text-sm text-white/80">
             <Eye className="size-4" /> Viewers
           </button>
+          {/* Which audience THIS post went to (v2.99.55). The per-post value is
+              frozen at insert, so this is the truth for this story even if the
+              default has changed since — which is exactly why it's worth showing. */}
+          {item.audience && (
+            <span
+              className="inline-flex min-w-0 items-center gap-1 text-xs text-white/60"
+              title={audienceOption(item.audience).hint}
+            >
+              {(() => {
+                const O = audienceOption(item.audience).Icon;
+                return <O className="size-3.5 shrink-0" />;
+              })()}
+              <span className="truncate">{audienceOption(item.audience).label}</span>
+            </span>
+          )}
           <button
             type="button"
             onClick={async () => {

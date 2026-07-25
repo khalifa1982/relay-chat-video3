@@ -1338,6 +1338,13 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "users", column: "messageEmailsToday", ddl: "ADD COLUMN `messageEmailsToday` int" },
     // v2.99.44 — missed-call email cooldown (H8).
     { table: "users", column: "lastMissedCallEmailAt", ddl: "ADD COLUMN `lastMissedCallEmailAt` timestamp NULL" },
+    // v2.99.55 — status audience. NULL means "contacts" on BOTH columns, which is
+    // exactly the rule every existing row was posted under, so the migration is a
+    // no-op until someone opts in. `statuses.audience` is per-POST and stamped at
+    // insert so flipping the identity default can never retroactively widen an
+    // already-published status.
+    { table: "identities", column: "statusAudience", ddl: "ADD COLUMN `statusAudience` varchar(16)" },
+    { table: "statuses", column: "audience", ddl: "ADD COLUMN `audience` varchar(16)" },
     // v2.99.49 — per-account password-login lockout (closes the v2.99.20 residual).
     { table: "users", column: "loginPwAttempts", ddl: "ADD COLUMN `loginPwAttempts` int" },
     { table: "users", column: "loginPwLockedAt", ddl: "ADD COLUMN `loginPwLockedAt` timestamp NULL" },
@@ -2910,9 +2917,17 @@ export async function authorizeStorageKey(
       if (await isIdentityAvatarKey(storageKey)) return { kind: "avatar", authorized: true };
       return { kind: "status", authorized: false };
     }
+    // DELIBERATELY refuses an anonymous request even for an "everyone" status
+    // (v2.99.55). "Everyone" means every RELAY identity, not every HTTP client:
+    // v2.99.14 exists specifically so a media URL cannot be opened or copied
+    // outside the app, and relaxing this would hand back the shareable-link
+    // behaviour that lockdown removed. Every real client has an identity (a
+    // name-only guest counts), so nothing legitimate is refused here.
     if (identityId == null) return { kind: "status", authorized: false };
     if (st.identityId === identityId) return { kind: "status", authorized: true };
-    const ok = await statusAudienceAuthorized(identityId, st.identityId);
+    // v2.99.55: the audience is a property of THIS post, not of its owner — an
+    // "everyone" story and a contacts-only one can be live at the same time.
+    const ok = await statusAudienceAuthorized(identityId, st.identityId, st.audience);
     return { kind: "status", authorized: ok };
   }
   const att = await getAttachmentByStorageKey(storageKey);
@@ -3010,6 +3025,26 @@ export async function getIdentitiesByNumbers(numbers: string[]) {
 
 /* ── rich user status (story-style, ephemeral) ────────────────── */
 
+/**
+ * Who may watch a status (v2.99.55).
+ *
+ *  - "contacts"  the historical rule: either side having saved the other.
+ *  - "everyone"  any signed-in RELAY identity that reaches the post.
+ *
+ * A block in either direction still wins over BOTH.
+ */
+export type StatusAudience = "contacts" | "everyone";
+
+/**
+ * Read a stored audience value. Anything that is not exactly "everyone" — NULL
+ * (every pre-v2.99.55 row), a typo, a value from a future version, a corrupted
+ * column — resolves to the PRIVATE option. Fail closed: a garbled value must
+ * never be the reason a status is published wider than its author chose.
+ */
+export function normalizeStatusAudience(v: string | null | undefined): StatusAudience {
+  return v === "everyone" ? "everyone" : "contacts";
+}
+
 export interface StatusRow {
   id: number;
   identityId: number;
@@ -3020,6 +3055,8 @@ export interface StatusRow {
   mediaUrl: string | null;
   mimeType: string | null;
   durationMs: number | null;
+  /** Per-post audience; NULL = "contacts". Read via normalizeStatusAudience. */
+  audience: string | null;
   createdAt: Date;
   expiresAt: Date;
 }
@@ -3033,6 +3070,7 @@ export async function insertStatus(input: {
   mediaUrl: string | null;
   mimeType: string | null;
   durationMs: number | null;
+  audience: StatusAudience;
   ttlMs: number;
 }): Promise<StatusRow | null> {
   const db = await getDb();
@@ -3047,6 +3085,9 @@ export async function insertStatus(input: {
     mediaUrl: input.mediaUrl,
     mimeType: input.mimeType,
     durationMs: input.durationMs ?? null,
+    // Stamped at insert, never read back from the identity default — that is what
+    // makes a later default change unable to widen this post.
+    audience: input.audience,
     expiresAt,
   });
   const [row] = await db
@@ -3176,11 +3217,11 @@ export async function getIdentityIdsWhoSaved(number: string): Promise<number[]> 
 /** A single ACTIVE status by its media key (drives storage-proxy authorization). */
 export async function getActiveStatusByMediaKey(
   mediaKey: string,
-): Promise<{ id: number; identityId: number } | null> {
+): Promise<{ id: number; identityId: number; audience: string | null } | null> {
   const db = await getDb();
   if (!db) return null;
   const [row] = await db
-    .select({ id: statuses.id, identityId: statuses.identityId })
+    .select({ id: statuses.id, identityId: statuses.identityId, audience: statuses.audience })
     .from(statuses)
     .where(and(eq(statuses.mediaKey, mediaKey), gt(statuses.expiresAt, new Date())))
     .limit(1);
@@ -3188,17 +3229,28 @@ export async function getActiveStatusByMediaKey(
 }
 
 /**
- * Can `requesterId` view statuses owned by `ownerId`? The owner always can.
- * Otherwise (v2.99.33, owner: "when you post it, it doesn't appear on anyone")
- * visibility is EITHER-DIRECTION, WhatsApp-style: a status reaches the people
+ * Can `requesterId` view a status owned by `ownerId`? The owner always can.
+ *
+ * `audience` is the PER-POST value from `statuses.audience` (v2.99.55). Pass it
+ * whenever the caller has a specific status in hand — the media gate and
+ * markViewed both do. Omitting it evaluates the "contacts" rule, which is the
+ * conservative reading and the right default for a caller that is reasoning
+ * about an owner rather than about one post.
+ *
+ * The "contacts" rule (v2.99.33, owner: "when you post it, it doesn't appear on
+ * anyone") is EITHER-DIRECTION, WhatsApp-style: a status reaches the people
  * YOU'VE added as contacts AND anyone who has added YOU — so posting is visible
- * to your contacts without requiring them to have saved you back. A block in
- * EITHER direction hides statuses BOTH ways. This is the single audience rule
- * shared by the feed, markViewed, and media access.
+ * to your contacts without requiring them to have saved you back.
+ *
+ * A block in EITHER direction hides statuses BOTH ways, and it is checked BEFORE
+ * the audience widening, so "everyone" never means "everyone including someone I
+ * blocked". This is the single audience rule shared by markViewed and media
+ * access.
  */
 export async function statusAudienceAuthorized(
   requesterId: number,
   ownerId: number,
+  audience?: string | null,
 ): Promise<boolean> {
   if (requesterId === ownerId) return true;
   const db = await getDb();
@@ -3206,9 +3258,15 @@ export async function statusAudienceAuthorized(
   const owner = await getIdentityById(ownerId);
   const requester = await getIdentityById(requesterId);
   if (!owner || !requester) return false;
-  // A block either way hides statuses in BOTH directions.
+  // A block either way hides statuses in BOTH directions — and it outranks the
+  // audience setting, so it is deliberately tested first.
   if (await isNumberBlockedBy(ownerId, requester.number)) return false; // owner blocked me
   if (await isNumberBlockedBy(requesterId, owner.number)) return false; // I blocked owner
+  // "Everyone": any signed-in identity that gets this far may watch. Note the
+  // caller has already established the requester IS a resolved identity — an
+  // anonymous request never reaches here (the storage proxy refuses a null
+  // identity before calling, and markViewed requires one).
+  if (normalizeStatusAudience(audience) === "everyone") return true;
   // Either side having saved the other authorizes viewing.
   const [iSavedThem] = await db
     .select({ id: contacts.id })
@@ -3222,6 +3280,64 @@ export async function statusAudienceAuthorized(
     .where(and(eq(contacts.ownerId, ownerId), eq(contacts.number, requester.number)))
     .limit(1);
   return !!theySavedMe;
+}
+
+/** My DEFAULT audience for new statuses (v2.99.55). NULL ⇒ "contacts". */
+export async function getIdentityStatusAudience(identityId: number): Promise<StatusAudience> {
+  const db = await getDb();
+  if (!db) return "contacts";
+  const [row] = await db
+    .select({ a: identities.statusAudience })
+    .from(identities)
+    .where(eq(identities.id, identityId))
+    .limit(1);
+  return normalizeStatusAudience(row?.a ?? null);
+}
+
+/** Set my default audience for FUTURE statuses. Already-posted rows keep theirs. */
+export async function setIdentityStatusAudience(
+  identityId: number,
+  audience: StatusAudience,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  await db.update(identities).set({ statusAudience: audience }).where(eq(identities.id, identityId));
+}
+
+/**
+ * The active statuses of ONE owner that `requesterId` is allowed to watch
+ * (v2.99.55) — the discovery surface that gives "everyone" its meaning.
+ *
+ * The story feed is deliberately built from a BOUNDED candidate set (my contacts
+ * + people who saved me), because the reverse of "everyone" is every identity in
+ * the database and fanning realtime events to all of them is not a thing that can
+ * be done. So "everyone" cannot mean "appears in strangers' feeds"; it means
+ * "anyone who opens my profile can watch it". This is that lookup, called from
+ * the profile popup with a number the viewer already has.
+ *
+ * Returns [] rather than an error for a status you may not see, so it is not an
+ * existence oracle: a contacts-only poster is indistinguishable from someone with
+ * no active status.
+ */
+export async function getViewableStatusesOfOwner(
+  requesterId: number,
+  ownerId: number,
+): Promise<StatusRow[]> {
+  const rows = await getActiveStatusesForOwners([ownerId]);
+  if (rows.length === 0) return [];
+  if (requesterId === ownerId) return rows;
+  // One authorization call per DISTINCT audience value, not per row: the two
+  // possible values mean at most two calls however many stories are live.
+  const verdict = new Map<StatusAudience, boolean>();
+  const out: StatusRow[] = [];
+  for (const r of rows) {
+    const a = normalizeStatusAudience(r.audience);
+    if (!verdict.has(a)) {
+      verdict.set(a, await statusAudienceAuthorized(requesterId, ownerId, a));
+    }
+    if (verdict.get(a)) out.push(r);
+  }
+  return out;
 }
 
 /** Count of a user's currently-active statuses (for the per-user cap). */
@@ -3242,6 +3358,14 @@ export async function countActiveStatuses(ownerId: number): Promise<number> {
  * SAVED the owner's number (non-blocked) AND everyone the OWNER has saved
  * (their own contacts) — so a fresh post lights up on the poster's contacts
  * live, not just on people who saved them. Mutual blocks are dropped.
+ *
+ * DELIBERATELY NOT widened by an "everyone" audience (v2.99.55), even though
+ * that looks like an inconsistency. This set is materialized and then iterated to
+ * publish one SSE event per member; the reverse of "everyone" is every identity
+ * in the database, so widening it would mean a full-table scan and a fan-out to
+ * every user on every status post. "Everyone" is therefore an AUTHORIZATION
+ * widening (see statusAudienceAuthorized) plus a pull-based discovery surface
+ * (getViewableStatusesOfOwner), not a broadcast. Keep it bounded.
  */
 export async function getStatusAudienceIds(
   ownerId: number,

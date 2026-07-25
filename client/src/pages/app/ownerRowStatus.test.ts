@@ -26,12 +26,18 @@ const ROUTERS = read("server/v2routers.ts");
 
 describe("v2.99.33 — status visibility is either-direction (post reaches your contacts)", () => {
   it("statusAudienceAuthorized authorizes when EITHER side saved the other", () => {
-    const fn = V2DB.slice(V2DB.indexOf("export async function statusAudienceAuthorized"), V2DB.indexOf("export async function statusAudienceAuthorized") + 1400);
+    // Slice widened for v2.99.55: the function grew an "everyone" branch, which
+    // pushed `return !!theySavedMe;` past the old 1400-char window. The
+    // either-direction rule below is UNCHANGED — it is now the "contacts" option.
+    const fn = V2DB.slice(V2DB.indexOf("export async function statusAudienceAuthorized"), V2DB.indexOf("export async function statusAudienceAuthorized") + 2400);
     expect(fn).toMatch(/if \(iSavedThem\) return true;/);
     expect(fn).toMatch(/return !!theySavedMe;/);
     // block either way still hides both directions
     expect(fn).toMatch(/isNumberBlockedBy\(ownerId, requester\.number\)/);
     expect(fn).toMatch(/isNumberBlockedBy\(requesterId, owner\.number\)/);
+    // v2.99.55: and the either-direction rule is still what an unspecified or
+    // "contacts" audience evaluates — the everyone branch must not swallow it.
+    expect(fn).toMatch(/normalizeStatusAudience\(audience\) === "everyone"/);
   });
   it("getStatusAudienceIds fans to savers AND the owner's own saved contacts", () => {
     const fn = V2DB.slice(V2DB.indexOf("export async function getStatusAudienceIds"), V2DB.indexOf("export async function getStatusAudienceIds") + 1400);

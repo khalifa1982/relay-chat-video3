@@ -106,7 +106,14 @@ describe("status privacy hardening (review §3/§4/§5)", () => {
   });
 
   it("markViewed is audience-gated + rate-limited", () => {
-    expect(router).toMatch(/statusAudienceAuthorized\(me\.id, st\.identityId\)\)\) return \{ ok: false \}/);
+    // v2.99.55 — the gate now carries the PER-POST audience (`st.audience`), not
+    // just the owner id. Passing the owner's current default here instead would
+    // let a later privacy change retroactively decide who may register a view on
+    // an already-published story; asserting the third argument is the stronger
+    // invariant, so this replaces the old two-argument pin rather than relaxing it.
+    expect(router).toMatch(
+      /statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience\)\)\) return \{ ok: false \}/,
+    );
     expect(router).toMatch(/statusGate\(ctx\)/);
   });
 

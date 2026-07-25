@@ -198,6 +198,12 @@ export const identities = mysqlTable(
      *  before this are hidden from THIS identity's History tab (per-user soft
      *  clear — the other party keeps their own log). Additive + nullable. */
     historyClearedAt: timestamp("historyClearedAt"),
+    /** Default audience for statuses I post: "contacts" | "everyone" (v2.99.55).
+     *  NULL = "contacts", which is what every pre-v2.99.55 identity was posting
+     *  under, so adding the column changes nobody's visibility. This is only the
+     *  DEFAULT for new posts — each status stamps its own `statuses.audience`, so
+     *  changing this never reaches back into something already published. */
+    statusAudience: varchar("statusAudience", { length: 16 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -438,6 +444,14 @@ export const statuses = mysqlTable(
     mimeType: varchar("mimeType", { length: 128 }),
     /** Audio/video duration in ms (drives the story auto-advance timer). */
     durationMs: int("durationMs"),
+    /**
+     * Who may watch THIS post: "contacts" | "everyone" (v2.99.55). Stamped at
+     * insert from the poster's `identities.statusAudience` default, so later
+     * changing that default can never retroactively widen an already-published
+     * status. NULL = "contacts" (every pre-v2.99.55 row, which was posted under
+     * the contacts-only rule).
+     */
+    audience: varchar("audience", { length: 16 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     /** createdAt + TTL (default 24h). Reads filter `expiresAt > now`. */
     expiresAt: timestamp("expiresAt").notNull(),

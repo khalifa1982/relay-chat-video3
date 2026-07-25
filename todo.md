@@ -6568,6 +6568,97 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       additive-DDL rule now allows ADD UNIQUE INDEX; androidAudioCamera.test.ts's chat-dedup pin now
       expects the threaded sender). Suite 1662 passed / 1 skipped; check + build green.
 
+## v2.99.55 — status audience (everyone / contacts only) + Gradle signs the Android release (2026-07-25)
+- [x] OWNER ASK #1 — "do the stories suggestion as to give me options (everyone sees, or contacts only)".
+      Two options, and the one design decision that matters: **the audience is a property of the POST, not of
+      the poster.** New `statuses.audience` is stamped at insert from the new `identities.statusAudience`
+      default, and every gate reads the ROW. Reading the owner's *current* preference instead would mean
+      flipping your default to "everyone" retroactively republished every contacts-only story still inside its
+      24h window — a silent widening of content someone chose to keep narrow. As a bonus the per-post value
+      gives the composer a free per-story override that doesn't rewrite the standing default.
+      - **`normalizeStatusAudience` fails closed**: anything that is not the literal `"everyone"` — NULL, a
+        typo, `"EVERYONE"`, `" everyone"`, a value from some future version — resolves to `contacts`. A
+        garbled column must never be the reason a status is published wider than its author picked. The
+        client has its own copy (it runs in the browser) and a test asserts the two agree on every input.
+      - **NULL means contacts on both columns**, which is exactly the rule every pre-v2.99.55 row was posted
+        under, so the migration is a genuine no-op until a user opts in. No DEFAULT, no NOT NULL.
+      - **Blocks outrank the audience** — both `isNumberBlockedBy` checks run BEFORE the everyone
+        short-circuit, so "everyone" never means "everyone, including someone I blocked". Pinned by index
+        comparison, not by hoping the order stays.
+      - **"Everyone" is deliberately NOT a broadcast, and the copy says so.** `getStatusAudienceIds` (the
+        realtime fan-out) is left bounded to contacts + savers: its reverse is every identity in the database,
+        so widening it would mean a full-table scan and an SSE publish to every user on every post. So
+        "everyone" is an AUTHORIZATION widening plus a PULL discovery surface — new `status.forNumber`, used by
+        the profile popup, which already has the number in hand. Without that surface the setting would have
+        been authorized-but-invisible: the feed is bounded, so a non-contact would never learn the story
+        exists. `forNumber` answers an unknown number and an unauthorized one IDENTICALLY (empty list, not an
+        error), so it is not an existence oracle, and it is `statusGate`-limited before any DB work.
+      - The storage proxy still **refuses an anonymous request even for an "everyone" status**. That is not an
+        oversight: v2.99.14 exists precisely so a media URL can't be opened or copied outside the app, and
+        relaxing it would hand back the shareable-link behaviour that lockdown removed. Commented at the gate.
+      - `audience` is on the wire **only for your own statuses** (`publicStatus(r, own)`), because whether
+        someone else's story is public isn't something a viewer needs — the v2.99.40 #4 lesson about shipping
+        fields no surface renders. The author's own story footer shows which audience the post went to.
+      - UI: a picker in the composer (per post) and a radio group in Profile → Status privacy (the default,
+        rendered for guests too, since statuses hang off the identity rather than the user row). Both render
+        from ONE module, `client/src/app/statusAudience.ts` — v2.99.49 was caused by a duplicated rule, and
+        duplicated *copy* is worse, because nothing fails when two screens promise different things.
+      - `server/statusAudience.test.ts` (27). Three mutations were run to confirm the pins bite: moving the
+        everyone check above the block checks, swapping `st.audience` for the owner's live default, and
+        loosening the normalizer to a trimmed/lowercased compare — each failed exactly the intended test.
+        Three stale pins rewritten to the STRONGER invariant (markViewed now asserts the third argument;
+        qaBatch7's copy pin moved from "this literal is somewhere in the file" — which a second audience would
+        have satisfied while displaying the wrong text — to the derived-from-what-was-sent property).
+- [x] OWNER ASK #2 — the cleaner Android end state: **Gradle signs the release; `jarsigner` only verifies.**
+      This finishes v2.99.52. Adversarially reviewed before writing (verdict: SAFE_WITH_CHANGES), and the
+      review caught five things worth having:
+      - It would have **turned CI red on commit one**: `androidSigning.test.ts` pinned `jarsigner -keystore`,
+        the exact substring being deleted. Updated in the same commit.
+      - **A zero-byte keystore satisfies `File.exists()`.** `base64 -d` of an empty string exits 0 and leaves
+        a 0-byte file — verified directly — which is precisely what an absent CI secret decodes to. An
+        exists()-only guard would have flipped true on every secretless run and failed the build loading a
+        garbage keystore. Closed on both sides: `test -s` at the decode step, `isFile() && length() > 0` in
+        Gradle, and the decode is skipped entirely when the secret is absent.
+      - **Silent-unsigned was a real regression.** jarsigner exited non-zero on a bad password; an incomplete
+        keystore in Gradle just leaves the build unsigned and GREEN, and Play only rejects it at upload — mid
+        store swap. New `RELAY_REQUIRE_SIGNED`, set by CI only when it actually staged a keystore, throws a
+        GradleException naming which part is missing.
+      - **`RELAY_KEYSTORE_PATH` must be absolute**: `file()` resolves a relative path against the app MODULE
+        directory, so a plausible value misses, exists() goes false, and the build goes quietly unsigned.
+        Now rejected outright; CI stages to `$RUNNER_TEMP` (absolute by construction, outside the checkout so
+        no artifact glob can publish it, `chmod 600`, wiped with the job).
+      - **The artifact NAME is the contract**: `RELAY-RN-release-aab-SIGNED` is what mobile/README.md tells the
+        operator to upload, so it is kept even though the mechanism moved. The plain AAB step no longer claims
+        "(unsigned)".
+      - Verification uses the right tool per format: `apksigner` cannot read an AAB (v2/v3 live in an APK
+        Signing Block that Play never reads on a bundle), and `jarsigner -verify` can exit 0 on an unsigned
+        archive — so the deterministic gate is `unzip -l | grep META-INF/*.RSA`, with `apksigner verify` on the
+        APK, at whatever build-tools version the runner has rather than a hardcoded one.
+      - Real upside beyond tidiness: Gradle signs the APK via apksigner (v1+v2+v3), so a signed run now yields
+        an **installable** release APK. jarsigner gives v1 only, which does not install on Android 11+ at
+        targetSdk 36 — that retires the v2.99.53 "use the debug artifact instead" caveat for signed runs.
+      - **`android-apk.yml` is deliberately NOT converted**, against this repo's system-wide-application rule:
+        its TWA and Capacitor modules have no `signingConfig` at all, so removing jarsigner there would leave
+        those releases permanently unsigned with no signer anywhere. Stated in a comment and pinned by a test.
+      - `androidSigning.test.ts` 8 → 16, and all 10 new pins were confirmed to FAIL against the pre-change
+        files by reverting the source and re-running.
+- [x] OWNER ASK #3 — SHA-pin `android-apk.yml` / `native-rn.yml`. These hold the upload keystore secrets, so an
+      action running there can read the decoded keystore and a repointed mutable tag is how it would get in.
+      `checkout` and `setup-node` are pinned (SHAs the owner supplied for v2.99.51). Three actions
+      (`setup-java`, `upload-artifact`, `gradle/actions/setup-gradle`) are still on `@v4` because resolving a
+      tag to a commit requires reading those upstream repos, which this session cannot do — its GitHub access
+      is scoped to this repo alone. Rather than exempt the two files wholesale (which would let a NEW unpinned
+      action slip in unnoticed), `workflowPinning.test.ts` now covers them with an explicit `PENDING_SHA` set
+      of exactly those three: adding a fourth fails, a stale entry fails, a BRANCH ref fails regardless of the
+      exemption, and `deploy.yml` gets no exemption at all. The resolve command is in the test's header.
+      Verified by three tripwires (a new unpinned action, a branch ref, unpinning deploy.yml) — each fired.
+- [x] mobile/README.md: corrected stale versionName/versionCode (3.0.0/2 → 3.1.0/3, matching build.gradle),
+      documented the Gradle-signing change and the local `-P` properties, and added the two pre-swap checks
+      that only bite at upload time — confirm the CI keystore is the UPLOAD key (compare the
+      `apksigner --print-certs` SHA-256 against Play Console → App integrity → App signing → Upload key
+      certificate) and confirm `versionCode 3` isn't already live.
+- [x] Suite 1930 passed / 1 skipped; `pnpm verify` (check + test + build, one script, no pipe) green.
+
 ## v2.99.54 — identity continuity: data is welded to the person, not to their number (2026-07-25)
 - [x] OWNER, after the v2.99.49 data-loss fix: "what I care is that it should not be repeated again to any other
       users and in the future and should be systematic. If you were a guest and you have data and you decide to
