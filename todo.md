@@ -6568,6 +6568,26 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       additive-DDL rule now allows ADD UNIQUE INDEX; androidAudioCamera.test.ts's chat-dedup pin now
       expects the threaded sender). Suite 1662 passed / 1 skipped; check + build green.
 
+## v2.99.53 — the Android workflow catches up with the unsigned release (2026-07-25)
+- [x] v2.99.52's Gradle change WORKED — the CI run reported `BUILD SUCCESSFUL in 35m 16s` with
+      `:app:assembleRelease`, `:app:packageRelease` and `:app:bundleRelease` all green. The job still
+      failed, one step later, and the error is itself proof the fix took effect:
+      `No files were found with the provided path: .../apk/release/app-release.apk`.
+- [x] CAUSE: AGP names the output `app-release-unsigned.apk` when a build type has no signing config and
+      `app-release.apk` when it does. The release is now unsigned unless a real keystore is configured, so
+      the workflow's hardcoded signed filename matched nothing and `if-no-files-found: error` failed the
+      job. Fixed with a glob (`app-release*.apk`) that matches whichever name the build produced — correct
+      both with and without a keystore, rather than swapping one hardcoded name for the other.
+- [x] ALSO CORRECTED A NOW-FALSE INSTRUCTION, because it would have wasted someone's time on a device:
+      that artifact's comment said "debug-keystore signed — uninstall before installing the Play release.
+      Prefer THIS one for the QA-TEST-PLAN §F pass". An UNSIGNED APK cannot be installed at all, so §F
+      must use the `RELAY-RN-debug-apk` artifact (side-by-side as `org.yourchat.relay.next`) or a build
+      with `RELAY_KEYSTORE_*` set. The comment now says that.
+- [x] `androidSigning.test.ts` grows to 8: the artifact path must be the glob and must NOT be the bare
+      signed filename, and the workflow must not still claim the release APK is debug-signed/installable.
+- [x] NOT changed: the AAB path (`app-release.aab`) is the same with or without signing, and its upload
+      step never ran in the failed job, so the next run is what confirms it. Suite 1848 passed / 1 skipped.
+
 ## v2.99.52 — the Android release build is never signed with the debug key (2026-07-25)
 - [x] `mobile/native/android/app/build.gradle` shipped the React Native template default,
       `release { signingConfig signingConfigs.debug }`. Two distinct problems, not one: (1) a local or CI

@@ -85,6 +85,25 @@ describe("Android release signing", () => {
     expect(guard).toMatch(/file\(ksPath\.toString\(\)\)\.exists\(\)/);
   });
 
+  it("the release-APK artifact path tolerates the unsigned filename", () => {
+    // AGP emits `app-release-unsigned.apk` with no signing config and
+    // `app-release.apk` with one. v2.99.52 made the release unsigned by default,
+    // so a hardcoded signed filename failed the upload (`if-no-files-found:
+    // error`) even though the Gradle build succeeded — that is exactly how the
+    // first run of the signing fix failed. A glob covers both.
+    const wf = fs.readFileSync(path.join(ROOT, ".github/workflows/native-rn.yml"), "utf8");
+    expect(wf).toMatch(/apk\/release\/app-release\*\.apk/);
+    expect(wf).not.toMatch(/apk\/release\/app-release\.apk/);
+  });
+
+  it("does not tell QA to install an artifact that cannot be installed", () => {
+    // An unsigned APK is not installable; the debug artifact is the device-test
+    // build. The workflow comment must not still claim otherwise.
+    const wf = fs.readFileSync(path.join(ROOT, ".github/workflows/native-rn.yml"), "utf8");
+    expect(wf).not.toMatch(/debug-keystore signed/);
+    expect(wf).toMatch(/RELAY-RN-debug-apk artifact/);
+  });
+
   it("the CI signing step still guards on the secret being present", () => {
     // Without the secret the workflow must stay green and simply not sign —
     // otherwise every fork/PR build fails. (Its jarsigner now signs an UNSIGNED
