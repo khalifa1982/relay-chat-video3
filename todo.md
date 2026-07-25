@@ -181,3 +181,9 @@
 - [x] Verified no remaining references to your-chat.org in the project
 - [x] relay-config.test.ts live endpoint test passes against your-chat.io/app
 - [x] tsc clean + 65 tests pass
+
+## Round 19 — Final Apple Guideline 2.2 fix: remove all beta references
+- [x] Confirmed BuildStatusRow already returns null on iOS (footer hidden)
+- [x] Renamed betaVersionName prop to appVersionName to eliminate the word "beta" from compiled code
+- [x] Verified zero occurrences of "beta" in any source file (ts/tsx/js)
+- [x] tsc clean + 65 tests pass

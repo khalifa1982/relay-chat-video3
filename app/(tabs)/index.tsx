@@ -62,7 +62,7 @@ export default function HomeScreen() {
       <BuildStatusRow
         installedBuild={installedBuild}
         installedVersionName={installedVersionName}
-        betaVersionName={
+        appVersionName={
           (Constants.expoConfig?.version ?? installedVersionName) || null
         }
         latestBuild={manifest?.buildNumber}

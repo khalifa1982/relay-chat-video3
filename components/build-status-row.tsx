@@ -10,7 +10,7 @@ interface Props {
   /** Installed human version name, e.g. "1.0.4". */
   installedVersionName?: string | null;
   /** The version bundled into this app build (from app.config.ts). */
-  betaVersionName?: string | null;
+  appVersionName?: string | null;
   /** Latest build number reported by the manifest, if known. */
   latestBuild?: number;
   /** Latest human version name reported by the manifest, if known. */
@@ -60,7 +60,7 @@ const COLORS = {
 export function BuildStatusRow({
   installedBuild,
   installedVersionName,
-  betaVersionName,
+  appVersionName,
   latestBuild,
   latestVersionName,
   reason,
@@ -76,7 +76,7 @@ export function BuildStatusRow({
   if (Platform.OS === "ios") return null;
 
   // Version label: show the installed version name and build number.
-  const versionLabel = betaVersionName ?? installedVersionName ?? null;
+  const versionLabel = appVersionName ?? installedVersionName ?? null;
   const latestLabel = latestVersionName ?? (latestBuild != null ? String(latestBuild) : null);
   const upToDate =
     latestBuild != null && installedBuild != null
