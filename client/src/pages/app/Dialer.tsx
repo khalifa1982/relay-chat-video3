@@ -163,7 +163,7 @@ export default function DialerPage() {
     // A matching one-time intent means WE navigated here (the back-online
     // notification the user armed and tapped), so it stays a single tap.
     //
-    // v2.99.48: the question is whether THIS number is the one the document was
+    // v2.99.49: the question is whether THIS number is the one the document was
     // opened with — not whether the document ever opened with any. `BOOT_SEARCH`
     // is captured per document, so the old "did we boot with a target?" test
     // meant that after one arrival (tapping Call on a back-online alert is a full

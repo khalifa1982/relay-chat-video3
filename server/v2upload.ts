@@ -27,7 +27,7 @@
    pipeline isn't ideal for binary/base64 payloads.
    ============================================================ */
 
-import type { Express, Request, Response } from "express";
+import type { Express, Request, Response, NextFunction} from "express";
 import crypto from "crypto";
 import { storagePut } from "./storage";
 import { s3Config } from "./s3";
@@ -118,6 +118,72 @@ function safeName(name: string | undefined, fallback: string) {
   return trimmed.replace(/[^\w.\-]+/g, "_").slice(0, 120);
 }
 
+/** Stash so the handler doesn't resolve the identity a second time. */
+interface UploadGateRequest extends Request {
+  __uploadIdentityId?: number;
+}
+
+/**
+ * Refuse before the body is read. Node drains the unread remainder so the socket
+ * stays reusable — but body-parser was SKIPPED here, so its 41MB `limit` no
+ * longer bounds that drain, and a client ignoring this response would have its
+ * whole claimed body drained anyway. `Connection: close` puts the response on
+ * Node's last-response path (FIN once this flushes, then destroy), so the reply
+ * is delivered and ingress stops. Deliberately NOT a manual socket destroy: an
+ * RST before the flush can eat the response the client needs to see.
+ */
+function refuseUpload(res: Response, status: number, error: string) {
+  res.setHeader("Connection", "close");
+  return res.status(status).json({ error });
+}
+
+/**
+ * Pre-parse upload gate (v2.99.49) — closes the ordering residual recorded in
+ * v2.99.20/38.
+ *
+ * The per-IP + per-identity limiters and the identity check used to live INSIDE
+ * the handler, which Express only reaches AFTER `express.raw`/`express.json`
+ * have buffered up to 41MB. So a throttled request — and, worse, a wholly
+ * ANONYMOUS one, since the 401 was also post-buffer — still cost a full 41MB of
+ * heap before anything refused it. This runs as middleware BEFORE those parsers.
+ *
+ * It needs cookies and headers only (`createContext` never reads `req.body`), so
+ * BOTH buckets move up, not just the per-IP one.
+ *
+ * ACCEPTED TRADE, stated plainly: the per-IP bucket now runs BEFORE identity
+ * resolution, so a request that ends in 401 spends an IP token where it used to
+ * pay nothing. That is the point — an anonymous 41MB flood was entirely
+ * unlimited — but on a shared egress (CGNAT, an office) a burst of
+ * expired-session 401s can eat the shared budget and a legitimate signed-in user
+ * behind that IP could then see a 429 on a real upload. The budget itself is
+ * left at the value already in production; raising it is a separate call.
+ */
+export async function uploadRateGate(req: Request, res: Response, next: NextFunction) {
+  if (req.method !== "POST") return next(); // non-POST stays byte-identical
+  const off = process.env.RELAY_RATELIMIT_OFF === "1";
+  const now = Date.now();
+  // Cheapest check first (headers only). This now also shields the identity
+  // resolution's DB work, which previously ran ahead of every limiter.
+  if (!off && !uploadIpLimiter.allow(clientIpOf(req), now)) {
+    return refuseUpload(res, 429, "Too many uploads. Try again shortly.");
+  }
+  let identityId: number | null = null;
+  try {
+    const ctx = await createContext({ req, res } as Parameters<typeof createContext>[0]);
+    identityId = ctx.identity?.id ?? null;
+  } catch {
+    identityId = null;
+  }
+  if (identityId == null) {
+    return refuseUpload(res, 401, "No identity. Sign in or start a guest session.");
+  }
+  if (!off && !uploadIdLimiter.allow(String(identityId), now)) {
+    return refuseUpload(res, 429, "Too many uploads. Try again shortly.");
+  }
+  (req as UploadGateRequest).__uploadIdentityId = identityId;
+  next();
+}
+
 export function registerV2Upload(app: Express) {
   app.post("/api/v2/upload", async (req: Request, res: Response) => {
     try {
@@ -126,25 +192,31 @@ export function registerV2Upload(app: Express) {
       // cookies, and device ids — but NOT the `relay_session` cookie minted by
       // email-OTP/PIN sign-in, so every registered (non-OAuth) member got a
       // 401 on avatars, attachments, and voice notes.
-      let identityId: number | null = null;
-      try {
-        const ctx = await createContext({ req, res } as Parameters<typeof createContext>[0]);
-        identityId = ctx.identity?.id ?? null;
-      } catch {
-        identityId = null;
-      }
+      // Normally already resolved by `uploadRateGate`, which runs BEFORE the body
+      // parsers (v2.99.49). The fallback below keeps this handler correct on any
+      // mount without the gate — a direct registerV2Upload, or a test — by doing
+      // exactly what it did before the gate existed.
+      let identityId = (req as UploadGateRequest).__uploadIdentityId ?? null;
       if (identityId == null) {
-        return res.status(401).json({ error: "No identity. Sign in or start a guest session." });
-      }
-
-      // Rate limit BEFORE reading/storing bytes (S7).
-      if (process.env.RELAY_RATELIMIT_OFF !== "1") {
-        const now = Date.now();
-        if (
-          !uploadIpLimiter.allow(clientIpOf(req), now) ||
-          !uploadIdLimiter.allow(String(identityId), now)
-        ) {
-          return res.status(429).json({ error: "Too many uploads. Try again shortly." });
+        try {
+          const ctx = await createContext({ req, res } as Parameters<typeof createContext>[0]);
+          identityId = ctx.identity?.id ?? null;
+        } catch {
+          identityId = null;
+        }
+        if (identityId == null) {
+          return res.status(401).json({ error: "No identity. Sign in or start a guest session." });
+        }
+        // Rate limit before STORING bytes (S7). With the gate mounted this has
+        // already happened pre-buffer; here it is the fail-safe.
+        if (process.env.RELAY_RATELIMIT_OFF !== "1") {
+          const now = Date.now();
+          if (
+            !uploadIpLimiter.allow(clientIpOf(req), now) ||
+            !uploadIdLimiter.allow(String(identityId), now)
+          ) {
+            return res.status(429).json({ error: "Too many uploads. Try again shortly." });
+          }
         }
       }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 
 /**
- * v2.99.48 — M48's forced-hot-mic guard, re-tested for the two ways it was
+ * v2.99.49 — M48's forced-hot-mic guard, re-tested for the two ways it was
  * bypassed and the flow it broke.
  *
  * `bootUrl.ts` reads `window.location` at MODULE EVALUATION (that is the whole

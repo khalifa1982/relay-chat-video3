@@ -142,15 +142,106 @@ export interface BusEnvelope {
   p: unknown;
 }
 
-export function encodeEnvelope(instanceId: string, payload: unknown): string {
-  return JSON.stringify({ i: instanceId, p: payload });
+/* ── envelope authentication (v2.99.49) ────────────────────────────────────
+   Closes the residual accepted in v2.99.20: the bus had NO authentication of any
+   kind, so anything able to PUBLISH to Redis could forge an envelope that reached
+   every connected SSE stream on an instance (the `kind` allowlist added then is
+   loop/shape safety, not auth).
+
+   WIRE FORMAT IS DELIBERATELY UNCHANGED IN SHAPE: still a flat object with `i`
+   and `p` at the top level, with the signature in ADDITIONAL fields. Today's
+   decoder reads only `i`/`p` and ignores extras, so a signed envelope is
+   transparently accepted by an OLD instance — which matters because the fleet is
+   rolled one instance at a time, so signed and unsigned publishers coexist during
+   every deploy. Any other shape (a `v1.<mac>.<body>` prefix, a nested body) would
+   make every old receiver JSON.parse-fail and drop 100% of real events for the
+   whole rollout window. */
+
+/** Signing key: REDIS_BUS_SECRET, else JWT_SECRET (fleet-uniform by necessity —
+ *  it already verifies session cookies on every instance), else null. NEVER
+ *  throws: publishBus is contractually no-throw. */
+function busSecret(): string | null {
+  return process.env.REDIS_BUS_SECRET || process.env.JWT_SECRET || null;
 }
 
-export function decodeEnvelope(raw: string): BusEnvelope | null {
+/** Strict mode: reject UNSIGNED envelopes. The operator flips this only after the
+ *  whole fleet runs a signing build — see docs-aws-scale-out.md. Note the
+ *  `&& key` conjunction at the use site: strict with no key must not drop
+ *  everything, or a dev box with the flag set goes dark. */
+export function busStrict(): boolean {
+  return /^(1|true)$/i.test(process.env.REDIS_BUS_STRICT || "");
+}
+
+function envelopeMac(channel: string, i: string, t: number, p: unknown, key: string): string {
+  const ps = JSON.stringify(p === undefined ? null : p) ?? "null";
+  return crypto
+    .createHmac("sha256", key)
+    .update(`${channel}\n${i}\n${t}\n${ps}`)
+    .digest("hex")
+    .slice(0, 32); // 128-bit tag
+}
+
+/** Counters surfaced on /api/health so `REDIS_BUS_STRICT=1` can be flipped on
+ *  evidence (every instance reporting unsigned: 0) rather than on faith. */
+export const busAuthStats = { signed: 0, unsigned: 0, invalid: 0, unverifiable: 0 };
+export function _busAuthStatsForTests() {
+  return { ...busAuthStats };
+}
+let lastBusAuthWarn = 0;
+function warnBusAuth(what: string): void {
+  const now = Date.now();
+  if (now - lastBusAuthWarn < 60_000) return;
+  lastBusAuthWarn = now;
+  console.warn(`[redisBus] ${what}`);
+}
+
+export function encodeEnvelope(instanceId: string, payload: unknown, channel = ""): string {
+  const key = busSecret();
+  // No key ⇒ byte-identical to the pre-signing format.
+  if (!key) return JSON.stringify({ i: instanceId, p: payload });
+  const t = Date.now();
+  return JSON.stringify({
+    i: instanceId,
+    p: payload,
+    t,
+    m: envelopeMac(channel, instanceId, t, payload, key),
+  });
+}
+
+export function decodeEnvelope(raw: string, channel = ""): BusEnvelope | null {
   try {
-    const j = JSON.parse(raw) as Partial<BusEnvelope>;
+    const j = JSON.parse(raw) as Partial<BusEnvelope> & { t?: unknown; m?: unknown };
     if (!j || typeof j.i !== "string" || !("p" in j)) return null;
-    return { i: j.i, p: j.p };
+    const env: BusEnvelope = { i: j.i, p: j.p };
+    const key = busSecret();
+    if (typeof j.m === "string" && typeof j.t === "number") {
+      if (!key) {
+        // Only reachable in dev/test: production always has JWT_SECRET, because
+        // the session signer already refuses to start without it.
+        busAuthStats.unverifiable++;
+        return env;
+      }
+      const expected = envelopeMac(channel, j.i, j.t, j.p, key);
+      const ok =
+        expected.length === j.m.length &&
+        crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(j.m));
+      if (!ok) {
+        // A signed-but-WRONG envelope is dropped in every mode, strict or not.
+        busAuthStats.invalid++;
+        warnBusAuth(`dropped an envelope with a bad signature on ${channel || "?"}`);
+        return null;
+      }
+      busAuthStats.signed++;
+      return env;
+    }
+    // Unsigned: an old instance mid-deploy, or a forgery. Accepted until the
+    // operator flips strict — which is exactly why the counter exists.
+    busAuthStats.unsigned++;
+    if (busStrict() && key) {
+      warnBusAuth(`dropped an UNSIGNED envelope on ${channel || "?"} (strict mode)`);
+      return null;
+    }
+    return env;
   } catch {
     return null;
   }
@@ -164,7 +255,10 @@ export function shouldDeliver(env: BusEnvelope, selfInstanceId: string): boolean
 
 /* ── pub/sub ───────────────────────────────────────────────────── */
 
-type BusHandler = (payload: unknown) => void;
+/** `fromInstance` is the publisher's INSTANCE_ID as carried by the envelope —
+ *  additive, so existing single-argument handlers are unaffected. It lets a
+ *  handler refuse a frame that claims to originate somewhere it didn't. */
+type BusHandler = (payload: unknown, fromInstance: string) => void;
 const handlers = new Map<string, Set<BusHandler>>();
 /** Channels whose SUBSCRIBE the server has ACKed. A channel enters this set
  *  only when its SUBSCRIBE RESOLVES (v2.91 review D3) — an eagerly-latched
@@ -194,11 +288,11 @@ function resubscribeAllChannels(sub: RedisSubscriberClient): void {
 function dispatchMessage(channel: string, message: string): void {
   const set = handlers.get(channel);
   if (!set || set.size === 0) return;
-  const env = decodeEnvelope(message);
+  const env = decodeEnvelope(message, channel);
   if (!env || !shouldDeliver(env, INSTANCE_ID)) return;
   set.forEach((h) => {
     try {
-      h(env.p);
+      h(env.p, env.i);
     } catch (err) {
       console.warn("[redisBus] handler error:", err);
     }
@@ -226,7 +320,7 @@ export function subscribeBus(channel: string, handler: BusHandler): void {
 export function publishBus(channel: string, payload: unknown): void {
   const pub = getPub();
   if (!pub) return;
-  Promise.resolve(pub.publish(channel, encodeEnvelope(INSTANCE_ID, payload))).catch(
+  Promise.resolve(pub.publish(channel, encodeEnvelope(INSTANCE_ID, payload, channel))).catch(
     () => {
       /* transient — subscribers self-heal via reconnect + local polling */
     }

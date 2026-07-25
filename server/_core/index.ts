@@ -12,10 +12,10 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./static";
 import { attachRelay } from "../relay";
-import { registerV2Upload } from "../v2upload";
+import { registerV2Upload, uploadRateGate } from "../v2upload";
 import { registerV2Events, publishToIdentity, publishPresenceTo } from "../v2events";
 import { registerV2Offline } from "../v2offline";
-import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, reapStaleSessions, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy, getPresenceAudienceIds,
+import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, reapStaleSessions, reapUnclaimedReservations, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy, getPresenceAudienceIds,
   claimMissedCallEmail,
   releaseMissedCallEmailClaim,
   MISSED_CALL_EMAIL_COOLDOWN_MS,
@@ -30,7 +30,7 @@ import { sendEmail, wrapEmailDocument } from "../email";
 import { createRateLimiter, clientIpOf } from "../rateLimit";
 import { registerLocalAuth } from "../authLocal";
 import { appBaseUrl } from "../appUrl";
-import { INSTANCE_ID } from "../redisBus";
+import { INSTANCE_ID, busStrict, busAuthStats } from "../redisBus";
 import { clusterEnabled } from "../relayCluster";
 import { registerDomainMigration } from "../domainMigration";
 
@@ -167,12 +167,21 @@ async function startServer() {
   // a gzip/deflate request body by default and enforces `limit` against the
   // DECOMPRESSED stream — so the 41 MB ceiling still holds, but the COST TO THE
   // ATTACKER of reaching it collapses: a few tens of KB of compressed zeros
-  // expands to the full 41 MB of server-side buffering. That compounds the known
+  // expands to the full 41 MB of server-side buffering. That used to compound an
   // ordering weakness on this route (the per-IP/per-identity upload rate limit
-  // lives INSIDE the handler, so it only runs AFTER the body is already buffered),
-  // turning a bounded cost into a ~1000x amplified one. No client compresses an
+  // lived INSIDE the handler, so it only ran AFTER the body was already
+  // buffered), turning a bounded cost into a ~1000x amplified one; v2.99.49
+  // closes the ordering half with the pre-parse gate below. No client compresses an
   // upload body — browsers never gzip request bodies on their own, and the native
   // app streams raw bytes — so refusing encoded bodies here costs nothing real.
+  // The upload gate runs BEFORE the parsers below, so a throttled or
+  // unauthenticated request is refused without buffering up to 41MB (v2.99.49,
+  // closing the ordering residual the M34 note describes above). Its own
+  // cookieParser(): the global one is mounted further down, AFTER these parsers,
+  // and the gate's identity resolution reads relay_guest / relay_session.
+  // cookie-parser early-returns when req.cookies is already set, so the later
+  // global instance is a no-op for these requests.
+  app.use("/api/v2/upload", cookieParser(), uploadRateGate);
   app.use(
     "/api/v2/upload",
     express.raw({ type: "application/octet-stream", limit: "41mb", inflate: false })
@@ -383,6 +392,18 @@ async function startServer() {
       version: APP_VERSION,
       instance: INSTANCE_ID,
       redisBus: Boolean(process.env.REDIS_URL),
+      // Bus envelope authentication (v2.99.49). Counters, no secret — they exist
+      // so REDIS_BUS_STRICT=1 can be flipped on EVIDENCE (every instance
+      // reporting unsigned: 0 for a sustained window) instead of on faith. An
+      // unsigned envelope means an instance mid-deploy is still on an older
+      // build; `invalid` means a signature was present and WRONG, which is
+      // always dropped regardless of strict mode.
+      busAuth: {
+        strict: busStrict(),
+        signed: busAuthStats.signed,
+        unsigned: busAuthStats.unsigned,
+        invalid: busAuthStats.invalid,
+      },
       // Operators who HAVE pinned all /api/relay/* to one instance (per
       // docs-aws-scale-out.md) set RELAY_SIGNALING_PINNED=1 on every instance
       // to silence the in-app "calling misconfigured" banner. Default false:
@@ -448,6 +469,14 @@ async function startServer() {
   setInterval(() => {
     reapExpiredStatuses().catch((err) => console.warn("[status reaper]", err));
   }, 10 * 60_000).unref();
+  // Reclaim 6-digit numbers that were RESERVED but never bound to a real row
+  // (v2.99.49) — the crash-window backstop for the case no release call can
+  // cover: the process dying between reserving and inserting. Hourly is ample;
+  // the helper itself only ever touches rows that are unclaimed AND post-epoch
+  // AND past the grace period AND absent from both number tables.
+  setInterval(() => {
+    reapUnclaimedReservations().catch((err) => console.warn("[reservation reaper]", err));
+  }, 60 * 60_000).unref();
   // Reap the sessions ledger every 30 min: dead new-device approval rows (never
   // approved after 30 min — they'd otherwise inflate the pending-device bell
   // forever) + sessions idle PAST THE LONGEST COOKIE TTL. QA M8: the default
@@ -462,7 +491,7 @@ async function startServer() {
   }, 30 * 60_000).unref();
   // tRPC API
   //
-  // SECURITY (v2.99.48): cap the BATCH size. tRPC's httpBatchLink packs many
+  // SECURITY (v2.99.49): cap the BATCH size. tRPC's httpBatchLink packs many
   // calls into one request, and with no cap a single request could carry dozens
   // of the same expensive procedure — which is how a per-call limit on
   // `messages.revealExpiring` (a 30MB inline read each) still added up to enough

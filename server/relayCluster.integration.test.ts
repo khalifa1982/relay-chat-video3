@@ -18,8 +18,16 @@ const { bus, busSub, busPub } = vi.hoisted(() => {
     if (!s) { s = new Set(); bus.set(ch, s); }
     s.add(h);
   };
+  // The real publishBus stamps the publishing instance's INSTANCE_ID into the
+  // envelope, and dispatchMessage hands it to the handler as `fromInstance`
+  // (v2.99.49 — the leader refuses a frame whose `home` claims to be someone
+  // other than its publisher). This fake models that: it derives the publisher
+  // from the frame's own `home` when present, which is exactly what a genuine
+  // instance-B publish would produce, and falls back to "LEADER" otherwise.
   const busPub = (ch: string, p: unknown) => {
-    bus.get(ch)?.forEach((h) => { try { h(p); } catch { /* */ } });
+    const from = (p as { home?: unknown } | null)?.home;
+    const fromInstance = typeof from === "string" ? from : "LEADER";
+    bus.get(ch)?.forEach((h) => { try { h(p, fromInstance); } catch { /* */ } });
   };
   return { bus, busSub, busPub };
 });

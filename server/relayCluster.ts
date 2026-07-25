@@ -221,11 +221,20 @@ export function startClusterRuntime(deps: {
   });
   // As the LEADER: process frames homes forwarded to us. Guarded on _isLeader so
   // a former leader (lease lost, mid-transition) can't mutate registry state.
-  subscribeBus(sigInChannel(INSTANCE_ID), (payload) => {
+  subscribeBus(sigInChannel(INSTANCE_ID), (payload, fromInstance) => {
     if (!_isLeader) return;
     const f = payload as InboundFrame | null;
-    if (f && typeof f.cid === "string" && typeof f.home === "string")
-      _onInbound?.(f.cid, f.home, f.raw);
+    if (!f || typeof f.cid !== "string" || typeof f.home !== "string") return;
+    // A publisher may only claim ITSELF as the frame's home (v2.99.49). This
+    // closes the other half of the bus residual — the leader used to trust a
+    // bus-forwarded `home`, so a forged frame could make it route a client's
+    // signaling to an instance of the attacker's choosing. Deploy-safe with no
+    // flag: `clusterForwardInbound` always sets home = INSTANCE_ID and publishBus
+    // stamps the same value as the envelope's `i`, and the same-instance case
+    // short-circuits before publishing — so the equality already holds for OLD
+    // publishers too.
+    if (f.home !== fromInstance) return;
+    _onInbound?.(f.cid, f.home, f.raw);
   });
 
   void electTick();

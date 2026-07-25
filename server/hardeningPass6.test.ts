@@ -232,7 +232,7 @@ describe("M40 — offline dials can't be used as an enumeration oracle", () => {
   });
 
   it("gates the offline branch on the CALLER PIN and honors the kill switch", () => {
-    // v2.99.48: the key is no longer the bare callerPin — an anonymous caller is
+    // v2.99.49: the key is no longer the bare callerPin — an anonymous caller is
     // handed a FRESH random pin at register, so a pin-keyed bucket never bound and
     // the oracle stayed open at ~60 probes/s. It now follows the cookie-proven
     // identity, else the address.

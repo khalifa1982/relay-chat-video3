@@ -57,7 +57,7 @@ describe("M21 — startGuest is rate limited (number-space exhaustion)", () => {
   });
 
   it("is sized for a room of people signing up on one shared address", () => {
-    // v2.99.48: sustained raised 0.2/s → 1/s. The earlier rationale ("returning
+    // v2.99.49: sustained raised 0.2/s → 1/s. The earlier rationale ("returning
     // visitors cost nothing") was wrong — guest identity is SESSION-scoped, so the
     // same person spends a token every browser session and a large shared egress
     // is governed by the sustained rate, not the burst. The 13th visitor per
@@ -72,7 +72,7 @@ describe("M21 — startGuest is rate limited (number-space exhaustion)", () => {
   it("the real ceiling on the number space is GLOBAL, at the one allocator funnel", () => {
     // A per-IP gate only punishes whoever shares an address; the resource is
     // global. It also can't be forgotten by a future caller — /api/auth/register
-    // reached the same sink with no mint budget at all until v2.99.48.
+    // reached the same sink with no mint budget at all until v2.99.49.
     expect(V2DB).toMatch(/function claimMintBudget\(/);
     expect(V2DB).toMatch(/MINT_MAX_PER_WINDOW/);
     const alloc = V2DB.slice(V2DB.indexOf("async function allocateSharedNumber"));

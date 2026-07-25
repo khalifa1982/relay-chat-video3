@@ -46,7 +46,7 @@ describe("v2.99.30 QA M20 — shared cross-table number reservation", () => {
     expect(fn).toMatch(/return true; \/\/ table missing/);
   });
   it("allocateSharedNumber gates on numberTaken THEN reserves, and both allocators use it", () => {
-    // Window widened for v2.99.48's global mint budget (a guard added ahead of
+    // Window widened for v2.99.49's global mint budget (a guard added ahead of
     // the candidate loop); the ordering asserted below is unchanged.
     const fn = V2DB.slice(V2DB.indexOf("async function allocateSharedNumber"), V2DB.indexOf("async function allocateSharedNumber") + 1100);
     expect(fn).toMatch(/if \(await numberTaken\(db, candidate\)\) continue;/);
@@ -68,7 +68,10 @@ describe("v2.99.30 QA L8 — party-line per-owner cap enforced after insert", ()
   it("an over-cap racer deletes its OWN row and rejects (no double-delete)", () => {
     const del = fn.indexOf("delete(partyLines).where(eq(partyLines.id, insertId))");
     expect(del).toBeGreaterThan(0);
-    // the delete is followed by the cap-reached throw
-    expect(fn.slice(del, del + 200)).toMatch(/You can have at most/);
+    // The delete is followed by the cap-reached throw. Window widened in
+    // v2.99.49: the release of the now-unused number reservation sits between
+    // them (the row is gone, so that number was never really handed out).
+    expect(fn.slice(del, del + 500)).toMatch(/You can have at most/);
+    expect(fn.slice(del, del + 500)).toMatch(/releaseUnusedNumberReservation\(number\)/);
   });
 });

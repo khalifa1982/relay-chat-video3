@@ -21,10 +21,11 @@
  * use time-limited verification tokens.
  */
 import type { CookieOptions, Express, Request, Response } from "express";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, isNotNull, lt, sql } from "drizzle-orm";
 import { getDb, getUserById } from "./db";
 import { users, emailVerifications } from "../drizzle/schema";
 import { ensureUserIdentity } from "./v2db";
+import { deviceIdFromRequest } from "./deviceIdHeader";
 import { sendEmail, emailEnabled, wrapEmailDocument } from "./email";
 import {
   hashPassword,
@@ -102,6 +103,131 @@ async function findLocalUserByEmail(email: string) {
  * this closes the other half — the victim must not be routed away from their own
  * account in the first place. One account per email address.)
  */
+/* ── per-account password-login lockout (v2.99.49) ─────────────────────────
+   Closes the v2.99.20 residual. `/api/auth/login` had exactly one throttle: a
+   per-IP token bucket shared across /api/auth/*. That cannot bound a
+   rotating-IP attacker — every address gets a fresh bucket — so one account
+   could be guessed at indefinitely with its owner never told. */
+
+/** Wrong entries allowed before the NEXT one locks. Looser than the PIN's 3: a
+ *  typed password is mistyped more often than 4 digits, and the search space is
+ *  vastly larger than 10^4. The point is bounding a DISTRIBUTED attacker, not
+ *  policing typos. */
+export const PW_MAX_ATTEMPTS = 5;
+/** How long a latched lock lasts. It EXPIRES ON ITS OWN — that is the primary
+ *  escape hatch, so recovery needs no action from anyone. */
+export const PW_LOCK_MS = 15 * 60_000;
+
+export type PwVerdict = "ok" | "wrong" | "locked";
+
+/**
+ * Mirrors `attemptPinLogin`'s discipline: an attempt must WIN A SLOT from the
+ * database BEFORE the secret is tested, so the cap bounds actual verifications
+ * (and therefore scrypt work), not merely increments after the fact.
+ *
+ * NOTHING HERE DEPENDS ON SET-ASSIGNMENT ORDER. drizzle's `buildUpdateSet` emits
+ * columns in SCHEMA DECLARATION order, not object-literal order, so any design
+ * leaning on MySQL's left-to-right evaluation is fragile by construction (see the
+ * note in `claimOfflineMessageEmail`, where exactly that cost a release). Every
+ * statement below either makes ONE assignment or assigns only literal constants
+ * that never read each other.
+ */
+export async function attemptPasswordLogin(
+  row: { id: number; passwordHash: string | null },
+  password: string
+): Promise<PwVerdict> {
+  if (!row.passwordHash) return "wrong";
+  try {
+    const db = await getDb();
+    if (!db) return "locked"; // fail CLOSED: never verify a secret without a live ladder
+
+    // (1) Expire a stale lock. Idempotent — concurrent runs write identical
+    // constants, so there is nothing to race.
+    await db
+      .update(users)
+      .set({ loginPwAttempts: 0, loginPwLockedAt: null })
+      .where(
+        and(
+          eq(users.id, row.id),
+          isNotNull(users.loginPwLockedAt),
+          lt(users.loginPwLockedAt, new Date(Date.now() - PW_LOCK_MS))
+        )
+      );
+
+    // (2) Claim a slot. ONE assignment, so the emitted order is irrelevant.
+    // MySQL serializes it per row, so however many requests arrive at once, only
+    // PW_MAX_ATTEMPTS + 1 can ever claim between unlocks.
+    const claim = await db
+      .update(users)
+      .set({ loginPwAttempts: sql`COALESCE(${users.loginPwAttempts}, 0) + 1` })
+      .where(
+        and(
+          eq(users.id, row.id),
+          isNull(users.loginPwLockedAt),
+          sql`COALESCE(${users.loginPwAttempts}, 0) <= ${PW_MAX_ATTEMPTS}`
+        )
+      );
+    const gotSlot =
+      Array.isArray(claim) && ((claim[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    if (!gotSlot) return "locked";
+
+    // (3) Slot won — only now is it legitimate to spend a scrypt on this guess.
+    if (verifyPassword(password, row.passwordHash)) {
+      await db
+        .update(users)
+        .set({ loginPwAttempts: 0, loginPwLockedAt: null })
+        .where(eq(users.id, row.id));
+      return "ok";
+    }
+
+    // (4) Wrong. Latch from the PERSISTED count — authoritative, because the
+    // claim above was atomic — via its own isNull-guarded UPDATE.
+    const [after] = await db
+      .select({ attempts: users.loginPwAttempts })
+      .from(users)
+      .where(eq(users.id, row.id))
+      .limit(1);
+    if ((after?.attempts ?? PW_MAX_ATTEMPTS + 1) > PW_MAX_ATTEMPTS) {
+      await db
+        .update(users)
+        .set({ loginPwLockedAt: sql`NOW()` })
+        .where(and(eq(users.id, row.id), isNull(users.loginPwLockedAt)));
+      console.warn(
+        `[auth] password login locked for user ${row.id} (${PW_MAX_ATTEMPTS + 1} wrong entries)`
+      );
+    }
+    return "wrong";
+    // DELIBERATELY NO ALERT EMAIL, unlike the PIN lock. That one latches until an
+    // email code unlocks it, so it mails at most once per lock and the owner must
+    // act. A 15-minute self-expiring lock would let anyone who knows an address
+    // trigger ~96 alerts a day: an email-bomb primitive and an SES-reputation
+    // hazard this repo explicitly budgets against elsewhere. The console warning
+    // is the signal; if an alert is ever wanted, it must go through a
+    // cooldown claim like the missed-call one.
+  } catch (e) {
+    // An AUTH path fails CLOSED. The repo's fail-OPEN convention covers
+    // notification/presence work, where a hiccup must not silence a call — it
+    // must never be read as "let the guess through".
+    console.warn("[auth] password ladder unavailable:", e);
+    return "locked";
+  }
+}
+
+/** An email-code sign-in proves the address, so it clears any password lock —
+ *  mirroring `unlockLoginPin`. A second escape hatch on top of self-expiry. */
+export async function unlockPasswordLogin(userId: number): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db
+      .update(users)
+      .set({ loginPwAttempts: 0, loginPwLockedAt: null })
+      .where(eq(users.id, userId));
+  } catch {
+    /* best effort — the lock expires on its own anyway */
+  }
+}
+
 async function findAnyUserByEmail(email: string) {
   const db = await getDb();
   if (!db) return null;
@@ -282,7 +408,7 @@ export function registerLocalAuth(app: Express): void {
   // Tight limits on the auth endpoints (brute-force / spam guard).
   const ipLimiter = createRateLimiter({ capacity: 30, refillPerSec: 30 / 60 }); // ~30/min burst, 0.5/s
   setInterval(() => ipLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
-  // v2.99.48: registration ALSO spends a permanent 6-digit number (via
+  // v2.99.49: registration ALSO spends a permanent 6-digit number (via
   // ensureUserIdentity → allocateNumber) and also sends mail, and it had no mint
   // budget at all — 43,200 permanent claims/day/IP through a sibling endpoint,
   // more than the per-endpoint bound M21 advertised for `startGuest`. A second,
@@ -374,8 +500,18 @@ export function registerLocalAuth(app: Express): void {
       if (!userId) { res.status(503).json({ error: "unavailable", message: "Service unavailable. Try again." }); return; }
       // Give them an identity row now (guest cookie migrated if present) so their
       // number/contacts carry over the moment they verify + sign in.
+      // Both hints, not just the cookie (v2.99.49): this call allocates a number
+      // when it finds no guest row, so missing the browser's device-resolved
+      // guest identity is what orphaned people's data.
       const guestToken = (req.cookies?.relay_guest as string | undefined) ?? null;
-      try { await ensureUserIdentity({ userId, displayName: email.split("@")[0], guestToken }); } catch { /* identity is best-effort here */ }
+      try {
+        await ensureUserIdentity({
+          userId,
+          displayName: email.split("@")[0],
+          guestToken,
+          deviceId: deviceIdFromRequest(req),
+        });
+      } catch { /* identity is best-effort here */ }
       const token = await mintVerification(userId, email, Date.now());
       await dispatchVerifyEmail(req, email, token);
       res.json({ ok: true, email });
@@ -443,8 +579,11 @@ export function registerLocalAuth(app: Express): void {
       const email = normalizeEmail((req.body?.email ?? "").toString());
       const password = (req.body?.password ?? "").toString();
       const u = await findLocalUserByEmail(email);
-      // Uniform failure message — don't reveal whether the email exists.
-      if (!u || !u.passwordHash || !verifyPassword(password, u.passwordHash)) {
+      // Uniform failure message — don't reveal whether the email exists. A LOCKED
+      // account answers with the SAME uniform failure as a wrong password or an
+      // unknown address: a distinct status here would turn this route into an
+      // oracle for "this address has a live password".
+      if (!u || (await attemptPasswordLogin(u, password)) !== "ok") {
         res.status(401).json({ error: "bad_credentials", message: "Incorrect email or password." });
         return;
       }

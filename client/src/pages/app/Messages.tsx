@@ -710,7 +710,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       /* transient — handled below, same as an explicit refusal */
     }
     setRevealing(null);
-    // v2.99.48: only cache a reveal we actually RECEIVED.
+    // v2.99.49: only cache a reveal we actually RECEIVED.
     //
     // M22 made the burn atomic, so a second device/tab that loses the race is now
     // correctly refused ({ok:false}) instead of being handed the content. But this

@@ -146,7 +146,7 @@ async function tryReserveNumber(
  *  lines). numberTaken guards pre-existing rows; tryReserveNumber closes the
  *  cross-table NEW-vs-NEW race atomically. */
 /**
- * GLOBAL MINT BUDGET (v2.99.48).
+ * GLOBAL MINT BUDGET (v2.99.49).
  *
  * Every 6-digit number ever handed out is permanent, and the space is 10^6 —
  * shared by guests, registrations, party lines and regenerations. M21 metered
@@ -452,6 +452,7 @@ export async function createGuestIdentity(input: {
     guestExpiresAt,
     deviceId,
   });
+  await confirmNumberReservation(number); // the number is now genuinely bound
   const created = await db
     .select()
     .from(identities)
@@ -484,38 +485,104 @@ export async function ensureUserIdentity(input: {
   userId: number;
   displayName: string;
   guestToken: string | null;
+  /**
+   * The identity `createContext` ALREADY resolved for this request, and the
+   * browser's device id — both added in v2.99.49 to fix real data loss.
+   *
+   * THE BUG: this function used to look for the guest by `guestToken` ONLY, while
+   * `createContext` resolves a guest by guestToken OR deviceId and documents that
+   * "cookies are a hint, device id is the truth" — device id WINS there when the
+   * two disagree. So whenever the browser's live guest identity was the
+   * device-resolved one (a cleared or expired guest cookie, an ITP-dropped
+   * cookie, a rotated token), registration looked up nothing, fell through to the
+   * fresh-identity branch, and minted a NEW 6-digit number. The user's guest
+   * identity — their number, contacts, messages and call history — was silently
+   * orphaned, and they landed on an empty account with a different number.
+   *
+   * Passing the resolved identity makes the upgrade use exactly the same notion of
+   * "who is this browser" as every other request, which is the only way the two
+   * can't drift apart again.
+   */
+  resolvedIdentityId?: number | null;
+  deviceId?: string | null;
 }): Promise<ResolvedIdentity> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
 
   const existingByUser = await getIdentityByUserId(input.userId);
-  if (existingByUser) return existingByUser;
-
-  // If the user previously had a guest identity cookie, upgrade that row.
-  if (input.guestToken) {
-    const guest = await getIdentityByGuestToken(input.guestToken);
-    if (guest) {
-      await db
-        .update(identities)
-        .set({
-          userId: input.userId,
-          displayName: input.displayName.trim().slice(0, 64) || guest.displayName,
-          guestToken: null,
-          guestExpiresAt: null,
-        })
-        .where(eq(identities.id, guest.id));
-      const refreshed = await getIdentityById(guest.id);
-      if (refreshed) return refreshed;
+  if (existingByUser) {
+    // The account already has an identity. Don't touch the guest row — but say so,
+    // because it means a guest session in this browser is about to be left behind
+    // (re-registering an address that already has an account).
+    if (input.resolvedIdentityId && input.resolvedIdentityId !== existingByUser.id) {
+      console.warn(
+        `[identity] user ${input.userId} already owns identity ${existingByUser.id}; guest identity ${input.resolvedIdentityId} left unclaimed`
+      );
     }
+    return existingByUser;
+  }
+
+  /* Claim the guest identity this browser is ACTUALLY using. Tried in the same
+     order of authority as createContext: the already-resolved identity first
+     (which is device-id-aware), then the cookie token, then the device id. */
+  const candidates = new Set<number>();
+  if (input.resolvedIdentityId) candidates.add(input.resolvedIdentityId);
+  if (input.guestToken) {
+    try {
+      const byToken = await getIdentityByGuestToken(input.guestToken);
+      if (byToken) candidates.add(byToken.id);
+    } catch {
+      /* a lookup hiccup must not cost the number */
+    }
+  }
+  if (input.deviceId) {
+    try {
+      const byDevice = await getIdentityByDeviceId(input.deviceId);
+      if (byDevice) candidates.add(byDevice.id);
+    } catch {
+      /* same */
+    }
+  }
+
+  for (const candidateId of candidates) {
+    // Conditional on `userId IS NULL`, so this can only ever claim an UNCLAIMED
+    // guest row — it can never steal an identity that already belongs to another
+    // account, however the candidate was resolved.
+    const res = await db
+      .update(identities)
+      .set({
+        userId: input.userId,
+        displayName: input.displayName.trim().slice(0, 64) || undefined,
+        guestToken: null,
+        guestExpiresAt: null,
+      })
+      .where(and(eq(identities.id, candidateId), isNull(identities.userId)));
+    const claimed =
+      Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    if (!claimed) continue;
+    const refreshed = await getIdentityById(candidateId);
+    if (refreshed) return refreshed; // SAME number, SAME contacts/messages/history
   }
 
   // Fresh permanent identity.
   const number = await allocateNumber();
-  await db.insert(identities).values({
-    number,
-    displayName: input.displayName.trim().slice(0, 64) || "User",
-    userId: input.userId,
-  });
+  try {
+    await db.insert(identities).values({
+      number,
+      displayName: input.displayName.trim().slice(0, 64) || "User",
+      userId: input.userId,
+    });
+  } catch (e) {
+    // The number was reserved but never bound — give it back (v2.99.49).
+    await releaseUnusedNumberReservation(number);
+    // The usual cause is a concurrent sign-in winning the per-user unique index.
+    // Resolving to the winner is strictly better than the old behaviour, where
+    // the loser's request ended up with no identity at all.
+    const winner = await getIdentityByUserId(input.userId);
+    if (winner) return winner;
+    throw e;
+  }
+  await confirmNumberReservation(number);
   const created = await getIdentityByNumber(number);
   if (!created) throw new Error("user identity insert failed");
   return created;
@@ -630,6 +697,10 @@ export async function regenerateIdentityNumber(
       await tx.update(contacts).set({ number: newNumber }).where(inArray(contacts.id, plan.updateIds));
     }
   });
+  // Committed — the new number is genuinely bound (v2.99.49). The OLD number's
+  // reservation stays forever on purpose: it WAS handed out, and recycling it
+  // would let a contact who kept the old number later dial a stranger.
+  await confirmNumberReservation(newNumber);
   return { oldNumber, newNumber };
 }
 
@@ -1129,6 +1200,8 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "identities", column: "lastName", ddl: "ADD COLUMN `lastName` varchar(64)" },
     // Native Android app push transport (v2.86).
     { table: "push_subscriptions", column: "kind", ddl: "ADD COLUMN `kind` varchar(10)" },
+    // v2.99.49 — proof-of-possession for an endpoint re-bind.
+    { table: "push_subscriptions", column: "claimHash", ddl: "ADD COLUMN `claimHash` varchar(64)" },
     // 4-digit login PIN + lockout (v2.87).
     { table: "users", column: "loginPinHash", ddl: "ADD COLUMN `loginPinHash` text" },
     { table: "users", column: "loginPinAttempts", ddl: "ADD COLUMN `loginPinAttempts` int" },
@@ -1149,6 +1222,14 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "users", column: "messageEmailsToday", ddl: "ADD COLUMN `messageEmailsToday` int" },
     // v2.99.44 — missed-call email cooldown (H8).
     { table: "users", column: "lastMissedCallEmailAt", ddl: "ADD COLUMN `lastMissedCallEmailAt` timestamp NULL" },
+    // v2.99.49 — per-account password-login lockout (closes the v2.99.20 residual).
+    { table: "users", column: "loginPwAttempts", ddl: "ADD COLUMN `loginPwAttempts` int" },
+    { table: "users", column: "loginPwLockedAt", ddl: "ADD COLUMN `loginPwLockedAt` timestamp NULL" },
+    // v2.99.49 — stamped once the real identities/party_lines row lands, so a
+    // reservation that never became a row can be reclaimed. NO DEFAULT on
+    // purpose: a default would backfill existing rows (convenient) but also
+    // stamp every NEW row, making the reaper a permanent no-op.
+    { table: "number_reservations", column: "claimedAt", ddl: "ADD COLUMN `claimedAt` timestamp NULL" },
     // Hot-path indexes (v2.88, mirrored in drizzle/schema.ts):
     //  - messages(conversationId, id): the listThreads groupwise-max + every
     //    listMessages page (ORDER BY id within a conversation).
@@ -1268,6 +1349,8 @@ export async function ensureSchemaExtensions(): Promise<void> {
         \`endpoint\` varchar(500) NOT NULL,
         \`p256dh\` varchar(255) NOT NULL,
         \`auth\` varchar(120) NOT NULL,
+        \`kind\` varchar(10),
+        \`claimHash\` varchar(64),
         \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY \`push_sub_endpoint_unique\` (\`endpoint\`),
         KEY \`push_sub_identity_idx\` (\`identityId\`)
@@ -1305,6 +1388,7 @@ export async function ensureSchemaExtensions(): Promise<void> {
       ddl: `CREATE TABLE IF NOT EXISTS \`number_reservations\` (
         \`number\` varchar(6) NOT NULL,
         \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`claimedAt\` timestamp NULL,
         PRIMARY KEY (\`number\`)
       )`,
     },
@@ -3409,29 +3493,76 @@ export async function upsertPushSubscription(input: {
   auth: string;
   /** "webpush" (default) or "fcm" (native Android — endpoint = device token). */
   kind?: "webpush" | "fcm";
-}): Promise<void> {
+  /** sha256 of the browser's push claim, when it has one (v2.99.49). */
+  claimHash?: string | null;
+}): Promise<{ owned: boolean }> {
   const db = await getDb();
-  if (!db) return;
+  // DB down: keep the fail-open convention — claim nothing was refused, so the
+  // client never starts a pointless self-heal storm.
+  if (!db) return { owned: true };
   const kind = input.kind ?? "webpush";
+  const endpoint = input.endpoint.slice(0, 500);
+  const p256dh = input.p256dh.slice(0, 255);
+  const auth = input.auth.slice(0, 120);
+  const claimHash = input.claimHash ?? null;
+
+  // STEP 1 — create if absent, and DELIBERATELY do nothing on conflict. The old
+  // code re-bound `identityId` right here, keyed on the globally-unique endpoint
+  // alone: anyone who learned a victim's endpoint string could point it at their
+  // own identity and silently kill the victim's notifications. The no-op keeps
+  // the insert from being a hijack primitive; the guarded UPDATE below is the
+  // only way an existing row's owner can change.
   await db
     .insert(pushSubscriptions)
-    .values({
+    .values({ identityId: input.identityId, endpoint, p256dh, auth, kind, claimHash })
+    .onDuplicateKeyUpdate({ set: { endpoint: sql`${pushSubscriptions.endpoint}` } });
+
+  // STEP 2 — one conditional UPDATE with the ENTIRE gate in the WHERE, so it
+  // reads the PRE-update row and cannot depend on the order MySQL emits SET
+  // assignments in (the lesson from claimOfflineMessageEmail).
+  await db
+    .update(pushSubscriptions)
+    .set({
       identityId: input.identityId,
-      endpoint: input.endpoint.slice(0, 500),
-      p256dh: input.p256dh.slice(0, 255),
-      auth: input.auth.slice(0, 120),
+      p256dh,
+      auth,
       kind,
+      ...(claimHash ? { claimHash } : {}),
     })
-    .onDuplicateKeyUpdate({
-      // Same endpoint/token re-registered (e.g. after a login switch on the
-      // same device) → re-bind it to the CURRENT identity + fresh keys.
-      set: {
-        identityId: input.identityId,
-        p256dh: input.p256dh.slice(0, 255),
-        auth: input.auth.slice(0, 120),
-        kind,
-      },
-    });
+    .where(
+      and(
+        eq(pushSubscriptions.endpoint, endpoint),
+        or(
+          // Already ours — there is nothing to steal.
+          eq(pushSubscriptions.identityId, input.identityId),
+          // Proof of possession: the same browser profile that registered it.
+          claimHash ? eq(pushSubscriptions.claimHash, claimHash) : sql`1=0`,
+          // LEGACY row (claimHash IS NULL) — accept on a keys match. This is what
+          // preserves the documented account-switch-on-same-device flow for every
+          // subscription that predates the claim: the encryption keys come from
+          // the browser's own PushSubscription, so a remote attacker with only the
+          // endpoint string cannot produce them. Such a row is stamped with a
+          // claim on this very update, so it is legacy exactly once.
+          and(
+            isNull(pushSubscriptions.claimHash),
+            eq(pushSubscriptions.p256dh, p256dh),
+            eq(pushSubscriptions.auth, auth)
+          )
+        )
+      )
+    );
+
+  // STEP 3 — verdict from a RE-READ, not from affectedRows: MySQL reports 0
+  // affected for a matched-but-unchanged row, which is indistinguishable from
+  // "refused". A refusal is purely a no-op — the victim's identityId, keys and
+  // claim are all untouched — so this can never break the owner, only decline an
+  // unproven re-bind.
+  const [row] = await db
+    .select({ identityId: pushSubscriptions.identityId })
+    .from(pushSubscriptions)
+    .where(eq(pushSubscriptions.endpoint, endpoint))
+    .limit(1);
+  return { owned: !row || row.identityId === input.identityId };
 }
 
 export async function deletePushSubscription(endpoint: string): Promise<void> {
@@ -3488,6 +3619,87 @@ export const MAX_PARTY_LINES_PER_OWNER = 10;
 
 /** Allocate a fresh 6-digit number that collides with NEITHER identities NOR
  *  existing party lines (one shared number space — see numberTaken). */
+/* ── reservation lifecycle (v2.99.49) ───────────────────────────────────────
+   Closes the leak deferred in v2.99.30. `allocateSharedNumber` inserts into the
+   shared ledger and hands the number back; it never learns whether the caller
+   went on to insert the real row. If that insert failed, the number was consumed
+   forever.
+
+   THE LEDGER'S MONOTONICITY IS LOAD-BEARING and must survive this: a number that
+   WAS handed out must never be recycled, even after its identity row is deleted
+   or renumbered, or a stale contact could later dial a stranger. So nothing here
+   reclaims a number on the strength of "no row has it" alone. */
+
+/** Reservations minted before the confirming code shipped are OUT OF SCOPE
+ *  forever. A NULL `claimedAt` on such a row means "unknown", not "leaked" — it
+ *  may be a number freed by a renumber or a removed party line, both of which the
+ *  ledger must keep. Dated the day AFTER the deploy so no clock or session
+ *  timezone skew can slide the floor back over the rollout. NEVER move earlier. */
+const RESERVATION_CLAIM_EPOCH = "2026-07-26 00:00:00";
+/** How long an unclaimed reservation is left alone. Must comfortably exceed the
+ *  gap between reserving and inserting, so an in-flight allocation can never be
+ *  reaped out from under itself. */
+const RESERVATION_REAP_GRACE_SEC = 3600;
+
+/** Stamp a reservation as genuinely bound to a real row. Best-effort by design:
+ *  a stamp failure must never fail a signup, and the reaper's NOT EXISTS guard
+ *  makes the consequence nil. Affects 0 rows when the allocation fail-opened
+ *  without a ledger row at all — also fine. */
+export async function confirmNumberReservation(number: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.execute(
+      sql`UPDATE \`number_reservations\` SET \`claimedAt\` = NOW() WHERE \`number\` = ${number} AND \`claimedAt\` IS NULL`
+    );
+  } catch (e) {
+    console.warn("[numbers] confirm reservation skipped:", (e as Error)?.message || "");
+  }
+}
+
+/** Release a reservation this process just took and PROVABLY never bound.
+ *  Guarded on the number being absent from BOTH number tables, so it can never
+ *  un-reserve one that is actually in use. */
+export async function releaseUnusedNumberReservation(number: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.execute(sql`
+      DELETE FROM \`number_reservations\`
+       WHERE \`number\` = ${number}
+         AND NOT EXISTS (SELECT 1 FROM \`identities\`  i WHERE i.\`number\`  = ${number})
+         AND NOT EXISTS (SELECT 1 FROM \`party_lines\` p WHERE p.\`number\` = ${number})`);
+  } catch (e) {
+    console.warn("[numbers] release reservation skipped:", (e as Error)?.message || "");
+  }
+}
+
+/** Backstop for the case no release call can cover: the process dying between
+ *  reserving and inserting. Only ever touches rows that are unclaimed AND minted
+ *  after the epoch floor AND past the grace period AND absent from both number
+ *  tables — four independent conditions, each of which alone would protect a live
+ *  number. Bounded per sweep so it can never become a long lock. */
+export async function reapUnclaimedReservations(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  try {
+    const res = await db.execute(sql`
+      DELETE FROM \`number_reservations\`
+       WHERE \`claimedAt\` IS NULL
+         AND \`createdAt\` >= ${RESERVATION_CLAIM_EPOCH}
+         AND \`createdAt\` <  NOW() - INTERVAL ${sql.raw(String(RESERVATION_REAP_GRACE_SEC))} SECOND
+         AND NOT EXISTS (SELECT 1 FROM \`identities\`  i WHERE i.\`number\`  = \`number_reservations\`.\`number\`)
+         AND NOT EXISTS (SELECT 1 FROM \`party_lines\` p WHERE p.\`number\` = \`number_reservations\`.\`number\`)
+       LIMIT 500`);
+    const n = Array.isArray(res) ? ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) : 0;
+    if (n > 0) console.log(`[numbers] reclaimed ${n} unclaimed reservation(s)`);
+    return n;
+  } catch (e) {
+    console.warn("[numbers] reservation reaper skipped:", (e as Error)?.message || "");
+    return 0;
+  }
+}
+
 export async function allocatePartyLineNumber(): Promise<string> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
@@ -3542,8 +3754,11 @@ export async function createPartyLine(input: {
       .where(and(eq(partyLines.ownerIdentityId, input.ownerIdentityId), lte(partyLines.id, insertId)));
     if (Number(rankRow?.rank ?? 0) > MAX_PARTY_LINES_PER_OWNER) {
       await db.delete(partyLines).where(eq(partyLines.id, insertId)).catch(() => {});
+      // The row is gone, so this number was never really handed out (v2.99.49).
+      await releaseUnusedNumberReservation(number);
       throw new Error(`You can have at most ${MAX_PARTY_LINES_PER_OWNER} party lines.`);
     }
+    await confirmNumberReservation(number);
     const [row] = await db.select().from(partyLines).where(eq(partyLines.id, insertId)).limit(1);
     if (row) return row;
   }

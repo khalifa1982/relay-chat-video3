@@ -5,7 +5,7 @@ import path from "node:path";
 /**
  * v2.99.46 — a tripwire for the failure that put a broken commit on `main`.
  *
- * v2.99.45 shipped with unresolved merge-conflict markers in three files. The
+ * v2.99.49 shipped with unresolved merge-conflict markers in three files. The
  * typecheck caught the two `.ts` ones, but the pre-push verification chain
  * piped `pnpm check` into `tail`, so the pipeline's exit status came from
  * `tail` (always 0) and the `&&` chain sailed past a failing gate. `CLAUDE.md`

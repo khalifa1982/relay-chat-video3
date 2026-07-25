@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Plus, X, Camera, Type, Trash2, Eye, ChevronLeft, ChevronRight, Send, Video } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
@@ -266,9 +267,18 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
     }
   }
 
-  return (
+  /* PORTALLED TO document.body (v2.99.49, owner screenshot: on desktop the
+     composer overlapped the conversation and its third tab was cut to "L").
+     `position: fixed` is only viewport-relative while NO ancestor establishes a
+     containing block — any ancestor with a transform, filter (a backdrop-blur
+     counts), or contain does establish one, and this dialog renders from inside
+     the Messages column, which has both blurred chrome and a horizontally
+     scrolling status strip above it. A portal makes the overlay independent of
+     every ancestor by construction, rather than depending on which of them
+     happens to have a filter today. */
+  return createPortal(
     <div className="fixed inset-0 z-[95] grid place-items-center bg-black/70 backdrop-blur-sm p-3" role="dialog" aria-modal="true">
-      <div className="relative w-[min(96vw,440px)] overflow-hidden rounded-3xl border border-border/60 bg-card shadow-2xl">
+      <div className="relative w-[min(96vw,440px)] max-h-[92dvh] overflow-y-auto overflow-x-hidden rounded-3xl border border-border/60 bg-card shadow-2xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
           <h2 className="font-bold">New status</h2>
           <button type="button" onClick={onClose} aria-label="Close" className="rounded-full p-1.5 text-muted-foreground hover:bg-muted">
@@ -277,29 +287,29 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
         </div>
 
         {/* Mode toggle */}
-        <div className="flex gap-1 p-3">
+        <div className="flex min-w-0 gap-1 p-3">
           <button
             type="button"
             onClick={() => setMode("text")}
-            className={`flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl py-2 text-sm font-semibold ${mode === "text" ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
+            className={`min-w-0 flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl px-1 py-2 text-sm font-semibold ${mode === "text" ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
           >
-            <Type className="size-4" /> Text
+            <Type className="size-4 shrink-0" /> <span className="truncate">Text</span>
           </button>
           {videoRecorderSupported() && (
             <button
               type="button"
               onClick={() => setRecOpen(true)}
-              className="flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl py-2 text-sm font-semibold text-muted-foreground"
+              className="min-w-0 flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl px-1 py-2 text-sm font-semibold text-muted-foreground"
             >
-              <Video className="size-4" /> Record
+              <Video className="size-4 shrink-0" /> <span className="truncate">Record</span>
             </button>
           )}
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            className={`flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl py-2 text-sm font-semibold ${mode === "media" ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
+            className={`min-w-0 flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl px-1 py-2 text-sm font-semibold ${mode === "media" ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
           >
-            <Camera className="size-4" /> Library
+            <Camera className="size-4 shrink-0" /> <span className="truncate">Library</span>
           </button>
           <input
             ref={fileRef}
@@ -380,7 +390,8 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           }}
         />
       )}
-    </div>
+    </div>,
+    document.body
   );
 }
 

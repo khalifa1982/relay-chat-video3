@@ -6568,6 +6568,125 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       additive-DDL rule now allows ADD UNIQUE INDEX; androidAudioCamera.test.ts's chat-dedup pin now
       expects the threaded sender). Suite 1662 passed / 1 skipped; check + build green.
 
+## v2.99.49 — guest registration keeps your number + data; the five accepted residuals CLOSED; desktop status composer (2026-07-25)
+- [x] OWNER DATA LOSS (two screenshots, both numbers side by side): used RELAY as a guest on 601-586 — contacts
+      saved, messages exchanged, calls made — registered with their email, verified the code, and landed on
+      737-582, a NEW number, with an empty account. "The data should be stored and attached to the old number,
+      and the number will not change unless if I request to generate a new number."
+- [x] ROOT CAUSE — two functions disagreed about which identity a browser is using, and one of them ALLOCATES.
+      `createContext` resolves a guest by cookie OR device id and documents that the DEVICE ID WINS when they
+      disagree ("cookies are a hint, device id is the truth" — that rule exists so a cleared/expired/ITP-dropped
+      cookie doesn't cost a guest their number). `ensureUserIdentity`, the upgrade that runs at registration,
+      looked the guest up by COOKIE TOKEN ONLY. Any browser whose live identity was device-resolved therefore
+      found nothing, fell through to the allocate-a-fresh-identity branch, and minted a new 6-digit number; the
+      guest row — which owns the number and which every contact/message/call-history row points at — was left
+      with userId NULL and no route back.
+- [x] FIX (server/v2db.ts): `ensureUserIdentity` takes `resolvedIdentityId` + `deviceId` and tries candidates in
+      the RESOLVER'S OWN ORDER OF AUTHORITY — the already-resolved identity (device-id-aware, so it agrees with
+      every other request in that browser by construction), then the cookie token, then the device id — deduped
+      through a Set, each optional lookup individually try/caught so a DB hiccup can never be why someone gets a
+      new number. Every claim is ONE conditional UPDATE gated `WHERE id = ? AND userId IS NULL`, verified by
+      affectedRows: it can only adopt an UNCLAIMED guest row, never an identity that belongs to another account
+      (a refused candidate moves to the next; getIdentityByDeviceId independently filters userId IS NULL as a
+      second guard). The claim sets userId/name and clears the cookie fields — it NEVER touches `number` — then
+      re-reads by the SAME id, so number, contacts, messages and history carry over untouched. Minting is now
+      genuinely the last resort.
+- [x] SAME BLINDNESS AT THREE OTHER MINTING SITES, all fixed (system-wide rule): `createContext` mints on ANY
+      request when a signed-in account has no identity yet (now passes deviceId); `POST /api/auth/register` (now
+      passes deviceIdFromRequest(req)); the PIN / legacy sign-in path in v2routers.ts.
+- [x] NEW server/deviceIdHeader.ts — DEVICE_ID_HEADER + normalizeDeviceId + deviceIdFromRequest, dependency-free.
+      `_core/context.ts` delegates to it instead of keeping its own copy of the shape rule: a second copy of that
+      rule is what caused this bug, and context.ts ↔ authLocal.ts already import each other, so a shared module
+      was also the only cycle-free way to share it.
+- [x] The `existingByUser` early return now console.warns when it leaves a guest identity unclaimed —
+      re-registering an address that already has an account is the one case where a guest session really is
+      stranded, and it should not be silent.
+- [x] SECOND HALF OF THE ASK ("even if I generate new number … others people contact will automatically update")
+      ALREADY SHIPPED, now pinned: `regenerateIdentityNumber` moves the identity and rewrites every contact row
+      holding the old number inside ONE transaction (all-or-nothing, so no contact is left dialling a number that
+      is no longer that person), via planRenumber, which also drops a stale duplicate when the saver already had
+      a row for the new number. A test asserts there is exactly ONE `.update(identities).set({ number: … })` in
+      the codebase, so no future path can renumber someone silently.
+- [x] Tests: server/guestUpgrade.test.ts (20) — candidate order, unclaimed-only gate, number/data preservation,
+      all four call sites, behavioural normalizeDeviceId coverage (repeated header, injection-shaped input,
+      bounds), regenerate propagation.
+- [ ] OWNER RECOVERY, one-time and NOT retroactive from code: identity 601-586 still exists with userId NULL.
+      Recovering it means deleting the empty 737-582 identity FIRST (a unique index allows one identity per
+      user), then setting 601-586's userId to the account. Say the word and I'll prepare the exact statements.
+- [x] Owner: "close everything pending". The five documented ACCEPTED RESIDUALS were the only engineering work
+      left. Each was accepted because the obvious fix broke something, so each was investigated by its own agent
+      against current source first; three of my intended designs were corrected by that pass.
+- [x] R1 — PUSH ENDPOINT RE-BIND (accepted v2.99.37). `upsertPushSubscription`'s ODKU re-bound `identityId`
+      keyed on the globally-unique `endpoint` alone, so anyone who learned a victim's endpoint could point it at
+      their own identity and silently kill the victim's notifications. MY FIRST DESIGN WAS REFUTED: binding the
+      re-bind to the existing device id would have refused 100% of legitimate account switches — that id lives
+      in sessionStorage (shorter-lived than a PushSubscription) AND `useSignOut` resets it, so account B always
+      presents a different one than account A stored. SHIPPED INSTEAD: a per-browser CLAIM secret in
+      localStorage (deliberately not cleared on sign-out — it identifies the browser profile, not an identity),
+      stored server-side only as a sha256 hash. The insert's ODKU is now a deliberate no-op, and the re-bind is
+      one conditional UPDATE whose ENTIRE gate is in the WHERE (so it reads the pre-update row and cannot depend
+      on drizzle's SET emission order): already-ours, OR a claim match, OR a LEGACY row (claimHash IS NULL) on an
+      encryption-keys match — which an endpoint-only attacker cannot produce, and which stamps a claim so a row
+      is legacy exactly once. Verdict from a RE-READ, not affectedRows (MySQL reports 0 for a
+      matched-but-unchanged row, indistinguishable from a refusal). A refusal is a pure no-op, and the client
+      SELF-HEALS: `owned: false` → unsubscribe → fresh endpoint, so the strict gate can never strand anyone.
+      DB down keeps the fail-open convention.
+- [x] R2 — LEAKED NUMBER RESERVATIONS (deferred v2.99.30), and one leak path was a routine swallowed race, not
+      just infra failure. THE LEDGER'S MONOTONICITY IS LOAD-BEARING (a handed-out number must never be recycled,
+      or a stale contact later dials a stranger), so a "delete rows no table references" reaper would have been
+      WRONG. Shipped: a `claimedAt` column (no DEFAULT — a default would stamp every new row and make the reaper
+      a permanent no-op) stamped at all four allocator sites once the real row lands; `releaseUnusedNumberReservation`
+      on the two reachable failure paths, guarded on the number being absent from BOTH number tables; and an
+      hourly reaper requiring FOUR independent conditions — unclaimed AND after a hardcoded epoch floor AND past
+      a 1h grace AND absent from both tables. The epoch floor replaces a backfill (my original idea): a NULL on a
+      pre-release row means "unknown", not "leaked", and a backfill has a failure window where it would eat live
+      numbers. A failed identity insert now also resolves the race WINNER instead of leaving the loser with no
+      identity at all.
+- [x] R3 — REDIS BUS HAD NO MESSAGE AUTHENTICATION (accepted v2.99.20). Anything able to PUBLISH to Redis could
+      forge an envelope that reached every SSE stream on an instance. Shipped HMAC signing keyed on
+      REDIS_BUS_SECRET (else JWT_SECRET), with the compatibility hazard the agent flagged running BOTH ways: the
+      wire format stays a FLAT object with `i`/`p` at top level and the signature in EXTRA fields, because the
+      old decoder ignores extras — any other shape would make every not-yet-deployed instance JSON.parse-fail and
+      drop 100% of real events for the whole rolling-deploy window. A signed-but-WRONG envelope is dropped in
+      every mode; UNSIGNED is accepted until the operator sets REDIS_BUS_STRICT=1, and `/api/health` now reports
+      `busAuth` counters so that flip happens on evidence (every instance at unsigned: 0) rather than on faith.
+      Strict with no key deliberately does NOT drop everything, or a dev box goes dark. ALSO closed the other
+      half for free: the leader now refuses an inbound frame whose `home` differs from its publisher
+      (`fromInstance`), which is deploy-safe with no flag because that equality already held for old publishers.
+- [x] R4 — NO PER-ACCOUNT PASSWORD LOCKOUT (accepted v2.99.20). `/api/auth/login` had only a per-IP bucket, so a
+      rotating-IP attacker had effectively unbounded guesses against one account with the owner never told.
+      Shipped a ladder in its OWN columns — sharing the PIN's would let a password brute-force lock out PIN
+      sign-in, a live UI path, turning the fix into a cross-channel DoS. An attempt must WIN A SLOT before the
+      secret is tested, so the cap bounds scrypt work, not just increments; every statement makes one assignment
+      or assigns only constants, so nothing depends on SET emission order. 5 wrong, then the 6th latches for 15
+      min. THREE escape hatches so permanent lockout is impossible: self-expiry, an email-code sign-in clears it,
+      and the real sign-in paths never read these columns. A locked account answers with the SAME uniform 401 as
+      a wrong password, so this is not an oracle for "this address has a live password". DELIBERATELY NO ALERT
+      EMAIL: a 15-min self-expiring lock would let anyone who knows an address trigger ~96 mails/day — an
+      email-bomb primitive and an SES hazard this repo budgets against elsewhere.
+- [x] R5 — UPLOAD RATE-LIMIT ORDERING (accepted v2.99.20/38). The limiters AND the 401 lived inside the handler,
+      i.e. after body-parser had buffered up to 41MB — so a throttled request, and worse a wholly ANONYMOUS one,
+      still cost a full 41MB of heap. New `uploadRateGate` middleware mounted BEFORE the parsers (with its own
+      scoped cookieParser, since the global one is mounted after them). Both buckets move up, not just the per-IP
+      one. Refusal sets `Connection: close` rather than destroying the socket: body-parser was skipped, so its
+      limit no longer bounds Node's drain of the unread body, and an RST before the flush can eat the response.
+      The handler keeps a fallback path so any mount without the gate behaves exactly as before. NAMED TRADE: a
+      401 now spends an IP token where it used to pay nothing, so on a shared egress a burst of expired-session
+      401s can eat the shared budget; the budget itself is left at its production value.
+- [x] OWNER SCREENSHOT (desktop): the New-status composer overlapped the conversation and its third tab was cut
+      to "L". `position: fixed` is only viewport-relative while NO ancestor establishes a containing block, and
+      this dialog renders from inside the Messages column — which has blurred chrome (a filter DOES establish
+      one) above a horizontally scrolling status strip. Fixed by rendering the overlay through a PORTAL to
+      document.body, which removes the ancestor dependence by construction rather than betting on which ancestor
+      has a filter today; plus the tab row now shrinks and truncates (min-w-0 flex-1, shrink-0 icons, truncating
+      labels) so it cannot clip even in a constrained box, and a tall composer scrolls inside itself.
+- [x] Tests: `server/residualsClosed.test.ts` (38) — each pins the property AND the constraint it had to respect,
+      because ignoring the constraint is the realistic way each of these regresses. Includes behavioural
+      HMAC round-trip / tamper / cross-channel-replay / strict-mode coverage, and the integration harness now
+      models the real bus by passing the publisher id. 1783 tests; check + build green.
+- OPS (optional, not required): after this is on every instance, watch `/api/health` → `busAuth.unsigned` fall to
+      0 fleet-wide, then set `REDIS_BUS_STRICT=1` in `/home/relay/.env` and restart pm2 one instance at a time.
+      `REDIS_BUS_SECRET` is optional — JWT_SECRET is used when it is unset.
 ## v2.99.48 — self-review round 3: the fixes that only LOOKED closed (2026-07-24)
 - [x] The remaining red-team clusters landed, and they found the sharpest class of problem yet. Worth
       naming the pattern, because it repeated three times: **a fix keyed to something the ATTACKER

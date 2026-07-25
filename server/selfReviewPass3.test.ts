@@ -5,7 +5,7 @@ import { createRegistry, handleMessage, type RelayRegistry, type RelaySocket } f
 import { mintBudgetState } from "./v2db";
 
 /**
- * v2.99.48 — THIRD self-review round. The pattern that keeps repeating in these
+ * v2.99.49 — THIRD self-review round. The pattern that keeps repeating in these
  * rounds is worth naming: a fix keyed to something the ATTACKER controls, or a
  * guard that parses differently from the code it guards, looks closed and is not.
  *

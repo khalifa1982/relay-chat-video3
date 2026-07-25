@@ -105,10 +105,12 @@ import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from ".
 import { recordSession, listSessionsForUser, revokeSession } from "./v2db";
 import { getRolesByIdentityIds, type IdentityRole } from "./v2db";
 import { hasRecentApprovedSession, pendingSessionsForUser, sessionApprovalBySid, approveSession } from "./v2db";
-import { setSessionCookie, rememberToTtlMs, LOCAL_SESSION_COOKIE, newSessionId, readLocalSession } from "./authLocal";
+import { setSessionCookie, rememberToTtlMs, LOCAL_SESSION_COOKIE, newSessionId, readLocalSession,
+  unlockPasswordLogin,
+} from "./authLocal";
 import { deviceLabelFromUA } from "./deviceLabel";
 import { COOKIE_NAME } from "@shared/const";
-import { normalizeEmail, isValidEmail } from "./authCrypto";
+import { normalizeEmail, isValidEmail, sha256Hex } from "./authCrypto";
 import {
   mintOtp,
   latestOtp,
@@ -295,7 +297,7 @@ function requireIdentity(ctx: { identity: unknown }) {
 const REVEAL_MAX_INLINE_BYTES = 30 * 1024 * 1024;
 
 /**
- * AGGREGATE ceiling for the same endpoint (v2.99.48).
+ * AGGREGATE ceiling for the same endpoint (v2.99.49).
  *
  * ── SELF-REVIEW: M23 BOUNDED ONE OBJECT, NOT THE PROCESS ── the per-request cap
  * stopped a single unbounded read, and M23's own comment reasoned that the per-IP
@@ -363,7 +365,7 @@ export function revealBudgetState(): { inFlight: number; bytes: number } {
  * metered (see the call site), and `startGuest` is invoked from exactly one
  * place — the "Enter as guest" form submit.
  *
- * ── SELF-REVIEW (v2.99.48): THE SIZING RATIONALE WAS WRONG ── v2.99.45 raised the
+ * ── SELF-REVIEW (v2.99.49): THE SIZING RATIONALE WAS WRONG ── v2.99.45 raised the
  * burst on the argument that "returning visitors cost nothing". They do not:
  * guest identity is deliberately SESSION-scoped (the device id lives in
  * `sessionStorage` and the guest cookie is a session cookie, so both halves die
@@ -376,7 +378,7 @@ export function revealBudgetState(): { inFlight: number; bytes: number } {
  * spike and left the steady state broken.
  *
  * Sustained is now ~1/s, and the real ceiling on the finite resource moved to the
- * GLOBAL mint budget inside `allocateSharedNumber` (v2.99.48) — which is the
+ * GLOBAL mint budget inside `allocateSharedNumber` (v2.99.49) — which is the
  * correct shape: a global counter protects a global resource, whereas a per-IP
  * counter mostly punishes whoever shares an address.
  * Honors RELAY_RATELIMIT_OFF like every other gate.
@@ -1830,7 +1832,7 @@ export const v2MessagesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
       statusGate(ctx); // reuse the generic per-IP throttle
-      // Reserve the aggregate slot BEFORE the burn (v2.99.48). Order matters: the
+      // Reserve the aggregate slot BEFORE the burn (v2.99.49). Order matters: the
       // burn is irreversible, so refusing after it would destroy a message the
       // reader never got to see. `retry` tells the client this one is still there.
       const slot = reserveRevealSlot();
@@ -2321,11 +2323,26 @@ export const v2OtpAuthRouter = router({
       await markUserEmailVerified(userId);
       // v2.87: an email-code sign-in is the recovery path — unlock the PIN.
       await unlockLoginPin(userId);
+      // Same recovery path for the password ladder (v2.99.49): proving the
+      // address by email code clears a password lock too, so a locked
+      // credential can never strand someone who can read their inbox.
+      await unlockPasswordLogin(userId);
       // Upgrade the guest identity in place (preserves number/contacts/messages).
       const guestToken = (ctx.req.cookies?.[GUEST_COOKIE] as string | undefined) ?? null;
       const displayName =
         `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || email.split("@")[0];
-      const identity = await ensureUserIdentity({ userId, displayName, guestToken });
+      // Pass the identity createContext ALREADY resolved for this request (plus the
+      // device id) so the guest upgrade uses the same notion of "who is this
+      // browser" as every other request. Without this, a guest whose identity was
+      // device-resolved rather than cookie-resolved got a BRAND NEW number and
+      // lost their contacts, messages and history (v2.99.49).
+      const identity = await ensureUserIdentity({
+        userId,
+        displayName,
+        guestToken,
+        resolvedIdentityId: ctx.identity?.id ?? null,
+        deviceId: ctx.deviceId ?? null,
+      });
       await markIdentityVerified(identity.id, { firstName: row.firstName, lastName: row.lastName });
       // New-device approval (v2.99.7): an email-code sign-in on an account that
       // already has another ONLINE device waits for that device to approve it,
@@ -2442,7 +2459,13 @@ export const v2OtpAuthRouter = router({
           // Same sign-in semantics as verifyOtp: adopt/upgrade the guest
           // identity so number/contacts/messages survive.
           const guestToken = (ctx.req.cookies?.[GUEST_COOKIE] as string | undefined) ?? null;
-          await ensureUserIdentity({ userId: user.id, displayName: user.name ?? email.split("@")[0], guestToken });
+          await ensureUserIdentity({
+            userId: user.id,
+            displayName: user.name ?? email.split("@")[0],
+            guestToken,
+            resolvedIdentityId: ctx.identity?.id ?? null,
+            deviceId: ctx.deviceId ?? null,
+          });
           setSessionCookie(ctx.res, user.id, rememberToTtlMs(input.remember), await startSession(ctx, user.id));
           return { ok: true };
         }
@@ -2654,6 +2677,11 @@ export const v2PushRouter = router({
             })
             .optional(),
           kind: z.enum(["webpush", "fcm"]).optional(),
+          /** Proof-of-possession secret (v2.99.49): a per-browser value the
+           *  client keeps in localStorage. Optional — an old client, or one with
+           *  storage disabled, simply doesn't send it and falls back to the
+           *  legacy keys-match path. */
+          claim: z.string().regex(/^[a-f0-9]{32,64}$/).optional(),
         })
         .refine(v => (v.kind ?? "webpush") === "fcm" || !!v.keys, {
           message: "keys are required for webpush subscriptions",
@@ -2668,14 +2696,19 @@ export const v2PushRouter = router({
       if (kind === "webpush" && !isAllowedWebPushEndpoint(input.endpoint)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Unsupported push endpoint." });
       }
-      await upsertPushSubscription({
+      const { owned } = await upsertPushSubscription({
         identityId: me.id,
         endpoint: input.endpoint,
         p256dh: kind === "fcm" ? "fcm" : input.keys!.p256dh,
         auth: kind === "fcm" ? "fcm" : input.keys!.auth,
         kind,
+        claimHash: input.claim ? sha256Hex(input.claim) : null,
       });
-      return { ok: true };
+      // `owned: false` means this endpoint belongs to a different identity and the
+      // caller couldn't prove possession. The client answers by rotating to a
+      // FRESH endpoint rather than being silently unnotifiable — which is what
+      // removes the downside that kept this residual open.
+      return { ok: true, owned };
     }),
 
   /** Endpoint URLs are unguessable capability URLs, so possession is proof
