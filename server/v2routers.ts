@@ -2038,46 +2038,90 @@ export const v2CallsRouter = router({
     const titleByNumber = new Map(
       (await getPartyLinesByNumbers(lineNumbers).catch(() => [])).map((l) => [l.number, l.title])
     );
-    // Live profile photos for every participant (v2.96) in ONE batched query —
-    // the roster snapshot has only number+name.
-    const allNumbers = Array.from(
+    /* THE ROSTER IS A HISTORICAL SNAPSHOT — RESOLVE THE PEOPLE IN IT LIVE.
+     *
+     * Each roster entry froze a number and a name at the moment the call ended,
+     * and it also recorded the `identityId`. The number is the part that goes
+     * stale: regenerate your number and every History row anybody holds keeps
+     * pointing at a number you no longer own — so the call-back button dials
+     * nothing, the row displays a PIN that is not yours as fact, and the
+     * presence dot (looked up by number) sticks grey forever. The avatar had the
+     * same defect: it was resolved BY NUMBER, so a renumbered person also lost
+     * their photo from everyone's History.
+     *
+     * So resolve from the identityId instead, and fall back to the number only
+     * for entries that never had an identity (true guests). This is the "live"
+     * strategy in NUMBER_BEARING_COLUMNS: nothing is rewritten, which means
+     * renumbers that already happened come out correct too, and no future
+     * renumber can leave this behind. Names are refreshed on the same principle
+     * the contacts list already uses — live identity over frozen copy.
+     */
+    const roster0 = (r: (typeof rows)[number]) =>
+      Array.isArray(r.participants)
+        ? (r.participants as Array<{ number?: string; name?: string; identityId?: number | null }>)
+        : [];
+    const rosterIds = Array.from(
+      new Set(rows.flatMap((r) => roster0(r).map((p) => p.identityId).filter((x): x is number => typeof x === "number")))
+    );
+    const liveById = new Map(
+      (rosterIds.length ? await getIdentitiesByIds(rosterIds).catch(() => []) : []).map((i) => [i.id, i])
+    );
+    // Guests (no identityId) keep the by-number lookup as their only option.
+    const guestNumbers = Array.from(
       new Set(
         rows.flatMap((r) =>
-          Array.isArray(r.participants)
-            ? (r.participants as Array<{ number?: string }>).map((p) => p.number ?? "").filter(Boolean)
-            : []
+          roster0(r)
+            .filter((p) => typeof p.identityId !== "number")
+            .map((p) => p.number ?? "")
+            .filter(Boolean)
         )
       )
     );
     const avatarByNumber = new Map(
-      (allNumbers.length ? await getIdentitiesByNumbers(allNumbers) : []).map((i) => [
+      (guestNumbers.length ? await getIdentitiesByNumbers(guestNumbers).catch(() => []) : []).map((i) => [
         i.number,
         i.avatarUrl ?? null,
       ])
     );
     return rows.map((r) => {
-      const roster = Array.isArray(r.participants)
-        ? (r.participants as Array<{ number?: string; name?: string; identityId?: number | null }>)
-        : [];
+      const roster = roster0(r);
       const isPartyLine = (r.roomId ?? "").startsWith("pl-");
+      const participants = roster.map((p) => {
+        const live = typeof p.identityId === "number" ? liveById.get(p.identityId) : undefined;
+        const frozenNumber = p.number ?? "";
+        return {
+          // Live number when we know who they are; the snapshot otherwise.
+          number: live?.number ?? frozenNumber,
+          frozenNumber,
+          name: live?.displayName || p.name || "Guest",
+          avatarUrl: live?.avatarUrl ?? (frozenNumber ? (avatarByNumber.get(frozenNumber) ?? null) : null),
+          isSelf: p.identityId === me.id,
+        };
+      });
+      /* The dialled number is stored with no identity of its own, so map it
+       * through the roster: the entry whose FROZEN number matches is the person
+       * who was dialled, and their live number is where a call-back should go.
+       * A party line is exempt — its number belongs to the line, not a person,
+       * and never moves. */
+      const dialed = r.dialedNumber ?? null;
+      const dialedLive =
+        dialed && !isPartyLine
+          ? (participants.find((p) => p.frozenNumber === dialed)?.number ?? dialed)
+          : dialed;
       return {
         id: r.id,
         roomId: r.roomId,
-        dialedNumber: r.dialedNumber,
+        dialedNumber: dialedLive,
         partyCount: r.partyCount,
         startedAt: r.startedAt,
         endedAt: r.endedAt,
         durationSec: r.durationSec,
         partyLine: isPartyLine,
         // Null when the line has since been deleted (row keeps its number).
-        partyLineTitle: isPartyLine ? (titleByNumber.get(r.dialedNumber ?? "") ?? null) : null,
+        // Looked up on the STORED number: a line's number never moves.
+        partyLineTitle: isPartyLine ? (titleByNumber.get(dialed ?? "") ?? null) : null,
         // Surface everyone EXCEPT me first-class; keep the full list too.
-        participants: roster.map((p) => ({
-          number: p.number ?? "",
-          name: p.name ?? "Guest",
-          avatarUrl: p.number ? (avatarByNumber.get(p.number) ?? null) : null,
-          isSelf: p.identityId === me.id,
-        })),
+        participants: participants.map(({ frozenNumber: _frozen, ...p }) => p),
       };
     });
   }),
