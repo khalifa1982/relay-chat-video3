@@ -1785,6 +1785,10 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // contacts, messages, history) that a browser close made unreachable. Additive
     // + nullable: a NULL simply means "not yet issued", and `ensureGuestRecoveryKey`
     // fills it in on the row's next visit.
+    // v2.99.74 — receipt timestamps for the message-info panel. `createdAt` already
+    // carries "sent"; these two say when it reached the device and when it was opened.
+    { table: "messages", column: "deliveredAt", ddl: "ADD COLUMN `deliveredAt` timestamp NULL" },
+    { table: "messages", column: "readAt", ddl: "ADD COLUMN `readAt` timestamp NULL" },
     { table: "identities", column: "recoveryHash", ddl: "ADD COLUMN `recoveryHash` varchar(64)" },
     { table: "identities", column: "recoveryIssuedAt", ddl: "ADD COLUMN `recoveryIssuedAt` timestamp NULL" },
     // Native Android app push transport (v2.86).
@@ -3242,6 +3246,73 @@ export async function revealExpiringMessage(input: {
   };
 }
 
+/**
+ * Mark a conversation's inbound messages DELIVERED (v2.99.74).
+ *
+ * Owner: "the other user is online and he received, but he didn't open it. It should
+ * show second check mark beside that."
+ *
+ * `messages.status` has had a `delivered` value since the schema was written and
+ * NOTHING ever set it, so one tick and two ticks were the same state and the sender
+ * could not tell "gone" from "arrived". This is the missing transition.
+ *
+ * DELIVERED MEANS "THE RECIPIENT'S APP HAS IT", which is why the recipient's client
+ * calls this rather than the server inferring it from a live SSE connection: an open
+ * stream proves a socket exists, not that the message reached the app — and it would
+ * miss the ordinary case of someone who was offline when it was sent and opens the app
+ * later without opening the thread. That case is precisely the one the second tick is
+ * for.
+ *
+ * Never touches a message the caller SENT (you do not deliver to yourself) and never
+ * downgrades one already `read`, so a late-arriving call cannot walk a receipt
+ * backwards. Membership-scoped like `markThreadRead`, for the same reason: without it,
+ * any identity could stamp receipts on conversations it is not part of.
+ *
+ * IN A GROUP, "delivered" MEANS AT LEAST ONE MEMBER HAS IT, not all of them — the row
+ * is shared, so the first member to report flips it for the sender's view. That is not
+ * a shortcut introduced here: `markThreadRead` has always worked exactly this way, so
+ * the second tick inherits the same semantics the third one already had rather than
+ * inventing a different rule for the same row. Per-recipient receipts would need a
+ * per-participant table, which is a schema change and a separate piece of work.
+ */
+export async function markThreadDelivered(input: {
+  conversationId: number;
+  identityId: number;
+}): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    const membership = await db
+      .select({ id: conversationParticipants.identityId })
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, input.conversationId),
+          eq(conversationParticipants.identityId, input.identityId)
+        )
+      )
+      .limit(1);
+    if (membership.length === 0) return false;
+    await db
+      .update(messages)
+      .set({ status: "delivered", deliveredAt: new Date() })
+      .where(
+        and(
+          eq(messages.conversationId, input.conversationId),
+          sql`${messages.senderIdentityId} <> ${input.identityId}`,
+          isNull(messages.deletedAt),
+          // ONLY from "sent". Excluding "read" is what stops a receipt going
+          // backwards, and excluding "failed" leaves a genuine failure visible.
+          eq(messages.status, "sent")
+        )
+      );
+    return true;
+  } catch {
+    // A receipt is not worth failing a page render over.
+    return false;
+  }
+}
+
 export async function markThreadRead(input: {
   conversationId: number;
   identityId: number;
@@ -3299,9 +3370,18 @@ export async function markThreadRead(input: {
     // message inserted between the SELECT above and this UPDATE would be flipped
     // to "read" before the reader ever saw it, giving the sender a false receipt.
     if (lastId != null) {
+      const now = new Date();
       await tx
         .update(messages)
-        .set({ status: "read" })
+        .set({
+          status: "read",
+          // v2.99.74: stamp WHEN, for the message-info panel. Also backfill
+          // `deliveredAt` if it is somehow still null — a message cannot have been
+          // read without having been delivered, and leaving it null would make the
+          // info panel show "read" above an empty "delivered" line.
+          readAt: now,
+          deliveredAt: sql`COALESCE(${messages.deliveredAt}, ${now})`,
+        })
         .where(
           and(
             eq(messages.conversationId, input.conversationId),

@@ -31,6 +31,10 @@ import {
   Timer,
   ChevronDown,
   Voicemail,
+  Check,
+  CheckCheck,
+  Forward,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -121,6 +125,39 @@ function formatTime(iso: string | Date): string {
   const day = d.toLocaleDateString([], { month: "short", day: "numeric" });
   const year = d.getFullYear() === now.getFullYear() ? "" : ` ${d.getFullYear()}`;
   return `${day}${year} · ${time}`;
+}
+
+/**
+ * Full date and time to the SECOND, for the message-info panel (v2.99.74).
+ *
+ * Deliberately not `formatTime`: that omits today's date (correct on a bubble, where
+ * repeating it 40 times is noise) and rounds to the minute. Sent, delivered and read
+ * are frequently within the same minute of each other, so a minute-precision panel
+ * shows three identical values and answers none of the question it was opened to
+ * answer. Here the date and the seconds are the point.
+ */
+function formatExact(iso: string | Date): string {
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  if (Number.isNaN(d.getTime())) return "—";
+  const date = d.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+  const time = d.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  return `${date} · ${time}`;
+}
+
+/**
+ * Is this a self-destructing message? (v2.99.74)
+ *
+ * Used to withhold FORWARD, whose whole effect is to make a second, permanent copy
+ * of something sent on the promise that there would be exactly one temporary one.
+ * The forward action refuses these too, but a menu item that cannot do its job
+ * should not be offered — the refusal exists as a backstop, not as the UI.
+ */
+function isExpiringMsg(meta: unknown): boolean {
+  return (meta as { expire?: unknown } | null)?.expire != null;
 }
 
 /** True when a message body is ONLY emoji (1-8 glyphs) — rendered big without a
@@ -807,6 +844,47 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const typers = useTypers(conversationId).filter((id) => id !== me?.id);
   // Unsend confirmation via AlertDialog (v2.88 — native confirm() is gone).
   const [unsendId, setUnsendId] = useState<number | null>(null);
+  // v2.99.74 — message Info (sent/delivered/read) and Forward-to-another-thread.
+  const [infoOf, setInfoOf] = useState<Msg | null>(null);
+  const [forwarding, setForwarding] = useState<Msg | null>(null);
+  const [forwardBusy, setForwardBusy] = useState(false);
+  // Every conversation EXCEPT this one — forwarding a message back into the thread
+  // it is already in is never what anybody means, and offering it invites the tap.
+  const forwardTargets = useMemo(
+    () => (threadsQuery.data ?? []).filter((t) => t.conversationId !== conversationId),
+    [threadsQuery.data, conversationId]
+  );
+
+  /**
+   * Forward one message into another conversation.
+   *
+   * Re-SENDS rather than re-pointing a row: the target thread gets its own message
+   * with its own receipts, which is what makes forwarding behave like sending. An
+   * attachment is carried by id — `messages.send` re-checks that the sender may use
+   * that attachment, so this cannot be used to smuggle media the forwarder could not
+   * already see.
+   *
+   * Deliberately never forwards an EXPIRING message: its whole contract is that it
+   * exists once and then does not, and copying it into another thread would quietly
+   * break that for the person who sent it.
+   */
+  async function forwardTo(target: { id: number }, m: Msg) {
+    setForwardBusy(true);
+    try {
+      await sendMutation.mutateAsync({
+        conversationId: target.id,
+        kind: m.attachment ? (m.kind as "image" | "video" | "audio" | "file") : "text",
+        body: m.body ?? undefined,
+        attachmentId: m.attachment ? (m.attachment as { id: number }).id : undefined,
+      });
+      toast.success("Forwarded");
+      setForwarding(null);
+    } catch {
+      toast.error("Couldn't forward that message");
+    } finally {
+      setForwardBusy(false);
+    }
+  }
   function deleteMessage(messageId: number) {
     setUnsendId(messageId);
   }
@@ -1479,6 +1557,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         .then(() => toast.success("Copied"))
                         .catch(() => toast.error("Failed to copy"));
                     } : undefined}
+                    onForward={isExpiringMsg(m.meta) ? undefined : () => setForwarding(m)}
+                    onInfo={() => setInfoOf(m)}
                     onDelete={() => deleteMessage(m.id)}
                   />
                 )}
@@ -1491,7 +1571,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         <div className="text-4xl leading-tight">{m.body}</div>
                         <div className={"text-[10px] mt-0.5 text-muted-foreground " + (mine ? "text-right" : "")}>
                           {formatTime(m.createdAt)}
-                          {mine && m.status && <span className="ml-1">{m.status === "read" ? "✓✓" : "✓"}</span>}
+                          <Receipt status={m.status} mine={!!mine} />
                         </div>
                       </div>
                     );
@@ -1572,6 +1652,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             thumbUrl={att.thumbUrl ?? null}
                             width={att.width ?? null}
                             height={att.height ?? null}
+                            /* v2.99.74: this was missing, and it is why a VIEW-ONCE
+                               voice note still showed a frozen bar after v2.99.73 —
+                               the ordinary bubble passed the stored duration but this
+                               path did not, and the fill is computed as cur/dur, so an
+                               unknown duration pins the bar at 0 however well playback
+                               is going. */
+                            durationMs={
+                              (att as { durationMs?: number | null }).durationMs ?? null
+                            }
                             mine={mine}
                             onOpen={setLightbox}
                           />
@@ -1633,7 +1722,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       </button>
                     );
                   })()}
-                  {/* WhatsApp-style meta: tiny time + ticks, tucked bottom-right. */}
+                  {/* WhatsApp-style meta: tiny time + ticks, tucked bottom-right.
+                      Receipt owns its own mine/status guard, so there is no outer
+                      condition here to fall out of step with it. */}
                   <div
                     className={
                       "flex justify-end items-center gap-1 text-[10px] leading-none mt-0.5 -mb-0.5 " +
@@ -1641,12 +1732,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     }
                   >
                     {formatTime(m.createdAt)}
-                    {mine && m.status && (
-                      <span>
-                        {/* sent (✓) vs read (✓✓) — kept distinct on purpose. */}
-                        {m.status === "read" ? "✓✓" : "✓"}
-                      </span>
-                    )}
+                    <Receipt status={m.status} mine={!!mine} />
                   </div>
                 </div>
                   );
@@ -1673,6 +1759,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         .then(() => toast.success("Copied"))
                         .catch(() => toast.error("Failed to copy"));
                     } : undefined}
+                    onForward={isExpiring ? undefined : () => setForwarding(m)}
+                    onInfo={() => setInfoOf(m)}
                   />
                   );
                 })()}
@@ -1959,6 +2047,99 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           }}
         />
       )}
+      {/* ── Message info (v2.99.74): sent / delivered / read ── */}
+      <AlertDialog open={infoOf !== null} onOpenChange={(open) => !open && setInfoOf(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Message info</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 pt-1 text-left">
+                {(() => {
+                  const m = infoOf;
+                  if (!m) return null;
+                  const iSent = m.senderIdentityId === me?.id;
+                  const rows: Array<{ label: string; at: string | Date | null }> = [
+                    { label: "Sent", at: m.createdAt },
+                    { label: "Delivered", at: m.deliveredAt ?? null },
+                    { label: "Read", at: m.readAt ?? null },
+                  ];
+                  return (
+                    <>
+                      {rows.map((r) => (
+                        <div key={r.label} className="flex items-baseline justify-between gap-4">
+                          <span className="text-xs uppercase tracking-wider text-muted-foreground">
+                            {r.label}
+                          </span>
+                          <span className="text-sm tabular-nums">
+                            {r.at ? (
+                              formatExact(r.at)
+                            ) : (
+                              /* An honest dash, not a guess. Every message that predates
+                                 v2.99.74 has no stored delivered/read time, and inventing
+                                 one would make this panel lie about the very thing it
+                                 exists to report. */
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </span>
+                        </div>
+                      ))}
+                      {!iSent && (
+                        <p className="pt-1 text-[0.72rem] leading-relaxed text-muted-foreground/80">
+                          These are the times recorded on your side for a message you
+                          received.
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Close</AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── Forward to another conversation (v2.99.74) ── */}
+      <AlertDialog open={forwarding !== null} onOpenChange={(open) => !open && setForwarding(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Forward to…</AlertDialogTitle>
+            <AlertDialogDescription>
+              {forwarding && (forwarding.meta as { expire?: unknown } | null)?.expire != null
+                ? "This is a disappearing message — forwarding it would break the promise it was sent under, so it can't be forwarded."
+                : "Pick a conversation. It's sent as a new message there, with its own delivery receipts."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {forwarding && (forwarding.meta as { expire?: unknown } | null)?.expire == null && (
+            <div className="max-h-64 space-y-1 overflow-y-auto">
+              {forwardTargets.map((t) => (
+                <button
+                  key={t.conversationId}
+                  type="button"
+                  disabled={forwardBusy}
+                  onClick={() => void forwardTo({ id: t.conversationId }, forwarding)}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted disabled:opacity-50"
+                >
+                  <span className="truncate" dir="auto">
+                    {t.title || t.peerDisplayName || t.peerNumber || "Conversation"}
+                  </span>
+                </button>
+              ))}
+              {forwardTargets.length === 0 && (
+                <p className="px-1 py-2 text-sm text-muted-foreground">
+                  No other conversations yet.
+                </p>
+              )}
+            </div>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Unsend confirmation (v2.88 — AlertDialog, not native confirm()). */}
       <AlertDialog open={unsendId !== null} onOpenChange={(open) => !open && setUnsendId(null)}>
         <AlertDialogContent>
@@ -2025,17 +2206,77 @@ function AccentCircle({
   );
 }
 
-/** Three-dot context menu for a message (Reply / Copy / Delete). Always tappable
- *  on mobile (the old hover-only buttons were invisible on touch). */
+/**
+ * Delivery receipt for one of MY messages (v2.99.74).
+ *
+ * Owner: "will you send the message? It shows you what check if it's delivered. I mean
+ * the other user is online and he received, but he didn't open it. It should show second
+ * check mark beside that. If he heard it, it will turn both check marks into blue
+ * colour means delivered, and any type of message either voice text video whatever."
+ *
+ * Before this, one tick and two ticks were the SAME state: `messages.status` had a
+ * `delivered` value that nothing ever set, so the UI rendered "✓✓" for read and "✓" for
+ * everything else — sent and delivered were indistinguishable. Now:
+ *
+ *   sent       → one tick, muted        (left this device)
+ *   delivered  → two ticks, muted       (their app has it, unopened)
+ *   read       → two ticks, BLUE        (they opened it)
+ *   failed     → one tick struck out    (never left)
+ *
+ * Applies to every kind — text, voice, video, file — because it keys off the message
+ * row's status, not the payload.
+ */
+function Receipt({ status, mine }: { status?: string | null; mine: boolean }) {
+  if (!mine || !status) return null;
+  const read = status === "read";
+  const twoTicks = read || status === "delivered";
+  const failed = status === "failed";
+  // Only ever rendered on our OWN bubbles (see the guard above), which are the
+  // accent colour — so sent/delivered is a muted white and READ goes blue, which is
+  // the state change the owner asked to be able to see at a glance.
+  const cls = read ? "text-[#4db6ff]" : "text-white/70";
+  const label = failed
+    ? "Not sent"
+    : read
+      ? "Read"
+      : twoTicks
+        ? "Delivered"
+        : "Sent";
+  return (
+    <span
+      className={"ml-1 inline-flex items-center " + cls}
+      title={label}
+      aria-label={label}
+      role="img"
+    >
+      {failed ? (
+        <span className="text-[11px] line-through opacity-80">✓</span>
+      ) : twoTicks ? (
+        <CheckCheck className="size-3.5" strokeWidth={3} />
+      ) : (
+        <Check className="size-3.5" strokeWidth={3} />
+      )}
+    </span>
+  );
+}
+
+/** Three-dot context menu for a message (Reply / Forward / Copy / Info / Delete).
+ *  Always tappable on mobile (the old hover-only buttons were invisible on touch). */
 function MessageMenu({
   mine,
   onReply,
   onCopy,
+  onForward,
+  onInfo,
   onDelete,
 }: {
   mine?: boolean;
   onReply: () => void;
   onCopy?: () => void;
+  /** v2.99.74 — send this message's content on to another conversation. */
+  onForward?: () => void;
+  /** v2.99.74 — sent / delivered / read times for this message. */
+  onInfo?: () => void;
   onDelete?: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -2078,6 +2319,24 @@ function MessageMenu({
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
               >
                 <Copy className="size-4" /> Copy
+              </button>
+            )}
+            {onForward && (
+              <button
+                type="button"
+                onClick={() => { onForward(); setOpen(false); }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+              >
+                <Forward className="size-4" /> Forward
+              </button>
+            )}
+            {onInfo && (
+              <button
+                type="button"
+                onClick={() => { onInfo(); setOpen(false); }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+              >
+                <Info className="size-4" /> Info
               </button>
             )}
             {mine && onDelete && (
@@ -2302,6 +2561,30 @@ function VoiceNotePlayer({
     return a;
   };
 
+  // v2.99.74 — LEARN THE LENGTH BEFORE THE FIRST PLAY, when nothing told us.
+  //
+  // The progress fill is `cur / dur`, so an unknown duration pins the bar at zero no
+  // matter how well playback is going. v2.99.73 made the probe SAFE by deferring it
+  // until the element was paused — but on a first play that means it never runs during
+  // that play, so the bar still sat still for its whole length. Probing on MOUNT closes
+  // that: by the time anyone presses play the length is known, and the note is seekable
+  // before it is ever played.
+  //
+  // Only when we have nothing stored, so the normal case still costs no request at
+  // all: every note this app records stores its length. The cost lands only on notes
+  // from before that existed — those get one `preload="metadata"` header fetch on
+  // mount instead of on first play, which is the price of a bar that moves.
+  useEffect(() => {
+    if (seeded > 0) return;
+    // Creating the element is the point: it starts the metadata load and installs the
+    // `loadedmetadata` listener, which runs the probe itself once the header arrives
+    // and turns out not to carry a duration. On mount `readyState` is normally 0, so
+    // the direct call below only fires when the metadata is already cached.
+    const a = ensure();
+    if (a.readyState >= 1) probeDuration(a);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url]);
+
   // Smooth clock while playing. `timeupdate` alone fires ~4Hz, which on a 3-second
   // note reads as a control that barely moves.
   useEffect(() => {
@@ -2312,7 +2595,14 @@ function VoiceNotePlayer({
     }
     const tick = () => {
       const a = audioRef.current;
-      if (a && !probingRef.current) setCur(a.currentTime || 0);
+      if (a && !probingRef.current) {
+        setCur(a.currentTime || 0);
+        // Second net: many engines only settle a MediaRecorder blob's duration once
+        // enough of it has buffered, which can happen mid-playback. Pick it up rather
+        // than leaving the bar frozen for a note whose length nobody ever recorded.
+        const d = a.duration;
+        if (Number.isFinite(d) && d > 0) setDur((prev) => (prev > 0 ? prev : d));
+      }
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);

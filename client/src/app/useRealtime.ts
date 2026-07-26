@@ -15,6 +15,8 @@ type V2Event =
   | { kind: "message"; conversationId: number; from: number }
   | { kind: "typing"; conversationId: number; from: number }
   | { kind: "read"; conversationId: number; reader: number }
+  /** Delivery receipt (v2.99.74): the second tick — they have it, unopened. */
+  | { kind: "delivered"; conversationId: number; by: number }
   | { kind: "presence"; number: string; online: boolean; lastSeenAt: string }
   | { kind: "contact"; from: number }
   | {
@@ -189,6 +191,12 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
             utils.calls.missedSummary.invalidate().catch(() => {});
             break;
           case "read":
+          case "delivered":
+            // Both are receipt changes on messages WE sent, and both are rendered
+            // from the same `status` field, so they refresh the same two queries.
+            // `delivered` deliberately makes no sound and raises nothing: the
+            // sender is the only person it concerns and a tick appearing is the
+            // whole notification.
             utils.messages.list
               .invalidate({ conversationId: payload.conversationId })
               .catch(() => {});

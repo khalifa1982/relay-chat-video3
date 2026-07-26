@@ -7557,6 +7557,107 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.74 — delivery receipts, a real message menu, and the voice bar that still did not move (2026-07-26)
+- [x] **(1) ONE TICK AND TWO TICKS WERE THE SAME STATE.** Owner: *"it shows you what check if it's
+      delivered. I mean the other user is online and he received, but he didn't open it. It should show
+      second check mark beside that. If he [read] it, it will turn both check marks into blue colour…
+      and any type of message either voice text video whatever."*
+      `messages.status` has carried a `delivered` value since the schema was written and NOTHING EVER
+      WROTE IT, so the UI's `status === "read" ? "✓✓" : "✓"` was a two-state display of a three-state
+      fact: sent and delivered rendered identically. This adds the missing transition.
+- [x] **THE RECIPIENT REPORTS IT, NOT THE SERVER.** The tempting version marks a message delivered when
+      the server fans its SSE event — but an open stream proves a socket exists, not that the message
+      reached an app that HAS it, and it would MISS the case the second tick exists for: somebody who
+      was offline when it was sent and opens the app later without opening the thread. So the report is
+      driven off the RECIPIENT's thread list (`useDeliveryReceipts`), mounted in `AppShell` rather than
+      `Messages` for exactly that reason: opening the app is enough, opening the thread is not required.
+- [x] **DEDUPED ON THE THREAD'S NEWEST MESSAGE TIME** — load-bearing, not an optimisation. That list
+      refetches every 15s, so an undeduped report is a write over the conversation's messages every
+      fifteen seconds forever, for a fact that has not changed; that is worse than the missing feature.
+      A newer `lastMessageAt` is precisely the signal that something new arrived. The watermark never
+      moves backwards (two tabs, or a stale cached list, must not re-fire). The claim is taken BEFORE
+      the request, because the live `message` event and the refetch it triggers land in the same tick
+      and would otherwise each fire their own write. A genuine failure UN-claims, because a blip must
+      not cost the sender their tick until the next message happens to arrive. One sweep is capped at
+      12, so opening the app on a large backlog is not a write storm — the remainder goes on the next
+      sweep, proven by test rather than asserted.
+- [x] **THE RECEIPT CANNOT WALK BACKWARDS.** `markThreadDelivered` promotes ONLY from `sent`, so a late
+      report cannot turn two blue ticks grey again; excluding `failed` leaves a real failure visible
+      instead of claiming it arrived. Membership-scoped, and never delivers to your own messages — the
+      S6 finding's shape, in a second place. Fails to `false` rather than throwing: a receipt is not
+      worth a failed render.
+- [x] **IN A GROUP, "delivered" MEANS AT LEAST ONE MEMBER HAS IT**, not all of them — the row is shared,
+      so the first member to report flips it for the sender's view. Not a shortcut introduced here:
+      `markThreadRead` has always worked exactly this way, so the second tick inherits the semantics the
+      third one already had rather than inventing a different rule for the same row. Per-recipient
+      receipts would need a per-participant table (see the "delete for me" item below — same shape).
+- [x] The read transition already accepted `delivered` as well as `sent` BEFORE this release, which is
+      the one thing that would have silently broken the whole chain: a message that got its second tick
+      could never have gone blue, for everybody whose app reported delivery first, i.e. everybody. It
+      was already correct; now pinned, so a future narrowing has to come back and think about it.
+- [x] **READING BACKFILLS THE DELIVERED TIME** (`COALESCE(deliveredAt, now)` inside `markThreadRead`),
+      or the info panel would show a message read at 10:05 that was never delivered — not a thing that
+      can happen, and it would read as a bug in the panel rather than in the data.
+- [x] **A BUG CAUGHT BEFORE SHIPPING, worth naming because it would have been invisible in testing.**
+      The first cut cast the new event through `as unknown as` to avoid touching the union — but
+      `KNOWN_V2_EVENT_KINDS` gates the RECEIVE side of the Redis bus, so an undeclared kind is
+      delivered locally and silently DROPPED whenever the sender is on the other instance, which on a
+      two-instance fleet is most of the time. Single-instance dev would have looked perfect.
+      `delivered` is now a declared member of both, and a test asserts the cast is absent.
+- [x] New nullable `messages.deliveredAt` / `messages.readAt` via the boot migrator; both returned by
+      `messages.list` to BOTH sides — they are timestamps the recipient generated about their own
+      reading, and the sender is exactly who the info panel is for. Nothing there reveals content, an
+      identity, or anything the ticks do not already imply.
+- [x] **(2) THE ⋮ MENU.** Owner: *"reply or put forward or delete or info."* Now Reply / Forward /
+      Copy / Info, plus Unsend on your own.
+- [x] Forward RE-SENDS rather than re-pointing the row, so the target thread gets its own message with
+      its own receipts — which is what makes a forward behave like a send. The attachment rides by id
+      and `messages.send` re-checks the sender may use it, so this cannot smuggle media the forwarder
+      could not already see. The picker never offers the thread you are already in.
+- [x] Forward is WITHHELD from a self-destructing message in both directions rather than
+      offered-then-refused: copying a view-once message into a second permanent thread breaks the exact
+      promise it was sent under, and a menu item that cannot do its job should not be there. The action
+      still refuses, as a backstop rather than as the UI.
+- [x] A still-LOCKED expiring message shows no menu at all — the QA H2 guard that was already there,
+      which Forward and Info inherit by living inside it (Reply and Copy would extract the plaintext
+      without burning it; the same is true of the two new items).
+- [x] **INFO** lists Sent / Delivered / Read, to the SECOND and always naming the date. Deliberately
+      NOT the bubble's `formatTime`, which drops today's date and rounds to the minute: those three
+      times are frequently inside the same minute, so a minute-precision panel shows three identical
+      values and answers nothing. A time nobody recorded shows an honest em dash, never a guess —
+      every message predating this release has none.
+- [x] **(3) THE VOICE BAR STILL DID NOT MOVE** (owner, second report on the same control). v2.99.73
+      fixed the probe that DESTROYED playback and threaded the stored duration through the ordinary
+      bubble — and MISSED the second render path: the revealed-expiring `content()` helper never passed
+      `durationMs`, so a view-once voice note had `dur = 0`, and since the fill is `cur / dur` the bar
+      was pinned at zero however well playback was going. That is the screenshot.
+- [x] Two more holes closed in the same pass. Making the probe safe by deferring it until PAUSED meant
+      it never ran during a FIRST play, so a note with no stored length still sat still for its entire
+      first play — it now probes on MOUNT, and only when nothing is stored, so the normal case costs no
+      request at all (the cost lands on pre-v2.96 notes as one `preload="metadata"` header fetch). The
+      rAF clock also picks a duration up mid-playback if the engine settles it late, without ever
+      overwriting one already trusted.
+- [x] `client/src/app/deliveryReceipts.test.ts` (39). The reporting RULE is tested BEHAVIOURALLY,
+      because a source pin cannot tell you whether a 15-second poll writes every 15 seconds.
+- [x] **ALL 24 tripwires verified by MUTATION** — reverted from byte-exact backups, aborting on a
+      missing target, source confirmed byte-identical afterwards. Includes the original screenshot bug,
+      the receipt-walks-backwards case, the bus-allowlist drop, and the hook being unmounted entirely.
+- [x] One of my own assertions was thrown out during that run rather than counted as a pass: a check
+      that the old hand-drawn "✓✓" was gone matched two COMMENTS describing the history, so it passed
+      or failed on prose rather than on behaviour. It now strips comment lines and checks CODE. This is
+      the third release in a row where a self-referential comment match was the weakness.
+- [x] Two redundancies removed while pinning: `Receipt` owned its own mine/status guard AND had an
+      outer one at the call site (two guards for one rule is how a receipt ends up rendering in one
+      place and not the other after somebody edits only one), and its non-`mine` colour branch was
+      unreachable behind its own early return.
+- [ ] **NOT DONE, said plainly:** "delete" for a message somebody else sent. Unsend removes a message
+      for everyone and is rightly ours-only; a per-recipient "delete for me" needs a real
+      per-participant tombstone touching `messages.list`, thread previews, `searchMessages` and the
+      STORED unread counters — and a localStorage version would be a lie that reappears on their other
+      device. It is a feature, not a polish item, so it is flagged rather than faked.
+- [x] `pnpm verify` green: 2278 tests. No ops work — no env var, no new dependency; the two columns are
+      additive nullable and land via the existing boot migrator.
+
 ## v2.99.73 — voice playback that moves, recording you can see and undo, dated messages, instant stats (2026-07-26)
 - [x] **(0) "MAKE IT LIVE, NOT AFTER 30 SECONDS."** v2.99.71 replaced the 30s poll with a 2s push, which is
       close but still tick-bound — signing in could take two seconds to show. Now every online/offline
