@@ -217,6 +217,28 @@ export const identities = mysqlTable(
      *  DEFAULT for new posts — each status stamps its own `statuses.audience`, so
      *  changing this never reaches back into something already published. */
     statusAudience: varchar("statusAudience", { length: 16 }),
+    /**
+     * ADOPT-AND-RETIRE recovery (v2.99.68) — sha256 of a recovery key the browser
+     * keeps in localStorage. This is the ONE durable thing a guest holds.
+     *
+     * Guest identity is deliberately SESSION-scoped: the device id lives in
+     * sessionStorage and the guest cookie is a session cookie, so both halves die
+     * on browser close and a fresh session mints a fresh guest. That was an
+     * explicit product decision and this column does NOT change it — automatic
+     * resolution is untouched. What it adds is a way for the PERSON to come back
+     * and say "that number was mine", which is the only remaining case where
+     * closing a browser silently stranded contacts, messages and call history.
+     *
+     * Stored HASHED, so a database read never yields a key that could claim an
+     * identity. Only ever settable on a row with `userId IS NULL`, and adoption
+     * re-checks that in its WHERE — a recovery key can never hand over an
+     * identity that now belongs to an account.
+     */
+    recoveryHash: varchar("recoveryHash", { length: 64 }),
+    /** When the recovery key was minted. Recorded for support/debugging; the
+     *  window is deliberately NOT bounded, because "you lost your data because you
+     *  waited too long" is the outcome this whole mechanism exists to prevent. */
+    recoveryIssuedAt: timestamp("recoveryIssuedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -225,6 +247,7 @@ export const identities = mysqlTable(
     userIdx: index("identities_userId_idx").on(t.userId),
     guestTokenIdx: index("identities_guestToken_idx").on(t.guestToken),
     deviceIdIdx: index("identities_deviceId_idx").on(t.deviceId),
+    recoveryIdx: index("identities_recoveryHash_idx").on(t.recoveryHash),
   }),
 );
 export type Identity = typeof identities.$inferSelect;

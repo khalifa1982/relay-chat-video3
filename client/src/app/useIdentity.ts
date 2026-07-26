@@ -1,6 +1,11 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { getDeviceId, resetDeviceId, clearRelayChannel } from "@/lib/deviceId";
+import {
+  forgetGuestRecovery,
+  refreshGuestRecoveryLabel,
+  rememberGuestRecovery,
+} from "@/lib/guestRecovery";
 
 /**
  * Hook for v2.0 phone-app identity — a PURE READ (whoami + start/sign-out).
@@ -22,10 +27,26 @@ export function useIdentity() {
     staleTime: 30_000,
   });
   const startGuestMutation = trpc.identity.startGuest.useMutation({
-    onSuccess: () => utils.identity.whoami.invalidate(),
+    onSuccess: (res) => {
+      // ADOPT-AND-RETIRE (v2.99.68): keep the recovery key the server just issued
+      // so this identity can be reclaimed after the browser closes — the one case
+      // where a guest used to lose their number, contacts and history outright.
+      // `recoveryKey` is null when the row already has one; `rememberGuestRecovery`
+      // treats that as a no-op rather than discarding the copy we hold.
+      rememberGuestRecovery({
+        key: res?.recoveryKey,
+        number: res?.number,
+        name: res?.displayName,
+      });
+      utils.identity.whoami.invalidate();
+    },
   });
   const signOutMutation = trpc.identity.signOutGuest.useMutation({
     onSuccess: () => {
+      // Signing out is the gesture that makes a SHARED browser safe: it is what
+      // lets recovery exist at all without loosening automatic resolution, so the
+      // record must go with the session.
+      forgetGuestRecovery();
       // A guest logout must TRULY end the session. Sever the device-id binding
       // BEFORE refetching whoami so the next login mints a brand-new identity
       // (fresh PIN, empty contacts) instead of the device-id silently restoring
@@ -52,6 +73,18 @@ export function useIdentity() {
   );
 
   const signOut = useCallback(() => signOutMutation.mutateAsync(), [signOutMutation]);
+
+  // Keep the recovery record's DISPLAY fields current (v2.99.68). The key is
+  // issued once, but the person can rename themselves or regenerate their number
+  // afterwards — and a restore prompt offering a number they no longer own reads
+  // as a bug even though the key still resolves perfectly. Cheap to run from every
+  // consumer of this hook: `refreshGuestRecoveryLabel` compares first and returns
+  // without touching storage when nothing changed.
+  const num = me.data?.number;
+  const nm = me.data?.displayName;
+  useEffect(() => {
+    if (num && nm) refreshGuestRecoveryLabel(num, nm);
+  }, [num, nm]);
 
   return {
     me: me.data ?? null,

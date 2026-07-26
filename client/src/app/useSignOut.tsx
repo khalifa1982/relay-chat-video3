@@ -1,6 +1,7 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 import { clearRelayChannel, resetDeviceId } from "@/lib/deviceId";
+import { forgetGuestRecovery } from "@/lib/guestRecovery";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -57,6 +58,12 @@ export function useSignOut(me: { isGuest: boolean } | null | undefined): {
     // re-bind unprovable and force an endpoint rotation on every sign-out.
     resetDeviceId();
     clearRelayChannel();
+    // ADOPT-AND-RETIRE (v2.99.68): drop the recovery record too. This is the
+    // boundary that keeps a SHARED browser safe — recovery is deliberate rather
+    // than automatic precisely so that signing out is enough to sever it, and
+    // leaving the record behind would hand the next person a one-tap way back
+    // into this identity.
+    forgetGuestRecovery();
     window.location.href = "/app";
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isGuest]);
@@ -70,7 +77,7 @@ export function useSignOut(me: { isGuest: boolean } | null | undefined): {
           <AlertDialogTitle>{isGuest ? "Sign out and forget this number?" : "Sign out?"}</AlertDialogTitle>
           <AlertDialogDescription>
             {isGuest
-              ? "Guest sign-out wipes this identity from this device: your number, contacts, and messages won't come back unless you registered. This can't be undone."
+              ? "Guest sign-out wipes this identity from this device: your number, contacts, and messages won't come back unless you registered — and it also removes the option to restore this number later. This can't be undone."
               : "You'll be signed out of your account on this device. Your number and data stay on your account — sign back in anytime."}
           </AlertDialogDescription>
         </AlertDialogHeader>

@@ -136,7 +136,16 @@ describe("M47 — duplicate identities can't be created, and resolution is stabl
   });
 
   it("notes that NULL userId (guests) are unaffected and that boot is never blocked", () => {
-    const idx = V2DB.slice(V2DB.indexOf("M47: one identity per registered user"), V2DB.indexOf("identities_user_unique`"));
+    // Anchored on the MIGRATOR ENTRY, not on a bare `identities_user_unique`
+    // token: v2.99.68 mentioned that index name in prose 1,000 lines earlier, which
+    // put the slice's end BEFORE its start and silently reduced it to "" — a pin
+    // that reads an empty string cannot fail for the reason it was written.
+    const start = V2DB.indexOf("M47: one identity per registered user");
+    const end = V2DB.indexOf('ddl: "ADD UNIQUE INDEX', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const idx = V2DB.slice(start, end);
+    expect(idx.length).toBeGreaterThan(200); // the comment block really is there
     expect(idx).toMatch(/NULL/);
     expect(idx).toMatch(/boot is never blocked/);
   });

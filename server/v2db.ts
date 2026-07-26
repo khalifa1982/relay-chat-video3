@@ -51,12 +51,35 @@ import {
   users,
 } from "../drizzle/schema";
 import { getDb } from "./db";
+import { hashRecoveryKey, newRecoveryKey } from "./guestRecovery";
 import {
   sanitizeMobiles,
   sanitizeSocials,
   sanitizeStatusOverride,
   type SocialLink,
 } from "@shared/profileFields";
+
+/**
+ * Rows a write actually touched, which is how every conditional claim in this file
+ * decides whether IT won: the entire gate lives in the WHERE, so `affectedRows` is
+ * the only trustworthy verdict — a prior read is a snapshot another request may
+ * already have invalidated.
+ *
+ * Both driver shapes are handled: mysql2 returns `[ResultSetHeader]` with
+ * `affectedRows`, while some drivers return a bare object with `rowsAffected`.
+ * Reading only one of them would silently report every write as a loss.
+ */
+function affectedRowsOf(res: unknown): number {
+  const direct = (res as { rowsAffected?: number; affectedRows?: number } | null)
+    ?.rowsAffected;
+  if (typeof direct === "number") return direct;
+  const flat = (res as { affectedRows?: number } | null)?.affectedRows;
+  if (typeof flat === "number") return flat;
+  const head = Array.isArray(res)
+    ? (res[0] as { affectedRows?: number } | undefined)?.affectedRows
+    : undefined;
+  return typeof head === "number" ? head : 0;
+}
 
 /* ── identity ─────────────────────────────────────────────────── */
 
@@ -452,7 +475,7 @@ export async function getIdentityByUserId(userId: number): Promise<ResolvedIdent
 export async function createGuestIdentity(input: {
   displayName: string;
   deviceId?: string | null;
-}): Promise<{ identity: ResolvedIdentity; guestToken: string }> {
+}): Promise<{ identity: ResolvedIdentity; guestToken: string; recoveryKey: string }> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
   const number = await allocateNumber();
@@ -463,12 +486,18 @@ export async function createGuestIdentity(input: {
     typeof input.deviceId === "string" && input.deviceId.length >= 8
       ? input.deviceId
       : null;
+  // Adopt-and-Retire (v2.99.68): mint the recovery key in the SAME insert that
+  // creates the identity, so there is no window in which a guest exists with no
+  // way back to it. Only the hash is stored.
+  const recoveryKey = newRecoveryKey();
   await db.insert(identities).values({
     number,
     displayName,
     guestToken,
     guestExpiresAt,
     deviceId,
+    recoveryHash: hashRecoveryKey(recoveryKey),
+    recoveryIssuedAt: new Date(),
   });
   await confirmNumberReservation(number); // the number is now genuinely bound
   const created = await db
@@ -477,7 +506,351 @@ export async function createGuestIdentity(input: {
     .where(eq(identities.guestToken, guestToken))
     .limit(1);
   if (created.length === 0) throw new Error("insert succeeded but row missing");
-  return { identity: rowToResolved(created[0]), guestToken };
+  return { identity: rowToResolved(created[0]), guestToken, recoveryKey };
+}
+
+/* ── Adopt-and-Retire: reclaiming an identity the browser forgot ───────────── */
+
+/**
+ * Give an EXISTING guest identity a recovery key if it has none, and hand the raw
+ * key back so the browser can store it.
+ *
+ * This is the self-healing half. Every identity minted before v2.99.68 has a NULL
+ * `recoveryHash`, and so does every guest whose row predates the feature — without
+ * this they would stay permanently unrecoverable, which is precisely the failure
+ * this release exists to end. `startGuest`'s two reuse branches call it, so an
+ * ordinary returning visitor is issued one on their next visit with no action.
+ *
+ * Returns null (never throws) when there is nothing to do or nothing can be done:
+ *   - the row already has a hash — re-minting would INVALIDATE the key the browser
+ *     may already hold, converting a recoverable identity into a lost one, so an
+ *     existing hash is never overwritten here;
+ *   - the row belongs to an account (`userId` set) — a registered user recovers by
+ *     signing in, and a bearer key must never be able to claim an account's row;
+ *   - the database is unavailable. A guest sign-in must not fail because a
+ *     convenience column could not be written.
+ */
+export async function ensureGuestRecoveryKey(
+  identityId: number
+): Promise<string | null> {
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    const key = newRecoveryKey();
+    const res = await db
+      .update(identities)
+      .set({ recoveryHash: hashRecoveryKey(key), recoveryIssuedAt: new Date() })
+      .where(
+        and(
+          eq(identities.id, identityId),
+          isNull(identities.userId),
+          isNull(identities.recoveryHash)
+        )
+      );
+    // The whole gate is in the WHERE, so the verdict comes from the write itself
+    // and two concurrent requests cannot both believe they minted the live key.
+    return affectedRowsOf(res) > 0 ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the guest identity a recovery key names, or null.
+ *
+ * Deliberately NOT gated on `guestExpiresAt`: the expiry models the COOKIE's life,
+ * and this lookup exists for exactly the case where that cookie is long gone. It IS
+ * gated on `userId IS NULL`, so a key can only ever name an unclaimed identity —
+ * once someone registers, the row is reachable by signing in and by nothing else.
+ */
+export async function findRecoverableGuestIdentity(
+  recoveryHash: string
+): Promise<ResolvedIdentity | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(identities)
+    .where(and(eq(identities.recoveryHash, recoveryHash), isNull(identities.userId)))
+    .orderBy(asc(identities.id))
+    .limit(1);
+  return rows.length > 0 ? rowToResolved(rows[0]) : null;
+}
+
+/** What is actually attached to an identity. Every field is a row count. */
+export type IdentityFootprint = {
+  messages: number;
+  conversations: number;
+  contacts: number;
+  calls: number;
+  conferences: number;
+  statuses: number;
+  partyLines: number;
+};
+
+/** True when nothing at all hangs off the identity, i.e. retiring it loses nothing. */
+export function footprintIsEmpty(f: IdentityFootprint): boolean {
+  return (
+    f.messages === 0 &&
+    f.conversations === 0 &&
+    f.contacts === 0 &&
+    f.calls === 0 &&
+    f.conferences === 0 &&
+    f.statuses === 0 &&
+    f.partyLines === 0
+  );
+}
+
+/**
+ * Count everything that references an identity.
+ *
+ * Two jobs, and they pull in the same direction. It tells the USER what they are
+ * about to get back ("14 contacts, 320 messages"), which is what makes the restore
+ * prompt trustworthy rather than a leap of faith. And it is the SAFETY GATE on the
+ * row being retired: adoption only ever deletes a provably empty identity, because
+ * the single way this feature could destroy data is by removing a non-empty row.
+ *
+ * The table/column list is the same one `scripts/recover-orphan-identity.mjs`
+ * validates against `information_schema` — note `contacts.ownerId` (not
+ * `ownerIdentityId`) and that call history splits into caller/callee columns; both
+ * were wrong in the first draft of that script and are easy to get wrong again.
+ *
+ * A count that cannot be read is reported as -1, never 0, so a failed query can
+ * never make a populated identity look empty to the gate.
+ */
+export async function identityFootprint(
+  identityId: number
+): Promise<IdentityFootprint> {
+  const db = await getDb();
+  const zero: IdentityFootprint = {
+    messages: -1,
+    conversations: -1,
+    contacts: -1,
+    calls: -1,
+    conferences: -1,
+    statuses: -1,
+    partyLines: -1,
+  };
+  if (!db) return zero;
+  const one = async (run: () => Promise<{ n: number }[]>): Promise<number> => {
+    try {
+      const rows = await run();
+      const n = Number(rows[0]?.n ?? -1);
+      return Number.isFinite(n) ? n : -1;
+    } catch {
+      return -1;
+    }
+  };
+  const [m, c, ct, ch, cp, st, pl] = await Promise.all([
+    one(() =>
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(messages)
+        .where(eq(messages.senderIdentityId, identityId))
+    ),
+    one(() =>
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(conversationParticipants)
+        .where(eq(conversationParticipants.identityId, identityId))
+    ),
+    one(() =>
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(contacts)
+        .where(eq(contacts.ownerId, identityId))
+    ),
+    one(() =>
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(callHistory)
+        .where(
+          or(
+            eq(callHistory.callerIdentityId, identityId),
+            eq(callHistory.calleeIdentityId, identityId)
+          )
+        )
+    ),
+    one(() =>
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(conferenceParticipants)
+        .where(eq(conferenceParticipants.identityId, identityId))
+    ),
+    one(() =>
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(statuses)
+        .where(eq(statuses.identityId, identityId))
+    ),
+    one(() =>
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(partyLines)
+        .where(eq(partyLines.ownerIdentityId, identityId))
+    ),
+  ]);
+  return {
+    messages: m,
+    conversations: c,
+    contacts: ct,
+    calls: ch,
+    conferences: cp,
+    statuses: st,
+    partyLines: pl,
+  };
+}
+
+/** Why an adoption was refused. The caller turns these into copy. */
+export type AdoptRefusal =
+  | "unavailable"
+  | "not-found"
+  | "current-has-data"
+  | "footprint-unknown"
+  | "race-lost";
+
+export type AdoptResult =
+  | { ok: true; identity: ResolvedIdentity; guestToken: string | null; retiredId: number | null }
+  | { ok: false; reason: AdoptRefusal };
+
+/**
+ * Move this browser (or this account) onto a recovered identity, and retire the
+ * one it is currently using.
+ *
+ * THE SHAPE, and why it is this shape:
+ *
+ *   - The recovered identity KEEPS ITS OWN NUMBER. That is the entire point — the
+ *     number is what other people stored, so restoring the person must not move it.
+ *     Nothing here ever writes `identities.number`, which is also why the
+ *     `NUMBER_BEARING_COLUMNS` contract (v2.99.54) needs no new entry.
+ *
+ *   - The identity being RETIRED must be provably EMPTY. Otherwise adoption would
+ *     just move the loss to the other row, and this feature would become a new way
+ *     to destroy data. There is deliberately no override flag; a caller holding
+ *     real data on both rows is told so and keeps both.
+ *
+ *   - A GUEST caller has this browser rebound to the recovered row: the device id
+ *     and a fresh guest token move over, so every subsequent request resolves it
+ *     the ordinary way with no special case anywhere else in the codebase.
+ *
+ *   - A REGISTERED caller has the recovered row CLAIMED by their account
+ *     (`userId` set, guest fields cleared) — the same claim `ensureUserIdentity`
+ *     performs, and it must be preceded by deleting their current identity because
+ *     the per-account unique index on identities.userId allows exactly one.
+ *
+ * Every write re-checks its own preconditions in the WHERE clause, so a concurrent
+ * change LOSES rather than corrupting, and a lost race is reported as such instead
+ * of being papered over.
+ */
+export async function adoptRecoveredIdentity(input: {
+  recoveryHash: string;
+  /**
+   * The identity this request already resolved, or null when the visitor has none
+   * yet — which is the PRIMARY path: someone reopens their browser, the entry
+   * screen sees a recovery record, and they restore before typing a name. With no
+   * current identity there is nothing to retire, so the emptiness gate below has
+   * nothing to check and is correctly skipped.
+   */
+  currentIdentityId: number | null;
+  currentUserId: number | null;
+  deviceId?: string | null;
+}): Promise<AdoptResult> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+
+  const target = await findRecoverableGuestIdentity(input.recoveryHash).catch(
+    () => null
+  );
+  if (!target) return { ok: false, reason: "not-found" };
+
+  // Already there. Idempotent so a double-tap, a retry, or a replayed request is
+  // a no-op success rather than an error the user has to interpret.
+  if (target.id === input.currentIdentityId) {
+    return { ok: true, identity: target, guestToken: null, retiredId: null };
+  }
+
+  const retiring = input.currentIdentityId;
+  if (retiring != null) {
+    const footprint = await identityFootprint(retiring);
+    // -1 means a count could not be read. Refusing here is the fail-closed choice:
+    // treating an unknown as empty is how you delete somebody's messages.
+    if (Object.values(footprint).some(n => n < 0)) {
+      return { ok: false, reason: "footprint-unknown" };
+    }
+    if (!footprintIsEmpty(footprint)) {
+      return { ok: false, reason: "current-has-data" };
+    }
+  }
+
+  const guestToken = input.currentUserId == null ? newGuestToken() : null;
+  const deviceId =
+    typeof input.deviceId === "string" && input.deviceId.length >= 8
+      ? input.deviceId
+      : null;
+
+  let claimed = 0;
+  await db.transaction(async tx => {
+    // Retire the empty row FIRST — the per-account unique index means the claim
+    // below cannot succeed while it still exists. Each branch re-states its own
+    // ownership in the WHERE, so this can only ever delete the row the caller
+    // genuinely holds: never another guest's, never another account's.
+    if (retiring != null) {
+      await tx
+        .delete(identities)
+        .where(
+          input.currentUserId == null
+            ? and(eq(identities.id, retiring), isNull(identities.userId))
+            : and(
+                eq(identities.id, retiring),
+                eq(identities.userId, input.currentUserId)
+              )
+        );
+    }
+    const res = await tx
+      .update(identities)
+      .set(
+        input.currentUserId == null
+          ? {
+              // Stay a guest, but bound to THIS browser.
+              deviceId,
+              guestToken,
+              guestExpiresAt: new Date(
+                Date.now() + GUEST_DAYS * 24 * 60 * 60 * 1000
+              ),
+            }
+          : {
+              // Become this account's identity. Guest handles are dropped so the
+              // recovery key and the old cookie stop naming it — after adoption the
+              // account is the only way in, which is what a registered identity
+              // means everywhere else in the codebase.
+              userId: input.currentUserId,
+              guestToken: null,
+              guestExpiresAt: null,
+              recoveryHash: null,
+              recoveryIssuedAt: null,
+              deviceId,
+            }
+      )
+      .where(and(eq(identities.id, target.id), isNull(identities.userId)));
+    claimed = affectedRowsOf(res);
+    if (claimed === 0) {
+      // Somebody registered the target between our read and this write. Roll the
+      // delete back rather than leaving the caller with no identity at all.
+      throw new Error("adopt-race");
+    }
+  }).catch(() => {
+    claimed = 0;
+  });
+
+  if (claimed === 0) return { ok: false, reason: "race-lost" };
+
+  const fresh = await getIdentityById(target.id).catch(() => null);
+  return {
+    ok: true,
+    identity: fresh ?? target,
+    guestToken,
+    retiredId: retiring,
+  };
 }
 
 /**
@@ -590,6 +963,13 @@ export async function ensureUserIdentity(input: {
           displayName: input.displayName.trim().slice(0, 64) || undefined,
           guestToken: null,
           guestExpiresAt: null,
+          // v2.99.68: drop the guest recovery key along with the other guest
+          // handles. `findRecoverableGuestIdentity` already refuses a row with a
+          // `userId`, so this is defence in depth rather than the gate — but a
+          // dangling bearer credential on an account's identity is precisely the
+          // kind of leftover a future code path forgets to check for.
+          recoveryHash: null,
+          recoveryIssuedAt: null,
         })
         .where(and(eq(identities.id, candidateId), isNull(identities.userId)));
       claimed =
@@ -1369,6 +1749,13 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // which deliberately turns the old always-on behaviour off for everyone
     // until they ask for it.
     { table: "identities", column: "autoReplyEnabled", ddl: "ADD COLUMN `autoReplyEnabled` boolean" },
+    // v2.99.68 — Adopt-and-Retire. sha256 of the recovery key a guest's browser
+    // keeps in localStorage, so a person can reclaim the identity (number,
+    // contacts, messages, history) that a browser close made unreachable. Additive
+    // + nullable: a NULL simply means "not yet issued", and `ensureGuestRecoveryKey`
+    // fills it in on the row's next visit.
+    { table: "identities", column: "recoveryHash", ddl: "ADD COLUMN `recoveryHash` varchar(64)" },
+    { table: "identities", column: "recoveryIssuedAt", ddl: "ADD COLUMN `recoveryIssuedAt` timestamp NULL" },
     // Native Android app push transport (v2.86).
     { table: "push_subscriptions", column: "kind", ddl: "ADD COLUMN `kind` varchar(10)" },
     // v2.99.49 — proof-of-possession for an endpoint re-bind.
@@ -1442,6 +1829,14 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // a deployment self-consistent meanwhile, and the index lands on the next
     // boot after the duplicates are reconciled.
     { table: "identities", column: "identities_user_unique", ddl: "ADD UNIQUE INDEX `identities_user_unique` (`userId`)" },
+    // v2.99.68 — Adopt-and-Retire looks an identity up BY recoveryHash, and
+    // `identities` is one of the larger tables. Without this the lookup is a full
+    // scan on an endpoint any visitor can reach. Declared after the column entries
+    // above because this list is applied in order.
+    // NOT unique: two rows could in principle hold the same hash only via a
+    // 2^256 collision, and a UNIQUE index here would instead mean that a future
+    // backfill bug takes the whole ALTER (and therefore the index) down with it.
+    { table: "identities", column: "identities_recoveryHash_idx", ddl: "ADD INDEX `identities_recoveryHash_idx` (`recoveryHash`)" },
   ];
   for (const a of adds) {
     try {

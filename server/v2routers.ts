@@ -15,10 +15,15 @@ import { getDb, getUserById } from "./db";
 import { identities } from "../drizzle/schema";
 import { router, publicProcedure } from "./_core/trpc";
 import { GUEST_COOKIE } from "./_core/context";
+import { hashRecoveryKey, normalizeRecoveryKey } from "./guestRecovery";
 import { getSessionCookieOptions } from "./_core/cookies";
 import {
+  adoptRecoveredIdentity,
   bindDeviceIdToIdentity,
   createGuestIdentity,
+  ensureGuestRecoveryKey,
+  findRecoverableGuestIdentity,
+  identityFootprint,
   deleteContact,
   getAttachmentForIdentity,
   getAttachmentsByIds,
@@ -505,6 +510,14 @@ export const v2AuthRouter = router({
           avatarUrl: ctx.identity.avatarUrl,
           isGuest: ctx.identity.isGuest,
           reused: true as const,
+          // Adopt-and-Retire self-heal (v2.99.68): a guest row minted before this
+          // release has no recovery key, so it would stay permanently unreachable
+          // after a browser close. Issue one on the next visit. Returns null when
+          // the row already has one — the existing key must never be replaced, or
+          // the copy the browser is holding would stop working.
+          recoveryKey: ctx.identity.isGuest
+            ? await ensureGuestRecoveryKey(ctx.identity.id)
+            : null,
         };
       }
 
@@ -536,6 +549,7 @@ export const v2AuthRouter = router({
             avatarUrl: byDevice.avatarUrl,
             isGuest: true as const,
             reused: true as const,
+            recoveryKey: await ensureGuestRecoveryKey(byDevice.id),
           };
         }
       }
@@ -553,7 +567,7 @@ export const v2AuthRouter = router({
       // resource being protected is the finite 6-digit number space, so meter
       // exactly the operation that spends it.
       guestMintGate(ctx);
-      const { identity, guestToken } = await createGuestIdentity({
+      const { identity, guestToken, recoveryKey } = await createGuestIdentity({
         displayName: input.displayName,
         deviceId,
       });
@@ -565,6 +579,7 @@ export const v2AuthRouter = router({
         avatarUrl: identity.avatarUrl,
         isGuest: identity.isGuest,
         reused: false as const,
+        recoveryKey,
       };
     }),
 
@@ -583,6 +598,98 @@ export const v2AuthRouter = router({
     ctx.res.clearCookie(COOKIE_NAME, { ...sess, maxAge: -1 });
     return { ok: true };
   }),
+
+  /**
+   * ADOPT-AND-RETIRE, step 1: what does this recovery key name? (v2.99.68)
+   *
+   * Read-only. Answers with the identity's number, name and a footprint the entry
+   * screen shows verbatim — "restore 601-586 · 14 contacts, 320 messages" — because
+   * a restore prompt the user cannot verify is one they should not tap.
+   *
+   * A key that names nothing returns null rather than an error: the browser may be
+   * holding a record for an identity that has since been registered (in which case
+   * signing in is the way back) and a dead record must not turn the entry screen
+   * into an error screen. `directoryGate` bounds the database work; brute force is
+   * not the threat (the key is 256 bits) but an unmetered DB read is.
+   */
+  guestRecoveryPreview: publicProcedure
+    .input(z.object({ key: z.string().min(1).max(200) }))
+    .query(async ({ ctx, input }) => {
+      directoryGate(ctx);
+      const key = normalizeRecoveryKey(input.key);
+      if (!key) return null;
+      const found = await findRecoverableGuestIdentity(
+        hashRecoveryKey(key)
+      ).catch(() => null);
+      if (!found) return null;
+      const footprint = await identityFootprint(found.id).catch(() => null);
+      return {
+        number: found.number,
+        displayName: found.displayName,
+        avatarUrl: found.avatarUrl,
+        // Negative counts mean "could not read", so report null rather than a
+        // confident zero — the prompt says "your data" instead of naming figures
+        // it cannot stand behind.
+        footprint:
+          footprint && Object.values(footprint).every(n => n >= 0)
+            ? footprint
+            : null,
+      };
+    }),
+
+  /**
+   * ADOPT-AND-RETIRE, step 2: take it. (v2.99.68)
+   *
+   * Binds this browser (or, for a signed-in caller, this account) to the recovered
+   * identity and retires the empty one it was using. The recovered identity keeps
+   * its own 6-digit number, so everybody who saved it still reaches this person —
+   * which is the whole reason recovery is preferable to "here is a new number".
+   *
+   * Refusals are named rather than collapsed into a generic failure, because each
+   * one has a different correct next step for the user, and `current-has-data` in
+   * particular must never be silently resolved by throwing one side away.
+   */
+  adoptGuestRecovery: publicProcedure
+    .input(
+      z.object({
+        key: z.string().min(1).max(200),
+        deviceId: z
+          .string()
+          .regex(/^[a-f0-9]{16,64}$/i)
+          .optional()
+          .nullable(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      directoryGate(ctx);
+      const key = normalizeRecoveryKey(input.key);
+      if (!key) return { ok: false as const, reason: "not-found" as const };
+      const deviceId = input.deviceId?.toLowerCase() ?? ctx.deviceId ?? null;
+      const res = await adoptRecoveredIdentity({
+        recoveryHash: hashRecoveryKey(key),
+        currentIdentityId: ctx.identity?.id ?? null,
+        currentUserId: ctx.user?.id ?? null,
+        deviceId,
+      });
+      if (!res.ok) return { ok: false as const, reason: res.reason };
+      // A guest adoption mints a fresh guest token for the recovered row, so this
+      // browser resolves it the ordinary way on every later request — no special
+      // case anywhere else. A registered adoption has no token by design: the
+      // account's own session cookie is already the credential.
+      if (res.guestToken) {
+        ctx.res.cookie(
+          GUEST_COOKIE,
+          res.guestToken,
+          guestCookieOptions(ctx.req)
+        );
+      }
+      return {
+        ok: true as const,
+        number: res.identity.number,
+        displayName: res.identity.displayName,
+        isGuest: res.identity.isGuest,
+      };
+    }),
 
   /**
    * Update display name or avatar URL on the current identity.

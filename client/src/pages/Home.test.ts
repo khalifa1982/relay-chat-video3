@@ -222,9 +222,17 @@ describe("v2.99.16 — Arabic parity (#40) + live group-call grid (#41)", () => 
   it("the group-call grid gets a rotating active-speaker sweep so it reads as a live call", () => {
     expect(HOME_TSX).toMatch(/@keyframes lpActive/);
     expect(HOME_TSX).toMatch(/animation:lpActive 20s \$\{delay\} infinite/);
-    // the sweep is staggered per tile and combines (not clobbers) the speaking anim
-    expect(HOME_TSX).toMatch(/const delay = `\$\{-i \* 2\}s`/);
-    expect(HOME_TSX).toMatch(/g\.spk \? `lpTalk 20s \$\{delay\} infinite, \$\{g\.spk\}`/);
+    // v2.99.69 REWROTE the rest of this pin rather than relaxing it. It used to
+    // assert `-i * 2` and the comma-combined `g.spk` speaking animation — and both
+    // of those were the incoherence: four tiles carried hardcoded speaking times on
+    // a stagger that did not match the ring sweep, so the ring lit one face while
+    // another face's bars bounced. The stronger invariant is that there is exactly
+    // ONE schedule, derived from the speaking turn, shared by every cue.
+    expect(HOME_TSX).toMatch(/const delay = `\$\{-\(turn \?\? 0\) \* slot\}s`/);
+    expect(HOME_TSX).toMatch(/const slot = 20 \/ speakers;/);
+    expect(HOME_TSX).not.toMatch(/g\.spk/);
+    // The nod rides the same delay, and a muted tile takes no turn at all.
+    expect(HOME_TSX).toMatch(/turn === null \? "" : `lpTalk 20s \$\{delay\} infinite`/);
   });
 });
 

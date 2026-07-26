@@ -67,7 +67,22 @@ on:
         type: choice
         required: true
         default: verify
-        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix]
+        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix, recover-identity]
+      recover_number:
+        description: "recover-identity only: the 6-digit number of the ORPHANED guest identity to re-attach (e.g. 601586)"
+        type: string
+        required: false
+        default: ""
+      recover_email:
+        description: "recover-identity only: the email of the account to attach it to"
+        type: string
+        required: false
+        default: ""
+      recover_apply:
+        description: "recover-identity only: actually WRITE the change. Off = dry run, which is what you should run first."
+        type: boolean
+        required: false
+        default: false
       turn_apply:
         description: "turn-fix only: actually APPLY the fix (open tcp/443 on the relay security groups + add coturn's alt TLS listener). Off = diagnose only."
         type: boolean
@@ -999,3 +1014,98 @@ jobs:
           [ -n "$FINAL" ] || { echo "::error::no instances ran the command — check the relay-app tag + SSM agent"; exit 1; }
           case "$FINAL" in *Failed*|*TimedOut*|*Cancelled*) exit 1 ;; esac
           echo "env-set done — both servers restarted with the new value and passed their health check."
+
+      # ────────────────────────────────────────────────────────────────
+      - name: recover-identity — re-attach an ORPHANED guest identity to its
+          account, running on ONE app instance (that is where DATABASE_URL lives)
+        if: inputs.action == 'recover-identity'
+        env:
+          RNUM: ${{ inputs.recover_number }}
+          REMAIL: ${{ inputs.recover_email }}
+          RAPPLY: ${{ inputs.recover_apply }}
+        run: |
+          set -uo pipefail
+          echo "=================================================================="
+          echo "RECOVER ORPHANED IDENTITY"
+          echo "=================================================================="
+          # WHY THIS RUNS HERE AND NOT ANYWHERE ELSE. The recovery needs the live
+          # DATABASE_URL, which exists only in /home/relay/.env on the fleet. This
+          # is the one path that reaches it without a human copying a production
+          # credential onto a laptop, and the workflow never prints it.
+          #
+          # DRY RUN IS THE DEFAULT and recover_apply gates the write, because the
+          # script's only destructive act is deleting the account's CURRENT identity
+          # row — which it does solely after proving that row is empty across all
+          # seven identity-referencing tables. Read the dry run before you apply it.
+          if [ -z "${RNUM}" ] || [ -z "${REMAIL}" ]; then
+            echo "::error::recover-identity needs BOTH recover_number and recover_email."
+            exit 1
+          fi
+          case "$RNUM" in
+            ''|*[!0-9]*) echo "::error::recover_number must be digits only (got a non-digit)."; exit 1 ;;
+          esac
+          if [ "${#RNUM}" -ne 6 ]; then
+            echo "::error::recover_number must be exactly 6 digits."
+            exit 1
+          fi
+          # SECURITY: recover_number and recover_email are free-text
+          # workflow_dispatch inputs that end up inside a command string executed on
+          # production EC2 via SSM RunShellScript. This file has been bitten by
+          # exactly that twice (SES_EMAIL/DOMAIN, then `region`), so both get the
+          # established treatment: base64 on the runner, decode ONLY on the
+          # instance, so no quote or semicolon in an input can ever break out of the
+          # remote shell. The number is additionally shape-checked above; the email
+          # is not, because any address-shape rule strict enough to be worth having
+          # would reject somebody's real address — encoding is the actual defence.
+          NUM_B64=$(printf %s "$RNUM" | base64 -w0)
+          EMAIL_B64=$(printf %s "$REMAIL" | base64 -w0)
+          FLAG=""
+          if [ "$RAPPLY" = "true" ]; then
+            FLAG=" --apply"
+            echo "MODE: APPLY — this will write to the production database."
+          else
+            echo "MODE: DRY RUN — nothing will be written. Re-run with recover_apply=true once the output looks right."
+          fi
+          # `--max-concurrency 1 --max-errors 0` and a single target: this is a
+          # database mutation, so it must run exactly ONCE. Running it on both
+          # instances would be harmless (the second pass finds the orphan already
+          # claimed and refuses) but "harmless because a guard catches it" is not a
+          # reason to fire a write twice.
+          IID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=relay-app" "Name=instance-state-name,Values=running" \
+            --query 'sort_by(Reservations[].Instances[],&LaunchTime)[0].InstanceId' \
+            --output text 2>/dev/null)
+          if [ -z "$IID" ] || [ "$IID" = "None" ]; then
+            echo "::error::no running instance tagged Name=relay-app — is the fleet up?"
+            exit 1
+          fi
+          echo "Running on $IID"
+          CMDLINE="cd /home/relay/app 2>/dev/null || cd /home/relay; set -a; . /home/relay/.env 2>/dev/null; set +a; node scripts/recover-orphan-identity.mjs --number \"\$(echo $NUM_B64 | base64 -d)\" --email \"\$(echo $EMAIL_B64 | base64 -d)\"${FLAG}; echo \"RECOVER_EXIT=\$?\""
+          PARAMS=$(jq -n --arg c "$CMDLINE" '{commands:[$c]}')
+          CMD=$(aws ssm send-command --instance-ids "$IID" \
+            --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 0 \
+            --parameters "$PARAMS" --query 'Command.CommandId' --output text) || {
+              echo "::error::could not start the recovery via SSM"; exit 1; }
+          echo "SSM command: $CMD"
+          for i in $(seq 1 36); do
+            S=$(aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status' --output text)
+            case "$S" in *InProgress*|*Pending*|"") sleep 5 ;; *) break ;; esac
+          done
+          OUT=$(aws ssm list-command-invocations --command-id "$CMD" --details \
+            --query 'CommandInvocations[0].CommandPlugins[0].Output' --output text)
+          echo "------------------------- script output -------------------------"
+          echo "$OUT" | head -c 8000
+          echo "-----------------------------------------------------------------"
+          # The script's own exit code is the verdict, and it is read from the
+          # printed marker rather than from the SSM status: a pipeline or a wrapper
+          # can mask a non-zero exit, which is the bug v2.99.46 exists to prevent.
+          if echo "$OUT" | grep -q "RECOVER_EXIT=0"; then
+            if [ "$RAPPLY" = "true" ]; then
+              echo "Recovery APPLIED. The account now holds $RNUM with its contacts, messages and history."
+            else
+              echo "Dry run passed every guard. Re-run with recover_apply=true to write it."
+            fi
+          else
+            echo "::error::the recovery script refused or failed — see its output above. NOTHING was written unless it says otherwise."
+            exit 1
+          fi

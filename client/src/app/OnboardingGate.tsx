@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { useIdentity } from "./useIdentity";
 import { AuthPanel } from "./AuthPanel";
+import { GuestRestore } from "./GuestRestore";
 import { LiveStats } from "./LiveStats";
 import { MatrixReveal } from "./MatrixReveal";
 
@@ -249,6 +250,20 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
           </>
         ) : (
           <>
+            {/* ── RESTORE A PREVIOUS NUMBER (v2.99.68) ──
+                Renders itself only when this browser holds a recovery record AND
+                the server confirms the key still names an unclaimed identity, so a
+                first-time visitor never sees it. Above the sign-in card because for
+                a returning guest this IS the primary action — typing a name would
+                mint a second identity and leave the first one stranded, which is
+                the loss this exists to prevent.
+                Deliberately NOT on the call-link join screen: that path is a single
+                focused field by design, and a second decision there costs the
+                caller the call. */}
+            {!emailMode && (
+              <GuestRestore className="mb-5" onRestored={refresh} />
+            )}
+
             {/* Brand */}
             <div className="mb-7 text-center">
               <div className="inline-flex items-center gap-2.5">
@@ -310,8 +325,9 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                     Login / Register with email <ArrowRight className="size-4" />
                   </Button>
                   <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
-                    Guest sessions last until you close your browser. Registering keeps your
-                    number forever and earns a verified badge.
+                    Guest sessions end when you close your browser — but this browser can
+                    restore your number and history next time. Registering keeps them
+                    permanently and earns a verified badge.
                   </p>
                 </>
               ) : (
