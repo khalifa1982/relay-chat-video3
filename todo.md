@@ -7684,3 +7684,83 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
          `TURN_TLS_PORT=443` + `TURN_TCP_ALT_PORT=off` via env-set. (Plaintext alternative: leave the env
          alone and redirect 443→3478 on the relay hosts.)
       Then re-run `verify` — it will report 8/8 allocating.
+
+## v2.99.68 — ROUND 11: the signaling room registry survives the loss of the leader (2026-07-26)
+- [x] THE GAP, as the owner's reviewer described it and as the code confirmed: clustered signaling elects ONE
+      leader that owns the whole call registry — rooms, members, roles, the pin→room index — in memory. Kill
+      that process and every active call's room is gone FLEET-WIDE. Browsers reconnect, but there is no room
+      to renegotiate through, so a relayed call cannot recover and a P2P call becomes unrepairable at the
+      first hiccup. Verified absent before building: `relay:room:*` and `rejoin-recreate` were 0 occurrences.
+- [x] **A. DURABLE SHADOW** — new `server/roomStore.ts`. Every room mutation marks the room dirty; a
+      coalesced next-tick flush writes it (the `touchBusyState` discipline, so a handler crossing several
+      funnels mid-transition writes ONCE, settled), plus a 15s sweep that rewrites every live room so a
+      mutation site nobody marked still converges and TTLs stay fresh on a quiet call. `relay:room:<id>` is
+      ONE hash with `e` (epoch) + `d` (signed JSON) — a single atomic HSET, so a reader can never see a
+      half-written room; `relay:rooms` is a SET index so hydration is one SMEMBERS, not a SCAN.
+- [x] **THE PIN→ROOM INDEX IS DERIVED, NOT STORED** (a deliberate deviation from the spec's
+      `SET relay:pinroom:<pin>`): a pin is in at most its ACTIVE room and its HELD room, and BOTH always
+      contain it, so a `held` flag per member rebuilds both maps and rides the SAME atomic write. Separate
+      per-pin keys would be a second write that can land out of order with the first.
+- [x] **FENCING** — a lease can expire while its holder is alive and still believes it leads (GC pause,
+      network blip); two leaders both writing would interleave two registries into one record. Every write
+      carries a monotonic epoch (`INCR relay:leader:epoch` on winning the lease) and is applied by a Lua CAS
+      that refuses a LOWER epoch. `>` not `>=`, so a leader can always overwrite itself. Losing the lease
+      sets the epoch to 0 immediately, which stops writes at the source.
+- [x] **HYDRATION GATES SERVING** — a new leader mints its epoch, reads the rooms back, and only THEN
+      processes signaling; frames queue meanwhile. A leader that answered `accept` for a room it had not
+      hydrated would tell the caller the call is gone. 5s timeout, then it serves ANYWAY — fail open,
+      deliberately: a missing room degrades to "dial again", a wedged signaling layer means nobody can call.
+- [x] **THE BUG THAT WOULD HAVE MADE ALL OF THIS A NO-OP**, found by reasoning through the behavioural test
+      before writing it: a hydrated room has NO connected members by construction (every client record died
+      with the old leader), which is exactly the "room of ghosts" shape `sendRejoinIfInRoom` exists to
+      dissolve — so the FIRST peer to come back would have called `leaveRoom` and deleted the very call
+      hydration saved. New `roomMeta.hydratedAt` + `HYDRATED_GRACE_MS` (45s) keeps it alive until its owners
+      re-register, after which a ghost room behaves exactly as before. Pinned by a test proven to fail
+      against the ungraced version.
+- [x] **SIGNED RECORDS** — they cross the same trust boundary as bus envelopes (anything with network reach
+      to Redis can write them) and hydration feeds them into the live registry, so they are HMAC'd with the
+      same fleet key. `busSecret` is now EXPORTED from redisBus and imported rather than re-derived — a
+      second copy of "which env var is the fleet secret" is what caused the v2.99.49 identity bug. A forged
+      record is dropped at hydration and its index entry pruned (proven against a real redis-server).
+- [x] **B. `rejoin-recreate` — REWRITTEN AROUND A SIGNED CAPABILITY.** The spec had the client send
+      `{roomId, selfPin, selfRole, knownMembers}` and the server "recreate the room shell and admit". That is
+      an authorization hole: room ids are relayed to every participant, so naming a stranger's roomId would
+      admit you to their live call, and `selfRole: "host"` would hand you kick/mute/admit over it — the exact
+      class closed by v2.99.43 (M45) and v2.99.57 (R-GENPIN). Instead the client is asked for ONE thing: a
+      capability THIS FLEET minted when it admitted that pin to that room (`server/roomCapability.ts`,
+      `<exp>.<role>.<hmac>`, 12h). The subject pin comes from the CONNECTION, the role from INSIDE the
+      signature, and a claimed member list is not read at all — membership converges because every returning
+      peer presents its own capability. A signed `host` capability takes a VACANT host seat and never
+      displaces one, so two peers recreating concurrently cannot fight over moderation. No fleet secret ⇒
+      the path does not exist rather than existing unauthenticated.
+- [x] **C. CLUSTER HYGIENE** (findings 26/27 of the review, both confirmed real first). `makeRemoteSocket`
+      returned only `{send, close}`, so `relay.ts`'s `!target.socket.alive` short-circuited TRUE for every
+      remote peer — the leader could not tell a dead browser from a quiet one. New per-instance heartbeat
+      (`relay:sig:hb:<leader>`, 5s, one frame per instance carrying its cid list) drives a real `alive()`.
+      It FAILS OPEN twice over — unknown cid, and an instance that has never beaten at all (an older build
+      mid-rollout) — because reporting a LIVE browser as dead sends its calls to the leave-a-message card
+      instead of ringing them. A home that misses 20s hands its browsers to the ORDINARY
+      `cleanupRegistryConn` grace, not oblivion: it may simply be restarting.
+- [x] **LEADERSHIP HANDOVER** — on a leader change each instance sends its local browsers `{type:"resync"}`,
+      which re-registers them (rebuilding the client records the dead leader held; a client record owns a
+      socket, and the socket lives on the home) and yields a `rejoin` from the hydrated rooms. Old clients
+      ignore the unknown message and are no worse off than before. SECOND BUG CAUGHT BEFORE SHIPPING: the
+      change hook is deliberately silent when the new leader is US, so the instance that TOOK OVER would have
+      repaired every browser in the fleet except its own — the ones most likely to be in the call. It now
+      resyncs its own browsers at the end of taking over, after hydration. Also pinned by a mutation test.
+- [x] The client keeps the capability alongside `roomId`, refreshed by every room ack (captured in ONE place
+      in `handle()` so an ack added later inherits recovery for free), persists it in the rejoin snapshot,
+      and drops it on hang-up/destroy — which is what guarantees the repair path can never resurrect a call
+      the user ended. `rejoin-recreate` is ARMED (1.5s) rather than sent: register→rejoin is one round trip
+      and usually wins, so the repair only fires when the room is genuinely gone.
+- [x] TESTS: `server/roundEleven.test.ts` (35, driving the real registry) + `server/roomStoreLive.test.ts`
+      (7, against a REAL spawned redis-server — the fence is Lua and Lua runs inside Redis, so a string check
+      of the script is not evidence that the script works; a lower-epoch write AND a lower-epoch DELETE are
+      both proven refused). **10 tripwires verified by mutation**, reverting from byte-exact backups and
+      aborting on a missing mutation target (never `git checkout --`, which discarded uncommitted work under
+      test in v2.99.56 and produced three false PASSes). Two of my first mutations were wrong rather than the
+      tests, and one property turned out to be defended by three redundant gates — recorded honestly rather
+      than quietly counted as a pass. 2108 tests (this branch rebased onto v2.99.67, which added its own).
+- [ ] OPERATOR: nothing required — `RELAY_CLUSTER=1` + `REDIS_URL` are already set on the fleet, and every
+      new key self-expires. The manual failover test is in `docs-cross-instance-signaling.md`: kill the
+      LEADER mid-call and the call should survive.

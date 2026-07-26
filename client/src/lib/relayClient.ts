@@ -124,6 +124,13 @@ interface Msg {
   partyLine?: boolean;
   /** joined (party line): the line's display title. */
   lineTitle?: string;
+  /** room/joined/rejoin/resumed/merged (Round 11 B): a server-minted capability
+   *  proving WE were admitted to this room. Presented back on `rejoin-recreate`
+   *  when the server has lost the room, so recovery is authorized by the
+   *  server's own signature rather than by anything we claim about ourselves. */
+  cap?: string;
+  /** rejoin: the room did not exist and was rebuilt from capabilities. */
+  recreated?: boolean;
   // Recording (LiveKit Egress). `recording` (boolean) on `registered` advertises
   // availability; the `recording` status message carries `on` + `by`.
   recording?: boolean;
@@ -311,6 +318,26 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function emitRejoin() {
     try { onRejoinChange?.(!!pendingRejoin); } catch { /* */ }
   }
+  /** How long to wait for the server's own `rejoin` before assuming it has lost
+   *  the room. Register → rejoin is one round trip on the same SSE stream, so
+   *  this only ever elapses when the room is genuinely gone. */
+  const RECREATE_DELAY_MS = 1500;
+  function armRecreate(target: { roomId: string; cap: string }) {
+    recreateTarget = target;
+    if (recreateT) clearTimeout(recreateT);
+    recreateT = setTimeout(() => {
+      recreateT = null;
+      const t = recreateTarget;
+      recreateTarget = null;
+      if (!t) return;
+      diag("rejoin-recreate " + t.roomId);
+      sendWS({ type: "rejoin-recreate", roomId: t.roomId, cap: t.cap });
+    }, RECREATE_DELAY_MS);
+  }
+  function cancelRecreate() {
+    recreateTarget = null;
+    if (recreateT) { clearTimeout(recreateT); recreateT = null; }
+  }
   function clearPendingRejoin() {
     const was = !!pendingRejoin;
     pendingRejoin = null;
@@ -324,6 +351,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let recordingOn = false;        // a recording is in progress for this room
   let inCall = false;
   let roomId: string | null = null;
+  // Round 11 B: the capability for `roomId`, kept alongside it and refreshed by
+  // every room ack. Never generated locally — an unsigned value is worth nothing.
+  let roomCap: string | null = null;
+  // Round 11 B: a pending "the server seems to have forgotten this call" repair.
+  // ARMED rather than sent immediately, because the ordinary register→rejoin
+  // handshake usually wins — and when it does there is nothing to repair.
+  let recreateTarget: { roomId: string; cap: string } | null = null;
+  let recreateT: ReturnType<typeof setTimeout> | null = null;
   // Set briefly while an add-to-call invite is in flight, so an "offline" error
   // for THAT invite doesn't trip the call-teardown path in the `error` handler
   // (which exists for the PRIMARY dial target — dialing someone offline should
@@ -812,8 +847,27 @@ export function startRelay(root: HTMLElement): RelayHandle {
       recordingAvailable = m.recording;
       updateRecordBtnVisibility();
     }
+    // Round 11 B: every envelope that puts us IN a room carries a fresh
+    // capability for it. Captured in one place rather than in each handler, so a
+    // room ack added later inherits the recovery path for free.
+    if (typeof m.cap === "string" && m.cap) roomCap = m.cap;
     switch (m.type) {
       case "registered":   onRegistered(m); break;
+      case "resync": {
+        // Round 11 C. Signaling leadership moved to another instance. Our SSE
+        // stream is fine — it is the SERVER-side view of who we are that was
+        // lost, because a client record owns a socket and the new leader has
+        // none. Re-register (the same message the stream sends on open), which
+        // rebuilds it and, from the leader's hydrated room registry, hands back
+        // a `rejoin`. If it does NOT (the durable copy was unavailable too),
+        // the armed repair below runs. Media is untouched throughout.
+        diag("resync (leader changed)");
+        if (wantName) {
+          sendWS({ type: "register", name: wantName, pin: me.pin || undefined, device: detectDeviceType(), flag: selfFlag || undefined });
+        }
+        if (inCall && roomId && roomCap) armRecreate({ roomId, cap: roomCap });
+        break;
+      }
       case "recording":      onRecordingStatus(m); break;
       case "recording-error":
         toast(m.message || "Recording failed.", true);
@@ -1048,6 +1102,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function onRegistered(m: Msg) {
     me.pin = String(m.pin);
+    // Round 11 B: rejoining after a reload. If the server still knows the call
+    // it answers with `rejoin` in this same burst and the repair is cancelled;
+    // if it has forgotten it (its leader died AND the durable copy was gone),
+    // nothing arrives and the capability is what gets us back in.
+    if (pendingRejoin?.cap && pendingRejoin.roomId) {
+      armRecreate({ roomId: pendingRejoin.roomId, cap: pendingRejoin.cap });
+    }
     try { window.localStorage.setItem("relay_pin", me.pin); } catch { /* */ }
     // Tell the embedding host (Dialer.tsx) the AUTHORITATIVE number so the UI
     // shows the exact pin the signaling server will route calls to. Without
@@ -3096,6 +3157,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // ---------- mesh / SFU ----------
   function onJoined(m: Msg) {
     stopRingtone(); // peer connected — stop the outgoing dial tone
+    cancelRecreate(); // Round 11 B: we are in a room — nothing to repair
     roomId = m.roomId || null;
     // PARTY LINE (v2.89): dialing a party-line number joins its persistent
     // room directly — the server answers the invite with `room` + `joined`
@@ -3147,6 +3209,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // (after a refresh / reconnect). Re-acquire media, re-enter the call UI, and
   // re-establish media — no fresh invite, no user action needed.
   async function onRejoin(m: Msg) {
+    cancelRecreate();                // Round 11 B: the server answered — no repair needed
     if (inCall) return;              // already in a call — ignore
     const rid = m.roomId || null;
     if (!rid) return;
@@ -6231,6 +6294,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // Clear leftover tiles so an idle/parked grid doesn't keep dead srcObjects.
     const grid = $("videoGrid"); if (grid) grid.innerHTML = "";
     inCall = false; roomId = null; callAnswered = false;
+    // Round 11 B: the capability names a call we have LEFT. Dropping it here is
+    // what guarantees the repair path can never resurrect a call the user ended.
+    roomCap = null; cancelRecreate();
     emitPhase("idle");
     if (timerInt) { clearInterval(timerInt); timerInt = null; }
     const log = $("chatLog"); if (log) log.innerHTML = "";
@@ -6325,7 +6391,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // Snapshot the call so the fresh page rejoins the SAME room with the SAME
     // mic/cam state (instead of stranding the user idle on the dialer).
     if (inCall && roomId && me.pin) {
-      writeSnapshot({ roomId, pin: me.pin, micOn, camOn, ts: Date.now() });
+      writeSnapshot({ roomId, pin: me.pin, micOn, camOn, ts: Date.now(), cap: roomCap ?? undefined });
     }
   };
 
@@ -6675,6 +6741,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // Logout / engine teardown → don't carry a pending auto-rejoin into the
       // next session, and release the loudspeaker context.
       if (rejoinWatchT) { clearTimeout(rejoinWatchT); rejoinWatchT = null; }
+      roomCap = null; cancelRecreate(); // Round 11 B — same reason as in hangUp
       try { loudspeakerDisable(); loudspeakerCtx?.close?.(); } catch { /* */ }
       if (reconnectT) { clearTimeout(reconnectT); reconnectT = null; }
       if (timerInt) { clearInterval(timerInt); timerInt = null; }
