@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { trpc } from "@/lib/trpc";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
+import { EmojiPicker } from "@/app/EmojiPicker";
 import { previewOf } from "@/app/messagePreview";
 import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
 import { StatusStrip } from "./Status";
@@ -65,13 +66,6 @@ import { demotablePollInterval } from "@/app/useRealtime";
 import { useThreadMuted, isThreadMuted, onMutedChange } from "@/app/mutedThreads";
 import { useTypers, useTypingConversations } from "@/app/typingStore";
 import { useDraft } from "@/app/draftStore";
-
-const EMOJI_QUICK = [
-  "😀","😂","😊","😍","😉","😎","🤔","🙏",
-  "👍","👏","🔥","❤️","💯","🎉","🚀","✨",
-  "😢","😭","😡","😴","🥳","🤝","💪","👀",
-  "📞","📱","💬","📩","✅","❌","⏰","🎵",
-];
 
 /** Own (outgoing) message bubble — the brand "message" orange gradient with
  *  white copy. Received bubbles keep the neutral token surface (theme-safe). */
@@ -159,6 +153,38 @@ function formatExact(iso: string | Date): string {
 function isExpiringMsg(meta: unknown): boolean {
   return (meta as { expire?: unknown } | null)?.expire != null;
 }
+
+/**
+ * The status-reply marker (v2.99.80), if this message carries one.
+ *
+ * Stamped SERVER-SIDE by `status.reply` and deliberately absent from
+ * `messages.send`'s meta schema — it is a claim about provenance ("replied to your
+ * status"), so a client-settable version would let anyone label any message as a
+ * reply to any status, including one they never had access to.
+ *
+ * Read defensively: this comes off a JSON column, so it may be anything.
+ */
+function statusReplyOf(
+  meta: unknown
+): { id: number; kind: string; excerpt?: string } | null {
+  const sr = (meta as { statusReply?: unknown } | null)?.statusReply;
+  if (!sr || typeof sr !== "object") return null;
+  const o = sr as { id?: unknown; kind?: unknown; excerpt?: unknown };
+  if (typeof o.id !== "number" || typeof o.kind !== "string") return null;
+  return {
+    id: o.id,
+    kind: o.kind,
+    excerpt: typeof o.excerpt === "string" ? o.excerpt.slice(0, 80) : undefined,
+  };
+}
+
+/** How a replied-to status reads in the chip. The glyphs match `previewOf`'s. */
+const STATUS_KIND_LABEL: Record<string, string> = {
+  text: "Status",
+  image: "📷 Photo status",
+  video: "🎬 Video status",
+  audio: "🎤 Audio status",
+};
 
 /** True when a message body is ONLY emoji (1-8 glyphs) — rendered big without a
  *  bubble, iMessage-style. Conservative: any non-emoji character disqualifies. */
@@ -1563,8 +1589,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   />
                 )}
                 {(() => {
+                  const sr = statusReplyOf(m.meta);
                   // Emoji-only messages render BIG without a bubble (iMessage-style).
-                  const emojiOnly = !m.attachment && m.replyToId == null && isEmojiOnly(m.body);
+                  //
+                  // A STATUS REPLY is excluded even when its body is one emoji
+                  // (v2.99.80): a one-tap status reaction is *precisely* an
+                  // emoji-only message, and this branch has no bubble and therefore
+                  // nowhere to put the "replied to your status" chip — the recipient
+                  // would see a floating ❤️ with no idea what it was about, which is
+                  // the one thing the owner asked for.
+                  const emojiOnly =
+                    !m.attachment && m.replyToId == null && !sr && isEmojiOnly(m.body);
                   if (emojiOnly) {
                     return (
                       <div className="max-w-[75%] px-1 py-0.5">
@@ -1591,6 +1626,39 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   {isGroup && !mine && !sameAsPrev && (
                     <div className="text-[11px] font-semibold text-primary mb-0.5">
                       {nameById.get(m.senderIdentityId) || "Member"}
+                    </div>
+                  )}
+                  {/* STATUS REPLY (v2.99.80): this message was sent from the story
+                      viewer, so say what it was about. Rendered from the marker's
+                      own snapshot and NEVER from a live lookup: a status is
+                      deliberately unreachable after 24h, so anything that fetched
+                      would show a broken tile forever afterwards. Withheld while a
+                      self-destructing message is still locked, mirroring how the
+                      whole received menu is withheld there. */}
+                  {sr && !(m as { locked?: boolean }).locked && (
+                    <div
+                      className={
+                        "mb-1 rounded-lg border-l-2 pl-2 py-0.5 text-[11px] leading-tight " +
+                        (mine
+                          ? "border-white/50 bg-white/15 text-white/90"
+                          : "border-[#a78bfa]/60 bg-[#a78bfa]/10 text-foreground/80")
+                      }
+                    >
+                      {/* The label and the kind glyph are bidi-isolated so an
+                          Arabic excerpt beside them cannot reorder the phrase. */}
+                      <span className="font-semibold [unicode-bidi:isolate]" dir="ltr">
+                        ↩ {mine ? "Replied to their status" : "Replied to your status"}
+                      </span>
+                      <span className="opacity-80 [unicode-bidi:isolate]" dir="ltr">
+                        {" · "}
+                        {STATUS_KIND_LABEL[sr.kind] ?? "Status"}
+                      </span>
+                      {sr.excerpt && (
+                        <span className="opacity-70" dir="auto">
+                          {" "}
+                          “{sr.excerpt}”
+                        </span>
+                      )}
                     </div>
                   )}
                   {m.replyToId != null && (
@@ -1834,19 +1902,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             </button>
           </div>
         )}
+        {/* The shared, categorised, searchable picker (v2.99.80). This was a
+            hand-written 32-glyph grid; the catalogue behind the new component
+            carries ~1,100 across ten categories and is the SAME one the status
+            reply band uses, so the two surfaces can't drift apart the way the
+            three separate lists in this repo had. Stays open after a pick, because
+            people insert several. */}
         {emojiOpen && (
-          <div className="mb-2 grid grid-cols-8 gap-1 p-2 rounded-xl bg-muted">
-            {EMOJI_QUICK.map((e) => (
-              <button
-                key={e}
-                type="button"
-                onClick={() => insertEmoji(e)}
-                className="aspect-square rounded-lg text-2xl hover:bg-card transition-colors"
-              >
-                {e}
-              </button>
-            ))}
-          </div>
+          <EmojiPicker className="mb-2" onPick={insertEmoji} onClose={() => setEmojiOpen(false)} />
         )}
         {/* ONE menu behind the "+" (v2.99.66, owner: "put the attachment and the
             image into one icon like you click a plus… so it will give more space

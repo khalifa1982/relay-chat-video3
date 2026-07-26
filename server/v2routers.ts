@@ -3483,6 +3483,118 @@ export const v2StatusRouter = router({
         }),
       };
     }),
+
+  /**
+   * Reply to somebody's status — as a PRIVATE MESSAGE to them (v2.99.80).
+   *
+   * Owner: *"When any user plays status, you can see his status ... you can make a
+   * kind of emoji or put a reply. So it will reply to him on the private message on
+   * the message showing that I replied on this status."*
+   *
+   * A one-tap emoji and a typed sentence are the SAME operation here, differing
+   * only in the body — which is what the owner described ("a kind of emoji OR put a
+   * reply", both arriving as a private message). A separate reaction counter on the
+   * status would have been a second data model, a second notification path and a
+   * second privacy question, for something the owner asked to land in the inbox.
+   *
+   * WHY THIS IS ITS OWN PROCEDURE RATHER THAN A NEW `messages.send` meta KEY.
+   * The `statusReply` marker is what makes the recipient's bubble say "replied to
+   * your status", so it is a CLAIM ABOUT PROVENANCE and must not be client-settable.
+   * `messages.send`'s meta schema is a plain `z.object`, which STRIPS unknown keys
+   * rather than rejecting them, and `sendMessage` casts meta through without
+   * validating it — so exposing the key there would let any client stamp "replied
+   * to your status <any id>" on any message, including a status it never had access
+   * to. Stamping it here, server-side, is the same pattern `autoReply` and
+   * `viaEmail` already use.
+   *
+   * NO COPY OF THE STATUS MEDIA IS STORED. A status is unreachable after 24h by
+   * design (`authorizeStorageKey` resolves through `getActiveStatusByMediaKey`), so
+   * a bubble holding a `mediaUrl` would render a broken image forever afterwards —
+   * and keeping a durable copy would quietly break the ephemerality the whole
+   * feature promises. The marker carries the KIND plus a short text excerpt, which
+   * is enough for the bubble to read correctly for the rest of time, and only the
+   * author and the replier ever see it.
+   */
+  reply: publicProcedure
+    .input(
+      z.object({
+        id: z.number().int().positive(),
+        /** The reply text, or a single emoji for a one-tap reaction. */
+        body: z.string().min(1).max(2000),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      // Throttle BEFORE any DB work: each reply is a message row plus an unread
+      // increment in someone else's inbox, so a loop is inbox spam.
+      statusGate(ctx);
+      const body = input.body.trim();
+      if (!body) throw new TRPCError({ code: "BAD_REQUEST", message: "Reply can't be empty." });
+
+      // Expired or missing are the SAME answer, deliberately. Distinguishing them
+      // would make this an existence oracle over status ids — the reason
+      // markViewed/forNumber answer uniformly. The viewer knows `expiresAt`
+      // locally and disables the input, so a legitimate user is told why.
+      const st = await getActiveStatusById(input.id);
+      if (!st) return { ok: false as const, reason: "unavailable" as const };
+      // Replying to your own status would silently post into your own Notes thread
+      // (getOrCreateDmConversation(me, me) is a real, supported self-thread), which
+      // is confusing rather than useful. The UI hides the band for your own story.
+      if (st.identityId === me.id) return { ok: false as const, reason: "own" as const };
+      // The audience verdict that let this person WATCH lived in a different
+      // request and cannot be carried. Re-check it — and note this one call also
+      // covers blocks in BOTH directions, ahead of the "everyone" short-circuit,
+      // so a block outranks a public audience.
+      if (!(await statusAudienceAuthorized(me.id, st.identityId, st.audience))) {
+        return { ok: false as const, reason: "unavailable" as const };
+      }
+
+      const convo = await getOrCreateDmConversation(me.id, st.identityId);
+      // Excerpt, not media: the status's own text or caption, bounded. Kept so the
+      // bubble still reads correctly once the status itself is gone.
+      const excerpt = (st.text ?? "").trim().slice(0, 80) || undefined;
+      const row = await sendMessage({
+        conversationId: convo.id,
+        senderIdentityId: me.id,
+        kind: "text",
+        body,
+        attachmentId: null,
+        replyToId: null,
+        meta: { statusReply: { id: st.id, kind: st.kind, ...(excerpt ? { excerpt } : {}) } },
+      });
+
+      // Realtime + push reuse `kind:"message"` deliberately. A bespoke SSE kind
+      // would be dropped by KNOWN_V2_EVENT_KINDS whenever the recipient's stream
+      // landed on the other instance (the v2.99.74 trap), and the `relay-msg-<id>`
+      // tag is what makes DND and per-conversation mute apply in the service
+      // worker — a new kind would bypass both.
+      for (const pid of [st.identityId, me.id]) {
+        try {
+          publishToIdentity(pid, { kind: "message", conversationId: convo.id, from: me.id });
+        } catch {
+          /* realtime is best-effort; the poll backstop covers it */
+        }
+      }
+      try {
+        const [pres] = await getPresenceForIds([st.identityId]);
+        if (!pres?.isOnline && (await pushReachable(st.identityId))) {
+          // Content-free by the standing rule: the sender's name, never a word of
+          // the reply. "Replied to your status" is a fact about the recipient's own
+          // post and reveals nothing about what was said.
+          sendPushToIdentity(st.identityId, {
+            kind: "message",
+            title: me.displayName || me.number,
+            body: "Replied to your status — tap to read it.",
+            tag: `relay-msg-${convo.id}`,
+            url: `/app/messages?c=${convo.id}`,
+          }).catch(() => {});
+        }
+      } catch {
+        /* a presence hiccup must never fail the reply itself */
+      }
+
+      return { ok: true as const, conversationId: convo.id, messageId: row.id };
+    }),
 });
 
 /* ── admin ────────────────────────────────────────────────────── */

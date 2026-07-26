@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Plus, X, Camera, Type, Trash2, Eye, ChevronLeft, ChevronRight, Send, Video } from "lucide-react";
+import { Plus, X, Camera, Type, Trash2, Eye, ChevronLeft, ChevronRight, Send, Video, Smile } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,8 @@ import { uploadStatusMedia } from "@/lib/uploadAttachment";
 import { videoRecorderSupported } from "@/lib/videoNote";
 import { VideoRecordSheet } from "@/app/VideoRecordSheet";
 import { AUDIENCE_OPTIONS, audienceOption } from "@/app/statusAudience";
+import { EmojiPicker } from "@/app/EmojiPicker";
+import { REACTION_QUICK } from "@/lib/emojiCatalog";
 
 /**
  * Rich user status (v2.95) — WhatsApp/story-style ephemeral updates: text,
@@ -472,6 +474,16 @@ export function StatusViewer({
   const [progress, setProgress] = useState(0); // 0..1 of current item
   const [paused, setPaused] = useState(false);
   const [showViewers, setShowViewers] = useState(false);
+  /**
+   * The reply band is open / busy (v2.99.80).
+   *
+   * Deliberately NOT `paused`: that flag is churned by the body wrapper's
+   * onPointerUp / onPointerLeave, so the very pointerup that ends the tap opening
+   * the composer would clear it and the story would advance mid-sentence. This is
+   * its own state, read by the rAF guard — exactly how `showViewers` already
+   * works, which is the mechanism this code already proves.
+   */
+  const [replyOpen, setReplyOpen] = useState(false);
   const markViewed = trpc.status.markViewed.useMutation();
   const remove = trpc.status.remove.useMutation();
   const utils = trpc.useUtils();
@@ -518,6 +530,12 @@ export function StatusViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item?.id]);
 
+  // Close the reply band whenever the story advances. Without this, a draft typed
+  // against status A could be sent against status B after an auto-advance — the
+  // same class of bug as the reply-target leak fixed in Messages (QA M5). The bar
+  // is keyed on the status id too, so its own text state is discarded with it.
+  useEffect(() => { setReplyOpen(false); }, [gi, ii]);
+
   // Progress timer (rAF). Video/audio drive their own playback; the bar tracks
   // wall-clock either way. Pauses while `paused` (press-and-hold / viewers open).
   useEffect(() => {
@@ -525,7 +543,7 @@ export function StatusViewer({
     let cancelled = false;
     const tick = (ts: number) => {
       if (cancelled) return;
-      if (paused || showViewers) { startRef.current = ts - elapsedRef.current; rafRef.current = requestAnimationFrame(tick); return; }
+      if (paused || showViewers || replyOpen) { startRef.current = ts - elapsedRef.current; rafRef.current = requestAnimationFrame(tick); return; }
       if (!startRef.current) startRef.current = ts;
       elapsedRef.current = ts - startRef.current;
       const p = Math.min(1, elapsedRef.current / itemMs);
@@ -536,7 +554,7 @@ export function StatusViewer({
     rafRef.current = requestAnimationFrame(tick);
     return () => { cancelled = true; if (rafRef.current) cancelAnimationFrame(rafRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gi, ii, itemMs, paused, showViewers]);
+  }, [gi, ii, itemMs, paused, showViewers, replyOpen]);
 
   if (!group || !item) return null;
 
@@ -574,17 +592,39 @@ export function StatusViewer({
         onPointerLeave={() => setPaused(false)}
       >
         <StatusBody item={item} />
-        {/* tap zones — navigate only on a quick tap; a press-and-hold pauses. */}
-        <button type="button" aria-label="Previous" onClick={() => { if (Date.now() - pressStartRef.current < HOLD_MS) prev(); }} className="absolute inset-y-0 left-0 w-1/3" />
-        <button type="button" aria-label="Next" onClick={() => { if (Date.now() - pressStartRef.current < HOLD_MS) next(); }} className="absolute inset-y-0 right-0 w-1/3" />
-        {/* desktop chevrons */}
-        <button type="button" onClick={prev} className="absolute left-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/40 p-2 md:block"><ChevronLeft className="size-5" /></button>
-        <button type="button" onClick={next} className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/40 p-2 md:block"><ChevronRight className="size-5" /></button>
+        {/* tap zones — navigate only on a quick tap; a press-and-hold pauses.
+            While the reply band is open the FIRST tap closes it instead of
+            navigating, so tapping away dismisses the composer rather than
+            skipping the story you were about to reply to (v2.99.80). */}
+        <button type="button" aria-label="Previous" onClick={() => { if (replyOpen) { setReplyOpen(false); return; } if (Date.now() - pressStartRef.current < HOLD_MS) prev(); }} className="absolute inset-y-0 left-0 w-1/3" />
+        <button type="button" aria-label="Next" onClick={() => { if (replyOpen) { setReplyOpen(false); return; } if (Date.now() - pressStartRef.current < HOLD_MS) next(); }} className="absolute inset-y-0 right-0 w-1/3" />
+        {/* desktop chevrons — these bypass the HOLD check, so they need the same
+            reply guard or a stray click would advance mid-compose. */}
+        <button type="button" onClick={() => { if (replyOpen) { setReplyOpen(false); return; } prev(); }} className="absolute left-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/40 p-2 md:block"><ChevronLeft className="size-5" /></button>
+        <button type="button" onClick={() => { if (replyOpen) { setReplyOpen(false); return; } next(); }} className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/40 p-2 md:block"><ChevronRight className="size-5" /></button>
       </div>
 
       {/* caption */}
       {item.text && item.kind !== "text" && (
         <div className="px-5 pb-3 text-center text-sm">{item.text}</div>
+      )}
+
+      {/* SOMEBODY ELSE'S STATUS — react or reply (v2.99.80). Placed here, between
+          the caption and the owner footer, because this is the only slot that is
+          simultaneously below the tap zones, OUTSIDE the body wrapper (whose
+          pointer handlers would fight every keystroke), and a direct child of the
+          root column so it takes its own band instead of overlaying the media. */}
+      {!isMine && (
+        <StatusReplyBar
+          // Keyed on the status: an advance discards the bar's own draft rather
+          // than carrying it onto the next story.
+          key={item.id}
+          statusId={item.id}
+          expiresAt={item.expiresAt}
+          ownerName={group.owner.displayName}
+          open={replyOpen}
+          setOpen={setReplyOpen}
+        />
       )}
 
       {/* owner footer: audience + seen-by + delete */}
@@ -625,6 +665,161 @@ export function StatusViewer({
       {showViewers && item && (
         <ViewersSheet statusId={item.id} onClose={() => { setShowViewers(false); setPaused(false); }} />
       )}
+    </div>
+  );
+}
+
+/**
+ * React or reply to somebody else's status (v2.99.80).
+ *
+ * Owner: *"you can make a kind of emoji or put a reply. So it will reply to him on
+ * the private message on the message showing that I replied on this status. So put
+ * the list of all emojis."*
+ *
+ * A one-tap emoji and a typed sentence are the SAME server call, differing only in
+ * the body — that is what the owner described, and it means one authorization path,
+ * one notification, and the reply landing in the inbox where they asked for it.
+ */
+function StatusReplyBar({
+  statusId,
+  expiresAt,
+  ownerName,
+  open,
+  setOpen,
+}: {
+  statusId: number;
+  expiresAt: string | Date;
+  ownerName: string;
+  open: boolean;
+  setOpen: (v: boolean) => void;
+}) {
+  const [text, setText] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [sending, setSending] = useState(false);
+  const reply = trpc.status.reply.useMutation();
+
+  /**
+   * A status can expire while the viewer sits on it, and the server answers a dead
+   * id and an unauthorized one IDENTICALLY on purpose (distinguishing them would be
+   * an existence oracle). `expiresAt` is already on the wire, so the honest reason
+   * is derived HERE — otherwise the person just gets a refusal with no explanation.
+   */
+  const expired = new Date(expiresAt).getTime() <= Date.now();
+
+  async function send(body: string) {
+    const b = body.trim();
+    // In-flight guard: a double-tap on a quick emoji would otherwise be two
+    // messages and two unread increments.
+    if (!b || sending || expired) return;
+    setSending(true);
+    setOpen(true); // hold the story while the request is in flight
+    try {
+      const res = await reply.mutateAsync({ id: statusId, body: b });
+      if (!res.ok) {
+        toast.error(
+          res.reason === "own"
+            ? "That's your own status."
+            : "This status is no longer available."
+        );
+        return;
+      }
+      setText("");
+      setPickerOpen(false);
+      setOpen(false);
+      toast.success(`Sent to ${ownerName}`);
+    } catch {
+      toast.error("Couldn't send that reply. Try again.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (expired) {
+    return (
+      <div className="px-5 py-3 text-center text-xs text-white/50">
+        This status has expired.
+      </div>
+    );
+  }
+
+  return (
+    // select-text because the viewer root sets select-none, which would otherwise
+    // make the input unusable. Width-capped and centred so the composer reads as a
+    // composer on a desktop instead of a bar stretched across 1,200px — the story
+    // itself is already letterboxed, so a full-width band would not match it.
+    <div className="mx-auto w-full max-w-[440px] select-text px-3 pb-[max(12px,env(safe-area-inset-bottom))] pt-1">
+      {pickerOpen && (
+        <EmojiPicker
+          tone="dark"
+          maxHeight={200}
+          className="mb-2"
+          onPick={(e) => send(e)}
+          onClose={() => {
+            setPickerOpen(false);
+            setOpen(false);
+          }}
+        />
+      )}
+
+      {/* One-tap reactions. A short row on purpose: this is the tap you make
+          without thinking, and the full 1,100-glyph catalogue is one tap further
+          in behind the ＋. */}
+      <div className="mb-2 flex items-center justify-center gap-1">
+        {REACTION_QUICK.map((e) => (
+          <button
+            key={e}
+            type="button"
+            disabled={sending}
+            onClick={() => send(e)}
+            aria-label={`React with ${e}`}
+            className="grid size-10 place-items-center rounded-full text-2xl leading-none transition active:scale-90 hover:bg-white/15 disabled:opacity-40"
+          >
+            {e}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => {
+            const next = !pickerOpen;
+            setPickerOpen(next);
+            setOpen(next);
+          }}
+          aria-label="All emoji"
+          aria-expanded={pickerOpen}
+          className="grid size-10 place-items-center rounded-full border border-white/20 text-lg leading-none text-white/70 hover:bg-white/15"
+        >
+          <Smile className="size-5" />
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void send(text);
+            }
+          }}
+          // dir="auto" so an Arabic reply lays out right-to-left as typed.
+          dir="auto"
+          maxLength={2000}
+          placeholder={`Reply to ${ownerName}…`}
+          aria-label="Reply to this status"
+          className="h-11 min-w-0 flex-1 rounded-full border border-white/20 bg-white/10 px-4 text-sm text-white outline-none placeholder:text-white/40 focus:border-white/40"
+        />
+        <button
+          type="button"
+          disabled={!text.trim() || sending}
+          onClick={() => void send(text)}
+          aria-label="Send reply"
+          className="grid size-11 shrink-0 place-items-center rounded-full bg-white text-black transition disabled:opacity-30"
+        >
+          <Send className="size-4" />
+        </button>
+      </div>
     </div>
   );
 }

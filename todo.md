@@ -7557,6 +7557,111 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.80 — react or reply to a status, and one emoji library instead of three (2026-07-26)
+- [x] **THE ASK.** Owner: *"When any user plays status, you can see his status. If he put it everyone or
+      contact, and you can make a kind of emoji or put a reply. So it will reply to him on the private
+      message on the message showing that I replied on this status. So put the list of all emojis."*
+      A band below the story now carries six one-tap reactions, the full emoji catalogue, and a reply
+      input; either lands in the owner's inbox as a private message whose bubble says what it was about.
+- [x] **AN EMOJI AND A SENTENCE ARE THE SAME OPERATION**, which is what the owner described ("a kind of
+      emoji OR put a reply", both arriving as a private message). A separate reaction counter on the
+      status would have been a second data model, a second notification path and a second privacy
+      question — for something asked to land in the inbox. One procedure, one authorization path.
+- [x] **THE MARKER IS STAMPED SERVER-SIDE, AND THAT IS THE LOAD-BEARING DECISION.** The chip that reads
+      "replied to your status" is a CLAIM ABOUT PROVENANCE, so it must not be client-settable. Widening
+      `messages.send`'s meta schema would have been the obvious shortcut and is unsafe: that schema is a
+      plain `z.object`, which **STRIPS** unknown keys rather than rejecting them, and `sendMessage` casts
+      meta straight through without validating it — so the key would let any client label any message a
+      reply to any status, including one they never had access to. `status.reply` stamps it instead,
+      matching how `autoReply` and `viaEmail` already work, and a test asserts `statusReply` appears
+      nowhere in `send`'s input schema.
+- [x] **NO COPY OF THE STATUS MEDIA IS STORED, and that is a promise rather than an omission.** A status
+      is unreachable after 24h by design (`authorizeStorageKey` resolves through
+      `getActiveStatusByMediaKey`, which filters on `expiresAt > now`), so a bubble holding a `mediaUrl`
+      would render a broken tile forever afterwards — and a durable copy would quietly break the
+      ephemerality the whole feature promises. The marker carries the KIND plus a ≤80-char text excerpt,
+      which is enough for the bubble to read correctly for the rest of time; the only two people who ever
+      see it are the author being quoted their own words and the replier who was audience-authorised.
+- [x] **EVERY GUARD RE-APPLIED, because the viewer's verdict lived in a different request.** In order:
+      `requireIdentity` (a **publicProcedure**, so a GUEST can reply — guests have identities and can
+      legitimately be in an "everyone" audience), `statusGate` **before any DB work** (each reply is a
+      row plus an unread increment in someone else's inbox, so a loop is inbox spam), `getActiveStatusById`,
+      a self-reply refusal, then `statusAudienceAuthorized` — which also covers blocks in BOTH directions
+      ahead of the "everyone" short-circuit, so a block outranks a public audience.
+- [x] **MISSING AND EXPIRED ANSWER IDENTICALLY.** Distinguishing them would make the endpoint an
+      existence oracle over status ids. The honest reason is derived on the CLIENT instead: `expiresAt`
+      is already on the wire, so the band shows "This status has expired" and disables the input, and a
+      real user is told why without the endpoint leaking anything.
+- [x] **REFUSING YOUR OWN STATUS is a real fix, not defensive noise**: `getOrCreateDmConversation(me, me)`
+      is a supported self-thread ("Notes (You)"), so an unguarded self-reply would silently post into the
+      user's own notes — confusing rather than broken. Hidden in the UI and refused server-side.
+- [x] **REALTIME AND PUSH REUSE `kind:"message"`.** A bespoke SSE kind is dropped by
+      `KNOWN_V2_EVENT_KINDS` whenever the recipient's stream is on the other instance — most of the time
+      on a two-instance fleet, and single-instance dev would look perfect (the v2.99.74 trap). The
+      `relay-msg-<id>` tag is also what makes DND and per-conversation mute apply in the service worker,
+      and what makes ten replies REPLACE one notification instead of stacking ten. The push body is
+      content-free per the standing rule: the sender's name, never a word of the reply.
+- [x] **THE BUG THAT WOULD HAVE MADE THE WHOLE FEATURE INVISIBLE, caught before shipping**: a one-tap
+      reaction is *precisely* an emoji-only message, and `Messages.tsx` renders those as a large bare
+      glyph with **no bubble** — and therefore nowhere to put the chip. The owner would have received a
+      floating ❤️ with no indication what it referred to, which is the one thing they asked for. A status
+      reply is now excluded from that branch. The chip is also withheld while a self-destructing message
+      is still LOCKED, since its body is withheld too and the chip would sit above an empty bubble.
+- [x] **THE VIEWER'S PRESS-HOLD CONFLICT, and why it needed its own state.** The story auto-advances on a
+      rAF clock, so typing must pause it — but `paused` is CHURNED by the body wrapper's
+      `onPointerUp`/`onPointerLeave`, so the very pointerup that ends the tap opening the composer clears
+      it and the story moves on mid-sentence. New `replyOpen` is owned solely by the band and read by the
+      rAF guard, exactly as `showViewers` already is. The band sits OUTSIDE the body div for the same
+      reason. Both tap zones AND both desktop chevrons dismiss instead of navigating while it is open —
+      the chevrons bypass the `HOLD_MS` check entirely, so guarding only the zones would still have let a
+      stray click advance mid-compose. An advance closes the band and the bar is keyed on the status id,
+      so a draft cannot be sent against the NEXT story (the QA M5 class).
+- [x] **"THE LIST OF ALL EMOJIS" — one catalogue replacing three.** There were `EMOJI_QUICK` (32, chat
+      composer), `CHAT_EMOJIS` (48, in-call palette) and `AVATAR_EMOJIS` (56, but a different purpose),
+      already drifted apart; a fourth for statuses would have been the wrong answer. New
+      `client/src/lib/emojiCatalog.ts` carries **~1,124 glyphs across ten categories**, every one
+      searchable by the word a person would actually type ("happy", "pizza", "uae", "lau" → 😂) rather
+      than by Unicode name. Zero dependency, matching this repo's own SMTP / S3 SigV4 / FCM / Expo / GIF
+      encoders. Search matches a keyword or a keyword PREFIX but **never an infix**, because a two-letter
+      infix query matches most of the catalogue and is indistinguishable from no filter. Cross-listed
+      glyphs (🧗 is both a person and an activity) are deduped in the flat list and in search results,
+      or a repeat becomes a duplicate React key. New `client/src/app/EmojiPicker.tsx` is the shared,
+      categorised, searchable panel — and **the Messages composer now uses it too**, so the two surfaces
+      cannot drift the way the three lists had. SAID PLAINLY: the full Unicode set is ~3,700 glyphs and
+      shipping literally all of them needs a dependency or a generated dataset plus a virtualised grid;
+      ~1,124 is what "all emojis" means in practice on a phone, and a complete dump with every skin-tone
+      and profession variant would be slower to use rather than richer.
+- [x] **LAYOUT MEASURED, NOT ASSUMED** — this repo has been bitten by clipping repeatedly. Headless
+      Chromium against the real built CSS at 390 / 320 / 1280: no horizontal page overflow, nothing past
+      the viewport bottom, the grid scrolls internally, the category tabs scroll on a phone. It caught a
+      real desktop bug: 8 columns across the full-width panel measured **153px emoji cells** for a 20px
+      glyph, so the picker and the band are now width-capped and centred — 49px after the fix, phone
+      unaffected. Both caps are pinned.
+- [x] `client/src/app/statusReply.test.ts` (44). The catalogue and the emoji predicates are tested
+      BEHAVIOURALLY — a source pin cannot tell you whether "lau" finds 😂, and search that does not work
+      is the whole feature. **All 16 tripwires verified by MUTATION**, one test each, reverted from
+      byte-exact backups with every source confirmed byte-identical afterwards.
+- [x] **ONE PIN OF MY OWN REWRITTEN DURING THE RUN rather than counted as a pass**: the select-text
+      assertion froze the exact class prefix `className="select-text px-3` and broke the moment the width
+      cap was prepended, while saying nothing about whether selection is actually re-enabled. It now
+      anchors on the component and asserts the property; re-verified to still bite.
+- [ ] **NOT DONE, flagged rather than faked**: the owner's thread LIST still shows a bare emoji with no
+      context for a one-tap reaction, because the thread-preview projection carries `{body, kind}` and
+      not `meta`. Adding it touches a hot groupwise-max query, so it is a follow-up. Also: the chip is
+      static and cannot re-open a still-live status — `v2StatusRouter` has no by-id read, and adding one
+      is a new audience-gated surface.
+- [x] Suite 2403 passed / 1 skipped (2404). No schema change, no new dependency, no new env var —
+      `messages.meta` is already a JSON column.
+
+### Operations run this session (production, owner-directed)
+- [x] `grant-admin khalifa@khalifa.net` — APPLIED (`user 1 role user -> admin`). The yellow **Admin**
+      badge needs no code change: `getRolesByIdentityIds` reads `users.role` and `roleFromFlags` maps it,
+      so it appears on every surface, and `/app/admin` is now reachable.
+- [x] `set-number 483307 -> 699999` — APPLIED, identity 60 "Ahmed Alkhyeli", 2 contacts propagated.
+- [x] `set-number 596484 -> 909090` — APPLIED, identity 23 "Mohamed Idris", 5 contacts propagated.
+- [x] Each ran DRY RUN first, then APPLY, each verdict read from the script's own `ADMIN_EXIT=0` marker
+      rather than the SSM status (a wrapper can mask a non-zero exit — the v2.99.46 bug).
+
 ## v2.99.79 — Firebase/Expo linked: the WebView shell's push token now reaches the right transport (2026-07-26)
 - [x] **THE ASK, AND WHAT IT ACTUALLY NEEDED.** Owner: *"i have created a firebase account and i want to
       link it to your web apps to send the notification to the front mobile apps for andriod and ios ...
