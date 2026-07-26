@@ -107,6 +107,7 @@ import { unsubscribeHeaders, unsubscribeLink } from "./unsubscribe";
 import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
+import { setIdentityAutoReply, autoReplyEnabledFor } from "./v2db";
 import { recordSession, listSessionsForUser, revokeSession } from "./v2db";
 import { getRolesByIdentityIds, type IdentityRole } from "./v2db";
 import { hasRecentApprovedSession, pendingSessionsForUser, sessionApprovalBySid, approveSession } from "./v2db";
@@ -446,6 +447,8 @@ export const v2AuthRouter = router({
       role,
       firstName: ctx.identity.firstName,
       lastName: ctx.identity.lastName,
+      /** Away auto-reply, opt-in (v2.99.66) — drives the Messages toggle. */
+      autoReplyEnabled: ctx.identity.autoReplyEnabled,
     };
   }),
 
@@ -634,6 +637,18 @@ export const v2AuthRouter = router({
    * without re-adding. The relay engine adopts the new number on the client's
    * next whoami (see RelayEngine's setPreferredPin reconcile).
    */
+  /**
+   * Turn the away auto-reply on or off (v2.99.66). Guests included — the pref
+   * lives on the identity, so it works before registration and survives it.
+   */
+  setAutoReply: publicProcedure
+    .input(z.object({ enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      await setIdentityAutoReply(me.id, input.enabled);
+      return { ok: true, enabled: input.enabled };
+    }),
+
   regenerateNumber: publicProcedure.mutation(async ({ ctx }) => {
     const me = requireIdentity(ctx);
     // SECURITY (M41): the sibling of M21. Each regeneration permanently claims
@@ -1685,10 +1700,18 @@ export const v2MessagesRouter = router({
       }
 
       // Offline auto-reply (1:1 only — avoids group spam). If the single other
-      // party is offline and hasn't auto-replied in the last 10 min, post a
-      // one-time auto-reply FROM them so the sender knows they'll reply later.
+      // party is offline, HAS OPTED IN, and hasn't auto-replied in the last
+      // 10 min, post a one-time auto-reply FROM them so the sender knows they'll
+      // reply later.
+      //
+      // v2.99.66 — now OPT-IN (owner: "you should allow the user to enable and
+      // disable it. You don't enable it by default"). This posts a message in
+      // someone else's name into a conversation they are not watching, so the
+      // consent has to be theirs; `autoReplyEnabledFor` fails closed, and the
+      // pref is checked BEFORE the presence and dedupe reads so the common
+      // (opted-out) path costs one indexed lookup instead of three.
       try {
-        if (peerIds.length === 1) {
+        if (peerIds.length === 1 && (await autoReplyEnabledFor(peerIds[0]))) {
           const peerId = peerIds[0];
           const [pres] = await getPresenceForIds([peerId]);
           const offline = !pres?.isOnline;
@@ -2898,7 +2921,7 @@ export function sanitizeStatusBg(v: string | undefined | null): string | null {
   return hex.test(s) || grad.test(s) ? s : null;
 }
 
-/** The two status-audience options (v2.99.55). */
+/** The two status-audience options (v2.99.66). */
 const StatusAudienceSchema = z.enum(["contacts", "everyone"]);
 
 /**
@@ -2957,7 +2980,7 @@ export const v2StatusRouter = router({
         mediaKey: z.string().max(256).optional(),
         mimeType: z.string().max(128).optional(),
         durationMs: z.number().int().min(0).max(10 * 60_000).optional(),
-        /** Per-post override; omitted ⇒ my saved default (v2.99.55). */
+        /** Per-post override; omitted ⇒ my saved default (v2.99.66). */
         audience: StatusAudienceSchema.optional(),
       }),
     )
@@ -2998,7 +3021,7 @@ export const v2StatusRouter = router({
         throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: `You can have up to ${STATUS_MAX_ACTIVE} active statuses.` });
       }
       const mediaUrl = mediaKey ? `/manus-storage/${mediaKey}` : null;
-      // v2.99.55 — resolve the audience ONCE, here, and store it on the row. An
+      // v2.99.66 — resolve the audience ONCE, here, and store it on the row. An
       // explicit per-post choice wins; otherwise fall back to my saved default.
       // A DB hiccup reading the default resolves to "contacts" (the private
       // option), so a failed read can never publish a post wider than intended.
@@ -3130,7 +3153,7 @@ export const v2StatusRouter = router({
       return { ok: true };
     }),
 
-  /* ── who can watch my statuses (v2.99.55) ──────────────────────────
+  /* ── who can watch my statuses (v2.99.66) ──────────────────────────
      Two options, per the owner's ask: everyone, or contacts only. The value is
      the DEFAULT for future posts; each status carries its own copy, so changing
      this never reaches back into something already published. */

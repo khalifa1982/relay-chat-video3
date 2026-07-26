@@ -22,7 +22,7 @@ import { PasscodeGate } from "./PasscodeGate";
 import { useRealtime } from "./useRealtime";
 import { useDnd } from "./dnd";
 import { useTheme } from "@/contexts/ThemeContext";
-import { AwaySummaryToast, NotificationBell } from "./MissedCalls";
+import { NotificationBell } from "./MissedCalls";
 import { PushBanner } from "./PushBanner";
 import { CallHealthBanner } from "./CallHealthBanner";
 import { PeerOverlaysHost } from "./PeerOverlays";
@@ -316,17 +316,16 @@ function Inner({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-svh bg-background text-foreground flex flex-col md:flex-row">
-      {/* Landing "while you were away" popup: prominent but non-intrusive, on
-          app launch — surfaces missed calls AND unread messages (v2.99.12). */}
-      {awayOpen && (
-        <AwaySummaryToast
-          missed={{ count: missedCount, latest: missed.data?.latest ?? null }}
-          unread={{ count: unreadTotal, latest: latestUnread }}
-          onViewMissed={viewMissed}
-          onOpenMessages={openMessagesFromToast}
-          onDismiss={dismissAway}
-        />
-      )}
+      {/* The "while you were away" banner is GONE from the main screen
+          (v2.99.67, owner: "the missed call notification, the way how it works,
+          it's not nice. Don't show it on the main screen as a side banner from up
+          to down. Show it only on the notification center on the top… and also on
+          the history").
+          Nothing is lost: the same missed calls and unread threads are still
+          counted on the bell (which keeps its blink), listed inside the bell
+          panel, and recorded in History. Those two are pull, not push — you look
+          when you want to, instead of being covered on arrival. `awayOpen` and
+          its watermark are retained so the bell's unseen logic is unchanged. */}
       {/* ── desktop / tablet sidebar ───────────────────────────── */}
       <aside
         className={

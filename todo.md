@@ -7557,6 +7557,107 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.67 — phone heating, a vanishing conference tile, the wrapped dial pad, the missed-call banner (2026-07-26)
+- [x] 1. THE LANDING PAGE MADE PHONES HOT. Owner: "when I open this website from the phone, the phone is heating."
+      MEASURED on an emulated 390px phone at 4x CPU throttle against the real built bundle, not guessed. The page
+      ran TWO uncapped requestAnimationFrame loops (the fx loop + the WebGL scene), repainted a FULL-VIEWPORT
+      canvas at device pixel ratio EVERY frame, rewrote SIX gradient/box-shadow style strings 20 times a second
+      (fc % 3 at 60fps — each pass re-parsing two 1100px radial-gradients plus three box-shadows across most of
+      the viewport), and gated none of it on the tab being visible.
+      FIXED: frame budget (30fps desktop / 20fps low-power); early return when document.hidden, with the rAF
+      re-armed BEFORE the return so the loop resumes; the chrome tint throttled by TIME not frame count (~4.5/s
+      vs 20/s, so cost no longer tracks frame rate and the slow hue drift looks identical); matrix canvas DPR
+      1.5 -> 1.0 and column pitch 18px -> 26px on a phone; and the WEBGL SCENE SKIPPED ENTIRELY on a low-power
+      device (innerWidth <= 820 OR hardwareConcurrency <= 4 OR Data Saver).
+      RESULT before -> after: canvas repaints 59.1/s -> 16.6/s; backing store 585x1266 -> 390x844; canvas fill
+      ~43.7 Mpx/s -> ~5.5 Mpx/s (~8x less).
+      HONEST LIMIT: the WebGL saving is asserted from the source gate, NOT measured — this environment runs
+      --disable-gpu and reported no WebGL context in EITHER run, so the probe could not see the scene either way.
+      The prefers-reduced-motion path is untouched.
+- [x] 2. A PARTICIPANT WHO TOOK ANOTHER CALL CAME BACK WITH NO TILE. Owner: "on the conference call, somebody got
+      a line, when he answer and he returned back, he disappeared… he keep hearing [him], but his profile is
+      disappeared." onPeerHold restored a placeholder ONLY under livekitEnabled, so on the MESH the tile stayed
+      gone; and the coming-BACK branch only stripped the .on-hold class, so if the tile had already left with the
+      peer's transport there was nothing to un-hold. addTile cannot help — it requires a live peers[id] entry,
+      which is exactly what the teardown removed. New ensurePlaceholderTile makes a name-only tile on EITHER
+      transport, marked data-ph so addTile/addLkTile REPLACE it rather than appending a second element with the
+      same id; called on hold AND on return.
+- [x] 3. THE LANDING DIAL PAD WRAPPED ON A PHONE (five digits up, one below). Six digits joined by spaces is 11
+      characters; at 30px monospace with .28em letter-spacing that is ~290px against ~285px of inner card width
+      at 390px — so it wrapped, and only on a phone, which is why it shipped. Now white-space:nowrap
+      (structurally one line) plus font:clamp(19px,6.2vw,30px) and letter-spacing:clamp(.13em,.6vw,.28em), whose
+      maxima are the original values, so desktop is unchanged.
+- [x] 4. THE MISSED-CALL BANNER IS GONE FROM THE MAIN SCREEN. Owner: "don't show it on the main screen as a side
+      banner from up to down. Show it only on the notification center on the top… and also on the history."
+      AwaySummaryToast is no longer mounted (component kept, import cleaned up). Nothing is lost: the bell still
+      counts missed calls AND unread messages, still blinks for them, lists them in its panel, and routes to
+      History / Messages — pull rather than push.
+- [ ] 5. STILL OPEN — THE GROUP-CALL TILES ARE STATIC PHOTOS. The owner has now asked TWICE for people who look
+      like they are talking (moving lips, hands, "like normal people in a conference"). v2.99.16 added per-tile
+      Ken-Burns drift and a rotating active-speaker ring; that is motion, but it is not talking. LIPS CANNOT MOVE
+      ON A STILL IMAGE — this needs a short looping video per tile (or an animated portrait), which is an ASSET
+      decision (licensing + ~10 clips + bytes on the landing page), so it is flagged for the owner rather than
+      faked. Options put to them: supply/approve stock clips, or accept stronger non-lip motion.
+- [x] Tests: client/src/app/ownerUiBatch3.test.ts (17). Two pre-existing pins REWRITTEN to the new intent rather
+      than relaxed: the v2.97.1 hold pin now asserts the transport-agnostic restore in BOTH directions, and the
+      v2.99.12 away-card pin asserts the banner is unmounted while the bell keeps the count, blink and routes.
+      Suite 2066 passed / 1 skipped; check + build green.
+- [ ] NOT verified live (this environment cannot reach your-chat.io): worth checking on the phone that the dial
+      pad is one line, the page no longer heats after a few minutes, a conference peer who takes another call
+      returns with their tile, and no banner drops over the main screen.
+
+## v2.99.66 — owner UI batch from five screenshots (2026-07-25)
+- [x] 1. LAST SEEN CARRIES THE CLOCK. formatLastSeen returned "last seen on Jul 23" for anything older
+      than yesterday, while the same-day and yesterday branches already had the time. Owner: "it shows you
+      below last seen on this, but doesn't show you the time and the minutes." Every dated branch now ends
+      "at H:MM AM"; the YEAR is named only when it differs from now, because "Jul 23" silently reads as
+      this year and being twelve months wrong without saying so is worse than one extra token.
+- [x] 2a. ONE "+" REPLACES THE IMAGE AND PAPERCLIP BUTTONS. Owner: "put the attachment and the image into
+      one icon like you click a plus… it will give more space for the input box of chatting." The + always
+      opens the existing attach menu, which now carries Record video (still gated on
+      videoRecorderSupported()), Photo & video, and Attach file — nothing lost, ~44px returned to the text
+      field. The old handler opened the menu ONLY when a recorder existed and otherwise jumped straight to
+      the library, which would have hidden "Attach file" entirely, so it is now an unconditional toggle.
+- [x] 2b. THE BELL AND MAGNIFIER MOVED INTO THE PEER PROFILE. Owner: "for the search and for the
+      notification, make it inside the profile of the person when you click on his name." As permanent
+      header icons they squeezed the name to "Ibrahi..." and left the "last seen" line with nothing after
+      it. openPeerProfile(number, chat?) now takes an optional PeerProfileChatActions
+      ({onSearch, muted, onToggleMute, lastSeenText}); Messages passes it, Contacts / History / the dialer
+      pass nothing and render exactly as before. The popup also shows the FULL last-seen line with its
+      clock, which the single-line header cannot fit. Only the close-search affordance stays inline, and
+      only while search is open, because it acts on what is on screen.
+- [x] 3. LIVE COUNTERS ON THE SIGN-IN SCREEN. Owner: "this is the live reads on the main website where I
+      want also this one to be also on the login page... below the login and registration with the email,
+      above the voice video chat." New client/src/app/LiveStats.tsx — Registered / Guests served / Call
+      parties / Messages / Online now, same public aggregate stats.public endpoint, polled every 15s, the
+      online figure pulsing. New messagesSent COUNT(*) joins the four existing counters, wrapped in
+      try/catch because `messages` is the largest table and a headline number must never stop the landing
+      page rendering; the landing page gains the same tile in EN and AR. Renders NOTHING rather than five
+      zeros when the query has no data — getPublicStats answers zeros on a dead DB, and a wall of "0" on
+      the sign-in screen reads as a broken product.
+- [x] 4. THE AWAY AUTO-REPLY IS OPT-IN. Owner: "you have it as a feature, but you should allow the user to
+      enable and disable it. You don't enable it by default." New identities.autoReplyEnabled (additive
+      nullable via the boot migrator) — on the IDENTITY rather than `users`, so a GUEST can set it and it
+      travels with the person through registration and renumbering, consistent with v2.99.54. Only an
+      explicit true enables it, so NULL turns the old always-on behaviour off for everybody, which is the
+      intended change. autoReplyEnabledFor FAILS CLOSED on any trouble — this posts a line in someone's
+      name into a conversation they are not watching, so silence beats guessing yes — and the pref is
+      checked BEFORE the presence and dedupe reads, so the common opted-out path costs one indexed lookup
+      instead of three. Surfaced as a switch in the Messages header (AutoReplyToggle), optimistic with
+      rollback so it cannot misreport its own state, plus identity.setAutoReply and autoReplyEnabled on
+      whoami.
+- [x] 5. CONTACTS PUT LAST SEEN BELOW THE PIN. They shared one line, and with a 6-digit PIN plus "last
+      seen 18h ago" there was never room — every row wrapped mid-phrase and read as broken. Two short
+      lines now, with the pin dir="ltr"-isolated so an RTL name cannot reorder it.
+- [x] Tests: client/src/app/ownerUiBatch2.test.ts (23) + 2 new formatLastSeen cases. The v2.96.2 recorder
+      pin was REWRITTEN to the new menu shape rather than relaxed — it asserted the exact branch this batch
+      deleted, and still gates Record video on recorder support. Suite 2049 passed / 1 skipped; check +
+      build green.
+- [ ] NOT verified live: this environment cannot reach your-chat.io (network policy), so all five are
+      verified by tests and typecheck only. Worth a look on the phone: the dialer preview's last-seen line,
+      the composer's + menu, tapping a chat name for search/notifications, the sign-in screen's counters,
+      the Messages auto-reply switch, and the contacts rows.
+
 ## v2.99.64/65 — TURN :443 diagnosed to two owner-only steps; TLS-on-443 unblocked (2026-07-26)
 - [x] `turn-fix` established: both relays are EC2 instances in this account —
       `i-0ccd35acc6940c5dc` (13.232.119.83) and `i-0cf65f64e50fa4e3d` (13.204.23.58) — and they SHARE ONE

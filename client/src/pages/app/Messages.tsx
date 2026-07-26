@@ -7,6 +7,7 @@ import {
   Send,
   Smile,
   Paperclip,
+  Plus,
   Mic,
   StopCircle,
   Image as ImageIcon,
@@ -49,7 +50,8 @@ import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { previewOf } from "@/app/messagePreview";
 import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
 import { StatusStrip } from "./Status";
-import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
+import { PeerAvatar, openPeerProfile, type PeerProfileChatActions } from "@/app/PeerOverlays";
+import { formatLastSeen } from "@shared/profileFields";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
 import { videoRecorderSupported } from "@/lib/videoNote";
@@ -244,7 +246,10 @@ export default function MessagesPage() {
       >
         <header className="flex items-center justify-between px-4 md:px-5 py-4 border-b border-border">
           <h2 className="text-base font-extrabold tracking-tight">Messages</h2>
-          <NewMessageDialog />
+          <div className="flex items-center gap-1">
+            <AutoReplyToggle />
+            <NewMessageDialog />
+          </div>
         </header>
         {(threads.data?.length ?? 0) > 0 && (
           <div className="px-3 py-2 border-b border-border/60">
@@ -882,6 +887,22 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     setDebouncedSearch("");
   }
 
+  /* What the peer's profile popup gets when it is opened from THIS conversation
+     (v2.99.66): the search and notification controls that used to crowd the
+     header, plus the full last-seen line with its clock. Rebuilt whenever the
+     inputs change so the popup never acts on a stale mute value. */
+  const peerProfileChat: PeerProfileChatActions = useMemo(
+    () => ({
+      onSearch: () => setSearchOpen(true),
+      muted,
+      onToggleMute: () => setMuted(!muted),
+      lastSeenText: thread?.peerLastSeenAt
+        ? formatLastSeen(new Date(thread.peerLastSeenAt).getTime(), Date.now()) || null
+        : null,
+    }),
+    [muted, setMuted, thread?.peerLastSeenAt]
+  );
+
   // scroll-to-bottom on new message — but DON'T yank the user down while they're
   // reading history. Only auto-scroll when already near the bottom; always jump
   // when the thread itself changes (opening a thread should land at the bottom).
@@ -1185,13 +1206,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           tabIndex={!isGroup && thread?.peerNumber ? 0 : undefined}
           onClick={() => {
             // Tapping the NAME opens the peer's profile popup (v2.96 spec:
-            // "click anywhere on the name … see their profile").
-            if (!isGroup && thread?.peerNumber) openPeerProfile(thread.peerNumber);
+            // "click anywhere on the name … see their profile") — now carrying
+            // this conversation's search + notification controls and the full
+            // last-seen line, which the header has no room for (v2.99.66).
+            if (!isGroup && thread?.peerNumber) openPeerProfile(thread.peerNumber, peerProfileChat);
           }}
           onKeyDown={(e) => {
             if (!isGroup && thread?.peerNumber && (e.key === "Enter" || e.key === " ")) {
               e.preventDefault();
-              openPeerProfile(thread.peerNumber);
+              openPeerProfile(thread.peerNumber, peerProfileChat);
             }
           }}
         >
@@ -1215,32 +1238,33 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             ) : thread?.peerIsOnline ? (
               <span className="text-[color:var(--relay-online)] font-medium">online</span>
             ) : thread?.peerLastSeenAt ? (
-              <span className="text-muted-foreground">last seen {timeAgo(thread.peerLastSeenAt)}</span>
+              // Short stamp here (the header is one cramped line); the profile
+              // popup carries the full date + time.
+              <span className="text-muted-foreground truncate">last seen {timeAgo(thread.peerLastSeenAt)}</span>
             ) : (
               <span className="text-muted-foreground">offline</span>
             )}
           </div>
         </div>
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={() => setMuted(!muted)}
-          aria-label={muted ? "Unmute conversation" : "Mute conversation"}
-          title={muted ? "Muted — tap to unmute" : "Mute notifications"}
-          className={"size-8 shrink-0 " + (muted ? "text-muted-foreground" : "")}
-        >
-          {muted ? <BellOff className="size-5" /> : <Bell className="size-5" />}
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
-          aria-label={searchOpen ? "Close search" : "Search this conversation"}
-          title={searchOpen ? "Close search" : "Search messages"}
-          className={"size-8 shrink-0 " + (searchOpen ? "text-primary" : "")}
-        >
-          {searchOpen ? <X className="size-5" /> : <Search className="size-5" />}
-        </Button>
+        {/* The bell and the magnifier used to live here permanently (v2.99.66,
+            owner): on a phone they squeezed the name to "Ibrahi…" and left the
+            "last seen" line with nothing after it. Both are conversation-scoped,
+            so they moved into the peer's profile — tap the name — where there is
+            room for a label and for the full last-seen date and time. Only the
+            close-search affordance stays inline, and only while search is open,
+            because that one is about the panel currently on screen. */}
+        {searchOpen && (
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={closeSearch}
+            aria-label="Close search"
+            title="Close search"
+            className="size-8 shrink-0 text-primary"
+          >
+            <X className="size-5" />
+          </Button>
+        )}
         {!isGroup && thread?.peerNumber && (
           <>
             <AccentCircle
@@ -1687,23 +1711,37 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             ))}
           </div>
         )}
+        {/* ONE menu behind the "+" (v2.99.66, owner: "put the attachment and the
+            image into one icon like you click a plus… so it will give more space
+            for the input box of chatting"). Media and Attach file used to be two
+            separate composer buttons, which cost ~44px of the row on every
+            screen for actions used occasionally. */}
         {attachMenuOpen && (
           <div className="mb-2 grid grid-cols-2 gap-2">
             {/* In-app recorder: works even DURING a call — iOS blocks the
                 system camera's video recording there, ours records in-page. */}
-            <button
-              type="button"
-              onClick={() => { setAttachMenuOpen(false); setVideoRecOpen(true); }}
-              className="flex items-center justify-center gap-2 rounded-xl bg-[#38bdf8]/12 px-3 py-3 text-sm font-semibold text-[#38bdf8] active:scale-95 transition-transform"
-            >
-              <Video className="size-4" /> Record video
-            </button>
+            {videoRecorderSupported() && (
+              <button
+                type="button"
+                onClick={() => { setAttachMenuOpen(false); setVideoRecOpen(true); }}
+                className="flex items-center justify-center gap-2 rounded-xl bg-[#38bdf8]/12 px-3 py-3 text-sm font-semibold text-[#38bdf8] active:scale-95 transition-transform"
+              >
+                <Video className="size-4 shrink-0" /> <span className="truncate">Record video</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => { setAttachMenuOpen(false); imageRef.current?.click(); }}
               className="flex items-center justify-center gap-2 rounded-xl bg-muted/60 px-3 py-3 text-sm font-semibold text-foreground active:scale-95 transition-transform"
             >
-              <ImageIcon className="size-4" /> Photo & video library
+              <ImageIcon className="size-4 shrink-0" /> <span className="truncate">Photo &amp; video</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAttachMenuOpen(false); fileRef.current?.click(); }}
+              className="flex items-center justify-center gap-2 rounded-xl bg-muted/60 px-3 py-3 text-sm font-semibold text-foreground active:scale-95 transition-transform"
+            >
+              <Paperclip className="size-4 shrink-0" /> <span className="truncate">Attach file</span>
             </button>
           </div>
         )}
@@ -1735,29 +1773,19 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           >
             <Smile className="size-5" />
           </Button>
+          {/* One "+" replaces the separate media and paperclip buttons — it opens
+              the menu above (Record video / Photo & video / Attach file). */}
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => {
-              // With an in-app recorder available, offer Record vs Library;
-              // otherwise keep the direct library picker.
-              if (videoRecorderSupported()) setAttachMenuOpen((v) => !v);
-              else imageRef.current?.click();
-            }}
-            aria-label="Photo or video"
-            className={attachMenuOpen ? "bg-muted/60" : ""}
+            onClick={() => setAttachMenuOpen((v) => !v)}
+            aria-label={attachMenuOpen ? "Close attach menu" : "Attach media or a file"}
+            title="Attach media or a file"
+            aria-expanded={attachMenuOpen}
+            className={attachMenuOpen ? "bg-muted/60 text-primary" : ""}
           >
-            <ImageIcon className="size-5" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={() => fileRef.current?.click()}
-            aria-label="Attach"
-          >
-            <Paperclip className="size-5" />
+            <Plus className={"size-5 transition-transform" + (attachMenuOpen ? " rotate-45" : "")} />
           </Button>
           {/* Self-destruct toggle (v2.96): off → view-once → 5s → 10s → 30s.
               Applies to the NEXT send (text, media, or voice note).
@@ -2284,6 +2312,95 @@ function MediaLightbox({
 }
 
 /* ────────────────────────────────────────────────────────────── */
+
+/**
+ * Away auto-reply switch, in the Messages header (v2.99.66).
+ *
+ * Owner: "this is the auto reply inside the message. You have it as a feature,
+ * but you should allow the user to enable and disable it. You don't enable it by
+ * default… whenever you enter the message section, give him type of option."
+ *
+ * It is OFF for everyone until switched on — the server treats a NULL column as
+ * off — because it posts a line in your name into a conversation you are not
+ * watching. Optimistic, with rollback, so the switch never lies about its state.
+ */
+function AutoReplyToggle() {
+  const utils = trpc.useUtils();
+  const me = trpc.identity.whoami.useQuery();
+  const on = me.data?.autoReplyEnabled === true;
+  const [open, setOpen] = useState(false);
+  const set = trpc.identity.setAutoReply.useMutation({
+    onMutate: async ({ enabled }) => {
+      const prev = utils.identity.whoami.getData();
+      utils.identity.whoami.setData(undefined, (d) => (d ? { ...d, autoReplyEnabled: enabled } : d));
+      return { prev };
+    },
+    onError: (_e, _v, cxt) => {
+      if (cxt?.prev !== undefined) utils.identity.whoami.setData(undefined, cxt.prev);
+      toast.error("Couldn't change auto-reply. Try again.");
+    },
+    onSuccess: ({ enabled }) => {
+      toast.success(enabled ? "Auto-reply is on while you're away" : "Auto-reply is off");
+    },
+  });
+
+  if (!me.data) return null;
+  return (
+    <>
+      <Button
+        size="icon"
+        variant="ghost"
+        onClick={() => setOpen(true)}
+        aria-label="Message options"
+        title="Message options"
+        className={"size-8 " + (on ? "text-primary" : "text-muted-foreground")}
+      >
+        <StickyNote className="size-5" />
+      </Button>
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent className="max-w-sm rounded-3xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Message options</AlertDialogTitle>
+            <AlertDialogDescription className="sr-only">
+              Turn the away auto-reply on or off.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={on}
+            disabled={set.isPending}
+            onClick={() => set.mutate({ enabled: !on })}
+            className="flex w-full items-start gap-3 rounded-2xl border border-border/60 p-3 text-left active:scale-[0.99] transition-transform"
+          >
+            <span
+              className={
+                "mt-0.5 h-6 w-10 shrink-0 rounded-full p-0.5 transition-colors " +
+                (on ? "bg-primary" : "bg-muted")
+              }
+            >
+              <span
+                className={
+                  "block size-5 rounded-full bg-white transition-transform " + (on ? "translate-x-4" : "")
+                }
+              />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold">Auto-reply when I'm away</span>
+              <span className="block text-xs text-muted-foreground mt-0.5">
+                If someone messages you while you're offline, RELAY replies once to let them know
+                you'll get back to them. Off by default.
+              </span>
+            </span>
+          </button>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Done</AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
 
 function NewMessageDialog() {
   const [, setLocation] = useLocation();

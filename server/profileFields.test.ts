@@ -94,9 +94,20 @@ describe("formatLastSeen", () => {
     const t = new Date("2026-06-27T22:30:00").getTime();
     expect(formatLastSeen(t, base)).toBe("last seen yesterday at 10:30 PM");
   });
-  it("older → on MON D", () => {
+  it("older → on MON D AT the time (v2.99.66)", () => {
+    // Owner screenshot: the dialer preview read "last seen on Jul 23" with no
+    // clock, while today/yesterday already carried one. The time is the part
+    // that distinguishes "this morning" from "3am", so every dated branch has it.
     const t = new Date("2026-06-20T08:00:00").getTime();
-    expect(formatLastSeen(t, base)).toBe("last seen on Jun 20");
+    expect(formatLastSeen(t, base)).toBe("last seen on Jun 20 at 8:00 AM");
+  });
+  it("names the year only when it is not the current one", () => {
+    // "Jun 20" silently reads as this year; being twelve months wrong without
+    // saying so is worse than one extra token.
+    const sameYear = new Date("2026-01-04T19:45:00").getTime();
+    expect(formatLastSeen(sameYear, base)).toBe("last seen on Jan 4 at 7:45 PM");
+    const lastYear = new Date("2025-11-02T06:09:00").getTime();
+    expect(formatLastSeen(lastYear, base)).toBe("last seen on Nov 2, 2025 at 6:09 AM");
   });
   it("empty for invalid timestamps", () => {
     expect(formatLastSeen(0, base)).toBe("");

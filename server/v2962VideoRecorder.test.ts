@@ -11,7 +11,7 @@
  *     so a full clip stays far below the 40 MB upload cap;
  *   - VideoRecordSheet gives live preview → record (timer + auto-stop) →
  *     review with Retake/Use, and ALWAYS releases the camera;
- *   - Messages: the image button becomes a Record/Library chooser; the clip
+ *   - Messages: the composer's "+" menu offers Record video (v2.99.66); the clip
  *     rides the normal attachment flow (caption + disappearing timer apply);
  *   - Status: a Record tab feeds the same composer pipeline (30s story cap).
  */
@@ -71,10 +71,23 @@ describe("VideoRecordSheet (v2.96.2)", () => {
 });
 
 describe("Messages wiring (v2.96.2)", () => {
-  it("the image button opens a Record/Library chooser when the recorder is supported", () => {
-    expect(MESSAGES).toMatch(/if \(videoRecorderSupported\(\)\) setAttachMenuOpen\(\(v\) => !v\);\s*\n\s*else imageRef\.current\?\.click\(\);/);
-    expect(MESSAGES).toMatch(/Record video/);
-    expect(MESSAGES).toMatch(/Photo & video library/);
+  it("the recorder is reachable from the composer's attach menu", () => {
+    // v2.99.66 restructured the composer: the image button and the paperclip
+    // merged into one "+" that always opens this menu (owner asked for the extra
+    // input width), so the old "recorder? menu : straight to library" branch is
+    // gone. What must stay true is that a supported recorder is OFFERED there —
+    // and that it is gated on support, since an unsupported browser showing a
+    // dead "Record video" row is the regression this test exists to catch.
+    expect(MESSAGES).toMatch(/onClick=\{\(\) => setAttachMenuOpen\(\(v\) => !v\)\}/);
+    const menu = MESSAGES.slice(
+      MESSAGES.indexOf("{attachMenuOpen && ("),
+      MESSAGES.indexOf("{expire !== null && (")
+    );
+    expect(menu).toMatch(/videoRecorderSupported\(\) && \(/);
+    expect(menu).toMatch(/setVideoRecOpen\(true\)/);
+    expect(menu).toMatch(/Record video/);
+    expect(menu).toMatch(/Photo &amp; video/);
+    expect(menu).toMatch(/Attach file/);
   });
   it("a recorded clip rides the NORMAL attachment flow (caption + expire timer apply)", () => {
     expect(MESSAGES).toMatch(/maxMs=\{60_000\}/);

@@ -190,6 +190,19 @@ export const identities = mysqlTable(
     /** Given/family name captured at passwordless registration (v2.68). */
     firstName: varchar("firstName", { length: 64 }),
     lastName: varchar("lastName", { length: 64 }),
+    /**
+     * Away auto-reply, OPT-IN (v2.99.66). When a 1:1 message arrives while this
+     * identity is offline, RELAY can post one "…is away right now" line back so
+     * the sender knows not to wait. It used to fire for everyone unconditionally;
+     * the owner asked for it to be the user's choice ("you should allow the user
+     * to enable and disable it. You don't enable it by default").
+     *
+     * NULL / false = off, which is the default for existing rows too — the
+     * behaviour change is intentional, since nobody opted into it. Lives on the
+     * IDENTITY rather than `users` so a guest can set it and so it travels with
+     * the person through registration and renumbering.
+     */
+    autoReplyEnabled: boolean("autoReplyEnabled"),
     /** High-water mark for missed-call acknowledgement: missed/declined calls
      *  newer than this are "unseen" and drive the landing popup + badges. Bumped
      *  to now() when the user reviews their missed calls. Additive + nullable. */
@@ -198,8 +211,8 @@ export const identities = mysqlTable(
      *  before this are hidden from THIS identity's History tab (per-user soft
      *  clear — the other party keeps their own log). Additive + nullable. */
     historyClearedAt: timestamp("historyClearedAt"),
-    /** Default audience for statuses I post: "contacts" | "everyone" (v2.99.55).
-     *  NULL = "contacts", which is what every pre-v2.99.55 identity was posting
+    /** Default audience for statuses I post: "contacts" | "everyone" (v2.99.66).
+     *  NULL = "contacts", which is what every pre-v2.99.66 identity was posting
      *  under, so adding the column changes nobody's visibility. This is only the
      *  DEFAULT for new posts — each status stamps its own `statuses.audience`, so
      *  changing this never reaches back into something already published. */
@@ -445,10 +458,10 @@ export const statuses = mysqlTable(
     /** Audio/video duration in ms (drives the story auto-advance timer). */
     durationMs: int("durationMs"),
     /**
-     * Who may watch THIS post: "contacts" | "everyone" (v2.99.55). Stamped at
+     * Who may watch THIS post: "contacts" | "everyone" (v2.99.66). Stamped at
      * insert from the poster's `identities.statusAudience` default, so later
      * changing that default can never retroactively widen an already-published
-     * status. NULL = "contacts" (every pre-v2.99.55 row, which was posted under
+     * status. NULL = "contacts" (every pre-v2.99.66 row, which was posted under
      * the contacts-only rule).
      */
     audience: varchar("audience", { length: 16 }),

@@ -127,7 +127,17 @@ export function effectiveStatus(isOnline: boolean, override: StatusOverride): Ef
  *   < 60m         → "last seen N minutes ago"
  *   same day      → "last seen today at H:MM AM"
  *   previous day  → "last seen yesterday at H:MM AM"
- *   older         → "last seen on MON D"
+ *   older         → "last seen on MON D at H:MM AM"
+ *   older, other year → "last seen on MON D, YYYY at H:MM AM"
+ *
+ * v2.99.66 (owner screenshot of the dialer preview): the older-than-yesterday
+ * branch used to stop at the date — "last seen on Jul 23" — while the same-day
+ * and yesterday branches already carried the clock. Owner: "it shows you last
+ * seen on this, but doesn't show you the time and the minutes." The time is the
+ * part that tells you whether they were here this morning or at 3am, so it is
+ * now on EVERY dated branch. The year is added only when it differs from now,
+ * because "Jul 23" reads as this year and would otherwise be wrong by twelve
+ * months without saying so.
  */
 export function formatLastSeen(lastSeenMs: number, nowMs: number): string {
   if (!Number.isFinite(lastSeenMs) || lastSeenMs <= 0) return "";
@@ -153,7 +163,9 @@ export function formatLastSeen(lastSeenMs: number, nowMs: number): string {
     then.getDate() === yest.getDate();
   if (isYesterday) return `last seen yesterday at ${time}`;
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `last seen on ${months[then.getMonth()]} ${then.getDate()}`;
+  const day = `${months[then.getMonth()]} ${then.getDate()}`;
+  const year = then.getFullYear() === now.getFullYear() ? "" : `, ${then.getFullYear()}`;
+  return `last seen on ${day}${year} at ${time}`;
 }
 
 function formatClock(d: Date): string {
