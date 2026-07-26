@@ -153,7 +153,13 @@ describe("3 — live counters on the sign-in screen", () => {
       expect(LIVESTATS, `${label} is shown`).toContain(label);
     }
     expect(LIVESTATS).toMatch(/live: true/);
-    expect(LIVESTATS).toMatch(/refetchInterval: 15_000/);
+    // v2.99.71 REWROTE this half rather than relaxing it. It pinned
+    // `refetchInterval: 15_000` — the polling that has now been replaced by a pushed
+    // SSE feed, which is the whole point of that release. The durable invariant is
+    // that the figures come from the SHARED live source, not the cadence of a poll
+    // that no longer exists here.
+    expect(LIVESTATS).toMatch(/const d = useLiveStats\(\);/);
+    expect(LIVESTATS).not.toMatch(/refetchInterval/);
   });
 
   it("renders nothing rather than a wall of zeros when the query has no data", () => {

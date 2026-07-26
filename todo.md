@@ -7557,6 +7557,156 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.73 — voice playback that moves, recording you can see and undo, dated messages, instant stats (2026-07-26)
+- [x] **(0) "MAKE IT LIVE, NOT AFTER 30 SECONDS."** v2.99.71 replaced the 30s poll with a 2s push, which is
+      close but still tick-bound — signing in could take two seconds to show. Now every online/offline
+      TRANSITION pokes the feed directly (`pokeStatsFeed`), so the figure moves in ~150ms. The poke is
+      COALESCED, and that is load-bearing: presence writes genuinely arrive in bursts (a heartbeat sweep, a
+      call ending, the reaper), and one database read per event would be far worse than the polling this
+      replaced — 50 simultaneous sign-ins cost one read. A poke only ever re-reads `onlineNow`, never the
+      full-table counts, and is a no-op when nobody is watching. The notify lives INSIDE
+      `markOnline`/`markOffline` rather than at their four call sites, because forgetting one is the exact
+      class of bug this codebase keeps re-learning; it is registered as a HOOK (`setPresenceChangeHook`)
+      because `statsFeed` already imports `v2db` and a second edge would be a cycle. A mere heartbeat from
+      someone already online deliberately does NOT poke — otherwise every open tab costs a read every 30s.
+- [x] **(1) THE VOICE PLAYER'S CONTROL NEVER MOVED** (owner: *"when you click to play, the sound is played,
+      but the control doesn't show that it's moving, which second you reach. It only stays there like it's
+      not played."*). TWO REAL BUGS, both visible in the screenshot as a scrubber pinned at the start with
+      "0:00" beside "· · ·":
+      - **THE DURATION PROBE DESTROYED PLAYBACK.** MediaRecorder blobs report `duration === Infinity` until
+        seeked past the end, and the workaround ran from `loadedmetadata` — which fires just AFTER the click
+        that started playback. So pressing play seeked the element to `Number.MAX_SAFE_INTEGER`, which clamps
+        to the end, fires `ended`, and resets the clock to 0: audio you had already heard start, with a
+        control frozen at zero. The probe now never runs while playing (it waits for a pause) and uses the
+        `1e101` form the codebase's own `readMediaDurationMs` already uses — MAX_SAFE_INTEGER is refused
+        outright by several engines, which is also why the total stayed "· · ·".
+      - **THE DURATION WAS ALREADY KNOWN AND WENT UNREAD.** Every voice note recorded in the app stores its
+        real length in `attachments.durationMs`, and `messages.list` already hands the whole attachment row
+        to the client. Seeding from it means the common case needs NO probe, shows a real total immediately,
+        and the scrubber is seekable before the first play.
+      Also: the clock is now driven by rAF while playing instead of `timeupdate`, which browsers fire about
+      four times a second — enough to look like a control that barely moves on a short note.
+- [x] **(2) RECORDING SHOWED NOTHING AND COULD ONLY BE SENT** (owner: *"when you record the voice, [it]
+      doesn't show that you are talking. Like, it just turned red, and there is no wave when you talk… and
+      then you need to click on the red to send, or there's no choice to delete the voice, or you can pause
+      the voice, or you cancel the voice and you want to re-record again."*). All of it was true: recording
+      replaced the mic button with a red square and Stop was the ONLY exit — which also sent. A misfire, a
+      cough or a change of mind had no way out except sending the note and unsending it afterwards.
+      The composer row now becomes a recording bar: **discard · live waveform · elapsed clock · pause/resume
+      · send**. THE WAVE IS REAL — RMS off a WebAudio analyser tapped from the SAME MediaStream the recorder
+      is encoding, so the bars move because the microphone is actually hearing you; a decorative animation
+      would have looked identical while telling you nothing, which is the complaint. RMS rather than peak,
+      because a peak meter pins to the top on any transient and stops conveying speech. The analyser is
+      deliberately NOT connected to `ac.destination` (that is a feedback loop), degrades to 0 rather than
+      failing the recording, and is released on both reachable exit paths.
+      PAUSED TIME IS EXCLUDED FROM THE DURATION — a note paused for a minute would otherwise claim to be a
+      minute longer than its audio and every player would show a bogus total. The UI reads the paused state
+      BACK from the recorder rather than assuming, because an engine without `MediaRecorder.pause` leaves it
+      running and the bar must not claim otherwise. Discard calls `cancel()`, which resolves `done` with
+      null, so the note is genuinely gone rather than sent-and-unsent.
+      The 30 bars and the clock are written IMPERATIVELY from one rAF loop sampled at ~20Hz — a state update
+      per frame would re-render the whole thread 60 times a second, the mistake the landing page had to be
+      rescued from in v2.99.67.
+- [x] **(3) NO DATE ON A MESSAGE** (owner: *"there is no time and date for each message when it's sent."*).
+      Subtler than it sounds: the TIME was already there, the DATE was not. The thread draws a day separator
+      but only from the first one onward, so every message ABOVE it carried a bare "12:09 PM" with nothing
+      saying which day — the owner's screenshot shows exactly that, three "12:09 PM" bubbles sitting above a
+      "Today" divider. Today stays time-only (repeating today's date on every bubble is noise); anything
+      older names the day, and anything from another year names the year too, because "Jul 23" silently
+      reads as this year and being twelve months wrong without saying so is worse than one extra token —
+      the same rule as `formatLastSeen` (v2.99.66), deliberately. The comparison is the whole date, not just
+      the day-of-month, or "the 26th of last month" would render as today.
+- [x] Tests: `client/src/pages/app/voiceAndStamps.test.ts` (20) + `statsFeed.test.ts` 14 -> 19. ALL 12
+      messaging tripwires and 4 of 5 stats tripwires verified by MUTATION.
+- [x] THREE OF MY OWN TEST WEAKNESSES FOUND BY THAT MUTATION RUN AND FIXED, rather than counted as passes:
+      (a) the rAF assertion matched the self-re-arm INSIDE `tick()`, so deleting the kick-off — which stops
+      the clock dead — left it green; it now requires BOTH occurrences. (b) The timestamp test asserted the
+      day/year FORMATTERS, which left `return time;` passing — the very bug being fixed; it now asserts the
+      returned shape. (c) A new poke test claimed in a comment to slow the tick down so only the poke could
+      be responsible, and then did not — so a coincidental tick would have satisfied it; the tick is now
+      400ms against a 150ms coalesce and the test asserts the LATENCY.
+- [x] ONE MUTATION THAT DID NOT BITE, recorded rather than hidden: removing the audience check from
+      `pokeStatsFeed` breaks nothing, because `refresh()` also returns early on an empty client set. The
+      property is defended twice; the check is still worth keeping (presence writes happen whether or not
+      anyone is watching, so without it every burst allocates a timer) but the invariant rests on
+      `refresh()`, and the test now says so and pins that guard instead.
+- [x] TWO PRE-EXISTING v2.96 PINS REWRITTEN TO THE STRONGER INVARIANT rather than relaxed: one asserted the
+      exact `<VoiceNotePlayer url mine />` prop list, which legitimately grew; the other pinned
+      `duration === Infinity` plus a `MAX_SAFE_INTEGER` seek — i.e. it pinned THE BUG as the cure. It now
+      asserts the quirk is still handled AND that it is handled without touching a playing element.
+- [x] Suite 2237 passed / 1 skipped (2238); check and build green. No schema change, no new dependency.
+      (Measured AFTER rebasing onto main's v2.99.71 TURN-checker work, which landed while this branch
+      was open and took that number — hence the renumber to .72/.73. My own pre-rebase figures were
+      2204 and 2229.)
+
+## v2.99.72 — the five live figures are PUSHED, so they move while you watch (2026-07-26)
+- [x] OWNER: *"the statistics of number of users, active users, messages, calls — the one on the main page
+      and on the login page — it should be dynamic. While I'm seeing the page, if somebody logs in, it will
+      automatically update. No need for me to refresh the page. These numbers are read from the database,
+      for all five."*
+- [x] WHAT WAS ALREADY TRUE, said plainly rather than quietly re-fixed: all five figures WERE already live
+      database reads (`getPublicStats` runs six `COUNT(*)`s with no cache anywhere), and both surfaces
+      already refreshed without a reload. So the ask was not broken — it was SLOW, and it scaled badly.
+- [x] WHAT WAS ACTUALLY WRONG. The landing page polled every **30s** with `refetchOnWindowFocus: false`,
+      so a visitor could sit looking at figures half a minute stale AND returning to the tab did not
+      refresh them — which is exactly the "I have to refresh" experience being reported. The sign-in
+      screen polled at 15s. Worse, polling scales the wrong way: EVERY viewer independently ran six
+      `COUNT(*)`s, one of them over `messages`, the largest table in the schema.
+- [x] THE FIX: one shared computation per instance, pushed to every viewer over SSE
+      (`server/statsFeed.ts`, `GET /api/stats/stream`). Ten thousand people watching the landing page now
+      cost what one person costs. Public and unauthenticated by design, exactly like the `stats.public`
+      procedure it mirrors — the landing page has no identity, and the payload is aggregate counts and
+      nothing else (a test asserts the frame's key set: no name, no number, no identity ever).
+- [x] TWO CADENCES, because one would have been indefensible. `onlineNow` is the figure the owner actually
+      named — it is the one that moves when somebody signs in — and it is CHEAP: `presence` is small and
+      carries `presence_isOnline_idx`, so counting it is an index scan. It refreshes every **2s** via a new
+      `getOnlineCount()`. The other four barely move and are expensive, so they refresh every **20s**.
+      Recomputing a `COUNT(*)` over `messages` every two seconds to watch a number that changes hourly
+      would be wasteful in a way no user would ever see.
+- [x] NOTHING RUNS WHEN NOBODY IS WATCHING. The timers start on the first subscriber and stop on the last,
+      so an idle instance does zero database work — which is the property the old per-visitor polling had,
+      and it would have been easy to lose. Two tests cover it (timers off at zero subscribers; no further
+      reads after the last viewer leaves), and the mutation run confirms both bite.
+- [x] FRAMES ONLY ON CHANGE. A quiet network costs one heartbeat comment every 25s and nothing else.
+- [x] IT DEGRADES RATHER THAN MISLEADS. `getOnlineCount` returns **null, never 0**, on any trouble, and the
+      feed then holds the previous snapshot — "0 people online" is a visible claim on the front page and a
+      query blip must never be allowed to make it. A refused client is answered as a STREAM carrying a
+      `retry:` directive rather than a bare JSON 429, because an EventSource ignores the body and reconnects
+      on its own schedule: without the directive, the clients being refused become the reconnect storm.
+- [x] THE CLIENT KEEPS A BACKSTOP POLL, and that is deliberate. A proxy can hold an `text/event-stream`
+      response open while buffering it, which from the browser's side is indistinguishable from a quiet
+      network. So `client/src/app/useLiveStats.ts` polls every 15s until the stream proves itself and every
+      120s after — never zero. It also does NOT hand-roll a reconnect loop on top of EventSource's own,
+      which is how you end up with two overlapping streams per tab. Renders `null` rather than five zeros.
+- [x] BOTH SURFACES NOW READ THE SAME HOOK (the landing page's raw-DOM strip via its imperative `put()`
+      effect, the sign-in screen's `LiveStats` directly), so neither can be fresher than the other — the
+      previous 30s-vs-15s split was exactly that kind of silent drift.
+- [x] Tests: `server/statsFeed.test.ts` (14) drive the REAL Express route over a REAL socket, because a
+      source pin cannot tell you whether a stream actually delivers a second frame when a number moves,
+      and that is the entire feature. They prove: a new viewer is seeded immediately, a change pushes a
+      new frame, an unchanged network pushes nothing, TWO viewers are served from ONE read, the timers
+      start and stop with the audience, and a failed read holds the last good value instead of zeroing it.
+      All 8 tripwires verified by MUTATION (change-gate removed, timers leaked, null read reported as 0,
+      seed removed, fast tick made to recompute everything, bare 429, landing reverted to its own poll,
+      hook's backstop dropped), each reverted from a byte-exact backup.
+- [x] TWO HARNESS BUGS OF MY OWN, found and fixed rather than shipped as results: I first waited 1200ms for
+      a 2000ms tick, so "the cheap figure is re-read often" failed for lack of a tick rather than for the
+      reason it was written; and the feed's snapshot is MODULE state, so a later test opened against the
+      previous test's value and the feed correctly pushed a corrective frame, which my "sends nothing when
+      unchanged" assertion counted as noise. The cadences are now overridable by env (clamped, so a bad
+      value cannot make a busy loop) and the quiet window starts only once the feed has settled. Re-run
+      three times to confirm it is not flaky.
+- [x] TWO PRE-EXISTING PINS REWRITTEN TO THE STRONGER INVARIANT rather than relaxed — both asserted the
+      POLLING this release removed. `Home.test.ts`'s live-stats pin asserted `trpc.stats.public.useQuery` +
+      `refetchInterval`; it now asserts the shared hook, all five keys, and that the imperative DOM writes
+      still run keyed on the snapshot. `ownerUiBatch2.test.ts` pinned `refetchInterval: 15_000` on the
+      sign-in strip; it now asserts the shared hook and that no poll interval remains there at all.
+- [x] The ES5 `Set`-iteration trap (TS2802) bit again in `broadcast()` and was caught by `pnpm check` —
+      `pnpm build` uses esbuild and does not typecheck, which is precisely how it reached CI in v2.99.49.
+      Noted in-source next to the `forEach` so the next person does not reintroduce it.
+- [x] NO OPS WORK: no env var required, no schema change, no new dependency. Suite 2237 passed / 1 skipped
+      (2238) after the rebase onto main's v2.99.71; check and build green.
+
 ## v2.99.70 — the group grid reads as a live call; the orphan recovery can actually be run (2026-07-26)
 - [x] THE GROUP-CALL TILES (owner, asked TWICE: *"I told you before to edit it to make it animated like
       people is talk… their lips is moving"*). WHAT IS HONESTLY POSSIBLE, SAID PLAINLY FIRST: lips cannot

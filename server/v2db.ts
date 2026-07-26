@@ -1252,6 +1252,30 @@ export async function regenerateIdentityNumber(
 
 /* ── presence ─────────────────────────────────────────────────── */
 
+/**
+ * Called whenever an identity's ONLINE state actually flips (v2.99.72).
+ *
+ * Set by the live-stats feed so "Online now" moves the moment somebody signs in
+ * rather than on the next tick. Registered as a HOOK rather than an import because
+ * `statsFeed` already imports this module, and a second edge would be a cycle.
+ *
+ * It lives INSIDE `markOnline`/`markOffline` rather than at their call sites — there
+ * are four of those today and forgetting one is precisely the class of bug this
+ * codebase keeps re-learning, so every present and future caller is covered by
+ * construction.
+ */
+let presenceChangeHook: (() => void) | null = null;
+export function setPresenceChangeHook(fn: (() => void) | null): void {
+  presenceChangeHook = fn;
+}
+function notifyPresenceChanged(): void {
+  try {
+    presenceChangeHook?.();
+  } catch {
+    // A decoration on a marketing page must never be able to fail a presence write.
+  }
+}
+
 export async function markOnline(
   identityId: number,
   socketSessionId: string | null
@@ -1282,6 +1306,10 @@ export async function markOnline(
         socketSessionId,
       },
     });
+  // Only a real TRANSITION pokes the live-stats feed — a heartbeat from someone
+  // already online changes no number, and poking on every beat would mean a database
+  // read every 30s per open tab, which is the cost this feed exists to avoid.
+  if (!wasOnline) notifyPresenceChanged();
   return { becameOnline: !wasOnline };
 }
 
@@ -1293,6 +1321,9 @@ export async function markOffline(identityId: number) {
     .insert(presence)
     .values({ identityId, isOnline: false, lastSeenAt: now })
     .onDuplicateKeyUpdate({ set: { isOnline: false, lastSeenAt: now } });
+  // Unconditional here: unlike markOnline there is no cheap prior read telling us
+  // whether this was already offline, and the feed coalesces pokes anyway.
+  notifyPresenceChanged();
 }
 
 /**
@@ -4233,6 +4264,34 @@ export interface PublicStats {
   onlineNow: number;
   /** Messages ever sent (v2.99.66 — owner asked for it beside the others). */
   messagesSent: number;
+}
+
+/**
+ * Just the online count (v2.99.71) — the one live figure worth re-reading often.
+ *
+ * The pushed stats feed recomputes this every 2s while anyone is watching, and it is
+ * cheap enough to justify that: `presence` is small and carries
+ * `presence_isOnline_idx`, so this is an index scan, not the full-table COUNT(*) that
+ * `messagesSent` requires. Re-running the whole of `getPublicStats` at that cadence
+ * would mean counting the largest table in the schema every two seconds to watch a
+ * number that changes hourly.
+ *
+ * Returns null rather than 0 on any trouble: "0 people online" is a visible claim on
+ * the front page, and a query blip must never be allowed to make it.
+ */
+export async function getOnlineCount(): Promise<number | null> {
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    const [row] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(presence)
+      .where(eq(presence.isOnline, true));
+    const n = Number(row?.n ?? NaN);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function getPublicStats(): Promise<PublicStats> {

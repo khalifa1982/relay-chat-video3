@@ -15,6 +15,7 @@ import { attachRelay } from "../relay";
 import { registerV2Upload, uploadRateGate } from "../v2upload";
 import { registerV2Events, publishToIdentity, publishPresenceTo } from "../v2events";
 import { registerV2Offline } from "../v2offline";
+import { registerStatsFeed } from "../statsFeed";
 import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, reapStaleSessions, reapUnclaimedReservations, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy, getPresenceAudienceIds,
   claimMissedCallEmail,
   releaseMissedCallEmailClaim,
@@ -421,6 +422,11 @@ async function startServer() {
   // v2.0 push channel — SSE that routes message/presence/read events
   // to the right identity. Production gateway is SSE-friendly.
   registerV2Events(app);
+  // Live network stats, PUSHED (v2.99.71). Public + aggregate-only, so it needs no
+  // identity — the landing page has none. One shared computation per instance feeds
+  // every viewer, which is strictly cheaper than the per-visitor polling it replaces,
+  // and its timers only run while somebody is actually watching.
+  registerStatsFeed(app);
   // Instant offline presence (v2.89): the sendBeacon target fired on
   // pagehide/tab-hide so contacts' LEDs flip grey immediately instead of
   // waiting out the 2-minute reaper (which stays as the backstop).
