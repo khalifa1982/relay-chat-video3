@@ -30,6 +30,8 @@
  */
 import net from "node:net";
 import tls from "node:tls";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import dgram from "node:dgram";
 import crypto from "node:crypto";
 
@@ -208,26 +210,56 @@ async function checkEndpoint(ep, secret, user) {
   return out;
 }
 
-/* ── endpoints, derived exactly as the server advertises them ───────────── */
-const secret = process.env.TURN_SECRET || "";
-const hosts = (process.env.TURN_HOSTS || process.env.TURN_HOST || "")
-  .split(/[\s,]+/).map((h) => h.trim()).filter(Boolean).filter((h, i, a) => a.indexOf(h) === i);
-const PORT = process.env.TURN_PORT || "3478";
-const ALT = process.env.TURN_TCP_ALT_PORT || "443";
-const TLSP = process.env.TURN_TLS_PORT || "5349";
-const useTls = process.env.TURN_TLS === "1";
+/* ── endpoints, derived exactly as the server advertises them ─────────────
+   EXPORTED and pure so a test can compare this set against what iceServers()
+   in server/relay.ts actually hands clients. The two drifted once already:
+   v2.99.65 taught the SERVER that TURN_TCP_ALT_PORT=off suppresses the
+   plaintext alt-port candidate, and this checker was never told — so with `off`
+   set it probed port `+"off"` = NaN and reported a DOWN endpoint the fleet does
+   not advertise, a permanent false failure on every relay, which is exactly the
+   noise that hides a real one. Keep the two in agreement. */
+export function deriveTurnEndpoints(env = process.env) {
+  const secret = env.TURN_SECRET || "";
+  const hosts = (env.TURN_HOSTS || env.TURN_HOST || "")
+    .split(/[\s,]+/).map((h) => h.trim()).filter(Boolean).filter((h, i, a) => a.indexOf(h) === i);
+  const PORT = env.TURN_PORT || "3478";
+  // Same rule as iceServers() in server/relay.ts.
+  const altRaw = env.TURN_TCP_ALT_PORT ?? "443";
+  const altOff = /^(off|none|0|false)$/i.test(altRaw.trim()) || altRaw.trim() === "";
+  const ALT = altOff ? "" : altRaw.trim();
+  const TLSP = env.TURN_TLS_PORT || "5349";
+  const useTls = env.TURN_TLS === "1";
+
+  const eps = [];
+  for (const host of hosts) {
+    eps.push({ host, port: +PORT, transport: "udp", scheme: "turn" });
+    if (!altOff) eps.push({ host, port: +ALT, transport: "tcp", scheme: "turn" });
+    eps.push({ host, port: +PORT, transport: "tcp", scheme: "turn" });
+    if (useTls) eps.push({ host, port: +TLSP, transport: "tcp", scheme: "turns" });
+  }
+  return { secret, hosts, eps };
+}
+
+/** The `turns:`/`turn:` URL each endpoint corresponds to — the exact string the
+ *  server puts in an ICE server list, so the comparison is like-for-like. */
+export function endpointToUrl(ep) {
+  return `${ep.scheme}:${ep.host}:${ep.port}?transport=${ep.transport}`;
+}
+
+/* ── main ─────────────────────────────────────────────────────────────────
+   Guarded so `server/turnCheckParity.test.ts` can import the two pure exports
+   above and compare them against iceServers(). Without this, importing the
+   module would run a health check and then process.exit(0), taking the test
+   runner with it. */
+const IS_MAIN =
+  !!process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (IS_MAIN) {
+const { secret, hosts, eps } = deriveTurnEndpoints();
 
 if (!secret || hosts.length === 0) {
   console.log("TURN is not configured on this host (TURN_SECRET / TURN_HOSTS unset) — nothing to check.");
   process.exit(0);
-}
-
-const eps = [];
-for (const host of hosts) {
-  eps.push({ host, port: +PORT, transport: "udp", scheme: "turn" });
-  eps.push({ host, port: +ALT, transport: "tcp", scheme: "turn" });
-  eps.push({ host, port: +PORT, transport: "tcp", scheme: "turn" });
-  if (useTls) eps.push({ host, port: +TLSP, transport: "tcp", scheme: "turns" });
 }
 
 const results = [];
@@ -259,3 +291,4 @@ if (bad.length) {
   process.exit(1);
 }
 console.log("\nAll endpoints alive and accepting our credentials.");
+} // end IS_MAIN

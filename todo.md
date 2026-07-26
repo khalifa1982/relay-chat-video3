@@ -7951,3 +7951,47 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
 - [ ] OPERATOR: nothing required — `RELAY_CLUSTER=1` + `REDIS_URL` are already set on the fleet, and every
       new key self-expires. The manual failover test is in `docs-cross-instance-signaling.md`: kill the
       LEADER mid-call and the call should survive.
+
+## v2.99.71 — the TURN health checker disagreed with the server about what is advertised (2026-07-26)
+- [x] CONTEXT: the owner completed the TURN work and reported it tested. Read back from the LIVE
+      `/api/relay/ice` rather than taken on trust, the fleet's relay list is now **hostname-based with TLS
+      on 443**: `turn:{turn,turn2}.your-chat.io:3478?transport=udp` + `:3478?transport=tcp` +
+      `turns:...:443?transport=tcp`, 6 URLs over 2 relays. Hostnames (not the old raw IPs) because a
+      public TLS cert cannot be issued for an IP; `turns:` on 443 because that is indistinguishable from
+      HTTPS and survives the DPI that was dropping plaintext TURN; and the plaintext `turn:...:443` form
+      is ABSENT, which is the observable proof that v2.99.65's `TURN_TCP_ALT_PORT=off` is live and doing
+      its job. That closes the last owner-only item from v2.99.63–65.
+- [x] BUG FOUND IN MY OWN TOOLING, in the same breath: `scripts/turn-check.mjs` never learned the `off`
+      rule. `const ALT = process.env.TURN_TCP_ALT_PORT || "443"` then `port: +ALT` — with `off` set that
+      is `+"off"` = **NaN**, so the checker probed a third endpoint per relay that the fleet does not
+      advertise and could never answer. Every future health check would have reported 2 permanently DOWN
+      endpoints, and a false failure is precisely what hides a real one. The `off` parsing is now the
+      SAME expression as `iceServers()` uses, and the endpoint is skipped rather than probed at NaN.
+- [x] THE REAL FIX IS THE TEST, because this is the v2.99.50 class — two gates that disagree about the
+      same rule, in different files and different languages (the checker is plain `.mjs` run by bare
+      `node` on an EC2 instance from the release tar; `iceServers()` is TypeScript in the server bundle),
+      so no string comparison would catch the NEXT divergence. `deriveTurnEndpoints` + `endpointToUrl`
+      are now exported from the script and `server/turnCheckParity.test.ts` compares their ACTUAL OUTPUT
+      against `iceServers()` over 7 env shapes — including the live fleet's — asserting the two sets are
+      EQUAL. Verified by mutation: reinstating the unconditional push fails 3 of the 9 tests.
+- [x] The script's main body is now guarded by a real run-as-main check (`fileURLToPath(import.meta.url)`
+      vs `path.resolve(process.argv[1])`) so importing it for the test is inert — without that, the
+      import ran a health check and then `process.exit(0)`, taking the test runner with it. Confirmed
+      both ways: the import yields two functions and prints nothing, and `node scripts/turn-check.mjs`
+      still runs a real check.
+- [x] Triggered the in-VPC `aws-ops.yml verify` (the only place an authenticated TURN Allocate can be
+      measured — the runner is outside the VPC and this sandbox's proxy answers :3478/:5349 with ASCII
+      "HTTP/1.1", the trap that produced a false 0/3-relays-dead report in v2.99.62). 2198 tests.
+- [x] LIVE EVIDENCE from the in-VPC run (30193640103), which independently confirmed BOTH halves:
+      every real endpoint allocates — `turn:turn.your-chat.io:3478 udp` OK relayed port 61660,
+      `:3478 tcp` OK 51267, **`turns:turn.your-chat.io:443 tcp` OK 58067**, and the same three on
+      turn2 (55678 / 54591 / **65319**). So TLS-on-443 WORKS on both relays, and because the check is
+      an authenticated Allocate rather than a ping it also proves both relays share one
+      `static-auth-secret`. That is the v2.99.63 item CLOSED with measurement, not assertion.
+      Meanwhile the run printed, verbatim, the bug this release fixes:
+      `turn:turn.your-chat.io:NaN tcp  DOWN  connect: Port should be >= 0 and < 65536. Received type
+      number (NaN).` on BOTH relays, giving `TURN_CHECK_EXIT=1` and "2/8 endpoint(s) NOT usable as a
+      relay" — a wholly FALSE failure. After this fix the checker derives 6 endpoints, not 8, and the
+      run should exit 0. NOTE the step deliberately echoes the script's exit code instead of
+      propagating it (`verify` is a status report and must not mask the rest of the fleet report), so
+      the step going green is NOT evidence of relay health — the per-endpoint lines are.
