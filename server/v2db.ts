@@ -1343,7 +1343,10 @@ export async function regenerateIdentityNumber(
   if (!db) throw new Error("database unavailable");
   const id = await getIdentityById(identityId);
   if (!id) return null;
-  const oldNumber = id.number;
+  // The PRE-FLIGHT snapshot. Used for the no-op check and the budget decisions
+  // below, then REFRESHED inside the transaction under a row lock — see there for
+  // why the pre-flight value cannot be the propagation key (v2.99.81).
+  let oldNumber = id.number;
   let newNumber: string;
   if (desiredNumber !== undefined) {
     const want = normalizeDesiredNumber(desiredNumber);
@@ -1372,6 +1375,36 @@ export async function regenerateIdentityNumber(
   // this person — a split-brain the caller never finds out about (the function
   // still returned success). A transaction makes it all-or-nothing.
   await db.transaction(async (tx) => {
+    // RE-READ THE OLD NUMBER UNDER A ROW LOCK (v2.99.81).
+    //
+    // The pre-flight read above happens up to three DB round-trips before this
+    // transaction opens (`allocateNumber` alone does two SELECTs plus a ledger
+    // insert, retried up to 40x). Two concurrent renumbers of the same identity
+    // therefore both captured the SAME `oldNumber`; the loser's UPDATE below blocks
+    // on the winner's row lock, and under REPEATABLE READ its read view forms at
+    // the first consistent read — the contacts SELECT — which runs AFTER the winner
+    // committed. So the loser propagated against a number that no longer existed,
+    // matched nothing, and left every saver's contact row stranded on the winner's
+    // number: a number nobody holds and never will, because the ledger is
+    // monotonic. That is permanent and self-heals nowhere, and because
+    // `isNumberBlockedBy` keys on `contacts.number`, it also SHEDS a block the
+    // renumbering person was under — the exact invariant the registry promises
+    // ("a block placed on your old number FOLLOWS you").
+    //
+    // A locking SELECT, deliberately not a second writer: this file must contain
+    // exactly ONE writer of `identities.number`, which is what stops a parallel
+    // implementation from skipping propagation.
+    const [cur] = await tx
+      .select({ number: identities.number })
+      .from(identities)
+      .where(eq(identities.id, identityId))
+      .for("update");
+    if (!cur) throw new Error("identity-gone");
+    oldNumber = cur.number;
+    // A racer may already have landed us on exactly this number (two identical
+    // chosen-number requests). Nothing to do, and propagating with
+    // oldNumber === newNumber would delete rows it should keep.
+    if (oldNumber === newNumber) return;
     // Point the identity at the new number first (unique index guarantees it's free).
     await tx.update(identities).set({ number: newNumber }).where(eq(identities.id, identityId));
     // Propagate to contacts. Fetch the rows touching either number, plan, apply.
@@ -1454,6 +1487,11 @@ export async function claimIdentityNumber(
     // re-checks that it is absent from both number tables, so even here it cannot
     // un-reserve one that is genuinely bound.
     await releaseUnusedNumberReservation(want).catch(() => {});
+    // The identity vanished between the pre-flight read and the locking re-read
+    // inside the transaction (v2.99.81) — a deleted account, or an Adopt-and-Retire
+    // running concurrently. Report it as what it is rather than as a fault; the
+    // release above is correct, because this call really did hold the reservation.
+    if (msg === "identity-gone") return { ok: false, reason: "not-found" };
     // A duplicate-key failure inside the transaction means somebody bound the
     // number between our check and our write. That is "taken", not a fault — and
     // the row that won is precisely why the release above is a no-op.

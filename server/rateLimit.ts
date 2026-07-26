@@ -22,8 +22,21 @@ export interface RateLimiterOptions {
 }
 
 export interface RateLimiter {
-  /** Consume one token for `key`. Returns true if allowed, false if throttled. */
-  allow(key: string, now: number): boolean;
+  /**
+   * Consume `cost` tokens for `key`. Returns true if allowed, false if throttled.
+   *
+   * `cost` DEFAULTS TO 1, and that default is load-bearing: this limiter backs the
+   * directory gate, the OTP gate, the status gate, the guest-mint gate, the upload
+   * buckets, the storage proxy and the signaling flood guard, and every one of
+   * those call sites passes two arguments. Making the cost mandatory would change
+   * all of them at once (v2.99.81).
+   *
+   * A cost exists because some endpoints do N times the work of others for one
+   * call — `directory.presenceMany` resolves up to 100 numbers per request, so at
+   * a flat one token per call its enumeration throttle was 100x weaker than
+   * `directory.lookup`'s.
+   */
+  allow(key: string, now: number, cost?: number): boolean;
   /** Drop buckets idle longer than `maxIdleMs` so the map can't grow unbounded. */
   sweep(now: number, maxIdleMs: number): void;
   /** Current number of tracked keys (for tests/diagnostics). */
@@ -36,7 +49,11 @@ export function createRateLimiter(opts: RateLimiterOptions): RateLimiter {
   const buckets = new Map<string, TokenBucket>();
 
   return {
-    allow(key, now) {
+    allow(key, now, cost = 1) {
+      // A cost below 1 would let an unbounded number of calls through; above
+      // capacity it could never succeed even on a full bucket, which reads as a
+      // permanently broken endpoint rather than a throttle.
+      const need = Math.min(capacity, Math.max(1, cost));
       let b = buckets.get(key);
       if (!b) {
         b = { tokens: capacity, last: now };
@@ -47,8 +64,8 @@ export function createRateLimiter(opts: RateLimiterOptions): RateLimiter {
         b.tokens = Math.min(capacity, b.tokens + elapsedSec * refillPerSec);
         b.last = now;
       }
-      if (b.tokens >= 1) {
-        b.tokens -= 1;
+      if (b.tokens >= need) {
+        b.tokens -= need;
         return true;
       }
       return false;

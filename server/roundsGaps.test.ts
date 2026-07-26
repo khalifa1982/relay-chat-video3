@@ -490,8 +490,30 @@ describe("v2.99.42 review findings — each fixed before merge", () => {
     expect(sw).toMatch(/prefs\.muted\.indexOf\(Number\(m\[1\]\)\) !== -1/);
     // Fails OPEN: a read problem must still show the notification.
     expect(sw).toMatch(/return \{ dnd: false, muted: \[\] \};/);
-    // An incoming call is never suppressed by a per-conversation mute.
-    expect(sw).toMatch(/if \(!isMessage && d\.kind !== "missed-call" && d\.kind !== "voicemail"\) return false;/);
+    // REWRITTEN in v2.99.81. This pinned the exact line
+    //   if (!isMessage && d.kind !== "missed-call" && d.kind !== "voicemail") return false;
+    // whose stated intent was only "a call is never suppressed by a mute" — but the
+    // line did much more than that: it returned BEFORE the prefs were read, so
+    // every kind outside its list was silently DND-EXEMPT. `contact-online` buzzed
+    // the phone with Do Not Disturb on, while the same alert delivered in-page
+    // honoured it, so the two paths disagreed about the user's own setting. A
+    // list-of-covered-kinds also exempts any FUTURE kind by default.
+    //
+    // The two properties, asserted directly instead:
+    //   (a) a ring is exempt from DND — explicitly, not as a side effect of a list;
+    //   (b) DND is reached for everything else, i.e. nothing short-circuits past it;
+    //   (c) MUTE stays message-only.
+    expect(sw).toMatch(/if \(d\.kind === "incoming-call"\) return false;/);
+    const body = sw.slice(sw.indexOf("async function suppressed(d)"));
+    const dndAt = body.indexOf("if (prefs.dnd) return true;");
+    const muteAt = body.indexOf('if (d.kind !== "message") return false;');
+    expect(dndAt, "the DND check exists").toBeGreaterThan(0);
+    expect(muteAt, "the message-only mute narrowing exists").toBeGreaterThan(0);
+    // DND is evaluated BEFORE the kind is narrowed, so it applies to every kind.
+    expect(dndAt).toBeLessThan(muteAt);
+    // …and the only early return ahead of the prefs read is the ring exemption.
+    const beforePrefs = body.slice(0, body.indexOf("const prefs = await alertPrefs();"));
+    expect((beforePrefs.match(/return false;/g) ?? []).length).toBe(1);
     // The page mirrors both settings wherever either can change.
     const prefs = read("..", "client", "src", "app", "swPrefs.ts");
     expect(prefs).toMatch(/caches\.open\(CACHE\)/);

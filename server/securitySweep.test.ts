@@ -63,8 +63,13 @@ describe("S1 — attemptPinLogin increments the lockout counter atomically", () 
 describe("S3–S5 — directory.presence / watchOnline / calls.logStart are gated", () => {
   const src = read("server/v2routers.ts");
   it("directory.presence calls directoryGate and applies the guest-privacy rule", () => {
+    // The gate is asserted as PRESENT, not as the exact `directoryGate(ctx)` call
+    // shape: v2.99.81 added an optional cost argument so a batch endpoint is
+    // charged by size, and this pin froze the one-argument form while saying
+    // nothing about whether the gate runs at all.
     const seg = src.slice(src.indexOf("presence: publicProcedure"), src.indexOf("presenceMany: publicProcedure"));
-    expect(seg).toMatch(/directoryGate\(ctx\)/);
+    expect(seg.length, "the slice is non-empty").toBeGreaterThan(200);
+    expect(seg).toMatch(/directoryGate\(ctx[,)]/);
     expect(seg).toMatch(/isGuestPresenceHidden/);
   });
   it("watchOnline calls directoryGate", () => {

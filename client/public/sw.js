@@ -45,14 +45,35 @@ async function alertPrefs() {
   }
 }
 
-/** Should this push be silenced on this device? Calls are never suppressed by
- *  mute (mute is per-conversation, about messages); DND covers both. */
+/**
+ * Should this push be silenced on this device?
+ *
+ * TWO SEPARATE RULES, and they have different scopes:
+ *   - DND applies to EVERY kind except a ring. A ring is exempt because missing a
+ *     call is worse than an unwanted buzz, and because it is the one alert the
+ *     recipient cannot get later.
+ *   - MUTE is per-CONVERSATION and therefore only ever about messages.
+ *
+ * v2.99.81 — DND IS NOW THE DEFAULT, NOT AN OPT-IN LIST. This used to early-return
+ * "not suppressed" for any kind outside message / missed-call / voicemail, BEFORE
+ * the prefs were read — so `contact-online` ("X is back online, tap to call them")
+ * buzzed the phone with Do Not Disturb on, and the same alert delivered IN-PAGE
+ * already honoured DND, so the two paths disagreed about the user's own setting.
+ * The list-of-covered-kinds shape is also the kind that gets forgotten: any future
+ * push kind was silently DND-exempt. Inverting the default makes a new kind safe
+ * without anybody remembering to add it — the same reasoning that put the
+ * `pushEnabled` check inside `sendPushToIdentity` rather than at its call sites.
+ */
 async function suppressed(d) {
-  const isMessage = d.kind === "message";
-  if (!isMessage && d.kind !== "missed-call" && d.kind !== "voicemail") return false;
+  // A ring is never silenced here. (No code path currently sends one — that was
+  // removed in v2.99.11 at the owner's request — but the kind remains, so the
+  // exemption has to be explicit rather than implied by a list.)
+  if (d.kind === "incoming-call") return false;
   const prefs = await alertPrefs();
   if (prefs.dnd) return true;
-  if (!isMessage) return false;
+  // Mute stays message-only: a per-conversation mute must not silence a missed
+  // call or a voicemail from that same person.
+  if (d.kind !== "message") return false;
   const m = /^relay-msg-(\d+)$/.exec(d.tag || "");
   if (!m) return false;
   return prefs.muted.indexOf(Number(m[1])) !== -1;
