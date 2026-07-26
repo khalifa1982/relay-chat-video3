@@ -54,12 +54,29 @@ describe("History rows — color coding + full metadata", () => {
     expect(PAGE).toMatch(/bg-blue-500\/12 text-blue-600 dark:text-blue-400/);
   });
 
-  it("every row shows the FULL date + precise time, the duration, and the PIN", () => {
+  it("every row shows the FULL date + precise time, the duration, and the number", () => {
     expect(PAGE).toMatch(/formatFullWhen\(conf\.startedAt\)/);
     expect(PAGE).toMatch(/formatFullWhen\(call\.startedAt\)/);
     expect(PAGE).toMatch(/formatDuration\(conf\.durationSec\)/);
-    const pins = PAGE.match(/PIN \{/g) || [];
-    expect(pins.length).toBeGreaterThanOrEqual(2); // conference dialed PIN + solo peer PIN
+    // v2.99.77 rewrote HOW the number is shown, at the owner's request: a bracketed
+    // tag beside the NAME, in its own colour, with no "PIN" label — *"just put his
+    // number ... in different color"*. Asserting the old `PIN {` literal would now
+    // pin prose that was deliberately removed, so this asserts the new carrier.
+    expect(PAGE).toMatch(/function PinTag\(/);
+    const tags = PAGE.match(/<PinTag number=/g) || [];
+    expect(tags.length).toBeGreaterThanOrEqual(2); // the 1:1-answered row + the solo row
+    // The label is gone from the rendered rows.
+    const codeOnly = PAGE.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(codeOnly).not.toMatch(/PIN \{/);
+  });
+
+  it("NEVER shows the viewer their own number (owner spec, v2.99.77)", () => {
+    // *"you don't need to put my number because I know my PIN."* The roster is the
+    // only place self ever appeared, and it is now groups-only and self-excluded.
+    expect(PAGE).toMatch(/const others = conf\.participants\.filter\(\(p\) => !p\.isSelf\);/);
+    expect(PAGE).toMatch(/\{isGroup && others\.length > 0 \?/);
+    const codeOnly = PAGE.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(codeOnly).not.toMatch(/p\.isSelf \? "You"/);
   });
 
   it("derives a conference's direction from the roster order (the CALLER seeds the roster)", () => {

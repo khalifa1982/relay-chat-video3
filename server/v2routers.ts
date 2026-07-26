@@ -1381,8 +1381,23 @@ export const v2MessagesRouter = router({
     const verifiedById = new Map(peerIdents.map((i) => [i.id, i.verified]));
     // Three-tier badge (v2.99.6): guest / registered / admin, one batched query.
     const rolesById = await getRolesByIdentityIds(otherIds);
+    // Guest-presence privacy, in the FOURTH place that needs it (v2.99.77).
+    //
+    // Owner: *"I saw this user in the contacts one time showing online. But when I
+    // went to his message or to his call history ... is offline."* `contacts.list`,
+    // `directory.presence` and `directory.presenceMany` all put presence through
+    // `isGuestPresenceHidden`; this resolver did not. So for a stale GUEST the
+    // thread list said online while every other surface said offline — one rule,
+    // four call sites, and the fourth forgot it. Exactly the class of bug this
+    // codebase keeps re-learning.
+    const peerIsGuestById = new Map(peerIdents.map((i) => [i.id, i.userId == null]));
     return base.map((b) => {
       const p = byId.get(b.otherIdentityId);
+      const presenceHidden = isGuestPresenceHidden({
+        isGuest: peerIsGuestById.get(b.otherIdentityId) ?? false,
+        isOnline: p?.isOnline ?? false,
+        lastSeenAt: p?.lastSeenAt ?? null,
+      });
       return {
         conversationId: b.conversationId,
         kind: b.kind,
@@ -1392,8 +1407,8 @@ export const v2MessagesRouter = router({
         peerNumber: b.otherNumber,
         peerDisplayName: b.otherDisplayName,
         peerAvatarUrl: b.otherAvatarUrl,
-        peerIsOnline: p?.isOnline ?? false,
-        peerLastSeenAt: p?.lastSeenAt ?? null,
+        peerIsOnline: presenceHidden ? false : (p?.isOnline ?? false),
+        peerLastSeenAt: presenceHidden ? null : (p?.lastSeenAt ?? null),
         peerVerified: verifiedById.get(b.otherIdentityId) ?? false,
         peerRole: (rolesById.get(b.otherIdentityId) ?? "guest") as IdentityRole,
         lastMessageAt: b.lastMessageAt,
@@ -2257,6 +2272,11 @@ export const v2CallsRouter = router({
     // Resolve the "other" identity for every row in ONE query. (This replaced a
     // dead single-row query plus an N+1 loop.)
     const otherById = new Map((await getIdentitiesByIds(otherIds)).map((o) => [o.id, o]));
+    // Tier badge for the call log (v2.99.78). Owner: *"inside the call history ...
+    // you didn't put the badge ... immediately put the badge"*. One batched query,
+    // and it is decoration — `getRolesByIdentityIds` swallows its own errors and
+    // returns an empty map, so a hiccup costs a badge and never the call log.
+    const rolesById = await getRolesByIdentityIds(otherIds);
     return rows.map((r) => {
       const otherId = r.callerIdentityId === me.id ? r.calleeIdentityId : r.callerIdentityId;
       const other = otherById.get(otherId);
@@ -2275,6 +2295,7 @@ export const v2CallsRouter = router({
               number: other.number,
               displayName: other.displayName,
               avatarUrl: other.avatarUrl,
+              role: (rolesById.get(other.id) ?? "guest") as IdentityRole,
             }
           : null,
       };
@@ -2344,6 +2365,12 @@ export const v2CallsRouter = router({
         i.avatarUrl ?? null,
       ])
     );
+    // Tier badge for each roster member (v2.99.78), resolved BY IDENTITY like the
+    // name and avatar already are — so a renumbered person keeps their badge. One
+    // batched query for the whole page; decoration-only and error-swallowing.
+    const confRolesById = await getRolesByIdentityIds(
+      Array.from(liveById.keys()).filter((k): k is number => typeof k === "number")
+    );
     return rows.map((r) => {
       const roster = roster0(r);
       const isPartyLine = (r.roomId ?? "").startsWith("pl-");
@@ -2357,6 +2384,10 @@ export const v2CallsRouter = router({
           name: live?.displayName || p.name || "Guest",
           avatarUrl: live?.avatarUrl ?? (frozenNumber ? (avatarByNumber.get(frozenNumber) ?? null) : null),
           isSelf: p.identityId === me.id,
+          role:
+            typeof p.identityId === "number"
+              ? ((confRolesById.get(p.identityId) ?? "guest") as IdentityRole)
+              : null,
         };
       });
       /* The dialled number is stored with no identity of its own, so map it

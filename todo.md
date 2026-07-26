@@ -7557,6 +7557,43 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.77 — the call log says each thing once; one presence surface stopped disagreeing (2026-07-26)
+- [x] **(1) THE PRESENCE GLITCH IS REAL AND HAS A NAMED CAUSE.** Owner: *"I saw this user in the contacts
+      one time showing online. But when I went to his message or to his call history ... is offline."*
+      `isGuestPresenceHidden` was applied in FOUR resolvers and NOT in `messages.threads`, which returned
+      a bare `p?.isOnline ?? false`. For a stale GUEST the thread list said ONLINE while every other
+      surface said OFFLINE. One rule, five call sites, the fifth forgot it. Fixed; `peerLastSeenAt` is
+      nulled with it, or a row would show a last-seen time for presence it is hiding.
+- [ ] **SAID PLAINLY: that fix is NOT proven to be the owner's case.** The account in their screenshot is
+      REGISTERED, and `isGuestPresenceHidden` returns false immediately for a non-guest. The remaining
+      structural cause: `getPresenceAudienceIds` covers people who SAVED you and people who share a
+      CONVERSATION with you, but NOT people you have only ever CALLED — so a call-history-only peer
+      generates no presence SSE for you and each surface falls back to its own poll cadence (History 30s,
+      threads 4–30s, contacts its own), which legitimately disagree between ticks. Closing it means
+      widening who learns when you come online, so it is flagged for a decision rather than done quietly.
+- [x] **(2) THE CALL LOG REPEATED ITSELF.** Each row said the name, then `PIN 566666` in the meta line,
+      then a chip row repeating `khaloud alhammadi 566666` AND `You 777777`.
+- [x] The number is now carried ONCE, as a bracketed `(566666)` tag in its own colour straight after the
+      name (new `PinTag`): no "PIN" label, `dir="ltr"` + bidi isolation so an Arabic name cannot reorder
+      the digits or their brackets.
+- [x] The meta line is action · media · duration. **The viewer's own number appears nowhere** — *"you
+      don't need to put my number because I know my PIN."*
+- [x] The roster chip row is GROUPS ONLY and excludes self: on a 1:1 row it repeated the line above, and
+      on a group row you are not news to yourself. A group row leads with `Group · N` before direction,
+      so the KIND of call reads first.
+- [x] Duration to the owner's rule: under ten minutes one minute digit (`1:23`), over ten two (`12:34`),
+      and with hours EVERY field two digits (`01:05:03`) so the column stops jittering down the log.
+- [x] Heavier `border-b-2` dividers and more row padding — *"make, like, clear line."*
+- [ ] **NOT DONE — a data gap, not an oversight:** media type on an ANSWERED GROUP call.
+      `conference_history` has no channel column, so Voice/Video is genuinely unknown there and printing
+      either would be a guess. Solo rows show it because `call_history.channel` exists.
+- [x] TWO PRE-EXISTING PINS REWRITTEN to the new intent rather than relaxed: one asserted the `h:mm:ss`
+      hour padding this release deliberately changed; the other counted `PIN {` occurrences, i.e. it
+      pinned the very prose the owner asked to remove. It now asserts the `PinTag` carrier and that the
+      label is gone from CODE (comment lines stripped), plus a new pin that the viewer's own number is
+      never rendered.
+- [x] `pnpm verify` green, 2339 tests.
+
 ## v2.99.76 — an admin panel, and a backend that can actually do it (2026-07-26)
 - [x] Owner: *"So why you dont do it at the backend / Or create for me an admin panel were i can
       change it."* Both.

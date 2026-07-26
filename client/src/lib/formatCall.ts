@@ -10,7 +10,11 @@ export function formatDuration(secInput: number): string {
   const s = sec % 60;
   const mm = String(m).padStart(h > 0 ? 2 : 1, "0");
   const ss = String(s).padStart(2, "0");
-  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  // Owner spec (v2.99.77): under an hour, minutes take as many digits as they
+  // need — "1:23" under ten minutes, "12:34" over. With hours, EVERY field is
+  // two digits ("01:05:03"), so the columns line up down the log instead of
+  // jittering between "1:05:03" and "11:05:03".
+  return h > 0 ? `${String(h).padStart(2, "0")}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
 /** Friendly absolute timestamp, e.g. "Jun 27, 3:14 PM" (locale-aware). */
