@@ -19,7 +19,10 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { iceServers } from "./relay";
 
-const KEYS = ["TURN_SECRET", "TURN_HOST", "TURN_HOSTS", "TURN_TCP_HOST", "TURN_TLS", "TURN_PORT"] as const;
+// Every TURN var the function reads must be listed here, or a value leaks
+// between tests and the assertions stop meaning what they say.
+const KEYS = ["TURN_SECRET", "TURN_HOST", "TURN_HOSTS", "TURN_TCP_HOST", "TURN_TLS",
+  "TURN_PORT", "TURN_TCP_ALT_PORT", "TURN_TLS_PORT", "TURN_TTL"] as const;
 const saved: Record<string, string | undefined> = {};
 for (const k of KEYS) saved[k] = process.env[k];
 afterEach(() => {
@@ -104,5 +107,31 @@ describe("multi-relay TURN (v2.99.61)", () => {
   it("no TURN secret still falls back to the public relay (unchanged)", () => {
     setEnv({ TURN_HOSTS: "10.0.0.1,10.0.0.2" }); // hosts but no secret
     expect(turnUrls().join(" ")).toContain("openrelay.metered.ca");
+  });
+});
+
+describe("TURN_TCP_ALT_PORT=off — make room for TLS on 443 (v2.99.65)", () => {
+  it("suppresses ONLY the plaintext alt-port candidate", () => {
+    setEnv({ TURN_SECRET: "s", TURN_HOSTS: "a.example", TURN_TCP_ALT_PORT: "off" });
+    const urls = turnUrls();
+    expect(urls).toEqual([
+      "turn:a.example:3478?transport=udp",
+      "turn:a.example:3478?transport=tcp",
+    ]);
+  });
+  it("lets TLS take 443 without a plaintext listener fighting it for the port", () => {
+    setEnv({ TURN_SECRET: "s", TURN_HOSTS: "a.example", TURN_TCP_ALT_PORT: "off", TURN_TLS: "1", TURN_TLS_PORT: "443" });
+    const urls = turnUrls();
+    expect(urls).toContain("turns:a.example:443?transport=tcp");
+    // the plaintext form on the same port must NOT also be advertised
+    expect(urls).not.toContain("turn:a.example:443?transport=tcp");
+  });
+  it("accepts the usual spellings of off, and an unset value still means 443", () => {
+    for (const v of ["off", "none", "0", "false", "OFF", " off "]) {
+      setEnv({ TURN_SECRET: "s", TURN_HOSTS: "a.example", TURN_TCP_ALT_PORT: v });
+      expect(turnUrls().join(" "), v).not.toContain(":443");
+    }
+    setEnv({ TURN_SECRET: "s", TURN_HOSTS: "a.example" });
+    expect(turnUrls()).toContain("turn:a.example:443?transport=tcp");
   });
 });

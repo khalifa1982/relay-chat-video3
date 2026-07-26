@@ -730,7 +730,15 @@ export function iceServers(userId: string, ttlSecOverride?: number): IceServer[]
       .createHmac("sha1", TURN_SECRET)
       .update(username)
       .digest("base64");
-    const TURN_TCP_ALT_PORT = process.env.TURN_TCP_ALT_PORT || "443";
+    // "off" (or 0/empty) SUPPRESSES the plaintext-TCP alt candidate. That is
+    // needed to put TLS on 443 — the strongest firewall-penetrating option,
+    // since turns:<host>:443 is indistinguishable from HTTPS on the wire, where
+    // plaintext TURN on 443 is exactly what DPI drops. Both cannot share the
+    // port, so advertising `turn:…:443` alongside `TURN_TLS_PORT=443` would
+    // point clients at a TLS listener in plaintext and fail every time.
+    const altRaw = process.env.TURN_TCP_ALT_PORT ?? "443";
+    const altOff = /^(off|none|0|false)$/i.test(altRaw.trim()) || altRaw.trim() === "";
+    const TURN_TCP_ALT_PORT = altOff ? "" : altRaw.trim();
     // Emitted per relay, in the configured order. The single-relay case is
     // byte-identical to the pre-v2.99.61 output (same URLs, same order), so
     // opting in is the only thing that changes behaviour.
@@ -746,7 +754,9 @@ export function iceServers(userId: string, ttlSecOverride?: number): IceServer[]
       // The L4 load balancer maps external 443 -> coturn 3478, so no coturn change
       // is needed and relay media tunnels back to the client over this same TCP
       // connection. This is the key fix for calls hanging on "connecting...".
-      list.push({ urls: "turn:" + tcpHost + ":" + TURN_TCP_ALT_PORT + "?transport=tcp", username, credential });
+      if (!altOff) {
+        list.push({ urls: "turn:" + tcpHost + ":" + TURN_TCP_ALT_PORT + "?transport=tcp", username, credential });
+      }
       // TCP relay on the standard port (additional fallback) on the TCP LB IP.
       list.push({ urls: "turn:" + tcpHost + ":" + TURN_PORT + "?transport=tcp", username, credential });
       // TLS relay only when a certificate is actually provisioned on coturn,

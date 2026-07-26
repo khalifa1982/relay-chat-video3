@@ -7556,3 +7556,30 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       it; plaintext TURN on 443 is exactly what they drop. The action prints that recipe when the security
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
+
+## v2.99.64/65 — TURN :443 diagnosed to two owner-only steps; TLS-on-443 unblocked (2026-07-26)
+- [x] `turn-fix` established: both relays are EC2 instances in this account —
+      `i-0ccd35acc6940c5dc` (13.232.119.83) and `i-0cf65f64e50fa4e3d` (13.204.23.58) — and they SHARE ONE
+      SECURITY GROUP, `sg-063532b4c358d1513`. That is why :443 is dead on BOTH identically, and it means
+      the network half of the fix is ONE rule on ONE group, not two.
+- [x] It could not go further, and says so rather than guessing: `ec2:DescribeSecurityGroups` is denied to
+      relay-github-deploy, and the relay hosts are NOT SSM-managed from this account, so coturn's listeners
+      can be neither inspected nor changed from CI. Both remaining steps are owner-only; the action prints
+      the exact IAM grant that would let it finish the SG half itself.
+- [x] BUG OF MY OWN, found by that first run: GitHub runs steps as `bash -e {0}`, so the denied
+      DescribeSecurityGroups call aborted the whole diagnostic before the listener check — the more
+      informative half — ever ran. The step now sets `+e` explicitly, and reports a denial as UNKNOWN
+      instead of letting it read as "not open", which would have been a finding this role could not make.
+- [x] NEW `TURN_TCP_ALT_PORT=off|none|0|false` suppresses ONLY the plaintext alt-port candidate. This is
+      what makes the better fix possible: `turns:<host>:443` is indistinguishable from HTTPS and passes
+      DPI, where plaintext TURN on 443 is exactly what DPI drops — and the two cannot share a port, so
+      advertising both would point clients at a TLS listener in plaintext. Unset still means 443, so every
+      existing deployment is byte-identical.
+- [x] Fixed the test helper while adding coverage: its KEYS list omitted TURN_TCP_ALT_PORT and
+      TURN_TLS_PORT, so those leaked between cases and the new assertions did not mean what they said.
+- [x] REMAINING (owner-only, both on the relay side):
+      1. allow tcp/443 inbound on sg-063532b4c358d1513 (one rule, covers both relays), and
+      2. make coturn listen on 443 — preferably TLS: `alt-tls-listening-port=443` in turnserver.conf, then
+         `TURN_TLS_PORT=443` + `TURN_TCP_ALT_PORT=off` via env-set. (Plaintext alternative: leave the env
+         alone and redirect 443→3478 on the relay hosts.)
+      Then re-run `verify` — it will report 8/8 allocating.
