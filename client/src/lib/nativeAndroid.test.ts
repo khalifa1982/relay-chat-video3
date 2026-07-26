@@ -47,11 +47,38 @@ describe("web engine ⇄ native bridge", () => {
 });
 
 describe("server — FCM transport", () => {
-  it("subscriptions carry kind (migrator + upsert + router enum, keys optional for fcm)", () => {
+  it("subscriptions carry kind, and every NATIVE kind is keyless", () => {
+    // REWRITTEN in v2.99.79. This used to freeze the exact two-value enum
+    // (`["webpush", "fcm"]`) and the exact `=== "fcm" || !!v.keys` refinement,
+    // so adding a THIRD native transport broke it while saying nothing about
+    // the property that matters. The property is: the column exists, the enum
+    // covers every kind the sender can route, and encryption keys are demanded
+    // for webpush ONLY — a native token has none, so a keys-always rule would
+    // refuse every native registration.
     expect(V2DB).toMatch(/ADD COLUMN `kind` varchar\(10\)/);
-    expect(V2DB).toMatch(/kind\?: "webpush" \| "fcm";/);
-    expect(ROUTERS).toMatch(/kind: z\.enum\(\["webpush", "fcm"\]\)\.optional\(\)/);
-    expect(ROUTERS).toMatch(/=== "fcm" \|\| !!v\.keys/);
+
+    const NATIVE_KINDS = ["fcm", "expo"] as const;
+
+    // The stored type and the wire enum must both admit webpush + every native
+    // kind. Order-independent, so a future addition does not have to land in a
+    // particular slot to keep this green.
+    // Anchored inside upsertPushSubscription — `kind?:` also names a
+    // CONVERSATION kind ("dm" | "group") earlier in the same file, and an
+    // unanchored match reads that one instead.
+    const UPSERT = V2DB.slice(V2DB.indexOf("export async function upsertPushSubscription("));
+    expect(UPSERT.length, "upsertPushSubscription still exists").toBeGreaterThan(200);
+    const dbKinds = /kind\?: ((?:"[a-z]+"(?: \| )?)+);/.exec(UPSERT)?.[1] ?? "";
+    const enumKinds = /kind: z\.enum\(\[([^\]]+)\]\)\.optional\(\)/.exec(ROUTERS)?.[1] ?? "";
+    expect(dbKinds, "v2db declares the kind union").not.toBe("");
+    expect(enumKinds, "the router declares the kind enum").not.toBe("");
+    for (const k of ["webpush", ...NATIVE_KINDS]) {
+      expect(dbKinds, `v2db kind union covers ${k}`).toContain(`"${k}"`);
+      expect(enumKinds, `router kind enum covers ${k}`).toContain(`"${k}"`);
+    }
+
+    // Keys are required for webpush only. Expressed as "not webpush ⇒ no keys
+    // needed" rather than naming the native kinds, so it cannot go stale again.
+    expect(ROUTERS).toMatch(/\(v\.kind \?\? "webpush"\) !== "webpush" \|\| !!v\.keys/);
   });
 
   it("sendPushToIdentity fans out to FCM tokens as DATA messages and prunes dead tokens", () => {

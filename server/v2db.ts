@@ -4639,7 +4639,9 @@ export async function upsertPushSubscription(input: {
   p256dh: string;
   auth: string;
   /** "webpush" (default) or "fcm" (native Android — endpoint = device token). */
-  kind?: "webpush" | "fcm";
+  /** v2.99.79: "expo" joins these — an Expo push token needs Expo's own
+   *  transport, not FCM. The column is varchar(10), so it fits. */
+  kind?: "webpush" | "fcm" | "expo";
   /** sha256 of the browser's push claim, when it has one (v2.99.49). */
   claimHash?: string | null;
 }): Promise<{ owned: boolean }> {

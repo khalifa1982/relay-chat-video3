@@ -114,6 +114,7 @@ import { sendEmail, emailEnabled, wrapEmailDocument } from "./email";
 import { appBaseUrl } from "./appUrl";
 import { unsubscribeHeaders, unsubscribeLink } from "./unsubscribe";
 import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
+import { classifyNativeToken } from "./expoPush";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
 import { setIdentityAutoReply, autoReplyEnabledFor } from "./v2db";
@@ -3012,20 +3013,35 @@ export const v2PushRouter = router({
               auth: z.string().min(6).max(120),
             })
             .optional(),
-          kind: z.enum(["webpush", "fcm"]).optional(),
+          kind: z.enum(["webpush", "fcm", "expo"]).optional(),
           /** Proof-of-possession secret (v2.99.49): a per-browser value the
            *  client keeps in localStorage. Optional — an old client, or one with
            *  storage disabled, simply doesn't send it and falls back to the
            *  legacy keys-match path. */
           claim: z.string().regex(/^[a-f0-9]{32,64}$/).optional(),
         })
-        .refine(v => (v.kind ?? "webpush") === "fcm" || !!v.keys, {
+        .refine(v => (v.kind ?? "webpush") !== "webpush" || !!v.keys, {
           message: "keys are required for webpush subscriptions",
         })
     )
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
-      const kind = input.kind ?? "webpush";
+      let kind = input.kind ?? "webpush";
+      // NATIVE tokens: the SHAPE decides the transport, not the label (v2.99.79).
+      //
+      // The label arrives from a mobile shell over a WebView bridge, and getting it
+      // wrong is a SILENT failure: an Expo token posted to FCM is not a
+      // registration token, so every notification is dropped with nothing in the
+      // logs pointing at why. `classifyNativeToken` re-derives it, and a token that
+      // is neither shape is refused at the door rather than stored and never
+      // delivered to.
+      if (kind !== "webpush") {
+        const actual = classifyNativeToken(input.endpoint);
+        if (!actual) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Unrecognised push token." });
+        }
+        kind = actual;
+      }
       // SECURITY (S8): a webpush endpoint is a URL the server later connects to;
       // reject anything that isn't https on a known push service so it can't be
       // used as a stored blind-SSRF primitive. FCM tokens aren't URLs.
@@ -3035,8 +3051,8 @@ export const v2PushRouter = router({
       const { owned } = await upsertPushSubscription({
         identityId: me.id,
         endpoint: input.endpoint,
-        p256dh: kind === "fcm" ? "fcm" : input.keys!.p256dh,
-        auth: kind === "fcm" ? "fcm" : input.keys!.auth,
+        p256dh: kind === "webpush" ? input.keys!.p256dh : kind,
+        auth: kind === "webpush" ? input.keys!.auth : kind,
         kind,
         claimHash: input.claim ? sha256Hex(input.claim) : null,
       });

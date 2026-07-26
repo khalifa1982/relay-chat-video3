@@ -21,6 +21,7 @@
 import crypto from "crypto";
 import { listPushSubscriptions, deletePushSubscription, pushEnabledForIdentity } from "./v2db";
 import { sendFcmData } from "./fcm";
+import { sendExpoPush } from "./expoPush";
 import { appBaseUrl } from "./appUrl";
 
 export interface PushPayload {
@@ -162,18 +163,48 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
     await Promise.all(r.invalidTokens.map(t => deletePushSubscription(t).catch(() => {})));
   }
   subs = subs.filter(s => s.kind !== "fcm");
+  // EXPO (kind="expo"): the owner's shipping app is an Expo WebView shell, and
+  // Expo's own push tokens are NOT FCM registration tokens — they must go through
+  // Expo's service, which then talks to FCM/APNs with credentials uploaded to EAS.
+  // Routing one to FCM drops it silently, so it gets its own transport (v2.99.79).
+  const expoTokens = subs.filter(s => s.kind === "expo").map(s => s.endpoint);
+  let expoDelivered = 0;
+  if (expoTokens.length > 0) {
+    const r = await sendExpoPush(expoTokens, {
+      title: payload.title,
+      body: payload.body ?? "",
+      kind: payload.kind,
+      data: {
+        kind: payload.kind,
+        title: payload.title,
+        body: payload.body ?? "",
+        tag: payload.tag ?? "",
+        url: payload.url ?? "",
+      },
+    });
+    expoDelivered = r.sent;
+    // Only "DeviceNotRegistered" reaches `dead`; a transient failure must never
+    // cost the user their registration.
+    await Promise.all(r.dead.map(t => deletePushSubscription(t).catch(() => {})));
+  }
+  subs = subs.filter(s => s.kind !== "expo");
+  const nativeDelivered = fcmDelivered + expoDelivered;
   const cfg = vapidConfig();
-  if (!cfg) return fcmDelivered;
-  if (subs.length === 0) return fcmDelivered;
+  if (!cfg) return nativeDelivered;
+  if (subs.length === 0) return nativeDelivered;
   let webpush: typeof import("web-push");
   try {
     webpush = (await import("web-push")).default as unknown as typeof import("web-push");
   } catch (e) {
     console.warn("[push] web-push unavailable:", (e as Error)?.message);
-    return 0;
+    // Pre-existing, corrected in v2.99.79: this returned a bare 0, discarding
+    // native deliveries that had ALREADY succeeded. Cosmetic today (every caller
+    // is fire-and-forget) but the return value's whole meaning is "how many
+    // devices got it", and this release adds a second contributor to that count.
+    return nativeDelivered;
   }
   const body = JSON.stringify(payload);
-  let delivered = fcmDelivered;
+  let delivered = nativeDelivered;
   // BOUNDED CONCURRENCY (v2.99.57). `Promise.all` over the whole list opened one
   // TLS connection and one ECDH + AES-GCM encryption per subscription
   // simultaneously. With the per-identity cap now in place that list is short, but
