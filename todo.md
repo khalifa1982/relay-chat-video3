@@ -7586,6 +7586,15 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       instead of claiming it arrived. Membership-scoped, and never delivers to your own messages — the
       S6 finding's shape, in a second place. Fails to `false` rather than throwing: a receipt is not
       worth a failed render.
+- [x] **IN A GROUP, "delivered" MEANS AT LEAST ONE MEMBER HAS IT**, not all of them — the row is shared,
+      so the first member to report flips it for the sender's view. Not a shortcut introduced here:
+      `markThreadRead` has always worked exactly this way, so the second tick inherits the semantics the
+      third one already had rather than inventing a different rule for the same row. Per-recipient
+      receipts would need a per-participant table (see the "delete for me" item below — same shape).
+- [x] The read transition already accepted `delivered` as well as `sent` BEFORE this release, which is
+      the one thing that would have silently broken the whole chain: a message that got its second tick
+      could never have gone blue, for everybody whose app reported delivery first, i.e. everybody. It
+      was already correct; now pinned, so a future narrowing has to come back and think about it.
 - [x] **READING BACKFILLS THE DELIVERED TIME** (`COALESCE(deliveredAt, now)` inside `markThreadRead`),
       or the info panel would show a message read at 10:05 that was never delivered — not a thing that
       can happen, and it would read as a bug in the panel rather than in the data.
@@ -7630,7 +7639,7 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       overwriting one already trusted.
 - [x] `client/src/app/deliveryReceipts.test.ts` (39). The reporting RULE is tested BEHAVIOURALLY,
       because a source pin cannot tell you whether a 15-second poll writes every 15 seconds.
-- [x] **ALL 23 tripwires verified by MUTATION** — reverted from byte-exact backups, aborting on a
+- [x] **ALL 24 tripwires verified by MUTATION** — reverted from byte-exact backups, aborting on a
       missing target, source confirmed byte-identical afterwards. Includes the original screenshot bug,
       the receipt-walks-backwards case, the bus-allowlist drop, and the hook being unmounted entirely.
 - [x] One of my own assertions was thrown out during that run rather than counted as a pass: a check
@@ -7646,7 +7655,7 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       per-participant tombstone touching `messages.list`, thread previews, `searchMessages` and the
       STORED unread counters — and a localStorage version would be a lie that reappears on their other
       device. It is a feature, not a polish item, so it is flagged rather than faked.
-- [x] `pnpm verify` green: 2277 tests. No ops work — no env var, no new dependency; the two columns are
+- [x] `pnpm verify` green: 2278 tests. No ops work — no env var, no new dependency; the two columns are
       additive nullable and land via the existing boot migrator.
 
 ## v2.99.73 — voice playback that moves, recording you can see and undo, dated messages, instant stats (2026-07-26)

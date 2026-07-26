@@ -3267,6 +3267,13 @@ export async function revealExpiringMessage(input: {
  * downgrades one already `read`, so a late-arriving call cannot walk a receipt
  * backwards. Membership-scoped like `markThreadRead`, for the same reason: without it,
  * any identity could stamp receipts on conversations it is not part of.
+ *
+ * IN A GROUP, "delivered" MEANS AT LEAST ONE MEMBER HAS IT, not all of them — the row
+ * is shared, so the first member to report flips it for the sender's view. That is not
+ * a shortcut introduced here: `markThreadRead` has always worked exactly this way, so
+ * the second tick inherits the same semantics the third one already had rather than
+ * inventing a different rule for the same row. Per-recipient receipts would need a
+ * per-participant table, which is a schema change and a separate piece of work.
  */
 export async function markThreadDelivered(input: {
   conversationId: number;

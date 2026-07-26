@@ -154,6 +154,19 @@ describe("the server transition — delivered means the app has it", () => {
     expect(fn).toMatch(/catch \{[\s\S]{0,200}?return false;/);
   });
 
+  it("a DELIVERED message can still become read", () => {
+    // The one thing that would silently break the whole chain: if the read transition
+    // only accepted `sent`, then every message that got its second tick could never
+    // get the third state at all — ticks would stop going blue for anyone whose app
+    // reported delivery first, which is everyone. It already accepted both before this
+    // release; pinned so a future narrowing has to come back and think about it.
+    const read = V2DB.slice(
+      V2DB.indexOf("export async function markThreadRead("),
+      V2DB.indexOf("export async function markThreadRead(") + 4000
+    );
+    expect(read).toMatch(/or\(eq\(messages\.status, "sent"\), eq\(messages\.status, "delivered"\)\)/);
+  });
+
   it("reading a message BACKFILLS its delivered time", () => {
     // Otherwise the info panel shows a message read at 10:05 that was never delivered,
     // which is not a thing that can happen and reads as a bug in the panel.
