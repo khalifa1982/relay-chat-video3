@@ -47,6 +47,27 @@ export interface VoiceRecording {
   stop: () => void;
   /** Abort: stop everything and discard — `done` resolves null. */
   cancel: () => void;
+  /**
+   * Pause/resume (v2.99.72, owner ask: "you can pause the voice"). MediaRecorder
+   * supports this natively, and paused time is EXCLUDED from the reported duration —
+   * otherwise a note paused for a minute would claim to be a minute longer than the
+   * audio it contains, and every player would show a bogus total.
+   */
+  pause: () => void;
+  resume: () => void;
+  /** "recording" | "paused" | "inactive", straight from the recorder. */
+  state: () => string;
+  /**
+   * Current microphone loudness, 0..1 (v2.99.72, owner ask: "it doesn't show that you
+   * are talking… no wave when you talk").
+   *
+   * Read on demand rather than pushed, so the UI samples it on its own animation frame
+   * and an idle recorder costs nothing. Returns 0 when the analyser is unavailable —
+   * a level meter must never be the reason recording fails.
+   */
+  level: () => number;
+  /** Milliseconds of AUDIO recorded so far, excluding any paused time. */
+  elapsedMs: () => number;
   /** Resolves with the finished audio (or null when cancelled/empty). */
   done: Promise<{ blob: Blob; ext: string; durationMs: number } | null>;
 }
@@ -75,9 +96,74 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
     throw e;
   }
   const chunks: Blob[] = [];
-  const startedAt = Date.now();
   let cancelled = false;
   let capT: ReturnType<typeof setTimeout> | null = null;
+
+  // ── elapsed time, excluding pauses ──
+  // Accumulate completed run-lengths and time the current run separately, so a pause
+  // genuinely stops the clock. Using a single startedAt would count paused wall-clock
+  // as audio and hand every player a duration longer than the sound.
+  let accumulatedMs = 0;
+  let runStartedAt: number | null = Date.now();
+  const elapsedMs = () =>
+    accumulatedMs + (runStartedAt == null ? 0 : Date.now() - runStartedAt);
+
+  // ── live input level ──
+  // A WebAudio analyser on the SAME stream the recorder uses, so the meter shows the
+  // audio actually being captured rather than a second, differently-gated capture.
+  // Entirely optional: every failure path leaves `level()` returning 0.
+  let ac: AudioContext | null = null;
+  let analyser: AnalyserNode | null = null;
+  let levelBuf: Uint8Array<ArrayBuffer> | null = null;
+  try {
+    const Ctor =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (Ctor) {
+      ac = new Ctor();
+      const src = ac.createMediaStreamSource(stream);
+      analyser = ac.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.35;
+      src.connect(analyser);
+      // Deliberately NOT connected to ac.destination: routing the mic to the speakers
+      // during recording is a feedback loop.
+      levelBuf = new Uint8Array(new ArrayBuffer(analyser.fftSize));
+    }
+  } catch {
+    ac = null;
+    analyser = null;
+  }
+  const level = (): number => {
+    if (!analyser || !levelBuf) return 0;
+    try {
+      analyser.getByteTimeDomainData(levelBuf);
+      // RMS of the waveform around the 128 midpoint. RMS rather than peak because a
+      // peak meter pins to the top on any transient and stops conveying speech.
+      let sum = 0;
+      for (let i = 0; i < levelBuf.length; i++) {
+        const v = (levelBuf[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / levelBuf.length);
+      // Speech RMS sits low (~0.02-0.2), so scale it into something a bar can show
+      // while still leaving headroom at the top.
+      return Math.min(1, rms * 4.5);
+    } catch {
+      return 0;
+    }
+  };
+  const releaseAudio = () => {
+    try {
+      analyser?.disconnect();
+      void ac?.close();
+    } catch {
+      /* nothing to do */
+    }
+    ac = null;
+    analyser = null;
+    levelBuf = null;
+  };
 
   const done = new Promise<{ blob: Blob; ext: string; durationMs: number } | null>((resolve) => {
     rec.ondataavailable = (e) => {
@@ -85,6 +171,11 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
     };
     rec.onstop = () => {
       if (capT) clearTimeout(capT);
+      if (runStartedAt != null) {
+        accumulatedMs += Date.now() - runStartedAt;
+        runStartedAt = null;
+      }
+      releaseAudio();
       stream.getTracks().forEach((t) => t.stop()); // mic LED off, always
       if (cancelled || chunks.length === 0) {
         resolve(null);
@@ -95,7 +186,7 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
       resolve({
         blob: new Blob(chunks, { type: finalMime }),
         ext: pick.ext,
-        durationMs: Date.now() - startedAt,
+        durationMs: accumulatedMs,
       });
     };
   });
@@ -104,6 +195,7 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
     rec.start();
   } catch (e) {
     // Same reasoning as the construction guard above: never leave the mic open.
+    releaseAudio();
     stream.getTracks().forEach((t) => t.stop());
     throw e;
   }
@@ -130,6 +222,38 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
       cancelled = true;
       safeStop();
     },
+    pause: () => {
+      try {
+        if (rec.state === "recording") {
+          rec.pause();
+          if (runStartedAt != null) {
+            accumulatedMs += Date.now() - runStartedAt;
+            runStartedAt = null;
+          }
+        }
+      } catch {
+        /* engine without pause support — the recorder simply keeps running */
+      }
+    },
+    resume: () => {
+      try {
+        if (rec.state === "paused") {
+          rec.resume();
+          runStartedAt = Date.now();
+        }
+      } catch {
+        /* as above */
+      }
+    },
+    state: () => {
+      try {
+        return rec.state;
+      } catch {
+        return "inactive";
+      }
+    },
+    level,
+    elapsedMs,
     done,
   };
 }

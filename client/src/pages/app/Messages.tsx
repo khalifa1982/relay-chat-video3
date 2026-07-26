@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type ReactNode } from "react";
 import { useLocation, useSearch } from "wouter";
 import { toast } from "sonner";
 import {
@@ -9,7 +9,6 @@ import {
   Paperclip,
   Plus,
   Mic,
-  StopCircle,
   Image as ImageIcon,
   Phone,
   Video,
@@ -93,9 +92,35 @@ function timeAgo(iso: string | Date): string {
   return d.toLocaleDateString();
 }
 
+/**
+ * Per-message stamp (v2.99.72).
+ *
+ * OWNER: "there is no time and date for each message when it's sent."
+ *
+ * The time was already there; the DATE was not, and that is a real gap rather than a
+ * preference. The thread draws a day separator, but only from the first one onward —
+ * every message ABOVE it carried a bare "12:09 PM" with nothing saying which day, so a
+ * note from last week was indistinguishable from one an hour ago. The owner's own
+ * screenshot shows exactly that: three bubbles reading "12:09 PM" sitting above a
+ * "Today" divider.
+ *
+ * Today stays time-only, because repeating today's date on every bubble is noise.
+ * Anything older names the day, and anything from another year names the year too —
+ * "Jul 23" silently reads as this year, and being twelve months wrong without saying so
+ * is worse than one extra token. Same rule as `formatLastSeen` (v2.99.66), deliberately.
+ */
 function formatTime(iso: string | Date): string {
   const d = typeof iso === "string" ? new Date(iso) : iso;
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const now = new Date();
+  const sameDay =
+    d.getDate() === now.getDate() &&
+    d.getMonth() === now.getMonth() &&
+    d.getFullYear() === now.getFullYear();
+  if (sameDay) return time;
+  const day = d.toLocaleDateString([], { month: "short", day: "numeric" });
+  const year = d.getFullYear() === now.getFullYear() ? "" : ` ${d.getFullYear()}`;
+  return `${day}${year} · ${time}`;
 }
 
 /** True when a message body is ONLY emoji (1-8 glyphs) — rendered big without a
@@ -1084,6 +1109,27 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     };
   }, []);
   const [recording, setRecording] = useState(false);
+  // v2.99.72: pause/resume and discard, so a recording is not a one-way trip to Send.
+  const [recPaused, setRecPaused] = useState(false);
+  const getRecording = useCallback(() => recordingRef.current, []);
+  function toggleRecPause() {
+    const rec = recordingRef.current;
+    if (!rec) return;
+    if (rec.state() === "paused") {
+      rec.resume();
+      setRecPaused(false);
+    } else {
+      rec.pause();
+      // Read the state back rather than assuming: an engine without pause support
+      // leaves the recorder running, and the UI must not claim otherwise.
+      setRecPaused(rec.state() === "paused");
+    }
+  }
+  function discardRecording() {
+    // `cancel()` resolves `done` with null, so the upload never happens — the note is
+    // gone rather than sent-and-unsent.
+    recordingRef.current?.cancel();
+  }
 
   // Safety net: if the conversation unmounts while recording, cancel so the
   // getUserMedia mic doesn't stay live (LED on).
@@ -1109,6 +1155,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       if (!recorderAliveRef.current) { rec.cancel(); return; }
       recordingRef.current = rec;
       setRecording(true);
+      setRecPaused(false);
       void rec.done
         .then(async (result) => {
           if (!result) return; // cancelled / empty
@@ -1123,6 +1170,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         .finally(() => {
           recordingRef.current = null;
           setRecording(false);
+          setRecPaused(false);
         });
     } catch (err) {
       toast.error(
@@ -1353,6 +1401,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             thumbUrl={m.attachment.thumbUrl ?? null}
                             width={m.attachment.width ?? null}
                             height={m.attachment.height ?? null}
+                            durationMs={m.attachment.durationMs ?? null}
                             mine={mine}
                             onOpen={setLightbox}
                           />
@@ -1763,6 +1812,19 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             </button>
           </div>
         )}
+        {recording ? (
+          /* While recording the whole row becomes the recording bar: the old UI
+             offered only a red Stop, which also sent — so there was no way to
+             discard a misfire except sending it and unsending it after. */
+          <RecordingBar
+            get={getRecording}
+            paused={recPaused}
+            onTogglePause={toggleRecPause}
+            onCancel={discardRecording}
+            onSend={stopRecording}
+            busy={uploading}
+          />
+        ) : (
         <div className="flex items-end gap-1.5">
           <Button
             type="button"
@@ -1876,10 +1938,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   : "Voice notes need a newer browser \u2014 use the paperclip to attach an audio file instead"
               }
             >
-              {recording ? <StopCircle className="size-5" /> : <Mic className="size-5" />}
+              <Mic className="size-5" />
             </Button>
           )}
         </div>
+        )}
       </div>
 
       {lightbox && <MediaLightbox media={lightbox} onClose={() => setLightbox(null)} />}
@@ -2040,6 +2103,7 @@ function AttachmentView({
   thumbUrl,
   width,
   height,
+  durationMs,
   mine = false,
   onOpen,
 }: {
@@ -2052,6 +2116,9 @@ function AttachmentView({
    *  the bubble reserves its box before the bytes arrive (no layout shift). */
   width?: number | null;
   height?: number | null;
+  /** Recorded audio length (v2.99.72) — already stored on every voice note this app
+   *  records, so the player shows a real total without probing the media element. */
+  durationMs?: number | null;
   /** Own-bubble styling (white-on-orange) vs received (theme tokens). */
   mine?: boolean;
   onOpen?: (m: { url: string; type: "image" | "video"; name?: string }) => void;
@@ -2102,7 +2169,7 @@ function AttachmentView({
     );
   }
   if (mimeType.startsWith("audio/")) {
-    return <VoiceNotePlayer url={url} mine={mine} />;
+    return <VoiceNotePlayer url={url} mine={mine} durationMs={durationMs} />;
   }
   return <FileCard url={url} filename={filename} mine={mine} />;
 }
@@ -2121,41 +2188,139 @@ function fmtClock(sec: number): string {
  * with a live clock, and a download affordance. The HTMLAudioElement is
  * created lazily on first play so a thread of 50 voice notes costs nothing.
  */
-function VoiceNotePlayer({ url, mine }: { url: string; mine: boolean }) {
+/**
+ * Voice-note player (v2.96, largely rewritten in v2.99.72).
+ *
+ * OWNER: "when you click to play, the sound is played, but the control doesn't show
+ * that it's moving, which second you reach. It only stays there like it's not played."
+ *
+ * TWO REAL BUGS, and the screenshot showed both — a scrubber pinned at the start with
+ * "0:00" beside "· · ·":
+ *
+ *   1. THE DURATION PROBE DESTROYED PLAYBACK. MediaRecorder blobs report
+ *      `duration === Infinity` until seeked past the end, and the workaround for that
+ *      ran on `loadedmetadata` — which fires just AFTER the click that started
+ *      playback. So pressing play seeked the element to `Number.MAX_SAFE_INTEGER`,
+ *      which clamps to the end, fires `ended`, and resets the clock to 0. Audio you
+ *      had already heard start, with a control frozen at zero: exactly the report.
+ *      The probe now never runs while playing — it waits for a pause — and uses the
+ *      `1e101` form that the codebase's own `readMediaDurationMs` already uses,
+ *      rather than MAX_SAFE_INTEGER, which several engines refuse outright.
+ *
+ *   2. THE DURATION WAS ALREADY KNOWN AND WENT UNREAD. Every voice note recorded in
+ *      the app stores its real length in `attachments.durationMs`, and `messages.list`
+ *      already hands the whole attachment row to the client. Seeding from it means the
+ *      common case needs NO probe at all, shows a real total immediately, and the
+ *      scrubber is seekable before the first play.
+ *
+ * The clock is also driven by rAF while playing rather than by `timeupdate`, which
+ * browsers fire about four times a second — enough to look like stuttering on a short
+ * note, which is the other half of "it doesn't look like it's moving".
+ */
+function VoiceNotePlayer({
+  url,
+  mine,
+  durationMs,
+}: {
+  url: string;
+  mine: boolean;
+  /** Recorded length from the attachment row, when the sender's client stored one. */
+  durationMs?: number | null;
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
-  const [dur, setDur] = useState(0);
+  const seeded = typeof durationMs === "number" && durationMs > 0 ? durationMs / 1000 : 0;
+  const [dur, setDur] = useState(seeded);
   const [cur, setCur] = useState(0);
+  // True only while the element is being seeked to read its length. Suppresses the
+  // clock so the probe's own position never reaches the UI.
+  const probingRef = useRef(false);
+  const rafRef = useRef<number | null>(null);
 
   // Stop playback when the bubble unmounts (thread switch / unsend).
-  useEffect(() => () => audioRef.current?.pause(), []);
+  useEffect(
+    () => () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      audioRef.current?.pause();
+    },
+    []
+  );
+
+  /** Read a MediaRecorder blob's real length. Only ever called while PAUSED. */
+  const probeDuration = (a: HTMLAudioElement) => {
+    if (probingRef.current || !a.paused) return;
+    probingRef.current = true;
+    const at = a.currentTime;
+    const finish = () => {
+      a.removeEventListener("timeupdate", finish);
+      const d = a.duration;
+      if (Number.isFinite(d) && d > 0) setDur(d);
+      // Put the playhead back exactly where the listener left it.
+      try {
+        a.currentTime = Number.isFinite(at) ? at : 0;
+      } catch {
+        /* some engines refuse a seek before the first play */
+      }
+      probingRef.current = false;
+    };
+    a.addEventListener("timeupdate", finish);
+    try {
+      // 1e101, not MAX_SAFE_INTEGER: the same value readMediaDurationMs uses, and the
+      // one engines actually accept for "seek past the end".
+      a.currentTime = 1e101;
+    } catch {
+      probingRef.current = false;
+      a.removeEventListener("timeupdate", finish);
+    }
+  };
 
   const ensure = (): HTMLAudioElement => {
     if (audioRef.current) return audioRef.current;
     const a = new Audio(url);
     a.preload = "metadata";
     a.addEventListener("loadedmetadata", () => {
-      if (a.duration === Infinity) {
-        // MediaRecorder blobs report Infinity until seeked past the end —
-        // the standard workaround: jump far ahead, read the real duration.
-        const fix = () => {
-          a.removeEventListener("timeupdate", fix);
-          setDur(a.duration);
-          a.currentTime = 0;
-        };
-        a.addEventListener("timeupdate", fix);
-        a.currentTime = Number.MAX_SAFE_INTEGER;
-      } else {
-        setDur(a.duration || 0);
+      const d = a.duration;
+      if (Number.isFinite(d) && d > 0) {
+        setDur(d);
+      } else if (!seeded) {
+        // Unknown length AND nothing stored for it. Defer the probe until playback
+        // stops — running it now is what used to break the very click that triggered
+        // it. A note with a stored duration never needs this at all.
+        if (a.paused) probeDuration(a);
       }
     });
-    a.addEventListener("timeupdate", () => setCur(a.currentTime || 0));
-    a.addEventListener("ended", () => setCur(0));
+    a.addEventListener("timeupdate", () => {
+      if (!probingRef.current) setCur(a.currentTime || 0);
+    });
+    a.addEventListener("ended", () => {
+      setCur(0);
+      if (!Number.isFinite(a.duration) && !seeded) probeDuration(a);
+    });
     a.addEventListener("pause", () => setPlaying(false));
     a.addEventListener("play", () => setPlaying(true));
     audioRef.current = a;
     return a;
   };
+
+  // Smooth clock while playing. `timeupdate` alone fires ~4Hz, which on a 3-second
+  // note reads as a control that barely moves.
+  useEffect(() => {
+    if (!playing) {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      return;
+    }
+    const tick = () => {
+      const a = audioRef.current;
+      if (a && !probingRef.current) setCur(a.currentTime || 0);
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    };
+  }, [playing]);
 
   const toggle = () => {
     const a = ensure();
@@ -2226,6 +2391,152 @@ function VoiceNotePlayer({ url, mine }: { url: string; mine: boolean }) {
       >
         <Download className="size-3.5" />
       </a>
+    </div>
+  );
+}
+
+/**
+ * Live recording bar (v2.99.72).
+ *
+ * OWNER: "when you record the voice, [it] doesn't show that you are talking. Like, it
+ * just turned red, and there is no wave when you talk… and then you need to click on
+ * the red to send, or there's no choice to delete the voice, or you can pause the
+ * voice, or you cancel the voice and you want to re-record again."
+ *
+ * All three were true. Recording replaced the mic button with a red square and nothing
+ * else: no feedback that the microphone was hearing anything, and Stop was the ONLY
+ * exit — which also sent. So a misfire, a cough, or a change of mind had no way out
+ * except sending the note and unsending it afterwards.
+ *
+ * This replaces the whole composer row while recording with: discard · live waveform ·
+ * elapsed clock · pause/resume · send.
+ *
+ * THE WAVEFORM IS REAL. It reads RMS off a WebAudio analyser tapped from the same
+ * MediaStream the recorder is using, so the bars move because the microphone is
+ * actually hearing you — a decorative animation would have looked identical while
+ * telling you nothing, which is the complaint.
+ *
+ * The bars are written IMPERATIVELY from one rAF loop rather than through React state.
+ * At 60fps a state update per frame would re-render the entire thread on every frame,
+ * which is the mistake the landing page had to be rescued from in v2.99.67.
+ */
+function RecordingBar({
+  get,
+  paused,
+  onTogglePause,
+  onCancel,
+  onSend,
+  busy,
+}: {
+  /** Getter, not the handle: the recorder is replaced on each new take. */
+  get: () => VoiceRecording | null;
+  paused: boolean;
+  onTogglePause: () => void;
+  onCancel: () => void;
+  onSend: () => void;
+  busy: boolean;
+}) {
+  const BARS = 30;
+  const barsRef = useRef<Array<HTMLSpanElement | null>>([]);
+  const clockRef = useRef<HTMLSpanElement | null>(null);
+  const histRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    let raf = 0;
+    let last = 0;
+    const loop = (t: number) => {
+      raf = requestAnimationFrame(loop);
+      // ~20 samples/sec. Faster buys nothing at this bar width and costs battery on
+      // a phone, which is a lesson this project has already paid for once.
+      if (t - last < 50) return;
+      last = t;
+      const rec = get();
+      const lvl = rec && !paused ? rec.level() : 0;
+      const hist = histRef.current;
+      hist.push(lvl);
+      if (hist.length > BARS) hist.shift();
+      for (let i = 0; i < BARS; i++) {
+        const el = barsRef.current[i];
+        if (!el) continue;
+        // Newest sample on the RIGHT, so the wave scrolls the way people read.
+        const v = hist[hist.length - BARS + i] ?? 0;
+        el.style.transform = `scaleY(${0.12 + Math.min(1, v) * 0.88})`;
+      }
+      if (clockRef.current && rec) {
+        clockRef.current.textContent = fmtClock(Math.floor(rec.elapsedMs() / 1000));
+      }
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [get, paused]);
+
+  return (
+    <div className="flex items-center gap-2 rounded-full border border-border/60 bg-card/70 px-2 py-1.5">
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={busy}
+        aria-label="Discard recording"
+        title="Discard this recording"
+        className="grid size-9 shrink-0 place-items-center rounded-full bg-destructive/15 text-destructive transition active:scale-95 disabled:opacity-50"
+      >
+        <Trash2 className="size-4" />
+      </button>
+
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <span
+          aria-hidden
+          className={
+            "size-2 shrink-0 rounded-full " +
+            (paused ? "bg-muted-foreground" : "bg-destructive motion-safe:animate-pulse")
+          }
+        />
+        <span
+          ref={clockRef}
+          className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground"
+        >
+          0:00
+        </span>
+        {/* The wave. aria-hidden because a screen reader gains nothing from 30 bars —
+            the state is announced by the buttons and the clock. */}
+        <span aria-hidden className="flex h-6 min-w-0 flex-1 items-center gap-[2px] overflow-hidden">
+          {Array.from({ length: BARS }, (_, i) => (
+            <span
+              key={i}
+              ref={(el) => {
+                barsRef.current[i] = el;
+              }}
+              className={
+                "h-6 w-full min-w-[2px] origin-center rounded-full " +
+                (paused ? "bg-muted-foreground/40" : "bg-[color:var(--relay-online,#06d6a0)]")
+              }
+              style={{ transform: "scaleY(0.12)" }}
+            />
+          ))}
+        </span>
+      </div>
+
+      <button
+        type="button"
+        onClick={onTogglePause}
+        disabled={busy}
+        aria-label={paused ? "Resume recording" : "Pause recording"}
+        title={paused ? "Resume" : "Pause"}
+        className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground/10 text-foreground transition active:scale-95 disabled:opacity-50"
+      >
+        {paused ? <Mic className="size-4" /> : <Pause className="size-4" />}
+      </button>
+      <button
+        type="button"
+        onClick={onSend}
+        disabled={busy}
+        aria-label="Send voice note"
+        title="Send"
+        className="grid size-9 shrink-0 place-items-center rounded-full text-white transition active:scale-95 disabled:opacity-50"
+        style={{ background: "linear-gradient(135deg,#fb923c,#c2410c)" }}
+      >
+        <Send className="size-4" />
+      </button>
     </div>
   );
 }

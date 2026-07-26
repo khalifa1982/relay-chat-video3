@@ -23,11 +23,20 @@ describe("Home.tsx — RELAY Landing (design port)", () => {
   });
 
   it("keeps the LIVE NETWORK stats from the previous landing (owner ask)", () => {
-    expect(HOME_TSX).toMatch(/trpc\.stats\.public\.useQuery/);
-    expect(HOME_TSX).toMatch(/refetchInterval/);
-    for (const k of ["registeredUsers", "guestsServed", "totalParties", "onlineNow"]) {
+    // v2.99.71 REWROTE the transport half of this pin rather than relaxing it. It
+    // asserted `trpc.stats.public.useQuery` + `refetchInterval` — the 30s poll that
+    // release replaced with a pushed SSE feed, because the owner asked for the figures
+    // to move while the page is open without a refresh. What must stay true is that
+    // all five figures are present and fed from the shared LIVE source.
+    expect(HOME_TSX).toMatch(/const live = useLiveStats\(\);/);
+    expect(HOME_TSX).toMatch(/import \{ useLiveStats \} from "@\/app\/useLiveStats";/);
+    for (const k of ["registeredUsers", "guestsServed", "totalParties", "onlineNow", "messagesSent"]) {
       expect(HOME_TSX).toContain(k);
     }
+    // …and that the imperative writes into the raw-DOM strip still happen, keyed on
+    // the snapshot, since this page's markup is one memoized string (v2.99.35).
+    expect(HOME_TSX).toMatch(/put\("online", d\.onlineNow\);/);
+    expect(HOME_TSX).toMatch(/\}, \[live\]\);/);
     expect(HOME_TSX).toMatch(/LIVE NETWORK — REAL NUMBERS/);
   });
 

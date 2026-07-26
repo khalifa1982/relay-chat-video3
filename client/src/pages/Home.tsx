@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { useLiveStats } from "@/app/useLiveStats";
 import { APP_VERSION } from "@shared/version";
 import { siteHost } from "@/lib/siteHost";
 
@@ -1831,17 +1832,21 @@ export default function Home() {
 
   // LIVE NETWORK stats (carried from the previous landing, owner ask): written
   // imperatively into the design's strip so the static markup stays one string.
-  const stats = trpc.stats.public.useQuery(undefined, {
-    refetchInterval: 30_000,
-    refetchOnWindowFocus: false,
-  });
+  //
+  // v2.99.71 — PUSHED. This used to poll every 30s with refetchOnWindowFocus OFF,
+  // which meant a visitor could watch numbers half a minute stale and returning to
+  // the tab did not refresh them (owner: "while I'm seeing the page, if somebody logs
+  // in, it will automatically update — no need for me to refresh"). The hook opens
+  // the shared public SSE feed and keeps a slow poll as a backstop; the sign-in
+  // screen uses the SAME hook, so the two surfaces cannot disagree about freshness.
+  const live = useLiveStats();
   // Public, rate-limited number→owner resolver for the hero dialer's live
   // preview (name + online state). utils.fetch is imperative — the landing
   // page is raw DOM, so the engine calls this as digits are entered.
   const utils = trpc.useUtils();
   useEffect(() => {
     const root = rootRef.current;
-    const d = stats.data;
+    const d = live;
     if (!root || !d) return;
     const put = (key: string, v: number | null | undefined) => {
       const el = root.querySelector<HTMLElement>(`[data-lp="stat-${key}"]`);
@@ -1852,7 +1857,10 @@ export default function Home() {
     put("parties", d.totalParties);
     put("messages", d.messagesSent);
     put("online", d.onlineNow);
-  }, [stats.data]);
+    // Keyed on the whole snapshot: the feed only emits a frame when a number
+    // actually CHANGED, so this re-runs exactly as often as there is something new
+    // to write, and the markup itself stays one memoized string (v2.99.35).
+  }, [live]);
 
   useEffect(() => {
     // Fonts (idempotent — cached across navigations).

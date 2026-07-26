@@ -1,4 +1,4 @@
-import { trpc } from "@/lib/trpc";
+import { useLiveStats } from "./useLiveStats";
 
 /**
  * Live network counters (v2.99.66).
@@ -20,13 +20,11 @@ import { trpc } from "@/lib/trpc";
  * as a broken product, so an errored or still-loading query renders nothing.
  */
 export function LiveStats({ className = "" }: { className?: string }) {
-  const stats = trpc.stats.public.useQuery(undefined, {
-    refetchInterval: 15_000,
-    refetchOnWindowFocus: true,
-    staleTime: 10_000,
-  });
-
-  const d = stats.data;
+  // v2.99.71: PUSHED, not polled. `useLiveStats` opens the shared public SSE feed
+  // and keeps a slow poll as a backstop, so the figures move within ~2s of somebody
+  // coming online instead of on a 15s timer — and both this screen and the landing
+  // page read the same hook, so neither can be fresher than the other.
+  const d = useLiveStats();
   if (!d) return null;
 
   const items: { label: string; value: number; live?: boolean }[] = [

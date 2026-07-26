@@ -135,13 +135,23 @@ describe("quick-add contacts (v2.96)", () => {
 
 describe("media previews (v2.96)", () => {
   it("voice notes use the custom player — the native <audio controls> is gone", () => {
-    expect(MESSAGES).toMatch(/<VoiceNotePlayer url=\{url\} mine=\{mine\} \/>/);
+    // v2.99.72 threads the stored duration in, so the props grew. Pin the COMPONENT,
+    // not the exact prop list — the invariant is that no native <audio> came back.
+    expect(MESSAGES).toMatch(/<VoiceNotePlayer url=\{url\} mine=\{mine\}/);
     // No JSX <audio> element anywhere (the doc comment naming the old one is fine).
     expect(MESSAGES).not.toMatch(/<audio\s+src=/);
   });
   it("the custom player handles MediaRecorder's Infinity-duration quirk", () => {
-    expect(MESSAGES).toMatch(/a\.duration === Infinity/);
-    expect(MESSAGES).toMatch(/Number\.MAX_SAFE_INTEGER/);
+    // REWRITTEN in v2.99.72 rather than relaxed. This pinned the two things that WERE
+    // the bug: `duration === Infinity` as the trigger, and a MAX_SAFE_INTEGER seek as
+    // the cure. That seek ran from `loadedmetadata` — which fires just after the click
+    // that started playback — so it jumped the element to the end, fired `ended`, and
+    // froze the clock at 0:00. The quirk still has to be HANDLED; the invariant is now
+    // that it is handled without touching a playing element.
+    expect(MESSAGES).toMatch(/Number\.isFinite\(d\) && d > 0/);
+    expect(MESSAGES).toMatch(/a\.currentTime = 1e101;/);
+    expect(MESSAGES).toMatch(/if \(probingRef\.current \|\| !a\.paused\) return;/);
+    expect(MESSAGES).not.toMatch(/currentTime = Number\.MAX_SAFE_INTEGER/);
   });
   it("generic files render as a styled card with a download affordance", () => {
     expect(MESSAGES).toMatch(/function FileCard\(/);
