@@ -112,13 +112,8 @@ between two users who both happen to be on the leader has zero added latency.
 
 ### Failure modes (documented, acceptable for v1)
 
-- **Leader dies.** Lease expires (≤9s) → new leader elected. In-flight call state
-  (held only on the dead leader) is lost — active calls drop, exactly like a
-  single-instance restart today, except fleet-wide. Proxies re-forward `register`
-  for their still-open SSE connections to the new leader, so presence/dialing
-  recovers within seconds; the client's existing auto-rejoin handles the media
-  side. (Hardening — persist `pinRoom`/`roomMeta` to Redis for warm failover —
-  is a later step, out of scope for v1.)
+- **Leader dies.** Lease expires (≤9s) → new leader elected. ~~In-flight call state
+  is lost.~~ **CLOSED in Round 11 (v2.99.66)** — see below.
 - **Redis blip.** Signaling stalls until reconnect (same as the bus today);
   `commandTimeout` + retries prevent hangs.
 
@@ -149,3 +144,96 @@ still works (that instance is the leader and every peer is local).
 Until phase 2–4 land, scale the `.io` ASG to **1 instance** (or pin `/api/relay/*`
 via `aws-ops.yml alb-tune`). Calls ring immediately. The cluster work removes that
 requirement.
+
+
+---
+
+## Round 11 (v2.99.66) — the room registry survives the leader
+
+The v1 design accepted one failure mode: the registry lived only in the leader's
+memory, so losing that process ended every active call fleet-wide. Three layers
+close it. All of them are inert unless `RELAY_CLUSTER=1` + `REDIS_URL`.
+
+### A. Durable shadow (`server/roomStore.ts`)
+
+Every room mutation marks the room dirty; a coalesced next-tick flush writes it
+to Redis, and a 15s sweep rewrites everything (so a mutation site nobody
+remembered to mark still converges, and TTLs stay fresh on a quiet call).
+
+| key | what |
+|---|---|
+| `relay:room:<roomId>` | HASH, two fields: `e` = writing leader's fence epoch, `d` = the whole record as signed JSON |
+| `relay:rooms` | SET index, so hydration is one `SMEMBERS` instead of a `SCAN` |
+| `relay:leader:epoch` | monotonic counter; `INCR` once per leadership win |
+
+Three decisions worth knowing before editing it:
+
+- **One hash per room.** A single `HSET` is atomic, so a reader can never see a
+  half-written room. Spreading members/roles/pinroom over several keys would
+  reintroduce the cross-key inconsistency the in-memory registry avoids.
+- **The pin→room index is derived, not stored.** A pin is in at most its ACTIVE
+  room and its HELD room, and both always contain it — so a `held` flag per
+  member rebuilds `pinRoom` and `heldRoom`, riding the same atomic write.
+- **Fencing.** A lease can expire while its holder still believes it leads (GC
+  pause, network blip). Every write carries the epoch and is applied by a Lua CAS
+  that refuses a **lower** epoch (`>`, not `>=`, so a leader can overwrite
+  itself). Executed for real against a spawned redis-server in
+  `server/roomStoreLive.test.ts`.
+- **Signed.** Records cross the same trust boundary as bus envelopes and are
+  HMAC'd with the same fleet secret (`busSecret`). A forged record is dropped at
+  hydration and its index entry pruned.
+
+On winning the lease the new leader mints an epoch, hydrates, and only THEN
+serves signaling — inbound frames queue behind a gate (5s timeout, then it serves
+anyway: a missing room degrades to "dial again", a wedged signaling layer means
+nobody can call at all).
+
+A hydrated room has no connected members by construction, which is exactly the
+"room of ghosts" shape `sendRejoinIfInRoom` dissolves. `roomMeta.hydratedAt` +
+`HYDRATED_GRACE_MS` (45s) keeps it alive until its owners re-register — without
+it the first peer back would delete the very call hydration saved.
+
+### B. `rejoin-recreate` — last resort, capability-gated
+
+If even the shadow was unavailable (a failover blip), a client can ask the server
+to rebuild the room. It is asked for exactly **one** thing: a capability the
+server minted when it admitted that pin to that room
+(`server/roomCapability.ts`, `<exp>.<role>.<hmac>`, 12h).
+
+Everything else is re-derived: the subject pin comes from the **connection**, the
+role from **inside the signature**, and a claimed member list is not read at all
+(membership converges because each returning peer presents its own capability). A
+signed `host` capability takes a *vacant* host seat and never displaces one. With
+no fleet secret the path does not exist rather than existing unauthenticated.
+
+Trusting a client-asserted `roomId`/`selfRole` here would reopen the class closed
+by v2.99.43 (M45) and v2.99.57 (R-GENPIN) — do not "simplify" it.
+
+### C. Cluster hygiene
+
+- **Heartbeat** (`relay:sig:hb:<leader>`, 5s): each home tells the leader which
+  cids it holds. `makeRemoteSocket` now implements `alive()` from it, **failing
+  open** for an unknown cid and for an instance that has never beaten (an older
+  build mid-rollout) — reporting a live browser as dead sends its calls to the
+  leave-a-message card.
+- **A lost home** (20s without a beat) hands its browsers to the ordinary
+  `cleanupRegistryConn` grace, not oblivion — they may simply be reconnecting.
+- **Leadership handover**: every instance sends its local browsers `{type:
+  "resync"}`, which re-registers them (rebuilding the client records the dead
+  leader held) and yields a `rejoin` from the hydrated rooms. The instance that
+  *takes* the job resyncs its own browsers too, after hydration.
+
+### Manual failover test
+
+1. Two browsers in a call. Find the leader (`/api/health`, or the `relay:leader`
+   key). **Kill that instance.** EXPECT: within ~10s the sockets resync, the new
+   leader hydrates the room, both sides rejoin, the call continues.
+2. Kill the **non**-leader mid-call. EXPECT: nothing (already true before).
+3. `redis-cli DEL relay:rooms 'relay:room:*'` *then* kill the leader. EXPECT: the
+   `rejoin-recreate` fallback carries the call instead.
+
+### Still not covered
+
+The leader is still a single writer, so a failover costs one lease expiry (≤9s)
+of signaling latency. Media is untouched throughout — this round is about the
+call being *repairable*, not about the packets.

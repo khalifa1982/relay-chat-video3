@@ -41,6 +41,8 @@ vi.mock("./redisBus", () => ({
   touchBusyState: () => {},
   readBusyPinsFromRedis: async () => new Set<string>(),
   readPlCountsFromRedis: async () => new Map<string, number>(),
+  // Round 11: roomStore + roomCapability derive the fleet signing key from here.
+  busSecret: () => "test-fleet-secret",
 }));
 vi.mock("ioredis", () => ({
   default: class {

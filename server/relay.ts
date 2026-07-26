@@ -104,6 +104,13 @@ import {
   clusterDeliverOutbound,
   makeRemoteSocket,
 } from "./relayCluster";
+import {
+  initRoomStore,
+  markRoomDirty,
+  hydrateRooms,
+  type PersistedRoom,
+} from "./roomStore";
+import { mintRoomCap, verifyRoomCap } from "./roomCapability";
 
 // TURN credentials are read on every call so the operator can add them via
 // `webdev_request_secrets` without restarting the server, and so unit tests
@@ -207,7 +214,24 @@ export interface RoomMeta {
   // pending host approval. Cleared on approve/deny. Optional (older rooms/tests
   // never set it).
   knocks?: Map<string, { name: string; at: number }>;
+  /**
+   * Round 11: when this room was restored from Redis by a newly-elected leader.
+   * A hydrated room has NO connected members by construction — every client
+   * record died with the old leader — so it looks exactly like the "room of
+   * ghosts" that sendRejoinIfInRoom exists to dissolve. It isn't: the others are
+   * on their way back, they simply haven't re-registered yet. Set only by
+   * applyHydratedRooms and only read for HYDRATED_GRACE_MS.
+   */
+  hydratedAt?: number;
 }
+
+/**
+ * How long a freshly-hydrated room is allowed to look empty. A leader change is
+ * detected within one lease renew (3s) and the browsers re-register immediately
+ * after their `resync`, so this only has to cover a slow client — after it, a
+ * room with nothing but ghosts is genuinely dead and behaves exactly as before.
+ */
+export const HYDRATED_GRACE_MS = 45_000;
 
 /** Host/co-host role of a pin in a room, for badges + moderation gating. */
 export function roleOf(meta: RoomMeta | undefined, pin: string): "host" | "cohost" | undefined {
@@ -392,11 +416,13 @@ function joinRoomMember(reg: RelayRegistry, roomId: string, pin: string) {
   // Busy-line mirror (v2.91): a coalesced next-tick sync, so an accept that
   // joins + flips roomMeta.accepted in the same handler is observed settled.
   touchBusyState();
+  markRoomDirty(roomId); // Round 11: shadow the room into Redis (leader only)
 }
 
 /** Fully tear down a room (abandoned, or last member explicitly left). */
 function reapRoom(reg: RelayRegistry, roomId: string) {
   touchBusyState(); // busy-line + party-line-count mirror (v2.91)
+  markRoomDirty(roomId); // the snapshot will be null ⇒ a fenced DEL
   const t = reg.roomReapT.get(roomId);
   if (t) { clearTimeout(t); reg.roomReapT.delete(roomId); }
   // Conference history: if this room was a REAL call (answered, ≥2 participants
@@ -484,6 +510,31 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
       !!c && c.ringing.size > 0 && !!rmeta && !rmeta.accepted &&
       Date.now() - rmeta.startedAt < PENDING_RING_TTL_MS;
     if (midDial) return;
+    // …or the room was just HYDRATED by a newly-elected leader (Round 11). Every
+    // member of such a room is a ghost until its owner re-registers, so without
+    // this the FIRST peer to come back would dissolve the very call the
+    // hydration existed to save — and persistence would be a no-op end to end.
+    if (rmeta?.hydratedAt && Date.now() - rmeta.hydratedAt < HYDRATED_GRACE_MS) {
+      const t0 = reg.roomReapT.get(rid);
+      if (t0) { clearTimeout(t0); reg.roomReapT.delete(rid); }
+      const cs = reg.clients.get(pin);
+      if (cs) cs.roomId = rid;
+      const lk0 = livekitConfig();
+      safeSend(socket, {
+        type: "rejoin",
+        roomId: rid,
+        members,
+        hydrated: true,
+        cap: mintRoomCap(rid, pin, roleOf(rmeta, pin)),
+        selfRole: roleOf(rmeta, pin),
+        hostPin: rmeta?.hostPin ?? null,
+        iceServers: iceServers(pin),
+        livekit: lk0.enabled,
+        livekitUrl: lk0.url,
+      });
+      pushLivekitToken(reg, pin, rid);
+      return;
+    }
     // ALONE (stale solo dial room) or only ghosts left. Don't drop the user
     // into a dead "call" screen; release the membership so they land in the
     // lobby, and let the orphaned room reap.
@@ -499,6 +550,10 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
     type: "rejoin",
     roomId: rid,
     members,
+    // Round 11 B: the signed proof that WE admitted this pin to this room, so a
+    // later "the server no longer knows this room" can be repaired without the
+    // client being trusted about who it is. See server/roomCapability.ts.
+    cap: mintRoomCap(rid, pin, roleOf(rmeta, pin)),
     selfRole: roleOf(rmeta, pin),
     hostPin: rmeta?.hostPin ?? null,
     iceServers: iceServers(pin),
@@ -541,6 +596,7 @@ function admitToRoom(reg: RelayRegistry, pin: string, roomId: string): void {
     type: "joined",
     roomId,
     members,
+    cap: mintRoomCap(roomId, pin, roleOf(meta, pin)),
     selfRole: roleOf(meta, pin),
     hostPin: meta.hostPin ?? null,
     iceServers: iceServers(pin),
@@ -937,6 +993,7 @@ function promoteHostIfVacant(reg: RelayRegistry, roomId: string, departed: strin
   if (!successor) return;                             // only ghosts remain
   meta.hostPin = successor;
   meta.cohosts.delete(successor);                     // host outranks co-host
+  markRoomDirty(roomId); // Round 11: moderation state must survive a leader change
   broadcastToRoom(reg, roomId, {
     type: "role",
     pin: successor,
@@ -948,6 +1005,7 @@ function promoteHostIfVacant(reg: RelayRegistry, roomId: string, departed: strin
 export function leaveRoom(reg: RelayRegistry, pin: string) {
   touchBusyState(); // busy-line + party-line-count mirror (v2.91)
   const roomId = reg.pinRoom.get(pin) ?? reg.clients.get(pin)?.roomId ?? null;
+  markRoomDirty(roomId); // Round 11
   reg.pinRoom.delete(pin);
   const c = reg.clients.get(pin);
   if (c) c.roomId = null;
@@ -976,6 +1034,93 @@ export function leaveRoom(reg: RelayRegistry, pin: string) {
   }
 }
 
+/* ── Round 11: the registry's durable shadow ─────────────────────────────── */
+
+/**
+ * Snapshot ONE room for persistence, or null when it no longer exists (which the
+ * store turns into a fenced delete). Names come from the live client record when
+ * there is one and otherwise from the history roster, so a hydrated room does not
+ * come back as a wall of "Guest".
+ */
+export function snapshotRoom(reg: RelayRegistry, roomId: string): PersistedRoom | null {
+  const room = reg.rooms.get(roomId);
+  const meta = reg.roomMeta.get(roomId);
+  if (!room || !meta) return null;
+  const members = Array.from(room).map(pin => ({
+    pin,
+    name: reg.clients.get(pin)?.name || meta.roster.get(pin) || "Guest",
+    // A member is HELD here when this room is their held one. `pinRoom` is the
+    // active pointer; anything else that is still a member is parked.
+    held: reg.heldRoom.get(pin) === roomId,
+  }));
+  return {
+    roomId,
+    members,
+    hostPin: meta.hostPin,
+    cohosts: Array.from(meta.cohosts),
+    startedAt: meta.startedAt,
+    answeredAt: meta.answeredAt,
+    lastActiveAt: meta.lastActiveAt,
+    dialedNumber: meta.dialedNumber,
+    accepted: meta.accepted,
+    roster: Array.from(meta.roster.entries()),
+  };
+}
+
+/**
+ * Rebuild rooms in an EMPTY registry from their persisted shadows — what a
+ * freshly-elected leader does before it serves any signaling.
+ *
+ * Deliberately restores ROOMS ONLY, never clients: a client record owns a live
+ * socket, and there is no socket to own until the browser's home re-announces it
+ * and the browser re-registers. What hydration must guarantee is that when that
+ * register arrives, `sendRejoinIfInRoom` finds the membership it needs. Members
+ * are therefore ghosts until their owners come back — exactly the state a
+ * grace-reaped member is already in, which is a shape the rest of the registry
+ * already handles everywhere (membersOf filters ghosts, sendRejoinIfInRoom
+ * refuses a room of only ghosts, maybeScheduleRoomReap collects the abandoned).
+ *
+ * An EXISTING room is never overwritten: this instance's own live state is
+ * always more current than a record it wrote at most a moment ago.
+ */
+export function applyHydratedRooms(reg: RelayRegistry, rooms: readonly PersistedRoom[]): number {
+  let restored = 0;
+  for (const rec of rooms) {
+    if (reg.rooms.has(rec.roomId)) continue;
+    const set = new Set<string>();
+    for (const m of rec.members) {
+      set.add(m.pin);
+      // Only ONE room may be a pin's active room and only one its held room. A
+      // record that disagrees with one already applied loses rather than
+      // clobbering it — the invariant matters more than any single record.
+      if (m.held) {
+        if (!reg.heldRoom.has(m.pin)) reg.heldRoom.set(m.pin, rec.roomId);
+      } else if (!reg.pinRoom.has(m.pin)) {
+        reg.pinRoom.set(m.pin, rec.roomId);
+      }
+    }
+    if (set.size === 0) continue;
+    reg.rooms.set(rec.roomId, set);
+    reg.roomMeta.set(rec.roomId, {
+      startedAt: rec.startedAt,
+      answeredAt: rec.answeredAt,
+      lastActiveAt: rec.lastActiveAt,
+      dialedNumber: rec.dialedNumber,
+      accepted: rec.accepted,
+      roster: new Map(rec.roster),
+      hostPin: rec.hostPin,
+      cohosts: new Set(rec.cohosts),
+      hydratedAt: Date.now(),
+    });
+    // Every hydrated room starts with zero connected members, so arm the
+    // abandonment reaper: a call whose participants never come back must not
+    // outlive them on the new leader either.
+    maybeScheduleRoomReap(reg, rec.roomId);
+    restored++;
+  }
+  return restored;
+}
+
 /** Build the member list (excluding `selfPin`) for a room, with names/roles. */
 function membersOf(reg: RelayRegistry, roomId: string, selfPin: string) {
   const rmeta = reg.roomMeta.get(roomId);
@@ -1002,6 +1147,7 @@ function membersOf(reg: RelayRegistry, roomId: string, selfPin: string) {
 export function releaseHeldRoom(reg: RelayRegistry, pin: string) {
   touchBusyState(); // busy-line + party-line-count mirror (v2.91)
   const heldRid = reg.heldRoom.get(pin);
+  markRoomDirty(heldRid); // Round 11
   reg.heldRoom.delete(pin);
   if (!heldRid) return;
   const room = reg.rooms.get(heldRid);
@@ -1034,6 +1180,7 @@ function promoteHeldRoom(
   reg.heldRoom.delete(pin);
   if (!heldRid || !reg.rooms.has(heldRid)) return false;
   reg.pinRoom.set(pin, heldRid);
+  markRoomDirty(heldRid); // Round 11: no longer held — this is the active call
   if (self) self.roomId = heldRid;
   const t = reg.roomReapT.get(heldRid);
   if (t) { clearTimeout(t); reg.roomReapT.delete(heldRid); }
@@ -1045,6 +1192,7 @@ function promoteHeldRoom(
     type: "resumed",
     roomId: heldRid,
     members: membersOf(reg, heldRid, pin),
+    cap: mintRoomCap(heldRid, pin, roleOf(rmeta, pin)),
     selfRole: roleOf(rmeta, pin),
     hostPin: rmeta?.hostPin ?? null,
     iceServers: iceServers(pin),
@@ -1171,7 +1319,7 @@ function joinPartyLine(
   // Standard `room` ack FIRST so the dialer's state machine has its roomId
   // (a group dial also flushes its remaining invites on this ack — those then
   // ring people INTO the line via the ordinary identity invite path).
-  safeSend(socket, { type: "room", roomId: rid, partyLine: true, hostPin: null });
+  safeSend(socket, { type: "room", roomId: rid, partyLine: true, hostPin: null, cap: mintRoomCap(rid, callerPin, undefined) });
   const members = membersOf(reg, rid, callerPin);
   joinRoomMember(reg, rid, callerPin);
   me.roomId = rid;
@@ -1192,6 +1340,7 @@ function joinPartyLine(
     partyLine: true,
     lineTitle: title,
     hostPin: null,
+    cap: mintRoomCap(rid, callerPin, undefined),
     iceServers: iceServers(callerPin),
     livekit: lk.enabled,
     livekitUrl: lk.url,
@@ -1231,6 +1380,9 @@ export interface RelayMessage {
   target?: string;
   /** invite: the caller dialed this as a VIDEO call (mutual-consent flow). */
   video?: boolean;
+  /** rejoin-recreate (Round 11 B): the server-minted room capability. Proof of
+   *  prior membership — the ONLY thing the client is trusted for on that path. */
+  cap?: string;
   /**
    * SERVER-SET ONLY (F1). The 6-digit number the POST /api/relay/send handler
    * resolved for the authenticated caller (from their session/guest cookie),
@@ -1587,7 +1739,7 @@ export function handleMessage(
               hostPin: callerPin, // the creator is the host
               cohosts: new Set(),
             });
-            safeSend(callerSocket, { type: "room", roomId: rid, selfRole: "host", hostPin: callerPin });
+            safeSend(callerSocket, { type: "room", roomId: rid, selfRole: "host", hostPin: callerPin, cap: mintRoomCap(rid, callerPin, "host") });
             // On the LiveKit path, the caller joins the SFU room immediately (alone)
             // so the callee connects near-instantly the moment they accept.
             pushLivekitToken(reg, callerPin, rid);
@@ -1928,6 +2080,7 @@ export function handleMessage(
           if (existingHeld && existingHeld !== priorRid) releaseHeldRoom(reg, conn.pin);
           reg.heldRoom.set(conn.pin, priorRid);
           reg.pinRoom.delete(conn.pin); // about to be re-set to the new room
+          markRoomDirty(priorRid);      // Round 11: this member is now HELD there
           roomActivityTouch(reg, priorRid);
           broadcastToRoom(reg, priorRid, { type: "peer-hold", pin: conn.pin, on: true }, conn.pin);
         } else {
@@ -1989,6 +2142,7 @@ export function handleMessage(
         type: "joined",
         roomId,
         members,
+        cap: mintRoomCap(roomId, conn.pin, roleOf(roomMetaForRoles, conn.pin)),
         selfRole: roleOf(roomMetaForRoles, conn.pin),
         hostPin: roomMetaForRoles?.hostPin ?? null,
         iceServers: iceServers(conn.pin),
@@ -2183,6 +2337,109 @@ export function handleMessage(
       break;
     }
 
+    case "rejoin-recreate": {
+      /*
+       * Round 11 part B — LAST-RESORT recovery: "I am still in a call, and you
+       * no longer know about it." Sent after a leader change when the ordinary
+       * register→rejoin handshake produced nothing, i.e. when the durable shadow
+       * in Redis was also unavailable (a failover blip, or a leader that died
+       * before its first write-through).
+       *
+       * AUTHORIZATION IS THE WHOLE DESIGN HERE. The client is asked for exactly
+       * one thing — a capability THIS FLEET minted when it admitted this pin to
+       * this room — and everything else is re-derived:
+       *   • the subject pin comes from the CONNECTION, never the message, so a
+       *     capability that leaks is useless to anyone holding another number;
+       *   • the role comes from INSIDE the signature, so `selfRole: "host"` is
+       *     not something a client can assert (that is the M45 / R-GENPIN class:
+       *     moderation powers over a call you were never in);
+       *   • a claimed member list is not accepted at all. Membership converges
+       *     because every returning participant presents its OWN capability.
+       * With no fleet secret configured nothing can be minted or verified, so
+       * the path simply does not exist rather than existing unauthenticated.
+       */
+      const rid = typeof msg.roomId === "string" ? msg.roomId : "";
+      const selfPin = conn.pin;
+      if (!rid || !selfPin) {
+        safeSend(conn.socket, { type: "error", code: "gone", message: "That call has ended." });
+        break;
+      }
+      const claim = verifyRoomCap(msg.cap, rid, selfPin);
+      if (!claim) {
+        safeSend(conn.socket, { type: "error", code: "gone", message: "That call has ended." });
+        break;
+      }
+      // The room may have survived after all (hydration won the race, or another
+      // participant recreated it a moment ago) — then this is an ordinary
+      // readmission, NOT a recreation.
+      let meta = reg.roomMeta.get(rid);
+      if (!reg.rooms.has(rid) || !meta) {
+        meta = {
+          startedAt: Date.now(),
+          answeredAt: Date.now(),
+          lastActiveAt: Date.now(),
+          dialedNumber: null,
+          // A recreated room is by definition a call that was already up, so it
+          // is `accepted` — otherwise its conference-history row would be
+          // silently dropped when it finally ends.
+          accepted: true,
+          roster: new Map(),
+          hostPin: null,
+          cohosts: new Set(),
+        };
+        reg.roomMeta.set(rid, meta);
+        reg.rooms.set(rid, new Set());
+      }
+      // The signed role is honoured only where it cannot displace anyone: the
+      // first host capability to arrive takes a VACANT host seat. A room that
+      // already has a host keeps it, so two peers recreating concurrently can
+      // never fight over moderation.
+      if (claim.role === "host" && !meta.hostPin) meta.hostPin = selfPin;
+      else if (claim.role === "cohost" || (claim.role === "host" && meta.hostPin !== selfPin)) {
+        meta.cohosts.add(selfPin);
+      }
+      if (self.roomId && self.roomId !== rid) leaveRoom(reg, selfPin);
+      joinRoomMember(reg, rid, selfPin);
+      self.roomId = rid;
+      meta.roster.set(selfPin, self.name);
+      meta.lastActiveAt = Date.now();
+      const lkr = livekitConfig();
+      const others = membersOf(reg, rid, selfPin);
+      safeSend(conn.socket, {
+        type: "rejoin",
+        roomId: rid,
+        members: others,
+        recreated: true,
+        cap: mintRoomCap(rid, selfPin, roleOf(meta, selfPin)),
+        selfRole: roleOf(meta, selfPin),
+        hostPin: meta.hostPin ?? null,
+        iceServers: iceServers(selfPin),
+        livekit: lkr.enabled,
+        livekitUrl: lkr.url,
+      });
+      pushLivekitToken(reg, selfPin, rid);
+      // Tell whoever is already back that this peer returned, so the mesh
+      // re-links without waiting for anybody's timeout.
+      others.forEach(m => {
+        const o = reg.clients.get(m.pin);
+        if (o) {
+          safeSend(o.socket, {
+            type: "peer-joined",
+            pin: selfPin,
+            name: self.name,
+            device: self.device,
+            flag: self.flag,
+            role: roleOf(meta, selfPin),
+            iceServers: iceServers(m.pin),
+            livekit: lkr.enabled,
+            livekitUrl: lkr.url,
+          });
+        }
+      });
+      touchBusyState();
+      break;
+    }
+
     case "refresh-livekit": {
       // Client lost or never received its SFU token (mint failure / dropped SSE
       // frame / connect failure). Re-mint for its CURRENT room, derived from
@@ -2324,6 +2581,8 @@ export function handleMessage(
       reg.heldRoom.set(conn.pin, activeRid);
       reg.pinRoom.set(conn.pin, heldRid);
       self.roomId = heldRid;
+      markRoomDirty(activeRid); // Round 11: both rooms' held flags flipped
+      markRoomDirty(heldRid);
       const t = reg.roomReapT.get(heldRid);
       if (t) { clearTimeout(t); reg.roomReapT.delete(heldRid); }
       roomActivityTouch(reg, heldRid);
@@ -2337,6 +2596,7 @@ export function handleMessage(
         roomId: heldRid,
         heldRoomId: activeRid,
         members: membersOf(reg, heldRid, conn.pin),
+        cap: mintRoomCap(heldRid, conn.pin, roleOf(rmeta, conn.pin)),
         selfRole: roleOf(rmeta, conn.pin),
         hostPin: rmeta?.hostPin ?? null,
         iceServers: iceServers(conn.pin),
@@ -2419,6 +2679,7 @@ export function handleMessage(
             type: "joined",
             roomId: activeRid,
             members: membersOf(reg, activeRid, p),
+            cap: mintRoomCap(activeRid, p, roleOf(activeMeta, p)),
             selfRole: roleOf(activeMeta, p),
             hostPin: activeMeta?.hostPin ?? null,
             iceServers: iceServers(p),
@@ -2445,7 +2706,11 @@ export function handleMessage(
         reg.roomMeta.delete(heldRid);
         reg.rooms.delete(heldRid);
       }
-      safeSend(conn.socket, { type: "merged", roomId: activeRid, members: membersOf(reg, activeRid, conn.pin) });
+      // Round 11: the held room was folded into the active one WITHOUT crossing
+      // reapRoom, so neither side would otherwise be re-shadowed.
+      markRoomDirty(heldRid);
+      markRoomDirty(activeRid);
+      safeSend(conn.socket, { type: "merged", roomId: activeRid, members: membersOf(reg, activeRid, conn.pin), cap: mintRoomCap(activeRid, conn.pin, roleOf(activeMeta, conn.pin)) });
       break;
     }
 
@@ -2526,6 +2791,7 @@ export function handleMessage(
           if (!room.has(target) || target === meta!.hostPin) break;
           const role = meta!.cohosts.has(target) ? undefined : "cohost";
           if (role) meta!.cohosts.add(target); else meta!.cohosts.delete(target);
+          markRoomDirty(rid); // Round 11
           broadcastToRoom(reg, rid, { type: "role", pin: target, role: role ?? null });
           break;
         }
@@ -2540,6 +2806,7 @@ export function handleMessage(
           meta!.hostPin = target;
           meta!.cohosts.delete(target);     // new host is no longer just a co-host
           if (oldHost) meta!.cohosts.add(oldHost); // demote old host to co-host
+          markRoomDirty(rid); // Round 11
           // Tell the room about BOTH role changes.
           broadcastToRoom(reg, rid, { type: "role", pin: target, role: "host", hostPin: target });
           if (oldHost) broadcastToRoom(reg, rid, { type: "role", pin: oldHost, role: "cohost", hostPin: target });
@@ -2921,6 +3188,13 @@ export function attachRelay(
   // REDIS_URL. The provider closes over THIS registry, matching
   // activeRegistry's last-attach-wins semantics.
   initBusyStateSync(() => computeBusySnapshot(reg));
+  // Round 11: the durable shadow of the room registry. Completely dormant until
+  // relayCluster hands it a fence epoch, which only ever happens on winning the
+  // leadership lease — so a single-process deploy writes nothing.
+  initRoomStore({
+    snapshotOf: (roomId) => snapshotRoom(reg, roomId),
+    liveRoomIds: () => Array.from(reg.rooms.keys()),
+  });
 
   // ── Cross-instance signaling (phase 2), gated on clusterEnabled()
   //    (RELAY_CLUSTER=1 + REDIS_URL). OFF ⇒ everything here is dormant and the
@@ -2986,6 +3260,37 @@ export function attachRelay(
     startClusterRuntime({
       onInbound: leaderProcess,
       onOutbound: (cid, obj) => { localDelivery.get(cid)?.send(obj); },
+      // LEADER: read the room registry back from Redis before serving anything.
+      onHydrate: async () => {
+        const rooms = await hydrateRooms();
+        const n = applyHydratedRooms(reg, rooms);
+        if (n) console.log(`[relay] hydrated ${n} room(s) from Redis on taking leadership`);
+      },
+      // HOME: leadership moved. The new leader has our ROOMS (it just hydrated)
+      // but not our CLIENTS — a client record owns a live socket, and the socket
+      // lives here. Ask each local browser to re-register, which is the existing,
+      // well-tested path that rebuilds the client record and then hands back a
+      // `rejoin` from the hydrated membership. Old clients that don't know
+      // `resync` simply ignore it and are no worse off than before this round.
+      onLeaderChanged: () => {
+        localDelivery.forEach((sock) => safeSend(sock, { type: "resync" }));
+      },
+      liveCids: () => Array.from(localDelivery.keys()),
+      // LEADER: a home instance stopped beating. Its browsers are unreachable,
+      // but they are NOT necessarily gone — the instance may be restarting and
+      // they will reconnect elsewhere. So run the ORDINARY disconnect path,
+      // which gives each of them RELAY_DISCONNECT_GRACE_MS to come back and
+      // keeps their call membership meanwhile. Silently deregistering them (the
+      // pre-Round-11 behaviour) ended every one of those calls instantly.
+      onHomeLost: (cids) => {
+        for (const cid of cids) {
+          const conn = reg.connections.get(cid);
+          if (!conn) continue;
+          cleanupRegistryConn(reg, cid, conn, onMissedCall);
+          reg.connections.delete(cid);
+          homeOf.delete(cid);
+        }
+      },
     });
   }
 

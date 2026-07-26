@@ -159,8 +159,13 @@ export interface BusEnvelope {
 
 /** Signing key: REDIS_BUS_SECRET, else JWT_SECRET (fleet-uniform by necessity —
  *  it already verifies session cookies on every instance), else null. NEVER
- *  throws: publishBus is contractually no-throw. */
-function busSecret(): string | null {
+ *  throws: publishBus is contractually no-throw.
+ *
+ *  EXPORTED (v2.99.66) so `server/roomStore.ts` signs persisted room records with
+ *  the SAME key rather than re-deriving the rule. A second copy of "which env var
+ *  is the fleet secret" is exactly the duplication that caused the v2.99.49
+ *  identity bug — one definition, two callers. */
+export function busSecret(): string | null {
   return process.env.REDIS_BUS_SECRET || process.env.JWT_SECRET || null;
 }
 

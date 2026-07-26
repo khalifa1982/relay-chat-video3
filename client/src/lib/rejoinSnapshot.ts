@@ -19,6 +19,12 @@ export interface RejoinSnapshot {
   camOn: boolean;
   /** When the snapshot was taken (ms). */
   ts: number;
+  /** Round 11 B: the server-minted room capability, so a rejoin can still be
+   *  authorized after the server has FORGOTTEN the room entirely (its leader
+   *  died and the durable copy was unavailable too). Optional — a snapshot
+   *  written by an older bundle simply has none, and then the recreate fallback
+   *  is unavailable rather than unauthenticated. */
+  cap?: string;
 }
 
 export const REJOIN_KEY = "relay_rejoin";
@@ -33,6 +39,7 @@ export function isFreshSnapshot(s: unknown, nowMs: number): s is RejoinSnapshot 
   if (typeof o.pin !== "string" || !/^\d{6}$/.test(o.pin)) return false;
   if (typeof o.micOn !== "boolean" || typeof o.camOn !== "boolean") return false;
   if (typeof o.ts !== "number" || !Number.isFinite(o.ts)) return false;
+  if (o.cap !== undefined && typeof o.cap !== "string") return false;
   const age = nowMs - o.ts;
   // Reject stale snapshots and absurd future-dated ones (clock skew guard).
   if (age > REJOIN_MAX_AGE_MS || age < -5_000) return false;
