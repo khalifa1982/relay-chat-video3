@@ -27,8 +27,17 @@ describe("aws-ops.yml — trigger + auth safety", () => {
     expect(OPS).not.toMatch(/\n\s*pull_request:/);
   });
   it("offers the ops actions with verify as the safe default (v2.97.2 adds ses/ses-ssm/iam-grant-ses/env-set)", () => {
-    expect(OPS).toMatch(/options: \[verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix\]/);
+    // v2.99.69 appended `recover-identity`. Rewritten as a PREFIX match plus an
+    // explicit default rather than a frozen full list: the exact-list form has now
+    // broken twice on a legitimate addition while telling us nothing about the
+    // property that matters, which is that the DEFAULT is the read-only action.
+    expect(OPS).toMatch(/options: \[verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix/);
     expect(OPS).toMatch(/default: verify/);
+    // Whatever the list grows to, `verify` must stay first — it is the one that
+    // changes nothing, and being first is what makes a mis-click harmless.
+    const opts = (OPS.match(/options: \[([^\]]+)\]/) || [, ""])[1].split(",").map(s => s.trim());
+    expect(opts[0]).toBe("verify");
+    expect(new Set(opts).size).toBe(opts.length); // no duplicate actions
   });
   it("region input defaults to ap-south-1; auth prefers access keys but falls back to the deploy OIDC role", () => {
     expect(OPS).toMatch(/default: ap-south-1/);
@@ -206,5 +215,82 @@ describe("aws-ops.yml — ses-ssm: no free-text workflow_dispatch input reaches 
     // 'https://$DOMAIN' spliced straight into a C-string.
     expect(sesSsm).not.toMatch(/--email-address '\$SES_EMAIL'/);
     expect(sesSsm).not.toMatch(/'https:\/\/\$DOMAIN'/);
+  });
+});
+
+describe("aws-ops.yml — recover-identity: a production DB write, gated and injection-safe", () => {
+  /* v2.99.69. The recovery script (added v2.99.60) needs the live DATABASE_URL,
+     which exists only in /home/relay/.env on the fleet — so SSM is the one path to
+     it that does not involve a human copying a production credential onto a laptop.
+     That makes this the most dangerous action in the file: it can DELETE an identity
+     row. Every property below is what keeps it safe. */
+  const rec = OPS.slice(OPS.indexOf("recover-identity — re-attach an ORPHANED"));
+
+  it("exists as an explicit action with its own three inputs", () => {
+    expect(OPS).toMatch(/options: \[verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix, recover-identity\]/);
+    for (const k of ["recover_number", "recover_email", "recover_apply"]) {
+      expect(OPS).toMatch(new RegExp(`\\n      ${k}:`));
+    }
+    expect(rec).toMatch(/if: inputs\.action == 'recover-identity'/);
+  });
+
+  it("DRY RUN is the default — the write needs recover_apply", () => {
+    const apply = OPS.slice(OPS.indexOf("      recover_apply:"), OPS.indexOf("      turn_apply:"));
+    expect(apply).toMatch(/type: boolean/);
+    expect(apply).toMatch(/default: false/);
+    // --apply is only ever added under the flag.
+    expect(rec).toMatch(/if \[ "\$RAPPLY" = "true" \]; then\s*\n\s*FLAG=" --apply"/);
+  });
+
+  it("refuses without BOTH inputs, and shape-checks the number", () => {
+    expect(rec).toMatch(/if \[ -z "\$\{RNUM\}" \] \|\| \[ -z "\$\{REMAIL\}" \]; then/);
+    expect(rec).toMatch(/\*\[!0-9\]\*\)/);
+    expect(rec).toMatch(/if \[ "\$\{#RNUM\}" -ne 6 \]; then/);
+  });
+
+  it("base64-encodes both free-text inputs and decodes them ON the instance", () => {
+    // Same treatment as SES_EMAIL/DOMAIN and `region` — this file has been bitten
+    // by that exact class twice, so a third free-text input reaching a remote
+    // shell unescaped is not a mistake it gets to make again.
+    expect(rec).toMatch(/NUM_B64=\$\(printf %s "\$RNUM" \| base64 -w0\)/);
+    expect(rec).toMatch(/EMAIL_B64=\$\(printf %s "\$REMAIL" \| base64 -w0\)/);
+    expect(rec).toMatch(/--number \\"\\\$\(echo \$NUM_B64 \| base64 -d\)\\"/);
+    expect(rec).toMatch(/--email \\"\\\$\(echo \$EMAIL_B64 \| base64 -d\)\\"/);
+    // …and the raw values never appear inside the remote command line.
+    const cmdline = rec.slice(rec.indexOf("CMDLINE="), rec.indexOf("PARAMS="));
+    expect(cmdline).not.toMatch(/\$RNUM/);
+    expect(cmdline).not.toMatch(/\$REMAIL/);
+  });
+
+  it("runs on exactly ONE instance — a DB mutation must not fire twice", () => {
+    expect(rec).toMatch(/--instance-ids "\$IID"/);
+    expect(rec).toMatch(/--max-concurrency 1 --max-errors 0/);
+    // Targeting the tag would hit the whole fleet.
+    expect(rec).not.toMatch(/--targets "Key=tag:Name,Values=relay-app"/);
+    expect(rec).toMatch(/sort_by\(Reservations\[\]\.Instances\[\],&LaunchTime\)\[0\]\.InstanceId/);
+  });
+
+  it("reads the verdict from the script's printed exit marker, not the SSM status", () => {
+    // v2.99.46's lesson: a wrapper or a pipeline can mask a non-zero exit, so the
+    // gate has to be something the script itself printed.
+    expect(rec).toMatch(/echo \\"RECOVER_EXIT=\\\$\?\\"/);
+    expect(rec).toMatch(/if echo "\$OUT" \| grep -q "RECOVER_EXIT=0"; then/);
+    expect(rec).toMatch(/::error::the recovery script refused or failed/);
+  });
+
+  it("sources the fleet env so DATABASE_URL is present, and prints no credential", () => {
+    expect(rec).toMatch(/set -a; \. \/home\/relay\/\.env 2>\/dev\/null; set \+a/);
+    expect(rec).not.toMatch(/echo .*DATABASE_URL/);
+  });
+
+  it("the script it invokes is actually shipped to the instances", () => {
+    const deploy = fs.readFileSync(
+      path.resolve(__dirname, "..", ".github", "workflows", "deploy.yml"),
+      "utf8"
+    );
+    expect(deploy).toMatch(/\[ -d scripts \] && echo scripts/);
+    expect(
+      fs.existsSync(path.resolve(__dirname, "..", "scripts", "recover-orphan-identity.mjs"))
+    ).toBe(true);
   });
 });

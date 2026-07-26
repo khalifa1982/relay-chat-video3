@@ -52,8 +52,15 @@ describe("M21 — startGuest is rate limited (number-space exhaustion)", () => {
     expect(body).toMatch(/guestMintGate\(ctx\)/);
     // It must NOT run before the reuse branches…
     expect(body.indexOf("guestMintGate(ctx)")).toBeGreaterThan(body.indexOf("ctx.identity"));
-    // …and must run immediately before the allocation.
-    expect(body).toMatch(/guestMintGate\(ctx\);\s*\n\s*const \{ identity, guestToken \} = await createGuestIdentity\(/);
+    // …and must run immediately before the allocation. The invariant is the
+    // ADJACENCY, so the destructured names are left open — pinning them made this
+    // fail when v2.99.68 added `recoveryKey` to the same statement, which told us
+    // nothing about the gate.
+    expect(body).toMatch(
+      /guestMintGate\(ctx\);\s*\n\s*const \{[^}]*\} = await createGuestIdentity\(/
+    );
+    // And nothing may allocate WITHOUT passing the gate: exactly one call site.
+    expect((body.match(/await createGuestIdentity\(/g) || []).length).toBe(1);
   });
 
   it("is sized for a room of people signing up on one shared address", () => {

@@ -27,6 +27,7 @@ import { uploadAvatarImage } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
 import { useSignOut } from "@/app/useSignOut";
 import { AvatarPicker } from "@/app/AvatarPicker";
+import { GuestRestore } from "@/app/GuestRestore";
 import { AUDIENCE_OPTIONS } from "@/app/statusAudience";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { CountryFlag } from "@/app/CountryFlag";
@@ -392,13 +393,23 @@ export default function ProfilePage() {
         {/* app lock / passcode */}
         <PasscodeSection displayName={me.displayName} />
 
+        {/* restore a previous number (v2.99.68) — the second half of
+            Adopt-and-Retire. The entry screen offers this before you pick a name,
+            but plenty of people will type a name out of habit first and only then
+            realise their old number is missing; without this surface that mistake
+            was unrecoverable. Renders nothing unless this browser holds a recovery
+            record that still resolves, and if the identity you're using now has its
+            own data the server refuses rather than trading one loss for another. */}
+        <RestoreNumberSection onRestored={refresh} />
+
         {/* upgrade CTA for guests */}
         {me.isGuest && (
           <section className="rounded-xl border border-primary/30 bg-primary/5 p-5 space-y-3">
             <h2 className="text-lg font-semibold">Keep this number forever</h2>
             <p className="text-sm text-muted-foreground">
-              Guest sessions are wiped when you close your browser. Create an account to save your
-              number, contacts, and profile permanently across all your devices.
+              Guest sessions end when you close your browser — this browser can restore your
+              number afterwards, but only this one. Create an account to keep your number,
+              contacts, and profile permanently across all your devices.
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
               <Button type="button" className="flex-1" onClick={() => setShowAuth(true)}>
@@ -1372,6 +1383,21 @@ function StatusPrivacySection() {
       </p>
     </section>
   );
+}
+
+/* ============================================================
+   Restore a previous number (v2.99.68). A thin wrapper so this reads
+   like every other Profile section; all the logic — and the decision
+   never to discard the stored key on a failure — lives in
+   client/src/app/GuestRestore.tsx, which the entry screen also uses.
+   One implementation, so the two surfaces can never make different
+   promises about what restoring does.
+   ============================================================ */
+function RestoreNumberSection({ onRestored }: { onRestored: () => void }) {
+  // The heading is passed IN rather than drawn here, because GuestRestore renders
+  // null whenever there is nothing to restore — which is almost always — and a
+  // heading outside that check would leave a titled section with an empty body.
+  return <GuestRestore heading="Restore a previous number" onRestored={onRestored} />;
 }
 
 /* ============================================================

@@ -266,15 +266,36 @@ const CSS = `
 @keyframes lpKb1{0%{transform:scale(1.07) translate(-1.4%,-1%)}100%{transform:scale(1.14) translate(1.4%,1.2%)}}
 @keyframes lpKb2{0%{transform:scale(1.13) translate(1.2%,.9%)}100%{transform:scale(1.06) translate(-1.2%,-1%)}}
 @keyframes lpKb3{0%{transform:scale(1.06) translate(.9%,1.3%)}100%{transform:scale(1.13) translate(-1%,-1.2%)}}
-@keyframes lpSpkA2{0%,21%{box-shadow:0 0 0 2px rgba(111,242,174,.7),0 0 24px rgba(111,242,174,.25)}27%,96%{box-shadow:0 0 0 1px rgba(233,240,242,.09)}100%{box-shadow:0 0 0 2px rgba(111,242,174,.7),0 0 24px rgba(111,242,174,.25)}}
-@keyframes lpSpkO2{0%,21%{opacity:1}27%,96%{opacity:.12}100%{opacity:1}}
 /* Active-speaker sweep (v2.99.16): a green ring lights each tile in turn so the
    grid reads as a LIVE moving call, not fixed photos. Each tile's ring runs the
    same 20s loop at a staggered -2s delay, so the highlight rotates around the
    10-up. Reduced-motion kills it via the global .lp-root * rule below. */
 @keyframes lpActive{0%,13%,100%{opacity:0}3%,10%{opacity:.95}}
-/* A soft "talking" scale pulse for the active window — subtle, transform-only. */
-@keyframes lpTalk{0%,13%,100%{transform:scale(1)}5%,8%{transform:scale(1.018)}}
+/* A "talking" pulse for the active window (v2.99.69): a scale lift PLUS a small
+   nod, because a pure scale reads as a zoom and a nod reads as a person. Still
+   transform-only, so it composes on the compositor with no paint. */
+@keyframes lpTalk{0%,13%,100%{transform:scale(1) translateY(0)}4%{transform:scale(1.014) translateY(-.7px)}7%{transform:scale(1.018) translateY(.5px)}10%{transform:scale(1.012) translateY(-.3px)}}
+/* THE ONE THAT MAKES A STILL READ AS A LIVE FEED (v2.99.69). A real video tile is
+   never perfectly still — there is always sub-pixel drift and the odd hitch from
+   the encoder. Photos have none of that, which is why the grid read as "fixed
+   images" no matter how much the surrounding chrome moved. Deliberately tiny and
+   deliberately NON-periodic-looking (uneven keyframe spacing, prime-ish timings at
+   the call site) so the eye cannot latch onto a loop. Transform-only. */
+@keyframes lpLive{0%{transform:translate3d(0,0,0)}17%{transform:translate3d(.35px,-.3px,0)}31%{transform:translate3d(-.25px,.4px,0)}44%{transform:translate3d(.4px,.25px,0)}58%{transform:translate3d(-.35px,-.35px,0)}73%{transform:translate3d(.2px,.45px,0)}88%{transform:translate3d(-.4px,-.2px,0)}100%{transform:translate3d(0,0,0)}}
+/* Voice-shaped level bars (v2.99.69). The old shared lpEq was a smooth 1.1s
+   sine on every bar, which reads as a loading spinner, not a voice. Speech is
+   bursty and the bars must disagree with each other, so each has its own uneven
+   envelope and the call site gives them non-harmonic durations that will not visibly
+   re-align. scaleY only — no height/paint. */
+@keyframes lpVox1{0%,100%{transform:scaleY(.22)}12%{transform:scaleY(.9)}23%{transform:scaleY(.35)}39%{transform:scaleY(1)}52%{transform:scaleY(.28)}66%{transform:scaleY(.78)}81%{transform:scaleY(.4)}}
+@keyframes lpVox2{0%,100%{transform:scaleY(.5)}9%{transform:scaleY(.25)}27%{transform:scaleY(1)}41%{transform:scaleY(.42)}55%{transform:scaleY(.85)}70%{transform:scaleY(.2)}88%{transform:scaleY(.7)}}
+@keyframes lpVox3{0%,100%{transform:scaleY(.35)}15%{transform:scaleY(.62)}30%{transform:scaleY(.24)}47%{transform:scaleY(.95)}61%{transform:scaleY(.5)}77%{transform:scaleY(.3)}92%{transform:scaleY(.82)}}
+/* The speaking ENVELOPE, on the same 20s/-2s schedule as the ring, so the meter
+   and the highlight belong to the same person. Before v2.99.69 four tiles had
+   hardcoded speaking times on a different stagger from the ring sweep, so the ring
+   lit one face while another face's bars bounced — nothing correlated, and the whole
+   effect read as decoration rather than as somebody talking. Opacity only. */
+@keyframes lpVoxOn{0%,14%,100%{opacity:0}3%,11%{opacity:1}}
 /* ZERO-JS loader failsafes (v2.95.9). The engine's FIRST action is adding
    .lp-js-ok to the overlay, which disarms this CSS watchdog (the JS watchdogs
    take over). If the engine never runs or dies before that, pure CSS fades the
@@ -340,38 +361,114 @@ const CSS = `
 /* Erase key: dimmed by JS until there is a digit to erase; .lp-key supplies
    the hover/active feedback, so full opacity on hover reads as "armed". */
 .lp-bs:hover{opacity:1!important}
+/* The 10-up group grid (v2.99.69). It used auto-fit/minmax(130px), which on a
+   1138px-wide card resolves to EIGHT columns — so ten people rendered as 8 + 2
+   with a large empty block underneath, which is what the owner's screenshot shows.
+   Ten participants want the conventional 5x2; a phone gets 2x5, and the middle
+   sizes get 3 and 4 so no breakpoint ever leaves a single orphan on the last row
+   (10 divides by 5, 2 and — with one short row — 3 and 4). */
+.lp-gcgrid{grid-template-columns:repeat(5,minmax(0,1fr))}
+@media (max-width:900px){.lp-gcgrid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media (max-width:680px){.lp-gcgrid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:470px){.lp-gcgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 `;
 
-/** Per-tile Ken-Burns/speaking specs for the 10-person group grid. */
+/**
+ * Per-tile specs for the 10-person group grid.
+ *
+ * v2.99.69 dropped the per-entry `spk`/`eq` fields. They pinned four tiles to
+ * hardcoded speaking times on a DIFFERENT stagger from the ring sweep, so the ring
+ * lit one face while another face's bars bounced. Speaking is now derived from the
+ * tile's index — one schedule for the ring, the meter, the nod and the chip dot —
+ * which is what makes the grid read as one conversation instead of ten decorations.
+ * `live` is the per-tile jitter timing: non-harmonic values so no two tiles drift
+ * in lockstep and none of them visibly loops.
+ */
 const GC = [
-  { n: "LINA · HOST", kb: "lpKb1 12s ease-in-out -2s infinite alternate", spk: "lpSpkA2 20s infinite", eq: "lpSpkO2 20s infinite" },
-  { n: "OMAR", kb: "lpKb2 14s ease-in-out -5s infinite alternate" },
-  { n: "SARA", kb: "lpKb3 11s ease-in-out -1s infinite alternate" },
-  { n: "MAYA", kb: "lpKb2 13s ease-in-out -7s infinite alternate", spk: "lpSpkA2 20s -15s infinite", eq: "lpSpkO2 20s -15s infinite" },
-  { n: "ADAM", kb: "lpKb1 15s ease-in-out -4s infinite alternate" },
-  { n: "NORA", kb: "lpKb3 12s ease-in-out -6s infinite alternate" },
-  { n: "ZAIN", kb: "lpKb2 11s ease-in-out -3s infinite alternate", muted: true },
-  { n: "DANA", kb: "lpKb1 13s ease-in-out -8s infinite alternate", muted: true },
-  { n: "KARIM", kb: "lpKb3 14s ease-in-out -2s infinite alternate", spk: "lpSpkA2 20s -10s infinite", eq: "lpSpkO2 20s -10s infinite" },
-  { n: "HALA", kb: "lpKb2 12s ease-in-out -5s infinite alternate", spk: "lpSpkA2 20s -5s infinite", eq: "lpSpkO2 20s -5s infinite" },
+  { n: "LINA · HOST", kb: "lpKb1 12s ease-in-out -2s infinite alternate", live: "7.3s -0.4s" },
+  { n: "OMAR", kb: "lpKb2 14s ease-in-out -5s infinite alternate", live: "6.1s -2.7s" },
+  { n: "SARA", kb: "lpKb3 11s ease-in-out -1s infinite alternate", live: "8.9s -5.1s" },
+  { n: "MAYA", kb: "lpKb2 13s ease-in-out -7s infinite alternate", live: "5.7s -1.3s" },
+  { n: "ADAM", kb: "lpKb1 15s ease-in-out -4s infinite alternate", live: "9.7s -6.2s" },
+  { n: "NORA", kb: "lpKb3 12s ease-in-out -6s infinite alternate", live: "6.7s -3.9s" },
+  { n: "ZAIN", kb: "lpKb2 11s ease-in-out -3s infinite alternate", live: "8.3s -0.9s", muted: true },
+  { n: "DANA", kb: "lpKb1 13s ease-in-out -8s infinite alternate", live: "7.9s -4.6s", muted: true },
+  { n: "KARIM", kb: "lpKb3 14s ease-in-out -2s infinite alternate", live: "6.3s -2.1s" },
+  { n: "HALA", kb: "lpKb2 12s ease-in-out -5s infinite alternate", live: "9.1s -7.4s" },
 ];
 
 const MUTE_SVG = `<span style="position:absolute;right:8px;bottom:7px;width:16px;height:16px;border-radius:50%;background:rgba(255,93,93,.15);border:1px solid rgba(255,93,93,.45);display:flex;align-items:center;justify-content:center"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#ff5d5d" stroke-width="2.4" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M2 2l20 20"></path></svg></span>`;
 const eqBars = (anim: string, w = 2.5, h = 10) =>
   `<span style="position:absolute;right:8px;bottom:8px;display:flex;align-items:flex-end;gap:2px;height:${h}px;animation:${anim}"><span style="width:${w}px;height:5px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out infinite"></span><span style="width:${w}px;height:9px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out .18s infinite"></span><span style="width:${w}px;height:7px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpEq 1.1s ease-in-out .36s infinite"></span></span>`;
 
+/**
+ * A voice-shaped level meter for the group grid (v2.99.69), gated by the SHARED
+ * speaking schedule so it belongs to whoever the ring is lighting.
+ *
+ * Four bars, each with its own envelope and a non-harmonic duration, so they
+ * disagree with one another the way a real meter does. The old version ran one
+ * smooth sine on every bar, which reads as a spinner.
+ */
+const voxMeter = (delay: string) =>
+  `<span style="position:absolute;right:8px;bottom:8px;display:flex;align-items:flex-end;gap:2px;height:11px;opacity:0;pointer-events:none;animation:lpVoxOn 20s ${delay} infinite">` +
+  `<span style="width:2.5px;height:11px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpVox1 .74s ease-in-out infinite"></span>` +
+  `<span style="width:2.5px;height:11px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpVox2 .53s ease-in-out infinite"></span>` +
+  `<span style="width:2.5px;height:11px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpVox3 .89s ease-in-out infinite"></span>` +
+  `<span style="width:2.5px;height:11px;border-radius:2px;background:#6ff2ae;transform-origin:bottom;animation:lpVox2 .61s ease-in-out -.2s infinite"></span>` +
+  `</span>`;
+
+/**
+ * Speaking turn per tile, or null for a muted one.
+ *
+ * The turn is the tile's ordinal among the UNMUTED tiles, not its raw index. The
+ * first cut of v2.99.69 used the raw index, and the screenshot showed the bug
+ * immediately: the ring lit ZAIN and DANA, who wear mute badges — a muted person
+ * highlighted as the active speaker, which is worse than no highlight at all.
+ * Eight speakers over the shared 20s loop gives 2.5s each and fills the loop
+ * exactly, so there is no dead gap where nobody is talking either.
+ */
+export function speakingTurns(
+  tiles: ReadonlyArray<{ muted?: boolean }>
+): Array<number | null> {
+  let turn = 0;
+  return tiles.map(t => (t.muted ? null : turn++));
+}
+
 function groupTiles(): string {
+  const turns = speakingTurns(GC);
+  const speakers = turns.filter(t => t !== null).length || 1;
+  const slot = 20 / speakers; // seconds of the shared loop per speaker
   return GC.map((g, i) => {
-    // Active-speaker sweep (v2.99.16): a green ring + a subtle scale pulse that
-    // lights each tile in turn (staggered -2s over a shared 20s loop), so the
-    // grid reads as a LIVE moving call. The ring is its OWN overlay so it never
-    // fights the container's per-tile speaking box-shadow. The container's
-    // scale pulse (lpTalk) is COMMA-combined with any per-tile speaking anim so
-    // both run (a second `animation:` would clobber the first).
-    const delay = `${-i * 2}s`;
-    const containerAnim = g.spk ? `lpTalk 20s ${delay} infinite, ${g.spk}` : `lpTalk 20s ${delay} infinite`;
-    const ring = `<span style="position:absolute;inset:0;border-radius:12px;border:2px solid #6ff2ae;box-shadow:0 0 22px rgba(111,242,174,.45),inset 0 0 18px rgba(111,242,174,.18);opacity:0;pointer-events:none;animation:lpActive 20s ${delay} infinite"></span>`;
-    return `<div style="position:relative;border-radius:12px;overflow:hidden;background:linear-gradient(150deg,#101820,#0b1016);border:1px solid rgba(233,240,242,.08);aspect-ratio:4/3;animation:${containerAnim}"><img src="${P[i]}" alt="${g.n}" loading="lazy" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;animation:${g.kb}"><span style="position:absolute;left:8px;bottom:7px;padding:3px 8px;border-radius:999px;background:rgba(10,13,16,.7);font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#e9f0f2">${g.n}</span>${g.muted ? MUTE_SVG : g.eq ? eqBars(g.eq) : ""}${ring}</div>`;
+    // ONE schedule per tile, for everything (v2.99.69). The ring, the level meter,
+    // the nod and the chip's speaking dot all run the same 20s loop at the same
+    // per-speaker offset, so the grid reads as a single conversation moving around
+    // the room. Before this, four tiles carried their own hardcoded speaking times
+    // on a different stagger from the ring sweep, so the highlight and the bars
+    // belonged to different people and the whole thing looked decorative.
+    const turn = turns[i];
+    const delay = `${-(turn ?? 0) * slot}s`;
+    // The nod runs on the CONTAINER. The old code comma-appended a box-shadow
+    // animation here for four tiles; that has been dropped — box-shadow animates
+    // by REPAINTING, and the ring overlay below already draws the same highlight
+    // with opacity, which the compositor handles for free.
+    // A MUTED tile gets no nod and no ring. It stays a live feed (the jitter and
+    // Ken-Burns still run) but it never takes a turn, because nothing looks more
+    // wrong than a mute badge on the person the highlight says is talking.
+    const containerAnim = turn === null ? "" : `lpTalk 20s ${delay} infinite`;
+    const ring =
+      turn === null
+        ? ""
+        : `<span style="position:absolute;inset:0;border-radius:12px;border:2px solid #6ff2ae;box-shadow:0 0 22px rgba(111,242,174,.45),inset 0 0 18px rgba(111,242,174,.18);opacity:0;pointer-events:none;animation:lpActive 20s ${delay} infinite"></span>`;
+    // A separate wrapper for the live-feed jitter: the img itself is already
+    // running Ken-Burns, and two transform animations on ONE element do not
+    // compose — the later declaration simply wins.
+    const feed = `<span style="position:absolute;inset:0;display:block;animation:lpLive ${g.live} linear infinite"><img src="${P[i]}" alt="${g.n}" loading="lazy" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;animation:${g.kb}"></span>`;
+    // A speaking dot inside the name chip. Opacity-gated on the same schedule
+    // rather than recolouring the chip, which would repaint text.
+    const dot = g.muted
+      ? ""
+      : `<span style="display:inline-block;width:4px;height:4px;border-radius:50%;background:#6ff2ae;margin-inline-end:4px;vertical-align:middle;opacity:0;animation:lpVoxOn 20s ${delay} infinite"></span>`;
+    return `<div style="position:relative;border-radius:12px;overflow:hidden;background:linear-gradient(150deg,#101820,#0b1016);border:1px solid rgba(233,240,242,.08);aspect-ratio:4/3${containerAnim ? `;animation:${containerAnim}` : ""}">${feed}<span style="position:absolute;left:8px;bottom:7px;padding:3px 8px;border-radius:999px;background:rgba(10,13,16,.7);font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#e9f0f2">${dot}${g.n}</span>${g.muted ? MUTE_SVG : voxMeter(delay)}${ring}</div>`;
   }).join("");
 }
 
@@ -586,7 +683,7 @@ function markup(host: string, t: Copy, ar: boolean): string {
         <div style="margin-top:28px;border:1px solid rgba(233,240,242,.12);border-radius:20px;overflow:hidden;background:rgba(10,13,16,.65);box-shadow:0 30px 80px rgba(0,0,0,.5)">
           ${chromeBar(host, " — group call · 10 people")}
           <div style="position:relative;background:#0a0d10">
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;padding:12px 12px 64px">${groupTiles()}</div>
+            <div class="lp-gcgrid" style="display:grid;gap:8px;padding:42px 12px 64px">${groupTiles()}</div>
             <span style="position:absolute;left:14px;top:12px;display:flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;background:rgba(10,13,16,.6);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(111,242,174,.3);font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#6ff2ae"><span style="width:6px;height:6px;border-radius:50%;background:#6ff2ae;animation:lpBlink 1.4s infinite;display:block"></span>GROUP CALL · 10 LIVE</span>
             <span style="position:absolute;right:14px;top:14px;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.16em;color:rgba(148,162,172,.7)">01:27</span>
             <div style="position:absolute;left:50%;bottom:14px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:9px 16px;border-radius:999px;background:rgba(14,19,23,.7);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(233,240,242,.12);font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#94a2ac"><span style="color:#6ff2ae">10</span> ON THE CALL</div>

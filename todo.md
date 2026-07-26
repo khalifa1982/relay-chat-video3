@@ -7557,6 +7557,193 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.70 — the group grid reads as a live call; the orphan recovery can actually be run (2026-07-26)
+- [x] THE GROUP-CALL TILES (owner, asked TWICE: *"I told you before to edit it to make it animated like
+      people is talk… their lips is moving"*). WHAT IS HONESTLY POSSIBLE, SAID PLAINLY FIRST: lips cannot
+      move on a still image. The ten tiles are stock PHOTOGRAPHS of people on video calls — laptop and
+      monitor bezels in frame, faces at wildly different scales and positions — so there is no normalised
+      mouth region to animate; a hardcoded mouth overlay would land on a houseplant in one tile and a
+      keyboard in another. Real lip movement needs real footage, which is an asset decision. So this
+      release makes the grid read as a live conference by every other means, and the load-bearing
+      insight is that what betrayed the photos was NOT the missing lip motion — it was that NOTHING
+      CORRELATED.
+- [x] THE ACTUAL BUG: four tiles carried hardcoded speaking times (`lpSpkA2`/`lpSpkO2` at -15s/-10s/-5s)
+      on a DIFFERENT stagger from the ring sweep (-2s per tile), so the ring lit one face while another
+      face's bars bounced. Nothing belonged to anybody, which is exactly why 20s of motion still read as
+      decoration. Now there is ONE schedule per tile — ring, level meter, nod and the chip's speaking dot
+      all run the same 20s loop at the same offset — so the grid reads as a single conversation moving
+      around the room.
+- [x] A MUTED PERSON IS NEVER THE SPEAKER. The first cut derived the schedule from the raw tile index and
+      the screenshot showed the bug immediately: the ring lit ZAIN and DANA, who wear mute badges. New
+      `speakingTurns()` gives a turn only to UNMUTED tiles (ordinal, not index), and eight speakers over
+      the shared 20s loop is 2.5s each, which fills the loop exactly so there is no dead gap either. A
+      muted tile keeps its live feed but gets no ring, no nod, no meter and no dot.
+- [x] WHAT MAKES A PHOTOGRAPH READ AS A FEED: new `lpLive`, a sub-pixel non-periodic drift on every tile.
+      A real video tile is never perfectly still; photographs have no drift at all, which is why the grid
+      read as fixed images however much the surrounding chrome moved. It rides a WRAPPER rather than the
+      img, because the img already runs Ken-Burns and two transform animations on ONE element do not
+      compose — the later declaration simply wins. Ten non-harmonic timings so no two tiles drift in
+      lockstep and none visibly loops.
+- [x] THE LEVEL BARS ARE VOICE-SHAPED. The old `lpEq` was one smooth 1.1s sine on every bar, which reads
+      as a loading spinner; speech is bursty and the bars have to disagree with one another. Four bars,
+      four uneven envelopes (`lpVox1/2/3`), four different periods. `lpTalk` also became a nod plus a
+      scale rather than a pure scale, because a pure scale reads as a camera zoom and an offset reads as a
+      person.
+- [x] COST, MEASURED — this is the page that made a phone hot two releases ago, so the claim is measured
+      rather than asserted. Emulated 390px phone at 4x CPU throttle, before -> after: **repainting
+      animations 4 -> 0** (the removed `lpSpkA2` animated `box-shadow`, which repaints every frame),
+      compositor-only animations 50 -> 84, phone layout and tile size identical. Repaint is the expensive
+      one, so this is a net win on the metric that matters; layer count went up and that is the deliberate
+      trade, stated rather than hidden. No JavaScript is added — the whole effect is CSS, and it stays
+      inside the existing `prefers-reduced-motion` kill switch.
+- [x] TEN PEOPLE NO LONGER RENDER AS EIGHT PLUS TWO. `auto-fit/minmax(130px,1fr)` resolved to EIGHT
+      columns on the 1138px card, so the 10-up rendered 8 + 2 with a large empty block underneath — which
+      is what the owner's screenshot shows. Now an explicit 5x2, stepping to 4 / 3 / 2 so no breakpoint
+      orphans a single tile, and a phone gets 2x5 (verified: 2 columns, no horizontal overflow). The
+      "GROUP CALL · 10 LIVE" chip also sat ON TOP of the first tile; it now has its own band, confirmed by
+      rect intersection rather than by eye — and the FIRST metric written for it was wrong (it compared
+      the grid CONTAINER's box to the card's, but padding moves the tiles, not the container, so it could
+      never have detected the fix).
+- [x] THE ORPHAN RECOVERY CAN NOW ACTUALLY BE RUN. `scripts/recover-orphan-identity.mjs` has existed since
+      v2.99.60 but had no way to reach a live database: `DATABASE_URL` exists only in `/home/relay/.env` on
+      the fleet, and this environment cannot reach production. New `recover-identity` action in
+      `aws-ops.yml` runs it over SSM on ONE app instance, sourcing the fleet env, so no production
+      credential ever has to be copied onto anyone's laptop and none is printed.
+      - DRY RUN IS THE DEFAULT (`recover_apply` defaults false), because the script's one destructive act
+        is deleting the account's current identity row — which it does only after proving that row is
+        empty across all seven identity-referencing tables.
+      - ONE instance, `--max-concurrency 1 --max-errors 0`. Running a database mutation on both boxes
+        would in fact be harmless (the second pass finds the orphan already claimed and refuses), but
+        "harmless because a guard catches it" is not a reason to fire a write twice.
+      - The verdict is read from the script's own printed `RECOVER_EXIT=` marker rather than the SSM
+        status, because a wrapper or a pipeline can mask a non-zero exit — the v2.99.46 bug.
+      - INJECTION: `recover_number` and `recover_email` are free-text `workflow_dispatch` inputs that end
+        up inside a command string executed on production EC2. This file has been bitten by exactly that
+        class TWICE (SES_EMAIL/DOMAIN, then `region`), so both get the established treatment — base64 on
+        the runner, decoded ONLY on the instance. PROVEN EMPIRICALLY, not asserted: the step's own CMDLINE
+        construction was replayed with eight hostile values (quote+semicolon, double-quote break, `$( )`,
+        backticks, `&&`, `|`, an embedded newline) and executed with a stub `node`; in all 8 the value
+        arrived as ONE literal argument and no payload ran. The FIRST harness reported all eight as pwned
+        — a bug in the harness, not the code: the stub echoes its arguments, so the payload's own text
+        appeared in the output and a naive grep matched it. Text in output is not evidence of execution,
+        so the detector became a sentinel FILE that either exists or does not.
+- [x] Tests: `client/src/pages/groupGridLive.test.ts` (19, incl. behavioural `speakingTurns` coverage) and
+      8 new `recover-identity` pins in `awsOps.test.ts`. TWO PRE-EXISTING PINS REWRITTEN TO THE STRONGER
+      INVARIANT rather than relaxed: the v2.99.16 grid pin asserted `-i * 2` and the comma-combined
+      `g.spk` speaking animation — and both of those WERE the incoherence this release removed, so it now
+      asserts that exactly one schedule exists and that a muted tile takes no turn; and the aws-ops
+      options pin froze the exact action list, which has now broken twice on a legitimate addition while
+      saying nothing about the property that matters, so it is a prefix match plus "verify must stay
+      first, and no duplicates". Suite 2189 passed / 1 skipped (2190); check and build green. (That total is measured AFTER
+      rebasing onto main's Round 11, which landed while this branch was open and took the v2.99.68
+      number — hence the renumber to .69/.70. My own pre-rebase figures were 2121 and 2148.)
+- [x] STILL OPEN: lip movement itself, which needs footage. Everything else in the owner's batch is done.
+
+## v2.99.69 — Adopt-and-Retire: a guest can reclaim the number a browser close forgot (2026-07-26)
+- [x] THE LAST STRUCTURAL DATA-LOSS PATH. v2.99.49 fixed the guest -> register transition and v2.99.54
+      welded the number to the person through a renumber. What stayed broken was simpler and far more
+      common: **a guest closes their browser**. Both things that resolve a guest are session-scoped BY
+      DESIGN — the device id lives in `sessionStorage` and the guest cookie is a session cookie — so the
+      number, contacts, threads, call history and statuses were stranded with NOTHING left in the browser
+      able to name the row. Nothing reaps those rows either, so the data sat there, intact and unreachable.
+      This is the real answer to the owner's requirement that data "move with you whenever you are moving".
+- [x] THE DESIGN DECISION THAT MAKES IT SAFE: **automatic resolution is NOT loosened.** Making the device
+      id or the cookie durable would restore the previous guest AUTOMATICALLY, which on a SHARED browser
+      drops the next person into someone else's account — that is precisely why the session scoping exists,
+      and it was an explicit product decision, not an oversight. So this adds a SECOND, DELIBERATE path
+      instead of widening the first: a recovery key the browser keeps in `localStorage`, sent only when the
+      person asks for their number back. Because recovery takes a tap, an explicit **sign-out** is enough to
+      sever it — `forgetGuestRecovery()` on both sign-out paths — and the shared-browser property is
+      preserved by the gesture that actually protects it. Pinned: the device id is still sessionStorage and
+      `guestCookieOptions` still adds no `maxAge`.
+- [x] THE KEY. New `server/guestRecovery.ts` (dependency-free): 32 bytes of CSPRNG as 64 hex, stored
+      SERVER-SIDE ONLY AS A SHA-256 HASH in the new nullable `identities.recoveryHash` (+ `recoveryIssuedAt`),
+      so a row read — or a database dump — never yields something that can claim an identity, the same reason
+      `push_subscriptions.claimHash` is a hash. Plain sha256 with no salt is correct here and a KDF would be
+      wrong: the input is 256 bits of uniform randomness so there is no dictionary to stretch against, and
+      every request must find the row BY this value, which a per-row salt would turn into a table scan.
+      `normalizeRecoveryKey` fails CLOSED — anything that is not exactly 64 hex is never hashed and never
+      looked up. Minted inside the SAME insert that creates the identity, so there is no window in which a
+      guest exists with no way back to it.
+- [x] EVERY EXISTING GUEST IS HEALED. Every row minted before this release has a NULL `recoveryHash` and
+      would otherwise stay permanently unrecoverable — which is the exact failure being fixed. New
+      `ensureGuestRecoveryKey` issues one on the row's NEXT visit, called from both of `startGuest`'s reuse
+      branches, so an ordinary returning visitor is covered with no action. It never overwrites an EXISTING
+      hash (that would invalidate the copy the browser is already holding, converting a recoverable identity
+      into a lost one), never touches a row with a `userId`, and never throws — a guest sign-in must not fail
+      over a convenience column. The verdict comes from `affectedRows`, so two concurrent requests cannot
+      both believe they minted the live key.
+- [x] THE SAFETY GATE, because this feature DELETES AN IDENTITY ROW. `adoptRecoveredIdentity` binds the
+      caller to the recovered identity and retires the one they were using — and the row being retired must
+      be **provably EMPTY**, counted across all seven identity-referencing tables by the new
+      `identityFootprint`. Otherwise adoption would simply move the loss to the other row and this feature
+      would become a new way to destroy data. There is deliberately **no override flag**. An unreadable count
+      is reported as **-1, never 0**, and any negative refuses — treating an unknown as empty is how you
+      delete somebody's messages. The column list is the one `scripts/recover-orphan-identity.mjs` validates
+      against `information_schema`: note `contacts.ownerId` (NOT `ownerIdentityId`) and that call history
+      splits into `callerIdentityId`/`calleeIdentityId`; both were wrong in that script's first draft and a
+      test now forbids the wrong spelling.
+- [x] THE RECOVERED IDENTITY KEEPS ITS OWN NUMBER — that is the entire point, since the number is what other
+      people stored. Nothing in the adoption path writes `identities.number` (pinned), so the
+      `NUMBER_BEARING_COLUMNS` contract from v2.99.54 needs no new entry and nobody who saved 601-586 is
+      broken by its owner coming back. One transaction: retire FIRST (the per-account unique index means the
+      claim cannot succeed while the old row exists), then claim, each statement re-stating its own
+      preconditions in the WHERE so a concurrent change LOSES instead of corrupting; a lost claim throws to
+      roll the delete back rather than leaving the caller with no identity at all, and is reported as
+      `race-lost` rather than papered over. Idempotent when the caller is already on the target.
+- [x] TWO CALLER SHAPES, ONE RULE. A GUEST has this browser rebound to the recovered row (device id + a
+      fresh guest token move over, so every later request resolves it the ordinary way with no special case
+      anywhere else). A REGISTERED caller has the row CLAIMED by their account — the same claim
+      `ensureUserIdentity` performs — with the guest handles dropped, because after adoption the account is
+      the only way in. A visitor with NO identity yet skips the retire entirely, and that is the PRIMARY
+      path: someone reopens their browser and restores BEFORE typing a name.
+- [x] AN EMERGENT PROPERTY WORTH NAMING: this also gives a **self-service fix for the owner's original bug**.
+      If a registration ever fails to adopt the browser's guest row, that row stays `userId IS NULL` while the
+      browser still holds its key — so the Profile card offers exactly the stranded identity, and a registered
+      caller can claim it onto their account without an operator touching the database.
+- [x] `identity.guestRecoveryPreview` (read-only) answers with the number, name and footprint the prompt shows
+      verbatim — "restore 601-586 · 14 contacts, 320 messages" — because a restore prompt the user cannot
+      verify is one they should not tap; negative counts report `null` rather than a confident zero, so the copy
+      falls back to "your data" instead of naming figures it cannot stand behind. `identity.adoptGuestRecovery`
+      performs it. Both `directoryGate`-limited BEFORE any database work (brute force is not the threat at 2^256
+      — an unmetered DB read is), both reject a malformed key without hashing it, and refusals are NAMED
+      (`not-found` / `current-has-data` / `footprint-unknown` / `race-lost` / `unavailable`) because each has a
+      different correct next step and `current-has-data` in particular must never be silently "resolved" by
+      throwing one side away. A key can only ever name an UNCLAIMED row (`userId IS NULL`) and is deliberately
+      NOT gated on `guestExpiresAt` — that expiry models the COOKIE's life, and this lookup exists for exactly
+      the case where the cookie is long gone. Registration now also nulls `recoveryHash` as defence in depth.
+- [x] UI. New `client/src/lib/guestRecovery.ts` (localStorage, NOT a cookie — a cookie is sent on every request,
+      which is what would make recovery automatic again) and `client/src/app/GuestRestore.tsx`, used by BOTH
+      surfaces so they can never make different promises: the entry screen ABOVE the sign-in card (for a
+      returning guest, restoring IS the primary action — typing a name mints a second identity and strands the
+      first), and a Profile section for someone who typed a name before noticing. Deliberately NOT on the
+      `/i/<pin>` call-link screen, which is one focused field by design. **The card NEVER discards the stored
+      key on a failure** — it is the only copy in existence, and a lookup can come back empty for reasons that
+      have nothing to do with the key (a DB blip, a rate-limit, a dropped request), so forgetting is only ever
+      an explicit "Not me" tap; a test asserts there is exactly ONE `forgetGuestRecovery()` call and that it is
+      not in the error path. The number is `dir="ltr"` + bidi-isolated so an RTL display name cannot reorder it.
+      Guest copy on the entry screen, in Profile and in the sign-out dialog was corrected: a browser close no
+      longer wipes the number, but signing out still does, and the dialog now says so.
+- [x] Tests: `server/guestRecovery.test.ts` (54 — behavioural coverage of the key/hash/normalize helpers plus
+      pins on every safety property). **All 10 tripwires verified by MUTATION** (footprint gate removed, contacts
+      column renamed, unknown-count read as 0, the `userId` gate dropped, an existing key overwritten, sign-out
+      keeping the record, the card forgetting on failure, the device id made durable, the gate mount removed, and
+      adoption writing the number) — each mutation reverted from a byte-exact backup copy, never from git, per the
+      v2.99.56 lesson about a harness that discarded the work under test.
+- [x] Suite 2189 passed / 1 skipped (2190) after the rebase onto main's Round 11; check and build green.
+- [x] TWO PRE-EXISTING PINS REWRITTEN TO THE STRONGER INVARIANT rather than relaxed. The v2.99.49 mint-gate pin
+      hardcoded the destructured names (`{ identity, guestToken }`) and broke when `recoveryKey` joined the same
+      statement — it now asserts the ADJACENCY, which is the actual invariant, plus that `createGuestIdentity`
+      has exactly ONE call site so nothing can allocate without passing the gate. The v2.99.43 M47 pin sliced to
+      a bare `identities_user_unique` token; this release mentioned that index name in prose 1,000 lines earlier,
+      which put the slice's end BEFORE its start and silently reduced it to `""` — a pin reading an empty string
+      cannot fail for the reason it was written. It now anchors on the migrator entry and asserts the slice is
+      non-empty first. (The colliding comment was also reworded.) Both rewrites verified to still bite.
+- [x] STILL OPEN, unchanged and stated plainly: the owner's own 601-586 row predates this feature, so its key
+      does not exist and `scripts/recover-orphan-identity.mjs` remains the route for that one — its database paths
+      have still never run, which is why the destructive half stays behind `--apply`. The animated group-call tiles
+      still need an asset decision. Email deliverability is still mostly DNS.
+
 ## v2.99.67 — phone heating, a vanishing conference tile, the wrapped dial pad, the missed-call banner (2026-07-26)
 - [x] 1. THE LANDING PAGE MADE PHONES HOT. Owner: "when I open this website from the phone, the phone is heating."
       MEASURED on an emulated 390px phone at 4x CPU throttle against the real built bundle, not guessed. The page
