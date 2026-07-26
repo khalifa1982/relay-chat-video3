@@ -3614,7 +3614,22 @@ export function startRelay(root: HTMLElement): RelayHandle {
   const SOUND_WAVE_HTML = '<div class="sound-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>';
   // Placeholder (avatar + full name, shown when the camera is off) + an info
   // chip (device + live speed) used by every tile builder.
-  function tileContentHTML(name: string, device: string, flag: string, pin?: string): string {
+  /**
+   * The ONE builder for every participant tile — remote (mesh + SFU), placeholder
+   * and self. `pin` absent ⇒ no ⋮ menu, no maximize, no Add pill and no digits in
+   * the band (you cannot add yourself, and the owner has said they do not need
+   * their own number shown back to them).
+   *
+   * `avatarName` exists only for the SELF tile, whose band reads "You" while its
+   * avatar must still show the person's own initials.
+   */
+  function tileContentHTML(
+    name: string,
+    device: string,
+    flag: string,
+    pin?: string,
+    avatarName?: string
+  ): string {
     const dev = device
       ? '<span class="ti-dev">' + escapeHtml(device) + "</span>"
       : '<span class="ti-dev"></span>';
@@ -3633,16 +3648,38 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // aren't a saved contact yet. `addContactMarkHTML` returns "" for saved
     // peers so the mark disappears the moment they're added.
     const addMark = pin ? addContactMarkHTML(pin, name) : "";
-    // The flag lives ONLY in the bottom-left .nm label (not also in the centered
-    // cam-off name) so it never renders twice on a camera-off tile.
+    // THE NAME APPEARS EXACTLY ONCE (v2.99.82, owner asked twice).
+    //
+    // This used to render it THREE times on one tile: the initials disc, then a
+    // centred `.ph-name` under it, then again in the bottom `.nm` band. Owner,
+    // with a marked-up screenshot circling all three: "you mentioned the name in
+    // two places ... You don't need to repeat the name. You need to put the
+    // profile picture or the avatar, and below it, you put add to contact if he
+    // was not in your contact. and at the bottom of the border of the frame of the
+    // user where you put the flag and you put his first name only, and beside, you
+    // put the PIN number, the six digits without mention PIN."
+    //
+    // So: avatar (photo, or initials as the fallback) -> the Add pill if they are
+    // not saved -> one bottom band carrying flag · first name · six digits.
+    // `.ph-name` is GONE.
+    //
+    // FIRST NAME ONLY in the band, with the full name on `title` so nothing is
+    // lost to a hover or a screen reader.
+    const first = (name || "").trim().split(/\s+/)[0] || name;
+    // The six digits raw — no "PIN" label, no grouping dash. `dir="ltr"` plus bidi
+    // ISOLATION (the v2.99.77 PinTag lesson) so an Arabic first name beside it
+    // cannot reorder the digits.
+    const pinTag = /^\d{6}$/.test(pin || "")
+      ? '<span class="nm-pin" dir="ltr">' + escapeHtml(pin as string) + "</span>"
+      : "";
     return (
-      // M26: `name` is a peer-chosen display name. The two full renderings below
-      // are escaped; escape the initials too — the 2-char slice can't carry an
-      // event handler, but a bare "<" still corrupts this row's parse.
-      '<div class="ph"><div class="av">' + escapeHtml(initials(name)) + "</div>" +
-      '<div class="ph-name">' + escapeHtml(name) + "</div>" +
+      // M26: `name` is a peer-chosen display name, so it is escaped. Escape the
+      // initials too — the 2-char slice can't carry an event handler, but a bare
+      // "<" still corrupts this row's parse.
+      '<div class="ph"><div class="av">' + escapeHtml(initials(avatarName || name)) + "</div>" +
       SOUND_WAVE_HTML + "</div>" +
-      '<div class="nm">' + fl + '<span class="nm-text">' + escapeHtml(name) + "</span></div>" +
+      '<div class="nm" title="' + escapeHtml(name) + '">' + fl +
+      '<span class="nm-text">' + escapeHtml(first) + "</span>" + pinTag + "</div>" +
       addMark +
       '<div class="tile-info">' + dev + '<span class="ti-speed"></span></div>' +
       menuBtn + maxBtn
@@ -4865,17 +4902,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // where autoplay already works.
     void v.play().catch(() => {});
     t.appendChild(v);
-    // Avatar (from the user's name) + "You" label + device chip. The avatar
-    // shows whenever the camera is off so the tile is never a blank black box.
-    const selfFl = '<span class="nm-flag">' + (selfFlag ? escapeHtml(selfFlag) : "") + "</span>";
+    // ONE builder for every tile (v2.99.82). This used to hand-roll the same DOM,
+    // which is how it kept its own duplicate `.ph-name` after the remote tiles
+    // lost theirs. Passing no `pin` means it gets no ⋮ menu, no maximize button
+    // and no Add pill — you cannot add yourself — and the self tile therefore
+    // inherits every future change to the shared shape for free.
+    //
+    // Own number in the band, like everyone else's: the owner's rule is the band
+    // carries flag · first name · six digits, and "You" plus your own PIN is what
+    // that means for the self tile.
     t.insertAdjacentHTML(
       "beforeend",
-      '<div class="ph"><div class="av">' + initials(me.name || "You") + "</div>" +
-        '<div class="ph-name">You</div>' +
-        SOUND_WAVE_HTML + "</div>" +
-        '<div class="nm">' + selfFl + '<span class="nm-text">You</span></div>' +
-        '<div class="tile-info"><span class="ti-dev">' + escapeHtml(detectDeviceType()) + "</span>" +
-        '<span class="ti-speed"></span></div>'
+      tileContentHTML("You", detectDeviceType(), selfFlag || "", undefined, me.name || "You")
     );
     grid.appendChild(t);
     if (!camOn) t.classList.add("audio-only");

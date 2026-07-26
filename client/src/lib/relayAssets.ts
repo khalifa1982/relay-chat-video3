@@ -596,9 +596,6 @@ export const RELAY_CSS = `
   .relay-root .relay-tile.speaking .sound-wave i:nth-child(5){animation-delay:.48s;background:#a855f7}
 }
 @keyframes relayWave{0%,100%{height:5px}50%{height:18px}}
-/* Cam-off display: full name under the avatar (never a blank black box). */
-.relay-root .relay-tile .ph-name{font-size:14px;font-weight:600;color:var(--text);max-width:84%;text-align:center;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Per-tile info chip: device type + live connection speed (e.g. "5.2 Mbps").
    Pinned to the TOP-right so it never collides with the bottom-left name label
    (which, with a Host badge + flag, can be wide on a narrow tile). */
@@ -634,11 +631,29 @@ export const RELAY_CSS = `
 .relay-root .relay-tile.you:not(.audio-only) .ph{display:none}
 .relay-root .relay-tile .ph .av{width:74px;height:74px;border-radius:24px;background:var(--surface2);border:1px solid var(--border);
   display:grid;place-items:center;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:30px;color:var(--accent)}
-.relay-root .relay-tile .nm{position:absolute;left:12px;bottom:11px;display:flex;align-items:center;gap:7px;max-width:calc(100% - 24px);
-  background:rgba(8,9,12,.62);backdrop-filter:blur(6px);padding:5px 11px;border-radius:9px;font-size:13px;font-weight:600;
+/* The bottom identity band: flag · FIRST NAME · six digits (v2.99.82).
+   Tightened gap/padding versus the old name-only band because it now carries the
+   digits too — in a 2-up phone grid the tile is ~178px, and at the previous
+   spacing a 7-letter first name ellipsised to "Moha...". Measured. */
+.relay-root .relay-tile .nm{position:absolute;left:10px;right:10px;bottom:11px;display:flex;align-items:center;gap:5px;
+  width:fit-content;max-width:calc(100% - 20px);
+  background:rgba(8,9,12,.62);backdrop-filter:blur(6px);padding:5px 9px;border-radius:9px;font-size:13px;font-weight:600;
   white-space:nowrap;overflow:hidden}
 /* The display name itself truncates with an ellipsis (the badge/flag stay). */
 .relay-root .relay-tile .nm .nm-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+/* The six digits, beside the first name (v2.99.82). The flex:0 0 auto is the
+   load-bearing part: .nm is nowrap + overflow:hidden, so without it a long first
+   name would eat the digits — and the digits are the one part of this band that
+   must never truncate. Its own colour, so the name and the number read apart at a
+   glance; bidi-ISOLATED so an Arabic first name beside it cannot reorder them.
+   NOTE: no backticks in here — this whole stylesheet is a template literal, and a
+   backtick in a comment terminates it (the v2.99.16 build break). */
+.relay-root .relay-tile .nm .nm-pin{flex:0 0 auto;unicode-bidi:isolate;font-variant-numeric:tabular-nums;
+  letter-spacing:.01em;font-size:12px;color:#7fe3ff;opacity:.95}
+.relay-root .relay-tile.you .nm .nm-pin{color:var(--accent)}
+/* On a thumbnail there is no room — hide the digits rather than let them clip. */
+.relay-root #videoGrid.spotlight .relay-tile.is-thumb .nm .nm-pin,
+.relay-root #videoGrid.compact .relay-tile .nm .nm-pin{display:none}
 .relay-root .relay-tile.you .nm{background:rgba(63,224,197,.2);color:var(--accent)}
 /* "connecting…" sits TOP-LEFT now (the info chip owns the top-right corner). */
 .relay-root .connecting{position:absolute;top:11px;left:12px;font-size:11px;color:var(--warn);background:rgba(255,180,84,.14);
@@ -932,8 +947,7 @@ export const RELAY_CSS = `
   padding:1px 5px;border-radius:5px;letter-spacing:.02em;text-transform:uppercase}
 /* Country flag emoji beside the name (in both the label + cam-off placeholder). */
 .relay-root .relay-tile .nm-flag{line-height:1}
-.relay-root .relay-tile .nm-flag:not(:empty){margin-right:5px}
-.relay-root .relay-tile .ph-name .nm-flag:not(:empty){margin-right:4px;font-size:1.1em}
+.relay-root .relay-tile .nm-flag:not(:empty){margin-right:2px}
 .relay-root .host-panel{position:absolute;bottom:84px;right:18px;width:320px;max-width:92vw;max-height:66vh;display:none;
   flex-direction:column;background:var(--surface);border:1px solid var(--border2);border-radius:18px;
   box-shadow:0 24px 60px -20px rgba(0,0,0,.7);z-index:31;overflow:hidden}
@@ -989,8 +1003,12 @@ export const RELAY_CSS = `
 .relay-root .relay-tile .tile-max-btn:hover{background:var(--accent);color:#04201B}
 .relay-root #videoGrid.screen-max .relay-tile.is-spotlight .tile-max-btn{background:var(--accent);color:#04201B}
 /* Per-tile "add to contacts" mark (v2.99.8): a small pill UNDER the name (name
-   is bottom-left), shown for a remote peer who isn't a saved contact yet. */
-.relay-root .relay-tile .tile-addc{position:absolute;left:12px;bottom:40px;z-index:4;display:inline-flex;align-items:center;gap:5px;
+   is bottom-left), shown for a remote peer who isn't a saved contact yet.
+   v2.99.82: this is now the ONLY add-to-contacts affordance in a call — the
+   top-left InCallSaveContacts chip is unmounted, per the owner ("Just put it one
+   place. Under the name of each user"). The bottom offset clears the .nm band,
+   whose own box is 11px offset + ~27px tall; keep the two in step. */
+.relay-root .relay-tile .tile-addc{position:absolute;left:12px;bottom:44px;z-index:4;display:inline-flex;align-items:center;gap:5px;
   border:1px solid rgba(63,224,197,.5);background:rgba(8,9,12,.62);backdrop-filter:blur(6px);color:var(--accent);
   border-radius:999px;padding:4px 10px 4px 8px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;line-height:1}
 .relay-root .relay-tile .tile-addc svg{width:13px;height:13px}

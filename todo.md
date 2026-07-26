@@ -7557,6 +7557,67 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.82 — the call tile says each thing once, and add-to-contacts has one home (2026-07-26)
+- [x] **THE OWNER ASKED TWICE, the second time with a screenshot circling all three renderings of one name
+      on a single tile.** Verbatim: *"you mentioned the name in two places, like you put my icon logo up,
+      it means k h, and then below it, it mentioned u, and then below it mentioned u with my flag country.
+      You don't need to repeat the name. You need to put the profile picture or the avatar, and below it,
+      you put add to contact if he was not in your contact. and at the bottom of the border of the frame of
+      the user where you put the flag and you put his first name only, and beside, you put the PIN number,
+      the six digits without mention PIN."* Recorded plainly: this was mapped rather than shipped on the
+      first ask, which is why it needed a second.
+- [x] **THE NAME NOW APPEARS EXACTLY ONCE.** `.ph-name` — the centred full name under the avatar — is
+      GONE, and with it two CSS rules, **one of which was already dead** before this release (nothing ever
+      put a flag inside `.ph-name`, so `.ph-name .nm-flag` could never match). The tile reads: avatar →
+      Add pill if unsaved → one bottom band.
+- [x] **THE BOTTOM BAND IS flag · FIRST NAME · SIX DIGITS.** First name only, with the FULL name on
+      `title` so nothing is lost to a hover or a screen reader. The digits are raw — no "PIN" label, no
+      grouping dash, since the owner said "the six digits" — in their own colour so the name and the
+      number read apart at a glance, and **bidi-ISOLATED** (the v2.99.77 `PinTag` lesson) so an Arabic
+      first name beside them cannot reorder them.
+- [x] **THE ONE REAL RISK, AND IT WAS MEASURED.** `.nm` is `nowrap` + `overflow:hidden`, so a long first
+      name would EAT the digits — and the digits are the one part of the band that must never truncate.
+      `flex:0 0 auto` on the pin makes the name the only shrinker. Headless Chromium against the real
+      stylesheet at 390 and 320 wide, driving the engine's OWN `tileContentHTML` output rather than a hand
+      copy: **name elements per tile 2 → 1**, digits never clipped, always inside the band, band always
+      inside the tile, Add pill never overlapping the band. The first pass DID truncate ("Mohamed" →
+      "Moha…") in a 2-up phone grid, so the band's gap and padding were tightened and the pin dropped a
+      point; re-measured, nothing truncates now — including a long Arabic name.
+- [x] **ADD-TO-CONTACTS HAS ONE HOME** (owner: *"currently you're putting on the profile, on the video, and
+      also you put it on the top left. Just put it one place. Under the name of each user"*). The top-left
+      `InCallSaveContacts` chip is UNMOUNTED. **Nothing is lost and three things improve**: the chip only
+      ever offered the FIRST unsaved peer (a `roster.find`) while the per-tile pill is per-peer; it polled
+      every 3 seconds; and it derived a SECOND saved-set from `contacts.list` that could disagree with the
+      engine's own — two copies of one fact, the class this repo keeps re-learning. It also sat at
+      `top-3 left-3`, the same corner as the "connecting…" and on-hold badges.
+- [x] **ONE BUILDER FOR EVERY TILE.** `addSelfTile` hand-rolled the same DOM instead of calling
+      `tileContentHTML`, which is exactly why it kept its own duplicate name after the remote tiles lost
+      theirs. It now calls the shared builder with no `pin` — so no ⋮ menu, no maximize, no Add pill and no
+      digits (you cannot add yourself, and the owner has already said they do not need their own number
+      shown back to them, the v2.99.77 call-log rule) — plus a new `avatarName` so the band reads "You"
+      while the disc still shows the person's own initials.
+- [x] `client/src/lib/callTileIdentity.test.ts` (15). **All 8 tripwires verified by MUTATION**, sources
+      byte-identical afterwards.
+- [x] **A HARNESS BUG OF MY OWN, reported rather than counted as a result.** Two mutations first came back
+      as "target missing" and "survived". Neither was true: the perl replacement had inserted its text at
+      **line 1** instead of replacing the call site, and the harness's needle check only asked whether the
+      string existed SOMEWHERE in the file — the same weakness caught in v2.99.76. Rewritten as a python
+      mutator that asserts the target occurs **exactly once** and fails the harness otherwise; both
+      mutations then bit.
+- [x] **TWO PRE-EXISTING PINS REWRITTEN TO THE NEW INTENT rather than relaxed**: `relayAssets.test.ts`
+      asserted `.relay-tile .ph-name{` EXISTS — i.e. it pinned the very thing the owner asked to remove —
+      and `peerIdentityBatch.test.ts` asserted the top-left chip was MOUNTED.
+- [x] **A BUILD TRAP THAT HAS NOW BITTEN TWICE gets a named guard.** The whole call stylesheet is a
+      template literal, so a backtick inside a CSS COMMENT terminates it — v2.99.16 hit this, and so did
+      this release, twice, surfacing as syntax errors 300 lines away. `pnpm check` catches it but says
+      nothing about the cause, so there is now an explicit assertion that `RELAY_CSS` contains no backtick.
+- [ ] **STILL OPEN and the more serious half of this batch**: a renumbered person stays registered in the
+      signaling layer under their OLD pin, so the dialer says "online now" while the call says "offline".
+      That is the root cause of the Add pill reappearing for a SAVED contact, and of contacts showing
+      "online" instead of "on a call". Fix designed (registry rebind hook + client self-heal, since the
+      operator admin-tool writes straight to MySQL and no server hook can fire for it) — not yet shipped.
+- [x] Suite 2455 passed / 1 skipped (2456). No schema change, no new dependency.
+
 ## v2.99.81 — the eight-item security batch, each finding re-confirmed before it was touched (2026-07-26)
 - [x] **PROCESS FIRST, because it changed two of the answers.** Every item below had been sitting in the
       v2.99.57 REMAINING list. Each was handed to an independent SKEPTIC briefed to REFUTE it and

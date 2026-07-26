@@ -483,9 +483,18 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
           <div className="flex-1" />
         </div>
       ) : null}
-      {/* In-call one-tap contact conversion (v2.96): a quiet chip for the
-          first on-call peer who isn't in your contacts yet. */}
-      {phase === "in-call" ? <InCallSaveContacts handleRef={handleRef} /> : null}
+      {/* v2.99.82 (owner): the top-left in-call "add contacts" chip is UNMOUNTED.
+          Owner: "add contact ... currently you're putting on the profile, on the
+          video, and also you put it on the top left. Just put it one place. Under
+          the name of each user."
+
+          The per-tile pill under each name is that one place, and NOTHING is lost
+          — three things improve. The chip only ever offered the FIRST unsaved peer
+          (a `roster.find`), while the pill is per-peer. It polled every 3s. And it
+          derived a SECOND saved-set from contacts.list that could disagree with the
+          engine's own — two copies of one fact, the class of bug this repo keeps
+          re-learning. It also sat at top-3 left-3, overlapping the "connecting…"
+          and on-hold badges, which live at the same corner. */}
       {/* v2.96.3 (owner): the floating top-right "X End" pill is GONE — it
           duplicated the engine's own hang-up (dial screen + in-call control
           bar both have one), showing two End controls at once. */}
