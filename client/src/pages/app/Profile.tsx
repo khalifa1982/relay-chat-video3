@@ -596,15 +596,37 @@ function NumberAndFlag({
   const [regenNotice, setRegenNotice] = useState<string | null>(null);
   // AlertDialog confirm (v2.88) — native confirm() is gone app-wide.
   const [confirmRegen, setConfirmRegen] = useState(false);
+  const announce = (n: string) => {
+    setRegenNotice(
+      `Now ${n.slice(0, 3)} ${n.slice(3)} — everyone who saved you was updated automatically.`
+    );
+    onRegenerated();
+    window.setTimeout(() => setRegenNotice(null), 6000);
+  };
   const regen = trpc.identity.regenerateNumber.useMutation({
-    onSuccess: (res) => {
-      setRegenNotice(
-        `New number ${res.number.slice(0, 3)} ${res.number.slice(3)} — your contacts were updated automatically.`
-      );
-      onRegenerated();
-      window.setTimeout(() => setRegenNotice(null), 6000);
-    },
+    onSuccess: (res) => announce(res.number),
   });
+  /* ── Choose your own number (v2.99.75) ───────────────────────────
+     Same propagation as a regenerate: the server moves the identity and rewrites
+     every saved copy in ONE transaction, so contacts, blocks, threads, messages
+     and call history all follow the person rather than the digits. */
+  const [chooseOpen, setChooseOpen] = useState(false);
+  const [wanted, setWanted] = useState("");
+  const [chooseError, setChooseError] = useState<string | null>(null);
+  const choose = trpc.identity.setNumber.useMutation({
+    onSuccess: (res) => {
+      setChooseOpen(false);
+      setWanted("");
+      setChooseError(null);
+      announce(res.number);
+    },
+    // The server names each refusal for a reason — a typo and a number somebody
+    // else already holds need different things from the person reading this.
+    onError: (e) => setChooseError(e.message || "Couldn't change your number."),
+  });
+  // Accept the grouping people naturally type; the server re-validates regardless.
+  const wantedDigits = wanted.replace(/[\s\-.]/g, "");
+  const wantedOk = /^\d{6}$/.test(wantedDigits) && !/^(000|111)/.test(wantedDigits);
   const copyNumber = () => {
     navigator.clipboard
       ?.writeText(number)
@@ -657,10 +679,23 @@ function NumberAndFlag({
             type="button"
             variant="outline"
             size="sm"
-            onClick={() => setConfirmRegen(true)}
-            disabled={regen.isPending}
+            onClick={() => {
+              setChooseError(null);
+              setWanted("");
+              setChooseOpen(true);
+            }}
+            disabled={choose.isPending || regen.isPending}
           >
-            {regen.isPending ? "Generating…" : "Regenerate number"}
+            {choose.isPending ? "Changing…" : "Choose my number"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setConfirmRegen(true)}
+            disabled={regen.isPending || choose.isPending}
+          >
+            {regen.isPending ? "Generating…" : "Random number"}
           </Button>
           {regenNotice && (
             <span className="text-xs text-[color:var(--relay-online,#06d6a0)]">{regenNotice}</span>
@@ -673,6 +708,65 @@ function NumberAndFlag({
       <p className="px-1 text-xs text-muted-foreground">
         Share this 6-digit number for people to call or message you.
       </p>
+      {/* Choose your own 6-digit number (v2.99.75). */}
+      <AlertDialog open={chooseOpen} onOpenChange={(open) => !open && setChooseOpen(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Choose your RELAY number</AlertDialogTitle>
+            <AlertDialogDescription>
+              Six digits, not starting 000 or 111. Everyone who saved you is updated
+              automatically, and your messages, calls and contacts all stay exactly as they
+              are — only the number changes. Your old number stops working immediately and
+              is never given to anyone else.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <label htmlFor="relay-wanted-number" className="sr-only">
+              Your desired 6-digit number
+            </label>
+            <input
+              id="relay-wanted-number"
+              // Numeric keypad on a phone, but a text field: `type="number"` brings
+              // spinners, silently accepts "1e5", and drops a leading zero.
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              dir="ltr"
+              maxLength={9}
+              placeholder="777777"
+              value={wanted}
+              onChange={(e) => {
+                setWanted(e.target.value);
+                setChooseError(null);
+              }}
+              className="w-full rounded-xl border border-border bg-background px-4 py-3 text-center font-mono text-2xl tracking-[0.18em] outline-none focus:border-primary"
+            />
+            {chooseError && <p className="text-xs text-destructive">{chooseError}</p>}
+            {!chooseError && wanted.length > 0 && !wantedOk && (
+              <p className="text-xs text-muted-foreground">
+                Six digits, and it can't start with 000 or 111.
+              </p>
+            )}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!wantedOk || choose.isPending}
+              // NOT auto-closing: the number may be taken, and closing the dialog
+              // before the server answers would hide the one message that tells the
+              // person to pick a different one.
+              onClick={(e) => {
+                e.preventDefault();
+                if (!wantedOk) return;
+                choose.mutate({ number: wantedDigits });
+              }}
+            >
+              {choose.isPending ? "Changing…" : "Use this number"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={confirmRegen} onOpenChange={(open) => !open && setConfirmRegen(false)}>
         <AlertDialogContent>
           <AlertDialogHeader>

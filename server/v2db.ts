@@ -1188,6 +1188,33 @@ export function planRenumber(
 }
 
 /**
+ * Normalize a number somebody TYPED, for the choose-your-own-number path
+ * (v2.99.75). Returns the canonical 6 digits, or null when it is not a number
+ * this system can hand out.
+ *
+ * FAILS CLOSED, and deliberately does its own shape check rather than trusting
+ * the caller's: this value reaches the one function allowed to move an identity's
+ * number, and every place a number is validated in this codebase agrees on
+ * exactly six digits. Spacing and the display grouping people naturally type
+ * ("777 777", "777-777") are accepted because refusing them would just be rude;
+ * anything else — a letter, five digits, seven, a reserved prefix — is not.
+ */
+export function normalizeDesiredNumber(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  // Strip only spaces and the two grouping characters a person would type. NOT
+  // every non-digit: doing that would silently accept "7a7b7c7d7e7f" as 777777,
+  // i.e. turn a typo into a successful renumber of somebody's identity.
+  const cleaned = input.replace(/[\s\-.]/g, "");
+  if (!/^\d{6}$/.test(cleaned)) return null;
+  if (RESERVED_PREFIXES.some((p) => cleaned.startsWith(p))) return null;
+  return cleaned;
+}
+
+/** Why a chosen number could not be taken. Named, because each has a different
+ *  correct next step for the person who typed it. */
+export type ChooseNumberError = "invalid" | "taken" | "budget";
+
+/**
  * Regenerate this identity's 6-digit number and PROPAGATE it across the network:
  * every contact that saved the OLD number is rewritten to the NEW one, so people
  * keep reaching them without re-adding. Collisions with a stale (ownerId,new)
@@ -1198,16 +1225,46 @@ export function planRenumber(
  * The "live" copies are deliberately NOT rewritten — they are resolved from the
  * identity when read, which is also why renumbers that happened BEFORE this
  * release come out correct with no backfill.
+ *
+ * `desiredNumber` (v2.99.75) picks a SPECIFIC number instead of a random one.
+ * It is a parameter here rather than a second function on purpose: propagation is
+ * the whole difficulty of renumbering, and a parallel implementation is exactly
+ * how History's copies came to rot before v2.99.54. `guestUpgrade.test.ts` pins
+ * that the codebase contains exactly ONE writer of `identities.number`, so this
+ * is also the only shape that can ship.
+ *
+ * Throws a `ChooseNumberError` message for a desired number that cannot be taken.
  */
 export async function regenerateIdentityNumber(
-  identityId: number
+  identityId: number,
+  desiredNumber?: string
 ): Promise<{ oldNumber: string; newNumber: string } | null> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
   const id = await getIdentityById(identityId);
   if (!id) return null;
   const oldNumber = id.number;
-  const newNumber = await allocateNumber();
+  let newNumber: string;
+  if (desiredNumber !== undefined) {
+    const want = normalizeDesiredNumber(desiredNumber);
+    if (!want) throw new Error("invalid" satisfies ChooseNumberError);
+    // Already theirs: a no-op, not an error. Makes a double-tap and a retry after
+    // a dropped response both harmless, rather than reporting "taken" about the
+    // caller's own number — which is true and useless.
+    if (want === oldNumber) return { oldNumber, newNumber: oldNumber };
+    // Same permanent resource a random allocation spends, so it is metered the
+    // same way — the global budget is the backstop against a scripted drain of
+    // the space, and it must not be sidesteppable by naming numbers instead of
+    // asking for them.
+    if (!claimMintBudget(Date.now())) throw new Error("budget" satisfies ChooseNumberError);
+    if (await numberTaken(db, want)) throw new Error("taken" satisfies ChooseNumberError);
+    // Take it in the shared ledger too, which is what closes the cross-table
+    // NEW-vs-NEW race against a party line being created in the same instant.
+    if (!(await tryReserveNumber(db, want))) throw new Error("taken" satisfies ChooseNumberError);
+    newNumber = want;
+  } else {
+    newNumber = await allocateNumber();
+  }
   // The identity update and contact propagation must succeed or fail TOGETHER.
   // The old code swallowed a propagation failure (try/catch around it only),
   // which could leave the identity pointed at newNumber while every contact
@@ -1248,6 +1305,62 @@ export async function regenerateIdentityNumber(
   // would let a contact who kept the old number later dial a stranger.
   await confirmNumberReservation(newNumber);
   return { oldNumber, newNumber };
+}
+
+/**
+ * Move an identity onto a number the person CHOSE (v2.99.75).
+ *
+ * A thin, deliberate wrapper: it exists so callers get a typed refusal instead of
+ * a thrown string, while the actual move — and therefore the propagation
+ * guarantee, the transaction, and the reservation ledger — stays in the one
+ * function that owns it. Nothing here writes a number.
+ *
+ * On a lost race the identity's unique index is the final authority, so a
+ * concurrent claim surfaces as "taken" rather than as a 500, and the reservation
+ * this call took is handed back (guarded on the number being in neither number
+ * table, so it can never un-reserve one that is genuinely in use).
+ */
+export async function claimIdentityNumber(
+  identityId: number,
+  desired: unknown
+): Promise<
+  | { ok: true; oldNumber: string; newNumber: string; unchanged: boolean }
+  | { ok: false; reason: ChooseNumberError | "not-found" | "unavailable" }
+> {
+  const want = normalizeDesiredNumber(desired);
+  if (!want) return { ok: false, reason: "invalid" };
+  try {
+    const res = await regenerateIdentityNumber(identityId, want);
+    if (!res) return { ok: false, reason: "not-found" };
+    return {
+      ok: true,
+      oldNumber: res.oldNumber,
+      newNumber: res.newNumber,
+      unchanged: res.oldNumber === res.newNumber,
+    };
+  } catch (e) {
+    const err = e as { errno?: number; code?: string; message?: string };
+    const msg = err?.message || "";
+    // THE PRE-FLIGHT REFUSALS MUST NOT RELEASE ANYTHING. Each of these is thrown
+    // BEFORE this call holds a reservation on `want`, and "taken" specifically
+    // means somebody ELSE holds it — possibly an allocation that has reserved the
+    // number but not yet inserted its row. Handing that back would un-reserve a
+    // stranger's in-flight number and hand it to two people.
+    if (msg === "invalid" || msg === "taken" || msg === "budget") {
+      return { ok: false, reason: msg as ChooseNumberError };
+    }
+    // Everything below this line means the reservation WAS taken and the move then
+    // failed, so the number is ours to give back. `releaseUnusedNumberReservation`
+    // re-checks that it is absent from both number tables, so even here it cannot
+    // un-reserve one that is genuinely bound.
+    await releaseUnusedNumberReservation(want).catch(() => {});
+    // A duplicate-key failure inside the transaction means somebody bound the
+    // number between our check and our write. That is "taken", not a fault — and
+    // the row that won is precisely why the release above is a no-op.
+    const dup =
+      err?.errno === 1062 || err?.code === "ER_DUP_ENTRY" || /duplicate/i.test(msg);
+    return { ok: false, reason: dup ? "taken" : "unavailable" };
+  }
 }
 
 /* ── presence ─────────────────────────────────────────────────── */
