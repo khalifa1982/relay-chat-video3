@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
+import { useLocation } from "wouter";
 import {
   Bell,
   BellRing,
@@ -368,6 +369,11 @@ export default function ProfilePage() {
 
         {/* links & social accounts */}
         <SocialLinksSection me={me} onSaved={refresh} />
+
+        {/* admin panel entry (v2.99.76) — renders NOTHING for a non-admin. The
+            server re-checks the role on every admin procedure, so this is a
+            discoverability link, not the permission. */}
+        <AdminLinkSection />
 
         {/* theme */}
         <ThemeToggleSection />
@@ -799,6 +805,32 @@ function NumberAndFlag({
    dark (default) and light. State is persisted via the
    ThemeProvider that wraps the app in main.tsx.
    ============================================================ */
+/* ============================================================
+   Admin entry (v2.99.76). Asks the SERVER whether this account holds the role
+   rather than reading the cached whoami, so a stale payload can neither hide the
+   panel from an admin nor advertise it to somebody who would only get FORBIDDEN.
+   ============================================================ */
+function AdminLinkSection() {
+  const [, navigate] = useLocation();
+  const amIAdmin = trpc.admin.amIAdmin.useQuery(undefined, { staleTime: 60_000 });
+  if (!amIAdmin.data?.admin) return null;
+  return (
+    <section className="rounded-2xl border border-border bg-card/60 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">Admin</div>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Find any account and change its 6-digit number.
+          </p>
+        </div>
+        <Button type="button" size="sm" variant="outline" onClick={() => navigate("/app/admin")}>
+          Open
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 function ThemeToggleSection() {
   const { theme, setTheme } = useTheme();
   const isDark = theme === "dark";

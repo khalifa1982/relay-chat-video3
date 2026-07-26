@@ -30,6 +30,7 @@ const History = lazy(() => import("./pages/app/History"));
 const Messages = lazy(() => import("./pages/app/Messages"));
 const Contacts = lazy(() => import("./pages/app/Contacts"));
 const Profile = lazy(() => import("./pages/app/Profile"));
+const Admin = lazy(() => import("./pages/app/Admin"));
 
 /** Minimal route-loading fallback — theme-aware, no layout shift drama. */
 function RouteSpinner() {
@@ -40,12 +41,13 @@ function RouteSpinner() {
   );
 }
 
-function ShellRoute({ tab }: { tab: "dialer" | "history" | "messages" | "contacts" | "profile" }) {
+function ShellRoute({ tab }: { tab: "dialer" | "history" | "messages" | "contacts" | "profile" | "admin" }) {
   const View =
     tab === "dialer" ? Dialer :
     tab === "history" ? History :
     tab === "messages" ? Messages :
     tab === "contacts" ? Contacts :
+    tab === "admin" ? Admin :
     Profile;
   return (
     <AppShell>
@@ -69,6 +71,7 @@ function Router() {
         <Route path={"/app/messages"}>{() => <ShellRoute tab="messages" />}</Route>
         <Route path={"/app/contacts"}>{() => <ShellRoute tab="contacts" />}</Route>
         <Route path={"/app/profile"}>{() => <ShellRoute tab="profile" />}</Route>
+        <Route path={"/app/admin"}>{() => <ShellRoute tab="admin" />}</Route>
         {/* Legacy in-call route. The Dialer now hosts the call engine in-place,
             so redirect here (preserving ?to=) to guarantee only ONE relay engine
             instance ever mounts — two engines sharing one relay_cid used to fight

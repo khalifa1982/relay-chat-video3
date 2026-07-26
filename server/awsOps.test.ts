@@ -227,7 +227,16 @@ describe("aws-ops.yml — recover-identity: a production DB write, gated and inj
   const rec = OPS.slice(OPS.indexOf("recover-identity — re-attach an ORPHANED"));
 
   it("exists as an explicit action with its own three inputs", () => {
-    expect(OPS).toMatch(/options: \[verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix, recover-identity\]/);
+    // Asserts MEMBERSHIP, not the whole list. The frozen-list form lived here too
+    // and has now broken THREE times on a legitimate addition (v2.99.69's
+    // recover-identity, v2.99.70, and v2.99.76's admin-tool) while saying nothing
+    // about the property this test is actually about, which is that
+    // `recover-identity` is a real selectable action wired to its own step.
+    // The list-wide invariants (verify first, no duplicates) are pinned once, above.
+    const opts = (OPS.match(/options: \[([^\]]+)\]/) || [, ""])[1]
+      .split(",")
+      .map((s) => s.trim());
+    expect(opts).toContain("recover-identity");
     for (const k of ["recover_number", "recover_email", "recover_apply"]) {
       expect(OPS).toMatch(new RegExp(`\\n      ${k}:`));
     }

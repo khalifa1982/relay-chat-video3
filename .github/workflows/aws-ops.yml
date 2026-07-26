@@ -67,7 +67,33 @@ on:
         type: choice
         required: true
         default: verify
-        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix, recover-identity]
+        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix, recover-identity, admin-tool]
+      admin_op:
+        description: "admin-tool only: which operation to run"
+        type: choice
+        required: false
+        default: whois
+        options: [whois, grant-admin, revoke-admin, set-number]
+      admin_email:
+        description: "admin-tool: the account email (grant-admin / revoke-admin / whois)"
+        type: string
+        required: false
+        default: ""
+      admin_number:
+        description: "admin-tool: the CURRENT 6-digit number (set-number / whois)"
+        type: string
+        required: false
+        default: ""
+      admin_to:
+        description: "admin-tool set-number only: the NEW 6-digit number to move onto"
+        type: string
+        required: false
+        default: ""
+      admin_apply:
+        description: "admin-tool only: actually WRITE the change. Off = dry run, which is what you should run first."
+        type: boolean
+        required: false
+        default: false
       recover_number:
         description: "recover-identity only: the 6-digit number of the ORPHANED guest identity to re-attach (e.g. 601586)"
         type: string
@@ -1107,5 +1133,98 @@ jobs:
             fi
           else
             echo "::error::the recovery script refused or failed — see its output above. NOTHING was written unless it says otherwise."
+            exit 1
+          fi
+
+      - name: admin-tool — backend administration (grant admin, renumber an
+          identity), running on ONE app instance where DATABASE_URL lives
+        if: inputs.action == 'admin-tool'
+        env:
+          ADM_OP: ${{ inputs.admin_op }}
+          ADM_EMAIL: ${{ inputs.admin_email }}
+          ADM_NUM: ${{ inputs.admin_number }}
+          ADM_TO: ${{ inputs.admin_to }}
+          ADM_APPLY: ${{ inputs.admin_apply }}
+        run: |
+          set -uo pipefail
+          echo "=================================================================="
+          echo "ADMIN TOOL — $ADM_OP"
+          echo "=================================================================="
+          # WHY HERE. DATABASE_URL exists only in /home/relay/.env on the fleet, so
+          # this is the one path that reaches the live database without a human
+          # copying a production credential onto a laptop. Nothing is printed from
+          # that file.
+          #
+          # PREFER /app/admin for routine changes: the panel calls the server's own
+          # single writer, so it cannot drift from the propagation rule. This action
+          # exists for the BOOTSTRAP (nobody holds the admin role yet) and for
+          # direct backend repair.
+          case "$ADM_OP" in
+            whois|grant-admin|revoke-admin|set-number) : ;;
+            *) echo "::error::unknown admin_op '$ADM_OP'"; exit 1 ;;
+          esac
+          for V in "$ADM_NUM" "$ADM_TO"; do
+            if [ -n "$V" ]; then
+              case "$V" in
+                *[!0-9\ .-]*) echo "::error::numbers must be digits (with optional spaces/dashes); got '$V'"; exit 1 ;;
+              esac
+            fi
+          done
+          if [ "$ADM_OP" = "set-number" ] && { [ -z "$ADM_NUM" ] || [ -z "$ADM_TO" ]; }; then
+            echo "::error::set-number needs BOTH admin_number (current) and admin_to (new)."
+            exit 1
+          fi
+          if { [ "$ADM_OP" = "grant-admin" ] || [ "$ADM_OP" = "revoke-admin" ]; } && [ -z "$ADM_EMAIL" ]; then
+            echo "::error::$ADM_OP needs admin_email."
+            exit 1
+          fi
+          # SECURITY: every one of these is a free-text workflow_dispatch input that
+          # ends up inside a command string executed on production EC2 via SSM
+          # RunShellScript. This file has been bitten by exactly that twice
+          # (SES_EMAIL/DOMAIN, then `region`), so they all get the established
+          # treatment: base64 on the runner, decoded ONLY on the instance, so no
+          # quote or semicolon in an input can break out of the remote shell.
+          ADM_EMAIL_B64=$(printf %s "$ADM_EMAIL" | base64 -w0)
+          ADM_NUM_B64=$(printf %s "$ADM_NUM" | base64 -w0)
+          ADM_TO_B64=$(printf %s "$ADM_TO" | base64 -w0)
+          FLAG=""
+          if [ "$ADM_APPLY" = "true" ]; then
+            FLAG=" --apply"
+            echo "MODE: APPLY — this will write to the production database."
+          else
+            echo "MODE: DRY RUN — nothing will be written. Re-run with admin_apply=true once the output looks right."
+          fi
+          IID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=relay-app" "Name=instance-state-name,Values=running" \
+            --query 'sort_by(Reservations[].Instances[],&LaunchTime)[0].InstanceId' \
+            --output text 2>/dev/null)
+          if [ -z "$IID" ] || [ "$IID" = "None" ]; then
+            echo "::error::no running instance tagged Name=relay-app — is the fleet up?"
+            exit 1
+          fi
+          echo "Running on $IID"
+          # ONE instance: this is a database mutation, so it runs exactly once.
+          CMDLINE="cd /home/relay/app 2>/dev/null || cd /home/relay; set -a; . /home/relay/.env 2>/dev/null; set +a; node scripts/admin-tool.mjs --op \"$ADM_OP\" --email \"\$(echo $ADM_EMAIL_B64 | base64 -d)\" --number \"\$(echo $ADM_NUM_B64 | base64 -d)\" --to \"\$(echo $ADM_TO_B64 | base64 -d)\"${FLAG}; echo \"ADMIN_EXIT=\$?\""
+          PARAMS=$(jq -n --arg c "$CMDLINE" '{commands:[$c]}')
+          CMD=$(aws ssm send-command --instance-ids "$IID" \
+            --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 0 \
+            --parameters "$PARAMS" --query 'Command.CommandId' --output text) || {
+              echo "::error::could not start the admin tool via SSM"; exit 1; }
+          echo "SSM command: $CMD"
+          for i in $(seq 1 36); do
+            S=$(aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status' --output text)
+            case "$S" in *InProgress*|*Pending*|"") sleep 5 ;; *) break ;; esac
+          done
+          OUT=$(aws ssm list-command-invocations --command-id "$CMD" --details \
+            --query 'CommandInvocations[0].CommandPlugins[0].Output' --output text)
+          echo "------------------------- script output -------------------------"
+          echo "$OUT" | head -c 8000
+          echo "-----------------------------------------------------------------"
+          # The verdict comes from the script's printed marker, not the SSM status: a
+          # wrapper or pipeline can mask a non-zero exit (the v2.99.46 bug).
+          if echo "$OUT" | grep -q "ADMIN_EXIT=0"; then
+            echo "admin-tool completed cleanly."
+          else
+            echo "::error::admin-tool did not report ADMIN_EXIT=0 — read the output above."
             exit 1
           fi
