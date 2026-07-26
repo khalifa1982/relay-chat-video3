@@ -7557,6 +7557,82 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.76 — an admin panel, and a backend that can actually do it (2026-07-26)
+- [x] Owner: *"So why you dont do it at the backend / Or create for me an admin panel were i can
+      change it."* Both.
+- [x] **THE HONEST ANSWER TO "why not at the backend"**: this sandbox has no route to the database —
+      `DATABASE_URL` exists only in `/home/relay/.env` on the fleet. A sanctioned path already existed
+      (v2.99.60's `recover-identity`: a script run ON an app instance over SSM, sourcing the fleet env,
+      so no production credential is copied anywhere); the number change simply had not been wired into
+      it. Now it is.
+- [x] **(1) THE PANEL** — `/app/admin`, new `v2AdminRouter` (`amIAdmin` / `findIdentities` /
+      `setIdentityNumber`). Find anyone by 6-digit number, email or name; change their number.
+- [x] SCOPE IS DELIBERATELY NARROW. An admin panel is a permanent high-value read and write surface, so
+      it does exactly two things and cannot read a message, list contacts, delete an account, or grant
+      itself more power. Widening it later is a decision somebody has to make on purpose rather than
+      something that arrived for free.
+- [x] `adminFindIdentities` is a PROJECTION that withholds every credential hash, guest token, recovery
+      hash and device id — pinned by name, so a future `select()` cannot quietly widen it. It escapes
+      LIKE wildcards, so a typed `%` matches a literal `%` instead of silently widening the search.
+- [x] EVERY procedure re-derives admin status from the `users` row via a new `isUserAdmin` that FAILS
+      CLOSED on a non-numeric id, an unreachable DB, or any throw. `whoami` already reports a `role`,
+      but that value has been through the browser and is a RENDERING hint, never a permission — a
+      client that renders the page anyway gets FORBIDDEN on every call. The refusal is uniform for
+      "not signed in", "not an admin" and "DB unreadable", so it is not an oracle for who holds it.
+- [x] The number change routes through `claimIdentityNumber` — the SAME single writer the self-service
+      path uses — so an admin change propagates to everyone who saved the old number inside one
+      transaction. An admin shortcut writing the column directly would silently skip all of it; a test
+      asserts `.update(identities)` appears nowhere in the router and that v2db still has exactly ONE
+      such writer. An admin acting on somebody else logs a trace carrying IDS ONLY: no name, no email,
+      no content, because that line lands in logs.
+- [x] **(2) THE BACKEND TOOL** — `scripts/admin-tool.mjs` plus the `admin-tool` action in `aws-ops.yml`:
+      `whois`, `grant-admin`, `revoke-admin`, `set-number`. DRY RUN IS THE DEFAULT on every write. It
+      exists for the BOOTSTRAP (`users.role` is granted by hand, so without it a fresh install has no
+      admin at all and the panel is unreachable) and for direct backend repair.
+- [x] `grant-admin` REFUSES AN AMBIGUOUS EMAIL rather than guessing: `users.email` carries no unique
+      index, and "whichever row came back first" is not an answer when the operation is granting
+      administrator. Its verdict comes from `affectedRows`, not from the earlier read.
+- [x] **THE REAL RISK IN (2), AND THE GUARD FOR IT.** The script CANNOT import the server's renumber —
+      it is plain `.mjs` run by bare `node` on EC2 while the writer is TypeScript inside the bundle — so
+      its `set-number` is a SECOND implementation of the propagation rule in ANOTHER LANGUAGE. That is
+      the exact shape that rots (v2.99.50: two gates disagreeing about one rule; v2.99.71: the TURN
+      checker disagreeing with the server). No string check catches the NEXT divergence, so
+      `server/adminToolParity.test.ts` cross-checks the script against `NUMBER_BEARING_COLUMNS` itself:
+      a column declared `renumber` MUST be written by the script, one declared `live`/`not-a-person`
+      must NOT be. Mutation-proven in BOTH directions — dropping the `conference_participants` update
+      fails, and adding an `UPDATE conference_history` fails.
+- [x] The script also reproduces `planRenumber`'s stale-duplicate delete (without it, a saver who
+      already had a row for the NEW number collides with the unique (ownerId, number) key and the whole
+      renumber fails), checks both tables of the shared number space, reserves in the ledger, writes in
+      a transaction that rolls back as a unit, never releases the OLD number, and PREFLIGHTS every
+      table and column against `information_schema` so a rename cannot make a guard pass by reading
+      nothing.
+- [x] **INJECTION PROVEN EMPIRICALLY, not asserted.** All four free-text inputs are base64'd on the
+      runner and decoded only on the instance. The step's own CMDLINE construction was replayed with 8
+      hostile values (quote+semicolon, double-quote break, `$( )`, backticks, `&&`, `|`, embedded
+      newline, bare `;`) against a stub `node`, using a SENTINEL FILE as the detector rather than a grep
+      of the output — text in output is not evidence of execution, the v2.99.70 harness bug. 0/8
+      executed; each value arrived as ONE literal argument. `admin_op` is the one unencoded value and is
+      a closed `choice` re-whitelisted by a `case` in the step.
+- [x] My harness reported a "SHAPE?" mismatch on 7 of 8 runs — that was ITS OWN off-by-one (argv[0] is
+      the script path, so the value is arg 9 not 8), not a code problem. Recorded rather than presented
+      as a clean run.
+- [x] **FOUR WEAK ASSERTIONS OF MY OWN, caught by the mutation run and fixed rather than counted as
+      passes.** All the same class — pinning incidental TEXT instead of the property: (a) the
+      ambiguous-email test pinned the MESSAGE while the mutation changed the CONDITION, so making it
+      guess stayed green; (b) the injection test checked that `ADM_EMAIL_B64` appeared *somewhere* — it
+      still did, as a now-unused assignment — instead of checking the CMDLINE, so putting the RAW value
+      back stayed green; (c) the verdict test matched `ADMIN_EXIT=`, which also occurs in the line that
+      PRINTS it, so replacing the check with `if true` stayed green; (d) a pre-existing aws-ops pin
+      froze the whole action list for the THIRD time on a legitimate addition — rewritten to assert
+      MEMBERSHIP, since the list-wide invariants (verify first, no duplicates) are pinned once already.
+      13/13 tripwires now bite.
+- [x] `server/adminToolParity.test.ts` (29). NO SCHEMA CHANGE — `users.role` has existed since v2.99.6.
+      `pnpm verify` green, 2336 tests.
+- [ ] NOT built, deliberately: anything else an admin panel could do. Reading messages, deleting
+      accounts and granting roles from the UI are all absent by choice, not by omission — see the scope
+      note above.
+
 ## v2.99.75 — choose your own 6-digit number (2026-07-26)
 - [x] Owner: *"my personal number is 235680. Can you change it to 777777 and make sure whoever added me
       in his contact book or has any communications and messages makes sure they appear with the new

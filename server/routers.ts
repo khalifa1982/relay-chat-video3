@@ -17,6 +17,7 @@ import {
   v2PushRouter,
   v2PartyLinesRouter,
   v2StatusRouter,
+  v2AdminRouter,
 } from "./v2routers";
 
 export const appRouter = router({
@@ -92,6 +93,7 @@ export const appRouter = router({
   attachments: v2AttachmentsRouter,
   calls: v2CallsRouter,
   stats: v2StatsRouter,
+  admin: v2AdminRouter,
   push: v2PushRouter,
   partyLines: v2PartyLinesRouter,
   status: v2StatusRouter,

@@ -319,6 +319,106 @@ export async function getIdentityByNumber(number: string): Promise<ResolvedIdent
   return rows.length > 0 ? rowToResolved(rows[0]) : null;
 }
 
+/**
+ * Is this user an administrator? (v2.99.76)
+ *
+ * THE SERVER-SIDE AUTHORITY for the admin panel. `whoami` already reports a `role`
+ * so the client can decide what to RENDER, but that value has been through the
+ * browser and is therefore a hint, not a permission — every admin procedure
+ * re-derives the answer here, from the row.
+ *
+ * FAILS CLOSED. A DB hiccup means "not an admin", never "probably fine": the whole
+ * point of the check is to stand between a stranger and other people's identities.
+ */
+export async function isUserAdmin(userId: number | null | undefined): Promise<boolean> {
+  if (typeof userId !== "number" || !Number.isFinite(userId)) return false;
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    const rows = await db
+      .select({ role: users.role })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    return rows[0]?.role === "admin";
+  } catch {
+    return false;
+  }
+}
+
+/** One row of the admin panel's people list. Deliberately NOT the whole identity:
+ *  see `adminFindIdentities` for what is withheld and why. */
+export interface AdminIdentityRow {
+  id: number;
+  number: string;
+  displayName: string;
+  role: IdentityRole;
+  email: string | null;
+  isGuest: boolean;
+  createdAt: Date | null;
+}
+
+/**
+ * Find identities for the admin panel, by 6-digit number, email, or name.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT RETURN, because an admin panel is a permanent
+ * new read surface and the smallest one that does the job is the right one: no
+ * message bodies, no contacts, no attachment keys, no credential hashes, no guest
+ * tokens, no recovery hashes, no device ids. Identifying a person and their number
+ * is the entire task the panel exists for.
+ *
+ * A blank query lists the most recent identities, which is what makes the panel
+ * usable before you know what you are looking for.
+ */
+export async function adminFindIdentities(
+  query: string,
+  limit = 25
+): Promise<AdminIdentityRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const q = (query || "").trim();
+  const cap = Math.min(Math.max(1, limit), 50);
+  const cols = {
+    id: identities.id,
+    number: identities.number,
+    displayName: identities.displayName,
+    verified: identities.verified,
+    userId: identities.userId,
+    userRole: users.role,
+    email: users.email,
+    createdAt: identities.createdAt,
+  };
+  try {
+    const base = db.select(cols).from(identities).leftJoin(users, eq(users.id, identities.userId));
+    // `like` parameterizes its value, but the WILDCARDS are ours to control: a `%`
+    // typed by the operator would otherwise widen their own search silently rather
+    // than matching the literal character they typed.
+    const esc = q.replace(/[%_\\]/g, (c) => `\\${c}`);
+    const rows = /^\d{6}$/.test(q)
+      ? await base.where(eq(identities.number, q)).limit(cap)
+      : q.length > 0
+        ? await base
+            .where(or(like(users.email, `%${esc}%`), like(identities.displayName, `%${esc}%`)))
+            .limit(cap)
+        : await base.orderBy(desc(identities.id)).limit(cap);
+    return rows.map((r) => ({
+      id: r.id,
+      number: r.number,
+      displayName: r.displayName,
+      role: (r.userRole === "admin"
+        ? "admin"
+        : r.verified === true
+          ? "registered"
+          : "guest") as IdentityRole,
+      email: r.email ?? null,
+      isGuest: r.userId == null,
+      createdAt: r.createdAt ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 /** Three-tier account badge (v2.99.6, owner spec):
  *  admin — the identity's owning user carries users.role = "admin";
  *  registered — email-verified identity (the old "verified" blue badge);

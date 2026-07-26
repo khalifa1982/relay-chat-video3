@@ -84,6 +84,8 @@ import {
   updateIdentityProfile,
   regenerateIdentityNumber,
   claimIdentityNumber,
+  isUserAdmin,
+  adminFindIdentities,
   upsertContact,
   getConversationParticipantIds,
   recentAutoReplyExists,
@@ -3433,5 +3435,97 @@ export const v2StatusRouter = router({
           };
         }),
       };
+    }),
+});
+
+/* ── admin ────────────────────────────────────────────────────── */
+
+/**
+ * The administrator panel's API (v2.99.76).
+ *
+ * Owner: *"why you dont do it at the backend / Or create for me an admin panel
+ * were i can change it"*.
+ *
+ * SCOPE IS DELIBERATELY NARROW. An admin panel is a permanent, high-value read and
+ * write surface, so this one does exactly two things — find a person, and change
+ * their number — and nothing else. It cannot read a message, list contacts, delete
+ * an account, or grant itself more power. Widening it later is a decision somebody
+ * has to make on purpose rather than something that arrived for free.
+ *
+ * EVERY procedure re-derives admin status from the `users` row via `isUserAdmin`.
+ * `whoami` already returns a `role`, but that value has been through the browser
+ * and is a rendering hint, never a permission.
+ */
+async function requireAdmin(ctx: { user?: { id: number } | null; identity: unknown }) {
+  const me = requireIdentity(ctx);
+  const userId = ctx.user?.id ?? null;
+  if (!(await isUserAdmin(userId))) {
+    // Same shape for "not signed in", "not an admin" and "DB unreadable", so the
+    // endpoint is not an oracle for who holds the role.
+    throw new TRPCError({ code: "FORBIDDEN", message: "Administrators only." });
+  }
+  return me;
+}
+
+export const v2AdminRouter = router({
+  /** Whether the CALLER is an admin, resolved server-side. Lets the client decide
+   *  whether to show the panel at all without trusting its cached whoami. */
+  amIAdmin: publicProcedure.query(async ({ ctx }) => {
+    const userId = (ctx.user?.id as number | undefined) ?? null;
+    return { admin: await isUserAdmin(userId) };
+  }),
+
+  /** Find people by 6-digit number, email, or name. Blank lists the newest. */
+  findIdentities: publicProcedure
+    .input(z.object({ query: z.string().max(120).optional() }))
+    .query(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      directoryGate(ctx);
+      return { rows: await adminFindIdentities(input.query ?? "", 25) };
+    }),
+
+  /**
+   * Change ANY identity's 6-digit number.
+   *
+   * Routes through `claimIdentityNumber`, which is the same single writer the
+   * self-service path uses — so an admin change propagates to every contact who
+   * saved the old number, inside the same transaction, and keeps all of that
+   * person's messages, calls, threads and statuses exactly where they are. An admin
+   * shortcut that wrote the column directly would silently skip all of it.
+   */
+  setIdentityNumber: publicProcedure
+    .input(z.object({ identityId: z.number().int().positive(), number: z.string().min(1).max(32) }))
+    .mutation(async ({ ctx, input }) => {
+      const me = await requireAdmin(ctx);
+      const res = await claimIdentityNumber(input.identityId, input.number);
+      if (!res.ok) {
+        const map: Record<
+          typeof res.reason,
+          { code: "BAD_REQUEST" | "CONFLICT" | "NOT_FOUND" | "TOO_MANY_REQUESTS" | "INTERNAL_SERVER_ERROR"; message: string }
+        > = {
+          invalid: {
+            code: "BAD_REQUEST",
+            message: "Not a valid RELAY number — six digits, not starting 000 or 111.",
+          },
+          taken: { code: "CONFLICT", message: "That number is already in use." },
+          budget: {
+            code: "TOO_MANY_REQUESTS",
+            message: "Too many numbers claimed just now — try again shortly.",
+          },
+          "not-found": { code: "NOT_FOUND", message: "No identity with that id." },
+          unavailable: {
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Couldn't change the number — nothing was changed.",
+          },
+        };
+        const m = map[res.reason];
+        throw new TRPCError({ code: m.code, message: m.message, cause: res.reason });
+      }
+      // An admin acting on somebody else's identity is worth a server-side trace.
+      // Ids only: this line lands in logs, so it carries no name, email or content.
+      console.warn(
+        `[admin] identity ${input.identityId} renumbered ${res.oldNumber} -> ${res.newNumber} by identity ${me.id}`
+      );
+      return { ...res };
     }),
 });
