@@ -7939,9 +7939,17 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       than relaxed: the v2.97.1 hold pin now asserts the transport-agnostic restore in BOTH directions, and the
       v2.99.12 away-card pin asserts the banner is unmounted while the bell keeps the count, blink and routes.
       Suite 2066 passed / 1 skipped; check + build green.
-- [ ] NOT verified live (this environment cannot reach your-chat.io): worth checking on the phone that the dial
-      pad is one line, the page no longer heats after a few minutes, a conference peer who takes another call
-      returns with their tile, and no banner drops over the main screen.
+- [x] PARTLY VERIFIED LIVE (2026-07-26, correcting this entry's original claim — HTTP to your-chat.io works
+      fine from the agent sandbox; what does NOT work is a headless BROWSER, which gets
+      `net::ERR_CONNECTION_RESET` through the agent proxy, so a rendered LAYOUT still needs a real phone).
+      Fetched the deployed chunk `assets/Home-CYSiliSF.js` off the live site and confirmed the shipped CSS:
+      `white-space:nowrap` present (the dial display is structurally one line), `clamp(19px,6.2vw,30px)` and
+      `letter-spacing:clamp(.13em,.6vw,.28em)` present (the phone-sized type that stops the wrap), plus the
+      phone-heating gates `document.hidden` and `hardwareConcurrency`. Zero raw U+2197 in either the main
+      bundle or the Home chunk, so the Arabic arrow fix holds in what is actually served.
+- [ ] STILL NEEDS A PHONE (not a code question): that the page no longer heats after a few minutes, and that
+      a conference peer who takes another call returns with their tile. Both are runtime/thermal behaviour
+      no static check can stand in for.
 
 ## v2.99.66 — owner UI batch from five screenshots (2026-07-25)
 - [x] 1. LAST SEEN CARRIES THE CLOCK. formatLastSeen returned "last seen on Jul 23" for anything older
@@ -7990,10 +7998,13 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       pin was REWRITTEN to the new menu shape rather than relaxed — it asserted the exact branch this batch
       deleted, and still gates Record video on recorder support. Suite 2049 passed / 1 skipped; check +
       build green.
-- [ ] NOT verified live: this environment cannot reach your-chat.io (network policy), so all five are
-      verified by tests and typecheck only. Worth a look on the phone: the dialer preview's last-seen line,
-      the composer's + menu, tapping a chat name for search/notifications, the sign-in screen's counters,
-      the Messages auto-reply switch, and the contacts rows.
+- [x] SIGN-IN COUNTERS VERIFIED LIVE (2026-07-26): this entry's premise was wrong — HTTP to your-chat.io
+      works from the agent sandbox (only a headless browser is blocked by the proxy). The deployed
+      `assets/index-SEadxTeO.js` contains the "Guests served" label and references `stats.public`, so
+      LiveStats is genuinely shipped and wired on the live sign-in screen.
+- [ ] STILL NEEDS A PHONE (visual/interaction, not checkable from source): the dialer preview's last-seen
+      line, the composer's + menu, tapping a chat name for search/notifications, the Messages auto-reply
+      switch, and the contacts rows.
 
 ## v2.99.64/65 — TURN :443 diagnosed to two owner-only steps; TLS-on-443 unblocked (2026-07-26)
 - [x] `turn-fix` established: both relays are EC2 instances in this account —
@@ -8177,3 +8188,26 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
 - [x] NO VERSION BUMP: this commit records a test result and changes no code, so bumping would mint a
       release that alters nothing a user can observe (and invite a fourth version collision with the
       parallel branches).
+
+## Session close-out — everything landed, nothing unmerged (2026-07-26)
+- [x] AUDITED for unlanded work rather than assumed: zero open PRs; no stashes; a clean tree; and every
+      remote branch now reports `0 ahead` of `origin/main`. TWO branches LOOKED unmerged and were not —
+      `claude/jolly-brown-isnjrh` and `claude/connected-ready-glsdab` were both stale post-squash remnants,
+      and their content-diff against main was pure DELETION, meaning merging either would have REVERTED
+      live content (#48's branch predates #49, so it would have removed the Round 11 failover record).
+      Checked before acting instead of merging on the strength of "1 commit ahead".
+- [x] VERIFIED my work survived #48's merge, since that branch was cut before #49 landed: the failover
+      record and its verbatim hydration log line are still in `docs-cross-instance-signaling.md`, the
+      `altOff` fix is still in `scripts/turn-check.mjs`, and all four Round 11 sources plus both test files
+      are present on main.
+- [x] main (v2.99.73) is LIVE on both instances (`7b9fd4f1`, `fe2517fd`), `cluster=True redisBus=True`,
+      2237 tests passing. `claude/jolly-brown-isnjrh` reset to main so the next task starts from a clean base.
+- [x] DELIBERATELY NOT DELETED: the two stale remote branches. `claude/connected-ready-glsdab` belongs to a
+      parallel session that may still be active, and deleting someone else's branch is an outward-facing,
+      hard-to-reverse act on work I do not own. Both are harmless — fully merged and 0 ahead.
+- [ ] REMAINING WORK, none of it a loose end: task #26 (call media — iOS self-mirror, call quality, live
+      video filters) which the owner explicitly deferred; the group-call tiles being static photos, which
+      needs footage and is an asset decision; the TURN relay-failover test (both relays now proven to
+      allocate, but no call has yet MOVED between them — the highest-value remaining test); Round 11 test 3
+      (`rejoin-recreate`, needs the Redis keys deleted before the kill) and a strict split topology; and the
+      phone-only visual checks above.
