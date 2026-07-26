@@ -76,6 +76,7 @@ import {
   markOnline,
   markOffline,
   markThreadRead,
+  markThreadDelivered,
   recordAttachment,
   recordCallStart,
   sendMessage,
@@ -1536,6 +1537,12 @@ export const v2MessagesRouter = router({
           meta: r.meta,
           status: r.status,
           createdAt: r.createdAt,
+          // v2.99.74 — receipt times for the message-info panel. Sent to BOTH sides:
+          // they are timestamps the recipient generated about their own reading, and
+          // the sender is precisely who the info panel is for. Nothing here reveals
+          // content, an identity, or anything the ticks do not already imply.
+          deliveredAt: r.deliveredAt ?? null,
+          readAt: r.readAt ?? null,
           editedAt: r.editedAt,
           attachment: locked ? null : r.attachmentId ? (attById.get(r.attachmentId) ?? null) : null,
           replyToId: r.replyToId ?? null,
@@ -1854,6 +1861,41 @@ export const v2MessagesRouter = router({
       }
 
       return row;
+    }),
+
+  /**
+   * Mark inbound messages DELIVERED (v2.99.74) — the second tick.
+   *
+   * Called by the RECIPIENT's client whenever it learns about messages in a
+   * conversation it is not currently reading. Fans a `read`-shaped event back so the
+   * sender's ticks update live rather than on their next poll; the event kind is
+   * `delivered` so an older client, which does not know it, simply ignores it.
+   */
+  markDelivered: publicProcedure
+    .input(z.object({ conversationId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const wasMember = await markThreadDelivered({
+        conversationId: input.conversationId,
+        identityId: me.id,
+      });
+      if (wasMember) {
+        try {
+          const peers = await getConversationParticipantIds(input.conversationId);
+          for (const pid of peers) {
+            if (pid !== me.id) {
+              publishToIdentity(pid, {
+                kind: "delivered",
+                conversationId: input.conversationId,
+                by: me.id,
+              });
+            }
+          }
+        } catch {
+          /* the receipt is already stored; the peer picks it up on their next read */
+        }
+      }
+      return { ok: wasMember };
     }),
 
   markRead: publicProcedure

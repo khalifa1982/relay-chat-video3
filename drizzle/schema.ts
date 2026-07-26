@@ -391,6 +391,17 @@ export const messages = mysqlTable(
     replyToId: int("replyToId"),
     /** Free-form metadata (e.g. call-ended duration, system event details). */
     meta: json("meta"),
+    /**
+     * Receipt timestamps (v2.99.74). `createdAt` is already "sent", so these two
+     * complete the set the message-info panel shows: when it reached the recipient's
+     * device, and when they actually opened it.
+     *
+     * Additive + nullable via the boot migrator. NULL means "not yet", which is
+     * exactly right for every historical row — we genuinely do not know when those
+     * were delivered or read, and inventing a value would make the info panel lie.
+     */
+    deliveredAt: timestamp("deliveredAt"),
+    readAt: timestamp("readAt"),
     status: mysqlEnum("status", ["sent", "delivered", "read", "failed"])
       .notNull()
       .default("sent"),

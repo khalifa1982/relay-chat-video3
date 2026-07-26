@@ -20,6 +20,7 @@ import { CountryFlag } from "./CountryFlag";
 import { OnboardingGate } from "./OnboardingGate";
 import { PasscodeGate } from "./PasscodeGate";
 import { useRealtime } from "./useRealtime";
+import { useDeliveryReceipts } from "./useDeliveryReceipts";
 import { useDnd } from "./dnd";
 import { useTheme } from "@/contexts/ThemeContext";
 import { NotificationBell } from "./MissedCalls";
@@ -201,6 +202,12 @@ function Inner({ children }: { children: React.ReactNode }) {
     if (typeof window !== "undefined" && window.history.length > 1) window.history.back();
     else navigate("/app/dialer");
   };
+  // Report DELIVERY for every unread thread (v2.99.74) — this is what makes the
+  // sender's second tick appear. Driven off the thread list because that is the
+  // signal that survives being offline when the message was sent: the SSE event is
+  // long gone by the time such a recipient opens the app.
+  useDeliveryReceipts(threads.data, me?.id ?? null);
+
   const unreadTotal = useMemo(
     () =>
       (threads.data ?? []).reduce((acc, t) => acc + (t.unreadCount ?? 0), 0),

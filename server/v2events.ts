@@ -38,6 +38,9 @@ export type V2Event =
   | { kind: "message"; conversationId: number; from: number }
   | { kind: "typing"; conversationId: number; from: number }
   | { kind: "read"; conversationId: number; reader: number }
+  /** Delivery receipt (v2.99.74): the second tick. The recipient's app has the
+   *  message but nobody has opened it, so the sender's single tick becomes two. */
+  | { kind: "delivered"; conversationId: number; by: number }
   | { kind: "presence"; number: string; online: boolean; lastSeenAt: string }
   | { kind: "contact"; from: number }
   | {
@@ -68,7 +71,7 @@ export type V2Event =
  * handler unfiltered.
  */
 const KNOWN_V2_EVENT_KINDS = new Set<V2Event["kind"]>([
-  "message", "typing", "read", "presence", "contact", "call_offer", "watched_online", "status", "device_pending", "ping",
+  "message", "typing", "read", "delivered", "presence", "contact", "call_offer", "watched_online", "status", "device_pending", "ping",
 ]);
 
 function writeEvent(client: SseClient, ev: V2Event) {
