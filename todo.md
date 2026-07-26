@@ -187,3 +187,12 @@
 - [x] Renamed betaVersionName prop to appVersionName to eliminate the word "beta" from compiled code
 - [x] Verified zero occurrences of "beta" in any source file (ts/tsx/js)
 - [x] tsc clean + 65 tests pass
+
+## Round 20 — Integrate Firebase push notifications for iOS
+- [x] Added GoogleService-Info.plist to project root (Bundle ID: io.yourchat.relay)
+- [x] Added googleServicesFile to iOS config in app.config.ts
+- [x] Added "remote-notification" to UIBackgroundModes for background push delivery
+- [x] Created use-push-token.ts hook: gets native device push token (APNs) and injects it into WebView via postMessage
+- [x] Integrated usePushToken into RelayWebView: sends token on load and on every app resume
+- [x] Web app receives { type: "SET_PUSH_TOKEN", token: "<apns_token>" } via window.addEventListener("message")
+- [x] tsc clean + 65 tests pass

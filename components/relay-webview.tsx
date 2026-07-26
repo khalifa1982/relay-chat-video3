@@ -24,6 +24,7 @@ import { parseRelayMessage } from "@/lib/call-messages";
 import { useCallSession } from "@/hooks/use-call-session";
 import { useCallNotifications } from "@/hooks/use-call-notifications";
 import { useBackgroundPresence } from "@/hooks/use-background-presence";
+import { usePushToken } from "@/hooks/use-push-token";
 
 // Palette aligned to the live RELAY web app (oklch(0.12 0.008 245) background
 // ~ #050608) so the native shell's splash/error chrome blends seamlessly with
@@ -111,6 +112,10 @@ export function RelayWebView() {
   // Call lifecycle: background audio, keep-awake, PiP, camera re-acquire,
   // plus audio output routing (earpiece/speaker/Bluetooth).
   const { setCallState, applyAudioRoute } = useCallSession(reacquireCamera);
+
+  // Firebase push token: get the native device token and inject it into the
+  // WebView so the web app can register it with its server for push delivery.
+  const { onWebViewLoadEnd: sendPushToken } = usePushToken(webViewRef);
 
   // Online presence: keep RELAY reachable in the background so calls ring even
   // when minimized. The injected script reports whether the user is signed in;
@@ -260,7 +265,10 @@ export function RelayWebView() {
         onLoadStart={() => {
           if (!firstLoadDoneRef.current) setLoading(true);
         }}
-        onLoadEnd={finishFirstLoad}
+        onLoadEnd={() => {
+          finishFirstLoad();
+          sendPushToken();
+        }}
         onError={handleError}
         onHttpError={() => {}}
         onNavigationStateChange={handleNavStateChange}

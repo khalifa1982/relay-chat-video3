@@ -56,6 +56,7 @@ const config: ExpoConfig = {
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
+    googleServicesFile: "./GoogleService-Info.plist",
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
       NSCameraUsageDescription:
@@ -63,7 +64,7 @@ const config: ExpoConfig = {
       NSMicrophoneUsageDescription:
         "RELAY uses your microphone to capture and transmit your voice to the person you are speaking with during a voice or video call. For example, when you accept an incoming call or dial a contact, your microphone activates so the other person can hear you clearly throughout the conversation.",
       // Keep the call's audio session alive while backgrounded (voice/video calls).
-      UIBackgroundModes: ["audio", "voip"],
+      UIBackgroundModes: ["audio", "voip", "remote-notification"],
     },
   },
   android: {
