@@ -83,6 +83,7 @@ import {
   touchGuestExpiry,
   updateIdentityProfile,
   regenerateIdentityNumber,
+  claimIdentityNumber,
   upsertContact,
   getConversationParticipantIds,
   recentAutoReplyExists,
@@ -777,6 +778,65 @@ export const v2AuthRouter = router({
       previousNumber: result?.oldNumber ?? me.number,
     };
   }),
+
+  /**
+   * Move onto a number the person CHOSE (v2.99.75).
+   *
+   * Same permanent claim on the shared 6-digit space as `regenerateNumber`, and
+   * the same propagation — everyone who saved the old number is rewritten inside
+   * the same transaction, so contacts, blocks, threads, messages and call history
+   * all follow the person rather than the digits. Hence the same M41 mint gate.
+   *
+   * REGISTERED ACCOUNTS ONLY, and that is a deliberate policy rather than an
+   * implementation limit. A chosen number is first-come and permanent (the
+   * reservation ledger never recycles), so leaving it open to guests would let an
+   * ephemeral, unverified session squat the memorable numbers — and a guest
+   * identity is session-scoped, so the number would be stranded the moment the
+   * browser closed. Proving an email is a low bar that makes the claim
+   * accountable to an account that persists.
+   */
+  setNumber: publicProcedure
+    .input(z.object({ number: z.string().min(1).max(32) }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      if (me.isGuest || !ctx.user) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Choosing your own number needs a registered account.",
+        });
+      }
+      guestMintGate(ctx);
+      const res = await claimIdentityNumber(me.id, input.number);
+      if (!res.ok) {
+        // NAMED refusals: each one has a different correct next step, and
+        // collapsing them into one message would tell somebody whose typo was
+        // rejected to go and pick a different number.
+        const map: Record<typeof res.reason, { code: "BAD_REQUEST" | "CONFLICT" | "NOT_FOUND" | "TOO_MANY_REQUESTS" | "INTERNAL_SERVER_ERROR"; message: string }> = {
+          invalid: {
+            code: "BAD_REQUEST",
+            message: "That isn't a valid RELAY number — six digits, not starting 000 or 111.",
+          },
+          taken: { code: "CONFLICT", message: "That number is already in use." },
+          budget: {
+            code: "TOO_MANY_REQUESTS",
+            message: "Too many numbers claimed just now — try again shortly.",
+          },
+          "not-found": { code: "NOT_FOUND", message: "Identity not found." },
+          unavailable: {
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Couldn't change your number — nothing was changed.",
+          },
+        };
+        const m = map[res.reason];
+        throw new TRPCError({ code: m.code, message: m.message, cause: res.reason });
+      }
+      const fresh = await getIdentityById(me.id);
+      return {
+        number: fresh?.number ?? res.newNumber,
+        previousNumber: res.oldNumber,
+        unchanged: res.unchanged,
+      };
+    }),
 });
 
 /* ── directory (numbers / lookups) ────────────────────────────── */

@@ -7557,6 +7557,74 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.75 — choose your own 6-digit number (2026-07-26)
+- [x] Owner: *"my personal number is 235680. Can you change it to 777777 and make sure whoever added me
+      in his contact book or has any communications and messages makes sure they appear with the new
+      number and keep the old data, such as calls or messages, but only updates to 777777."*
+- [x] **HALF OF THAT ALREADY WORKED**, stated rather than quietly re-fixed. Renumbering has propagated
+      since v2.99.54 and `numberContinuity.test.ts` MACHINE-CHECKS it: it scans `drizzle/schema.ts` for
+      every `varchar(…, {length: 6})` and fails the build if a number-bearing column has no declared
+      strategy. All five are declared — `identities.number` moves; `contacts.number` is rewritten (so
+      everyone who saved you keeps reaching you, and a block on the old number FOLLOWS you);
+      `conference_participants.number` is rewritten scoped by identityId; `conference_history.dialedNumber`
+      is resolved LIVE at read time; `party_lines.number` is never touched, because a line is not a
+      person. The History roster JSON is resolved by identityId too, separately pinned. Everything else —
+      messages, threads, call history, statuses, attachments, presence, push subscriptions — references
+      the identity by numeric id, so it follows the person with nothing to migrate.
+- [x] **WHAT DID NOT EXIST**: any way to pick a SPECIFIC number. `regenerateNumber` only ever handed out
+      a random one, so "change it to 777777" was not expressible.
+- [x] **THE CONSTRAINT THAT SHAPED THE CHANGE, and it is a good one**: `guestUpgrade.test.ts` pins that
+      the codebase contains exactly ONE writer of `identities.number`. Propagation is the whole
+      difficulty of renumbering, and a parallel implementation is precisely how History's copies came to
+      rot before v2.99.54. So this is a `desiredNumber` PARAMETER on the existing writer, never a second
+      function — mutation-proven: a parallel writer that skips propagation fails the suite. The chosen
+      number resolves to `newNumber` BEFORE the transaction, so the body it shares with a random
+      allocation is identical and inherits every copy.
+- [x] `normalizeDesiredNumber` accepts the grouping people actually type ("777 777", "777-777" — the app
+      displays numbers that way, so refusing it would be rude) but strips ONLY spacing and grouping,
+      never every non-digit: `\D`-stripping would silently read "7a7b7c7d7e7f" as 777777 and turn a typo
+      into a successful renumber of somebody's identity. Honours the same `RESERVED_PREFIXES` a random
+      allocation does, or the reserved range is reserved against the allocator and not against people.
+      Fails closed on a non-string.
+- [x] Availability checked against BOTH number tables, then RESERVED in the shared ledger — which is what
+      closes the cross-table NEW-vs-NEW race against a party line minted in the same instant. Spends the
+      same GLOBAL MINT BUDGET, because the drain backstop must not be sidesteppable by naming numbers
+      instead of asking for them.
+- [x] Choosing the number you already hold is a NO-OP, not an error, so a double-tap or a retry after a
+      dropped response is harmless rather than reporting "taken" about the caller's own number.
+- [x] **THE SUBTLE BUG I HAD TO REASON OUT, THEN PIN**: the failure path must NOT hand the reservation
+      back on a pre-flight refusal. "taken" means somebody ELSE holds it — possibly an allocation that
+      has reserved the number but not yet inserted its row — so releasing there would un-reserve a
+      stranger's in-flight number and let two people end up with it. The early return precedes the
+      release, and that ordering is mutation-verified rather than assumed. A genuine post-reservation
+      failure DOES release, and `releaseUnusedNumberReservation` re-checks the number is absent from both
+      tables, so even then it cannot un-reserve a bound one. A lost race surfaces as `taken` (errno 1062)
+      rather than a 500. The OLD number is never released: the ledger is monotonic on purpose, or a
+      number somebody kept written down would later connect them to a stranger.
+- [x] **REGISTERED ACCOUNTS ONLY**, as policy rather than as an implementation limit: a chosen number is
+      first-come and permanent, and a guest identity is session-scoped, so a guest claim would squat a
+      memorable number and then strand it the moment the browser closed.
+- [ ] **FLAGGED HONESTLY: chosen numbers are FIRST-COME.** Nothing reserves 777777 for anybody, so the
+      owner should claim it promptly. Admin-only was considered and rejected: `users.role = "admin"` is
+      granted by hand via SQL and may not be set on their account, which would have shipped a feature
+      they could not use.
+- [x] UI: Profile offers "Choose my number" beside "Random number" (the old button, renamed; a test pins
+      it still calls the no-argument path, so its behaviour is unchanged). The dialog deliberately does
+      NOT close on submit — the number may be taken, and closing before the server answers would hide the
+      one message telling the person to pick another. Refusals are the SERVER's own named messages, since
+      a typo and a collision need different things from the reader. A text input with
+      `inputMode="numeric"` rather than `type="number"` (spinners, accepts "1e5", drops a leading zero),
+      `dir="ltr"` so an RTL locale cannot reorder the digits being typed.
+- [x] `server/chooseNumber.test.ts` (30); all 12 tripwires verified by MUTATION from byte-exact backups,
+      source confirmed byte-identical afterwards.
+- [x] **A RECURRING WEAKNESS OF MY OWN, finally fixed rather than patched a fourth time**: for the fourth
+      release running, a "this pattern is gone" assertion matched a COMMENT explaining why it is gone —
+      here `type="number"` inside the comment justifying its absence — so it passed on prose rather than
+      behaviour, which is worse than no assertion. Every `not.toMatch` against a source file now goes
+      through a `codeOnly()` helper that strips comment lines.
+- [x] NO ops work and NO schema change: reuses the existing transaction, reservation ledger and boot
+      migrator entirely. `pnpm verify` green, 2308 tests.
+
 ## v2.99.74 — delivery receipts, a real message menu, and the voice bar that still did not move (2026-07-26)
 - [x] **(1) ONE TICK AND TWO TICKS WERE THE SAME STATE.** Owner: *"it shows you what check if it's
       delivered. I mean the other user is online and he received, but he didn't open it. It should show
