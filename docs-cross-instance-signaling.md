@@ -232,6 +232,40 @@ by v2.99.43 (M45) and v2.99.57 (R-GENPIN) — do not "simplify" it.
 3. `redis-cli DEL relay:rooms 'relay:room:*'` *then* kill the leader. EXPECT: the
    `rejoin-recreate` fallback carries the call instead.
 
+#### Test 1 — RUN AND PASSED, 2026-07-26 07:44 UTC
+
+Against a **real 2-device call**, not a synthetic one. An identical script went to
+both instances; each compared `relay:leader` to its own id and only the leader
+`kill -9`'d itself (SIGKILL — no graceful shutdown path, so nothing could flush
+on the way out).
+
+| fact | evidence |
+|---|---|
+| pre-kill leader | `relay:leader = 6987756681fc6166` (Server B, ap-south-1b) |
+| the room was already shadowed | `relay:room:r6fb23ba9d392` in Redis, members pin 235680 + 319011, epoch field `2` |
+| the kill | `kill -9` pid 88014 on the leader, mid-call |
+| election | `relay:leader` → `db54cf614e883b38` (Server A); `relay:leader:epoch` advanced to **3** |
+| **hydration ran** | `[relay] hydrated 1 room(s) from Redis on taking leadership` — verbatim from the new leader's log |
+| the fence accepted the higher epoch | the room record survived the election and its epoch field advanced `2` → `3` |
+| self-heal | pm2 revived the killed process (`restarts: 1`); no ASG replacement needed |
+| **user experience** | *"I didn't feel anything — it works normal, like there was no disconnection."* |
+
+What that evidence pins, mechanism by mechanism: the write-through had already
+persisted the live room (epoch `2` present *before* the kill, so it was not
+written by the recovery); `mintLeaderEpoch` produced a strictly higher epoch on
+election; `applyHydratedRooms` returned 1, which is the only way that log line
+prints, so the gate ran *before* signaling was served; and the room's epoch moving
+to `3` shows the Lua CAS admits a higher epoch while (per
+`roomStoreLive.test.ts`) refusing a lower one.
+
+**Still untested:** (a) a strict split topology — production logs do not record
+which instance each browser's stream was attached to, so "one browser per
+instance" cannot be proven retroactively for this run; force it by deregistering
+one ALB target, connecting device 1, swapping, connecting device 2, re-registering
+both, then killing the leader. (b) Test 3, the `rejoin-recreate` fallback. (c) The
+companion TURN test — kill a relay mid-**relayed** call and expect recovery via
+the second relay; this call was P2P, so the relays were bystanders.
+
 ### Still not covered
 
 The leader is still a single writer, so a failover costs one lease expiry (≤9s)

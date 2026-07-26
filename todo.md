@@ -7995,3 +7995,35 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       run should exit 0. NOTE the step deliberately echoes the script's exit code instead of
       propagating it (`verify` is a status report and must not mask the rest of the fleet report), so
       the step going green is NOT evidence of relay health — the per-endpoint lines are.
+
+## Round 11 leader-failover test — RUN AND PASSED (2026-07-26)
+- [x] The one Round 11 claim I could not verify from the sandbox (it needs two live instances and a
+      browser on each) was run by the owner against a **real 2-device call**. An identical script went to
+      both instances; each compared `relay:leader` to its own id and only the leader `kill -9`'d itself —
+      SIGKILL, so no graceful-shutdown path could flush anything on the way out. Verdict PASS, and the
+      owner's subjective report is the headline: *"I didn't feel anything — it works normal, like there
+      was no disconnection."*
+- [x] The evidence pins the MECHANISMS, not just the outcome, which is what makes it worth recording:
+      (1) `relay:room:r6fb23ba9d392` was already in Redis with both members and epoch field `2` BEFORE
+      the kill — so the write-through had genuinely persisted a live room, and the record was not
+      manufactured by the recovery path; (2) `relay:leader:epoch` advanced to `3` on election, i.e.
+      `mintLeaderEpoch` minted a strictly higher fence; (3) the new leader logged
+      `[relay] hydrated 1 room(s) from Redis on taking leadership` VERBATIM — that string only prints
+      when `applyHydratedRooms` returns non-zero, so hydration provably ran, and it runs inside the gate
+      that precedes serving any signaling; (4) the room record survived the election with its epoch field
+      advanced `2` → `3`, which shows the Lua CAS admits a HIGHER epoch, complementing
+      `roomStoreLive.test.ts`'s proof that it refuses a lower one. pm2 revived the killed process
+      (`restarts: 1`) with no ASG replacement.
+- [x] Recorded in `docs-cross-instance-signaling.md` § Round 11 so the next contributor finds the result
+      beside the procedure rather than only in a chat log.
+- [ ] STILL UNTESTED, stated rather than glossed: (a) a STRICT split topology — production logs do not
+      record which instance each browser's SSE was attached to, so "one browser per instance" cannot be
+      proven retroactively for that run (force it by deregistering one ALB target, connecting device 1,
+      swapping, connecting device 2, re-registering both, then killing the leader); (b) test 3, the
+      `rejoin-recreate` fallback, which needs the Redis room keys deleted before the kill; (c) the
+      companion TURN test — kill a relay mid-**relayed** call and expect recovery via the second relay.
+      The tested call was P2P, so the relays were bystanders and the multi-relay path is still unexercised
+      end to end even though both relays are now proven to allocate.
+- [x] NO VERSION BUMP: this commit records a test result and changes no code, so bumping would mint a
+      release that alters nothing a user can observe (and invite a fourth version collision with the
+      parallel branches).
