@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "541732683953",
+    "project_id": "relay-5f28c",
+    "storage_bucket": "relay-5f28c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:541732683953:android:d717377904e2833e9f2290",
+        "android_client_info": {
+          "package_name": "com.relaytech.calling"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCnt3eygnVodXlWRSb0ByyBKIOl1Z8Zbio"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -68,6 +68,7 @@ const config: ExpoConfig = {
     },
   },
   android: {
+    googleServicesFile: "./google-services.json",
     adaptiveIcon: {
       backgroundColor: "#0B1020",
       foregroundImage: "./assets/images/android-icon-foreground.png",

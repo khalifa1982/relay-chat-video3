@@ -196,3 +196,4 @@
 - [x] Integrated usePushToken into RelayWebView: sends token on load and on every app resume
 - [x] Web app receives { type: "SET_PUSH_TOKEN", token: "<apns_token>" } via window.addEventListener("message")
 - [x] tsc clean + 65 tests pass
+- [x] Added google-services.json for Android (package: com.relaytech.calling) and configured googleServicesFile in app.config.ts
