@@ -72,8 +72,25 @@ describe("relay call UI regression guards", () => {
   });
 
   // ── tile enrichment (v2.39) ────────────────────────────────────────────────
-  it("cam-off tiles show a full-name label under the avatar", () => {
-    expect(RELAY_CSS).toMatch(/\.relay-tile \.ph-name\{/);
+  it("a cam-off tile shows the AVATAR only — the name is not repeated there", () => {
+    // REWRITTEN in v2.99.82. This pinned `.relay-tile .ph-name{`, i.e. the centred
+    // full name under the avatar — which the owner asked twice to remove, having
+    // circled all three renderings of one name on a screenshot. The name now
+    // appears exactly ONCE per tile, in the bottom band.
+    expect(RELAY_CSS).not.toMatch(/\.ph-name/);
+    // The avatar itself is still there, so a camera-off tile is never a blank box.
+    expect(RELAY_CSS).toMatch(/\.relay-tile \.ph \.av\{/);
+    // The band, and the digits beside the name.
+    expect(RELAY_CSS).toMatch(/\.relay-tile \.nm\{/);
+    expect(RELAY_CSS).toMatch(/\.relay-tile \.nm \.nm-pin\{/);
+  });
+
+  it("the stylesheet contains no backtick — it IS a template literal", () => {
+    // This has broken the build twice (v2.99.16, and again while writing v2.99.82):
+    // a backtick inside a CSS comment terminates the literal. `pnpm check` catches
+    // it, but only as a confusing cascade of syntax errors 300 lines away, so name
+    // the real rule here.
+    expect(RELAY_CSS).not.toContain("`");
   });
   it("tiles carry a device + speed info chip", () => {
     expect(RELAY_CSS).toMatch(/\.relay-tile \.tile-info\{/);

@@ -124,12 +124,29 @@ describe("quick-add contacts (v2.96)", () => {
     expect(PEER_OVERLAYS).toMatch(/disabled=\{saved \|\| upsert\.isPending\}/);
     expect(PEER_OVERLAYS).toMatch(/Add to contacts/);
   });
-  it("in-call: the engine exposes a read-only roster and the host renders the save chip", () => {
+  it("in-call add-to-contacts lives in exactly ONE place: the per-tile pill", () => {
+    // REWRITTEN in v2.99.82. This pinned the top-left `InCallSaveContacts` chip as
+    // MOUNTED. Owner: "add contact ... currently you're putting on the profile, on
+    // the video, and also you put it on the top left. Just put it one place. Under
+    // the name of each user."
+    //
+    // Nothing was lost by unmounting it, and three things improved: the chip only
+    // ever offered the FIRST unsaved peer (a `roster.find`) while the pill is
+    // per-peer; it polled every 3s; and it derived a SECOND saved-set from
+    // contacts.list that could disagree with the engine's own.
+    const engineCode = RELAY_ENGINE
+      .split("\n")
+      .filter((l) => {
+        const t = l.trim();
+        return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
+      })
+      .join("\n");
+    expect(engineCode).not.toMatch(/<InCallSaveContacts/);
+    // The roster accessor stays — the engine's own saved-set push uses it.
     expect(RELAY_CLIENT).toMatch(/getRoster: \(\) => Array<\{ pin: string; name: string \}>/);
-    expect(RELAY_ENGINE).toMatch(/phase === "in-call" \? <InCallSaveContacts/);
-    // The chip must never render for peers already saved (v2.96.1: icon-only,
-    // no dismissed-set — it simply vanishes once everyone is saved).
-    expect(RELAY_ENGINE).toMatch(/!saved\.has\(r\.pin\)/);
+    // The per-tile pill is the single carrier, and it still never shows for a peer
+    // who is already saved.
+    expect(RELAY_CLIENT).toMatch(/savedContactPins\.has\(pin\)\) return "";/);
   });
 });
 
