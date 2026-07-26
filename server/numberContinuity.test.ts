@@ -160,10 +160,21 @@ describe("renumbering moves every stored copy, atomically", () => {
 });
 
 describe("History resolves people from their identity, not a frozen number", () => {
-  const proc = ROUTERS.slice(
-    ROUTERS.indexOf("conferenceHistory: publicProcedure"),
-    ROUTERS.indexOf("conferenceHistory: publicProcedure") + 5200
-  );
+  // Bounded by the procedure's OWN END, not a magic character count. The `+5200`
+  // form broke the moment v2.99.78 added a batched role lookup ahead of the roster
+  // map: the assertions below fell outside the window and started passing/failing on
+  // where bytes happened to land rather than on what the code does.
+  const procStart = ROUTERS.indexOf("conferenceHistory: publicProcedure");
+  const procEnd = ROUTERS.indexOf("clearHistory:", procStart);
+  const proc = ROUTERS.slice(procStart, procEnd > procStart ? procEnd : undefined);
+
+  it("the slice really covers the whole procedure", () => {
+    // A slice that silently shrinks to nothing cannot fail for the reason it was
+    // written, which is worse than no assertion (the v2.99.69 lesson).
+    expect(procStart).toBeGreaterThan(-1);
+    expect(procEnd).toBeGreaterThan(procStart);
+    expect(proc.length).toBeGreaterThan(3000);
+  });
 
   it("looks the roster up by identityId", () => {
     expect(proc).toMatch(/getIdentitiesByIds\(rosterIds\)/);

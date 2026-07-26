@@ -32,6 +32,8 @@ import {
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
 import { formatDuration, formatFullWhen } from "@/lib/formatCall";
+import { RoleBadge } from "@/app/VerifiedBadge";
+import type { IdentityRole } from "@/app/VerifiedBadge";
 import { useIdentity } from "@/app/useIdentity";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
@@ -48,7 +50,7 @@ type ConfRow = {
   partyLine?: boolean;
   /** The line's title (null when the line has since been deleted). */
   partyLineTitle?: string | null;
-  participants: Array<{ number: string; name: string; avatarUrl?: string | null; isSelf: boolean }>;
+  participants: Array<{ number: string; name: string; avatarUrl?: string | null; isSelf: boolean; role?: IdentityRole | null }>;
 };
 
 type CallRow = {
@@ -58,7 +60,7 @@ type CallRow = {
   channel?: string;
   durationSec?: number | null;
   startedAt: string | Date;
-  other: { number: string; displayName: string; avatarUrl?: string | null } | null;
+  other: { number: string; displayName: string; avatarUrl?: string | null; role?: IdentityRole | null } | null;
 };
 
 type Item =
@@ -794,6 +796,7 @@ function ConferenceItem({
               aria-label={`View ${peer.name}'s profile`}
             >
               <span className="truncate" dir="auto">{title}</span>
+              <RoleBadge role={peer.role ?? null} size={14} className="ms-1 self-center" />
               <PinTag number={peer.number} />
             </button>
           ) : (
@@ -885,6 +888,7 @@ function ConferenceItem({
               aria-label={p.number ? `${p.name} (${p.number})` : p.name}
             >
               <span className="max-w-[10rem] truncate" dir="auto">{p.name}</span>
+              <RoleBadge role={p.role ?? null} size={11} className="self-center" />
               {p.number ? (
                 <span
                   dir="ltr"
@@ -967,6 +971,10 @@ function SoloItem({
             aria-label={`View ${peerName}'s profile`}
           >
             <span className="truncate" dir="auto">{peerName}</span>
+            {/* Owner: "immediately put the badge" — right after the last name, and
+                BEFORE the number, so name → tier → number reads in that order. No
+                caption: the colour is the tier (v2.99.78). */}
+            <RoleBadge role={call.other?.role ?? null} size={14} className="ms-1 self-center" />
             <PinTag number={peerNum} />
           </button>
           <div className="truncate text-xs text-muted-foreground">

@@ -2272,6 +2272,11 @@ export const v2CallsRouter = router({
     // Resolve the "other" identity for every row in ONE query. (This replaced a
     // dead single-row query plus an N+1 loop.)
     const otherById = new Map((await getIdentitiesByIds(otherIds)).map((o) => [o.id, o]));
+    // Tier badge for the call log (v2.99.78). Owner: *"inside the call history ...
+    // you didn't put the badge ... immediately put the badge"*. One batched query,
+    // and it is decoration — `getRolesByIdentityIds` swallows its own errors and
+    // returns an empty map, so a hiccup costs a badge and never the call log.
+    const rolesById = await getRolesByIdentityIds(otherIds);
     return rows.map((r) => {
       const otherId = r.callerIdentityId === me.id ? r.calleeIdentityId : r.callerIdentityId;
       const other = otherById.get(otherId);
@@ -2290,6 +2295,7 @@ export const v2CallsRouter = router({
               number: other.number,
               displayName: other.displayName,
               avatarUrl: other.avatarUrl,
+              role: (rolesById.get(other.id) ?? "guest") as IdentityRole,
             }
           : null,
       };
@@ -2359,6 +2365,12 @@ export const v2CallsRouter = router({
         i.avatarUrl ?? null,
       ])
     );
+    // Tier badge for each roster member (v2.99.78), resolved BY IDENTITY like the
+    // name and avatar already are — so a renumbered person keeps their badge. One
+    // batched query for the whole page; decoration-only and error-swallowing.
+    const confRolesById = await getRolesByIdentityIds(
+      Array.from(liveById.keys()).filter((k): k is number => typeof k === "number")
+    );
     return rows.map((r) => {
       const roster = roster0(r);
       const isPartyLine = (r.roomId ?? "").startsWith("pl-");
@@ -2372,6 +2384,10 @@ export const v2CallsRouter = router({
           name: live?.displayName || p.name || "Guest",
           avatarUrl: live?.avatarUrl ?? (frozenNumber ? (avatarByNumber.get(frozenNumber) ?? null) : null),
           isSelf: p.identityId === me.id,
+          role:
+            typeof p.identityId === "number"
+              ? ((confRolesById.get(p.identityId) ?? "guest") as IdentityRole)
+              : null,
         };
       });
       /* The dialled number is stored with no identity of its own, so map it

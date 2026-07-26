@@ -72,12 +72,22 @@ export function roleLabel(role: IdentityRole | null | undefined): string | null 
 export function RoleBadge({
   role,
   size = 14,
-  caption = true,
+  caption = false,
   className = "",
 }: {
   role: IdentityRole | null | undefined;
   size?: number;
-  /** The tiny tier name under the mark. On by default (owner spec). */
+  /**
+   * The tiny tier name under the mark. OFF by default since v2.99.78.
+   *
+   * v2.99.6 shipped it on, at the owner's request. They have since reversed that:
+   * *"you don't need to put the word registered under the verified badge ... just
+   * put the badge only ... it will know."* The colour already carries the tier, and
+   * the word under it made every name two lines tall for no new information.
+   *
+   * Flipped at the DEFAULT rather than at the ten call sites, so a surface added
+   * later inherits the decision instead of re-litigating it.
+   */
   caption?: boolean;
   className?: string;
 }) {
