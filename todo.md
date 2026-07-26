@@ -7557,6 +7557,108 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.79 — Firebase/Expo linked: the WebView shell's push token now reaches the right transport (2026-07-26)
+- [x] **THE ASK, AND WHAT IT ACTUALLY NEEDED.** Owner: *"i have created a firebase account and i want to
+      link it to your web apps to send the notification to the front mobile apps for andriod and ios ...
+      npm install firebase"*, with the Firebase **Web SDK** config and `getAnalytics(app)`. The shipping
+      app then turned out to be a **React Native + Expo (SDK 54) shell wrapping this site in a
+      full-screen WebView** — which changes the answer completely, so the `firebase` npm package is
+      deliberately NOT installed and no `getAnalytics` is wired.
+      - The web SDK's job is Web Push in a BROWSER, which this app has had since v2.83 (VAPID, its own
+        keys, no Firebase). Adding Firebase Web there would be a second, parallel notification stack for
+        a case already covered.
+      - Inside a WebView the browser push API is either absent or unreliable, so the notification is the
+        NATIVE layer's job. The native layer holds the token; the web app holds the identity. The token
+        has to cross that boundary — which is the whole of this release.
+- [x] **EXPO HANDS OUT TWO TOKENS AND THEY ARE NOT INTERCHANGEABLE.** `getExpoPushTokenAsync()` returns
+      `ExponentPushToken[…]`, which Expo's own service delivers (talking to FCM/APNs with credentials
+      uploaded to EAS); `getDevicePushTokenAsync()` returns a raw FCM registration token or an APNs token,
+      which goes to FCM directly. Sending an Expo token to FCM is not an error anybody sees — it is a
+      **silent** delivery failure, and this repo only had the FCM sender (v2.86). New dependency-free
+      `server/expoPush.ts` adds the other transport, matching the house pattern for SMTP / S3 SigV4 / FCM;
+      Expo's send endpoint is a plain JSON POST, and `EXPO_ACCESS_TOKEN` is honoured for accounts with
+      enhanced security enabled. Batched at Expo's documented 100/request.
+- [x] **THE TOKEN'S SHAPE DECIDES THE TRANSPORT, NOT ITS LABEL.** `classifyNativeToken` is the single rule;
+      `push.subscribe` accepts `"expo"` but **re-derives** the kind from the token and refuses one it
+      cannot classify, rather than storing an unroutable row that would fail silently forever. A ring is
+      `priority:"high"` with `ttl:60` on the `calls` channel; everything else is `normal`, so the OS may
+      batch it for the user's battery. Only `DeviceNotRegistered` marks a token dead — a transient failure
+      must never cost somebody their registration.
+- [x] **THE SNIPPET THE OWNER WAS GIVEN IS A NOTIFICATION-HIJACK PRIMITIVE, so it is not what shipped.**
+      The advice was a bare `window.addEventListener("message", …)` that registers whatever token arrives.
+      On a real website ANY frame that can post into the page — an embedding iframe, an opener, a
+      malicious ad — hands us a token for THEIR device and starts receiving somebody else's calls and
+      messages. This repo already has a recorded finding of that exact class (v2.99.49 R1, push-endpoint
+      re-bind). New `client/src/app/nativeTokenBridge.ts` keeps three gates: **origin** must be
+      same-origin, or empty/`"null"` (which is what an injected-JS post from a WebView looks like on iOS —
+      refusing those would refuse the only case the module exists for); **source** must be our window or
+      absent; **shape** must be the exact `{type:"SET_PUSH_TOKEN", token}` envelope with a plausible
+      token, bounded at 8192 chars before parsing. A **bare token string is refused** — without the
+      envelope it is indistinguishable from any other string a library posts into a page. `platform` may
+      be sent and is ignored, because the shape already decides.
+- [x] **REGISTERS ONCE PER DISTINCT TOKEN.** The shell may post on every foreground; re-registering an
+      unchanged token would be a database write per app switch, forever. A genuinely NEW token still gets
+      through, or a rotated token would leave the device unnotifiable. The bridge also posts
+      `RELAY_WEB_READY` so a shell that posted before the bundle finished evaluating can re-send, rather
+      than having to time its post against our mount.
+- [x] Tests: `client/src/app/nativeTokenBridge.test.ts` (20). The gates are tested **behaviourally** —
+      a source pin cannot tell you whether a cross-origin message is refused, and that refusal is the
+      entire point. Includes a **client/server parity** test cross-checking `tokenKind` against
+      `classifyNativeToken` over 9 inputs: two gates disagreeing about one rule is the recurring bug in
+      this codebase (v2.99.50, v2.99.71), and here a disagreement would be a broken registration, since
+      the client picks the label and the server re-derives it.
+- [x] **ONE PRE-EXISTING PIN REWRITTEN TO THE STRONGER INVARIANT rather than relaxed.** `nativeAndroid.test.ts`
+      froze the exact two-value enum (`["webpush", "fcm"]`) and the exact `=== "fcm" || !!v.keys`
+      refinement — so a THIRD native transport broke it while saying nothing about the property that
+      matters. It now asserts, order-independently, that the stored union and the wire enum both cover
+      webpush plus every native kind, and expresses the keys rule as *not-webpush ⇒ no keys needed* so it
+      cannot go stale on the next addition. Anchored inside `upsertPushSubscription`, because `kind?:`
+      also names a CONVERSATION kind earlier in the same file and an unanchored match read that one.
+      **All four mutations bite** (enum loses expo / keys rule names fcm only / db union loses expo /
+      anchor renamed), reverted from byte-exact backups, sources confirmed byte-identical afterwards.
+- [x] **ONE PRE-EXISTING BUG CORRECTED IN PASSING:** the `web-push`-unavailable branch of
+      `sendPushToIdentity` returned a bare `0`, discarding native deliveries that had ALREADY succeeded.
+      Cosmetic today (every caller is fire-and-forget) but the return value's whole meaning is "how many
+      devices got it", and this release adds a second contributor to that count.
+- [ ] **SAID PLAINLY — FIREBASE ALONE WILL NOT MAKE A CLOSED APP RING**, and this is a decision, not a gap:
+      **no code path sends a `kind:"incoming-call"` push.** It was removed in v2.99.11 at the owner's own
+      request (*"if the user is offline and you try to call him it should NOT ring automatically"*).
+      Verified by a 5-agent audit and independently. Messages, missed calls, voicemails and back-online
+      alerts all push and will now reach the Expo shell; a ring will not, until that decision is reversed.
+      The `incoming-call` kind and its 70s TTL remain in the senders as infrastructure.
+- [ ] **OWNER-ONLY STEPS (nothing here can do them):** if the shell uses **Expo** tokens, upload the FCM
+      server key + APNs key to EAS and nothing else is needed server-side. If it uses **device** tokens,
+      put the Firebase **service-account JSON** into `/home/relay/.env` as `FIREBASE_SERVICE_ACCOUNT_JSON`
+      and restart pm2 — that private key is a real secret and must never go into a chat message or a
+      `workflow_dispatch` input, where it would be visible in run metadata. iOS needs the APNs key in
+      Firebase either way. The two uploaded config files (`com.relaytech.calling` /
+      `io.yourchat.relay`) belong in the **external Expo app**, not in this repo — whose own native
+      project is a different package (`org.yourchat.relay`).
+- [x] Suite 2359 passed / 1 skipped (2360). No schema change, no new dependency, no new required env var.
+
+## v2.99.78 — the badge is just the badge, and the call log finally has one (2026-07-26)
+- [x] **CAPTION OFF.** Owner: *"Inside the message, you don't need to put the word registered under the
+      verified badge ... So just put the badge only. No need to mention below it registered."* v2.99.6
+      shipped the tier name in tiny type under the mark at the owner's own request; they have now
+      reversed that. Flipped at **`RoleBadge`'s DEFAULT** rather than at the ten call sites, so a surface
+      added later inherits the decision instead of re-litigating it. The colour already carries the tier,
+      and the word under it made every name two lines tall for no new information.
+- [x] **CALL HISTORY HAD NO BADGE AT ALL**, because the payload carried no role. Owner: *"inside the call
+      history, even here, you didn't put the badge ... immediately put the badge."* Added to BOTH shapes:
+      `calls.history` resolves it for the peer, and `conferenceHistory` resolves it per roster member **by
+      identityId** — like the name and avatar already are, so a renumbered person keeps their badge. One
+      batched query each, and `getRolesByIdentityIds` already swallows its own failure, so a role lookup
+      cannot stop the log rendering. Rendered immediately after the name, before the `PinTag`.
+- [x] **TWO PRE-EXISTING PINS REWRITTEN** rather than relaxed, and one fragile slice rebounded:
+      `numberContinuity.test.ts` sliced a fixed `+5200` characters past the procedure start to check the
+      renumber-safe roster resolution — which silently shrank as the procedure grew. It is now bounded by
+      the procedure's own end (`ROUTERS.indexOf("clearHistory:", procStart)`) with an assertion that the
+      slice did not collapse to nothing, because a pin reading an empty string cannot fail for the reason
+      it was written.
+- [x] Suite 2340 passed / 1 skipped. **This release's `todo.md` / `CLAUDE.md` entry was missed at commit
+      time and is backfilled here in v2.99.79** — recorded rather than quietly added, since keeping those
+      two files current in the same commit is a standing rule.
+
 ## v2.99.77 — the call log says each thing once; one presence surface stopped disagreeing (2026-07-26)
 - [x] **(1) THE PRESENCE GLITCH IS REAL AND HAS A NAMED CAUSE.** Owner: *"I saw this user in the contacts
       one time showing online. But when I went to his message or to his call history ... is offline."*

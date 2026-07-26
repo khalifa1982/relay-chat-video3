@@ -16,6 +16,7 @@ import type { RelayHandle, RelayPhase } from "@/lib/relayClient";
 import { isNativeAndroid, nativeEnsureNotifPermission, nativeGetPushToken } from "@/lib/nativeBridge";
 import { VoicemailPrompt, type FailedDialInfo } from "./VoicemailPrompt";
 import { trpc } from "@/lib/trpc";
+import { mountNativeTokenBridge } from "./nativeTokenBridge";
 
 interface RelayEngineValue {
   /** Programmatic dial. Returns true if the engine accepted the request.
@@ -152,6 +153,23 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
       const token = await nativeGetPushToken();
       if (token) pushSubscribe.mutate({ endpoint: token, kind: "fcm" });
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.id]);
+
+  // WEBVIEW SHELL (v2.99.79): the owner's shipping app is a React Native + Expo
+  // shell wrapping this site, so the token lives in the NATIVE layer and arrives
+  // by postMessage. Mounted for every signed-in session because a WebView is
+  // indistinguishable from a browser from in here — an ordinary browser simply
+  // never receives such a message, so this costs one idle listener.
+  //
+  // The gates live in `acceptTokenMessage`, not here: a bare message listener that
+  // registers whatever token it is handed is a notification-hijack primitive for
+  // any frame that can post into this page.
+  useEffect(() => {
+    if (!me) return;
+    return mountNativeTokenBridge((endpoint, kind) => {
+      pushSubscribe.mutate({ endpoint, kind });
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me?.id]);
 
