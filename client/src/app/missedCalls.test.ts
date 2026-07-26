@@ -67,14 +67,23 @@ describe("missed-call notification system", () => {
 describe("v2.99.12 — offline-return: unread messages surface + blinking icon", () => {
   const CSS = read("../index.css");
 
-  it("a combined 'while you were away' card surfaces missed calls AND unread messages", () => {
+  it("missed calls AND unread messages surface on RETURN — but no longer as a banner", () => {
+    // v2.99.67 (owner): "the missed call notification, the way how it works, it's
+    // not nice. Don't show it on the main screen as a side banner from up to
+    // down. Show it only on the notification center on the top… and also on the
+    // history." So the banner is no longer mounted. The REQUIREMENT it served —
+    // that returning after time away surfaces both categories — is unchanged and
+    // now lives on pull surfaces: the bell's badge and blink, its panel, and
+    // History. The component itself is retained but unmounted.
+    expect(SHELL).not.toMatch(/<AwaySummaryToast/);
     expect(MISSED).toMatch(/export function AwaySummaryToast/);
-    expect(MISSED).toMatch(/While you were away/);
-    expect(MISSED).toMatch(/onViewMissed/);
+    // The bell counts BOTH categories and blinks for them…
+    expect(MISSED).toMatch(/const total = missedCount \+ unreadCount \+ pendingDevices;/);
+    expect(MISSED).toMatch(/const blink = missedCount \+ unreadCount > 0;/);
+    // …and routes to the detail for each.
+    expect(MISSED).toMatch(/onOpenHistory/);
     expect(MISSED).toMatch(/onOpenMessages/);
-    // AppShell mounts the combined card (not the calls-only one) with both summaries
-    expect(SHELL).toMatch(/<AwaySummaryToast/);
-    expect(SHELL).toMatch(/unread=\{\{ count: unreadTotal, latest: latestUnread \}\}/);
+    expect(SHELL).toMatch(/<NotificationBell/);
   });
 
   it("the landing card re-surfaces on a NEW item via a TIMESTAMP watermark (counts are non-monotonic)", () => {

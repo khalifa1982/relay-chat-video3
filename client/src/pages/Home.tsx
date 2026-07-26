@@ -502,7 +502,7 @@ function markup(host: string, t: Copy, ar: boolean): string {
       <div style="flex:0 1 375px;min-width:320px;animation:lpRiseIn 1s cubic-bezier(.22,1,.36,1) .55s both">
         <div data-lp="padTilt" style="background:rgba(255,255,255,.035);border:1px solid rgba(233,240,242,.1);border-radius:26px;padding:26px;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:0 30px 80px rgba(0,0,0,.5);transition:transform .25s ease-out;transform:perspective(900px)">
           <div style="display:flex;align-items:center;justify-content:space-between;font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.22em"><span style="color:rgba(148,162,172,.9)">${t.dialerTitle}</span><span style="display:flex;align-items:center;gap:6px;color:#6ff2ae"><span style="width:5px;height:5px;border-radius:50%;background:#6ff2ae;animation:lpBlink 1.6s infinite"></span>${t.dialerOnline}</span></div>
-          <div data-lp="dialDisplay" dir="ltr" style="margin:22px 0 8px;text-align:center;font:500 30px 'IBM Plex Mono',monospace;letter-spacing:.28em;color:#e9f0f2;min-height:38px">· · · · · ·</div>
+          <div data-lp="dialDisplay" dir="ltr" style="margin:22px 0 8px;text-align:center;font:500 clamp(19px,6.2vw,30px) 'IBM Plex Mono',monospace;letter-spacing:clamp(.13em,.6vw,.28em);white-space:nowrap;color:#e9f0f2;min-height:38px">· · · · · ·</div>
           <div data-lp="dialStatus" style="text-align:center;font:400 10px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:rgba(148,162,172,.9);margin-bottom:8px">${t.dialEnter}</div>
           <div data-lp="dialPreview" style="display:none;text-align:center;font:500 12px 'Space Grotesk',sans-serif;margin-bottom:14px;min-height:18px"></div>
           <div dir="ltr" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">${keypad(t)}</div>
@@ -711,6 +711,23 @@ function startLanding(
   $("loader")?.classList.add("lp-js-ok");
   const reduced =
     typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  /* Frame budget (v2.99.67). The page ran TWO uncapped rAF loops — this one and
+     the WebGL scene's — plus a full-viewport canvas repaint every frame, with no
+     pause when the tab was hidden. On a phone that pins the GPU and the device
+     gets hot in the hand. None of this animation reads as smoother at 60fps than
+     at 30, so it is capped; phones get a lower cap again, and the WebGL scene is
+     skipped there entirely (see bootThree). */
+  const lowPower =
+    typeof navigator !== "undefined" &&
+    (innerWidth <= 820 ||
+      (typeof navigator.hardwareConcurrency === "number" && navigator.hardwareConcurrency <= 4) ||
+      // Data Saver is an explicit "spend less on my behalf" signal.
+      !!(navigator as unknown as { connection?: { saveData?: boolean } }).connection?.saveData);
+  const FRAME_MS = lowPower ? 1000 / 20 : 1000 / 30;
+  const TINT_MS = lowPower ? 220 : 160;
+  let lastFrame = 0;
+  let lastTint = 0;
+
 
   let alive = true;
   let raf = 0; // fx loop
@@ -1149,13 +1166,16 @@ function startLanding(
   const sizeMatrix = () => {
     const c = $("matrix") as HTMLCanvasElement | null;
     if (!c || !mctx) return;
-    const dpr = Math.min(devicePixelRatio, 1.5);
+    // A decorative rain does not need retina pixels, and on a phone the canvas
+    // is the largest surface repainted every frame (v2.99.67). 1.5 → 1.0 on a
+    // low-power device is a ~2.2x cut in pixels touched per frame.
+    const dpr = Math.min(devicePixelRatio, lowPower ? 1 : 1.5);
     c.width = innerWidth * dpr;
     c.height = innerHeight * dpr;
     mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     mctx.font = '13px "IBM Plex Mono",monospace';
     rainCols = [];
-    const n = Math.ceil(innerWidth / 18);
+    const n = Math.ceil(innerWidth / (lowPower ? 26 : 18));
     for (let i = 0; i < n; i++) rainCols.push({ y: Math.random() * innerHeight, v: 2.5 + Math.random() * 4 });
   };
   const initMatrix = () => {
@@ -1200,7 +1220,17 @@ function startLanding(
     drawMatrix(h);
     if (fc % 2 === 0 && threeColorTint) threeColorTint(shift);
     if (fc % 3 === 1) scrTick();
-    if (fc % 3 === 0) {
+    // THE CHROME TINT IS THE MOST EXPENSIVE THING ON THIS PAGE (v2.99.67, owner:
+    // "when I open this website from the phone, the phone is heating"). It used
+    // to run every 3rd frame — 20 times a second — and each pass re-parses six
+    // style strings and repaints two 1100px radial gradients plus three
+    // box-shadows over most of the viewport. The hue it encodes drifts slowly
+    // with scroll, so 20Hz bought nothing a human can see. Throttled by TIME
+    // instead of frame count, which also makes the cost independent of the frame
+    // rate: ~6 writes a second instead of 20, and identical output between them.
+    const nowMs = performance.now();
+    if (nowMs - lastTint >= TINT_MS) {
+      lastTint = nowMs;
       const hu = $("hue");
       if (hu) hu.style.background = `radial-gradient(1100px at 12% 8%, hsla(${h},85%,62%,.075), transparent 62%), radial-gradient(900px at 88% 92%, hsla(${(h + 40) % 360},85%,60%,.06), transparent 62%)`;
       const s = $("spot");
@@ -1226,8 +1256,15 @@ function startLanding(
   };
   const fxLoop = () => {
     if (!alive) return;
-    updateFx();
     raf = requestAnimationFrame(fxLoop);
+    // Nothing to draw for a tab nobody is looking at. rAF is already throttled
+    // when hidden, but not stopped on every browser, and this also covers the
+    // window being fully occluded.
+    if (typeof document !== "undefined" && document.hidden) return;
+    const now = performance.now();
+    if (now - lastFrame < FRAME_MS) return; // frame budget
+    lastFrame = now;
+    updateFx();
   };
 
   /* ── listeners ── */
@@ -1265,7 +1302,10 @@ function startLanding(
   let threeStarted = false;
   const lpDpr = () => Math.min(devicePixelRatio, innerWidth > 820 ? 1.8 : 1.25);
   const bootThree = async () => {
-    if (reduced || threeStarted) return;
+    // A phone does not get a WebGL scene (v2.99.67). It was the second uncapped
+    // rAF loop on the page and the main reason the device got hot; the CSS
+    // backdrop already carries the look, and the hue drift below still runs.
+    if (reduced || threeStarted || lowPower) return;
     threeStarted = true;
     let T: typeof import("three");
     try {

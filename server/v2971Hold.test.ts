@@ -46,8 +46,19 @@ describe("held 1:1 must NOT drop (v2.97.1)", () => {
     // …and a landing peer-hold defuses it.
     expect(CLIENT).toMatch(/peersHoldingUs\.add\(pin\);\s*\n[\s\S]{0,120}cancelSoloEndGrace\(\);/);
   });
-  it("the SFU race is healed in BOTH orders: a late hold restores the removed tile", () => {
-    expect(CLIENT).toMatch(/if \(livekitEnabled && !document\.getElementById\("tile-" \+ pin\)\) addLkTile\(pin, nm\);/);
+  it("a late hold restores the removed tile — on EITHER transport", () => {
+    // v2.99.67 widened this. The original only healed the SFU race
+    // (`livekitEnabled && !getElementById(...) -> addLkTile`), so in a MESH
+    // conference the held peer's tile stayed gone: the owner reported hearing
+    // someone whose picture had vanished. The property is unchanged and now
+    // stronger — a hold always leaves a tile — but it is transport-agnostic,
+    // and `ensurePlaceholderTile` is itself a no-op when a tile exists.
+    const hold = CLIENT.slice(CLIENT.indexOf("function onPeerHold"), CLIENT.indexOf("function onRoleChange"));
+    expect(hold).toMatch(/peersHoldingUs\.add\(pin\);[\s\S]{0,600}?ensurePlaceholderTile\(pin, nm\);/);
+    expect(hold).not.toMatch(/livekitEnabled && !document\.getElementById/);
+    // And the way BACK restores it too, which is the half that was missing.
+    const back = hold.slice(hold.indexOf("peersHoldingUs.delete(pin);"));
+    expect(back).toMatch(/ensurePlaceholderTile\(pin, nm\);/);
   });
   it("a REAL leave clears the hold state so a holder's full hang-up still ends the call", () => {
     const pl = CLIENT.slice(CLIENT.indexOf('case "peer-left"'));

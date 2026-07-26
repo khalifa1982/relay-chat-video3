@@ -3767,16 +3767,23 @@ export function startRelay(root: HTMLElement): RelayHandle {
       peersHoldingUs.add(pin);
       // The hold arrived — a pending "did they leave?" fuse is defused.
       cancelSoloEndGrace();
-      // SFU race: the holder's LiveKit disconnect may already have removed
-      // their tile before this signal landed — restore a placeholder so the
-      // held screen still SHOWS who parked us.
-      if (livekitEnabled && !document.getElementById("tile-" + pin)) addLkTile(pin, nm);
+      // Their transport goes away when they take the other call, so by the time
+      // this signal lands their tile may already have been removed — on EITHER
+      // path (an SFU disconnect, or a mesh peer-left). Restore a name-only tile
+      // so the roster still shows who is parked. This used to be SFU-only, which
+      // is why a mesh conference lost the tile entirely (v2.99.67).
+      ensurePlaceholderTile(pin, nm);
       document.getElementById("tile-" + pin)?.classList.add("on-hold");
       addSysMsg(nm + " put you on hold for another call.");
       toast(nm + " put you on hold.");
       playCue("hold");
     } else {
       peersHoldingUs.delete(pin);
+      // THE REPORTED BUG: this only stripped the on-hold class, so if the tile
+      // had been removed while they were away there was nothing to un-hold and
+      // they came back as audio with no tile. Recreate it if it is missing; the
+      // real tile replaces this placeholder as soon as their media arrives.
+      ensurePlaceholderTile(pin, nm);
       document.getElementById("tile-" + pin)?.classList.remove("on-hold");
       addSysMsg(nm + " is back.");
       toast(nm + " is back.");
@@ -3957,6 +3964,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function addLkTile(id: string, name: string) {
     if (name) peerNamesSeen[id] = name;
     if (lkParticipantTiles[id]) return;
+    dropPlaceholderTile(id);
     callAnswered = true; // a second party exists — the join watchdog may enforce media
     onCalleeAnswered();  // outgoing dial: "Ringing…" → the real connecting sequence
     if (Object.keys(lkParticipantTiles).length >= 1) callIsGroup = true; // 2nd remote → conference
@@ -4809,9 +4817,42 @@ export function startRelay(root: HTMLElement): RelayHandle {
     grid.appendChild(t);
     if (!camOn) t.classList.add("audio-only");
   }
+  /**
+   * A NAME-ONLY tile for someone who is in the call but has no media right now
+   * (v2.99.67). The case that needed it: in a conference, a participant answers
+   * another line — which tears down their transport, so `peer-left` / an SFU
+   * disconnect removes their tile — and then comes back. Audio returned, but
+   * their tile did not, so the owner reported "he keep hearing [him], but his
+   * profile is disappeared".
+   *
+   * `addTile` cannot do this job: it requires a live `peers[id]` entry, which is
+   * exactly what no longer exists after the teardown. `addLkTile` only exists on
+   * the SFU path. So this makes a bare tile on EITHER transport, marked
+   * `data-ph` so the real tile can replace it rather than duplicate the id.
+   */
+  function ensurePlaceholderTile(id: string, name: string) {
+    if (!inCall || !id) return;
+    if (document.getElementById("tile-" + id)) return;
+    const grid = $("videoGrid"); if (!grid) return;
+    if (name) peerNamesSeen[id] = name;
+    const t = document.createElement("div");
+    t.className = "relay-tile";
+    t.id = "tile-" + id;
+    t.dataset.ph = "1";
+    t.insertAdjacentHTML("beforeend", tileContentHTML(name || nameOf(id), peerDevices[id] || "", peerFlags[id] || "", id));
+    grid.appendChild(t);
+    layoutGrid();
+  }
+  /** Drop a placeholder so a REAL tile with the same id can take its place. */
+  function dropPlaceholderTile(id: string) {
+    const el = document.getElementById("tile-" + id);
+    if (el && el.dataset.ph === "1") el.remove();
+  }
+
   function addTile(id: string, name: string) {
     if (!inCall) return;
     const entry = peers[id]; if (!entry || entry.el) return;
+    dropPlaceholderTile(id);
     const grid = $("videoGrid"); if (!grid) return;
     const t = document.createElement("div");
     t.className = "relay-tile"; t.id = "tile-" + id;
