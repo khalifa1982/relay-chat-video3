@@ -15,10 +15,22 @@ describe("formatDuration", () => {
     expect(formatDuration(12 * 60 + 3)).toBe("12:03");
   });
 
-  it("formats hours as h:mm:ss with zero-padded minutes", () => {
-    expect(formatDuration(3600)).toBe("1:00:00");
-    expect(formatDuration(3600 + 2 * 60 + 33)).toBe("1:02:33");
-    expect(formatDuration(2 * 3600 + 5)).toBe("2:00:05");
+  it("formats hours as hh:mm:ss — EVERY field two digits (owner spec, v2.99.77)", () => {
+    // "If it's hours, you put two digits hour, two digits minutes, two digits of
+    // the seconds." Padding the hour too is what keeps the column from jittering
+    // between "1:05:03" and "11:05:03" down the log.
+    expect(formatDuration(3600)).toBe("01:00:00");
+    expect(formatDuration(3600 + 2 * 60 + 33)).toBe("01:02:33");
+    expect(formatDuration(2 * 3600 + 5)).toBe("02:00:05");
+    expect(formatDuration(11 * 3600 + 5 * 60 + 3)).toBe("11:05:03");
+  });
+
+  it("under an hour, minutes take only the digits they need", () => {
+    // "If it was less than ten minutes, then just one digit ... If it's more than
+    // ten minutes, you put two digits."
+    expect(formatDuration(83)).toBe("1:23");
+    expect(formatDuration(9 * 60 + 59)).toBe("9:59");
+    expect(formatDuration(12 * 60 + 34)).toBe("12:34");
   });
 
   it("clamps negative / non-finite / fractional input", () => {

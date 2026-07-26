@@ -1381,8 +1381,23 @@ export const v2MessagesRouter = router({
     const verifiedById = new Map(peerIdents.map((i) => [i.id, i.verified]));
     // Three-tier badge (v2.99.6): guest / registered / admin, one batched query.
     const rolesById = await getRolesByIdentityIds(otherIds);
+    // Guest-presence privacy, in the FOURTH place that needs it (v2.99.77).
+    //
+    // Owner: *"I saw this user in the contacts one time showing online. But when I
+    // went to his message or to his call history ... is offline."* `contacts.list`,
+    // `directory.presence` and `directory.presenceMany` all put presence through
+    // `isGuestPresenceHidden`; this resolver did not. So for a stale GUEST the
+    // thread list said online while every other surface said offline — one rule,
+    // four call sites, and the fourth forgot it. Exactly the class of bug this
+    // codebase keeps re-learning.
+    const peerIsGuestById = new Map(peerIdents.map((i) => [i.id, i.userId == null]));
     return base.map((b) => {
       const p = byId.get(b.otherIdentityId);
+      const presenceHidden = isGuestPresenceHidden({
+        isGuest: peerIsGuestById.get(b.otherIdentityId) ?? false,
+        isOnline: p?.isOnline ?? false,
+        lastSeenAt: p?.lastSeenAt ?? null,
+      });
       return {
         conversationId: b.conversationId,
         kind: b.kind,
@@ -1392,8 +1407,8 @@ export const v2MessagesRouter = router({
         peerNumber: b.otherNumber,
         peerDisplayName: b.otherDisplayName,
         peerAvatarUrl: b.otherAvatarUrl,
-        peerIsOnline: p?.isOnline ?? false,
-        peerLastSeenAt: p?.lastSeenAt ?? null,
+        peerIsOnline: presenceHidden ? false : (p?.isOnline ?? false),
+        peerLastSeenAt: presenceHidden ? null : (p?.lastSeenAt ?? null),
         peerVerified: verifiedById.get(b.otherIdentityId) ?? false,
         peerRole: (rolesById.get(b.otherIdentityId) ?? "guest") as IdentityRole,
         lastMessageAt: b.lastMessageAt,

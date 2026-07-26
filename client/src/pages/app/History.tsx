@@ -67,6 +67,28 @@ type Item =
 
 type Filter = "all" | "dialed" | "missed";
 
+/**
+ * The peer's 6-digit number, in brackets, right after their name (v2.99.77).
+ *
+ * Owner: *"beside his name up, you put between two brackets his PIN number. No
+ * need to mention PIN and the number. Just put his number ... in different
+ * color."* So: no label, its own colour, and never wrapped away from the name.
+ *
+ * `dir="ltr"` + bidi isolation because an Arabic display name would otherwise
+ * reorder the digits and the brackets around them.
+ */
+function PinTag({ number }: { number: string | null | undefined }) {
+  if (!number || !/^\d{6}$/.test(number)) return null;
+  return (
+    <span
+      dir="ltr"
+      className="ms-1.5 shrink-0 font-mono text-[12.5px] font-bold text-[color:var(--relay-online,#06d6a0)] [unicode-bidi:isolate]"
+    >
+      ({number})
+    </span>
+  );
+}
+
 /* Per-direction accent recipe. FULL literal class strings — Tailwind's JIT
  * can't see classes assembled at runtime. The user spec: missed calls bright
  * RED, dialed (outgoing) vibrant GREEN, received (incoming) clear BLUE.
@@ -733,7 +755,7 @@ function ConferenceItem({
 
   return (
     <li
-      className="border-b border-border/60 px-4 py-3 last:border-b-0 transition-colors hover:bg-muted/30"
+      className="border-b-2 border-border px-4 py-3.5 last:border-b-0 transition-colors hover:bg-muted/30"
       aria-label={`${direction === "out" ? "Outgoing" : "Incoming"} call with ${title}, ${formatDuration(conf.durationSec)} duration`}
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -768,28 +790,33 @@ function ConferenceItem({
             <button
               type="button"
               onClick={() => openPeerProfile(peer.number)}
-              className="block max-w-full truncate text-left text-[15px] font-bold text-foreground outline-none focus-visible:underline"
+              className="flex max-w-full items-baseline text-left text-[15px] font-bold text-foreground outline-none focus-visible:underline"
               aria-label={`View ${peer.name}'s profile`}
             >
-              {title}
+              <span className="truncate" dir="auto">{title}</span>
+              <PinTag number={peer.number} />
             </button>
           ) : (
-            <div className="truncate text-[15px] font-bold text-foreground">{title}</div>
+            <div className="truncate text-[15px] font-bold text-foreground" dir="auto">{title}</div>
           )}
           <div className="truncate text-xs text-muted-foreground">
+            {/* Group first, so "Group" reads as the KIND of call before its
+                direction, then direction, then the duration. A group's media type
+                is deliberately absent: `conference_history` stores no channel, so
+                claiming Voice or Video here would be a guess. */}
+            {isGroup ? (
+              <>
+                <span className="font-semibold text-foreground">
+                  <Users className="mr-0.5 inline size-3 align-[-1px]" />
+                  Group · {conf.partyCount}
+                </span>
+                {" · "}
+              </>
+            ) : null}
             <span className={"font-semibold " + tone.label}>
               {direction === "out" ? "Outgoing" : "Incoming"}
             </span>
-            {isGroup ? (
-              <>
-                {" "}· <Users className="mr-0.5 inline size-3 align-[-1px]" />
-                {conf.partyCount} people
-              </>
-            ) : null}
             {" "}· {formatDuration(conf.durationSec)}
-            {conf.dialedNumber ? (
-              <span className="font-mono"> · PIN {conf.dialedNumber}</span>
-            ) : null}
           </div>
           <div className="mt-0.5 text-[11px] text-muted-foreground/80">
             {formatFullWhen(conf.startedAt)}
@@ -844,27 +871,32 @@ function ConferenceItem({
         </div>
       </div>
 
-      {/* Roster: every participant's name + PIN. */}
-      <div className="mt-2 flex flex-wrap gap-1.5 pl-12">
-        {conf.participants.map((p) => (
-          <span
-            key={p.number}
-            className={
-              "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold " +
-              (p.isSelf
-                ? "bg-primary/15 text-primary"
-                : "bg-muted/60 text-muted-foreground")
-            }
-            title={p.number}
-            aria-label={p.isSelf ? "You" : `${p.name} (${p.number})`}
-          >
-            <span className="max-w-[10rem] truncate">
-              {p.isSelf ? "You" : p.name}
-            </span>
-            {p.number ? <span className="font-mono opacity-60">{p.number}</span> : null}
-          </span>
-        ))}
-      </div>
+      {/* Roster — GROUPS ONLY, and never yourself (v2.99.77).
+          Owner: *"you don't need to put myself because it's showing my name ...
+          they will see all others except themselves."* On a 1:1 row the roster was
+          pure repetition of the name and number already on the line above, so it
+          is gone entirely there. */}
+      {isGroup && others.length > 0 ? (
+        <ul className="mt-2 flex flex-wrap gap-1.5 pl-12">
+          {others.map((p) => (
+            <li
+              key={p.number || p.name}
+              className="inline-flex items-baseline gap-1 rounded-full bg-muted/60 px-2 py-0.5 text-[11px] font-semibold text-muted-foreground"
+              aria-label={p.number ? `${p.name} (${p.number})` : p.name}
+            >
+              <span className="max-w-[10rem] truncate" dir="auto">{p.name}</span>
+              {p.number ? (
+                <span
+                  dir="ltr"
+                  className="font-mono font-bold text-[color:var(--relay-online,#06d6a0)] [unicode-bidi:isolate]"
+                >
+                  ({p.number})
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </li>
   );
 }
@@ -909,7 +941,7 @@ function SoloItem({
 
   return (
     <li
-      className="border-b border-border/60 px-4 py-3 last:border-b-0 transition-colors hover:bg-muted/30"
+      className="border-b-2 border-border px-4 py-3.5 last:border-b-0 transition-colors hover:bg-muted/30"
       aria-label={`${label} — ${peerName}`}
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -929,17 +961,22 @@ function SoloItem({
             type="button"
             onClick={() => peerNum && openPeerProfile(peerNum)}
             className={
-              "block max-w-full truncate text-left text-[15px] font-bold outline-none focus-visible:underline " +
+              "flex max-w-full items-baseline text-left text-[15px] font-bold outline-none focus-visible:underline " +
               (missedIn ? tone.name : "text-foreground")
             }
             aria-label={`View ${peerName}'s profile`}
           >
-            {peerName}
+            <span className="truncate" dir="auto">{peerName}</span>
+            <PinTag number={peerNum} />
           </button>
           <div className="truncate text-xs text-muted-foreground">
             <span className={"font-semibold " + tone.label}>{label}</span>
             {call.channel === "voice" ? " · Voice" : call.channel === "video" ? " · Video" : ""}
-            {peerNum ? <span className="font-mono"> · PIN {peerNum}</span> : null}
+            {/* A missed/unanswered call has no duration to show, so it is only
+                rendered when there genuinely is one. The peer's number now lives
+                beside the name, and OUR OWN number is never shown anywhere in the
+                log — the owner already knows their own. */}
+            {call.durationSec ? ` · ${formatDuration(call.durationSec)}` : ""}
           </div>
           <div className="mt-0.5 text-[11px] text-muted-foreground/80">
             {formatFullWhen(call.startedAt)}
