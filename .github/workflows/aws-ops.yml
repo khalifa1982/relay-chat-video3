@@ -753,6 +753,13 @@ jobs:
         env:
           APPLY: ${{ inputs.turn_apply }}
         run: |
+          # NO -e HERE, DELIBERATELY. GitHub runs steps as `bash -e {0}`, so a
+          # single denied AWS call would abort the whole diagnostic — which is
+          # exactly what happened on the first run: ec2:DescribeSecurityGroups is
+          # not granted to the deploy role, and the step died before reaching the
+          # listener check, which is the more informative half. A diagnostic must
+          # report what it could NOT determine and keep going.
+          set +e
           set -uo pipefail
           echo "=================================================================="
           echo "TURN :443  —  DIAGNOSE${APPLY:+ / APPLY=$APPLY}"
@@ -808,13 +815,21 @@ jobs:
             SGS=$(aws ec2 describe-instances --instance-ids "$IID" \
               --query 'Reservations[0].Instances[0].SecurityGroups[].GroupId' --output text)
             echo "  $ip = $IID  sg: $SGS"
-            OPEN=no
+            OPEN=no; DENIED=no
             for sg in $SGS; do
               HIT=$(aws ec2 describe-security-groups --group-ids "$sg" \
-                --query "SecurityGroups[0].IpPermissions[?IpProtocol=='tcp' && FromPort<=\`443\` && ToPort>=\`443\`]" --output text)
+                --query "SecurityGroups[0].IpPermissions[?IpProtocol=='tcp' && FromPort<=\`443\` && ToPort>=\`443\`]" \
+                --output text 2>/tmp/sgerr)
+              if grep -q UnauthorizedOperation /tmp/sgerr 2>/dev/null; then DENIED=yes; continue; fi
               [ -n "$HIT" ] && OPEN=yes
             done
-            if [ "$OPEN" = "yes" ]; then
+            if [ "$DENIED" = "yes" ]; then
+              # UNKNOWN is not the same as CLOSED — say so rather than implying
+              # a finding this role was never able to make.
+              echo "    tcp/443: UNKNOWN — ec2:DescribeSecurityGroups is denied to this role"
+              echo "             (grant ec2:DescribeSecurityGroups + ec2:AuthorizeSecurityGroupIngress to"
+              echo "              relay-github-deploy if you want this action to inspect/fix the SG)"
+            elif [ "$OPEN" = "yes" ]; then
               echo "    tcp/443 IS permitted by the security group"
             else
               echo "    tcp/443 is NOT permitted  <-- this alone explains the timeout"
