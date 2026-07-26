@@ -249,6 +249,8 @@ export interface ResolvedIdentity {
   verified: boolean;
   firstName: string | null;
   lastName: string | null;
+  /** Away auto-reply, opt-in (v2.99.66). NULL column is treated as false. */
+  autoReplyEnabled: boolean;
 }
 
 function parseJsonSafe(text: string | null | undefined): unknown {
@@ -275,6 +277,8 @@ function rowToResolved(row: typeof identities.$inferSelect): ResolvedIdentity {
     verified: row.verified === true,
     firstName: row.firstName ?? null,
     lastName: row.lastName ?? null,
+    // Opt-in: only an explicit true enables the away auto-reply (v2.99.66).
+    autoReplyEnabled: row.autoReplyEnabled === true,
   };
 }
 
@@ -628,6 +632,38 @@ export async function ensureUserIdentity(input: {
 
 /** Flip an identity to verified (blue badge) and record the registration name.
  *  Called after a successful email-OTP verification. */
+/**
+ * Turn this identity's away auto-reply on or off (v2.99.66). Opt-in: only an
+ * explicit `true` ever enables it.
+ */
+export async function setIdentityAutoReply(id: number, enabled: boolean): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  await db.update(identities).set({ autoReplyEnabled: enabled }).where(eq(identities.id, id));
+}
+
+/**
+ * Does this identity want an away auto-reply sent on their behalf?
+ *
+ * FAILS CLOSED on any trouble (missing row, DB hiccup, legacy NULL): an
+ * auto-reply is a message posted in someone's name to a conversation they are
+ * not watching, so silence is always the safer answer than guessing yes.
+ */
+export async function autoReplyEnabledFor(identityId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    const rows = await db
+      .select({ on: identities.autoReplyEnabled })
+      .from(identities)
+      .where(eq(identities.id, identityId))
+      .limit(1);
+    return rows[0]?.on === true;
+  } catch {
+    return false;
+  }
+}
+
 export async function markIdentityVerified(
   id: number,
   name?: { firstName?: string | null; lastName?: string | null },
@@ -1328,6 +1364,11 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "identities", column: "verified", ddl: "ADD COLUMN `verified` boolean" },
     { table: "identities", column: "firstName", ddl: "ADD COLUMN `firstName` varchar(64)" },
     { table: "identities", column: "lastName", ddl: "ADD COLUMN `lastName` varchar(64)" },
+    // v2.99.66 — the away auto-reply is now OPT-IN, per identity (so a guest can
+    // set it too, and it follows the person through registration). NULL = off,
+    // which deliberately turns the old always-on behaviour off for everyone
+    // until they ask for it.
+    { table: "identities", column: "autoReplyEnabled", ddl: "ADD COLUMN `autoReplyEnabled` boolean" },
     // Native Android app push transport (v2.86).
     { table: "push_subscriptions", column: "kind", ddl: "ADD COLUMN `kind` varchar(10)" },
     // v2.99.49 — proof-of-possession for an endpoint re-bind.
@@ -1352,7 +1393,7 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "users", column: "messageEmailsToday", ddl: "ADD COLUMN `messageEmailsToday` int" },
     // v2.99.44 — missed-call email cooldown (H8).
     { table: "users", column: "lastMissedCallEmailAt", ddl: "ADD COLUMN `lastMissedCallEmailAt` timestamp NULL" },
-    // v2.99.55 — status audience. NULL means "contacts" on BOTH columns, which is
+    // v2.99.66 — status audience. NULL means "contacts" on BOTH columns, which is
     // exactly the rule every existing row was posted under, so the migration is a
     // no-op until someone opts in. `statuses.audience` is per-POST and stamped at
     // insert so flipping the identity default can never retroactively widen an
@@ -3005,14 +3046,14 @@ export async function authorizeStorageKey(
       return { kind: "status", authorized: false };
     }
     // DELIBERATELY refuses an anonymous request even for an "everyone" status
-    // (v2.99.55). "Everyone" means every RELAY identity, not every HTTP client:
+    // (v2.99.66). "Everyone" means every RELAY identity, not every HTTP client:
     // v2.99.14 exists specifically so a media URL cannot be opened or copied
     // outside the app, and relaxing this would hand back the shareable-link
     // behaviour that lockdown removed. Every real client has an identity (a
     // name-only guest counts), so nothing legitimate is refused here.
     if (identityId == null) return { kind: "status", authorized: false };
     if (st.identityId === identityId) return { kind: "status", authorized: true };
-    // v2.99.55: the audience is a property of THIS post, not of its owner — an
+    // v2.99.66: the audience is a property of THIS post, not of its owner — an
     // "everyone" story and a contacts-only one can be live at the same time.
     const ok = await statusAudienceAuthorized(identityId, st.identityId, st.audience);
     return { kind: "status", authorized: ok };
@@ -3113,7 +3154,7 @@ export async function getIdentitiesByNumbers(numbers: string[]) {
 /* ── rich user status (story-style, ephemeral) ────────────────── */
 
 /**
- * Who may watch a status (v2.99.55).
+ * Who may watch a status (v2.99.66).
  *
  *  - "contacts"  the historical rule: either side having saved the other.
  *  - "everyone"  any signed-in RELAY identity that reaches the post.
@@ -3124,7 +3165,7 @@ export type StatusAudience = "contacts" | "everyone";
 
 /**
  * Read a stored audience value. Anything that is not exactly "everyone" — NULL
- * (every pre-v2.99.55 row), a typo, a value from a future version, a corrupted
+ * (every pre-v2.99.66 row), a typo, a value from a future version, a corrupted
  * column — resolves to the PRIVATE option. Fail closed: a garbled value must
  * never be the reason a status is published wider than its author chose.
  */
@@ -3337,7 +3378,7 @@ export async function getActiveStatusByMediaKey(
 /**
  * Can `requesterId` view a status owned by `ownerId`? The owner always can.
  *
- * `audience` is the PER-POST value from `statuses.audience` (v2.99.55). Pass it
+ * `audience` is the PER-POST value from `statuses.audience` (v2.99.66). Pass it
  * whenever the caller has a specific status in hand — the media gate and
  * markViewed both do. Omitting it evaluates the "contacts" rule, which is the
  * conservative reading and the right default for a caller that is reasoning
@@ -3388,7 +3429,7 @@ export async function statusAudienceAuthorized(
   return !!theySavedMe;
 }
 
-/** My DEFAULT audience for new statuses (v2.99.55). NULL ⇒ "contacts". */
+/** My DEFAULT audience for new statuses (v2.99.66). NULL ⇒ "contacts". */
 export async function getIdentityStatusAudience(identityId: number): Promise<StatusAudience> {
   const db = await getDb();
   if (!db) return "contacts";
@@ -3412,7 +3453,7 @@ export async function setIdentityStatusAudience(
 
 /**
  * The active statuses of ONE owner that `requesterId` is allowed to watch
- * (v2.99.55) — the discovery surface that gives "everyone" its meaning.
+ * (v2.99.66) — the discovery surface that gives "everyone" its meaning.
  *
  * The story feed is deliberately built from a BOUNDED candidate set (my contacts
  * + people who saved me), because the reverse of "everyone" is every identity in
@@ -3465,7 +3506,7 @@ export async function countActiveStatuses(ownerId: number): Promise<number> {
  * (their own contacts) — so a fresh post lights up on the poster's contacts
  * live, not just on people who saved them. Mutual blocks are dropped.
  *
- * DELIBERATELY NOT widened by an "everyone" audience (v2.99.55), even though
+ * DELIBERATELY NOT widened by an "everyone" audience (v2.99.66), even though
  * that looks like an inconsistency. This set is materialized and then iterated to
  * publish one SSE event per member; the reverse of "everyone" is every identity
  * in the database, so widening it would mean a full-table scan and a fan-out to
@@ -3795,12 +3836,14 @@ export interface PublicStats {
   guestsServed: number;
   totalParties: number;
   onlineNow: number;
+  /** Messages ever sent (v2.99.66 — owner asked for it beside the others). */
+  messagesSent: number;
 }
 
 export async function getPublicStats(): Promise<PublicStats> {
   const db = await getDb();
   if (!db) {
-    return { registeredUsers: 0, guestsServed: 0, totalParties: 0, onlineNow: 0 };
+    return { registeredUsers: 0, guestsServed: 0, totalParties: 0, onlineNow: 0, messagesSent: 0 };
   }
 
   const [usersRow] = await db
@@ -3817,12 +3860,23 @@ export async function getPublicStats(): Promise<PublicStats> {
     .select({ n: sql<number>`count(*)` })
     .from(presence)
     .where(eq(presence.isOnline, true));
+  // Aggregate count only — no bodies, no senders, no conversation ids. Wrapped
+  // because `messages` is the largest table here and a headline number must
+  // never be the reason the landing page fails to render.
+  let messagesSent = 0;
+  try {
+    const [msgRow] = await db.select({ n: sql<number>`count(*)` }).from(messages);
+    messagesSent = Number(msgRow?.n ?? 0);
+  } catch {
+    messagesSent = 0;
+  }
 
   return {
     registeredUsers: Number(usersRow?.n ?? 0),
     guestsServed: Number(guestRow?.n ?? 0),
     totalParties: Number(totalRow?.n ?? 0),
     onlineNow: Number(onlineRow?.n ?? 0),
+    messagesSent,
   };
 }
 

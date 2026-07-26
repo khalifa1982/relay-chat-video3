@@ -464,16 +464,23 @@ function ContactRow({
             <RoleBadge role={roleFromFlags(c.role, c.verified)} size={14} />
             {c.blocked && <Ban className="size-3.5 shrink-0 text-[#ff8d84]" />}
           </div>
-          <div className="text-xs text-muted-foreground font-mono mt-0.5">
+          {/* PIN on its own line, presence UNDER it (v2.99.66, owner screenshot).
+              They shared a line before, and with a 6-digit PIN plus "last seen
+              18h ago" there was never room: every row wrapped mid-phrase
+              ("last seen" / "18h ago" on separate lines) and read as broken.
+              Two short lines fit any width and let both be read at a glance. */}
+          <div className="text-xs text-muted-foreground font-mono mt-0.5" dir="ltr">
             {c.number.length === 6 ? c.number.slice(0, 3) + "-" + c.number.slice(3) : c.number}
+          </div>
+          <div className="text-xs text-muted-foreground mt-0.5 truncate">
             {c.blocked ? (
-              <> · <span className="text-[#ff8d84]">blocked</span></>
+              <span className="text-[#ff8d84]">blocked</span>
             ) : c.presenceHidden ? null : c.inCall ? (
-              <> · <span className="text-amber-500">on a call</span></>
+              <span className="text-amber-500">on a call</span>
             ) : c.isOnline ? (
-              <> · <span className="text-[color:var(--relay-online)]">online</span></>
+              <span className="text-[color:var(--relay-online)]">online</span>
             ) : (
-              <> · last seen {relativeTime(c.lastSeenAt)}</>
+              <>last seen {relativeTime(c.lastSeenAt)}</>
             )}
           </div>
           {(c.company || c.jobTitle) && (

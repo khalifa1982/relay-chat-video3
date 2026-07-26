@@ -101,7 +101,7 @@ const COPY = {
     dialJoin: "JOIN CALL", dialParty: (n: number) => `PARTY LINE · ${n} ON THE LINE`,
     marquee: "PEER-TO-PEER ✦ NO ACCOUNTS ✦ NO INSTALLS ✦ FREE FOREVER ✦ ENCRYPTED IN TRANSIT ✦ BROWSER-NATIVE ✦ 6-DIGIT NUMBERS ✦ PEER-TO-PEER ✦ NO ACCOUNTS ✦ NO INSTALLS ✦ FREE FOREVER ✦",
     statsEyebrow: "LIVE NETWORK — REAL NUMBERS",
-    statUsers: "REGISTERED USERS", statGuests: "GUESTS SERVED", statParties: "CALL PARTIES", statOnline: "ONLINE NOW",
+    statUsers: "REGISTERED USERS", statGuests: "GUESTS SERVED", statParties: "CALL PARTIES", statMessages: "MESSAGES SENT", statOnline: "ONLINE NOW",
     howEyebrow: "01 — HOW IT WORKS", howH2: "On a call in less time than a signup form.",
     step1T: "Pick a name", step1B: "No signup, no email, no password. Type whatever you want to be called today and you're on the network.",
     step2T: "Get your number", step2B: "You're handed a 6-digit RELAY number instantly — short enough to read out loud, easy enough to remember.",
@@ -161,7 +161,7 @@ const COPY = {
     dialJoin: "الانضمام للمكالمة", dialParty: (n: number) => `خط جماعي · ${n} على الخط`,
     marquee: "ند-لِند ✦ بلا حسابات ✦ بلا تثبيت ✦ مجاني للأبد ✦ مشفَّر أثناء النقل ✦ داخل المتصفح ✦ أرقام من 6 خانات ✦ ند-لِند ✦ بلا حسابات ✦ بلا تثبيت ✦ مجاني للأبد ✦",
     statsEyebrow: "الشبكة الآن — أرقام حقيقية",
-    statUsers: "مستخدمون مسجّلون", statGuests: "ضيوف تمّت خدمتهم", statParties: "أطراف المكالمات", statOnline: "متصلون الآن",
+    statUsers: "مستخدمون مسجّلون", statGuests: "ضيوف تمّت خدمتهم", statParties: "أطراف المكالمات", statMessages: "رسائل مُرسلة", statOnline: "متصلون الآن",
     howEyebrow: "01 — كيف يعمل", howH2: "تدخل مكالمة في وقت أقل من تعبئة نموذج تسجيل.",
     step1T: "اختر اسمًا", step1B: "لا تسجيل، لا بريد إلكتروني، لا كلمة مرور. اكتب أي اسم يعجبك اليوم وستكون على الشبكة.",
     step2T: "احصل على رقمك", step2B: "تحصل فورًا على رقم RELAY من 6 خانات — قصير يُقرأ بصوت عالٍ ويسهل حفظه.",
@@ -414,6 +414,7 @@ function statsStrip(t: Copy): string {
         ${tile("users", t.statUsers)}
         ${tile("guests", t.statGuests)}
         ${tile("parties", t.statParties)}
+        ${tile("messages", t.statMessages)}
         ${tile("online", t.statOnline, `<span style="width:8px;height:8px;border-radius:50%;background:#6ff2ae;box-shadow:0 0 12px rgba(111,242,174,.9);animation:lpBlink 1.6s infinite;display:block"></span>`)}
       </div>
     </div>
@@ -1712,6 +1713,7 @@ export default function Home() {
     put("users", d.registeredUsers);
     put("guests", d.guestsServed);
     put("parties", d.totalParties);
+    put("messages", d.messagesSent);
     put("online", d.onlineNow);
   }, [stats.data]);
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { Phone, Video, MessageSquare, UserPlus, Check, CircleUserRound, ArrowLeft, X } from "lucide-react";
+import { Phone, Video, MessageSquare, UserPlus, Check, CircleUserRound, ArrowLeft, X, Search, Bell, BellOff } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -33,8 +33,31 @@ const OPEN_PROFILE = "relay:open-profile";
 export function openPeerStatus(number: string): void {
   window.dispatchEvent(new CustomEvent(OPEN_STATUS, { detail: { number } }));
 }
-export function openPeerProfile(number: string): void {
-  window.dispatchEvent(new CustomEvent(OPEN_PROFILE, { detail: { number } }));
+
+/**
+ * Conversation-scoped extras a caller can hang off the profile popup
+ * (v2.99.66, owner: "for the search and for the notification, make it inside the
+ * profile of the person when you click on his name").
+ *
+ * The chat header used to carry a bell and a magnifier as permanent icons, which
+ * on a phone left the name truncated and the "last seen" line with nothing after
+ * it — no room. Both actions belong to ONE conversation, so they live where that
+ * conversation's peer lives instead of taxing the header on every screen.
+ *
+ * Only Messages passes these; Contacts / History / the dialer open the same
+ * popup with none, and it renders exactly as before.
+ */
+export interface PeerProfileChatActions {
+  /** Open the in-conversation message search. */
+  onSearch?: () => void;
+  muted?: boolean;
+  onToggleMute?: () => void;
+  /** Full "last seen …" line with the clock, which the header had no room for. */
+  lastSeenText?: string | null;
+}
+
+export function openPeerProfile(number: string, chat?: PeerProfileChatActions): void {
+  window.dispatchEvent(new CustomEvent(OPEN_PROFILE, { detail: { number, chat } }));
 }
 
 function initialsFrom(name: string): string {
@@ -176,6 +199,8 @@ export function PeerOverlaysHost() {
   const utils = trpc.useUtils();
   const [statusNumber, setStatusNumber] = useState<string | null>(null);
   const [profileNumber, setProfileNumber] = useState<string | null>(null);
+  /** Set only when the popup was opened from inside a conversation. */
+  const [chatActions, setChatActions] = useState<PeerProfileChatActions | null>(null);
   // Full-screen "profile page" opened by tapping the avatar in the popup — the
   // owner asked for a fuller view (big photo + details) that opens even when the
   // peer has no active status.
@@ -183,7 +208,11 @@ export function PeerOverlaysHost() {
 
   useEffect(() => {
     const onStatus = (e: Event) => setStatusNumber((e as CustomEvent).detail?.number ?? null);
-    const onProfile = (e: Event) => setProfileNumber((e as CustomEvent).detail?.number ?? null);
+    const onProfile = (e: Event) => {
+      const d = (e as CustomEvent).detail ?? {};
+      setProfileNumber(d.number ?? null);
+      setChatActions((d.chat as PeerProfileChatActions | undefined) ?? null);
+    };
     window.addEventListener(OPEN_STATUS, onStatus);
     window.addEventListener(OPEN_PROFILE, onProfile);
     return () => {
@@ -200,7 +229,7 @@ export function PeerOverlaysHost() {
   const groups = feed.data?.groups ?? [];
   const statusIdx = statusNumber ? groups.findIndex((g) => g.owner.number === statusNumber) : -1;
 
-  /* ── the "Everyone" discovery surface (v2.99.55) ──
+  /* ── the "Everyone" discovery surface (v2.99.66) ──
      The story FEED is bounded to my contacts and the people who saved me — it
      has to be, because its reverse is what realtime status events fan out to,
      and the reverse of "everyone" is every identity in the database. So a
@@ -327,9 +356,12 @@ export function PeerOverlaysHost() {
               <div className="mt-0.5 font-mono text-sm text-muted-foreground" dir="ltr">
                 {p.number.length === 6 ? `${p.number.slice(0, 3)}-${p.number.slice(3)}` : p.number}
               </div>
-              {presenceLine(p) && (
+              {/* Prefer the caller's full last-seen line when it has one: the
+                  chat header can only fit a short "8h" style stamp, and the owner
+                  asked for the date AND time to be readable somewhere. */}
+              {(chatActions?.lastSeenText || presenceLine(p)) && (
                 <div className={"mt-1.5 text-xs " + (p.isOnline ? "text-[color:var(--relay-online,#06d6a0)]" : "text-muted-foreground")}>
-                  {presenceLine(p)}
+                  {p.isOnline ? presenceLine(p) : (chatActions?.lastSeenText || presenceLine(p))}
                 </div>
               )}
 
@@ -387,6 +419,38 @@ export function PeerOverlaysHost() {
                   </button>
                 )}
               </div>
+
+              {/* The two actions that used to sit permanently in the chat header.
+                  Present ONLY when opened from inside a conversation. */}
+              {(chatActions?.onSearch || chatActions?.onToggleMute) && (
+                <div className="mt-2 grid w-full gap-2" style={{ gridTemplateColumns: chatActions.onSearch && chatActions.onToggleMute ? "1fr 1fr" : "1fr" }}>
+                  {chatActions.onSearch && (
+                    <button
+                      type="button"
+                      onClick={() => { const f = chatActions.onSearch; setProfileNumber(null); f?.(); }}
+                      className="flex items-center justify-center gap-2 rounded-2xl bg-muted/60 px-3 py-2.5 text-sm font-semibold text-foreground active:scale-95 transition-transform"
+                    >
+                      <Search className="size-4 shrink-0" /> <span className="truncate">Search chat</span>
+                    </button>
+                  )}
+                  {chatActions.onToggleMute && (
+                    <button
+                      type="button"
+                      onClick={() => chatActions.onToggleMute?.()}
+                      className={
+                        "flex items-center justify-center gap-2 rounded-2xl px-3 py-2.5 text-sm font-semibold active:scale-95 transition-transform " +
+                        (chatActions.muted ? "bg-muted/50 text-muted-foreground" : "bg-primary/12 text-primary")
+                      }
+                    >
+                      {chatActions.muted ? (
+                        <><BellOff className="size-4 shrink-0" /> <span className="truncate">Muted</span></>
+                      ) : (
+                        <><Bell className="size-4 shrink-0" /> <span className="truncate">Notifications</span></>
+                      )}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <div className="py-10 text-center text-sm text-muted-foreground">

@@ -7557,6 +7557,58 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.66 — owner UI batch from five screenshots (2026-07-25)
+- [x] 1. LAST SEEN CARRIES THE CLOCK. formatLastSeen returned "last seen on Jul 23" for anything older
+      than yesterday, while the same-day and yesterday branches already had the time. Owner: "it shows you
+      below last seen on this, but doesn't show you the time and the minutes." Every dated branch now ends
+      "at H:MM AM"; the YEAR is named only when it differs from now, because "Jul 23" silently reads as
+      this year and being twelve months wrong without saying so is worse than one extra token.
+- [x] 2a. ONE "+" REPLACES THE IMAGE AND PAPERCLIP BUTTONS. Owner: "put the attachment and the image into
+      one icon like you click a plus… it will give more space for the input box of chatting." The + always
+      opens the existing attach menu, which now carries Record video (still gated on
+      videoRecorderSupported()), Photo & video, and Attach file — nothing lost, ~44px returned to the text
+      field. The old handler opened the menu ONLY when a recorder existed and otherwise jumped straight to
+      the library, which would have hidden "Attach file" entirely, so it is now an unconditional toggle.
+- [x] 2b. THE BELL AND MAGNIFIER MOVED INTO THE PEER PROFILE. Owner: "for the search and for the
+      notification, make it inside the profile of the person when you click on his name." As permanent
+      header icons they squeezed the name to "Ibrahi..." and left the "last seen" line with nothing after
+      it. openPeerProfile(number, chat?) now takes an optional PeerProfileChatActions
+      ({onSearch, muted, onToggleMute, lastSeenText}); Messages passes it, Contacts / History / the dialer
+      pass nothing and render exactly as before. The popup also shows the FULL last-seen line with its
+      clock, which the single-line header cannot fit. Only the close-search affordance stays inline, and
+      only while search is open, because it acts on what is on screen.
+- [x] 3. LIVE COUNTERS ON THE SIGN-IN SCREEN. Owner: "this is the live reads on the main website where I
+      want also this one to be also on the login page... below the login and registration with the email,
+      above the voice video chat." New client/src/app/LiveStats.tsx — Registered / Guests served / Call
+      parties / Messages / Online now, same public aggregate stats.public endpoint, polled every 15s, the
+      online figure pulsing. New messagesSent COUNT(*) joins the four existing counters, wrapped in
+      try/catch because `messages` is the largest table and a headline number must never stop the landing
+      page rendering; the landing page gains the same tile in EN and AR. Renders NOTHING rather than five
+      zeros when the query has no data — getPublicStats answers zeros on a dead DB, and a wall of "0" on
+      the sign-in screen reads as a broken product.
+- [x] 4. THE AWAY AUTO-REPLY IS OPT-IN. Owner: "you have it as a feature, but you should allow the user to
+      enable and disable it. You don't enable it by default." New identities.autoReplyEnabled (additive
+      nullable via the boot migrator) — on the IDENTITY rather than `users`, so a GUEST can set it and it
+      travels with the person through registration and renumbering, consistent with v2.99.54. Only an
+      explicit true enables it, so NULL turns the old always-on behaviour off for everybody, which is the
+      intended change. autoReplyEnabledFor FAILS CLOSED on any trouble — this posts a line in someone's
+      name into a conversation they are not watching, so silence beats guessing yes — and the pref is
+      checked BEFORE the presence and dedupe reads, so the common opted-out path costs one indexed lookup
+      instead of three. Surfaced as a switch in the Messages header (AutoReplyToggle), optimistic with
+      rollback so it cannot misreport its own state, plus identity.setAutoReply and autoReplyEnabled on
+      whoami.
+- [x] 5. CONTACTS PUT LAST SEEN BELOW THE PIN. They shared one line, and with a 6-digit PIN plus "last
+      seen 18h ago" there was never room — every row wrapped mid-phrase and read as broken. Two short
+      lines now, with the pin dir="ltr"-isolated so an RTL name cannot reorder it.
+- [x] Tests: client/src/app/ownerUiBatch2.test.ts (23) + 2 new formatLastSeen cases. The v2.96.2 recorder
+      pin was REWRITTEN to the new menu shape rather than relaxed — it asserted the exact branch this batch
+      deleted, and still gates Record video on recorder support. Suite 2049 passed / 1 skipped; check +
+      build green.
+- [ ] NOT verified live: this environment cannot reach your-chat.io (network policy), so all five are
+      verified by tests and typecheck only. Worth a look on the phone: the dialer preview's last-seen line,
+      the composer's + menu, tapping a chat name for search/notifications, the sign-in screen's counters,
+      the Messages auto-reply switch, and the contacts rows.
+
 ## v2.99.64/65 — TURN :443 diagnosed to two owner-only steps; TLS-on-443 unblocked (2026-07-26)
 - [x] `turn-fix` established: both relays are EC2 instances in this account —
       `i-0ccd35acc6940c5dc` (13.232.119.83) and `i-0cf65f64e50fa4e3d` (13.204.23.58) — and they SHARE ONE

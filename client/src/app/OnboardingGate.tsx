@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { useIdentity } from "./useIdentity";
 import { AuthPanel } from "./AuthPanel";
+import { LiveStats } from "./LiveStats";
 import { MatrixReveal } from "./MatrixReveal";
 
 interface OnboardingGateProps {
@@ -357,8 +358,14 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
               )}
             </div>
 
+            {/* Live counters — below the sign-in card, above the Voice/Video/Chat
+                chips, exactly where the owner asked for them. Same public
+                aggregate endpoint the landing page reads, polled so the figures
+                move while the screen is open. */}
+            <LiveStats className="mt-6" />
+
             {/* Feature chips */}
-            <div className="mt-6 flex items-center justify-center gap-2">
+            <div className="mt-5 flex items-center justify-center gap-2">
               {[
                 { icon: Phone, label: "Voice" },
                 { icon: Video, label: "Video" },
