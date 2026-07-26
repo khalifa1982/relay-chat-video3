@@ -7557,6 +7557,138 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.81 — the eight-item security batch, each finding re-confirmed before it was touched (2026-07-26)
+- [x] **PROCESS FIRST, because it changed two of the answers.** Every item below had been sitting in the
+      v2.99.57 REMAINING list. Each was handed to an independent SKEPTIC briefed to REFUTE it and
+      defaulting to refuted, and required to produce a concrete exploit before it counted as confirmed.
+      Six came back CONFIRMED, two PARTIAL — and two of the original claims were **wrong in ways that
+      would have made a naive fix harmful**:
+      - **The claimed OTP bug was in the wrong function.** "`mintOtp` never invalidates prior codes" is
+        harmless: superseding only SHADOWS, so once the newest row is burned `latestOtp` falls back to the
+        older un-consumed row, and every mint mails the valid code to the victim's OWN inbox, which the
+        attacker cannot read. Making `mintOtp` invalidate priors — the obvious fix — would DELETE that
+        self-healing fallback and make an attacker's burn permanent. **Strictly worse.** The real defect is
+        that `verifyOtp` has no per-address budget at all.
+      - **F3 rewrites `firstName`/`lastName`, not `displayName`.** `ensureUserIdentity` returns a
+        pre-existing row untouched, so the display name was never at risk — but the first/last pair is
+        what `directory.lookup` returns and what the landing dialer PREFERS, so the rewrite was visible to
+        strangers anyway.
+- [x] **F1 — A BLOCKED PERSON COULD STILL POST, BY REPLYING TO AN OLD NOTIFICATION EMAIL.** The inbound
+      handler checked thread membership and that the From address matched the signed identity, then called
+      `sendMessage` **directly** — inheriting none of the router's block rule. The reply address carries
+      **no expiry**, so a months-old missed-call email stays a usable credential forever, and a blocked
+      person can even mint a fresh one by simply not answering a call (the missed-call gate checks the
+      OTHER direction). Fixed in the reply branch: 1:1 only, matching `messages.send` exactly, because
+      group semantics deliberately do not refuse a send when one member blocked the sender. Fails **OPEN**
+      on a lookup hiccup — a bare `await` would throw into the outer catch, which answers 200, and the
+      provider does not retry, so a genuine reply would be silently destroyed. Answers **200, not 503**,
+      or the provider redelivers the same mail forever. Deliberately NOT pushed down into `sendMessage`:
+      its other callers include the offline auto-reply, which legitimately posts on behalf of somebody the
+      sender may have blocked.
+- [x] **F2 — DRAINING SOMEBODY'S SIGN-IN CODES WAS UNBOUNDED.** `verifyOtp` has a per-IP gate and no
+      per-address one, so five wrong guesses burn a code (`recordOtpFailure` consumes at the cap) and
+      repeating drains every outstanding row until `latestOtp` returns null and the victim's real code
+      reports "expired" — chained with four wrong PIN tries, a full unauthenticated lockout, because the
+      email code is the PIN's own unlock path. New per-address budget claimed **before the row is read**,
+      so a drain cannot outrun it and rotating IPs gains nothing. Sized 20 per ten minutes: a real person
+      needs one or two attempts, and this repo already fixed the case where correcting a digit cost an
+      attempt (v2.99.31 L3), so it cannot lock out a legitimate user.
+- [x] **F3 — A REGISTER CODE COULD SKIP NEW-DEVICE APPROVAL AND RENAME YOU.** `otpAuth.register` accepts
+      an address that already has an account (the legacy password route refuses — the two paths
+      disagreed), and `verifyOtp` then read
+      `const wasRegistration = !!(row.firstName || row.lastName)` and skipped approval whenever the row
+      carried a name. **`NameSchema` makes a name MANDATORY on register**, so every register-minted row set
+      it: an attacker who could read or phish the code got an immediately-usable session, and the victim's
+      online device was never prompted and could never decline. Inferring "first device" from an
+      attacker-supplied field was the whole defect. The short-circuit is DELETED —
+      `shouldRequireApproval` already answers the real question, and a genuine first registration still
+      never waits because it has no prior approved session, which is the property the short-circuit was
+      reaching for. The name is now written only when the account did not already exist, captured BEFORE
+      `createOtpUser` (after it, a pre-existing account is indistinguishable from a new one).
+- [ ] **DELIBERATELY NOT DONE in F3: `register` still accepts an existing address.** Refusing it would
+      mirror the legacy path, but with approval now enforced the security hole is closed, and a refusal
+      would create an email-EXISTENCE ORACLE on a surface that has none today. The two paths still
+      disagree, and that disagreement is now defensible: a password on an existing account is a pre-hijack
+      vector (which is why M35 fixed it there), while a code proves ownership and approval gates the
+      session.
+- [x] **F4 — SIGNING OUT LEFT THE PUSH SUBSCRIPTION BOUND TO THE SIGNED-OUT IDENTITY.** Sign-out rotated
+      the device id, the channel and the guest recovery key and never touched `push_subscriptions`, so the
+      browser kept receiving that person's notifications after they left. `push.unsubscribe` already
+      existed and is identity-scoped — nothing called it. Called **before** the server sign-out, because
+      the scoping needs the caller still to BE that identity; the browser-side subscription is dropped too,
+      so a re-registration mints a fresh endpoint instead of reviving this one; best-effort throughout,
+      because a push failure must never be the reason somebody cannot sign out. The per-browser push CLAIM
+      is still deliberately kept (it identifies the browser profile, not the identity — v2.99.49 R1).
+- [x] **F5 — DO NOT DISTURB DID NOT APPLY TO "X IS BACK ONLINE".** The service worker early-returned "not
+      suppressed" for any kind outside message / missed-call / voicemail **before the prefs were read**, so
+      a `contact-online` push buzzed the phone with DND on — while the same alert delivered IN-PAGE
+      honoured it, so the two paths disagreed about the user's own setting. A list of covered kinds also
+      exempts every FUTURE kind by default. Inverted: a **ring** is exempt explicitly (missing a call is
+      worse than an unwanted buzz, and it is the one alert you cannot get later), DND applies to everything
+      else, and MUTE stays message-only so a per-conversation mute cannot silence a missed call from the
+      same person. Same reasoning that put `pushEnabled` inside `sendPushToIdentity` rather than at its
+      call sites.
+- [x] **F8 — A 100-NUMBER BATCH COST ONE TOKEN.** `directoryGate` charged a flat token, so
+      `presenceMany` (up to 100 numbers) and `presence` (up to 200 ids) had an enumeration throttle 100x
+      and 200x weaker than `lookup`'s — and both drop unknown entries, which makes each element an
+      existence probe. Measured: the whole 10^6 space mapped in **~2.8 hours** via `presenceMany` versus
+      ~11.6 days via `lookup`. The limiter now takes an **optional** `cost` defaulting to 1 — load-bearing,
+      because this limiter also backs the OTP gates, the status gate, the mint gate, the upload buckets,
+      the storage proxy and the signaling flood guard, all of which pass two arguments. Charged
+      **sub-linearly** (one token per ten numbers, per twenty ids) and BEFORE the dedupe, so padding with
+      repeats costs the same as distinct probes. The naive fix — `cost = n` — would have refused History's
+      legitimate 100-number presence poll outright and throttled real users' presence LEDs; a test drives
+      20 consecutive real polls through the actual limiter to prove they pass.
+- [x] **F10 — `+alias` BYPASSED THE PER-INBOX COOLDOWN.** The cooldown keyed on the exact string, so
+      `victim+1@`, `victim+2@` … were each a fresh bucket while all of them deliver to `victim@` — and that
+      cooldown is the only bound on mail to one inbox that is not per-IP, so aliasing turned it into a
+      bounded-only-by-IP mail cannon aimed at a third party, which is an SES-reputation problem this repo
+      already treats as first-class (v2.99.42 GAP3). New `canonicalRecipient` strips a `+tag` for
+      THROTTLING ONLY. `normalizeEmail` is deliberately untouched — it is the storage and identity key, and
+      merging aliases there would make `victim+work@` and `victim@` resolve to ONE account, breaking the
+      exact-match resolution `findUserByEmailAny` depends on and the one-email-one-row invariant M35 holds.
+      Dots are NOT stripped: dot-insensitivity is a Gmail behaviour, and applying it globally would merge
+      genuinely distinct addresses elsewhere and refuse a legitimate signup. The exact-string cooldown is
+      KEPT alongside the new one, or an attacker could deny the legitimate owner of an alias their own code.
+      **PARTIAL, said plainly**: only `register` was exploitable — `requestOtp` short-circuits on an
+      unregistered address before the cooldown is even consulted.
+- [x] **F11 — TWO CONCURRENT RENUMBERS COULD STRAND EVERY SAVER PERMANENTLY, AND SHED A BLOCK.**
+      `regenerateIdentityNumber` read `oldNumber` up to three round-trips before its transaction opened
+      (`allocateNumber` alone does two SELECTs plus a ledger insert, retried up to 40x). Both racers
+      captured the SAME value; the loser's UPDATE blocks on the winner's row lock, and under REPEATABLE
+      READ its read view forms at the first consistent read — the contacts SELECT — which runs AFTER the
+      winner committed. So the loser propagated against a number that no longer existed, matched nothing,
+      and left every saver's contact row on a number **nobody holds and never will**, because the ledger is
+      monotonic. Permanent, self-heals nowhere — and because `isNumberBlockedBy` keys on
+      `contacts.number`, it also SHEDS a block the renumbering person was under, inverting the registry's
+      own promise that "a block placed on your old number FOLLOWS you". Fixed with a locking re-read
+      (`.for("update")`) inside the transaction, plus a no-op guard for the case where a racer already
+      landed us on this number (propagating with old === new would delete rows it should keep). A SELECT,
+      not a second writer: this file must contain exactly **ONE** writer of `identities.number`, which is
+      what stops a parallel implementation from skipping propagation. A vanished identity is reported as
+      `not-found` rather than a generic fault.
+- [x] `server/securityBatch2999.test.ts` (35). The limiter cost and the canonicalisation are tested
+      BEHAVIOURALLY — a source pin cannot tell you whether 100 numbers now cost more than one, and that
+      arithmetic is the entire fix. **All 17 tripwires verified by MUTATION**, reverted from byte-exact
+      backups with every source confirmed byte-identical afterwards.
+- [x] **TWO WEAKNESSES OF MY OWN CAUGHT BY THAT RUN and fixed rather than counted as passes**, both the
+      same class — an assertion that never reached the code it claimed to cover: the "does not strip dots"
+      test used `first.last@example.com`, which returns EARLY because it has no `+`, so a dot-stripping
+      regression could never be detected; and the cooldown test pinned that `const last = await
+      lastOtpAt(email)` exists, which says nothing about whether the value is USED — deleting the
+      comparison left the read in place and stayed green.
+- [x] **THREE PRE-EXISTING PINS REWRITTEN TO THE STRONGER INVARIANT rather than relaxed**, each predicted
+      by its skeptic before the change: the new-device-approval pin froze the two `wasRegistration` lines,
+      i.e. it froze the DEFECT while its stated intent was something weaker; the sw.js pin froze the exact
+      early-return line whose comment claimed only "a call is never suppressed by a mute" while the line
+      silently exempted every other kind from DND; and the `directory.presence` pin froze the
+      one-argument `directoryGate(ctx)` call shape while saying nothing about whether the gate runs.
+- [ ] **HONEST LIMITATION**: the two new budgets (per-inbox mint, per-address verify) are in-memory and
+      therefore per-instance, so on the two-instance fleet the effective ceiling is double. That still
+      turns an unbounded attack into a bounded trickle; making them fleet-wide means Redis, which is a
+      bigger change than these findings warrant.
+- [x] Suite 2439 passed / 1 skipped (2440). No schema change, no new dependency, no new env var.
+
 ## v2.99.80 — react or reply to a status, and one emoji library instead of three (2026-07-26)
 - [x] **THE ASK.** Owner: *"When any user plays status, you can see his status. If he put it everyone or
       contact, and you can make a kind of emoji or put a reply. So it will reply to him on the private

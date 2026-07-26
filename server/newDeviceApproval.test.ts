@@ -61,13 +61,48 @@ describe("fail-safe against lockout (v2.99.7)", () => {
 });
 
 describe("login paths (v2.99.7)", () => {
-  it("verifyOtp parks a NON-registration sign-in that needs approval; a fresh registration never waits", () => {
+  it("approval is decided by shouldRequireApproval ALONE — never by a client-supplied field", () => {
+    // REWRITTEN in v2.99.81. This used to pin the two source lines verbatim:
+    //   const wasRegistration = !!(row.firstName || row.lastName)
+    //   const pending = !wasRegistration && (await shouldRequireApproval(userId))
+    // …which froze the DEFECT. `NameSchema` makes a name MANDATORY on register, so
+    // every register-minted row set it — meaning an `otpAuth.register` against an
+    // address that ALREADY has an account skipped new-device approval entirely: the
+    // victim's online device was never prompted and could never decline. Inferring
+    // "first device" from an attacker-supplied field was the whole bug.
+    //
+    // The property that matters: the approval decision comes from the SERVER's own
+    // view of whether another session is live. A genuine first registration still
+    // never waits, because it has no prior approved session — so the short-circuit
+    // was never load-bearing, only unsafe.
     const fn = ROUTERS.slice(ROUTERS.indexOf("verifyOtp: publicProcedure"), ROUTERS.indexOf("resendOtp: publicProcedure"));
-    expect(fn).toMatch(/const wasRegistration = !!\(row\.firstName \|\| row\.lastName\)/);
-    expect(fn).toMatch(/const pending = !wasRegistration && \(await shouldRequireApproval\(userId\)\)/);
+    expect(fn.length, "the slice is non-empty").toBeGreaterThan(500);
+    expect(fn).toMatch(/const pending = await shouldRequireApproval\(userId\);/);
+    // The name fields must not gate the decision, in CODE (comments explaining the
+    // history legitimately mention them).
+    const code = fn
+      .split("\n")
+      .filter((l) => {
+        const t = l.trim();
+        return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
+      })
+      .join("\n");
+    expect(code).not.toMatch(/wasRegistration/);
+    expect(code).not.toMatch(/pending = !/);
     expect(fn).toMatch(/await startSession\(ctx, userId, pending\)/);
     expect(fn).toMatch(/return \{ ok: true, verified: true, pending: true \}/);
     expect(fn).toMatch(/announcePendingDevice\(userId, sid, label\)/);
+  });
+
+  it("an existing account's name is never rewritten by a register-minted code", () => {
+    // The same register-on-an-existing-address path also passed the OTP row's
+    // attacker-supplied first/last name straight into markIdentityVerified. The
+    // rewrite is visible to strangers, because directory.lookup returns
+    // firstName/lastName and the landing dialer prefers "First Last".
+    const fn = ROUTERS.slice(ROUTERS.indexOf("verifyOtp: publicProcedure"), ROUTERS.indexOf("resendOtp: publicProcedure"));
+    expect(fn).toMatch(/const accountExisted = userId != null;/);
+    expect(fn).toMatch(/if \(!accountExisted\) \{\s*\n\s*await markIdentityVerified\(identity\.id, \{ firstName: row\.firstName, lastName: row\.lastName \}\);/);
+    expect(fn).toMatch(/\} else \{\s*\n\s*await markIdentityVerified\(identity\.id\);/);
   });
   it("loginWithPin is the bypass — it never calls the approval gate", () => {
     const fn = ROUTERS.slice(ROUTERS.indexOf("loginWithPin: publicProcedure"), ROUTERS.indexOf("setLoginPin: publicProcedure"));

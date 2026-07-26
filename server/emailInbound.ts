@@ -30,6 +30,7 @@ import {
   getIdentityByUserId,
   getOrCreateDmConversation,
   setUserNotificationPrefs,
+  isNumberBlockedBy,
 } from "./v2db";
 import { getUserById, getUserByOpenId } from "./db";
 import { publishToIdentity } from "./v2events";
@@ -567,6 +568,29 @@ export function registerEmailInbound(app: Express): void {
           console.warn("[inbound] From mismatch — dropping reply");
           res.status(200).json({ ok: false, reason: "from-mismatch" });
           return;
+        }
+        // BLOCKING (v2.99.81). `messages.send` refuses a 1:1 send when the
+        // recipient has blocked the sender, but this path called `sendMessage`
+        // directly and inherited nothing — so somebody who had been blocked could
+        // still post into the thread by replying to an old notification email. The
+        // reply address carries no expiry, so that credential stays usable forever,
+        // and a blocked person can even mint a fresh one by not answering a call
+        // (the missed-call gate checks the OTHER direction).
+        //
+        // 1:1 ONLY, matching the router exactly: group semantics deliberately do
+        // not refuse a send because one member blocked the sender.
+        const peers = members.filter((p) => p !== parsed.identityId);
+        if (peers.length === 1 && ident?.number) {
+          // Fail OPEN on a lookup hiccup, like every other block check here — and
+          // note a bare `await` would throw into the outer catch, which answers 200,
+          // and the provider does not retry, so a genuine reply would be destroyed.
+          const blocked = await isNumberBlockedBy(peers[0], ident.number).catch(() => false);
+          if (blocked) {
+            // 200, not 503: a 5xx makes the provider redeliver the same mail
+            // forever. The block is not revealed to the sender either way.
+            res.status(200).json({ ok: false, reason: "blocked" });
+            return;
+          }
         }
         const { text, html } = extractBody(payload);
         const body = stripQuotedReply(text || stripHtml(html)).slice(0, 8000);

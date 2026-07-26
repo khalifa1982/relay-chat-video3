@@ -42,9 +42,30 @@ export function useSignOut(me: { isGuest: boolean } | null | undefined): {
   const [confirming, setConfirming] = useState(false);
   const signOutGuestMut = trpc.identity.signOutGuest.useMutation();
   const logoutUserMut = trpc.auth.logout.useMutation();
+  const pushUnsubscribeMut = trpc.push.unsubscribe.useMutation();
   const isGuest = !!me?.isGuest;
 
   const performSignOut = useCallback(async () => {
+    // PUSH (v2.99.81): drop this device's subscription BEFORE the session goes,
+    // because `push.unsubscribe` is identity-scoped and needs the caller still to
+    // be that identity. Nothing used to do this — sign-out rotated the device id,
+    // the channel and the recovery key but left the `push_subscriptions` row bound,
+    // so the browser kept receiving the signed-out person's notifications, and
+    // their Devices list kept showing a subscription they had signed out of.
+    //
+    // Best-effort by design: a failure here must never be the reason somebody
+    // cannot sign out. The browser-side subscription is also dropped, so a
+    // re-registration mints a fresh endpoint rather than reviving this one.
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration();
+      const sub = await reg?.pushManager?.getSubscription();
+      if (sub?.endpoint) {
+        await pushUnsubscribeMut.mutateAsync({ endpoint: sub.endpoint }).catch(() => {});
+        await sub.unsubscribe().catch(() => {});
+      }
+    } catch {
+      /* no service worker, no permission, or a storage error — nothing to undo */
+    }
     try {
       if (isGuest) await signOutGuestMut.mutateAsync();
       else await logoutUserMut.mutateAsync();

@@ -937,9 +937,20 @@ export function isPrivateOrLocalIp(ip: string): boolean {
 // every other gate here.
 const directoryIpLimiter = createRateLimiter({ capacity: 120, refillPerSec: 1 });
 setInterval(() => directoryIpLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
-function directoryGate(ctx: { req: unknown }) {
+/**
+ * `cost` is OPTIONAL and defaults to 1 (v2.99.81), so the eleven existing
+ * `directoryGate(ctx)` call sites are untouched.
+ *
+ * It exists because a BATCH endpoint does N times the work of a single lookup for
+ * one token: `presenceMany` resolves up to 100 numbers per call and `presence` up
+ * to 200 ids, so at a flat one token each their enumeration throttle was 100x and
+ * 200x weaker than `lookup`'s — and both drop unknown entries, which makes each
+ * one an existence probe. Charged sub-linearly so real batch users stay well
+ * inside the budget.
+ */
+function directoryGate(ctx: { req: unknown }, cost = 1) {
   if (process.env.RELAY_RATELIMIT_OFF === "1") return;
-  if (!directoryIpLimiter.allow(clientIpOf(ctx.req as Parameters<typeof clientIpOf>[0]), Date.now())) {
+  if (!directoryIpLimiter.allow(clientIpOf(ctx.req as Parameters<typeof clientIpOf>[0]), Date.now(), cost)) {
     throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many lookups. Try again shortly." });
   }
 }
@@ -1100,7 +1111,12 @@ export const v2DirectoryRouter = router({
       // of the sequential id space) and apply the SAME guest-privacy rule the
       // other directory surfaces use — a guest inactive >24h must not leak
       // presence / last-seen here when they're hidden everywhere else.
-      directoryGate(ctx);
+      //
+      // One token per TWENTY ids (v2.99.81): the id space is sequential and so
+      // cheaper to walk than the number space, but the legitimate callers here send
+      // small batches, so a coarser divisor keeps them free while still pricing a
+      // 200-id sweep at 10 tokens instead of 1.
+      directoryGate(ctx, Math.ceil(input.ids.length / 20));
       if (input.ids.length === 0) return [];
       const [presList, idents] = await Promise.all([
         getPresenceForIds(input.ids),
@@ -1126,7 +1142,11 @@ export const v2DirectoryRouter = router({
   presenceMany: publicProcedure
     .input(z.object({ numbers: z.array(NumberSchema).max(100) }))
     .query(async ({ input, ctx }) => {
-      directoryGate(ctx);
+      // One token per TEN numbers (v2.99.81). History legitimately sends 100 every
+      // 30s, which is 10 tokens per poll against a 60/min budget — comfortable —
+      // while a scraper's rate drops 10x. Charged BEFORE the dedupe below, so
+      // padding the array with repeats costs the same as distinct probes.
+      directoryGate(ctx, Math.ceil(input.numbers.length / 10));
       const uniq = Array.from(new Set(input.numbers));
       if (uniq.length === 0) return [];
       const idents = await getIdentitiesByNumbers(uniq);
@@ -2519,9 +2539,91 @@ function otpGate(ctx: { req: unknown }) {
     throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many attempts. Try again shortly." });
   }
 }
+/**
+ * Reduce an address to the INBOX it actually reaches, for throttling only.
+ *
+ * v2.99.81: the per-email cooldown keyed on the exact string, so `victim+1@x.com`,
+ * `victim+2@x.com` … were each a fresh bucket while all of them deliver to
+ * `victim@x.com`. That cooldown is the only bound on mail volume to one inbox that
+ * is not per-IP, so aliasing turned it into ~30 unsolicited emails per minute per
+ * rotating IP — a deliverability and SES-reputation problem, which this codebase
+ * already treats as a first-class concern (v2.99.42 GAP3).
+ *
+ * THROTTLING ONLY. `normalizeEmail` is deliberately left alone: it is the storage
+ * and identity key, and merging aliases there would make `victim+work@` and
+ * `victim@` resolve to ONE account, breaking the exact-match identity resolution
+ * `findUserByEmailAny` depends on and the one-email-one-row invariant M35 exists to
+ * hold. Dots are also deliberately NOT stripped — dot-insensitivity is a Gmail
+ * behaviour, and applying it globally would merge genuinely distinct addresses at
+ * other providers and refuse a legitimate signup.
+ */
+export function canonicalRecipient(email: string): string {
+  const e = String(email || "").trim().toLowerCase();
+  const at = e.lastIndexOf("@");
+  if (at <= 0) return e;
+  const local = e.slice(0, at);
+  const domain = e.slice(at);
+  const plus = local.indexOf("+");
+  // A local part that is ONLY a tag ("+tag@x.com") is not a valid address to
+  // begin with; leave it whole rather than producing a bare "@domain" bucket that
+  // every such address would share.
+  if (plus <= 0) return e;
+  return local.slice(0, plus) + domain;
+}
+
+/**
+ * Per-INBOX mint budget, on top of the per-exact-address cooldown.
+ *
+ * Sized as a ceiling rather than a cooldown: a person legitimately holding several
+ * aliases at one provider should be able to sign in with each, so this permits a
+ * short burst and then throttles hard. In-memory and therefore per-instance —
+ * stated plainly: on the two-instance fleet the effective ceiling is double this,
+ * which still turns an unbounded mail cannon into a bounded trickle.
+ */
+const otpRecipientLimiter = createRateLimiter({ capacity: 6, refillPerSec: 6 / 600 });
+setInterval(() => otpRecipientLimiter.sweep(Date.now(), 60 * 60_000), 30 * 60_000).unref();
+
 async function cooldownOk(email: string) {
   const last = await lastOtpAt(email);
-  return !last || Date.now() - last >= OTP_RESEND_COOLDOWN_MS;
+  if (last && Date.now() - last < OTP_RESEND_COOLDOWN_MS) return false;
+  // The exact-string cooldown above is KEPT, not replaced. Sharing one bucket
+  // between `victim@` and `victim+1@` would let an attacker deny the legitimate
+  // owner of an alias their own code.
+  if (process.env.RELAY_RATELIMIT_OFF === "1") return true;
+  return otpRecipientLimiter.allow(canonicalRecipient(email), Date.now());
+}
+
+/**
+ * Per-address budget for WRONG code guesses (v2.99.81).
+ *
+ * THE REAL DEFECT here was not where it was first claimed. `mintOtp` not
+ * invalidating prior codes is harmless — superseding only SHADOWS them, so once the
+ * newest row is burned `latestOtp` falls back to the older un-consumed one, and
+ * every mint mails the new valid code to the victim's own inbox, which the attacker
+ * cannot read. Making `mintOtp` invalidate priors would DELETE that self-healing
+ * fallback and make the burn permanent — strictly worse.
+ *
+ * `verifyOtp` is the unbounded one: it has no per-address throttle at all, so five
+ * wrong guesses burn a code (`recordOtpFailure` consumes at the cap) and repeating
+ * drains every outstanding row until `latestOtp` returns null and the victim's real
+ * code reports "expired". Chained with four wrong PIN tries that is a full
+ * unauthenticated lockout, because the email code is the PIN's own unlock path.
+ *
+ * Generously sized: a legitimate person needs one or two attempts, and this repo
+ * already fixed the case where correcting a digit cost an attempt (v2.99.31 L3), so
+ * 20 per ten minutes cannot lock out a real user while it makes draining somebody's
+ * codes impractical.
+ */
+const otpVerifyLimiter = createRateLimiter({ capacity: 20, refillPerSec: 20 / 600 });
+setInterval(() => otpVerifyLimiter.sweep(Date.now(), 60 * 60_000), 30 * 60_000).unref();
+function otpVerifyGate(email: string) {
+  if (process.env.RELAY_RATELIMIT_OFF === "1") return;
+  if (!otpVerifyLimiter.allow(canonicalRecipient(email), Date.now())) {
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: "Too many code attempts for this address. Wait a few minutes and try again.",
+    });
+  }
 }
 
 // NOTE (v2.99.35): the v2.97.2 `RELAY_OTP_REGISTER_BYPASS` email-outage stopgap
@@ -2627,6 +2729,10 @@ export const v2OtpAuthRouter = router({
     .mutation(async ({ ctx, input }) => {
       otpGate(ctx);
       const email = normalizeEmail(input.email);
+      // Per-ADDRESS budget on top of the per-IP one (v2.99.81). Claimed BEFORE the
+      // row is read, so a drain attempt cannot spend somebody else's codes faster
+      // than the budget allows, and an attacker rotating IPs gains nothing here.
+      otpVerifyGate(email);
       const row = await latestOtp(email);
       if (!row) throw new TRPCError({ code: "CONFLICT", message: "That code has expired — request a new one." });
       if (!verifyOtpHash(input.code, row.codeHash)) {
@@ -2650,6 +2756,11 @@ export const v2OtpAuthRouter = router({
       }
       // Resolve or create the user account (register rows carry the name).
       let userId = (await findUserByEmailAny(email))?.id ?? null;
+      // Did this address ALREADY have an account before this verification? That is
+      // the honest test for "first device" and for "may this code rename you"
+      // (v2.99.81) — see below. Captured before createOtpUser, which would make it
+      // indistinguishable from a genuine first registration.
+      const accountExisted = userId != null;
       if (!userId) userId = await createOtpUser({ email, firstName: row.firstName, lastName: row.lastName });
       if (!userId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create your account." });
       // M29 (account pre-hijacking): the code proves this caller owns the
@@ -2680,14 +2791,33 @@ export const v2OtpAuthRouter = router({
         resolvedIdentityId: ctx.identity?.id ?? null,
         deviceId: ctx.deviceId ?? null,
       });
-      await markIdentityVerified(identity.id, { firstName: row.firstName, lastName: row.lastName });
+      // NAME: only a genuinely new account takes its name from the OTP row.
+      //
+      // v2.99.81: `otpAuth.register` accepts an address that ALREADY has an account
+      // (the legacy password route refuses — the two paths disagreed), and the name
+      // fields on that row are attacker-supplied. Writing them unconditionally let a
+      // register call rename an existing person, and the rewrite is visible to
+      // strangers, because `directory.lookup` returns firstName/lastName and the
+      // landing dialer PREFERS "First Last" over displayName.
+      if (!accountExisted) {
+        await markIdentityVerified(identity.id, { firstName: row.firstName, lastName: row.lastName });
+      } else {
+        await markIdentityVerified(identity.id);
+      }
       // New-device approval (v2.99.7): an email-code sign-in on an account that
-      // already has another ONLINE device waits for that device to approve it,
-      // UNLESS this is a brand-new registration (`row.firstName` present means
-      // the OTP was minted by register → first device, nothing to approve
-      // against). PIN login is the explicit bypass and never lands here.
-      const wasRegistration = !!(row.firstName || row.lastName);
-      const pending = !wasRegistration && (await shouldRequireApproval(userId));
+      // already has another ONLINE device waits for that device to approve it.
+      //
+      // v2.99.81 — THE SHORT-CIRCUIT IS GONE. It read
+      // `const wasRegistration = !!(row.firstName || row.lastName)` and skipped
+      // approval whenever the row carried a name — but `NameSchema` makes a name
+      // MANDATORY on register, so every register-minted row set it, and an
+      // `otpAuth.register` against an existing address therefore bypassed approval
+      // entirely: the victim's online device was never prompted and could never
+      // decline. Inferring "first device" from an attacker-supplied field was the
+      // defect. `shouldRequireApproval` already answers the real question — a
+      // genuine first registration has no prior approved session, so it still never
+      // waits, which is the property the short-circuit was reaching for.
+      const pending = await shouldRequireApproval(userId);
       const sid = await startSession(ctx, userId, pending);
       setSessionCookie(ctx.res, userId, rememberToTtlMs(input.remember), sid);
       if (pending) {
