@@ -3,15 +3,15 @@
 <plist version="1.0">
 <dict>
     <key>method</key>
-    <string>app-store</string>
+    <string>app-store-connect</string>
     <key>teamID</key>
-    <string>QJBVFFML9P</string>
+    <string>BNHM5YKRWM</string>
     <key>signingStyle</key>
     <string>manual</string>
     <key>provisioningProfiles</key>
     <dict>
         <key>com.app.relaymobile</key>
-        <string>com.app.relaymobile AppStore Distribution</string>
+        <string>relay_appstore</string>
     </dict>
     <key>uploadBitcode</key>
     <false/>
