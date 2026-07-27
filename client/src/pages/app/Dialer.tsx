@@ -62,7 +62,10 @@ const KEYS: { d: string; sub: string }[] = [
   { d: "9", sub: "WXYZ" },
   { d: "*", sub: "" },
   { d: "0", sub: "+" },
-  { d: "#", sub: "" },
+  // The 12th cell is the ERASE key, rendered explicitly after this list — see the
+  // grid below. v2.99.36 made exactly this trade on the LANDING dial pad: on a
+  // 6-digit numeric pad `#` is pure decoration, and erase is what the cell is
+  // actually worth. The app pad never got the same treatment until v2.99.86.
 ];
 
 /**
@@ -247,7 +250,12 @@ export default function DialerPage() {
   useEffect(() => () => disposeDtmf(), []);
 
   function tap(d: string) {
-    if (dialed.length >= 6 && /[0-9]/.test(d)) return;
+    // Digits only. The length guard used to apply ONLY to digits, so `*` (and the
+    // old `#`) appended without limit and could push non-numeric junk into a field
+    // that can only ever hold a 6-digit RELAY number. `*` keeps its key — it plays
+    // its tone and is a spare cell — but it can no longer corrupt the number.
+    if (!/^[0-9]$/.test(d)) { playDtmf(d); return; }
+    if (dialed.length >= 6) return;
     setDialed((s) => s + d);
     // Owner spec: a real dial-pad TONE per key (standard DTMF dual tone), so
     // dialling sounds like a phone. Output-only WebAudio — never touches the mic.
@@ -641,6 +649,59 @@ export default function DialerPage() {
                   </span>
                 </button>
               ))}
+              {/* ERASE — the 12th cell (v2.99.86, owner with a screenshot of the
+                  pale ghost icon): "This delete, I couldn't make it little large and
+                  red colour, flashy glossy to delete the numbers in case you want to
+                  delete it."
+                  It sits IN the pad rather than floating beside the call buttons, and
+                  that is a MEASUREMENT rather than a preference: the old floating
+                  button already overlapped the Group Call button by 9px at 320px
+                  BEFORE this change, and enlarging it to the size the owner asked for
+                  took the overlap to 17px. In the pad it cannot collide, it is under
+                  the thumb that is typing, and there is exactly ONE erase affordance
+                  (the "just put it one place" rule from v2.99.82).
+                  Dimmed and inert with nothing to erase — never hidden, because a key
+                  that appears and disappears makes the grid jump. */}
+              <button
+                type="button"
+                onClick={backspace}
+                disabled={dialed.length === 0}
+                className="
+                  relay-key relative rounded-[22px] overflow-hidden
+                  flex items-center justify-center select-none text-white
+                  transition-[transform,opacity] duration-150
+                  active:scale-[0.94] disabled:opacity-30 disabled:active:scale-100
+                "
+                style={{
+                  transitionTimingFunction: "var(--ease-out)",
+                  background: "linear-gradient(160deg,#f87171,#dc2626 55%,#991b1b)",
+                  border: "1px solid rgba(255,255,255,.22)",
+                  boxShadow: "inset 0 1px 0 rgba(255,255,255,.22), 0 6px 16px rgba(153,27,27,.45)",
+                }}
+                aria-label="Erase last digit"
+                title="Erase"
+              >
+                {/* The halo: a STATIC box-shadow on a stacked overlay, only its
+                    OPACITY animated. Animating the key's own box-shadow would
+                    repaint it every frame (the v2.99.84 rule). Runs only when there
+                    is something to erase, so an idle pad is completely still. */}
+                {dialed.length > 0 && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-0 rounded-[22px] pointer-events-none relay-gloss-pulse"
+                    style={{ boxShadow: "0 0 16px 3px rgba(220,38,38,.6)" }}
+                  />
+                )}
+                {/* The gloss: a fixed specular highlight across the top. Static on
+                    purpose — a moving shine on a key you are aiming at is a
+                    distraction rather than "flashy". */}
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-x-0 top-0 h-1/2 pointer-events-none"
+                  style={{ background: "linear-gradient(180deg,rgba(255,255,255,.32),rgba(255,255,255,0))" }}
+                />
+                <Delete className="relative" style={{ width: "clamp(22px,6.5vw,28px)", height: "clamp(22px,6.5vw,28px)" }} strokeWidth={2.4} />
+              </button>
             </div>
 
             {/* Call actions — THREE equally-prominent circular icon buttons in
@@ -736,17 +797,6 @@ export default function DialerPage() {
                   <span className="text-xs font-medium text-muted-foreground">Group Call</span>
                 </div>
               </div>
-              {/* Backspace — kept out of the way of the centred trio. */}
-              {dialed.length > 0 ? (
-                <button
-                  type="button"
-                  onClick={backspace}
-                  className="absolute right-0 top-1.5 size-10 grid place-items-center rounded-full text-muted-foreground hover:text-foreground active:scale-95 transition"
-                  aria-label="Backspace"
-                >
-                  <Delete className="size-[18px]" />
-                </button>
-              ) : null}
             </div>
 
             {/* Quick-add (v2.99.8): offer Save for a complete 6-digit number

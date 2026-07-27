@@ -7557,6 +7557,115 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.86 — the top bar to spec, and an erase key you can actually see (2026-07-27)
+- [x] **OWNER, three screenshots and a long brief.** The erase key: *"This delete, I couldn't make it little
+      large and red colour, flashy glossy to delete the numbers in case you want to delete it."* The bar:
+      *"on the top bar on the left, there is the green icon, green blue of rely, and rely make it flashy,
+      glossy, glossy. and it's, like, animated slowly. Uh, nice animation, but don't make it so much. And on
+      the middle, put the flag first, little small size, not the normal size, make it little small. Then the
+      first name and then the badge and then the PIN number, three numbers dash three number, put it in
+      green color. and then it will show you on the right … this ring bill where for notification center.
+      Green, if there is nothing… no notification. Red and blinking, if there is a notification, and then
+      there's the profile where I told you you need to put circle of two colors."* And the ring: *"make a
+      green silk kill on the profile image … flashy between green and white to keep flashy but feed and feed
+      out."*
+- [x] **THE ERASE KEY MOVED, AND A MEASUREMENT IS WHY.** The owner pointed at the floating ⌫ beside the call
+      buttons and asked for it bigger and red. Measured first: at **320px that button ALREADY overlapped the
+      Group Call button by 9px** before this release, and growing it to the size asked for took the overlap
+      to **17px**; at 360px the enlarged version left 3px of clearance. So it is now the keypad's **12th
+      cell** — big, red, glossy, and impossible to collide with. Measured there: **92×72 at 320px** rising to
+      115×72, no overlap with any key or call button, grid still 3×4, no page overflow.
+      `#` gave up the cell, which is the same trade **v2.99.36** already made on the LANDING pad: on a
+      6-digit numeric pad it is pure decoration. There is now exactly ONE erase affordance (the "just put it
+      one place" rule from v2.99.82), it sits under the thumb that is typing, and it DIMS rather than
+      disappearing with nothing to erase — a key that comes and goes makes the grid jump mid-tap.
+- [x] **A LIVE BUG FOUND WHILE THERE**: `tap`'s length guard applied only to DIGITS, so `*` (and the old `#`)
+      appended without limit and could push non-numeric junk into a field that can only ever hold a 6-digit
+      RELAY number. Now digit-only; `*` keeps its key and its tone but can no longer corrupt the number.
+- [x] **THE BAR IS THREE ZONES, and the MIDDLE IS TWO LINES — the decision the whole layout rests on.**
+      Seven monospace digits are ATOMIC: they cannot ellipsize without becoming a lie about somebody's
+      number. On one line they compete with the name, the flag, the badge, the wordmark, a back arrow and two
+      36px chips, and at 320px something has to give. Line 2 carries the PIN alone, so it can never be
+      squeezed. Vertical cost is zero — the bar's height was already set by the 36px avatar, not by text.
+- [x] **MEASURED, not asserted** — headless Chromium against the REAL built stylesheet, **5 widths (320/360/
+      375/390/430) × back-arrow present or not × 6 names** including a long Arabic name and a single-glyph
+      CJK name: the PIN is never clipped, the badge is always visible and never distorted, the avatar ring
+      stays inside the header, there is no horizontal overflow, and there are zero nested buttons. The
+      harness emits a `<meta viewport>` and ABORTS if the emulated width did not take effect (the v2.99.84
+      harness bug).
+- [x] **THE PIN'S GREEN IS A MEASURED TOKEN, NOT THE LED GREEN.** The presence green is
+      `oklch(0.55 0.18 145)` = `rgb(0,139,29)`, which computes to **4.46:1** on the light theme's white card
+      — it FAILS WCAG AA for text, and the PIN is 11.5px semibold. The grey it replaces was 5.97:1, so
+      painting it the LED green would have made the owner's headline element LESS readable. New
+      `--relay-green-text` is `oklch(0.48 …)` = **5.92:1**, fixed in the TOKEN so no call site has to know;
+      the LED green is deliberately untouched, because a 12px dot is not text.
+- [x] **THE FLAG'S BOX IS RESERVED even when there is no flag.** `geoSelf` returns a null country for a LAN,
+      a VPN or a GeoIP miss and `CountryFlag` then renders NOTHING — so without a reserved box the whole
+      identity block shifted sideways the moment geo resolved, changing where the name truncates mid-session.
+      Rendered "little small" at 11px, per the ask.
+- [x] **THE BELL CARRIES ITS STATE**: green when clear, red + blinking when something is waiting, and
+      **DND moved to AMBER**. That last part is not cosmetic — green currently means DND, so shipping
+      green-when-clear without moving DND would leave one colour meaning both "nothing waiting" and "alerts
+      silenced". The CLEAR state is a green STROKE rather than a filled chip: the owner gets green, but a
+      tinted plate lit 100% of the time spends attention on the one state that needs none.
+- [x] **`.relay-blink-glow` ANIMATED BOX-SHADOW on the top bar** — a repaint every frame, hosted on the
+      bar's `backdrop-blur-xl backdrop-saturate-150` surface, the most expensive host in the app to repaint
+      over. Converted to the v2.99.84 overlay pattern (static shadow, animated opacity), and it now renders
+      only while something is actually waiting, so a quiet bell runs no animation at all.
+- [x] **THE AVATAR'S TWO-COLOUR RING, AND A REAL BUG IN MY OWN NEW CSS, caught in review before shipping.**
+      The ring is two stacked rings whose opacities cross-fade — never an animated border-color or conic
+      gradient, both of which repaint. My first version anti-phased them with `animation-direction: reverse`,
+      which on a SYMMETRIC keyframe with a point-symmetric easing is an **EXACT no-op** — verified
+      numerically, max |forward − reversed| = **0.000000**. Both rings therefore peaked together and the
+      later-declared WHITE one covered the green for the entire cycle: a **white ring blinking**, which is
+      precisely what the owner ruled out ("feed and feed out"). Fixed with a half-cycle negative delay and
+      **MEASURED**: a+b stays ≈1 across the cycle, max |a−b| = 0.99.
+- [x] **AND A SECOND ONE IN THE SAME COMPONENT**: under reduced motion neither ring animates, and without an
+      explicit rest state the white ring sat at full opacity and covered the green — a still frame that looks
+      nothing like the moving one. Ring B now rests at `opacity: 0`, so the quiet frame is the GREEN ring.
+      Measured: 1.00/0.00 held across the sample.
+- [x] **ONE TAP, A REAL CHOICE, AND DELIBERATELY NO DOUBLE-TAP.** The owner's brief said "double click" and
+      then, later in the same breath, "even if there is a status, when you click it, it will tell you to see
+      the status or go to the profile" — the second is the considered version and it is what shipped. A
+      `dblclick` would put a ~300ms disambiguation delay on every single tap of the most-tapped chrome in the
+      app, collides with iOS Safari's zoom gesture, has no keyboard or assistive equivalent, and would assign
+      the HIDDEN gesture to the COMMON case, since most people have no status most of the time.
+- [x] **A SILENT NO-OP CAUGHT BY READING THE ROUTE LIST**: my first cut sent "See my status" to
+      `navigate("/app/status")`. **There is no such route** — statuses live as a strip atop Messages and the
+      viewer is opened imperatively through the global overlay host. It would have been a dead menu item that
+      no source pin could catch. Now `openPeerStatus(me.number)`; with no status the item honestly offers
+      "Add a status" and goes to the Messages strip, which is where the composer is.
+- [x] **THE STORY SIGNAL IS A PIP, NOT THE RING.** The ring means "this is you"; overloading it with story
+      state would change an identity signal whenever you post a photo, and would contradict `PeerAvatar`,
+      where a ring means somebody ELSE'S unseen story.
+- [x] **THE GUEST'S ONLY MOBILE ROUTE TO REGISTRATION IS PRESERVED** — v2.95.10 put "Register — keep this
+      number" in this menu because a separate pill overflowed the bar, and losing it would strand every guest
+      on a phone. Pinned.
+- [x] **A STANDING GUARD, because `relay-blink-glow` proved this can regress unnoticed**: a test now fails if
+      ANY keyframe in `index.css` animates `box-shadow`, `height`, `width`, `background-position`,
+      `border-color` or `filter`, and asserts all four new primitives animate only transform/opacity and sit
+      inside the reduced-motion gate.
+- [x] **TWO TEST BUGS OF MY OWN, both found by running them and both fixed rather than counted as passes.**
+      The render-order test used `{formatPin(number)}` as a needle, which also matches inside the
+      aria-label's `${formatPin(number)}` — it put the PIN at position 440 and read the order backwards. And
+      the no-double-tap test matched the bare word `dblclick` in **my own JSX comment explaining why there is
+      no double-tap**: `codeOnly` strips `//` lines but not a `{/* … */}` block. That is the fifth time this
+      repo has matched its own prose; it now requires an actual `onDoubleClick=` binding.
+- [x] **ONE PRE-EXISTING PIN REWRITTEN to the property rather than the expression**: `headerFixes.test.ts`
+      froze the whole `{dnd ? <BellOff …/> : <Bell …/>}` line, so it broke the moment the Bell gained a blink
+      class while saying nothing about what matters — that the three bell states are visually distinct and
+      that DND is not green.
+- [x] `client/src/app/topBarSpec.test.ts` (34); **all 20 tripwires verified by MUTATION** from byte-exact
+      backups, sources byte-identical afterwards.
+- [x] **NOT DONE, and said plainly rather than half-shipped: the PROFILE PAGE REBUILD.** The owner supplied
+      two mockups and asked for a control centre — grouped rows, the barcode, the number, the badge, the
+      status, and every existing control reachable from one place. A design pass mapped all ~60 existing
+      profile controls and an adversarial review found real hazards in the obvious approach (a hash-only deep
+      link is a no-op under this router; `@keyframes enter` animates `filter` and establishes a containing
+      block that mis-centres the fixed "Saved" pill; the avatar file input is dead code; `identity.setNumber`
+      renders for guests but throws FORBIDDEN). That is its own release, not a coda to this one.
+- [x] No schema change, no new dependency, no server change. 2559 tests.
+
 ## v2.99.85 — who is speaking, told by colour; and the ⋮ looks like a button (2026-07-27)
 - [x] **OWNER**, from a group-chat screenshot: *"when I type it should showing typing like my name typing and
       it's like first name is capital small letter for the rest and it keep increase. the second letter become
