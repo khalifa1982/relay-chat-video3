@@ -197,3 +197,9 @@
 - [x] Web app receives { type: "SET_PUSH_TOKEN", token: "<apns_token>" } via window.addEventListener("message")
 - [x] tsc clean + 65 tests pass
 - [x] Added google-services.json for Android (package: com.relaytech.calling) and configured googleServicesFile in app.config.ts
+
+## Round 21 — Ensure update footer is completely hidden on iOS (Apple Guideline 2.2)
+- [x] Added Platform.OS === "android" guard at the PARENT level in index.tsx so BuildStatusRow + ApkUpdateBanner + GlossyCheckButton are never rendered on iOS at all
+- [x] Double protection: BuildStatusRow also returns null internally on iOS
+- [x] No BETA badge, no build number, no refresh button visible on iOS
+- [x] tsc clean + 65 tests pass

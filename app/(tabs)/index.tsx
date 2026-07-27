@@ -23,7 +23,7 @@ import { RELAY_APP_URL } from "@/lib/relay-config";
  * lightweight notice with the target URL instead of an embedded frame.
  */
 export default function HomeScreen() {
-  // Self-hosted APK auto-update.
+  // Self-hosted APK auto-update (Android only — no-op on iOS/web).
   const {
     status,
     progress,
@@ -58,34 +58,38 @@ export default function HomeScreen() {
         <RelayWebView />
       </View>
 
-      {/* Compact build/status footer with manual re-check. */}
-      <BuildStatusRow
-        installedBuild={installedBuild}
-        installedVersionName={installedVersionName}
-        appVersionName={
-          (Constants.expoConfig?.version ?? installedVersionName) || null
-        }
-        latestBuild={manifest?.buildNumber}
-        latestVersionName={manifest?.versionName}
-        reason={lastReason}
-        status={status}
-        progress={progress}
-        lastCheckAt={lastCheckAt}
-        pollIntervalMs={pollIntervalMs}
-        onCheck={() => void check()}
-        onDownload={startDownload}
-        onApply={() => void applyUpdate()}
-      />
+      {/* Android-only: compact build/status footer + update banner.
+          iOS updates go through the App Store — no self-hosted updater. */}
+      {Platform.OS === "android" && (
+        <>
+          <BuildStatusRow
+            installedBuild={installedBuild}
+            installedVersionName={installedVersionName}
+            appVersionName={
+              (Constants.expoConfig?.version ?? installedVersionName) || null
+            }
+            latestBuild={manifest?.buildNumber}
+            latestVersionName={manifest?.versionName}
+            reason={lastReason}
+            status={status}
+            progress={progress}
+            lastCheckAt={lastCheckAt}
+            pollIntervalMs={pollIntervalMs}
+            onCheck={() => void check()}
+            onDownload={startDownload}
+            onApply={() => void applyUpdate()}
+          />
 
-      {/* Update banner (or full blocking overlay when the update is mandatory). */}
-      <ApkUpdateBanner
-        status={status}
-        progress={progress}
-        versionName={manifest?.versionName}
-        mandatory={mandatory}
-        onDownload={startDownload}
-        onApply={() => void applyUpdate()}
-      />
+          <ApkUpdateBanner
+            status={status}
+            progress={progress}
+            versionName={manifest?.versionName}
+            mandatory={mandatory}
+            onDownload={startDownload}
+            onApply={() => void applyUpdate()}
+          />
+        </>
+      )}
     </SafeAreaView>
   );
 }
