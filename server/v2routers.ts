@@ -57,6 +57,7 @@ import {
   dmConversationExists,
   createGroupConversation,
   setGroupProfile,
+  hideMessageForIdentity,
   deleteMessage,
   consumeExpiringMessage,
   revealExpiringMessage,
@@ -1643,6 +1644,38 @@ export const v2MessagesRouter = router({
    * validated with the SAME namespace gate an identity's photo uses (F2), so this
    * cannot be used to point a group at somebody else's private media.
    */
+  /**
+   * Hide ONE message for the caller alone — "delete for me" (v2.102.2, owner #81).
+   *
+   * DISTINCT FROM `remove`, which is UNSEND: that flips `deletedAt`, takes the message
+   * away from EVERYBODY, and is rightly restricted to its own sender. This one changes
+   * nothing for anybody else, which is why it is allowed on somebody else's message.
+   *
+   * Membership and idempotency both live in `hideMessageForIdentity` rather than here,
+   * because a message id is a small integer and "who may hide this" is the safety
+   * argument — it must not be something a second call site could forget.
+   */
+  hide: publicProcedure
+    .input(z.object({ messageId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const res = await hideMessageForIdentity({ messageId: input.messageId, identityId: me.id });
+      if (!res.ok) {
+        // Named, because "that message is gone" and "you are not in that conversation"
+        // need different next steps — and a member who is not in the conversation is
+        // told the same thing a missing message gets, so this is no existence oracle
+        // over message ids.
+        if (res.reason === "not-a-member" || res.reason === "not-found") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "That message is no longer there." });
+        }
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Couldn't hide that — nothing changed.",
+        });
+      }
+      return { ok: true as const };
+    }),
+
   setGroupProfile: publicProcedure
     .input(
       z.object({

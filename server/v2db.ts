@@ -38,6 +38,7 @@ import {
   conferenceParticipants,
   contacts,
   conversationParticipants,
+  messageHides,
   conversations,
   identities,
   messages,
@@ -2594,6 +2595,20 @@ export async function ensureSchemaExtensions(): Promise<void> {
       )`,
     },
     {
+      // Per-person message hiding — "delete for me" (v2.102.2). One row means one
+      // identity does not want to see one message. NOT `messages.deletedAt`, which
+      // is UNSEND and removes it for everybody. The PK order (identityId, messageId)
+      // is the order every read uses, so the anti-join is an index lookup.
+      name: "message_hides",
+      ddl: `CREATE TABLE IF NOT EXISTS \`message_hides\` (
+        \`identityId\` int NOT NULL,
+        \`messageId\` int NOT NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`identityId\`, \`messageId\`),
+        KEY \`message_hides_message_idx\` (\`messageId\`)
+      )`,
+    },
+    {
       // Device/session ledger (v2.99.1). One row per login; the cookie's sid
       // maps here so a device can be logged out by deleting its row.
       name: "sessions",
@@ -3464,6 +3479,54 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
   const latestByConvo = new Map<number, typeof recents[number]>();
   for (const m of recents) latestByConvo.set(m.conversationId, m);
 
+  // "Delete for me" (v2.102.2), and THE FAST PATH IS PRESERVED DELIBERATELY.
+  //
+  // The obvious change is a NOT EXISTS inside the MAX() above — and it is the wrong
+  // one: that aggregate is a loose index scan over (conversationId, id), it is polled
+  // by every client every few seconds, and an antijoin defeats the loose scan for
+  // every user in the fleet to serve a feature almost nobody has used.
+  //
+  // So the aggregate is untouched. Instead: ask which of the WINNING ids this person
+  // has hidden — one primary-key range lookup over at most a few dozen ids — and only
+  // for the conversations that come back does a second, narrow query find the
+  // next-newest visible message. With no hides the extra cost is that single lookup,
+  // and the query plan for everyone else is byte-identical to before.
+  if (latestIds.length > 0) {
+    const hidden = await db
+      .select({ messageId: messageHides.messageId })
+      .from(messageHides)
+      .where(
+        and(
+          eq(messageHides.identityId, identityId),
+          inArray(messageHides.messageId, latestIds),
+        ),
+      );
+    if (hidden.length > 0) {
+      const hiddenIds = new Set(hidden.map((h) => Number(h.messageId)));
+      for (const [convoId, m] of Array.from(latestByConvo.entries())) {
+        if (!hiddenIds.has(m.id)) continue;
+        // Scoped to ONE conversation and ordered by the same index the aggregate
+        // uses, so this is a short backwards walk rather than a scan.
+        const [next] = await db
+          .select()
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, convoId),
+              isNull(messages.deletedAt),
+              notHiddenFor(identityId),
+            ),
+          )
+          .orderBy(desc(messages.id))
+          .limit(1);
+        // No visible message left: the thread stays, with no preview. Deleting the
+        // thread instead would hide a conversation somebody else is still in.
+        if (next) latestByConvo.set(convoId, next);
+        else latestByConvo.delete(convoId);
+      }
+    }
+  }
+
   // 5) Find this user's own row so we can synthesise the "Notes (You)"
   // peer projection on self-conversations (where there's no other row).
   const myIdentityRow = await db
@@ -3529,6 +3592,131 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
   });
 }
 
+/**
+ * "This message is not hidden for THIS person" (v2.102.2) — the one predicate every
+ * read uses, so no surface can forget it and start showing a message somebody hid.
+ *
+ * A correlated NOT EXISTS rather than a LEFT JOIN, because MySQL optimises it as an
+ * antijoin against the `(identityId, messageId)` primary key: one index lookup per
+ * candidate row, and the table is empty for almost everybody.
+ */
+export function notHiddenFor(identityId: number) {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM \`message_hides\` mh
+     WHERE mh.\`messageId\` = ${messages.id}
+       AND mh.\`identityId\` = ${identityId})`;
+}
+
+/**
+ * Hide ONE message for ONE person — "delete for me" (v2.102.2, owner #81).
+ *
+ * DELIBERATELY NOT UNSEND. `deleteMessage` flips `messages.deletedAt`, which removes
+ * the message for EVERYBODY and is rightly restricted to its own sender. This hides a
+ * row for the caller alone and leaves it exactly as it was for everyone else.
+ *
+ * THE INSERT IS THE ATOMIC CLAIM, and that is what makes the unread adjustment safe:
+ * `ON DUPLICATE KEY UPDATE identityId = identityId` reports `affectedRows: 0` for a row
+ * that already existed, so a double-tap or a retried request cannot run the adjustment
+ * twice — the exact shape `tryReserveNumber` uses, and the defect v2.99.57 found in
+ * `deleteMessage`, where two concurrent unsends each decremented a STORED counter.
+ *
+ * Membership is checked first: a message id is a small integer, so without it this
+ * would let anybody write a row naming any message in the database. Hiding is
+ * one-directional and there is no unhide, which the confirmation says out loud.
+ */
+export async function hideMessageForIdentity(input: {
+  messageId: number;
+  identityId: number;
+}): Promise<{ ok: boolean; reason?: "not-found" | "not-a-member" | "unavailable" }> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  try {
+    const [row] = await db
+      .select({ id: messages.id, conversationId: messages.conversationId })
+      .from(messages)
+      .where(eq(messages.id, input.messageId))
+      .limit(1);
+    // An already-unsent message is reported as missing rather than hidden: it is
+    // already gone from every read, so a row here would be a tombstone for a
+    // tombstone.
+    if (!row) return { ok: false, reason: "not-found" };
+    const members = await getConversationParticipantIds(row.conversationId);
+    if (!members.includes(input.identityId)) return { ok: false, reason: "not-a-member" };
+
+    const ins = await db
+      .insert(messageHides)
+      .values({ identityId: input.identityId, messageId: input.messageId })
+      .onDuplicateKeyUpdate({ set: { identityId: sql`${messageHides.identityId}` } });
+    const claimed =
+      Array.isArray(ins) && ((ins[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    // Already hidden — succeed without touching the counter, so the endpoint is
+    // idempotent rather than an error the UI has to explain.
+    if (!claimed) return { ok: true };
+
+    // The badge must not keep counting a message this person can no longer see.
+    // RECOMPUTED, never decremented: a decrement is not idempotent and a retry drives
+    // a stored counter negative (v2.99.74), and recomputing also heals any pre-existing
+    // drift for this participant.
+    await recomputeUnreadFor(row.conversationId, input.identityId);
+    return { ok: true };
+  } catch (e) {
+    console.warn("[messages] hide skipped:", (e as Error)?.message || "");
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
+/**
+ * Recompute one participant's stored unread count from the messages themselves
+ * (v2.102.2).
+ *
+ * `unreadCount` is a STORED counter — bumped on send, zeroed on read — so nothing
+ * else can derive it. This is the one place it is rebuilt from first principles:
+ * messages after the read watermark, not sent by this person, not unsent, and not
+ * hidden by them. Idempotent by construction, which is why it is safe to call from a
+ * path that may be retried.
+ */
+export async function recomputeUnreadFor(conversationId: number, identityId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    const [part] = await db
+      .select({ lastReadMessageId: conversationParticipants.lastReadMessageId })
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, conversationId),
+          eq(conversationParticipants.identityId, identityId),
+        ),
+      )
+      .limit(1);
+    if (!part) return;
+    const after = part.lastReadMessageId ?? 0;
+    const [{ n } = { n: 0 }] = await db
+      .select({ n: sql<number>`COUNT(*)` })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, conversationId),
+          gt(messages.id, after),
+          ne(messages.senderIdentityId, identityId),
+          isNull(messages.deletedAt),
+          notHiddenFor(identityId),
+        ),
+      );
+    await db
+      .update(conversationParticipants)
+      .set({ unreadCount: Number(n) || 0 })
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, conversationId),
+          eq(conversationParticipants.identityId, identityId),
+        ),
+      );
+  } catch (e) {
+    console.warn("[messages] unread recompute skipped:", (e as Error)?.message || "");
+  }
+}
+
 export async function listMessages(input: {
   conversationId: number;
   identityId: number;
@@ -3553,7 +3741,11 @@ export async function listMessages(input: {
   const limit = Math.min(input.limit ?? 50, 200);
   const baseWhere = and(
     eq(messages.conversationId, input.conversationId),
-    isNull(messages.deletedAt)
+    isNull(messages.deletedAt),
+    // "Delete for me" (v2.102.2). Bounded to one conversation's page of at most 200
+    // rows, so the anti-join is cheap here; the THREAD PREVIEW's groupwise-max is the
+    // query that needed care, and it keeps its fast path (see listThreads).
+    notHiddenFor(input.identityId)
   );
   const where = input.beforeId ? and(baseWhere, lt(messages.id, input.beforeId)) : baseWhere;
   const rows = await db
@@ -3603,6 +3795,8 @@ export async function searchMessages(input: {
       and(
         eq(messages.conversationId, input.conversationId),
         isNull(messages.deletedAt),
+      // A hidden message must not come back through search (v2.102.2).
+      notHiddenFor(input.identityId),
         like(messages.body, `%${escaped}%`)
       )
     )

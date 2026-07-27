@@ -20,6 +20,7 @@ import {
   Users,
   UserPlus,
   Trash2,
+  EyeOff,
   Reply,
   Bell,
   BellOff,
@@ -890,6 +891,34 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       utils.messages.threads.invalidate();
     },
   });
+  /**
+   * "Delete for me" (v2.102.2). Optimistic with snapshot-and-restore, the SAME shape
+   * unsend uses above — a hide that stayed on screen until the next poll would read as
+   * a control that did nothing, and a failed one must put the message back rather than
+   * silently vanishing something that still exists for everybody.
+   */
+  const hideMutation = trpc.messages.hide.useMutation({
+    onMutate: async ({ messageId }) => {
+      const input = { conversationId, limit: 100 } as const;
+      await utils.messages.list.cancel(input);
+      const prev = utils.messages.list.getData(input);
+      utils.messages.list.setData(input, (old) =>
+        old ? old.filter((m) => m.id !== messageId) : old
+      );
+      return { prev, input };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.prev) utils.messages.list.setData(context.input, context.prev);
+      toast.error("Couldn't delete that for you — it's still here.");
+    },
+    onSettled: () => {
+      utils.messages.list.invalidate({ conversationId });
+      // The thread list too: hiding the NEWEST message changes the preview and can
+      // change the unread badge, so refreshing only the open thread would leave the
+      // list describing a message this person can no longer see.
+      utils.messages.threads.invalidate();
+    },
+  });
   // "I'm typing" ping — throttled to at most once per 3s while actively typing.
   const typingMutation = trpc.messages.typing.useMutation();
   const lastTypingRef = useRef(0);
@@ -903,6 +932,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const typers = useTypers(conversationId).filter((id) => id !== me?.id);
   // Unsend confirmation via AlertDialog (v2.88 — native confirm() is gone).
   const [unsendId, setUnsendId] = useState<number | null>(null);
+  // "Delete for me" (v2.102.2) — its own confirmation, because it is a DIFFERENT
+  // operation from unsend and a shared dialog would have to describe both.
+  const [hidingId, setHidingId] = useState<number | null>(null);
   // v2.99.74 — message Info (sent/delivered/read) and Forward-to-another-thread.
   const [infoOf, setInfoOf] = useState<Msg | null>(null);
   const [forwarding, setForwarding] = useState<Msg | null>(null);
@@ -1667,6 +1699,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     } : undefined}
                     onForward={isExpiringMsg(m.meta) ? undefined : () => setForwarding(m)}
                     onInfo={() => setInfoOf(m)}
+                    onHide={() => setHidingId(m.id)}
                     onDelete={() => deleteMessage(m.id)}
                   />
                 )}
@@ -1928,6 +1961,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     } : undefined}
                     onForward={isExpiring ? undefined : () => setForwarding(m)}
                     onInfo={() => setInfoOf(m)}
+                    onHide={() => setHidingId(m.id)}
                   />
                   );
                 })()}
@@ -2306,6 +2340,32 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* "Delete for me" confirmation (v2.102.2). Its own dialog, and the copy's job is
+          to make the difference from Unsend unmistakable — "for everyone" vs "only for
+          you" is the whole distinction, and getting it wrong is not recoverable. */}
+      <AlertDialog open={hidingId !== null} onOpenChange={(open) => !open && setHidingId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this message for you?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It disappears from this conversation on all your devices. Everyone else keeps
+              it, and they aren't told. You can't get it back.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (hidingId !== null) hideMutation.mutate({ messageId: hidingId });
+                setHidingId(null);
+              }}
+            >
+              Delete for me
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Unsend confirmation (v2.88 — AlertDialog, not native confirm()). */}
       <AlertDialog open={unsendId !== null} onOpenChange={(open) => !open && setUnsendId(null)}>
         <AlertDialogContent>
@@ -2434,6 +2494,7 @@ function MessageMenu({
   onCopy,
   onForward,
   onInfo,
+  onHide,
   onDelete,
 }: {
   mine?: boolean;
@@ -2443,6 +2504,11 @@ function MessageMenu({
   onForward?: () => void;
   /** v2.99.74 — sent / delivered / read times for this message. */
   onInfo?: () => void;
+  /**
+   * v2.102.2 — hide it for me alone. Offered on anybody's message, because unlike
+   * `onDelete` (unsend) it changes nothing for the other people in the conversation.
+   */
+  onHide?: () => void;
   onDelete?: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -2511,6 +2577,19 @@ function MessageMenu({
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
               >
                 <Info className="size-4" /> Info
+              </button>
+            )}
+            {/* "Delete for me" (v2.102.2, owner #81) — offered on EVERY message,
+                including somebody else's, because it changes nothing for anybody but
+                the person tapping it. Unsend below is the other operation entirely and
+                stays ours-only. */}
+            {onHide && (
+              <button
+                type="button"
+                onClick={() => { onHide(); setOpen(false); }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+              >
+                <EyeOff className="size-4" /> Delete for me
               </button>
             )}
             {mine && onDelete && (

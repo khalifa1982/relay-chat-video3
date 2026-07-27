@@ -71,6 +71,7 @@ import {
   sessions,
   signaling,
   statusViews,
+  messageHides,
   statuses,
   users,
 } from "../drizzle/schema";
@@ -174,6 +175,17 @@ export const IDENTITY_REFERENCING_COLUMNS = [
       "A stored counter, so removing messages from a surviving group leaves other " +
       "members' badges too high. RECOMPUTED, never decremented — a decrement is not " +
       "idempotent and a retried sweep would drive it negative (the v2.99.74 lesson).",
+  },
+  {
+    table: "message_hides",
+    column: "identityId",
+    strategy: "cascade",
+    note:
+      "Which messages this person hid from their OWN view (v2.102.2). Purely theirs — " +
+      "it is visible to nobody else and describes a view that is about to stop " +
+      "existing — so it goes with them. Deleting it also cannot make anything MORE " +
+      "readable, unlike an attachments row: the rows it names are other people's " +
+      "messages, which are untouched either way.",
   },
   {
     table: "conversations",
@@ -474,6 +486,9 @@ async function cascade(identityId: number, number: string | null, userId: number
     await db.delete(statuses).where(inArray(statuses.id, ids));
   }
   await db.delete(statusViews).where(eq(statusViews.viewerId, identityId));
+  // Their own "delete for me" rows (v2.102.2) — purely theirs, visible to nobody
+  // else, and describing a view that is about to stop existing.
+  await db.delete(messageHides).where(eq(messageHides.identityId, identityId));
   await db.delete(contacts).where(eq(contacts.ownerId, identityId));
   await db.delete(partyLines).where(eq(partyLines.ownerIdentityId, identityId));
   await db

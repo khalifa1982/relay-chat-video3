@@ -89,6 +89,19 @@ describe("ensureSchemaExtensions — additive only (never destructive)", () => {
     SRC.indexOf("export async function listContacts")
   );
 
+  /**
+   * Comments stripped, so a destructive-SQL sweep cannot be satisfied — or tripped —
+   * by prose. Both are real failure modes: a comment quoting `DROP TABLE` to explain
+   * why the migrator never does it would hide nothing, and a comment naming the
+   * "delete for me" feature must not read as a DELETE statement.
+   */
+  const codeSql = (x: string) =>
+    x
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join("\n");
+
   it("contains an ensureSchemaExtensions function", () => {
     expect(fnBody.length).toBeGreaterThan(50);
   });
@@ -104,9 +117,28 @@ describe("ensureSchemaExtensions — additive only (never destructive)", () => {
       // would violate it, so boot is never blocked.
       expect(d, d).toMatch(/^ADD (COLUMN|(UNIQUE )?INDEX) /);
     }
-    expect(fnBody).not.toMatch(/\bDROP\b/i);
-    expect(fnBody).not.toMatch(/\bTRUNCATE\b/i);
-    expect(fnBody).not.toMatch(/\bDELETE\b/i);
+    // The whole-function sweep below used to be case-INSENSITIVE, which made it a
+    // guard against PROSE as well as SQL: v2.102.2's `message_hides` table is for the
+    // "delete for me" feature, so the comment naming it tripped /\bDELETE\b/i inside a
+    // function containing no DELETE statement at all. Scanning prose is a proxy for
+    // what this test actually cares about, and it produced a false positive on a
+    // correct migration.
+    //
+    // So the sweep is now case-SENSITIVE (SQL keywords in this file are written upper
+    // case — every DDL string above proves it) and matches the destructive STATEMENT
+    // forms rather than bare words. That is strictly tighter on what it exists to
+    // catch: `DELETE` alone could never distinguish a comment from a statement, while
+    // `DELETE FROM` cannot appear by accident.
+    expect(codeSql(fnBody)).not.toMatch(/\bDROP\s+(TABLE|COLUMN|INDEX|DATABASE)\b/);
+    expect(codeSql(fnBody)).not.toMatch(/\bTRUNCATE\b/);
+    expect(codeSql(fnBody)).not.toMatch(/\bDELETE\s+FROM\b/);
+    expect(codeSql(fnBody)).not.toMatch(/\bRENAME\b/);
+    // …and every CREATE is guarded, so a boot can never clobber an existing table.
+    // On STRIPPED sql, for the same reason as the sweep above — and this assertion
+    // proved it by failing on v2.102.0's comment "the CREATE TABLE never re-runs".
+    for (const c of [...codeSql(fnBody).matchAll(/CREATE TABLE[^`]*/g)].map((m) => m[0])) {
+      expect(c, c).toMatch(/^CREATE TABLE IF NOT EXISTS/);
+    }
   });
 
   it("swallows the duplicate-column AND duplicate-key errors so it's safe to run on every boot", () => {
