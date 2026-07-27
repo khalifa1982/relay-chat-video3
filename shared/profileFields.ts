@@ -112,12 +112,33 @@ export function sanitizeStatusOverride(input: unknown): StatusOverride {
   return input === "away" || input === "travel" ? input : "";
 }
 
-/** The effective status to DISPLAY, combining live presence with any override. */
+/**
+ * The effective status to DISPLAY, combining live presence with any override.
+ *
+ * `idle` (v2.99.92) means signed in but BACKGROUNDED — the owner's "idle": *"whenever
+ * you minimize the app, the user showing offline, not the idle."* It maps onto the
+ * SAME `away` the manual override already produces, deliberately: every surface in
+ * the app already knows how to render "away", so an automatic idle needs no new
+ * display vocabulary and cannot be handled inconsistently by one screen.
+ *
+ * A MANUAL override still wins. Somebody who set "travelling" stays travelling
+ * whether or not their app is in the foreground — they said so on purpose, and an
+ * automatic signal must not overwrite a deliberate one.
+ *
+ * `idle` DEFAULTS TO FALSE, and that default is the safety property: a caller that
+ * has not been taught about idle yet degrades to the pre-v2.99.92 reading (online),
+ * never to the wrong-way failure of showing somebody offline.
+ */
 export type EffectiveStatus = "online" | "offline" | "away" | "travel";
-export function effectiveStatus(isOnline: boolean, override: StatusOverride): EffectiveStatus {
+export function effectiveStatus(
+  isOnline: boolean,
+  override: StatusOverride,
+  idle = false
+): EffectiveStatus {
   if (override === "travel") return "travel";
   if (override === "away") return "away";
-  return isOnline ? "online" : "offline";
+  if (!isOnline) return "offline";
+  return idle ? "away" : "online";
 }
 
 /**

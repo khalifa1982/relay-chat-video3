@@ -118,12 +118,15 @@ describe("Messages.tsx — v2.71 iMessage-grade chat UI", () => {
     expect(SRC).toMatch(/typing…/);
   });
   it("presence LEDs: green online, GREY offline (list + conversation header)", () => {
-    // v2.88: offline LEDs standardized on var(--relay-offline) — red read as
-    // "busy/error", and amber now means "on a call" elsewhere in the app.
-    const offline = SRC.match(/bg-\[color:var\(--relay-offline\)\]/g) || [];
-    expect(offline.length).toBeGreaterThanOrEqual(2);
-    const online = SRC.match(/bg-\[color:var\(--relay-online\)\]/g) || [];
-    expect(online.length).toBeGreaterThanOrEqual(2);
+    // v2.99.92 moved both LEDs onto the SHARED `presenceDot` helper — see
+    // Contacts.test.ts for why. What matters here is that BOTH dots (the thread row
+    // and the conversation header) read the shared rule rather than one of them
+    // keeping an inline ternary, which is precisely how they would drift apart.
+    expect(SRC).toMatch(/import \{ presenceDot \} from "@\/app\/presenceDot"/);
+    const uses = SRC.match(/presenceDot\(\{ isOnline:/g) || [];
+    expect(uses.length).toBe(2);
+    expect(SRC).toMatch(/presenceDot\(\{ isOnline: t\.peerIsOnline, idle: t\.peerIdle \}\)/);
+    expect(SRC).toMatch(/presenceDot\(\{ isOnline: thread\?\.peerIsOnline, idle: thread\?\.peerIdle \}\)/);
   });
   it("the app top bar is hidden on mobile while a conversation is open", () => {
     expect(SRC).toMatch(/relay-convo-open/);

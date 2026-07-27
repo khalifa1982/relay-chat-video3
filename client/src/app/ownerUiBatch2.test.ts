@@ -210,10 +210,13 @@ describe("4 — the away auto-reply is opt-in", () => {
   });
 
   it("the send path checks the PEER's choice before anything else", () => {
-    const block = ROUTERS.slice(
-      ROUTERS.indexOf("// Offline auto-reply (1:1 only"),
-      ROUTERS.indexOf("// Offline auto-reply (1:1 only") + 1200
-    );
+    // Bounded by the block's OWN end rather than a fixed +1200 characters, which
+    // silently shrank as the comments above the presence read grew — the v2.99.78
+    // lesson, and it broke on v2.99.92's added explanation of why this one
+    // deliberately does NOT use the shared notification rule.
+    const blockAt = ROUTERS.indexOf("// Offline auto-reply (1:1 only");
+    const block = ROUTERS.slice(blockAt, ROUTERS.indexOf("\n      } catch {", blockAt));
+    expect(block.length).toBeGreaterThan(400);
     expect(block).toMatch(/peerIds\.length === 1 && \(await autoReplyEnabledFor\(peerIds\[0\]\)\)/);
     // The pref gate precedes the presence and dedupe reads.
     expect(block.indexOf("autoReplyEnabledFor")).toBeLessThan(block.indexOf("getPresenceForIds"));

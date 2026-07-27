@@ -1600,12 +1600,17 @@ export async function markOnline(
       identityId,
       isOnline: true,
       lastSeenAt: now,
+      // Coming to the FOREGROUND clears idle (v2.99.92). This is the only place
+      // that clears it on a return, and it is why `markIdle` can be a plain
+      // repeated beat: the transition back is owned by the ordinary heartbeat.
+      idleSince: null,
       socketSessionId,
     })
     .onDuplicateKeyUpdate({
       set: {
         isOnline: true,
         lastSeenAt: now,
+        idleSince: null,
         socketSessionId,
       },
     });
@@ -1622,11 +1627,55 @@ export async function markOffline(identityId: number) {
   const now = new Date();
   await db
     .insert(presence)
-    .values({ identityId, isOnline: false, lastSeenAt: now })
-    .onDuplicateKeyUpdate({ set: { isOnline: false, lastSeenAt: now } });
+    .values({ identityId, isOnline: false, lastSeenAt: now, idleSince: null })
+    // Offline SUPERSEDES idle, and clearing it here is not tidiness: `idle` is
+    // derived as `isOnline && idleSince != null`, so a leftover timestamp on an
+    // offline row is harmless today and a trap the moment anyone reads the column
+    // on its own.
+    .onDuplicateKeyUpdate({ set: { isOnline: false, lastSeenAt: now, idleSince: null } });
   // Unconditional here: unlike markOnline there is no cheap prior read telling us
   // whether this was already offline, and the feed coalesces pokes anyway.
   notifyPresenceChanged();
+}
+
+/**
+ * The app went to the BACKGROUND — still signed in and still reachable, but not
+ * being looked at (v2.99.92).
+ *
+ * Owner: *"whenever you minimize the app, the user showing offline, not the idle."*
+ * Minimising used to fire the go-offline beacon, so a person who switched apps for
+ * five seconds read as OFFLINE to every contact.
+ *
+ * `isOnline` STAYS TRUE, because it is what keeps the row out of the reaper's way
+ * and it is the truth: the SSE stream is open and a call still rings. `lastSeenAt`
+ * is refreshed on every beat for the same reason — otherwise a minimised app would
+ * decay to offline after two minutes, which is the bug rather than the fix.
+ *
+ * `idleSince` is set ONLY on the first beat (`COALESCE`), so it records when the
+ * person went away rather than when they last beat. That distinction is load-bearing
+ * for the offline-message email, whose whole rule-2 is "have they really been gone a
+ * while" — with a refreshing `lastSeenAt` there would be nothing left to ask.
+ *
+ * Deliberately does NOT poke the live-stats feed: an idle identity is still counted
+ * as online, so no headline number changes and a poke per background/foreground
+ * flip would be pure database load.
+ */
+export async function markIdle(identityId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const now = new Date();
+  await db
+    .insert(presence)
+    .values({ identityId, isOnline: true, lastSeenAt: now, idleSince: now })
+    .onDuplicateKeyUpdate({
+      set: {
+        isOnline: true,
+        lastSeenAt: now,
+        // Keep the FIRST idle moment. A bare `now` here would reset the clock on
+        // every beat and the person would never read as "away for a while".
+        idleSince: sql`COALESCE(${presence.idleSince}, ${now})`,
+      },
+    });
 }
 
 /**
@@ -1661,7 +1710,9 @@ export async function reapStalePresence(
   }
   await db
     .update(presence)
-    .set({ isOnline: false })
+    // `idleSince` is cleared with the flip (v2.99.92): the row is now offline, and
+    // an offline row that still carries an idle timestamp is a contradiction.
+    .set({ isOnline: false, idleSince: null })
     .where(and(eq(presence.isOnline, true), lt(presence.lastSeenAt, cutoff)));
   // L4/TOCTOU: a victim that HEARTBEAT back online between the SELECT above and
   // this UPDATE is NOT flipped by the UPDATE (its lastSeenAt is now fresh, so the
@@ -1992,8 +2043,38 @@ export async function releaseOfflineMessageEmailClaim(userId: number): Promise<v
 
 export interface PresenceLite {
   identityId: number;
+  /** Has a live session, foreground OR background. NOT "is looking at the app". */
   isOnline: boolean;
   lastSeenAt: Date | null;
+  /**
+   * Signed in but backgrounded (v2.99.92) — the "idle" the owner asked for.
+   *
+   * DERIVED here rather than exposing the raw `idleSince`, so no consumer can get
+   * the combination wrong: an offline row is never idle, whatever the column says.
+   */
+  idle: boolean;
+  /** When they went idle, for "how long have they really been away" questions. */
+  idleSince: Date | null;
+}
+
+/**
+ * Should a message to this person be pushed / emailed, rather than left for them to
+ * see in the open app? (v2.99.92)
+ *
+ * ONE RULE IN ONE PLACE. Before idle existed, three call sites each wrote
+ * `!presence.isOnline` inline — and with idle those three would silently STOP
+ * notifying a backgrounded app, which is the exact opposite of what the owner
+ * wants and would have made their complaint worse rather than better. A
+ * backgrounded app cannot draw an in-page toast, so it needs the OS notification
+ * every bit as much as a closed one does.
+ *
+ * An unknown identity (no row) counts as needing one: failing toward "tell them"
+ * loses a notification's worth of quiet, while failing the other way loses the
+ * message.
+ */
+export function presenceNeedsNotification(p: PresenceLite | undefined | null): boolean {
+  if (!p) return true;
+  return !p.isOnline || p.idle;
 }
 
 /** A guest's presence is fully suppressed once they've been inactive this long. */
@@ -2023,10 +2104,17 @@ export async function getPresenceForIds(ids: number[]): Promise<PresenceLite[]> 
   const rows = await db.select().from(presence).where(inArray(presence.identityId, ids));
   const byId = new Map<number, PresenceLite>();
   for (const r of rows) {
+    const idleSince = r.idleSince ?? null;
     byId.set(r.identityId, {
       identityId: r.identityId,
       isOnline: r.isOnline,
       lastSeenAt: r.lastSeenAt ?? null,
+      // THE ONE PLACE `idle` IS DERIVED (v2.99.92). Every presence read in the
+      // routers comes through this function, so putting the rule here reaches all
+      // of them at once — and an offline row can never come out idle, whatever
+      // stale timestamp the column happens to hold.
+      idle: r.isOnline && idleSince != null,
+      idleSince,
     });
   }
   return ids.map(
@@ -2035,6 +2123,8 @@ export async function getPresenceForIds(ids: number[]): Promise<PresenceLite[]> 
         identityId: id,
         isOnline: false,
         lastSeenAt: null,
+        idle: false,
+        idleSince: null,
       }
   );
 }
@@ -2094,6 +2184,10 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "messages", column: "readAt", ddl: "ADD COLUMN `readAt` timestamp NULL" },
     { table: "identities", column: "recoveryHash", ddl: "ADD COLUMN `recoveryHash` varchar(64)" },
     { table: "identities", column: "recoveryIssuedAt", ddl: "ADD COLUMN `recoveryIssuedAt` timestamp NULL" },
+    // v2.99.92 — the IDLE presence state. NULL means the app is in the foreground
+    // (or offline), which is exactly the reading every pre-release row needs, so
+    // this is a no-op until a client starts reporting it.
+    { table: "presence", column: "idleSince", ddl: "ADD COLUMN `idleSince` timestamp NULL" },
     // Native Android app push transport (v2.86).
     { table: "push_subscriptions", column: "kind", ddl: "ADD COLUMN `kind` varchar(10)" },
     // v2.99.49 — proof-of-possession for an endpoint re-bind.

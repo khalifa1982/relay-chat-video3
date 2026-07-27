@@ -179,6 +179,8 @@ export function PeerAvatar({
 /** Presence line for the profile popup. */
 function presenceLine(d: {
   isOnline: boolean;
+  /** Signed in but backgrounded (v2.99.92). */
+  idle?: boolean;
   inCall: boolean;
   lastSeenAt: string | Date | null;
   presenceHidden: boolean;
@@ -188,6 +190,9 @@ function presenceLine(d: {
   if (d.partyLine) return `Party line · ${d.memberCount} on the line`;
   if (d.presenceHidden) return "";
   if (d.inCall) return "On a call right now";
+  // Backgrounded reads as away, NOT as "Online now" and not as a last-seen a few
+  // seconds ago — which is what minimising used to produce (v2.99.92).
+  if (d.isOnline && d.idle) return "Away — app is in the background";
   if (d.isOnline) return "Online now";
   if (d.lastSeenAt) return `Last seen ${new Date(d.lastSeenAt).toLocaleString()}`;
   return "Offline";
@@ -360,7 +365,7 @@ export function PeerOverlaysHost() {
                   chat header can only fit a short "8h" style stamp, and the owner
                   asked for the date AND time to be readable somewhere. */}
               {(chatActions?.lastSeenText || presenceLine(p)) && (
-                <div className={"mt-1.5 text-xs " + (p.isOnline ? "text-[color:var(--relay-online,#06d6a0)]" : "text-muted-foreground")}>
+                <div className={"mt-1.5 text-xs " + (p.isOnline && !p.idle ? "text-[color:var(--relay-online,#06d6a0)]" : "text-muted-foreground")}>
                   {p.isOnline ? presenceLine(p) : (chatActions?.lastSeenText || presenceLine(p))}
                 </div>
               )}
@@ -509,7 +514,7 @@ export function PeerOverlaysHost() {
               {p.number.length === 6 ? `${p.number.slice(0, 3)}-${p.number.slice(3)}` : p.number}
             </div>
             {presenceLine(p) && (
-              <div className={"mt-2 text-sm " + (p.isOnline ? "text-[color:var(--relay-online,#06d6a0)]" : "text-muted-foreground")}>
+              <div className={"mt-2 text-sm " + (p.isOnline && !p.idle ? "text-[color:var(--relay-online,#06d6a0)]" : "text-muted-foreground")}>
                 {presenceLine(p)}
               </div>
             )}

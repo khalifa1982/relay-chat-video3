@@ -49,10 +49,37 @@ describe("v2.99.32 QA M12 — PresenceManager wiring", () => {
     expect(PRESENCE).toMatch(/touchTab\(id, tabId, Date\.now\(\)\)/);
   });
   it("onLeave only beacons when no other tab is alive; removes the slot on a real close", () => {
-    const fn = PRESENCE.slice(PRESENCE.indexOf("const onLeave ="), PRESENCE.indexOf("const onLeave =") + 700);
-    expect(fn).toMatch(/if \(closing\) removeTab\(id, tabId, now\)/);
+    const at = PRESENCE.indexOf("const onLeave =");
+    const fn = PRESENCE.slice(at, PRESENCE.indexOf("\n    };", at));
+    expect(fn.length).toBeGreaterThan(200);
+    // v2.99.92 dropped `onLeave`'s `closing` parameter: its only false caller was
+    // `visibilitychange → hidden`, which now marks IDLE instead of beaconing
+    // offline (owner: "whenever you minimize the app, the user showing offline, not
+    // the idle"), so the false branch had become unreachable. The M12 property is
+    // unchanged and is what this asserts — free the slot, then beacon only when no
+    // other tab of this identity is alive.
+    expect(fn).toMatch(/removeTab\(id, tabId, now\)/);
+    expect(fn).not.toMatch(/closing/);
     expect(fn).toMatch(/if \(otherTabsAlive\(id, tabId, now\)\) return;/);
     expect(fn).toMatch(/beaconOffline\(\)/);
+    // And hiding the tab must NOT reach this path any more.
+    // Bounded by onVisibility's OWN end, not a 700-char window: the wider window ran
+    // past it into `const onClose = () => onLeave();`, which legitimately calls it.
+    const visAt = PRESENCE.indexOf("const onVisibility =");
+    const visBody = PRESENCE.slice(visAt, PRESENCE.indexOf("\n    };", visAt));
+    expect(visBody.length).toBeGreaterThan(120);
+    expect(visBody).toMatch(/document\.visibilityState === "hidden"\) idleTick\(\)/);
+    // COMMENT LINES STRIPPED. Without this the assertion matched the comment that
+    // explains `onLeave(false)`'s removal — the sixth time in this repo that a
+    // `not.toMatch` has passed or failed on its own prose rather than on code.
+    const visCode = visBody
+      .split("\n")
+      .filter((l) => {
+        const t = l.trim();
+        return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
+      })
+      .join("\n");
+    expect(visCode).not.toMatch(/onLeave\(/);
   });
   it("frees the tab slot on unmount (cleanup)", () => {
     expect(PRESENCE).toMatch(/removeTab\(id, tabId, Date\.now\(\)\); \/\/ leaving/);
@@ -60,7 +87,11 @@ describe("v2.99.32 QA M12 — PresenceManager wiring", () => {
 });
 
 describe("v2.99.32 QA L4 — reaper returns only genuinely-flipped victims", () => {
-  const fn = V2DB.slice(V2DB.indexOf("export async function reapStalePresence("), V2DB.indexOf("export async function reapStalePresence(") + 1800);
+  // Bounded by the function's own end: a fixed +1800 characters shrank as
+  // v2.99.92's comments grew and cut the re-check clean out of the slice.
+  const reapAt = V2DB.indexOf("export async function reapStalePresence(");
+  const fn = V2DB.slice(reapAt, V2DB.indexOf("\n}", V2DB.indexOf("return victims;", reapAt)));
+  expect(fn.length).toBeGreaterThan(800);
   it("re-confirms isOnline=false after the UPDATE (excludes race-reconnected users)", () => {
     expect(fn).toMatch(/inArray\(presence\.identityId, ids\), eq\(presence\.isOnline, false\)/);
     expect(fn).toMatch(/return confirmed;/);

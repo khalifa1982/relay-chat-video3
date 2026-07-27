@@ -61,6 +61,8 @@ import {
   revealExpiringMessage,
   getPresenceAudienceIds,
   getPresenceForIds,
+  presenceNeedsNotification,
+  markIdle,
   isGuestPresenceHidden,
   listCallHistory,
   listConferenceHistory,
@@ -222,7 +224,18 @@ function messageWaitingText(opts: { appUrl: string | null; unsubscribeUrl?: stri
  * notification on its own.
  */
 function awayForMs(presence: PresenceLite | undefined): number | null {
-  if (!presence || presence.isOnline) return null;
+  if (!presence) return null;
+  // IDLE (v2.99.92): a backgrounded app keeps heartbeating — that is what stops it
+  // decaying to offline after two minutes — so `lastSeenAt` no longer answers "how
+  // long have they been away" and would report a few seconds forever. `idleSince`
+  // records when they went away rather than when they last beat, which is why it is
+  // a timestamp and not a flag.
+  if (presence.isOnline) {
+    if (!presence.idle || !presence.idleSince) return null;
+    const since = new Date(presence.idleSince).getTime();
+    if (!Number.isFinite(since)) return null;
+    return Math.max(0, Date.now() - since);
+  }
   const seen = presence.lastSeenAt ? new Date(presence.lastSeenAt).getTime() : NaN;
   if (!Number.isFinite(seen)) return null;
   return Math.max(0, Date.now() - seen);
@@ -1006,6 +1019,10 @@ export const v2DirectoryRouter = router({
         lastName: id.lastName,
         avatarUrl: id.avatarUrl,
         isOnline: hidden ? false : (pres?.isOnline ?? false),
+        // v2.99.92 — signed in but backgrounded. Emitted alongside `isOnline`, never
+        // instead of it, so an older client simply ignores it and keeps today's
+        // reading. Suppressed with everything else when presence is hidden.
+        idle: hidden ? false : (pres?.idle ?? false),
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
         statusOverride: hidden ? "" : ((id.statusOverride as "" | "away" | "travel" | null) ?? ""),
         presenceHidden: hidden,
@@ -1132,7 +1149,7 @@ export const v2DirectoryRouter = router({
           isOnline: p.isOnline,
           lastSeenAt: p.lastSeenAt,
         });
-        return hidden ? { ...p, isOnline: false, lastSeenAt: null } : p;
+        return hidden ? { ...p, isOnline: false, idle: false, lastSeenAt: null } : p;
       });
     }),
 
@@ -1168,6 +1185,7 @@ export const v2DirectoryRouter = router({
         return {
           number: i.number,
           isOnline: hidden ? false : (pres?.isOnline ?? false),
+          idle: hidden ? false : (pres?.idle ?? false),
           inCall: hidden ? false : inCallSet.has(i.number),
         };
       });
@@ -1251,6 +1269,26 @@ export const v2DirectoryRouter = router({
     return { ok: true, at: new Date() };
   }),
 
+  /**
+   * "I went to the background" — the idle beat (v2.99.92).
+   *
+   * Owner: *"whenever you minimize the app, the user showing offline, not the idle."*
+   * Minimising used to fire the go-offline beacon below, so switching apps for five
+   * seconds read as OFFLINE to every contact.
+   *
+   * Deliberately does NOT fan a presence SSE event. The person is still online as far
+   * as `isOnline` goes, so the boolean every SSE consumer reads has not changed —
+   * publishing `true` again would be a no-op that costs an audience query on every
+   * background/foreground flip, and publishing `false` would be the bug. Idle reaches
+   * the UI on the next ordinary presence read, which is the honest cadence for a
+   * signal that means "not looking right now".
+   */
+  markIdle: publicProcedure.mutation(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    await markIdle(me.id);
+    return { ok: true };
+  }),
+
   /** Explicit "I'm leaving" beacon. */
   goOffline: publicProcedure.mutation(async ({ ctx }) => {
     const me = requireIdentity(ctx);
@@ -1315,6 +1353,7 @@ export const v2ContactsRouter = router({
         blocked: r.blocked === true,
         identityId: ident ?? null,
         isOnline: hidden ? false : (pres?.isOnline ?? false),
+        idle: hidden ? false : (pres?.idle ?? false),
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
         presenceHidden: hidden,
         verified: ident != null ? (verifiedById.get(ident) ?? false) : false,
@@ -1432,6 +1471,7 @@ export const v2MessagesRouter = router({
         peerDisplayName: b.otherDisplayName,
         peerAvatarUrl: b.otherAvatarUrl,
         peerIsOnline: presenceHidden ? false : (p?.isOnline ?? false),
+        peerIdle: presenceHidden ? false : (p?.idle ?? false),
         peerLastSeenAt: presenceHidden ? null : (p?.lastSeenAt ?? null),
         peerVerified: verifiedById.get(b.otherIdentityId) ?? false,
         peerRole: (rolesById.get(b.otherIdentityId) ?? "guest") as IdentityRole,
@@ -1811,7 +1851,10 @@ export const v2MessagesRouter = router({
         if (peerIds.length > 0) {
           const presences = await getPresenceForIds(peerIds);
           for (const p of presences) presenceById.set(p.identityId, p);
-          offlinePeerIds = peerIds.filter((pid) => !presenceById.get(pid)?.isOnline);
+          // v2.99.92: a BACKGROUNDED app needs this push every bit as much as a
+          // closed one — it cannot draw an in-page toast. One shared rule, so the
+          // three sites that ask this question cannot drift apart.
+          offlinePeerIds = peerIds.filter((pid) => presenceNeedsNotification(presenceById.get(pid)));
           // A voicemail already pushed its own, better-worded notification.
           if (!input.meta?.voicemail) {
             const from = me.displayName || me.number;
@@ -1929,6 +1972,12 @@ export const v2MessagesRouter = router({
         if (peerIds.length === 1 && (await autoReplyEnabledFor(peerIds[0]))) {
           const peerId = peerIds[0];
           const [pres] = await getPresenceForIds([peerId]);
+          // DELIBERATELY NOT `presenceNeedsNotification` (v2.99.92). This one posts a
+          // line in somebody else's name saying they are away and will reply later —
+          // and a person who merely switched apps for ten seconds may reply
+          // immediately, which would make the auto-reply a lie. Genuinely offline is
+          // the right trigger here, and it is the same over-reaction to minimising
+          // that this release exists to remove, in message form.
           const offline = !pres?.isOnline;
           if (
             offline &&
@@ -3710,7 +3759,9 @@ export const v2StatusRouter = router({
       }
       try {
         const [pres] = await getPresenceForIds([st.identityId]);
-        if (!pres?.isOnline && (await pushReachable(st.identityId))) {
+        // Same shared rule as `messages.send` (v2.99.92): a backgrounded app cannot
+        // draw an in-page toast, so idle needs the OS notification too.
+        if (presenceNeedsNotification(pres) && (await pushReachable(st.identityId))) {
           // Content-free by the standing rule: the sender's name, never a word of
           // the reply. "Replied to your status" is a fact about the recipient's own
           // post and reveals nothing about what was said.

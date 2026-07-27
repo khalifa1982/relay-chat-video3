@@ -259,11 +259,25 @@ describe("a presence change pushes IMMEDIATELY, not on the next tick", () => {
     // the exact class of bug this codebase keeps re-learning.
     const db = fs.readFileSync(path.resolve(__dirname, "v2db.ts"), "utf8");
     const online = db.slice(db.indexOf("export async function markOnline"), db.indexOf("export async function markOffline"));
-    const offline = db.slice(db.indexOf("export async function markOffline"), db.indexOf("export async function markOffline") + 700);
+    // Bounded by markOffline's OWN end rather than a fixed +700 characters, which
+    // shrank as v2.99.92 explained why `idleSince` is cleared here — the recurring
+    // fixed-slice fragility (v2.99.78).
+    const offAt = db.indexOf("export async function markOffline");
+    const offline = db.slice(offAt, db.indexOf("\n}", offAt) + 2);
+    expect(offline.length).toBeGreaterThan(300);
     // A real transition notifies; a mere heartbeat from someone already online must
     // NOT, or every open tab costs a database read every 30s.
     expect(online).toMatch(/if \(!wasOnline\) notifyPresenceChanged\(\);/);
     expect(offline).toMatch(/notifyPresenceChanged\(\);/);
+    // markIdle (v2.99.92) deliberately does NOT poke: an idle identity is still
+    // counted as online, so no headline number moves, and a poke per
+    // background/foreground flip would be pure database load for a figure that
+    // did not change. Pinned so it is not "fixed" by symmetry with its neighbours.
+    const idleAt = db.indexOf("export async function markIdle");
+    expect(idleAt).toBeGreaterThan(-1);
+    const idleFn = db.slice(idleAt, db.indexOf("\n}", idleAt) + 2);
+    expect(idleFn.length).toBeGreaterThan(300);
+    expect(idleFn).not.toMatch(/notifyPresenceChanged/);
     // And the hook can never throw into a presence write.
     expect(db).toMatch(/function notifyPresenceChanged\(\): void \{\s*\n\s*try \{/);
   });

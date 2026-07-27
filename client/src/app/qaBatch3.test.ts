@@ -46,7 +46,9 @@ describe("v2.99.25 QA H4 — a stale registration flag can't misroute a login in
 
 describe("v2.99.25 QA H6 — the presence heartbeat never re-marks a hidden tab online", () => {
   it("the 30s tick skips the heartbeat when the document is hidden", () => {
-    const fn = PRESENCE.slice(PRESENCE.indexOf("const tick ="), PRESENCE.indexOf("const tick =") + 600);
+    const at = PRESENCE.indexOf("const tick =");
+    const fn = PRESENCE.slice(at, PRESENCE.indexOf("\n    };", at));
+    expect(fn.length).toBeGreaterThan(200);
     expect(fn).toMatch(/document\.visibilityState === "hidden"\) return;/);
     // the hidden-guard must precede the heartbeat call inside tick
     const guardAt = fn.indexOf('visibilityState === "hidden"');

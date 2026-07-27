@@ -42,11 +42,16 @@ describe("Contacts — rich rows + inline actions", () => {
 
   it("shows the PIN (formatted), presence LED, and verified badge", () => {
     expect(PAGE).toMatch(/c\.number\.slice\(0, 3\) \+ "-" \+ c\.number\.slice\(3\)/);
-    // v2.88: LED is amber "on a call" / green online / grey offline
-    // (var(--relay-offline) — red used to read as busy/error).
-    expect(PAGE).toMatch(/c\.inCall\s*\?\s*"bg-amber-400"/);
-    expect(PAGE).toMatch(/bg-\[color:var\(--relay-online\)\]/);
-    expect(PAGE).toMatch(/bg-\[color:var\(--relay-offline\)\]/);
+    // v2.99.92 moved the LED's rule into the SHARED `presenceDot` helper, because a
+    // third state (idle) meant eight separate dots across four screens each had to
+    // learn it — and that is how two surfaces end up disagreeing about the same
+    // person (v2.99.77 was exactly that bug). So this no longer pins Contacts' own
+    // inline ternary; it pins that Contacts reads the shared rule, and the COLOURS
+    // are pinned once, in the helper's own test.
+    expect(PAGE).toMatch(/import \{ presenceDot \} from "@\/app\/presenceDot"/);
+    expect(PAGE).toMatch(/const dot = presenceDot\(c\);/);
+    expect(PAGE).toMatch(/style=\{\{ background: dot\.color, boxShadow: dot\.glow \|\| undefined \}\}/);
+    expect(PAGE).toMatch(/aria-label=\{dot\.label\}/);
     // v2.99.6: the verified-only badge became the three-tier RoleBadge
     // (Guest/Registered/Admin) rendered for EVERY contact.
     expect(PAGE).toMatch(/<RoleBadge role=\{roleFromFlags\(c\.role, c\.verified\)\}/);

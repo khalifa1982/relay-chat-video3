@@ -7557,6 +7557,103 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.92 — minimising the app is IDLE, not offline (2026-07-27)
+- [x] **OWNER**: *"Whenever you minimize the app, the user showing offline, not the idle."* `PresenceManager`
+      fired the go-offline BEACON on `visibilitychange → hidden` as well as on `pagehide`, so switching apps for
+      five seconds told every contact you had left. Now: **hidden → idle** (a slow 60s beat), **visible → the
+      ordinary heartbeat, which clears idle in the same write**, **pagehide/beforeunload → the offline beacon,
+      exactly as before**.
+- [x] **THE HARD PART WAS NOT THE THIRD STATE — IT IS THAT `isOnline` ANSWERED TWO DIFFERENT QUESTIONS.** "What
+      LED do I draw?" and "should I push, because they cannot see this in the open app?" were the same boolean.
+      So keeping `isOnline` true while backgrounded would have **SILENTLY STOPPED NOTIFYING A MINIMISED APP** —
+      making the owner's complaint worse, in a way nothing on screen would ever show. New shared
+      `presenceNeedsNotification` (`!isOnline || idle`) is used at every site that asks the second question,
+      it FAILS TOWARD telling somebody (an unknown identity counts as needing one, because failing the other
+      way loses the message rather than a moment's quiet), and a test enumerates the call sites so a fourth
+      added later has to come through it.
+- [x] **THE AUTO-REPLY DELIBERATELY DOES NOT USE THAT RULE, and the difference is the point**: it posts a line
+      in somebody else's name saying they are away and will reply later, and a person who switched apps for ten
+      seconds may reply immediately — firing it on idle would make the auto-reply a lie, which is the same
+      over-reaction to minimising this release exists to remove, in message form. Pinned as a deliberate
+      exception rather than left to look like an oversight.
+- [x] **ONE NEW NULLABLE COLUMN, `presence.idleSince`, and NULL is exactly the reading every existing row
+      needs** — so the additive migration is a no-op until a client starts reporting idle. It is a TIMESTAMP
+      rather than a flag because the offline-message email's rule 2 asks "have they really been away a while",
+      and `lastSeenAt` can no longer answer that: a backgrounded app keeps beating, which is precisely what
+      stops it decaying to offline after two minutes. `awayForMs` now measures from `idleSince` while idle and
+      falls back to `lastSeenAt` for a genuinely offline person.
+- [x] **`markIdle` KEEPS `isOnline` TRUE — and that is the truth, not a convenience**: the SSE stream is open
+      and a call still rings, so the person really is reachable. It records the FIRST idle moment via
+      `COALESCE`, because a bare `now` would reset the clock on every beat and nobody would ever read as away
+      for a while. `markOnline` and `markOffline` both clear `idleSince`, and so does the reaper — an offline
+      row carrying an idle timestamp is a contradiction, harmless today and a trap the moment anyone reads the
+      column alone.
+- [x] **`markIdle` IS A SEPARATE ENDPOINT FROM `heartbeat`, NOT A FLAG ON IT.** `heartbeat` calls `markOnline`,
+      which clears idle AND can fire the "X is back online" watcher push — reusing it while hidden is exactly
+      the bug v2.99.25/H6 fixed, and an idle beat built on it would have reintroduced it. It also fans NO
+      presence SSE event: `isOnline` has not changed, so publishing `true` again is a no-op costing an audience
+      query per app switch, and publishing `false` would be the bug.
+- [x] **`idle` IS DERIVED IN EXACTLY ONE PLACE.** Every presence read in the routers already funnelled through
+      `getPresenceForIds`, so `idle: r.isOnline && idleSince != null` there reaches all of them at once — and no
+      consumer can combine the two fields wrongly, because none of them sees the raw pair. Guest-privacy
+      suppression covers idle too: a hidden presence must not leak "away" while withholding everything else.
+- [x] **IT MAPS ONTO THE `away` THE APP ALREADY HAS**, rather than inventing a display state: every surface
+      already knows how to render away, so an automatic idle cannot be handled inconsistently by one screen. A
+      MANUAL override still wins — somebody who set "travelling" said so on purpose, and an automatic signal
+      must not overwrite a deliberate one. `idle` DEFAULTS TO FALSE in `effectiveStatus`, and that default is the
+      safety property: a caller not yet taught about it degrades to the old reading (online), never to the
+      wrong-way failure of showing somebody offline.
+- [x] **AN AUTOMATIC IDLE IS NOT LABELLED AS A CHOSEN STATUS.** The dialer's status chip now reads the
+      OVERRIDE directly instead of the resolved status, because both resolve to `away` and reading the chip off
+      the resolution would put a label in somebody's mouth that they never selected. The presence LINE says
+      "away"; the chip stays empty. (A manual "Away" also now reads "away" on that line rather than "online
+      now", which was the line contradicting the chip.)
+- [x] **ONE LED RULE FOR EVERY DOT** (new `client/src/app/presenceDot.ts`). A third state meant eight separate
+      dots across Contacts, the Messages thread list, the chat header and the profile popup each had to learn
+      it — and eight copies is exactly how two surfaces end up disagreeing about the same person (v2.99.77 was
+      that bug: one rule applied in four places and forgotten in a fifth). **THE COLOUR VOCABULARY IS NOT
+      WIDENED**: idle is the online green FADED with no glow, not a new hue, because amber already means "on a
+      call" here and "Do Not Disturb" in the top bar and a third meaning would make colour stop carrying
+      information; the glow is what makes green read as "active right now", so idle loses it, and the LABEL is
+      what says it unambiguously — which is also what a screen reader and a colour-blind reader get.
+- [x] **`onLeave`'s DEAD BRANCH DELETED**: its `closing` parameter had exactly one false caller,
+      `visibilitychange → hidden`, which now marks idle — so the branch was unreachable, and an unreachable
+      branch in a presence path is how the wrong one gets taken later.
+- [x] **THE COST, STATED RATHER THAN HIDDEN**: on mobile Safari a real tab CLOSE often fires only
+      `visibilitychange`, so such a close now reads "away" for up to two minutes instead of going offline at
+      once. That is the trade — a wrong "offline" every time somebody checks another app, against a slightly
+      late "offline" when they close one browser tab. The 2-minute reaper still converges it. An idle identity
+      also still counts in the landing page's "online now", which makes that figure MORE stable than before,
+      since minimising no longer decrements it.
+- [x] `server/presenceIdle.test.ts` (30), with the shared rule, `effectiveStatus` and the LED tested
+      BEHAVIOURALLY — a source pin cannot tell you whether a backgrounded app still gets its push, and that is
+      the whole risk. **All 28 tripwires verified by MUTATION** from byte-exact backups and a confirmed-GREEN
+      baseline.
+- [x] **TWO WEAKNESSES OF MY OWN CAUGHT BY THAT RUN and fixed rather than counted as passes, both the same
+      class**: the markIdle assertions matched `isOnline: true` and `lastSeenAt: now` ANYWHERE in the function,
+      and since it is an upsert each string occurs twice — so breaking the UPDATE path left the test green, and
+      the UPDATE is the worse half, the one that keeps a minimised app out of the reaper's way. Now COUNTED,
+      with the insert and the update asserted separately. **A BAD MUTATION OF MY OWN, reported rather than
+      hidden**: the markOnline case inserted a COMMENT line, which changes no behaviour at all — the test was
+      right and the mutation meaningless; replaced with one that drops `idleSince: null` from the UPDATE.
+- [x] **NINE PRE-EXISTING PINS REWRITTEN**, and six of them for the SAME structural reason rather than because
+      the property changed: `ownerUiBatch2`, `qaBatch3`, `qaBatch10` (×2), `statsFeed` and `presenceReaper` all
+      sliced a FIXED number of characters from an anchor, and this release's added comments pushed the code they
+      were reading out of the window — the recurring fixed-slice fragility (v2.99.78). All now bound by the
+      function's own end with a non-empty assertion. The other three were genuine intent changes: `statusReply`,
+      `roundsGaps` and `emailNotifyPrefs` pinned the bare `!isOnline` notification check, i.e. they would have
+      pinned the silent regression; `qaBatch10` also froze `onLeave`'s deleted parameter; and the Contacts /
+      Messages / messagesRowRedesign LED pins froze inline ternaries that moved into the shared helper.
+- [x] **AND THE PROSE TRAP FOR THE SEVENTH TIME**: a `not.toMatch(/onLeave\(/)` matched MY OWN COMMENT
+      explaining `onLeave(false)`'s removal, because `codeOnly` strips comment LINES and the phrase sat
+      mid-line. Fixed by stripping comments — and the wider window it used also ran past `onVisibility` into
+      `const onClose = () => onLeave()`, which legitimately calls it, so it is bounded to its own function now.
+- [x] **NOT VERIFIED ON A DEVICE, said plainly**: the state machine is tested, but nobody has watched a real
+      phone minimise and seen a contact's dot go from green to faded green. The client half rests on
+      `visibilitychange` firing as specified, which is exactly where mobile Safari is inconsistent — hence the
+      cost stated above.
+- [x] One additive nullable column, no new dependency, no new env var. 2688 tests.
+
 ## v2.99.91 — why a notification did not arrive (2026-07-27)
 - [x] **OWNER**: *"Can you check the Firebase configuration as still the notification for the front mobile apps
       for Android? It's not showing or it's not active."* **A NATIVE PUSH CROSSES FIVE LINKS AND EVERY ONE OF

@@ -216,9 +216,15 @@ describe("status.reply — the guards, in order", () => {
     expect(codeOnly(PROC)).not.toMatch(/kind: "status-reply"|kind: "reaction"/);
   });
 
-  it("pushes only when the owner is OFFLINE and reachable", () => {
+  it("pushes only when they cannot see it in the open app, and are reachable", () => {
     expect(PROC).toMatch(/getPresenceForIds\(\[st\.identityId\]\)/);
-    expect(PROC).toMatch(/!pres\?\.isOnline && \(await pushReachable\(st\.identityId\)\)/);
+    // v2.99.92 widened this from `!pres?.isOnline` to the SHARED rule. A
+    // BACKGROUNDED app is now `isOnline` — that is what stopped minimising reading
+    // as offline — but it still cannot draw an in-page toast, so it needs the OS
+    // notification exactly as a closed app does. Pinning the old expression would
+    // have pinned a silent regression: replies to a status would stop notifying
+    // anyone whose app was merely minimised.
+    expect(PROC).toMatch(/presenceNeedsNotification\(pres\) && \(await pushReachable\(st\.identityId\)\)/);
   });
 
   it("the push body names no content", () => {

@@ -44,7 +44,7 @@ describe("reapStalePresence returns the reaped identities (v2.99.3)", () => {
     expect(fnBody).toMatch(/if \(!db\) return \[\];/);
   });
   it("still flips the stale rows offline", () => {
-    expect(fnBody).toMatch(/\.update\(presence\)\s*\.set\(\{\s*isOnline:\s*false\s*\}\)/);
+    expect(fnBody).toMatch(/\.update\(presence\)[\s\S]{0,240}?\.set\(\{ isOnline: false, idleSince: null \}\)/);
   });
 });
 
