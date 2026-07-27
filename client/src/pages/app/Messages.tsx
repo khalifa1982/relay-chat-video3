@@ -57,6 +57,7 @@ import { StatusStrip } from "./Status";
 import { PeerAvatar, openPeerProfile, type PeerProfileChatActions } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
 import { matchQuery } from "@/app/searchMatch";
+import { describeProfileStatus } from "@shared/profileStatus";
 import { suggestContacts, digitsOf, isNumberQuery } from "@/app/contactSuggest";
 import { formatLastSeen } from "@shared/profileFields";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
@@ -256,7 +257,11 @@ export default function MessagesPage() {
     // previously findable only if the query happened to appear in the composed peer
     // name, so searching a group by its own title matched nothing.
     const list = threadSearch.trim()
-      ? all.filter((t) => matchQuery(threadSearch, [t.peerDisplayName, t.peerNumber, t.title]))
+      ? all.filter((t) =>
+          // v2.102.0: a group is findable by its OWN 6-digit id too, not only its
+          // title — which is the point of giving it one.
+          matchQuery(threadSearch, [t.peerDisplayName, t.peerNumber, t.title, t.groupNumber]),
+        )
       : all;
     const meId = me?.id;
     const isNotes = (t: (typeof list)[number]) =>
@@ -449,10 +454,12 @@ export default function MessagesPage() {
                         const muted = isThreadMuted(t.conversationId);
                         const unread = t.unreadCount > 0;
                         const tier = isDm ? roleFromFlags(t.peerRole, t.peerVerified) : null;
-                        // NNN-NNN — 1:1 only (a group has no number; notes-to-self is me).
+                        // NNN-NNN. A GROUP now has its own id too (v2.102.0), so this is
+                        // no longer 1:1-only; notes-to-self stays blank because that is me.
+                        const ownNumber = isGroup ? t.groupNumber : isDm ? t.peerNumber : null;
                         const pin =
-                          isDm && t.peerNumber && /^\d{6}$/.test(t.peerNumber)
-                            ? `${t.peerNumber.slice(0, 3)}-${t.peerNumber.slice(3)}`
+                          ownNumber && /^\d{6}$/.test(ownNumber)
+                            ? `${ownNumber.slice(0, 3)}-${ownNumber.slice(3)}`
                             : null;
                         const preview = t.lastMessageAt
                           ? previewOf(t.lastMessageKind ?? "text", t.lastMessageBody)
@@ -472,13 +479,27 @@ export default function MessagesPage() {
                                 not PeerAvatar adds its ~5px ring. */}
                             <div className="grid size-16 shrink-0 place-items-center">
                               {isGroup ? (
-                                <div
-                                  className="grid size-[60px] place-items-center rounded-full"
-                                  style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
-                                  aria-label="Group conversation"
-                                >
-                                  <Users className="size-7" />
-                                </div>
+                                t.groupAvatarUrl ? (
+                                  // The group's own photo (v2.102.0). A broken URL must
+                                  // degrade to the glyph below, never to the browser's
+                                  // broken-image icon — the same rule PeerAvatar follows.
+                                  <img
+                                    src={t.groupAvatarUrl}
+                                    alt={displayName}
+                                    className="size-[60px] rounded-full border border-border/60 bg-muted/40 object-cover"
+                                    onError={(e) => {
+                                      (e.currentTarget as HTMLImageElement).style.display = "none";
+                                    }}
+                                  />
+                                ) : (
+                                  <div
+                                    className="grid size-[60px] place-items-center rounded-full"
+                                    style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
+                                    aria-label="Group conversation"
+                                  >
+                                    <Users className="size-7" />
+                                  </div>
+                                )
                               ) : isNotes ? (
                                 <div
                                   className="grid size-[60px] place-items-center rounded-full"
@@ -645,6 +666,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   );
 
   const isGroup = thread?.kind === "group";
+  // The group's status as ONE string, from the shared formatter — so the header and
+  // any later surface cannot phrase the same status differently (v2.101.1).
+  const groupStatusText = isGroup
+    ? describeProfileStatus(thread?.groupStatus, thread?.groupStatusNote)
+    : null;
   const [muted, setMuted] = useThreadMuted(conversationId);
   // For groups, fetch the roster so we can label messages with sender names.
   const infoQuery = trpc.messages.conversationInfo.useQuery(
@@ -1377,8 +1403,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           }}
         >
           <div className="font-semibold text-[15px] truncate flex items-center gap-1.5">
-            <span className="truncate">{thread?.peerDisplayName || thread?.peerNumber || "Conversation"}</span>
-            {thread && <RoleBadge role={roleFromFlags(thread.peerRole, thread.peerVerified)} size={15} />}
+            <span className="truncate">
+              {isGroup
+                ? thread?.title || thread?.peerDisplayName || "Group"
+                : thread?.peerDisplayName || thread?.peerNumber || "Conversation"}
+            </span>
+            {/* A group has no tier — the badge describes a person's account. */}
+            {thread && !isGroup && (
+              <RoleBadge role={roleFromFlags(thread.peerRole, thread.peerVerified)} size={15} />
+            )}
           </div>
           <div className="text-[11px] truncate flex items-center gap-1.5">
             {/* v2.99.10 (owner): show the peer's PIN next to the name area on
@@ -1388,7 +1421,21 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 {thread.peerNumber.slice(0, 3)}-{thread.peerNumber.slice(3)}
               </span>
             )}
-            {!isGroup && thread?.peerNumber && <span className="text-muted-foreground/40">·</span>}
+            {/* The GROUP's own 6-digit id (v2.102.0), in the same place a person's
+                sits — so the two read as the same kind of fact. dir="ltr" so an RTL
+                locale cannot reorder the digits. */}
+            {isGroup && thread?.groupNumber && /^\d{6}$/.test(thread.groupNumber) && (
+              <span className="font-mono text-muted-foreground" dir="ltr">
+                {thread.groupNumber.slice(0, 3)}-{thread.groupNumber.slice(3)}
+              </span>
+            )}
+            {/* The group's status label, from the SAME vocabulary a person's uses. */}
+            {isGroup && groupStatusText && (
+              <span className="truncate text-muted-foreground">{groupStatusText}</span>
+            )}
+            {((!isGroup && thread?.peerNumber) || (isGroup && thread?.groupNumber)) && (
+              <span className="text-muted-foreground/40">·</span>
+            )}
             {typers.length > 0 ? (
               <span className="text-[color:var(--relay-online)] font-medium animate-pulse">typing…</span>
             ) : isGroup ? (

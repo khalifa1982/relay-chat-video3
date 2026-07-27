@@ -34,8 +34,11 @@ describe("PIN shows on every 1:1 username surface (v2.99.10)", () => {
     const m = read("client/src/pages/app/Messages.tsx");
     // v2.99.37: the row derives a formatted `pin` (1:1 only) up front and renders
     // it on the second line, instead of inlining the guard in JSX.
-    expect(m).toMatch(/isDm && t\.peerNumber && \/\^\\d\{6\}\$\/\.test\(t\.peerNumber\)/);
-    expect(m).toMatch(/\$\{t\.peerNumber\.slice\(0, 3\)\}-\$\{t\.peerNumber\.slice\(3\)\}/);
+    // v2.102.0: a GROUP has its own 6-digit id too, so the row derives `ownNumber`
+    // — the number of whatever the row is ABOUT — rather than the peer's only.
+    // Notes-to-self still shows none, because that is me.
+    expect(m).toMatch(/const ownNumber = isGroup \? t\.groupNumber : isDm \? t\.peerNumber : null;/);
+    expect(m).toMatch(/\$\{ownNumber\.slice\(0, 3\)\}-\$\{ownNumber\.slice\(3\)\}/);
   });
   it("Contacts rows already render name + badge + formatted PIN", () => {
     const c = read("client/src/pages/app/Contacts.tsx");

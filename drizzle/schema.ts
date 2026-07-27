@@ -378,11 +378,38 @@ export const conversations = mysqlTable(
     pairKey: varchar("pairKey", { length: 64 }),
     kind: mysqlEnum("kind", ["dm", "group"]).notNull().default("dm"),
     title: varchar("title", { length: 128 }),
+    /**
+     * THE GROUP'S OWN 6-DIGIT ID (v2.102.0, owner: a group should have a 6-digit
+     * group ID, an avatar and a status of its own).
+     *
+     * From the SAME space as identities and party lines, and allocated through the
+     * SAME `allocateSharedNumber` — a parallel allocator is exactly the cross-table
+     * collision v2.99.30 closed. NULL for every DM and for every group created
+     * before this release, which is why the migration is additive.
+     *
+     * Declared "not-a-person" in NUMBER_BEARING_COLUMNS: a member renumbering must
+     * never move the group's id, the same rule a party line already has.
+     */
+    number: varchar("number", { length: 6 }),
+    /** Group photo. Uploaded through the same `?bare=1&avatar=1` path identities
+     *  use, or `authorizeStorageKey` cannot classify the key (v2.99.2). */
+    avatarUrl: text("avatarUrl"),
+    /** The group's status label + note, from the SAME vocabulary a person's uses
+     *  (shared/profileStatus.ts) rather than a second one. No presence is derived
+     *  from it — a group has no presence, so there is nothing to derive. */
+    profileStatus: varchar("profileStatus", { length: 16 }),
+    statusNote: varchar("statusNote", { length: 140 }),
+    /** Who created it. Nullable: every pre-release group has no recorded creator,
+     *  and the purge cascade must treat that as "no owner" rather than guessing. */
+    ownerIdentityId: int("ownerIdentityId"),
     lastMessageAt: timestamp("lastMessageAt").defaultNow().notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
     pairKeyIdx: uniqueIndex("conversations_pairKey_unique").on(t.pairKey),
+    // UNIQUE, like both other number tables: two groups sharing an id would make
+    // the id useless for the one thing it exists for.
+    numberIdx: uniqueIndex("conversations_number_unique").on(t.number),
     lastMessageIdx: index("conversations_lastMessage_idx").on(t.lastMessageAt),
   }),
 );

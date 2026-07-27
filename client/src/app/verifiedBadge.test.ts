@@ -50,7 +50,12 @@ describe("role badge is wired into every primary identity surface", () => {
     ["client/src/pages/app/Contacts.tsx", /<RoleBadge role=\{roleFromFlags\(c\.role, c\.verified\)\}/],
     // v2.99.37: the redesigned thread row computes the tier first, then renders a
     // caption-less mark beside the name (a stacked caption clipped a row before).
-    ["client/src/pages/app/Messages.tsx", /const tier = isDm \? roleFromFlags\(t\.peerRole, t\.peerVerified\) : null;[\s\S]{0,6500}<RoleBadge role=\{tier\} size=\{16\} caption=\{false\}/],
+    // The fixed 6500-char window went stale when v2.102.0 added the group-avatar
+    // branch between the two anchors — the recurring fixed-slice fragility. Both
+    // halves are asserted independently instead, which is what the test is about:
+    // the tier comes from the payload with a verified fallback, and it is RENDERED.
+    ["client/src/pages/app/Messages.tsx", /const tier = isDm \? roleFromFlags\(t\.peerRole, t\.peerVerified\) : null;/],
+    ["client/src/pages/app/Messages.tsx", /<RoleBadge role=\{tier\} size=\{16\} caption=\{false\}/],
     // v2.99.36: the Dialer preview computes the tier first (`tier`) and renders a
     // CAPTION-LESS mark with the tier word inline, because the stacked caption
     // overflowed the one-line row and collided with the keypad.

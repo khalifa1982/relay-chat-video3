@@ -148,6 +148,20 @@ async function numberTaken(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, c
     // party_lines may not exist yet on a first boot before the migrator ran —
     // treat as free (identical to pre-v2.89 behavior).
   }
+  // v2.102.0 — GROUPS are the THIRD table in this space. Missing this check is
+  // exactly the cross-table collision v2.99.30 closed: two allocations targeting
+  // different tables both pass, both insert, and one id permanently shadows the
+  // other. Wrapped like the party-line check so a pre-migrator boot reads free.
+  try {
+    const group = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(eq(conversations.number, candidate))
+      .limit(1);
+    if (group.length > 0) return true;
+  } catch {
+    /* the column may not exist yet on a first boot */
+  }
   return false;
 }
 
@@ -1349,6 +1363,15 @@ export const NUMBER_BEARING_COLUMNS = [
       "unchanged (a line is not a person).",
   },
   {
+    table: "conversations",
+    column: "number",
+    strategy: "not-a-person",
+    note:
+      "A GROUP's own 6-digit id (v2.102.0). From the shared space, allocated through " +
+      "allocateSharedNumber like the other two, and never moved by a MEMBER renumbering " +
+      "— the id belongs to the group, not to whoever created it.",
+  },
+  {
     table: "party_lines",
     column: "number",
     strategy: "not-a-person",
@@ -2290,6 +2313,14 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // is what every existing row means, so this is a no-op until somebody picks one.
     { table: "identities", column: "profileStatus", ddl: "ADD COLUMN `profileStatus` varchar(16)" },
     { table: "identities", column: "statusNote", ddl: "ADD COLUMN `statusNote` varchar(140)" },
+    // v2.102.0 — a group's own identity: a 6-digit id from the shared space, a photo,
+    // a status from the SAME vocabulary a person's uses, and its creator. All
+    // nullable, so every DM and every pre-release group simply has none.
+    { table: "conversations", column: "number", ddl: "ADD COLUMN `number` varchar(6)" },
+    { table: "conversations", column: "avatarUrl", ddl: "ADD COLUMN `avatarUrl` text" },
+    { table: "conversations", column: "profileStatus", ddl: "ADD COLUMN `profileStatus` varchar(16)" },
+    { table: "conversations", column: "statusNote", ddl: "ADD COLUMN `statusNote` varchar(140)" },
+    { table: "conversations", column: "ownerIdentityId", ddl: "ADD COLUMN `ownerIdentityId` int" },
     // v2.99.92 — the IDLE presence state. NULL means the app is in the foreground
     // (or offline), which is exactly the reading every pre-release row needs, so
     // this is a no-op until a client starts reporting it.
@@ -2382,6 +2413,12 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // 2^256 collision, and a UNIQUE index here would instead mean that a future
     // backfill bug takes the whole ALTER (and therefore the index) down with it.
     { table: "identities", column: "identities_recoveryHash_idx", ddl: "ADD INDEX `identities_recoveryHash_idx` (`recoveryHash`)" },
+    // v2.102.0 — a group's id must be UNIQUE like both other number tables, or the
+    // id is useless for the one thing it exists for. `conversations` already exists
+    // on every deployment, so the CREATE TABLE never re-runs and the index has to be
+    // added here. A UNIQUE index tolerates repeated NULLs in MySQL, so every DM and
+    // every pre-release group is unaffected.
+    { table: "conversations", column: "conversations_number_unique", ddl: "ADD UNIQUE INDEX `conversations_number_unique` (`number`)" },
   ];
   for (const a of adds) {
     try {
@@ -3093,27 +3130,112 @@ export async function createGroupConversation(input: {
   if (!db) throw new Error("database unavailable");
   // De-dupe + always include the creator.
   const ids = Array.from(new Set([input.creatorId, ...input.memberIds]));
+  // The group's own 6-digit id (v2.102.0), reserved BEFORE the transaction so the
+  // ledger claim is settled by the time the row lands. A failure past this point
+  // releases it — `releaseUnusedNumberReservation` re-checks the number is absent
+  // from all THREE number tables, so it can never un-reserve a bound one.
+  let number: string | null = null;
+  try {
+    number = await allocateGroupNumber();
+  } catch {
+    // A group without an id is worse than no group only if the id were load-bearing
+    // for reaching it; it is not (a group is reached through its thread), so an
+    // exhausted allocator degrades to a group with no id rather than a failed create.
+    number = null;
+  }
   // Both inserts in ONE transaction so a failed participant insert never leaves
   // an orphaned conversation row behind.
-  return await db.transaction(async (tx) => {
-    const res = await tx.insert(conversations).values({
-      pairKey: null,
-      kind: "group",
-      title: input.title.slice(0, 128),
+  try {
+    return await db.transaction(async (tx) => {
+      const res = await tx.insert(conversations).values({
+        pairKey: null,
+        kind: "group",
+        title: input.title.slice(0, 128),
+        number,
+        ownerIdentityId: input.creatorId,
+      });
+      // mysql2 returns the new row id as insertId on the result header.
+      const insertId = Number(res[0].insertId);
+      if (!insertId) throw new Error("group conversation insert failed");
+      await tx.insert(conversationParticipants).values(
+        ids.map((identityId) => ({ conversationId: insertId, identityId }))
+      );
+      const [row] = await tx
+        .select()
+        .from(conversations)
+        .where(eq(conversations.id, insertId))
+        .limit(1);
+      return row;
     });
-    // mysql2 returns the new row id as insertId on the result header.
-    const insertId = Number(res[0].insertId);
-    if (!insertId) throw new Error("group conversation insert failed");
-    await tx.insert(conversationParticipants).values(
-      ids.map((identityId) => ({ conversationId: insertId, identityId }))
-    );
-    const [row] = await tx
-      .select()
+  } catch (e) {
+    // The row never landed, so the reservation is genuinely unbound — give it back
+    // rather than leaking one of ~980,000 ids on every failed create.
+    if (number) await releaseUnusedNumberReservation(number).catch(() => {});
+    throw e;
+  }
+}
+
+/**
+ * A group's own title, photo and status (v2.102.0).
+ *
+ * MEMBERS-ONLY, and the membership check is INSIDE this function rather than at the
+ * call site: it writes a row several people share, so "who may change it" is the
+ * whole of the safety argument and must not be something a caller can forget. Any
+ * member may edit — a group has no owner role today (`ownerIdentityId` records who
+ * created it, nothing more), and inventing one here would be a permission model
+ * nobody asked for.
+ *
+ * Refuses a DM outright: `conversations.kind` is the only thing separating the two,
+ * and a DM has no title, photo or status of its own — it borrows the peer's.
+ */
+export async function setGroupProfile(
+  conversationId: number,
+  identityId: number,
+  patch: { title?: string; avatarUrl?: string | null; profileStatus?: string; statusNote?: string },
+): Promise<{ ok: boolean; reason?: "not-found" | "not-a-group" | "not-a-member" | "unavailable" }> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  try {
+    const [convo] = await db
+      .select({ id: conversations.id, kind: conversations.kind })
       .from(conversations)
-      .where(eq(conversations.id, insertId))
+      .where(eq(conversations.id, conversationId))
       .limit(1);
-    return row;
-  });
+    if (!convo) return { ok: false, reason: "not-found" };
+    if (convo.kind !== "group") return { ok: false, reason: "not-a-group" };
+    const [member] = await db
+      .select({ identityId: conversationParticipants.identityId })
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, conversationId),
+          eq(conversationParticipants.identityId, identityId),
+        ),
+      )
+      .limit(1);
+    if (!member) return { ok: false, reason: "not-a-member" };
+
+    const set: Record<string, unknown> = {};
+    if (patch.title !== undefined) {
+      const t = patch.title.trim().slice(0, 128);
+      // A group with a blank title falls back to its member names everywhere it is
+      // rendered, so clearing is allowed and means "use the fallback".
+      set.title = t || null;
+    }
+    if (patch.avatarUrl !== undefined) set.avatarUrl = patch.avatarUrl || null;
+    if (patch.profileStatus !== undefined) {
+      // No `statusOverride` is derived here, unlike an identity's: a group has no
+      // presence, so there is nothing for an availability to describe.
+      set.profileStatus = normalizeProfileStatus(patch.profileStatus);
+    }
+    if (patch.statusNote !== undefined) set.statusNote = normalizeStatusNote(patch.statusNote);
+    if (Object.keys(set).length === 0) return { ok: true };
+    await db.update(conversations).set(set).where(eq(conversations.id, conversationId));
+    return { ok: true };
+  } catch (e) {
+    console.warn("[groups] setGroupProfile skipped:", (e as Error)?.message || "");
+    return { ok: false, reason: "unavailable" };
+  }
 }
 
 export interface ThreadSummary {
@@ -3122,6 +3244,15 @@ export interface ThreadSummary {
   kind: "dm" | "group";
   /** Group title (null for DMs). */
   title: string | null;
+  /**
+   * The GROUP's own 6-digit id, photo and status (v2.102.0). All null for a DM and
+   * for a group created before this release — a group is reached through its thread,
+   * so an absent id costs nothing and the UI omits what it does not have.
+   */
+  groupNumber: string | null;
+  groupAvatarUrl: string | null;
+  groupStatus: string | null;
+  groupStatusNote: string | null;
   /** For a DM: the other participant. For a group: 0 (use title/members). */
   otherIdentityId: number;
   otherNumber: string;
@@ -3166,6 +3297,10 @@ export function composeThreadSummaries(input: {
     lastMessageAt: Date;
     kind?: "dm" | "group";
     title?: string | null;
+    number?: string | null;
+    avatarUrl?: string | null;
+    profileStatus?: string | null;
+    statusNote?: string | null;
   }>;
   latestMessageByConvo: Map<
     number,
@@ -3210,6 +3345,12 @@ export function composeThreadSummaries(input: {
       unreadCount: unreadByConvo.get(p.conversationId) ?? 0,
       lastMessagePreview: latest?.body ?? null,
       lastMessageKind: latest?.kind ?? "text",
+      // Null by default and set only in the group branch, so a DM can never carry a
+      // group's id by accident.
+      groupNumber: null as string | null,
+      groupAvatarUrl: null as string | null,
+      groupStatus: null as string | null,
+      groupStatusNote: null as string | null,
     };
 
     if (kind === "group") {
@@ -3223,6 +3364,10 @@ export function composeThreadSummaries(input: {
         otherDisplayName: convo.title || fallbackTitle || "Group",
         otherAvatarUrl: null,
         memberCount: members.length + 1, // + me
+        groupNumber: convo.number ?? null,
+        groupAvatarUrl: convo.avatarUrl ?? null,
+        groupStatus: normalizeProfileStatus(convo.profileStatus),
+        groupStatusNote: normalizeStatusNote(convo.statusNote),
       });
     } else if (members.length > 0) {
       // Regular 1:1 DM — the single other participant.
@@ -3357,6 +3502,13 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
       lastMessageAt: c.lastMessageAt,
       kind: c.kind,
       title: c.title,
+      // The group's own identity (v2.102.0). The query above is a bare `.select()`,
+      // so these arrive with the row; they are threaded explicitly rather than
+      // spreading `c`, so a new column cannot reach the wire without a decision.
+      number: c.number,
+      avatarUrl: c.avatarUrl,
+      profileStatus: c.profileStatus,
+      statusNote: c.statusNote,
     })),
     latestMessageByConvo: new Map(
       Array.from(latestByConvo.entries()).map(([k, m]) => [
@@ -5176,8 +5328,9 @@ export async function releaseUnusedNumberReservation(number: string): Promise<vo
     await db.execute(sql`
       DELETE FROM \`number_reservations\`
        WHERE \`number\` = ${number}
-         AND NOT EXISTS (SELECT 1 FROM \`identities\`  i WHERE i.\`number\`  = ${number})
-         AND NOT EXISTS (SELECT 1 FROM \`party_lines\` p WHERE p.\`number\` = ${number})`);
+         AND NOT EXISTS (SELECT 1 FROM \`identities\`    i WHERE i.\`number\` = ${number})
+         AND NOT EXISTS (SELECT 1 FROM \`party_lines\`   p WHERE p.\`number\` = ${number})
+         AND NOT EXISTS (SELECT 1 FROM \`conversations\` c WHERE c.\`number\` = ${number})`);
   } catch (e) {
     console.warn("[numbers] release reservation skipped:", (e as Error)?.message || "");
   }
@@ -5197,8 +5350,9 @@ export async function reapUnclaimedReservations(): Promise<number> {
        WHERE \`claimedAt\` IS NULL
          AND \`createdAt\` >= ${RESERVATION_CLAIM_EPOCH}
          AND \`createdAt\` <  NOW() - INTERVAL ${sql.raw(String(RESERVATION_REAP_GRACE_SEC))} SECOND
-         AND NOT EXISTS (SELECT 1 FROM \`identities\`  i WHERE i.\`number\`  = \`number_reservations\`.\`number\`)
-         AND NOT EXISTS (SELECT 1 FROM \`party_lines\` p WHERE p.\`number\` = \`number_reservations\`.\`number\`)
+         AND NOT EXISTS (SELECT 1 FROM \`identities\`    i WHERE i.\`number\` = \`number_reservations\`.\`number\`)
+         AND NOT EXISTS (SELECT 1 FROM \`party_lines\`   p WHERE p.\`number\` = \`number_reservations\`.\`number\`)
+         AND NOT EXISTS (SELECT 1 FROM \`conversations\` c WHERE c.\`number\` = \`number_reservations\`.\`number\`)
        LIMIT 500`);
     const n = Array.isArray(res) ? ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) : 0;
     if (n > 0) console.log(`[numbers] reclaimed ${n} unclaimed reservation(s)`);
@@ -5207,6 +5361,20 @@ export async function reapUnclaimedReservations(): Promise<number> {
     console.warn("[numbers] reservation reaper skipped:", (e as Error)?.message || "");
     return 0;
   }
+}
+
+/**
+ * A 6-digit id for a GROUP (v2.102.0).
+ *
+ * Goes through `allocateSharedNumber` like the other two callers, so it inherits the
+ * cross-table `numberTaken` check, the atomic `number_reservations` claim that closes
+ * the NEW-vs-NEW race, and the global mint budget. A parallel allocator here is
+ * precisely the collision v2.99.30 fixed.
+ */
+export async function allocateGroupNumber(): Promise<string> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  return allocateSharedNumber(db);
 }
 
 export async function allocatePartyLineNumber(): Promise<string> {

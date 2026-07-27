@@ -54,6 +54,9 @@ describe("the backend tool agrees with the server about what a renumber touches"
       conference_participants: /UPDATE conference_participants SET number =/,
       conference_history: /UPDATE conference_history SET/,
       party_lines: /UPDATE party_lines SET/,
+      // v2.102.0 — a group's own 6-digit id. Declared "not-a-person", so the backend
+      // tool must NOT write it: a member renumbering never moves the group's id.
+      conversations: /UPDATE conversations SET/,
     };
     for (const c of NUMBER_BEARING_COLUMNS) {
       if (c.table === "identities") continue; // the identity's own move, asserted below

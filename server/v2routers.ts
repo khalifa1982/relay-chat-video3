@@ -56,6 +56,7 @@ import {
   getOrCreateDmConversation,
   dmConversationExists,
   createGroupConversation,
+  setGroupProfile,
   deleteMessage,
   consumeExpiringMessage,
   revealExpiringMessage,
@@ -1529,6 +1530,14 @@ export const v2MessagesRouter = router({
         conversationId: b.conversationId,
         kind: b.kind,
         title: b.title,
+        // The GROUP's own identity (v2.102.0) — null for a DM, and null for a group
+        // created before this release. Named `group*` rather than reusing the `peer*`
+        // fields on purpose: a group is not a peer, and one field meaning two things
+        // is how a surface comes to render a group's id as a person's.
+        groupNumber: b.groupNumber,
+        groupAvatarUrl: b.groupAvatarUrl,
+        groupStatus: b.groupStatus,
+        groupStatusNote: b.groupStatusNote,
         memberCount: b.memberCount,
         peerIdentityId: b.otherIdentityId,
         peerNumber: b.otherNumber,
@@ -1624,6 +1633,66 @@ export const v2MessagesRouter = router({
    * member. Unknown numbers are skipped (we report which resolved). Needs at
    * least one other valid member.
    */
+  /**
+   * Edit a GROUP's own title, photo and status (v2.102.0, owner: a group should have
+   * a group ID, a group avatar and a group status).
+   *
+   * Members-only, and that check lives INSIDE `setGroupProfile` rather than here,
+   * because it writes a row several people share — "who may change it" is the safety
+   * argument and must not be something a call site can forget. The avatar URL is
+   * validated with the SAME namespace gate an identity's photo uses (F2), so this
+   * cannot be used to point a group at somebody else's private media.
+   */
+  setGroupProfile: publicProcedure
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        title: z.string().max(128).optional(),
+        avatarUrl: z.string().max(1024).nullable().optional(),
+        profileStatus: z.enum(["", ...PROFILE_STATUSES]).optional(),
+        statusNote: z.string().max(MAX_STATUS_NOTE).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      // AVATAR LAUNDERING (v2.98.4/F2, and v2.99.26/H5 for the absolute form): a
+      // storage key must be in the CALLER's own namespace, or a group could be
+      // pointed at a stranger's private attachment and the proxy would serve it.
+      if (input.avatarUrl) {
+        const marker = "/manus-storage/";
+        const at = input.avatarUrl.lastIndexOf(marker);
+        if (at >= 0) {
+          const key = input.avatarUrl.slice(at + marker.length);
+          if (!keyInOwnerNamespace(key, me.id)) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "That image isn't yours to use." });
+          }
+        }
+      }
+      const res = await setGroupProfile(input.conversationId, me.id, {
+        title: input.title,
+        avatarUrl: input.avatarUrl,
+        profileStatus: input.profileStatus,
+        statusNote: input.statusNote,
+      });
+      if (!res.ok) {
+        const map: Record<
+          NonNullable<typeof res.reason>,
+          { code: "NOT_FOUND" | "BAD_REQUEST" | "FORBIDDEN" | "INTERNAL_SERVER_ERROR"; message: string }
+        > = {
+          "not-found": { code: "NOT_FOUND", message: "That conversation doesn't exist." },
+          "not-a-group": {
+            code: "BAD_REQUEST",
+            message: "That's a direct chat — its name and photo come from the person you're talking to.",
+          },
+          "not-a-member": { code: "FORBIDDEN", message: "Only members can change a group." },
+          unavailable: { code: "INTERNAL_SERVER_ERROR", message: "Couldn't save that — nothing changed." },
+        };
+        const m = map[res.reason ?? "unavailable"];
+        throw new TRPCError({ code: m.code, message: m.message, cause: res.reason });
+      }
+      return { ok: true as const };
+    }),
+
   createGroup: publicProcedure
     .input(
       z.object({

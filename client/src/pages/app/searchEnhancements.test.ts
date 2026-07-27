@@ -26,7 +26,13 @@ describe("Messages thread-list search", () => {
   it("searches the group TITLE as well as the peer name and number", () => {
     // A group used to be findable only if the query happened to appear in the
     // composed peer name, so searching a group by its own title matched nothing.
-    expect(src).toMatch(/matchQuery\(threadSearch, \[t\.peerDisplayName, t\.peerNumber, t\.title\]\)/);
+    // v2.102.0 added the group's OWN 6-digit id as a fourth field, so this asserts the
+    // three that were here plus that the call still goes through matchQuery — rather
+    // than freezing an exact argument list that grows every time a group gains a field.
+    expect(src).toMatch(/matchQuery\(threadSearch, \[[\s\S]{0,120}\]\)/);
+    for (const f of ["t.peerDisplayName", "t.peerNumber", "t.title", "t.groupNumber"]) {
+      expect(src, f).toContain(f);
+    }
   });
   it("no longer hand-rolls its own substring test", () => {
     expect(src).not.toMatch(/peerDisplayName \|\| ""\)\.toLowerCase\(\)\.includes\(q\)/);
