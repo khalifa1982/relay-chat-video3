@@ -7557,6 +7557,92 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.95 — the green dot was the VIEWER'S OWN, painted on somebody else's face (2026-07-27)
+
+Owner, third report, with a screenshot: *"Here, the user showing online. But if you go into contact and
+everywhere, it's still showing offline. Still, this glitch is happening with several users."*
+
+**THE SCREENSHOT CONTAINED THE PROOF, and it is not any of the three things this was assumed to be.**
+The one History row with a green LED reads **Incoming**; the two grey ones read **Outgoing**. That
+pairing is the whole diagnosis.
+
+**ROOT CAUSE.** There is exactly ONE shared `conference_history` row per call room, and the CALLER seeds
+`dialedNumber` with the number they dialled. So on the RECIPIENT'S screen that field holds *the
+recipient's own number* — and the row's presence LED was keyed on `dialedNumber` FIRST, with the peer
+only as a fallback (`History.tsx:581`). An answered incoming call therefore asked `presenceMany` for the
+viewer's own presence — which is online by definition while they are looking at their own call log — and
+painted it on the caller's avatar. Permanently green, per-row rather than per-person, and affecting
+everyone who has ever called the owner and been answered. Contacts, keyed on that person's actual
+identity, was right all along. Outgoing rows were also right, because there `dialedNumber` really is the
+peer, which is exactly why the bug was invisible for so long.
+
+**A SECOND SYMPTOM FROM THE SAME EXPRESSION, found in the same read**: `callBack` (`History.tsx:745`)
+used the same key, so **Message / Video / Call on an answered incoming row dialled the viewer
+themselves** — which the signaling layer refuses with `error{self}`, i.e. a button that silently does
+nothing. Fixed in the same change.
+
+**THE RULE NOW LIVES IN ONE PURE FUNCTION** (`conferenceRowKeys`) that a row calls to derive its own key,
+rather than the call site guessing which of a row's numbers it is about. That guess *was* the bug, so
+removing the guess is the fix; the function is exported so the rule could be tested against a row shaped
+exactly like the owner's screenshot instead of pinned in source, and so v2.99.96's per-peer grouping can
+key on the same thing rather than re-deriving it.
+
+**A PARTY LINE IS THE ONE PLACE `dialedNumber` IS RIGHT** — there it is the LINE's number rather than a
+person's, and redialling it is what rejoins the room without ringing anybody (v2.89). Taking it away
+everywhere would have broken rejoining a line, so the exception is explicit and tested.
+
+**THE VIEWER'S OWN NUMBER IS NO LONGER PUT INTO THE PRESENCE BATCH AT ALL**, belt-and-braces so the class
+cannot recur: no History row should ever need it, and a self entry also made the busy set probe
+`directory.liveRoom` for our own number. `dialedNumber` is likewise gone from the batch — for an outgoing
+call it was already there via the roster, and for an incoming one it was the self entry.
+
+**A GROUP ROW NOW DRAWS NO LED.** The disc it sat on is a generic `Users` glyph standing for N people, and
+N people do not have one presence — showing an arbitrary member's as the group's is a guess presented as
+a fact, and grey would be equally wrong. So it is absent rather than invented.
+
+**AND THE SECOND, INDEPENDENT DIVERGENCE IS CLOSED AT THE FUNNEL.** `presenceMany` has carried `idle`
+since v2.99.92 and History threw it away, so a **backgrounded** person read as full-strength green here
+while Contacts said "away" — one person, two answers, which is the class `presenceDot` exists to end.
+History's `PresenceLed` and the group-call picker's dot were the last two inline copies of the colour
+rule (4 of 6 dot sites shared it); both now defer to `presenceDot`, so there is no fourth hand-rolled
+ternary to forget next time — v2.99.77 was precisely that bug. A standing guard test fails if any of
+these surfaces branches on `isOnline` for a colour again.
+
+**THE STORY THAT WOULD NOT DELETE — a real, previously-undocumented defect found while investigating.**
+v2.99.86 started routing the top bar's "See my status" through `openPeerStatus(me.number)`. That fires
+into `PeerOverlaysHost`, which locates the group **by number** and, on a miss, **synthesises** one with
+`isMe: false` hard-coded — under a comment asserting "this host only ever opens for another peer's
+number", which had stopped being true. `status.forNumber` *does* return your own stories, so the content
+rendered and only the ownership verdict was wrong: no Viewers list, no audience chip, and **no Delete
+row**. The feed and whoami are cached separately, so their idea of your number can disagree for a few
+seconds, and a renumber opens exactly that window. `isMe` is now derived.
+
+**SAID PLAINLY, ABOUT THE OWNER'S PARTICULAR ROW: it removed itself.** `statuses.expiresAt` is `notNull`
+and always stamped `now + 24h`, and an identity-agnostic reaper runs every 10 minutes — so no story can
+persist beyond a day, and theirs showed "16h ago". There was never a permanently-stuck row to delete.
+An earlier draft of this release claimed `deleteStatus` could report success while the row survived;
+**that was wrong and is recorded as such** — its SELECT and DELETE carry identical predicates, and the
+DELETE is not catch-wrapped, so a failure throws rather than lying. Their screenshot also predates
+v2.99.87 (its top bar is the older layout and it is signed in as 235-680, not 777777).
+
+**A WEAKNESS OF MY OWN CAUGHT BY THE MUTATION RUN, twice, both the same class** — pinning a rule's
+DECLARATION instead of its USE. The LED test asserted `presenceDot` was *called* and the old class strings
+were gone, so a mutation that called the rule for its label and then painted a hand-rolled colour anyway
+stayed green; and the presence-lookup test used a bare `toMatch` for `presenceOf={presenceOf}`, which one
+of the two row kinds satisfied while the other had been cut off from presence entirely. Both now assert
+the applied value and the count.
+
+`client/src/pages/app/historyPresence.test.ts` (17), the key rule tested BEHAVIOURALLY against the
+owner's own row shape because a source pin cannot tell you which number a row ends up asking about; **all
+15 tripwires verified by MUTATION** from byte-exact backups and a confirmed-GREEN baseline, including the
+original bug reinstated verbatim.
+
+**NOT VERIFIED AGAINST THE OWNER'S DATA**: their rows are not readable from here, so the diagnosis rests
+on the code plus the direction/colour pairing in their screenshot — which is a sharp, falsifiable
+prediction rather than a guess, and it held.
+
+No schema change, no new dependency, no new env var, no server change. 2782 tests.
+
 ## v2.99.94 — the top bar answers to two taps, the dot has a pulse, and the bottom bar stops leaving a gap (2026-07-27)
 
 Owner, verbatim: *"I circle on the notification center push it left little bit, keep space and gap

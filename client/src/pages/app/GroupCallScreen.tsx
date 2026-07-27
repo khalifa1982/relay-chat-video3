@@ -5,6 +5,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useRelayEngine } from "@/app/RelayEngine";
+import { presenceDot } from "@/app/presenceDot";
 
 function initials(name: string): string {
   const p = name.trim().split(/\s+/).slice(0, 2);
@@ -191,17 +192,22 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
                         <div className="grid size-10 place-items-center rounded-2xl bg-primary/15 text-sm font-bold text-primary">
                           {initials(c.displayName || c.number)}
                         </div>
-                        {/* presence dot — hidden for >24h-inactive guests */}
-                        {!c.presenceHidden && (
-                          <span
-                            className={
-                              "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
-                              (c.isOnline
-                                ? "bg-[color:var(--relay-online)]"
-                                : "bg-[color:var(--relay-offline)]")
-                            }
-                          />
-                        )}
+                        {/* Presence dot — hidden for >24h-inactive guests.
+                            v2.99.95: folded onto `presenceDot`, the one rule every
+                            LED in the app shares. It was the last inline copy that
+                            knew nothing about `idle`, so a backgrounded person read
+                            here as plain online while Contacts said "away". */}
+                        {!c.presenceHidden && (() => {
+                          const dot = presenceDot({ isOnline: c.isOnline, idle: c.idle });
+                          return (
+                            <span
+                              aria-label={dot.label}
+                              title={dot.label}
+                              className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card"
+                              style={{ background: dot.color, boxShadow: dot.glow || undefined }}
+                            />
+                          );
+                        })()}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="truncate font-medium">{c.displayName || c.number}</div>

@@ -37,6 +37,48 @@ import type { IdentityRole } from "@/app/VerifiedBadge";
 import { useIdentity } from "@/app/useIdentity";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
+import { presenceDot } from "@/app/presenceDot";
+
+/**
+ * One person's live reachability, as this screen understands it (v2.99.95).
+ *
+ * Passed down as a LOOKUP rather than as pre-resolved booleans, because the call
+ * site cannot safely decide WHICH number a row is about — it used to try, and on an
+ * incoming call it picked the viewer's own number and painted the viewer's presence
+ * on the caller's face. Each row now derives its own key from its own data.
+ */
+export type PresenceSnapshot = { isOnline: boolean; idle: boolean; inCall: boolean };
+type PresenceLookup = ((number: string | null | undefined) => PresenceSnapshot | undefined) | undefined;
+
+/**
+ * Which number a conference row is ABOUT (v2.99.95) — pure, so the rule can be
+ * tested with a row shaped like the owner's screenshot rather than pinned in source.
+ *
+ * `dialedNumber` is a trap and it caused a real bug. There is ONE shared
+ * `conference_history` row per room, and the CALLER seeds `dialedNumber` with the
+ * number they dialled — so on the RECIPIENT'S screen it holds the recipient's own
+ * number. Reading it as "the peer" made every answered incoming call ask for the
+ * viewer's own presence (always online) and paint it on the caller's avatar, and made
+ * that row's Message / Video / Call buttons dial the viewer themselves.
+ *
+ * A PARTY LINE is the one exception: there `dialedNumber` is the LINE's number rather
+ * than a person's, and redialling it is what rejoins the room without ringing anybody.
+ */
+export function conferenceRowKeys(conf: {
+  partyLine?: boolean;
+  dialedNumber: string | null;
+  partyCount: number;
+  participants: Array<{ number: string; isSelf: boolean }>;
+}): { peerNumber: string; callBack: string; isGroup: boolean; otherNumbers: string[] } {
+  const others = conf.participants.filter((p) => !p.isSelf);
+  const otherNumbers = others.map((p) => p.number).filter(Boolean);
+  const isGroup = conf.partyCount > 2 || otherNumbers.length > 1;
+  const peerNumber = otherNumbers[0] || "";
+  const callBack = conf.partyLine
+    ? conf.dialedNumber || peerNumber
+    : peerNumber || conf.dialedNumber || "";
+  return { peerNumber, callBack, isGroup, otherNumbers };
+}
 
 type ConfRow = {
   id: number;
@@ -359,20 +401,32 @@ export default function HistoryPage() {
   // other side is even reachable — dialing someone offline pages their phone.
   const presenceNumbers = useMemo(() => {
     const set = new Set<string>();
+    // Never ask for our OWN presence (v2.99.95). We are online by definition
+    // while looking at this screen, so a self entry can only ever come back
+    // green — and that green then has to be attached to somebody, which is
+    // exactly the bug below. It would also make `inCallSet` probe
+    // `directory.liveRoom` for our own number.
+    const self = me?.number ?? "";
+    const add = (n: string | null | undefined) => {
+      if (n && n !== self && /^\d{6}$/.test(n)) set.add(n);
+    };
     for (const it of items) {
       if (it.kind === "solo") {
-        const other = it.call.other?.number;
-        if (other && /^\d{6}$/.test(other)) set.add(other);
+        add(it.call.other?.number);
       } else {
+        // The roster is the ONLY source of a peer's number here. `dialedNumber`
+        // is deliberately NOT added: for an OUTGOING call it is already in the
+        // roster, and for an INCOMING one it is the viewer's own number (the
+        // caller seeds it, and there is one shared conference_history row per
+        // room) — so adding it bought nothing and cost the bug fixed below.
         for (const p of it.conf.participants) {
-          if (!p.isSelf && p.number && /^\d{6}$/.test(p.number)) set.add(p.number);
+          if (!p.isSelf) add(p.number);
         }
-        if (it.conf.dialedNumber && /^\d{6}$/.test(it.conf.dialedNumber)) set.add(it.conf.dialedNumber);
       }
       if (set.size >= 100) break; // server caps the batch at 100
     }
     return Array.from(set).slice(0, 100).sort();
-  }, [items]);
+  }, [items, me?.number]);
   const presence = trpc.directory.presenceMany.useQuery(
     { numbers: presenceNumbers },
     { enabled: !!me && presenceNumbers.length > 0, refetchInterval: 30_000, refetchIntervalInBackground: false }
@@ -381,11 +435,34 @@ export default function HistoryPage() {
     () => new Set((presence.data ?? []).filter((p) => p.isOnline).map((p) => p.number)),
     [presence.data]
   );
+  // Backgrounded-but-signed-in (v2.99.92). `presenceMany` has carried `idle`
+  // since then and this screen threw it away, so a minimised person read as
+  // full-strength green here while Contacts said "away" — one person, two
+  // answers, which is the class of divergence `presenceDot` exists to end.
+  const idleSet = useMemo(
+    () => new Set((presence.data ?? []).filter((p) => p.idle).map((p) => p.number)),
+    [presence.data]
+  );
   // Busy line (v2.88): numbers that are in a live call right now (amber LED).
   const inCallSet = useMemo(
     () => new Set((presence.data ?? []).filter((p) => p.inCall).map((p) => p.number)),
     [presence.data]
   );
+  /**
+   * ONE lookup handed to the rows, so a row derives its own key from its own
+   * data instead of the call site guessing which number to ask about — which is
+   * how an incoming call ended up rendering the VIEWER'S presence on the
+   * caller's face. `undefined` means "not loaded yet": the LED draws nothing
+   * rather than claiming offline.
+   */
+  const presenceOf = useMemo(() => {
+    if (!presence.data) return undefined;
+    return (num: string | null | undefined) => {
+      const n = num ?? "";
+      if (!n) return undefined;
+      return { isOnline: onlineSet.has(n), idle: idleSet.has(n), inCall: inCallSet.has(n) };
+    };
+  }, [presence.data, onlineSet, idleSet, inCallSet]);
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 min-h-0 flex-col px-4 pb-3 pt-4 md:pb-6">
@@ -576,14 +653,7 @@ export default function HistoryPage() {
                               saved={savedNumbers.has(
                                 it.conf.participants.find((p) => !p.isSelf)?.number ?? ""
                               )}
-                              online={
-                                presence.data
-                                  ? onlineSet.has(it.conf.dialedNumber || it.conf.participants.find((p) => !p.isSelf)?.number || "")
-                                  : undefined
-                              }
-                              inCall={inCallSet.has(
-                                it.conf.dialedNumber || it.conf.participants.find((p) => !p.isSelf)?.number || ""
-                              )}
+                              presenceOf={presenceOf}
                             />
                           ) : (
                             <SoloItem
@@ -595,8 +665,7 @@ export default function HistoryPage() {
                               onWatch={watch}
                               onAddContact={quickAdd}
                               saved={savedNumbers.has(it.call.other?.number ?? "")}
-                              online={presence.data ? onlineSet.has(it.call.other?.number ?? "") : undefined}
-                              inCall={inCallSet.has(it.call.other?.number ?? "")}
+                              presenceOf={presenceOf}
                             />
                           )
                         )}
@@ -660,31 +729,35 @@ function RoundAction({
   );
 }
 
-/** Amber/green/grey reachability LED pinned to a row's icon bubble: amber =
- *  ON A CALL right now (v2.88 busy line — a redial would hit call waiting),
- *  green = online, grey = offline. `undefined` (presence not loaded yet)
- *  renders nothing — no flicker, no wrong claims. */
-function PresenceLed({ online, inCall }: { online: boolean | undefined; inCall?: boolean }) {
-  if (online === undefined) return null;
-  const busy = online && inCall;
+/**
+ * The reachability LED pinned to a row's icon bubble.
+ *
+ * v2.99.95: this drew its own three-way ternary and knew nothing about `idle`, so a
+ * backgrounded person read as full-strength green here while Contacts said "away" —
+ * one person, two answers. It now defers to `presenceDot`, the single rule every dot
+ * in the app shares, rather than becoming a fourth inline copy of it (v2.99.77 was
+ * exactly that bug).
+ *
+ * A missing verdict renders NOTHING — no flicker and no wrong claim — which is why
+ * the prop is the whole snapshot rather than a boolean that has to default somehow.
+ */
+function PresenceLed({ p }: { p: PresenceSnapshot | undefined }) {
+  if (!p) return null;
+  const dot = presenceDot(p);
   return (
     <span
-      aria-label={busy ? "On a call" : online ? "Online" : "Offline"}
+      aria-label={dot.label}
       title={
-        busy
+        dot.label === "On a call"
           ? "On a call right now — you'd ring as call waiting"
-          : online
+          : dot.label === "Online"
             ? "Online now"
-            : "Offline — calling will page their phone"
+            : dot.label === "Away"
+              ? "Signed in but not looking — the app is in the background"
+              : "Offline — calling will page their phone"
       }
-      className={
-        "absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-background " +
-        (busy
-          ? "bg-amber-400"
-          : online
-            ? "bg-[color:var(--relay-online,#06d6a0)]"
-            : "bg-[color:var(--relay-offline)]")
-      }
+      className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-background"
+      style={{ background: dot.color, boxShadow: dot.glow || undefined }}
     />
   );
 }
@@ -713,8 +786,7 @@ function ConferenceItem({
   onVideo,
   onAddContact,
   saved,
-  online,
-  inCall,
+  presenceOf,
 }: {
   conf: ConfRow;
   direction: "in" | "out";
@@ -725,12 +797,12 @@ function ConferenceItem({
   /** One-tap contact conversion (v2.96) for the 1:1 peer — hidden when saved. */
   onAddContact?: (num: string, name: string) => void;
   saved?: boolean;
-  online: boolean | undefined;
-  inCall?: boolean;
+  presenceOf: PresenceLookup;
 }) {
   const others = conf.participants.filter((p) => !p.isSelf);
-  const otherNumbers = others.map((p) => p.number).filter(Boolean);
-  const isGroup = conf.partyCount > 2 || otherNumbers.length > 1;
+  // The peer key, the call-back target and the group verdict all come from ONE
+  // pure rule (see conferenceRowKeys) so this row cannot disagree with itself.
+  const { peerNumber, callBack, isGroup, otherNumbers } = conferenceRowKeys(conf);
   const tone = direction === "out" ? TONE.out : TONE.in;
   // Title = the party line's name (v2.89) when this room WAS a line, else the
   // other people on the call (or the dialed number as a fallback).
@@ -741,8 +813,13 @@ function ConferenceItem({
       : conf.dialedNumber
         ? `Call to ${conf.dialedNumber}`
         : "Call";
-  // Best number to call back: the dialed number, else the first other party.
-  const callBack = conf.dialedNumber || others[0]?.number || "";
+  /**
+   * A group row draws NO presence LED. The disc it would sit on is a generic
+   * `Users` glyph standing for N people, and N people do not have one presence —
+   * picking an arbitrary member's and showing it as the group's is a guess
+   * presented as a fact. Grey would be equally wrong, so it is simply absent.
+   */
+  const rowPresence = isGroup ? undefined : presenceOf?.(peerNumber);
   // For a GROUP, the call button rings everyone back into one conference —
   // except a PARTY LINE (v2.89), where redialing the LINE number rejoins the
   // room without ringing anyone.
@@ -771,7 +848,6 @@ function ConferenceItem({
             }}
           >
             <Users className="size-[18px]" />
-            <PresenceLed online={online} inCall={inCall} />
           </span>
         ) : (
           // 1:1 answered call → photo + status ring (v2.96); no-photo
@@ -784,7 +860,7 @@ function ConferenceItem({
             fallbackClassName={tone.bubble + " text-sm"}
           >
             <DirectionBadge direction={direction} toneName={tone.name} />
-            <PresenceLed online={online} inCall={inCall} />
+            <PresenceLed p={rowPresence} />
           </PeerAvatar>
         )}
         <div className="min-w-0 flex-1 basis-48">
@@ -916,8 +992,7 @@ function SoloItem({
   onWatch,
   onAddContact,
   saved,
-  online,
-  inCall,
+  presenceOf,
 }: {
   call: CallRow;
   onRedial: (num: string) => void;
@@ -928,12 +1003,15 @@ function SoloItem({
   /** One-tap contact conversion (v2.96) — hidden when already saved. */
   onAddContact?: (num: string, name: string) => void;
   saved?: boolean;
-  online: boolean | undefined;
-  inCall?: boolean;
+  presenceOf: PresenceLookup;
 }) {
   const missedIn = call.direction === "in";
   const tone = missedIn ? TONE.missed : TONE.out;
   const peerNum = call.other?.number ?? "";
+  // A solo row has exactly one peer and the server resolves it by identityId, so
+  // there is no ambiguity here — but it goes through the same lookup as every
+  // other row so the rule for "which number is this row about" lives in one place.
+  const rowPresence = presenceOf?.(peerNum);
   const peerName = call.other?.displayName ?? peerNum ?? "Unknown";
   const label = missedIn
     ? call.status === "declined" ? "Declined" : "Missed call"
@@ -958,7 +1036,7 @@ function SoloItem({
           fallbackClassName={tone.bubble + " text-sm"}
         >
           <DirectionBadge direction={call.direction} toneName={tone.name} />
-          <PresenceLed online={online} inCall={inCall} />
+          <PresenceLed p={rowPresence} />
         </PeerAvatar>
         <div className="min-w-0 flex-1 basis-48">
           <button
@@ -1004,7 +1082,7 @@ function SoloItem({
             </RoundAction>
           ) : null}
           {/* Offline peer → offer the v2.88 call-back alert right on the row. */}
-          {online === false && onWatch && peerNum ? (
+          {rowPresence && !rowPresence.isOnline && onWatch && peerNum ? (
             <RoundAction
               rgb="82,227,208"
               accent="#52e3d0"
