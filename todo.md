@@ -7557,6 +7557,99 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.84 — the conference stops cooking the phone, and the voice survives it (2026-07-27)
+- [x] **OWNER**: *"my phone become verry hot whenever we have conference call multiple parties. I think
+      because of the video or because of what? Make sure that the length of the sound to be very clear and
+      good latency for both video and voice."*
+- [x] **THE TRANSPORT DECIDES THE ANSWER, AND IT IS THE MESH — established, not assumed.** LiveKit needs
+      three env vars an operator sets, and it appears nowhere in this repo except as a commented-out
+      optional in `docs-aws-io-deploy.md`, so the fleet runs the **WebRTC mesh**: every phone in an N-party
+      call runs **N-1 independent video encoders and N-1 decoders**. At the 6-participant cap that is five
+      of each, on a handset. That is the heat, and it is structural rather than a bug.
+- [x] **THE CANVAS PIPELINE WAS RULED OUT BY READING IT, not by trusting its comment.** `mediaPipeline`
+      claims "plain, unfiltered calls don't use this pipeline at all"; both `ensurePipeline` call sites were
+      checked and the claim holds (`activeFilter !== "none"` gates it), so a 30fps main-thread canvas paint
+      is NOT part of the default cost. Said plainly because it was the first suspect.
+- [x] **FRAME RATE WAS NEVER CAPPED — the largest CPU lever left.** Bitrate and resolution have scaled with
+      party size since v2.80; framerate did not, so five encoders ran at the camera's native 30 and did
+      roughly twice the work of five at 15. New ladder: **30 / 24 / 15** at 1 / ≤3 / >3 peers. 1:1 is
+      unchanged in effect (30 IS the source rate) but is a REAL value rather than an absent field, because
+      the party can SHRINK 6 → 2 and an undefined cap is not reliably cleared by every engine — assigning 30
+      back is deterministic and reversible.
+- [x] **`degradationPreference: "balanced"` GOES IN ITS OWN `setParameters` CALL, and the separation is the
+      whole point.** It is a TOP-LEVEL field some engines reject outright, and a rejected `setParameters`
+      discards the **entire object** — so folding it in with the caps would silently lose the bitrate AND
+      framerate caps on exactly the browsers that most need them. "balanced" rather than the common
+      maintain-framerate default, which keeps frames and sheds nothing else — precisely wrong on a
+      thermally throttled phone, where dropping resolution is the correct sacrifice.
+- [x] **THE AUDIO ASK IS ANSWERED BY THE VIDEO FIX, and that is worth saying out loud rather than shipping a
+      separate knob.** A thermally throttled phone starves its AUDIO encoder too, which is heard as choppy,
+      unclear sound. Capping the video is what protects the voice; there is no "make audio clearer" setting
+      that survives a hot CPU.
+- [x] **AUDIO IS PROTECTED, NEVER CAPPED.** Marked `priority`/`networkPriority` `"high"` so that when the
+      uplink or the CPU runs short the engine sheds VIDEO and keeps the voice — the difference between a
+      call that goes blurry and one that goes unusable. Deliberately NO audio bitrate cap (it is a rounding
+      error beside video, and capping it is the exact opposite of the ask), and a missing `encodings` array
+      is left ALONE rather than fabricated: for video an empty array is filled in because the cap is the
+      point, but inventing an encoding purely to stamp a priority risks disturbing a working track for no
+      gain. Its branch `return`s so it can never fall into the video path.
+- [x] **THE MICROPHONE IS CAPTURED MONO** (`channelCount: { ideal: 1 }`). A voice call carries no spatial
+      information, so a stereo capture doubles the encoder's sample work for nothing on the very path where
+      N-1 encoders are already the problem. **`ideal`, not `exact`** — `exact` throws
+      `OverconstrainedError` on a device that only offers stereo and would cost that person their
+      microphone entirely. Clarity is unaffected; only redundant channels go.
+- [x] **THE GRID WAS REPAINTING ITSELF 14 TIMES A FRAME OVER LIVE VIDEO.** Three animations, all running per
+      speaking tile: `relayWave` animated **height** (a layout+paint animation, five bars per tile),
+      `relaySpeakPulse` animated the tile's own **box-shadow** (a full-tile repaint), and `relayAvBreath`
+      animated a colour-cycling box-shadow. A tile's backdrop is live video, so nothing can ever be cached.
+      This is exactly the class v2.99.70 measured on the landing page.
+      **`relayWave` → `transform: scaleY`** (full height, bottom origin, scaled down at rest — identical
+      look, compositor-only). **`relaySpeakPulse` → a `.spk-glow` overlay carrying the glow as a STATIC
+      box-shadow with only its OPACITY animated** — identical look, compositor-only, static markup, still
+      driven by the `.speaking` class alone so no JS toggles it. **`relayAvBreath` keeps its colour cycle on
+      DESKTOP, where a GPU handles it for free, and runs a transform-only `relayAvBreathLite` on phones** —
+      the device in the report. Only small screens trade the colour cycle.
+- [x] **THIRTY-SIX BLUR LAYERS OVER LIVE VIDEO, and the existing cap never covered any of them.** The
+      v2.9x mobile blur cap named exactly TWO elements — `.ctrl-bar` and `.filter-dock`. Every TILE carries
+      **six** blurred chips (name band, add pill, two info chips, menu and maximize buttons), so at the
+      6-cap a phone was compositing 36 `backdrop-filter` layers, each re-blurred **every frame** because its
+      backdrop never stops changing. Suppressed on phones with the backgrounds taken opaque in the same
+      breath, so nothing becomes harder to read; desktop keeps the glass.
+- [x] **THE OVERRIDE'S POSITION IS LOAD-BEARING, and the measurement is what proved it.** Equal-specificity
+      overrides are decided by ORDER, and four of the six base rules are declared LATE in the stylesheet —
+      so in its natural home the rule measured as doing **nothing at all** (36 blur layers before AND
+      after) while reading as correct. It now sits last, with a comment saying so and a test that fails if
+      any of those six base rules ever moves after it.
+- [x] **MEASURED, not asserted** — headless Chromium against the real stylesheet, six tiles with two
+      speaking, emulated 390px phone: **repainting animations 14 → 0** (compositor-only 0 → 14), **blur
+      layers over live video 36 → 0**, no horizontal overflow. Re-measured at 1440 desktop and deliberately
+      **unchanged at 36** blur layers with the colour cycle intact, so the trade is confined to phones.
+- [x] **A HARNESS BUG OF MY OWN, reported rather than counted as a result.** The first run showed blur
+      36 → 36 and I nearly recorded the override as ineffective for the wrong reason: `page.setContent`
+      without a `<meta viewport>` leaves the emulated page on the **980px default layout viewport**, so
+      every `max-width` query silently fails to match (`innerWidth` was 980, not 390). The harness now
+      emits the meta the real app has AND **aborts** if the phone query does not match, so it can never
+      again report a phone measurement taken at desktop width. The cascade bug above was real and separate;
+      it was only visible once the harness was honest.
+- [x] **THREE MISTAKES OF MY OWN IN THE TESTS, all found by the mutation run and all fixed rather than
+      counted as passes.** Two were the recurring shape — pinning the DECLARATION instead of the USE: one
+      asserted the bitrate LADDER existed while deleting the line that APPLIES it stayed green, and the
+      other COUNTED `setParameters` calls, which says nothing about which OBJECT carries
+      `degradationPreference` — the one property that matters. The third is worse and is recorded plainly:
+      my replacement assertion counted the bare identifier `degradationPreference`, which also matches the
+      COMMENT above it and the type annotation, so it read 3 and **the test was RED** — and an already-red
+      test fails for every mutation, so that mutation's "bit" was a **false positive**. It now counts
+      ASSIGNMENTS with comments stripped, and the entire sweep was **re-run from a confirmed-green
+      baseline** so no result rests on a test that was failing anyway.
+- [x] `client/src/lib/conferenceCost.test.ts` (19); **all 20 tripwires verified by MUTATION** from
+      byte-exact backups, from a green baseline, sources confirmed byte-identical afterwards.
+- [x] **NOT MEASURED, said plainly: none of the encoder changes were tested on a real phone in a real
+      6-party call.** There is no handset and no multi-party call available here, so the framerate,
+      priority and mono changes rest on how WebRTC is specified to behave, not on a thermal reading. The
+      CSS half IS measured. The owner should expect a visible improvement on a crowded call and should say
+      if the video looks softer than they want — the ladder is one line to retune.
+- [x] No schema change, no new dependency, no new env var, no server change. 2500 tests.
+
 ## v2.99.83 — a renumbered person stays reachable (2026-07-27)
 - [x] **THE BUG, PROVEN BY THE OWNER'S OWN TWO SCREENSHOTS TAKEN SECONDS APART.** Verbatim: *"I have this
       user. He is online. But when I call him, it give me offline. I think there is a glitch or, you know,

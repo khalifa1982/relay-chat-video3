@@ -586,7 +586,12 @@ export const RELAY_CSS = `
    five rainbow bars that bounce like an equaliser. Hidden unless .speaking. */
 .relay-root .relay-tile .sound-wave{display:none;align-items:flex-end;justify-content:center;gap:3px;height:18px;margin-top:3px}
 .relay-root .relay-tile.speaking .sound-wave{display:flex}
-.relay-root .relay-tile .sound-wave i{width:3px;height:5px;border-radius:3px;background:#22c55e;display:block}
+/* v2.99.84: FULL height with a bottom transform-origin, scaled DOWN at rest.
+   The bar used to be 5px tall and animate the height property to 18px — a layout+paint
+   animation, five of them per speaking tile, compositing over live video every
+   frame. scaleY is compositor-only and looks identical. */
+.relay-root .relay-tile .sound-wave i{width:3px;height:18px;border-radius:3px;background:#22c55e;display:block;
+  transform-origin:bottom center;transform:scaleY(.278)}
 @media (prefers-reduced-motion: no-preference){
   .relay-root .relay-tile.speaking .sound-wave i{animation:relayWave .9s ease-in-out infinite}
   .relay-root .relay-tile.speaking .sound-wave i:nth-child(1){animation-delay:0s;background:#f43f5e}
@@ -595,7 +600,7 @@ export const RELAY_CSS = `
   .relay-root .relay-tile.speaking .sound-wave i:nth-child(4){animation-delay:.36s;background:#3b82f6}
   .relay-root .relay-tile.speaking .sound-wave i:nth-child(5){animation-delay:.48s;background:#a855f7}
 }
-@keyframes relayWave{0%,100%{height:5px}50%{height:18px}}
+@keyframes relayWave{0%,100%{transform:scaleY(.278)}50%{transform:scaleY(1)}}
 /* Per-tile info chip: device type + live connection speed (e.g. "5.2 Mbps").
    Pinned to the TOP-right so it never collides with the bottom-left name label
    (which, with a Host badge + flag, can be wide on a narrow tile). */
@@ -608,12 +613,24 @@ export const RELAY_CSS = `
 .relay-root #videoGrid.spotlight .relay-tile.is-thumb .tile-info{display:none}
 /* Active-speaking cue: a glowing ring + a soft sound-wave halo on the avatar.
    The static outline always marks the speaker; the pulse is motion-gated. */
+/* v2.99.84: the glow is a STATIC box-shadow on an overlay whose OPACITY animates.
+   It used to animate box-shadow on the tile itself, which repaints the entire
+   tile every frame — and the tile's backdrop is LIVE VIDEO, so nothing could be
+   cached. Six of those at the mesh cap is most of a phone's paint budget. Opacity
+   is compositor-only and the result looks the same. (v2.99.70 measured this exact
+   trade on the landing page: repainting animations are the expensive ones.) */
+/* z-index 3 — above the video, BELOW every interactive chip (which sit at 4-5).
+   The glow is edge-only, but painting it over the menu/maximize buttons would
+   tint them green in the corner where they live. */
+.relay-root .relay-tile .spk-glow{position:absolute;inset:0;z-index:3;pointer-events:none;
+  border-radius:inherit;opacity:0;box-shadow:inset 0 0 22px 0 rgba(34,197,94,.30)}
+.relay-root .relay-tile.speaking .spk-glow{opacity:1}
 @media (prefers-reduced-motion: no-preference){
-  .relay-root .relay-tile.speaking{animation:relaySpeakPulse 1.4s ease-in-out infinite}
+  .relay-root .relay-tile.speaking .spk-glow{animation:relaySpeakPulse 1.4s ease-in-out infinite}
   /* Avatar breathes (heart-beat scale) with a colour-cycling glow ring. */
   .relay-root .relay-tile.speaking .ph .av{animation:relayAvBreath 1.4s ease-in-out infinite}
 }
-@keyframes relaySpeakPulse{0%,100%{box-shadow:inset 0 0 0 0 rgba(34,197,94,0)}50%{box-shadow:inset 0 0 22px 0 rgba(34,197,94,.30)}}
+@keyframes relaySpeakPulse{0%,100%{opacity:0}50%{opacity:1}}
 @keyframes relayAvBreath{
   0%{transform:scale(1);box-shadow:0 0 0 0 rgba(244,63,94,.55)}
   35%{transform:scale(1.07);box-shadow:0 0 0 9px rgba(245,158,11,.0),0 0 20px 5px rgba(245,158,11,.5)}
@@ -1210,4 +1227,48 @@ export const RELAY_CSS = `
    a fresh one. transform/opacity only, matching the project's animation rule. */
 .relay-root .relay-tile.slow-connect .ph{opacity:.55}
 .relay-root .relay-tile.slow-connect .connecting{color:var(--warn);border-color:rgba(255,180,84,.5)}
+/* ── phone GPU budget: keep this LAST ─────────────────────────────────
+   Equal-specificity overrides are decided by ORDER, and four of the six
+   selectors below have their base rule declared later in this file than the
+   natural home for this block. Placed there, it measured as doing nothing at
+   all (36 blur layers before and after). Anything added after it that blurs
+   per-tile chrome has to come back and think about this. */
+/* v2.99.84 (owner: "my phone become verry hot whenever we have conference call
+   multiple parties"): the cap above only ever covered the ctrl-bar and the filter
+   dock — TWO elements. The PER-TILE chrome was never included, and every tile
+   carries SIX of them, so at the mesh 6-participant cap a phone was compositing
+   THIRTY-SIX backdrop-filter layers — measured, not estimated — each of them over
+   LIVE VIDEO, which means each is re-blurred every single frame because its
+   backdrop never stops changing. That is the most expensive thing per-tile chrome
+   can possibly do on a phone GPU.
+   MEASURED, emulated 390px phone, six tiles, two of them speaking:
+     blur layers over live video  36 -> 0
+     repainting animations        14 -> 0   (compositor-only: 0 -> 14)
+   Desktop re-measured at 1440 and deliberately UNCHANGED at 36 blur layers.
+   Dropped on phones only; desktop keeps the glass. The backgrounds go opaque in
+   the same breath so nothing becomes harder to read — losing the blur without
+   that would leave 62%-alpha chips floating on moving video. */
+/* The avatar breath animates a colour-CYCLING box-shadow (rose -> amber -> blue
+   -> purple) alongside its scale. The scale is compositor-only; the shadow
+   repaints the disc every frame. On a desktop GPU that is free and the cycle is
+   worth keeping, so it is untouched there — on a PHONE, which is the device in
+   the report, the same selector runs a transform-only variant. The motion reads
+   identically; only the colour cycle is traded, and only on small screens.
+   Same specificity as the base rule (0,4,2), so this must stay AFTER it. */
+@media (max-width:768px){
+  .relay-root .relay-tile.speaking .ph .av{animation-name:relayAvBreathLite}}
+@keyframes relayAvBreathLite{
+  0%{transform:scale(1)}
+  35%{transform:scale(1.07)}
+  70%{transform:scale(1.02)}
+  100%{transform:scale(1)}
+}
+@media (max-width:768px){
+  .relay-root .relay-tile .tile-info span,
+  .relay-root .relay-tile .nm,
+  .relay-root .relay-tile .connecting,
+  .relay-root .relay-tile .tile-menu-btn,
+  .relay-root .relay-tile .tile-max-btn,
+  .relay-root .relay-tile .tile-addc{backdrop-filter:none;-webkit-backdrop-filter:none;background:rgba(8,9,12,.90)}}
+
 `;
