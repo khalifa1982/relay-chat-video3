@@ -57,6 +57,19 @@ export type V2Event =
   /** New-device approval (v2.99.7): a new sign-in on this account is WAITING
    *  for one of the existing devices to approve it — light up the bell. */
   | { kind: "device_pending"; sid: string; label: string }
+  /**
+   * Your own 6-digit number MOVED (v2.99.83). Fans by identityId, so it does not
+   * depend on the number it is announcing — which is the whole point, since the old
+   * one is retired the instant the transaction commits.
+   *
+   * The client re-reads whoami on this, so every surface showing the number
+   * converges without a reload. Declared in BOTH the union AND the allowlist below:
+   * an undeclared kind is delivered locally and SILENTLY DROPPED whenever the
+   * recipient's SSE stream is on the other instance — which on the two-instance
+   * fleet is most of the time, and single-instance dev would look perfect. That is
+   * the v2.99.74 `delivered` bug verbatim.
+   */
+  | { kind: "number"; number: string; previousNumber: string }
   | { kind: "ping" };
 
 /**
@@ -71,7 +84,7 @@ export type V2Event =
  * handler unfiltered.
  */
 const KNOWN_V2_EVENT_KINDS = new Set<V2Event["kind"]>([
-  "message", "typing", "read", "delivered", "presence", "contact", "call_offer", "watched_online", "status", "device_pending", "ping",
+  "message", "typing", "read", "delivered", "presence", "contact", "call_offer", "watched_online", "status", "device_pending", "number", "ping",
 ]);
 
 function writeEvent(client: SseClient, ev: V2Event) {

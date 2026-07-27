@@ -7557,6 +7557,115 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.83 — a renumbered person stays reachable (2026-07-27)
+- [x] **THE BUG, PROVEN BY THE OWNER'S OWN TWO SCREENSHOTS TAKEN SECONDS APART.** Verbatim: *"I have this
+      user. He is online. But when I call him, it give me offline. I think there is a glitch or, you know,
+      not for this user. Check it generic."* The dialer showed **"Mohamed Idris · Registered · online
+      now"**; the call answered **"Mohamed Idris is offline right now."** Two surfaces disagreeing about
+      one person, in the same breath.
+- [x] **ROOT CAUSE — RELAY NAMES A PERSON TWICE, AND ONLY ONE OF THE TWO MOVED.** Presence is a database
+      row keyed on `identityId`. The signaling registry — the thing that actually ROUTES a call — is in
+      memory and keyed on the **6-digit PIN**. `regenerateIdentityNumber` moved the database and every
+      stored copy of the number inside one transaction and touched the registry **not at all**. So a
+      person who was signed in when their number changed stayed registered under their **OLD** pin:
+      unreachable at the number they now own, and still occupying one that no longer exists. This is the
+      v2.99.54 identity-continuity story with one layer missing — the layer that is not in the database.
+- [x] **THREE MORE OWNER-REPORTED SYMPTOMS WERE THE SAME BUG, said plainly rather than chased separately.**
+      The in-call **"Add to contacts" pill reappearing for somebody already SAVED** (the roster names the
+      old pin while their `contacts.number` row was rewritten, so the saved-set lookup misses), and
+      **Contacts showing them plain "online" instead of "on a call"** (`pinsInCall` reports the old pin).
+      The owner reached this diagnosis themselves — *"I think this glitch of showing add to contact, which
+      already the user in my contact is because they changed their number"* — and they were right.
+- [x] **THE HOOK, NOT A SECOND WRITER.** `identities.number` has exactly ONE writer and a test pins that
+      (`guestUpgrade.test.ts` / `chooseNumber.test.ts`); propagation is the whole difficulty of renumbering
+      and a parallel implementation is precisely how History's copies came to rot before v2.99.54. So this
+      is a `setNumberChangeHook` fired from inside that writer, at the commit point — immediately after
+      `confirmNumberReservation` — registered in `relay.ts` beside `initBusyStateSync`. A hook rather than
+      a direct call because `v2db → relay` would close the cycle `v2db → relay → _core/context → v2db`;
+      `setPresenceChangeHook` (v2.99.73) is the established precedent for exactly this.
+- [x] **`rebindRegisteredPin` MOVES TWELVE PLACES IN ONE SYNCHRONOUS PASS, and the synchrony is the design
+      rather than a convenience.** The registry is plain Maps dispatched from one event loop, so a function
+      with no `await` in it cannot be observed half-done — which matters enormously here, because a
+      half-renamed registry is worse than a stale one: the person would be in a room under one pin and
+      addressed under another. In order: resolve-and-no-op → collision check → **sever `cidToPin` FIRST** →
+      client record → devices → membership across BOTH `pinRoom` and `heldRoom` plus the `rooms` Sets →
+      `roomMeta` roster/hostPin/cohosts/knocks + `recordings.by` → `pendingRings` by KEY and by every
+      `from` value → every other client's `ringing` Set → `markRoomDirty` + `touchBusyState` → re-send
+      `registered`.
+- [x] **WHY `cidToPin` GOES FIRST, and it is the single most dangerous omission in the whole rename.** That
+      reverse index BEATS the client's requested pin in the register handler. Until it moves, a concurrent
+      re-register either re-asserts the OLD pin or is misclassified as an **identity switch** — and the
+      identity-switch body deliberately DESTROYS the live call (it exists to stop a cross-user hijack on a
+      shared browser). Moving it last would have left a window in which a routine SSE reconnect drops the
+      call it was supposed to save.
+- [x] **THE OLD NUMBER IS RETIRED, NEVER ALIASED.** An alias would re-create two addresses for one person —
+      the exact split being removed — and would silently bypass the block-follows-you property, because
+      `contacts.number` was rewritten in the same transaction, so a block placed on the old number lives on
+      the new one. Nobody is put at risk by the retirement: the reservation ledger is **monotonic**, so the
+      old number is never handed to a stranger.
+- [x] **A VERIFIED HOLDER OF THE NEW PIN IS NEVER EVICTED.** The only legitimate way somebody else holds it
+      is an unverified `genPin` allocation, and such a registration is already un-ringable via
+      `pinIsAddressable` — so an unverified squatter is evicted and a **verified** holder makes the rebind
+      REFUSE, because evicting them would be the v2.98.4/F1 number-seizure class in reverse. The
+      client-side self-heal then converges it.
+- [x] **`verifiedPin` IS SET EXPLICITLY.** Left false, `pinIsAddressable` makes the person un-ringable and
+      un-rejoinable — an "offline" **indistinguishable from the bug being fixed**. After the DB commit the
+      new pin genuinely IS cookie-resolvable, so setting it is correct rather than optimistic.
+- [x] **THE CLIENT IS TOLD, NOT MADE TO RE-REGISTER.** Re-registering mid-call is read as an identity switch
+      and drops the call, so the server re-sends `registered` with a new `renumbered: true` flag; the
+      client's existing handler already sets `me.pin` from it and persists it, so an older client needs no
+      change at all.
+- [x] **A NEW `number` SSE EVENT, declared in BOTH places — and that is not bookkeeping.**
+      `KNOWN_V2_EVENT_KINDS` gates the **receive** side of the Redis bus, so an undeclared kind is
+      delivered locally and **silently DROPPED whenever the recipient is on the other instance** — which
+      on a two-instance fleet is most of the time, and single-instance dev would have looked perfect. This
+      is the v2.99.74 `delivered` bug, avoided by having been bitten by it once.
+- [x] **A CLIENT-SIDE SELF-HEAL, because one real path fires no hook at all.** `scripts/admin-tool.mjs`
+      runs as plain `node` on an EC2 instance and writes straight to MySQL — it CANNOT import the server's
+      TypeScript writer, so no hook can fire for it and no SSE event is sent. `useIdentity` therefore now
+      has `refetchOnWindowFocus: true`, which is the only backstop covering that path; the script's header
+      says so in as many words, and it prints the fact after an apply so the operator knows the affected
+      person needs to reopen the app.
+- [x] **CLUSTERED MODE ROUTES TO THE LEADER.** The registry lives on the elected leader, so a non-leader
+      instance forwards the event as a `__renumber` frame rather than mutating a registry it does not own.
+- [x] **A REAL BUG IN MY OWN CODE, CAUGHT BY THIS RELEASE'S OWN TEST and worth naming because it would have
+      been invisible.** Step 11 originally called `socket.send(JSON.stringify({…}))`, but `RelaySocket.send`
+      takes an **object** — the transport serializes. A pre-stringified frame arrives as a JSON *string*
+      with no `.type`, which the client's dispatcher silently drops: the whole "tell the client its pin
+      moved" step would have been a no-op that reads as working.
+- [x] **THE CATCH IS DESTRUCTIVE-BUT-SAFE, ON PURPOSE.** The hook swallows throws (the renumber is already
+      committed and must never be reported as failed), which means a throw here would be **invisible**. So
+      a failure retires the old registration instead: that ends the person's live call, which is bad, but it
+      leaves no half-renamed state and their next register lands correctly. A dropped call is recoverable;
+      a split identity is the bug being fixed.
+- [x] `server/renumberRebind.test.ts` (26) — **behavioural against the REAL registry**, because a source pin
+      cannot tell you whether a call actually connects after a rename and that is the entire feature. It
+      reproduces the bug, then proves an invite to the new number rings, the old number rings nobody, and
+      answering mid-rename still works. **All 18 tripwires verified by MUTATION** from byte-exact backups.
+- [x] **THREE HARNESS BUGS OF MY OWN, fixed rather than reported as results.** (1) `reg.connections` is
+      seeded by the HTTP layer, not by `handleMessage`, so the map the rebind rewrites was empty and a
+      correct rebind read as broken; the harness now mirrors `attachRelay`'s **stable** connection object,
+      which is load-bearing rather than cosmetic — a snapshotted pin would report success while the next
+      message from that browser still carried the old number. (2) A bare `{type:"accept"}` cannot be
+      authorized (it must name the room the ring carried — v2.99.43/M45), so every accept in the file was
+      silently doing nothing. (3) `pinsInCall` reads a module global and takes a pin LIST; it is now driven
+      through `_setActiveRegistryForTests` so the owner's actual Contacts symptom is tested through the
+      real function, with an `afterEach` so the registry cannot leak into later files.
+- [x] **ONE OF MY OWN ASSERTIONS WAS VACUOUS AND THE MUTATION RUN CAUGHT IT.** The `verifiedPin` test
+      re-read the value after a rebind — but this harness registers over the non-HTTP path, where
+      `verifiedClaim` is true by construction, so it passed whether the assignment existed or not. It now
+      forces the record to `false` first and asserts the CONSEQUENCE (the invite rings). Recorded honestly:
+      reaching an unverified record through the front door is not possible today, because an unverified
+      registration is handed a random `genPin` unrelated to its identity and no renumber event can name it
+      — so that line is a guard on an invariant, not a reproduction of a live case.
+- [x] **A SILENT-SKIP TEST OF MY OWN REMOVED.** The held-room case had a conditional `return` when nothing
+      was parked, so it could pass by doing nothing — worse than not having it, because it reports safety.
+      The park is now asserted (and there is no `hold` flag: the accept handler parks automatically whenever
+      the answerer is already in another room).
+- [x] **NO SCHEMA CHANGE, no new dependency, no new env var, and the no-op path costs nothing** — a renumber
+      while signed out (the common case) resolves no residue and returns immediately.
+- [x] Suite 2481 passed / 1 skipped (2482).
+
 ## v2.99.82 — the call tile says each thing once, and add-to-contacts has one home (2026-07-26)
 - [x] **THE OWNER ASKED TWICE, the second time with a screenshot circling all three renderings of one name
       on a single tile.** Verbatim: *"you mentioned the name in two places, like you put my icon logo up,

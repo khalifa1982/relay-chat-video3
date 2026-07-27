@@ -23,7 +23,16 @@ import {
 export function useIdentity() {
   const utils = trpc.useUtils();
   const me = trpc.identity.whoami.useQuery(undefined, {
-    refetchOnWindowFocus: false,
+    // v2.99.83: refetch on focus. This used to be false, which meant a number
+    // changed by the ADMIN PANEL or the operator CLI left this tab stale
+    // indefinitely — the only refresh path was a same-tab mutation callback, so a
+    // second tab, another device and both admin paths never learned.
+    //
+    // The SSE `number` event is the fast path and covers everything that goes
+    // through the server. This is the backstop for the one path no server hook can
+    // reach: `scripts/admin-tool.mjs` talks straight to MySQL. One cheap query per
+    // foreground, and the ONLY new recurring read introduced.
+    refetchOnWindowFocus: true,
     staleTime: 30_000,
   });
   const startGuestMutation = trpc.identity.startGuest.useMutation({

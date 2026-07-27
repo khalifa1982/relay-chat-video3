@@ -540,6 +540,46 @@ export function stopClusterRuntime(): void {
 /** HOME → LEADER. A raw signaling message (or synthetic __connect/__disconnect)
  *  from a browser homed on THIS instance, routed to the current leader. When we
  *  ARE the leader, dispatched locally (no Redis hop). */
+/**
+ * RENUMBER → LEADER (v2.99.83).
+ *
+ * The signaling registry lives ONLY on the elected leader, but a renumber can be
+ * served by any instance, so applying the rebind locally on a follower is a silent
+ * no-op — the person stays registered under their old pin on the box that actually
+ * routes calls.
+ *
+ * Rides the inbound signaling channel with a synthetic frame type rather than a new
+ * channel: those frames are cid-addressed and a renumber has no cid, so a sentinel
+ * is passed and the payload travels in `raw`. Two properties come free and both are
+ * wanted — the frame queues behind the leader's HYDRATION GATE (a rebind arriving
+ * mid-hydration is applied after it, which is required because hydration would
+ * otherwise restore the old pin on top of the rename), and the envelope is HMAC'd
+ * like every other bus frame.
+ *
+ * `home` must be our own instance id or the leader's anti-spoof check drops the
+ * frame. It carries no reply path, so the value is informational — but it still has
+ * to be correct.
+ */
+export function clusterForwardRenumber(e: {
+  identityId: number;
+  oldNumber: string;
+  newNumber: string;
+}): void {
+  const raw = { type: "__renumber", ...e };
+  if (_isLeader) {
+    // Sentinel cid: nothing addresses a connection here, and `dispatchInbound`
+    // only uses it for the home map, which a renumber never reads.
+    dispatchInbound("__renumber", INSTANCE_ID, raw, false);
+    return;
+  }
+  const lid = _leaderId;
+  // No leader known yet: drop it. The client-side self-heal converges anyway, and
+  // buffering a rename to replay against an unknown future registry would be worse
+  // than not doing it.
+  if (!lid) return;
+  publishBus(sigInChannel(lid), { cid: "__renumber", home: INSTANCE_ID, raw } as InboundFrame);
+}
+
 export function clusterForwardInbound(cid: string, raw: unknown): void {
   if (_isLeader) {
     cidHome.set(cid, INSTANCE_ID);

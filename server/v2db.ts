@@ -1437,6 +1437,10 @@ export async function regenerateIdentityNumber(
   // reservation stays forever on purpose: it WAS handed out, and recycling it
   // would let a contact who kept the old number later dial a stranger.
   await confirmNumberReservation(newNumber);
+  // The move is now durable. `oldNumber` here is the value re-read under a row
+  // lock INSIDE the transaction, not the pre-flight snapshot — so the notification
+  // names the number that actually moved even if a racer got there first.
+  notifyNumberChanged({ identityId, oldNumber, newNumber });
   return { oldNumber, newNumber };
 }
 
@@ -1498,6 +1502,54 @@ export async function claimIdentityNumber(
     const dup =
       err?.errno === 1062 || err?.code === "ER_DUP_ENTRY" || /duplicate/i.test(msg);
     return { ok: false, reason: dup ? "taken" : "unavailable" };
+  }
+}
+
+/* ── renumber notification ────────────────────────────────────── */
+
+/**
+ * Called after an identity's 6-digit number has DURABLY moved (v2.99.83).
+ *
+ * WHY A HOOK AND NOT AN IMPORT. `server/relay.ts` imports `_core/context`, which
+ * imports this module — so a `v2db -> relay` edge would close the cycle
+ * `v2db -> relay -> _core/context -> v2db`. Today there is no edge in either
+ * direction, and this hook keeps it that way. A second, independent reason:
+ * `relay.ts` has boot side effects (it owns the live registry, the reap timers and
+ * the SSE route), and pulling those into the DB layer is the trap v2.99.71 hit when
+ * importing a script ran a health check and called `process.exit(0)`, killing the
+ * test runner.
+ *
+ * WHY IT LIVES INSIDE `regenerateIdentityNumber` rather than at the three
+ * procedures that call it: exactly the reason the presence hook gives above —
+ * forgetting one call site is the class of bug this codebase keeps re-learning, and
+ * a test already forbids a parallel writer of `identities.number`, so this is the
+ * only place it can live.
+ *
+ * WHAT IT IS FOR. The registry that routes calls is in memory and keyed on PIN,
+ * while presence is a DB row keyed on identityId. Without this, a renumbered person
+ * stays registered under their OLD pin: reachable at a number that no longer exists
+ * and unreachable at the one they now own, while the dialer cheerfully reports them
+ * online.
+ */
+let numberChangeHook:
+  | ((e: { identityId: number; oldNumber: string; newNumber: string }) => void)
+  | null = null;
+export function setNumberChangeHook(
+  fn: ((e: { identityId: number; oldNumber: string; newNumber: string }) => void) | null
+): void {
+  numberChangeHook = fn;
+}
+function notifyNumberChanged(e: {
+  identityId: number;
+  oldNumber: string;
+  newNumber: string;
+}): void {
+  try {
+    numberChangeHook?.(e);
+  } catch {
+    // The renumber is already COMMITTED. It must never be reported as failed
+    // because a downstream notification threw — so this swallows, and the
+    // consumer's own catch is responsible for leaving no half-renamed state.
   }
 }
 
