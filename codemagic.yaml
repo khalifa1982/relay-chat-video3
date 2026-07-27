@@ -44,13 +44,38 @@ workflows:
           WORKSPACE=$(ls -d *.xcworkspace | head -1)
           SCHEME=$(echo "$WORKSPACE" | sed 's/.xcworkspace//')
           echo "Using workspace: $WORKSPACE, scheme: $SCHEME"
-          xcode-project build-ipa \
-            --workspace "$WORKSPACE" \
-            --scheme "$SCHEME" \
-            --config "Release"
+          
+          # Run xcodebuild directly to get full error output
+          set -o pipefail
+          xcodebuild -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -archivePath "$CM_BUILD_DIR/ios/build/RELAY.xcarchive" \
+            -destination "generic/platform=iOS" \
+            archive \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            CODE_SIGN_STYLE=Manual \
+            2>&1 | tee /tmp/xcodebuild_full.log | tail -100
+          
+          # If archive succeeded, export IPA
+          xcodebuild -exportArchive \
+            -archivePath "$CM_BUILD_DIR/ios/build/RELAY.xcarchive" \
+            -exportOptionsPlist ../exportOptions.plist \
+            -exportPath "$CM_BUILD_DIR/build/ios/ipa" \
+            2>&1 | tee -a /tmp/xcodebuild_full.log
+      - name: Show build errors if failed
+        script: |
+          if [ -f /tmp/xcodebuild_full.log ]; then
+            echo "=== ERRORS ==="
+            grep -i "error:" /tmp/xcodebuild_full.log | head -50
+            echo "=== WARNINGS ==="
+            grep -i "warning:" /tmp/xcodebuild_full.log | head -20
+          fi
     artifacts:
       - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
+      - /tmp/xcodebuild_full.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
     publishing:
       app_store_connect:
