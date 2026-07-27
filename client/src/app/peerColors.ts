@@ -48,9 +48,20 @@ export const PEER_BUBBLE_STYLE: CSSProperties = {
 /**
  * Group palette. Blue is deliberately ABSENT: in a group it would read as "the
  * other person" from the 1:1 rule, and orange is absent because that is always
- * you. Ten hues, each with enough separation to be told apart at bubble size on
- * a phone, all dark enough to carry white text at the contrast the rest of the
- * app uses.
+ * you. Every hue is dark enough to carry white text at the contrast the rest of
+ * the app uses, and every `text` is the light tint the sender's NAME renders in.
+ *
+ * SIXTEEN, at the owner's request ("every user gets a different bubble colour, up
+ * to 16"). Said plainly: sixteen is at the limit of what is tellable apart at
+ * bubble size on a phone, and it has to be, because the wheel is already missing
+ * blue and orange. The first ten are the v2.99.85 set and are the most separated;
+ * the six added here lean on DEPTH as a second axis rather than trying to find six
+ * more unused hues, which do not exist — a deep crimson beside a bright rose reads
+ * as two colours, whereas two more near-identical greens would not.
+ *
+ * The array's ORDER carries no meaning: `peerPaletteIndex` is a bit-mixed hash, so
+ * neighbours in this list are not neighbours on screen. What matters is that all
+ * sixteen are pairwise distinguishable, which is what the palette test checks.
  */
 export const GROUP_PALETTE: readonly { from: string; to: string; text: string }[] = [
   { from: "#a855f7", to: "#6d28d9", text: "#d8b4fe" }, // violet
@@ -63,6 +74,13 @@ export const GROUP_PALETTE: readonly { from: string; to: string; text: string }[
   { from: "#8b5cf6", to: "#5b21b6", text: "#c4b5fd" }, // purple
   { from: "#f97316", to: "#9a3412", text: "#fdba74" }, // burnt (distinct from own gradient)
   { from: "#14b8a6", to: "#0f766e", text: "#5eead4" }, // teal
+  // ── v2.103.3, the second six ────────────────────────────────────────────────
+  { from: "#dc2626", to: "#7f1d1d", text: "#fca5a5" }, // crimson — deeper and less pink than rose
+  { from: "#d946ef", to: "#86198f", text: "#f0abfc" }, // fuchsia — sits between pink and violet
+  { from: "#22c55e", to: "#166534", text: "#86efac" }, // spring green — warmer than emerald's blue-green
+  { from: "#ca8a04", to: "#713f12", text: "#fde68a" }, // mustard — amber taken darker
+  { from: "#7e22ce", to: "#4c1d95", text: "#e9d5ff" }, // plum — violet taken darker
+  { from: "#0891b2", to: "#155e75", text: "#a5f3fc" }, // sea — cyan taken darker
 ];
 
 /**

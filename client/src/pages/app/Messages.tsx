@@ -230,6 +230,55 @@ function dayLabel(iso: string | Date): string {
   return d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
 }
 
+/**
+ * The sender's thumbnail beside their name in a group row (v2.103.3).
+ *
+ * Owner: "each user's message shows a small clickable thumbnail of their profile
+ * image beside their name on the left, opening their status/story."
+ *
+ * `PeerAvatar` already does all of the work — the photo, the initials fallback when
+ * a photo 403s, the story ring, and the tap that opens the story or the profile — so
+ * this is a gutter, not a new avatar.
+ *
+ * THE FIXED WIDTH IS THE LOAD-BEARING PART. PeerAvatar draws its ring ONLY when the
+ * person has a story (`st?.hasAny ? ring : disc`), so its rendered footprint is 28px
+ * without one and ~36px with one. Placed bare in the row that would shift every
+ * bubble sideways according to somebody else's story state, and make the whole
+ * column JUMP the moment a story is posted or expires 24 hours later. A constant
+ * 36px gutter with the avatar centred inside makes the row's geometry independent of
+ * that entirely.
+ *
+ * `show` is false for the later messages of a stacked run, where the sender label is
+ * suppressed too (`sameAsPrev`). The gutter still takes its width in that case — an
+ * absent spacer is what would slide those bubbles left and visibly break the run.
+ *
+ * A sender who is no longer in the roster has no member entry, so the avatar is
+ * rendered NON-clickable rather than as a button whose handler returns early: a
+ * control that looks tappable and does nothing is worse than one that does not.
+ */
+function SenderThumb({
+  member,
+  show,
+}: {
+  member?: { name: string; number: string; avatarUrl: string | null };
+  show: boolean;
+}) {
+  return (
+    <span className="w-9 shrink-0 self-start grid place-items-center">
+      {show && (
+        <PeerAvatar
+          number={member?.number}
+          name={member?.name}
+          avatarUrl={member?.avatarUrl}
+          size={28}
+          clickable={!!member?.number}
+          className="mt-[2px]"
+        />
+      )}
+    </span>
+  );
+}
+
 export default function MessagesPage() {
   const { me } = useIdentity();
   const [location, setLocation] = useLocation();
@@ -835,6 +884,29 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const nameById = useMemo(() => {
     const m = new Map<number, string>();
     for (const mem of infoQuery.data?.members ?? []) m.set(mem.id, mem.displayName || mem.number);
+    return m;
+  }, [infoQuery.data]);
+  /**
+   * The same roster, keeping the two fields `nameById` was throwing away (v2.103.3).
+   *
+   * Owner: "each user's message shows a small clickable thumbnail of their profile
+   * image beside their name on the left, opening their status/story."
+   *
+   * `conversationInfo` has ALWAYS returned `number` and `avatarUrl` alongside the
+   * display name — the memo above simply discarded them — so the sender thumbnail
+   * needs no server change at all. Kept as a SECOND map rather than widening the
+   * first, because `nameById` has four other readers that want a plain string and
+   * changing its value type would touch all of them for no gain.
+   */
+  const memberById = useMemo(() => {
+    const m = new Map<number, { name: string; number: string; avatarUrl: string | null }>();
+    for (const mem of infoQuery.data?.members ?? []) {
+      m.set(mem.id, {
+        name: mem.displayName || mem.number,
+        number: mem.number,
+        avatarUrl: mem.avatarUrl ?? null,
+      });
+    }
     return m;
   }, [infoQuery.data]);
 
@@ -1839,6 +1911,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     (sameAsPrev ? " mt-0.5" : " mt-2")
                   }
                 >
+                {/* v2.103.3: the sender thumbnail, ONE insertion rather than three.
+                    This row is the single container wrapping BOTH the emoji-only
+                    branch and the ordinary bubble branch below, so putting the gutter
+                    here covers every kind of received group message — including the
+                    attachment and status-reply shapes — instead of repeating it per
+                    branch, which is how three copies of the sender label came to
+                    exist in the first place. Only for a group, and only for somebody
+                    else's message: my own bubbles are already unambiguous. */}
+                {isGroup && !mine && (
+                  <SenderThumb member={memberById.get(m.senderIdentityId)} show={!sameAsPrev} />
+                )}
                 {mine && (
                   <MessageMenu
                     mine

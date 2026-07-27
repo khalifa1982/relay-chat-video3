@@ -7557,6 +7557,76 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.103.3 — the sender's thumbnail, sixteen colours, and three asks already built (2026-07-27)
+
+First of six releases from a 19-agent recon pass over the owner's group-admin batch.
+The most valuable thing that pass produced was a list of what NOT to build.
+
+- [x] **ALREADY BUILT, confirmed with pins rather than reimplemented.** Per-person
+      bubble colours (v2.99.85, `peerColors.ts`); day grouping with a header at the top
+      of each day (v2.71 — Today / Yesterday / "June 28, 2026"); the DATE on a message
+      from a previous day (v2.99.73 — today is time-only on purpose, since repeating
+      today's date forty times is noise).
+- [x] **The design's guess that the day header "must be scrolling away" was DROPPED, not
+      acted on.** `git log -S 'const showDay'` shows one commit and the predicate has
+      always contained `!prev`, so the first day's header has never been missing.
+- [x] **The one genuinely missing piece: the sender thumbnail — and it needed NO server
+      change.** `conversationInfo` has always returned each member's `number` and
+      `avatarUrl`; the roster memo discarded both. A second memo keeps them and
+      `nameById` is left alone, because four other readers want a plain string.
+- [x] `PeerAvatar` REUSED, not rebuilt — it already owns the photo, the initials
+      fallback on a 403, the story ring and the tap that opens the story or profile.
+- [x] **THE GUTTER IS THE LOAD-BEARING PART, and it answers a trap the recon missed.**
+      PeerAvatar draws its ring only when the person HAS a story, so its footprint is
+      28px or 36px — bare in the row, every bubble's left edge would depend on somebody
+      else's story state and the column would jump when a story expired. A constant 36px
+      gutter fixes it. **Measured** against the real built stylesheet at 320/375/390/430:
+      bubble left edge 54px in all three states (ring / no ring / stacked spacer), ringed
+      avatar fits exactly, avatar top-aligned +2px with the name, no overflow.
+- [x] **One insertion, not three** — the row container wraps both the emoji branch and
+      the bubble branch, so one mount covers attachment, status-reply, emoji and text.
+- [x] The spacer span is unconditional and only the avatar inside is gated, or a stacked
+      run would slide left and visibly break.
+- [x] A sender who has left the roster gets a NON-clickable disc, not a focusable button
+      whose handler returns early.
+- [x] **Palette 10 → 16.** Sixteen is at the limit of what is tellable apart at bubble
+      size, and it has to be — the wheel is already missing blue and orange — so the six
+      added lean on DEPTH rather than hunting six unused hues that do not exist. Each has
+      its own light NAME tint, or two senders' names would match. A test asserts all
+      sixteen are REACHABLE through the real hash, which catches the widening being
+      cosmetic if anything still divided by a hardcoded ten.
+- [x] `client/src/pages/app/groupMessageThumb.test.ts` (15); **all 25 tripwires verified
+      by mutation** from byte-exact backups off a confirmed-GREEN baseline, sources
+      byte-identical afterwards.
+
+**One of my own mutations was bad twice over, reported rather than counted:** it first
+failed to match on indentation, and the corrected version then matched TWICE — an
+18-space anchor is a SUBSTRING of the 24-space one, so one needle hit two render sites.
+Re-anchored to the longer indent, after which it bit.
+
+**A recon error caught by reading:** the map called one of the three sender-label sites
+"the attachment path" when it is the SEARCH-RESULTS list. That matters — search results
+are flat with no stacking and no day pills, so they are deliberately left without a
+gutter rather than given one.
+
+**NOT DONE, the honest half of the split.** Roles, admin-only deletion, the add-member
+toggle, the 4-digit lock and group invite links are v2.104.0 onward. An adversarial
+review already killed two things before they were written:
+
+- Reusing `clearedUpToMessageId` as a join watermark would make a newly added member's
+  group **invisible** — `listThreads` drops the row entirely when nothing is newer
+  (`server/v2db.ts:3524-3529`), which is exactly what v2.103.0 built it to do. Membership
+  needs its own `joinedAtMessageId`.
+- An "every member is an admin when there is no admin" fallback is a **first-mover
+  takeover primitive**, default-on for every pre-v2.102.0 group (they all have
+  `ownerIdentityId` NULL): any member could appoint themselves and strip the other
+  nineteen. Reachable transitively through an invite link too. The fallback must grant
+  `edit-profile` only — which is all that exists today anyway.
+- And there is no admin SUCCESSION: the sole admin using `leaveGroup` collapses the group
+  to all-admin, which the refusals on self-demotion and last-admin-removal do not cover.
+
+No schema change, no new dependency, no new env var, no server change. 3147 tests.
+
 ## REPO NOTE — `main` now belongs to a different project (2026-07-27)
 
 Not a release. A structural fact any future contributor has to know before touching git.
