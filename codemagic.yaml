@@ -23,9 +23,6 @@ workflows:
         script: |
           npm install -g pnpm@9
           pnpm install --frozen-lockfile
-      - name: Set up Expo
-        script: |
-          npx expo install --check
       - name: Prebuild iOS
         script: |
           npx expo prebuild --platform ios --clean
