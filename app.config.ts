@@ -40,7 +40,7 @@ const env = {
   // Leave empty to use the default icon from assets/images/icon.png
   logoUrl: "/manus-storage/relay-icon_08a8c101.png",
   scheme: schemeFromBundleId,
-  iosBundleId: "io.yourchat.relay",
+  iosBundleId: "com.app.relaymobile",
   androidPackage: bundleId,
 };
 

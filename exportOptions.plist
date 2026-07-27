@@ -10,8 +10,8 @@
     <string>manual</string>
     <key>provisioningProfiles</key>
     <dict>
-        <key>io.yourchat.relay</key>
-        <string>io.yourchat.relay AppStore Distribution</string>
+        <key>com.app.relaymobile</key>
+        <string>com.app.relaymobile AppStore Distribution</string>
     </dict>
     <key>uploadBitcode</key>
     <false/>

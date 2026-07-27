@@ -12,7 +12,7 @@ workflows:
         certificates:
           - certificate: relay-distribution
       vars:
-        BUNDLE_ID: "io.yourchat.relay"
+        BUNDLE_ID: "com.app.relaymobile"
         APP_STORE_APP_ID: "6787503091"
         APPLE_TEAM_ID: "QJBVFFML9P"
       node: 22
