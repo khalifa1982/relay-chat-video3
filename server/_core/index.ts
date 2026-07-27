@@ -21,6 +21,7 @@ import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpir
   releaseMissedCallEmailClaim,
   MISSED_CALL_EMAIL_COOLDOWN_MS,
 } from "../v2db";
+import { reapExpiredGuests } from "../purgeIdentity";
 import { sendPushToIdentity } from "../webPush";
 import { registerWellKnown } from "../wellKnown";
 import { registerSeo } from "../seo";
@@ -494,6 +495,18 @@ async function startServer() {
     reapStaleSessions(30 * 60_000, 372 * 24 * 60 * 60_000).catch((err) =>
       console.warn("[sessions reaper]", err),
     );
+  }, 30 * 60_000).unref();
+  // Purge guest identities that have gone 30 days without a visit (v2.100.0).
+  //
+  // OFF BY DEFAULT, and the interval below is registered regardless because
+  // `reapExpiredGuests` returns immediately when the switch is unset — so turning
+  // it on is one env var and a restart, with no code change and no window where
+  // half the fleet sweeps. This is the only unattended irreversible destructive
+  // path in the codebase, so `RELAY_GUEST_PURGE=dry` logs what it WOULD delete and
+  // touches nothing: the first honest count of eligible rows has to come from
+  // production, because nobody can take it from outside.
+  setInterval(() => {
+    reapExpiredGuests().catch((err) => console.warn("[guest purge]", err));
   }, 30 * 60_000).unref();
   // tRPC API
   //

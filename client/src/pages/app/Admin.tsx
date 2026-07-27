@@ -23,7 +23,7 @@ import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { ShieldCheck, Search, Loader2, Hash, BellRing, Check, X } from "lucide-react";
+import { ShieldCheck, Search, Loader2, Hash, BellRing, Check, X, Trash2 } from "lucide-react";
 import { RoleBadge } from "@/app/VerifiedBadge";
 
 function fmtNum(n: string) {
@@ -58,6 +58,22 @@ export default function Admin() {
     // "become a guest" need three different next steps. Surfacing its message
     // verbatim is the whole point of naming them.
     onError: (e) => setTypeError(e.message),
+  });
+  /** Which row's DELETE panel is open, and the number typed to confirm it (v2.100.0). */
+  const [deleting, setDeleting] = useState<number | null>(null);
+  const [confirmNum, setConfirmNum] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const purge = trpc.admin.deleteIdentity.useMutation({
+    onSuccess: () => {
+      toast.success("Deleted. Their number is retired and will not be reissued.");
+      setDeleting(null);
+      setConfirmNum("");
+      setDeleteError(null);
+      utils.admin.findIdentities.invalidate().catch(() => {});
+    },
+    // The server names the self-deletion refusal specifically, because "another
+    // admin has to do it" is a different next step from "that id doesn't exist".
+    onError: (e) => setDeleteError(e.message || "Couldn't delete that person."),
   });
   const setNumber = trpc.admin.setIdentityNumber.useMutation({
     onSuccess: (res) => {
@@ -199,9 +215,87 @@ export default function Admin() {
                     <ShieldCheck className="size-3.5" />
                     {typing === r.id ? "Cancel" : "Account type"}
                   </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => {
+                      setDeleting(deleting === r.id ? null : r.id);
+                      setConfirmNum("");
+                      setDeleteError(null);
+                    }}
+                  >
+                    <Trash2 className="size-3.5" />
+                    {deleting === r.id ? "Cancel" : "Delete"}
+                  </Button>
                 </div>
               </div>
               {checking === r.id && <PushCheck identityId={r.id} />}
+              {deleting === r.id && (
+                <div className="mt-3 rounded-xl border border-destructive/40 bg-destructive/5 p-3">
+                  <p className="text-xs font-semibold text-destructive">
+                    Delete this person completely. This cannot be undone.
+                  </p>
+                  <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-muted-foreground">
+                    <li>Their messages, threads, contacts, stories, call log and devices go.</li>
+                    <li>
+                      Anyone who was in a 1:1 chat with them loses that conversation from their own
+                      inbox. Group chats survive for their other members.
+                    </li>
+                    <li>
+                      {fmtNum(r.number)} is retired for good — it is never handed to anybody else.
+                    </li>
+                    {/* Said plainly rather than implied away. Deleting an attachments row would
+                        make its media MORE readable, not less (v2.98.4/F3: the storage proxy
+                        serves a key it cannot classify), and a third party's contact row is what
+                        holds a BLOCK, so deleting it would silently un-block them (M13). The
+                        avatar line is the honest one: a profile photo has always been readable
+                        by any signed-in RELAY user (it renders on the incoming-ring card), and
+                        that does not change here — the bytes stay because there is no
+                        storage-delete path in this codebase to remove them with. */}
+                    <li>
+                      Files they sent stay in storage and stay locked shut. Their profile photo
+                      stays too — no more readable than before, but not erased.
+                    </li>
+                    <li>A block anyone placed on them stays in place.</li>
+                  </ul>
+                  <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      dir="ltr"
+                      autoComplete="off"
+                      maxLength={9}
+                      placeholder={r.number}
+                      value={confirmNum}
+                      onChange={(e) => {
+                        setConfirmNum(e.target.value);
+                        setDeleteError(null);
+                      }}
+                      aria-label={`Type ${r.number} to confirm deleting this person`}
+                      className="w-36 rounded-lg border border-destructive/40 bg-background px-3 py-2 text-center font-mono text-lg tracking-[0.12em] outline-none focus:border-destructive"
+                    />
+                    {/* Typing the number is the confirmation, not a Yes/No. The panel lists
+                        several rows at once and every one of them has a Delete button in the
+                        same place, so a plain confirm dialog protects against hesitation but
+                        not against acting on the wrong row — which is the mistake that
+                        actually happens here. */}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="destructive"
+                      disabled={
+                        confirmNum.replace(/[\s\-.]/g, "") !== r.number || purge.isPending
+                      }
+                      onClick={() => purge.mutate({ identityId: r.id })}
+                    >
+                      {purge.isPending ? "Deleting…" : "Delete permanently"}
+                    </Button>
+                  </div>
+                  {deleteError && <p className="mt-2 text-xs text-destructive">{deleteError}</p>}
+                </div>
+              )}
               {typing === r.id && (
                 <div className="mt-3 border-t border-border/60 pt-3">
                   <p className="text-xs text-muted-foreground">

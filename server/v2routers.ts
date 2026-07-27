@@ -115,6 +115,7 @@ import {
   type PresenceLite,
 
 } from "./v2db";
+import { adminPurgeIdentity, guestDaysLeft } from "./purgeIdentity";
 import { sendEmail, emailEnabled, wrapEmailDocument } from "./email";
 import { appBaseUrl } from "./appUrl";
 import { unsubscribeHeaders, unsubscribeLink } from "./unsubscribe";
@@ -1033,6 +1034,16 @@ export const v2DirectoryRouter = router({
           (id.verified ? "registered" : "guest")) as IdentityRole | null,
         // Carrier-style busy line (v2.88): they're ON A CALL right now.
         inCall: hidden ? false : (await pinsInCallAsync([id.number])).has(id.number),
+        // How long before a GUEST identity is deleted (v2.100.0, owner: *"for the
+        // guest, the blue badge, when you enter to their profile, it will show you
+        // that they will be deleted after certain days ... the number of days and
+        // the countdown"*). NULL — the field is OMITTED, never 0 — for anybody who
+        // is not an expiring guest, so a registered account cannot render one.
+        //
+        // No new information class: the figure is derived purely from how long ago
+        // they last opened RELAY, which `lastSeenAt` on this same payload has stated
+        // outright since v2.99.66.
+        guestDaysLeft: guestDaysLeft(id.guestExpiresAt),
         partyLine: false,
         memberCount: 0,
       };
@@ -3953,6 +3964,64 @@ export const v2AdminRouter = router({
         `[admin] identity ${input.identityId} (account ${res.userId}) set to ${res.role} by identity ${me.id}`
       );
       return { ok: true as const, role: res.role };
+    }),
+
+  /**
+   * DELETE A PERSON COMPLETELY (v2.100.0, owner: *"if I click delete, it will
+   * delete him completely. Whoever he took, whoever he had contact data,
+   * everything will delete."*).
+   *
+   * The only irreversible action any RELAY surface can take, and it shares its
+   * entire implementation with the automatic guest purge — one cascade, two
+   * callers, because two copies of "everything" is how the two would come to mean
+   * different things. What is and is not destroyed, and why three things are
+   * deliberately KEPT because deleting them would do active harm, is documented in
+   * `server/purgeIdentity.ts`; the short version is that an `attachments` row is
+   * what holds its media SHUT (v2.98.4/F3) and a third party's contact row is what
+   * holds a BLOCK (v2.99.28/M13).
+   *
+   * `TWO_STEP` confirmation is the CLIENT's job and this endpoint does not model
+   * it, deliberately: a server-side confirm token would be a second thing to get
+   * wrong and would not stop a determined caller, whereas an admin who reaches
+   * this procedure has already re-derived as an admin on this very request.
+   *
+   * It REFUSES the caller's own identity, for the same reason a self-demotion is
+   * refused — the one account nobody else can restore for you is your own, and an
+   * admin deleting themselves can leave a deployment with no administrator.
+   */
+  deleteIdentity: publicProcedure
+    .input(z.object({ identityId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = await requireAdmin(ctx);
+      const res = await adminPurgeIdentity(input.identityId, me.id);
+      if (!res.ok) {
+        const map: Record<
+          typeof res.reason,
+          { code: "CONFLICT" | "NOT_FOUND" | "INTERNAL_SERVER_ERROR"; message: string }
+        > = {
+          "not-eligible": {
+            code: "CONFLICT",
+            message:
+              "You can't delete your own account from here — that could leave this deployment with no administrator. Another admin has to do it.",
+          },
+          "not-found": {
+            code: "NOT_FOUND",
+            message: "No identity with that id, or it is already being deleted.",
+          },
+          unavailable: {
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Couldn't complete the deletion. Some of it may have been applied.",
+          },
+        };
+        const m = map[res.reason];
+        throw new TRPCError({ code: m.code, message: m.message, cause: res.reason });
+      }
+      // Ids and the number only. The number is logged BECAUSE it is now tombstoned
+      // and can never be reissued — that is the fact worth being able to look up.
+      console.warn(
+        `[admin] identity ${input.identityId} (${res.number ?? "no number"}, account: ${res.hadAccount}) DELETED by identity ${me.id}`
+      );
+      return { ok: true as const, hadAccount: res.hadAccount };
     }),
 
   /**

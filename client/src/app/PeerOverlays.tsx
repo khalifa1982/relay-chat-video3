@@ -199,6 +199,44 @@ function presenceLine(d: {
   return "Offline";
 }
 
+/**
+ * How long before a guest identity is deleted (v2.100.0, owner: *"for the guest,
+ * the blue badge, when you enter to their profile, it will show you that they will
+ * be deleted after certain days ... beside his profile after the blue badge"*).
+ *
+ * Renders NOTHING for anybody who is not an expiring guest — the server sends null
+ * rather than 0 for them, so there is no state in which a registered account shows
+ * a countdown. Coloured to match the guest badge above it so the two read as one
+ * fact rather than two, and it says the clock RESETS on every visit, because a bare
+ * "deleted in 12 days" implies a countdown nobody can stop; `touchGuestExpiry`
+ * pushes it forward every time they open RELAY, which is the part that makes the
+ * figure non-frightening.
+ */
+export function GuestExpiryNote({
+  daysLeft,
+  size = "sm",
+}: {
+  daysLeft: number | null | undefined;
+  size?: "sm" | "md";
+}) {
+  if (daysLeft == null) return null;
+  const label =
+    daysLeft <= 0
+      ? "Guest number expires today"
+      : `Guest number expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
+  return (
+    <div
+      className={
+        "mt-2 inline-flex max-w-[16rem] flex-col items-center gap-0.5 rounded-full border border-[#38bdf8]/35 bg-[#38bdf8]/10 px-3 py-1 text-center text-[#0284c7] dark:text-[#7dd3fc] " +
+        (size === "md" ? "text-xs" : "text-[11px]")
+      }
+    >
+      <span className="font-semibold">{label}</span>
+      <span className="opacity-80">Opening RELAY resets the countdown</span>
+    </div>
+  );
+}
+
 export function PeerOverlaysHost() {
   const [, setLocation] = useLocation();
   const engine = useRelayEngine();
@@ -385,6 +423,7 @@ export function PeerOverlaysHost() {
                   {p.isOnline ? presenceLine(p) : (chatActions?.lastSeenText || presenceLine(p))}
                 </div>
               )}
+              <GuestExpiryNote daysLeft={p.guestDaysLeft} />
 
               <div className="mt-5 grid w-full grid-cols-3 gap-2">
                 <button
@@ -534,6 +573,7 @@ export function PeerOverlaysHost() {
                 {presenceLine(p)}
               </div>
             )}
+            <GuestExpiryNote daysLeft={p.guestDaysLeft} size="md" />
 
             <div className="mt-7 grid w-full max-w-sm grid-cols-3 gap-2.5">
               <button
