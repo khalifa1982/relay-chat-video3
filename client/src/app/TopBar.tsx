@@ -105,12 +105,17 @@ export function BrandMark() {
             style={{ background: "linear-gradient(135deg,#C4B5FD,#A5F3FC)", opacity: 0 }}
           />
         </span>
-        {/* The wordmark. It hides below 390px so the middle zone keeps its width on
-            the smallest phones — the dot and the connection line always stay, so the
-            bar never loses its anchor. ONE component handles both widths now: two
-            call sites would mean two subscriptions to the connection store and the
-            breakpoint restated in two places. */}
-        <span className="relative max-[389px]:hidden">
+        {/* The wordmark. NO BREAKPOINT — v2.103.2, owner: "I saw one time you put the
+            relay logo up in the top bar. It's moving animated. Now it's not showing."
+            v2.99.94 hid it below 390px to protect the middle zone, and MEASUREMENT
+            says that was two whole phone sizes too cautious: at 360 / 375 / 390 / 430
+            the word coexists with the longest name and the PIN with real slack, and
+            even at 320 the only contact is the PEAK FRAME of the swell grazing an
+            already-truncated name — which is why the swell is sized to 1.10, the
+            largest peak that keeps positive slack at every measured width. So the word
+            is now on every phone, including the 360px Androids and the 375px iPhones
+            where it had been silently absent. */}
+        <span className="relative">
           <span
             className="block text-sm font-extrabold tracking-[0.22em] text-foreground relay-word-pop"
             style={{ transformOrigin: "left center" }}
@@ -118,14 +123,20 @@ export function BrandMark() {
             RELAY
           </span>
           {/* The sheen lives in its OWN clipping layer rather than on a shared
-              `overflow-hidden` parent: the word swells to 1.07 and a parent that
-              clipped the band would clip the swell along with it. */}
+              `overflow-hidden` parent: the word swells and a parent that clipped the
+              band would clip the swell along with it.
+              v2.103.2 widens the band from 24px to 40px and brightens it. The word is
+              64px, so a 24px band was a thin glint crossing it in a fraction of a
+              second; 40px is most of the mark lighting up. This costs nothing in
+              safety, because the band is clipped to the word's own box and therefore
+              cannot reach anything beside it however wide it gets — unlike the swell,
+              which is a transform and does paint outside its layout box. */}
           <span aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
             <span
-              className="absolute inset-y-0 -left-6 w-6 relay-sheen"
+              className="absolute inset-y-0 -left-10 w-10 relay-sheen"
               style={{
                 background:
-                  "linear-gradient(90deg,rgba(110,231,255,0),rgba(190,250,255,.55),rgba(110,231,255,0))",
+                  "linear-gradient(90deg,rgba(110,231,255,0),rgba(205,252,255,.72),rgba(110,231,255,0))",
               }}
             />
           </span>

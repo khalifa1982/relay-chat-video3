@@ -7557,6 +7557,80 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.103.2 — the RELAY wordmark was invisible three different ways (2026-07-27)
+
+Owner: *"I saw one time you put the relay logo up in the top bar. It's moving animated.
+Now it's not showing. Why? The word rely itself. I told you every thirty seconds, make
+animation."*
+
+**Nothing broke it.** The wordmark's markup was byte-identical to what v2.99.94 shipped,
+so this needed a diagnosis rather than a `git log`. A 19-agent investigation returned
+five findings; three are real, independent causes.
+
+- [x] **Cause 1 — a 390px breakpoint deleted the word on most phones.**
+      `max-[389px]:hidden` removed it outright on 375px iPhones (SE / 8 / 13 mini) and
+      360px Androids while leaving the dot and connection line in place, so the bar
+      looked intact and the word was simply gone. Measured against the real built
+      stylesheet over five name shapes: the word coexists with the longest name and the
+      PIN at 360 / 375 / 390 / 430 with real slack, and at 320 the only contact is the
+      peak frame of the swell grazing an already-truncated name. **Breakpoint removed
+      entirely**; 25/25 cases pass, worst case 2px of slack.
+- [x] **Cause 2 — the only mount was on a `md:hidden` surface**, so above 768px the
+      animated wordmark did not exist at all (the sidebar drew a static uppercase span).
+      v2.99.94's own pin had frozen that state by asserting exactly one mount. The
+      sidebar now mounts `<BrandMark />` and desktop gains the connection line it never
+      had. Two mounts is correct because the surfaces are mutually exclusive
+      (`hidden md:flex` vs `md:hidden`), the wordmark's rules still live in one place,
+      and `useConnectionState` is a `useSyncExternalStore` over window events with no
+      timer.
+- [x] **Cause 3 — v2.99.94 cut its own duty cycle.** Sampled from the running animation
+      with a negative `animation-delay`: v2.99.86 moved 1.3s of a 5.5s cycle (22.8%);
+      v2.99.94 moved 1.3s of a 30s cycle (4.4%); this release moves 3.1s of 30s (10.5%).
+      The cadence the owner asked for was delivered and the event inside it became
+      nearly invisible.
+- [x] **A fourth defect nobody had noticed: the sheen band came to rest ON the word.**
+      Its travel ended at `translateX(320%)` of a 24px band — left edge at 52.8px, inside
+      a 64px mark — and was held there from 7% to 100%, so for 29.2 of every 30 seconds
+      there was a static bright smear over the last letter. v2.99.86 had the same end
+      point and only got away with it by repeating every 5.5s. Now pinned as a clearance
+      calculation, which the old shape fails (43.2px vs the 64px it must clear).
+- [x] **Two things reading the keyframes would never have revealed.** 40% of the band's
+      travel happened off-screen (it is inside the clip only between 0% and 260% of its
+      own width), and `ease-in-out` is fastest in the middle — which is precisely the
+      visible part — so the band crossed the letters at its top speed and was gone in
+      1.4s of a 3.6s window. Tightening the travel and switching that one animation to
+      `linear` took the visible band from 1.4s to 3.3s, matching the word's 3.1s.
+- [x] Word beats twice, second smaller, matching the brand dot's own language; band
+      widened 24px → 40px of a 64px mark (free, because it is clipped to the word's box —
+      unlike the swell, which is a transform and paints outside its layout box, which is
+      why the peak is measured rather than chosen).
+- [x] **The one-sided pin is what let this regress, and it is now two-sided.** v2.99.94
+      asserted motion ends at or before 10% with no floor, so shortening the flourish to
+      5% passed cleanly. A one-sided bound on a perceptual property rewards making the
+      thing disappear. Now 8%–20%, both bounds load-bearing, plus a pin that the word and
+      band end at the same percentage.
+- [x] `client/src/app/wordmarkFlourish.test.ts` (15); **all 25 tripwires verified by
+      mutation** from byte-exact backups and a confirmed-GREEN baseline, mutator aborting
+      unless its target occurs exactly once, sources byte-identical afterwards.
+- [x] Two pre-existing pins rewritten to the property — both had frozen halves of this
+      defect (the single `md:hidden` mount, and the one-sided window bound).
+
+**Harness bugs of my own, reported rather than counted as results.** The first in-motion
+run said the band was visible 95% of the cycle and I was one step from calling it a code
+defect — I had dropped the `flex items-center gap-2` wrapper, so `#word` was a bare inline
+span and the sheen's `inset-0` clip resolved against a body-width box. And the
+before/after comparison first reported 0% motion for both older variants, because
+`!important` on the `animation` shorthand also pins `animation-delay`, so the inline seek
+was silently ignored and every sample read the same frame.
+
+**Said plainly, and it needs a five-second check on the owner's phone:** iOS/Android
+**Reduce Motion** suppresses this entirely, because both animations live inside
+`@media (prefers-reduced-motion: no-preference)` and hoisting a decorative flourish out of
+that gate would override an accessibility request to deliver it. Under reduced motion the
+still frame is verified to be the plain unscaled mark with the band fully off it.
+
+No schema change, no new dependency, no new env var, no server change. 3132 tests.
+
 ## v2.103.1 — the call-history filters fit a phone, and the Profile hero stops repeating itself (2026-07-27)
 
 Two owner reports, both about the same thing: a screen saying something twice, or not

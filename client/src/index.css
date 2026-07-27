@@ -476,40 +476,75 @@ body.relay-app-lock {
      `overflow:hidden` — no background-position animation, which would repaint the
      whole element every frame. Deliberately slow and mostly idle: the owner asked
      for "animated slowly … nice animation, but don't make it so much".
-     v2.99.94 RETIMES it to the owner's own newer cadence — "for the word rely make
+     v2.99.94 RETIMED it to the owner's own newer cadence — "for the word rely make
      kind of nice animated animation for that word. it keep animated every 30
      seconds" — by stretching the cycle to 30s while holding the band off-screen from
-     7% onward. THE VISIBLE PORTION IS THE FIRST ~2.1s AND THE REST IS REST, which is
-     what gives an event every half minute with ZERO JS: no interval to arm, nothing
-     to leak, no re-render per tick, and it stays inside the reduced-motion gate like
-     everything else in this block. Keeping the 5.5s cadence AND adding a 30s one
-     would have buried the slower event under the faster one. */
+     7% onward, which gives an event every half minute with ZERO JS: no interval to
+     arm, nothing to leak, no re-render per tick, and it stays inside the
+     reduced-motion gate like everything else in this block.
+
+     v2.103.2 WIDENS THE VISIBLE WINDOW, and the reason is a regression v2.99.94
+     inflicted on itself. Stretching the cycle from 5.5s to 30s without stretching the
+     motion cut the duty cycle from ~38% to ~7%: the flourish still fired every thirty
+     seconds, but it lasted ~1.4s of each of them, so a casual glance caught it maybe
+     one time in ten. The owner reported the wordmark as "not showing", and this is
+     half of why (the other half was a 390px breakpoint, now gone). The window is now
+     12% — 3.6s of a 30s cycle — which is still overwhelmingly at rest ("don't make it
+     so much") but long enough to be an event somebody notices rather than a twitch.
+
+     TWO THINGS BESIDES THE WINDOW HAD TO CHANGE, both found by SAMPLING the running
+     animation rather than reading these numbers. (1) The travel was -140% → 320%, and
+     the band is only inside the mark's clip between 0% and 260% of its own width — so
+     40% of the sweep happened off-screen where nobody could see it. It now starts and
+     ends just 8px clear of each edge, which puts 87% of the travel on screen instead
+     of 60%. (2) The timing was `ease-in-out`, which is FASTEST IN THE MIDDLE — and the
+     middle is precisely the visible part, so the band crossed the letters at its
+     highest speed and was gone in 1.4s of a 3.6s window. `linear` is what makes a
+     sweep read as a sweep. Together: 1.4s of visible band → 3.1s, matching the word's
+     own 3.1s, so the two halves are one event rather than a glint and then a swell. */
   @keyframes relaySheen {
     0% {
-      transform: translateX(-140%) skewX(-18deg);
+      transform: translateX(-20%) skewX(-18deg);
     }
-    7%,
+    12%,
     100% {
-      transform: translateX(320%) skewX(-18deg);
+      transform: translateX(280%) skewX(-18deg);
     }
   }
   .relay-sheen {
-    animation: relaySheen 30s ease-in-out infinite;
+    animation: relaySheen 30s linear infinite;
   }
 
-  /* The wordmark's own half of that 30s event: it swells briefly as the band passes,
-     so the two read as ONE thing happening rather than a stray glint. Same cycle
-     length and same phase; `transform-origin` is set at the call site so the word
-     grows away from the dot instead of shifting both ways. */
+  /* The wordmark's own half of that 30s event: it swells as the band passes, so the
+     two read as ONE thing happening rather than a stray glint. Same cycle length and
+     the SAME 12% window, so the band is still crossing the letters during the second
+     beat instead of being over before it — with the old 7%/5% split the two halves of
+     one event ended at different times.
+
+     TWO BEATS, THE SECOND SMALLER, which is the same language the brand dot beside it
+     already speaks ("flashing similar to the heart way"): a single swell reads as a
+     glitch, a swell-settle-swell reads as deliberate. `transform-origin` is set at the
+     call site so the word grows away from the dot instead of shifting both ways.
+
+     THE PEAK IS 1.10 AND THAT NUMBER IS MEASURED, NOT CHOSEN. A transform paints
+     outside its layout box, so the swell can reach into the middle zone even though it
+     changes no geometry; 1.10 is the largest peak that keeps positive slack against
+     the longest name at every width down to 320px. */
   @keyframes relayWordPop {
     0%,
     100% {
       transform: scale(1);
     }
-    1.5% {
-      transform: scale(1.07);
+    2% {
+      transform: scale(1.1);
     }
     5% {
+      transform: scale(1);
+    }
+    8% {
+      transform: scale(1.055);
+    }
+    12% {
       transform: scale(1);
     }
   }

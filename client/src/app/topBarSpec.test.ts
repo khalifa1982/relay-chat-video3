@@ -117,9 +117,11 @@ describe("LEFT — the glossy RELAY mark", () => {
     // timing the owner has since replaced. Keeping BOTH cadences would have buried
     // the slower event under the faster one.
     //
-    // Asserted as the PROPERTY rather than as one hold percentage: a 30s cycle whose
-    // motion is confined to a small opening fraction. That is what gives an event
-    // every half minute with no JS timer to arm or leak.
+    // v2.103.2 KEEPS the cadence assertion and MOVES the window assertion out of this
+    // file, because the version here was one-sided (`<= 10`) and therefore rewarded
+    // making the flourish shorter — which is exactly the regression the owner then
+    // reported as the word not animating. The two-sided bound lives in
+    // wordmarkFlourish.test.ts with the measurements that justify both ends of it.
     for (const [cls, kf] of [
       ["relay-sheen", "relaySheen"],
       ["relay-word-pop", "relayWordPop"],
@@ -136,36 +138,34 @@ describe("LEFT — the glossy RELAY mark", () => {
       const hold = body.match(/\n\s+([\d.]+)%[,\s]/g);
       expect(hold, `${kf} has percentage keyframes`).toBeTruthy();
       const pcts = hold!.map((h) => Number(h.trim().replace(/[%,]/g, "")));
-      // Motion stops here and the rest of the 30s is still.
-      expect(Math.max(...pcts.filter((p) => p < 100))).toBeLessThanOrEqual(10);
+      // Motion stops well inside the cycle and the rest of the 30s is still.
+      expect(Math.max(...pcts.filter((p) => p < 100))).toBeLessThanOrEqual(20);
     }
   });
 
-  it("keeps the brand dot on the narrowest phones and drops only the wordmark", () => {
-    // The bar must never lose its brand anchor, but the wordmark is what the middle
-    // zone needs the width back from.
+  it("keeps the brand dot AND the wordmark on every phone", () => {
+    // REWRITTEN TWICE, and the second rewrite is the interesting one.
     //
-    // REWRITTEN in v2.99.94: this used to pin TWO `<BrandMark>` call sites in the
-    // shell, one per breakpoint. That froze an implementation the component has since
-    // absorbed — and two mounts now means two subscriptions to the connection store
-    // and the same breakpoint restated in two places. The property is what matters:
-    // exactly one mount, the wordmark carrying the breakpoint, and the dot never
-    // carrying it.
-    expect(SHELL.match(/<BrandMark\b/g)?.length).toBe(1);
-    expect(SHELL).not.toMatch(/<BrandMark compact/);
+    // v2.99.86 pinned two `<BrandMark>` call sites, one per breakpoint. v2.99.94
+    // replaced that with "exactly ONE mount, and the wordmark carries a 390px
+    // breakpoint" — and that pin then froze BOTH halves of the defect the owner
+    // reported in v2.103.2: the single mount was on the `md:hidden` mobile header, so
+    // no animated wordmark existed above 768px at all, and the breakpoint deleted the
+    // word outright on 375px iPhones and 360px Androids.
+    //
+    // What this asserts now is the property that survives: the dot and the word are
+    // BOTH unconditional, so no width can drop either. The mount count moved to
+    // wordmarkFlourish.test.ts, which explains why two is correct.
     const brand = TOPBAR.slice(
       TOPBAR.indexOf("export function BrandMark"),
       TOPBAR.indexOf("export function IdentityStrip")
     );
     expect(brand.length).toBeGreaterThan(200);
-    // The wordmark hides below 390px. Matched as the rendered word rather than as
-    // `RELAY</span>`, which the multiline JSX does not contain at all.
+    // Matched as the rendered word rather than as `RELAY</span>`, which the multiline
+    // JSX does not contain at all.
     expect(brand).toMatch(/>\s*RELAY\s*</);
-    expect(brand).toMatch(/relative max-\[389px\]:hidden/);
-    // …and the hiding class appears exactly once, so it cannot also be on the dot.
-    expect(brand.match(/max-\[389px\]:hidden/g)?.length).toBe(1);
-    const dot = brand.slice(brand.indexOf("relay-heartbeat"));
-    expect(dot.slice(0, 200)).not.toMatch(/max-\[389px\]:hidden/);
+    expect(brand).toMatch(/relay-heartbeat/);
+    expect(codeOnly(brand)).not.toMatch(/max-\[\d+px\]:hidden/);
   });
 });
 

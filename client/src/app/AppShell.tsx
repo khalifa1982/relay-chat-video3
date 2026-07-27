@@ -362,7 +362,14 @@ function Inner({ children }: { children: React.ReactNode }) {
       >
         <div className="px-5 pt-6 pb-4">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">RELAY</span>
+            {/* v2.103.2: this was a STATIC uppercase span, so the animated wordmark
+                the owner asked for did not exist at all above 768px — the only mount
+                lived in the `md:hidden` mobile header below. The sidebar and that
+                header are mutually exclusive breakpoints, so exactly one of the two
+                is ever visible; the wordmark's own rules stay inside BrandMark, so
+                nothing is restated in two places. The desktop user also gains the
+                connection line, which had been a phone-only indicator. */}
+            <BrandMark />
             <NotificationBell
               missedCount={missedCount}
               unreadCount={unreadTotal}
