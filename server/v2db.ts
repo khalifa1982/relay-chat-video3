@@ -2324,6 +2324,12 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "conversation_participants", column: "archivedAt", ddl: "ADD COLUMN `archivedAt` timestamp NULL" },
     { table: "conversation_participants", column: "manualUnreadAt", ddl: "ADD COLUMN `manualUnreadAt` timestamp NULL" },
     { table: "conversation_participants", column: "clearedUpToMessageId", ddl: "ADD COLUMN `clearedUpToMessageId` int" },
+    // v2.104.0 — group roles. Both additive and nullable: every existing participant
+    // reads as an ordinary member and every existing deletion reads as a self-unsend,
+    // which is what they all are. No backfill, and nothing a member can do today stops
+    // working, because `edit-profile` stays unconditional for members.
+    { table: "conversation_participants", column: "groupRole", ddl: "ADD COLUMN `groupRole` varchar(16)" },
+    { table: "messages", column: "deletedByIdentityId", ddl: "ADD COLUMN `deletedByIdentityId` int" },
     { table: "conversations", column: "number", ddl: "ADD COLUMN `number` varchar(6)" },
     { table: "conversations", column: "avatarUrl", ddl: "ADD COLUMN `avatarUrl` text" },
     { table: "conversations", column: "profileStatus", ddl: "ADD COLUMN `profileStatus` varchar(16)" },
@@ -3198,14 +3204,377 @@ export async function createGroupConversation(input: {
 }
 
 /**
+ * GROUP PERMISSIONS — the one predicate (v2.104.0).
+ *
+ * Owner: *"the creator marked as Creator/admin inside group details; admins can appoint
+ * sub-admins; only group admins or sub-admins can delete any type of message."*
+ *
+ * ONE function, because two copies of "may this person do this" is how two surfaces come
+ * to disagree about the same person — the class this codebase has been bitten by twice
+ * (v2.99.77, v2.99.95). It is SERVER-SIDE for a structural reason rather than a stylistic
+ * one: every row it protects is shared by up to twenty people, so a client-side check is
+ * a suggestion, not a rule.
+ *
+ * THE `capability` ARGUMENT DOES NOT VIOLATE "the check goes inside the write function".
+ * That rule forbids a CALLER passing the ANSWER (`{ isAdmin: true }`); this passes the
+ * QUESTION, as a compile-time literal at each writer's first statement, and the function
+ * reads the database itself to answer it. Nothing a tRPC input can reach.
+ *
+ * ── THE ROLES ──────────────────────────────────────────────────────────────────────
+ *   member   — `groupRole` NULL. Reads, sends, and uses every per-person thread action.
+ *   admin    — `groupRole = "admin"`. Appointed by another admin.
+ *   creator  — NOT a stored role: derived from `conversations.ownerIdentityId`, which has
+ *              been written at creation since v2.102.0 and read by nothing until now.
+ *              Treated as an admin, so every group created since then already HAS an
+ *              administrator with no backfill. Rendered as a distinct label because it is
+ *              a fact rather than a power — a creator and an admin can do the same things.
+ *
+ * ── WHY `edit-profile` IS UNCONDITIONAL FOR MEMBERS, AND WHY THAT IS THE SAFETY ─────
+ * An adversarial review of the first draft killed a rule that read as harmless: "when a
+ * group has no admin and no reachable creator, treat every member as an admin". It is
+ * behaviour-preserving statically and a HOSTILE TAKEOVER PRIMITIVE dynamically, default-on
+ * for every pre-v2.102.0 group (they all have `ownerIdentityId` NULL): any member could
+ * appoint THEMSELVES, at which point the group is no longer adminless and the other
+ * nineteen instantly lose every power they had a second earlier, with nothing telling them.
+ *
+ * The fix is not a smaller fallback, it is having no fallback at all. `edit-profile` — the
+ * ONLY thing a member can do today (GroupInfoSheet: "Any member can change the name, photo
+ * and status") — is granted to every member unconditionally, forever. The admin-only
+ * capabilities are granted ONLY to a stored admin or the derived creator, with no
+ * fallback whatsoever. So there is nothing for a first-mover to seize: taking adminship in
+ * a legacy group would remove NOTHING from anybody.
+ *
+ * THE HONEST CONSEQUENCE, stated rather than hidden: a group created before v2.102.0 has
+ * no `ownerIdentityId`, therefore no creator, therefore no admin and no way to appoint
+ * one. Those groups keep exactly today's behaviour — every member can edit the profile,
+ * and nobody can delete anybody else's messages. Nothing regresses; the feature simply
+ * does not reach them. `hasAdmin` is returned so the UI can SAY that instead of offering a
+ * control that always fails.
+ *
+ * ── FAILURE DIRECTIONS ARE OPPOSITE, AND BOTH DELIBERATE ────────────────────────────
+ * "This group has no admin" is a known, reasoned state and is reported as such. "The read
+ * threw" is not knowledge, and fails CLOSED as `unavailable`.
+ */
+export type GroupCapability = "edit-profile" | "delete-any-message" | "manage-roles";
+
+export type GroupPermission =
+  | { ok: true; isAdmin: boolean; isCreator: boolean; hasAdmin: boolean }
+  | {
+      ok: false;
+      reason: "not-found" | "not-a-group" | "not-a-member" | "not-an-admin" | "unavailable";
+      hasAdmin?: boolean;
+    };
+
+export async function checkGroupPermission(
+  conversationId: number,
+  identityId: number,
+  capability: GroupCapability,
+): Promise<GroupPermission> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  try {
+    const [convo] = await db
+      .select({ id: conversations.id, kind: conversations.kind, ownerIdentityId: conversations.ownerIdentityId })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+    if (!convo) return { ok: false, reason: "not-found" };
+    if (convo.kind !== "group") return { ok: false, reason: "not-a-group" };
+
+    // The caller's own row. Membership is checked before anything else is revealed.
+    const [mine] = await db
+      .select({ groupRole: conversationParticipants.groupRole })
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, conversationId),
+          eq(conversationParticipants.identityId, identityId),
+        ),
+      )
+      .limit(1);
+    if (!mine) return { ok: false, reason: "not-a-member" };
+
+    // Does the group have ANY administrator? Needed so the UI can distinguish "you are
+    // not an admin" from "this group has none", which need different things said.
+    const admins = await db
+      .select({ identityId: conversationParticipants.identityId })
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, conversationId),
+          eq(conversationParticipants.groupRole, "admin"),
+        ),
+      );
+    // The creator counts as an admin only while they are still a member — an
+    // `ownerIdentityId` naming somebody who left, or a purged identity, is not one.
+    const creatorIsMember =
+      convo.ownerIdentityId != null && convo.ownerIdentityId === identityId;
+    const isCreator = creatorIsMember;
+    const isAdmin = mine.groupRole === "admin" || isCreator;
+    let hasAdmin = admins.length > 0;
+    if (!hasAdmin && convo.ownerIdentityId != null) {
+      const [ownerRow] = await db
+        .select({ identityId: conversationParticipants.identityId })
+        .from(conversationParticipants)
+        .where(
+          and(
+            eq(conversationParticipants.conversationId, conversationId),
+            eq(conversationParticipants.identityId, convo.ownerIdentityId),
+          ),
+        )
+        .limit(1);
+      hasAdmin = !!ownerRow;
+    }
+
+    if (capability === "edit-profile") return { ok: true, isAdmin, isCreator, hasAdmin };
+    if (!isAdmin) return { ok: false, reason: "not-an-admin", hasAdmin };
+    return { ok: true, isAdmin, isCreator, hasAdmin };
+  } catch (e) {
+    console.warn("[groups] checkGroupPermission failed:", (e as Error)?.message || "");
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
+/**
+ * The stored roles for one group, for a READ (v2.104.0).
+ *
+ * Decoration-tolerant on purpose — it is used to label a members list, so it swallows its
+ * own failure and returns an empty map rather than breaking the roster. It must therefore
+ * NEVER be used to decide whether somebody may do something: that is
+ * `checkGroupPermission`, which fails closed. `getRolesByIdentityIds` next door carries
+ * the same warning for the same reason.
+ */
+export async function getGroupRoles(
+  conversationId: number,
+): Promise<{ ownerIdentityId: number | null; roleById: Map<number, string | null> }> {
+  const empty = { ownerIdentityId: null as number | null, roleById: new Map<number, string | null>() };
+  const db = await getDb();
+  if (!db) return empty;
+  try {
+    const [convo] = await db
+      .select({ ownerIdentityId: conversations.ownerIdentityId })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+    const rows = await db
+      .select({
+        identityId: conversationParticipants.identityId,
+        groupRole: conversationParticipants.groupRole,
+      })
+      .from(conversationParticipants)
+      .where(eq(conversationParticipants.conversationId, conversationId));
+    const roleById = new Map<number, string | null>();
+    for (const r of rows) roleById.set(r.identityId, r.groupRole ?? null);
+    return { ownerIdentityId: convo?.ownerIdentityId ?? null, roleById };
+  } catch {
+    return empty;
+  }
+}
+
+/**
+ * Appoint or revoke a group admin (v2.104.0). "admins can appoint sub-admins" — one tier,
+ * because the owner's own sentence gives an admin and a sub-admin identical power
+ * ("only group admins or sub-admins can delete any type of message") and nobody has named
+ * a single thing one may do that the other may not. Inventing that difference would be a
+ * permission model larger than the ask.
+ *
+ * A SELF-REVOKE BY THE ONLY ADMIN IS REFUSED, for the same reason `admin.setAccountType`
+ * refuses a site-admin self-demotion (v2.99.99): adminship is the one power nobody else
+ * can restore for you, and refusing GUARANTEES the group keeps an administrator — a
+ * stronger property than counting them and hoping.
+ *
+ * THE CREATOR CANNOT BE REVOKED, and this is named rather than silently ignored: their
+ * adminship is DERIVED from `ownerIdentityId`, so no stored value can remove it, and a
+ * control that appears to work and changes nothing is worse than one that refuses.
+ */
+export async function setGroupRole(input: {
+  conversationId: number;
+  actorIdentityId: number;
+  targetIdentityId: number;
+  role: "admin" | null;
+}): Promise<{
+  ok: boolean;
+  reason?:
+    | "not-found"
+    | "not-a-group"
+    | "not-a-member"
+    | "not-an-admin"
+    | "target-not-a-member"
+    | "creator-cannot-be-revoked"
+    | "last-admin"
+    | "unavailable";
+}> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  const gate = await checkGroupPermission(input.conversationId, input.actorIdentityId, "manage-roles");
+  if (!gate.ok) return { ok: false, reason: gate.reason };
+  try {
+    const [convo] = await db
+      .select({ ownerIdentityId: conversations.ownerIdentityId })
+      .from(conversations)
+      .where(eq(conversations.id, input.conversationId))
+      .limit(1);
+    if (!convo) return { ok: false, reason: "not-found" };
+    if (input.role === null && convo.ownerIdentityId === input.targetIdentityId) {
+      return { ok: false, reason: "creator-cannot-be-revoked" };
+    }
+
+    // Refuse a revoke that would leave the group with no administrator at all. Counted
+    // over STORED admins plus the creator, because the creator's adminship is derived and
+    // would not appear in the column.
+    if (input.role === null) {
+      const admins = await db
+        .select({ identityId: conversationParticipants.identityId })
+        .from(conversationParticipants)
+        .where(
+          and(
+            eq(conversationParticipants.conversationId, input.conversationId),
+            eq(conversationParticipants.groupRole, "admin"),
+          ),
+        );
+      const remaining = admins.filter((a) => a.identityId !== input.targetIdentityId).length;
+      const creatorStillAdmin =
+        convo.ownerIdentityId != null && convo.ownerIdentityId !== input.targetIdentityId;
+      if (remaining === 0 && !creatorStillAdmin) return { ok: false, reason: "last-admin" };
+    }
+
+    // Scoped to ONE participation by naming both halves of the primary key, so this can
+    // never touch another group or another person however it is called.
+    const res = await db
+      .update(conversationParticipants)
+      .set({ groupRole: input.role })
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, input.conversationId),
+          eq(conversationParticipants.identityId, input.targetIdentityId),
+        ),
+      );
+    const changed =
+      Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    // affectedRows is 0 both for "no such member" and for "already that value". A re-read
+    // distinguishes them, so a double-tap succeeds rather than reporting a false failure.
+    if (!changed) {
+      const [row] = await db
+        .select({ groupRole: conversationParticipants.groupRole })
+        .from(conversationParticipants)
+        .where(
+          and(
+            eq(conversationParticipants.conversationId, input.conversationId),
+            eq(conversationParticipants.identityId, input.targetIdentityId),
+          ),
+        )
+        .limit(1);
+      if (!row) return { ok: false, reason: "target-not-a-member" };
+      if ((row.groupRole ?? null) !== input.role) return { ok: false, reason: "unavailable" };
+    }
+    return { ok: true };
+  } catch (e) {
+    console.warn("[groups] setGroupRole failed:", (e as Error)?.message || "");
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
+/**
+ * A group admin removes SOMEBODY ELSE'S message, for everyone (v2.104.0).
+ *
+ * A SEPARATE FUNCTION rather than a widening of `deleteMessage`, deliberately. That one
+ * stays byte-identical: `messageHide.test.ts` pins the literal
+ * `eq(messages.senderIdentityId, input.identityId)` inside it, and that clause is what
+ * stops two concurrent unsends each decrementing a stored counter (v2.99.57). More
+ * importantly, one function serving both questions is the "one boolean serving two
+ * questions" shape `purgeIdentity.ts` records as the mistake, and it would put an
+ * isAdmin-shaped parameter in exactly the position the house rule forbids.
+ *
+ * IT REUSES `deletedAt` rather than inventing a second mechanism, because five readers
+ * already filter on it (`listMessages`, `searchMessages`, `listThreads`, `markThreadRead`,
+ * `markThreadDelivered`). Anything else would have to teach all five a second rule, and
+ * SEARCH is where that silently fails — a deleted message reappearing under search is the
+ * feature not working, which v2.102.2 records as the likeliest place to forget.
+ *
+ * THE ATTACHMENTS ROW IS KEPT and only `attachmentId` is nulled. `authorizeStorageKey`
+ * classifies a key with no row as `unknown`, and the storage proxy SERVES an unknown key
+ * to any signed-in caller — so deleting the row would make the media MORE readable rather
+ * than gone (the v2.98.4/F3 defect, recorded verbatim in the purge registry).
+ */
+export async function deleteMessageAsGroupAdmin(input: {
+  messageId: number;
+  conversationId: number;
+  identityId: number;
+}): Promise<{
+  ok: boolean;
+  reason?: "not-found" | "not-a-group" | "not-a-member" | "not-an-admin" | "own-message" | "unavailable";
+}> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  const gate = await checkGroupPermission(input.conversationId, input.identityId, "delete-any-message");
+  if (!gate.ok) return { ok: false, reason: gate.reason };
+  try {
+    const [row] = await db
+      .select({
+        id: messages.id,
+        conversationId: messages.conversationId,
+        senderIdentityId: messages.senderIdentityId,
+        deletedAt: messages.deletedAt,
+      })
+      .from(messages)
+      .where(eq(messages.id, input.messageId))
+      .limit(1);
+    // THE MESSAGE MUST BE IN THE GROUP THE CALLER IS AN ADMIN OF. Without this an admin
+    // of one group could name any message id and delete it anywhere — message ids are
+    // small sequential integers. A message in another conversation answers exactly like a
+    // missing one, so the endpoint is no existence oracle.
+    if (!row || row.conversationId !== input.conversationId) return { ok: false, reason: "not-found" };
+    if (row.deletedAt) return { ok: true }; // already gone — idempotent, not an error
+    // Their own message is Unsend's job, which is already offered on that bubble.
+    if (row.senderIdentityId === input.identityId) return { ok: false, reason: "own-message" };
+
+    // A survivor's reply must be unhooked BEFORE the quoted message goes, or the client's
+    // quote bar degrades to a generic "Them · Message" — the ordering the purge cascade
+    // already uses.
+    await db
+      .update(messages)
+      .set({ replyToId: null })
+      .where(eq(messages.replyToId, input.messageId));
+
+    // ATOMIC CLAIM: `affectedRows` decides the winner, so two admins tapping at once
+    // cannot both run the unread recompute below.
+    const claim = await db
+      .update(messages)
+      .set({
+        deletedAt: new Date(),
+        deletedByIdentityId: input.identityId,
+        body: null,
+        attachmentId: null,
+      })
+      .where(and(eq(messages.id, input.messageId), isNull(messages.deletedAt)));
+    const claimed =
+      Array.isArray(claim) && ((claim[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    if (!claimed) return { ok: true }; // lost the race; the message is gone either way
+
+    // RECOMPUTED, never decremented. `deleteMessage`'s decrement excludes
+    // `ne(identityId, input.identityId)` — the SENDER there, but the ADMIN here — so
+    // reusing it would skip the admin and wrongly decrement the real sender. A recompute
+    // is also idempotent, which a decrement is not (v2.99.74).
+    const members = await getConversationParticipantIds(input.conversationId);
+    for (const m of members) await recomputeUnreadFor(input.conversationId, m);
+    return { ok: true };
+  } catch (e) {
+    console.warn("[groups] deleteMessageAsGroupAdmin failed:", (e as Error)?.message || "");
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
+/**
  * A group's own title, photo and status (v2.102.0).
  *
- * MEMBERS-ONLY, and the membership check is INSIDE this function rather than at the
- * call site: it writes a row several people share, so "who may change it" is the
- * whole of the safety argument and must not be something a caller can forget. Any
- * member may edit — a group has no owner role today (`ownerIdentityId` records who
- * created it, nothing more), and inventing one here would be a permission model
- * nobody asked for.
+ * The membership check is INSIDE this function rather than at the call site: it writes a
+ * row several people share, so "who may change it" is the whole of the safety argument
+ * and must not be something a caller can forget.
+ *
+ * v2.104.0 routes that check through `checkGroupPermission(..., "edit-profile")` — the one
+ * predicate — rather than an inline SELECT of its own. BEHAVIOURALLY UNCHANGED: any
+ * member may still edit, because `edit-profile` is unconditional for members. What
+ * changes is that there is now one place the rule lives.
  *
  * Refuses a DM outright: `conversations.kind` is the only thing separating the two,
  * and a DM has no title, photo or status of its own — it borrows the peer's.
@@ -3217,26 +3586,9 @@ export async function setGroupProfile(
 ): Promise<{ ok: boolean; reason?: "not-found" | "not-a-group" | "not-a-member" | "unavailable" }> {
   const db = await getDb();
   if (!db) return { ok: false, reason: "unavailable" };
+  const gate = await checkGroupPermission(conversationId, identityId, "edit-profile");
+  if (!gate.ok) return { ok: false, reason: gate.reason === "not-an-admin" ? "not-a-member" : gate.reason };
   try {
-    const [convo] = await db
-      .select({ id: conversations.id, kind: conversations.kind })
-      .from(conversations)
-      .where(eq(conversations.id, conversationId))
-      .limit(1);
-    if (!convo) return { ok: false, reason: "not-found" };
-    if (convo.kind !== "group") return { ok: false, reason: "not-a-group" };
-    const [member] = await db
-      .select({ identityId: conversationParticipants.identityId })
-      .from(conversationParticipants)
-      .where(
-        and(
-          eq(conversationParticipants.conversationId, conversationId),
-          eq(conversationParticipants.identityId, identityId),
-        ),
-      )
-      .limit(1);
-    if (!member) return { ok: false, reason: "not-a-member" };
-
     const set: Record<string, unknown> = {};
     if (patch.title !== undefined) {
       const t = patch.title.trim().slice(0, 128);

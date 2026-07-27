@@ -456,6 +456,22 @@ export const conversationParticipants = mysqlTable(
      * while its newest message id is not greater than this.
      */
     clearedUpToMessageId: int("clearedUpToMessageId"),
+    /**
+     * GROUP ROLE (v2.104.0) — `"admin"` or NULL, the one durable store for group power.
+     *
+     * It lives HERE because this row is already keyed (conversationId, identityId) as
+     * its PRIMARY KEY, so an UPDATE naming both halves can only ever touch one person's
+     * role in one group — the same property `setThreadState` already relies on.
+     *
+     * NOT `users.role`: that is an ACCOUNT-level SITE admin, and a guest has no `users`
+     * row at all while a guest can perfectly well be a group member. A varchar rather
+     * than a boolean so a third tier later is a value, not a migration.
+     *
+     * NULL = ordinary member, which is what every existing row reads as. Nothing a
+     * member can do today stops working when this column appears, because `edit-profile`
+     * is unconditional for members — see `checkGroupPermission`.
+     */
+    groupRole: varchar("groupRole", { length: 16 }),
     joinedAt: timestamp("joinedAt").defaultNow().notNull(),
   },
   (t) => ({
@@ -538,6 +554,20 @@ export const messages = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     editedAt: timestamp("editedAt"),
     deletedAt: timestamp("deletedAt"),
+    /**
+     * WHO removed it, when it was not the sender (v2.104.0).
+     *
+     * `deletedAt` has one meaning and two causes: the sender unsending their own
+     * message, and a group admin removing somebody else's. NULL here means the first,
+     * which is true of every deletion that has ever happened, so no backfill.
+     *
+     * Declared **keep-safer** in IDENTITY_REFERENCING_COLUMNS rather than `redact`, and
+     * that is a correction the adversarial review earned: nulling a purged admin's id
+     * would rewrite their deletion into an apparent self-unsend, i.e. the row would
+     * positively assert the sender removed their own words. Leaving it dangling reads as
+     * "an admin, no longer here" — which is the truth.
+     */
+    deletedByIdentityId: int("deletedByIdentityId"),
   },
   (t) => ({
     conversationIdx: index("messages_conversation_idx").on(t.conversationId, t.createdAt),

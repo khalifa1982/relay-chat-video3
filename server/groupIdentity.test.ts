@@ -186,17 +186,36 @@ describe("editing a group", () => {
     return V2DB.slice(at, V2DB.indexOf("\nexport interface ThreadSummary", at));
   };
 
-  it("the membership check is INSIDE the function, not at the call site", () => {
+  it("the permission check is INSIDE the function, not at the call site", () => {
     // It writes a row several people share, so "who may change it" is the safety
     // argument and must not be something a caller can forget.
+    //
+    // REWRITTEN in v2.104.0. This used to pin the INLINE membership SELECT
+    // (`from(conversationParticipants)` … `if (!member)`), i.e. one particular
+    // implementation of the rule. That check now lives in `checkGroupPermission`, the
+    // single predicate every group write shares, so freezing the inline version would
+    // have forbidden the consolidation while saying nothing about the property. The
+    // property is that the gate runs inside this function and BEFORE anything is
+    // written — which is what is asserted now.
     const body = fn();
-    expect(body.length).toBeGreaterThan(400);
-    expect(body).toMatch(/from\(conversationParticipants\)/);
-    expect(body).toMatch(/if \(!member\) return \{ ok: false, reason: "not-a-member" \}/);
+    expect(body.length).toBeGreaterThan(300);
+    expect(body).toMatch(/checkGroupPermission\(conversationId, identityId, "edit-profile"\)/);
+    expect(body).toMatch(/if \(!gate\.ok\) return \{ ok: false/);
+    // …and it precedes the only write, so it cannot be a decorative early line.
+    expect(body.indexOf("checkGroupPermission")).toBeLessThan(body.indexOf(".update(conversations)"));
   });
 
   it("a DM is refused outright — it has no title, photo or status of its own", () => {
-    expect(fn()).toMatch(/if \(convo\.kind !== "group"\) return \{ ok: false, reason: "not-a-group" \}/);
+    // Also rewritten: the `kind !== "group"` refusal moved into the shared predicate
+    // with the membership check, so it is asserted THERE — which is strictly better,
+    // because every future group write inherits it instead of restating it.
+    const gate = V2DB.slice(
+      V2DB.indexOf("export async function checkGroupPermission"),
+      V2DB.indexOf("export async function setGroupRole"),
+    );
+    expect(gate.length).toBeGreaterThan(400);
+    expect(gate).toMatch(/if \(convo\.kind !== "group"\) return \{ ok: false, reason: "not-a-group" \}/);
+    expect(gate).toMatch(/if \(!mine\) return \{ ok: false, reason: "not-a-member" \}/);
   });
 
   it("NO presence override is derived — a group has no presence", () => {

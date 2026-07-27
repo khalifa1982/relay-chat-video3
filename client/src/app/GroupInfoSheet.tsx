@@ -69,6 +69,25 @@ export function GroupInfoSheet({
     onError: (e) => toast.error(e.message || "Couldn't save that — nothing changed."),
   });
 
+  /**
+   * Appoint or revoke an admin (v2.104.0). NOT optimistic: it changes what other people
+   * are allowed to do, so a failure already painted as success would leave this admin
+   * believing they promoted somebody the server refused — the same reasoning that keeps
+   * the profile writes above non-optimistic.
+   *
+   * Only `conversationInfo` is invalidated, because a role appears nowhere in the thread
+   * list. The profile writes invalidate both because they change what the list renders.
+   */
+  const role = trpc.messages.setGroupRole.useMutation({
+    onSuccess: async () => {
+      await utils.messages.conversationInfo.invalidate({ conversationId });
+    },
+    onError: (e) => toast.error(e.message || "Couldn't change that — nothing changed."),
+  });
+  // Read from the SERVER's own answer, never inferred client-side: this sheet gates
+  // nothing (the server is the gate), so this only decides what to OFFER.
+  const iAmAdmin = !!info.data?.members.find((m) => m.isMe)?.isAdmin;
+
   // The early return TOLERATES an open avatar picker, and that is the whole reason it
   // is written this way: a bare `if (!open) return null` unmounts the picker along with
   // the sheet, so a close arriving while somebody is mid-upload would tear the upload's
@@ -215,9 +234,11 @@ export function GroupInfoSheet({
               />
             </div>
 
-            {/* Members — read-only here; adding and removing people is the call
-                screen's job and inventing a second way to do it would mean two
-                places that can disagree about who is in the group. */}
+            {/* Members. v2.104.0 adds the Creator label, an Admin badge and — for an
+                admin — the appoint/revoke control. ADDING and REMOVING people is still
+                not here: that is its own release, because changing WHO is in a group has
+                a larger blast radius than changing what it is called and deserves its
+                own review (the block check and the member cap are the focus there). */}
             <div className="space-y-2">
               <Label className="text-xs uppercase tracking-wider text-muted-foreground">
                 Members{info.data ? ` · ${info.data.members.length}` : ""}
@@ -242,15 +263,57 @@ export function GroupInfoSheet({
                     <span className="min-w-0 flex-1 truncate text-sm">
                       {m.displayName || "Someone"}
                       {m.isMe && <span className="text-muted-foreground"> · you</span>}
+                      {/* CREATOR is a fact, not a power — a creator and an admin can do
+                          exactly the same things, so it is labelled separately and only
+                          one of the two labels is ever shown. */}
+                      {m.isCreator ? (
+                        <span className="ms-1.5 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                          Creator
+                        </span>
+                      ) : m.isAdmin ? (
+                        <span className="ms-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                          Admin
+                        </span>
+                      ) : null}
                     </span>
                     <span className="shrink-0 font-mono text-[11px] text-muted-foreground" dir="ltr">
                       {m.number}
                     </span>
+                    {/* The control renders only for an admin, and never against the
+                        creator — their adminship is derived from who made the group, so
+                        no stored value could remove it and a button that appears to work
+                        and changes nothing is worse than none. The SERVER refuses both
+                        cases regardless; this only avoids offering them. */}
+                    {iAmAdmin && !m.isCreator && (
+                      <button
+                        type="button"
+                        disabled={role.isPending}
+                        onClick={() =>
+                          role.mutate({
+                            conversationId,
+                            targetIdentityId: m.id,
+                            role: m.isAdmin ? null : "admin",
+                          })
+                        }
+                        className="shrink-0 rounded-lg border border-border/60 px-2 py-1 text-[11px] font-semibold text-muted-foreground transition hover:bg-muted/60 disabled:opacity-50"
+                      >
+                        {m.isAdmin ? "Remove admin" : "Make admin"}
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
               <p className="text-[11px] text-muted-foreground">
-                Any member can change the name, photo and status.
+                Any member can change the name, photo and status.{" "}
+                {info.data
+                  ? info.data.hasAdmin
+                    ? "Admins can also remove anyone's message."
+                    : // SAID PLAINLY rather than hidden: a group created before group IDs
+                      // existed has no creator recorded, so it has no admin and no way to
+                      // appoint one. Nothing about it regresses — every member keeps what
+                      // they have today — but the feature does not reach it.
+                      "This group was created before admins existed, so it has none. Start a new group to use admin controls."
+                  : ""}
               </p>
             </div>
           </div>

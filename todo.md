@@ -7557,6 +7557,93 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.104.0 — group roles: Creator, admins, and the delete override (2026-07-27)
+
+The spine of the group-admin batch (#108). Two additive nullable columns, ONE predicate,
+two write paths. The most valuable work was done by an adversarial review of the DESIGN.
+
+- [x] `conversation_participants.groupRole` + `messages.deletedByIdentityId`, both
+      additive and nullable via the boot migrator. Every existing participant reads as a
+      member; every existing deletion reads as a self-unsend. No backfill.
+- [x] `checkGroupPermission(conversationId, identityId, capability)` — the single
+      server-side predicate. The capability is a compile-time literal at each writer's
+      first statement, so it passes the QUESTION, never the answer.
+- [x] **THE TAKEOVER PATH, KILLED BEFORE IT WAS WRITTEN.** The first design granted every
+      member full admin rights whenever a group had no admin, as "behaviour-preserving".
+      It is a first-mover seizure primitive **default-on for every pre-v2.102.0 group**
+      (all have `ownerIdentityId` NULL): any member appoints themselves and the other
+      nineteen instantly lose everything, silently. It composed further — a purged guest
+      creator hands the group to everyone, and an invite link would grant adminship
+      transitively. **The fix is having NO fallback**: `edit-profile` (all a member can do
+      today) is unconditional for members forever, so there is nothing to seize; admin
+      capabilities need a stored admin or the derived creator.
+- [x] The honest consequence is SAID, not hidden: a pre-v2.102.0 group has no creator, so
+      no admin and no way to appoint one. It keeps today's behaviour and the sheet says
+      "created before admins existed" rather than offering a control that always fails.
+- [x] Creator DERIVED from `ownerIdentityId` (written since v2.102.0, read by nothing until
+      now), counted only while still a participant — which keeps the purge registry's
+      `keep-safer` note true: a purged creator confers adminship on nobody.
+- [x] One tier, not two. The owner's own sentence gives admin and sub-admin identical
+      power, and nobody named a thing one may do that the other may not.
+- [x] `setGroupRole` — refuses revoking the last admin (counting the derived creator) and
+      refuses revoking the creator by name, because their adminship cannot be removed by a
+      stored value and a control that changes nothing is worse than one that refuses.
+- [x] `deleteMessageAsGroupAdmin` — a SEPARATE function; `deleteMessage` is byte-identical.
+      Reuses `deletedAt` (five readers already filter it; search is where a second rule
+      silently fails), KEEPS the attachments row (a row-less key is served as `unknown`),
+      RECOMPUTES unread rather than decrementing (the decrement excludes the ADMIN here,
+      not the sender), unhooks replies first, and refuses a message outside the caller's
+      own group — answering like a missing one, so it is no existence oracle.
+- [x] `deletedByIdentityId` declared **keep-safer**, not `redact`: NULL means "the sender
+      unsent it", so nulling a purged admin's id would rewrite their deletion into an
+      apparent self-unsend.
+- [x] **The review's sharpest catch is about the GUARD.** `REFERENCE_SHAPE` is an anchored,
+      hand-kept alternation, so `deletedByIdentityId` escaped the machine check and the
+      build would NOT have failed by name. Widened in the same commit, weakness recorded.
+- [x] UI: Creator label, Admin badge, an admin-only appoint/revoke control (never against
+      the creator), and "Remove for everyone" in the message menu behind a confirmation
+      whose copy names the blast radius and says the sender is not told. Neither write is
+      optimistic.
+- [x] `server/groupRoles.test.ts` (38); **all 38 tripwires verified by mutation** from
+      byte-exact backups off a confirmed-GREEN baseline, sources byte-identical afterwards.
+
+**A naming collision that silently re-pointed an existing security pin, in SIX files.**
+`deleteMessage` is a PREFIX of `deleteMessageAsGroupAdmin`, and six test files locate a
+function with `indexOf("export async function " + name)` — so `sweep20.test.ts`'s "unsend
+stays sender-only" assertion started reading the ADMIN path. Caught by the suite going red;
+fixed in all six with an exact `\b` match, and `sweep20`'s fixed `+2200` slice replaced
+with the function's own end.
+
+**Two mutation survivors, both the same class, now its THIRD occurrence** (v2.102.2,
+v2.103.0): the role-write scoping pin sliced to the end of the function and was satisfied
+by the RE-READ's identical WHERE while the mutation stripped it from the UPDATE — an
+unscoped UPDATE changes a role in every group; and the `conversationInfo` members-only pin
+was bounded past its own procedure, so a stranger's `code: "FORBIDDEN"` satisfied it after
+this one's guard was deleted. Both rewritten to the write specifically, with counts, then
+re-verified.
+
+**Two test bugs of my own, caught before shipping:** a slice bounded by
+`"  list: publicProcedure"`, which occurs 570 lines EARLIER than `conversationInfo`, so the
+end came before the start and the slice was `""` — vacuous the moment one assertion became
+a `not.toMatch`; and an assertion on the content of a COMMENT sitting outside the slice,
+which is prose-pinning besides.
+
+**Two pre-existing pins rewritten to the property:** both froze `setGroupProfile`'s inline
+membership SELECT and DM refusal, i.e. they would have forbidden the consolidation into one
+predicate while saying nothing about the property.
+
+**NOT VERIFIED AGAINST A DATABASE**, said plainly: no MySQL is reachable here, so the
+statements are proven by reading and pinned, but no role has been written and no message
+removed by an admin.
+
+**NOT DONE — v2.105.0 onward:** the "all users can add" toggle, add/remove member, the
+4-digit lock, group invite links, and group-call role seeding. Membership needs its OWN
+join watermark: reusing `clearedUpToMessageId` would make a newly added member's group
+INVISIBLE, because `listThreads` drops the row entirely when nothing is newer — exactly
+what v2.103.0 built it to do.
+
+Two additive nullable columns, no new dependency, no new env var. 3185 tests.
+
 ## v2.103.3 — the sender's thumbnail, sixteen colours, and three asks already built (2026-07-27)
 
 First of six releases from a 19-agent recon pass over the owner's group-admin batch.

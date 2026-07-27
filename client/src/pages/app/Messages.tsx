@@ -898,6 +898,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
    * first, because `nameById` has four other readers that want a plain string and
    * changing its value type would touch all of them for no gain.
    */
+  /**
+   * Am I an admin of THIS group (v2.104.0)? Read from the server's own answer on
+   * `conversationInfo` and never inferred, because this decides only what to OFFER —
+   * the actual gate is `checkGroupPermission` on the server, since a client-side check
+   * on a row twenty people share is a suggestion rather than a rule.
+   */
+  const iAmGroupAdmin = !!(isGroup && infoQuery.data?.members.find((mem) => mem.isMe)?.isAdmin);
+
   const memberById = useMemo(() => {
     const m = new Map<number, { name: string; number: string; avatarUrl: string | null }>();
     for (const mem of infoQuery.data?.members ?? []) {
@@ -1120,6 +1128,24 @@ function ConversationView({ conversationId }: { conversationId: number }) {
    * a control that did nothing, and a failed one must put the message back rather than
    * silently vanishing something that still exists for everybody.
    */
+  /**
+   * v2.104.0 — a group admin removes somebody else's message for everyone.
+   *
+   * NOT optimistic, unlike `hide` below. Hiding affects only the person doing it, so a
+   * rollback is invisible to anybody else; this removes a row twenty people are looking
+   * at, and a failure already painted as success would leave the admin believing they
+   * had removed something the server refused. It invalidates instead, and the other
+   * members learn through the SSE event the endpoint fans out.
+   */
+  const adminDeleteMutation = trpc.messages.deleteAsAdmin.useMutation({
+    onSuccess: async () => {
+      await utils.messages.list.invalidate({ conversationId, limit: 100 });
+      await utils.messages.threads.invalidate();
+      toast.success("Removed for everyone");
+    },
+    onError: (e) => toast.error(e.message || "Couldn't remove that — it's still here."),
+  });
+
   const hideMutation = trpc.messages.hide.useMutation({
     onMutate: async ({ messageId }) => {
       const input = { conversationId, limit: 100 } as const;
@@ -1158,6 +1184,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   // "Delete for me" (v2.102.2) — its own confirmation, because it is a DIFFERENT
   // operation from unsend and a shared dialog would have to describe both.
   const [hidingId, setHidingId] = useState<number | null>(null);
+  /** v2.104.0 — the message a group admin is about to remove for everyone. */
+  const [adminDeleting, setAdminDeleting] = useState<Msg | null>(null);
   // v2.99.74 — message Info (sent/delivered/read) and Forward-to-another-thread.
   const [infoOf, setInfoOf] = useState<Msg | null>(null);
   const [forwarding, setForwarding] = useState<Msg | null>(null);
@@ -2196,6 +2224,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     onForward={isExpiring ? undefined : () => setForwarding(m)}
                     onInfo={() => setInfoOf(m)}
                     onHide={() => setHidingId(m.id)}
+                    // v2.104.0: offered only when the SERVER has said this person is a
+                    // group admin. Behind a confirmation, because it removes somebody
+                    // else's words for everybody and cannot be undone — the same bar
+                    // "delete this chat" is held to.
+                    onAdminDelete={iAmGroupAdmin ? () => setAdminDeleting(m) : undefined}
                   />
                   );
                 })()}
@@ -2600,6 +2633,37 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* v2.104.0 — the group-admin removal. The ONLY new action behind a confirmation,
+          for the reason "delete for me" is: this one cannot be undone and it acts on
+          somebody else's words in front of twenty people. The copy names WHOSE message
+          and says the sender is not told, because an admin should know that before they
+          tap rather than discover it afterwards. */}
+      <AlertDialog open={adminDeleting !== null} onOpenChange={(open) => !open && setAdminDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this message for everyone?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {adminDeleting
+                ? `${nameById.get(adminDeleting.senderIdentityId) || "This member"}'s message disappears for every member of the group. They aren't told, and it can't be undone.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (adminDeleting) {
+                  adminDeleteMutation.mutate({ conversationId, messageId: adminDeleting.id });
+                }
+                setAdminDeleting(null);
+              }}
+            >
+              Remove for everyone
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Unsend confirmation (v2.88 — AlertDialog, not native confirm()). */}
       <AlertDialog open={unsendId !== null} onOpenChange={(open) => !open && setUnsendId(null)}>
         <AlertDialogContent>
@@ -2730,6 +2794,7 @@ function MessageMenu({
   onInfo,
   onHide,
   onDelete,
+  onAdminDelete,
 }: {
   mine?: boolean;
   onReply: () => void;
@@ -2744,6 +2809,14 @@ function MessageMenu({
    */
   onHide?: () => void;
   onDelete?: () => void;
+  /**
+   * v2.104.0 — a group ADMIN removes somebody else's message for everyone. A separate
+   * prop from `onDelete` (unsend), and a separate item in the menu, because the two have
+   * different authority and the copy has to say which. Passed only when the server has
+   * said this person is an admin, so the item simply does not exist otherwise — a control
+   * that is always refused is worse than an absent one.
+   */
+  onAdminDelete?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -2833,6 +2906,20 @@ function MessageMenu({
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10"
               >
                 <Trash2 className="size-4" /> Unsend
+              </button>
+            )}
+            {/* v2.104.0 — the group-admin override. Never shown on my OWN message: that
+                is Unsend's job and it is already offered above, and the server refuses
+                it there too ("own-message"). The wording names the blast radius, because
+                "delete" alone is what makes somebody remove a message for twenty people
+                believing they hid it for themselves. */}
+            {!mine && onAdminDelete && (
+              <button
+                type="button"
+                onClick={() => { onAdminDelete(); setOpen(false); }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10"
+              >
+                <Trash2 className="size-4" /> Remove for everyone
               </button>
             )}
           </div>

@@ -83,9 +83,20 @@ function schemaColumns(): Array<{ table: string; column: string }> {
 }
 
 /** Column names that name an identity or the account behind one. A column with
- *  one of these names is a reference the purge MUST have an answer for. */
+ *  one of these names is a reference the purge MUST have an answer for.
+ *
+ *  WIDENED in v2.104.0 for `deletedByIdentityId`, and the reason is worth recording:
+ *  an adversarial review pointed out that this alternation is ANCHORED and hand-kept,
+ *  so a new identity-naming column whose name it does not happen to list escapes the
+ *  machine check entirely — the build would NOT fail by name, which is the one thing
+ *  this guard exists to guarantee. The pattern is the weak link in an otherwise
+ *  machine-checked contract, so any new `*IdentityId` column has to be added here in
+ *  the same commit that adds the column. The `*IdentityId$` suffix would be a stronger
+ *  rule than an enumeration, but it is deliberately NOT used: a typo'd or renamed
+ *  column would then be silently covered by the pattern while its registry entry went
+ *  stale, and the reverse-direction test below exists precisely to catch that. */
 const REFERENCE_SHAPE =
-  /^(identityId|ownerId|ownerIdentityId|senderIdentityId|uploadedByIdentityId|callerIdentityId|calleeIdentityId|viewerId|watcherId|targetId|fromIdentityId|toIdentityId|userId)$/;
+  /^(identityId|ownerId|ownerIdentityId|senderIdentityId|deletedByIdentityId|uploadedByIdentityId|callerIdentityId|calleeIdentityId|viewerId|watcherId|targetId|fromIdentityId|toIdentityId|userId)$/;
 
 describe("the cascade is COMPLETE — machine-checked against the schema", () => {
   it("the scan actually finds the schema (it cannot pass by reading nothing)", () => {

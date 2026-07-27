@@ -41,7 +41,12 @@ const codeOnly = (s: string) =>
     .join("\n");
 
 function fn(src: string, name: string): string {
-  const i = src.indexOf(`export async function ${name}`);
+  // EXACT name match, not a prefix. `indexOf("export async function deleteMessage")`
+  // also finds `deleteMessageAsGroupAdmin`, which silently re-points a pin at the WRONG
+  // function — caught when v2.104.0 added exactly that name and the sender-only unsend
+  // guard started reading the admin path instead. `\\b` rejects it because the character
+  // after the name is a word character on both sides of the boundary.
+  const i = src.search(new RegExp(`export async function ${name}\\b`));
   const j = src.indexOf("\nexport ", i + 10);
   const out = src.slice(i, j === -1 ? undefined : j);
   expect(out.length, `${name} not found`).toBeGreaterThan(120);

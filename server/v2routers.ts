@@ -57,6 +57,10 @@ import {
   dmConversationExists,
   createGroupConversation,
   setGroupProfile,
+  setGroupRole,
+  deleteMessageAsGroupAdmin,
+  checkGroupPermission,
+  getGroupRoles,
   hideMessageForIdentity,
   setThreadState,
   deleteMessage,
@@ -1780,6 +1784,104 @@ export const v2MessagesRouter = router({
       return { ok: true as const };
     }),
 
+  /**
+   * Appoint or revoke a group admin (v2.104.0).
+   *
+   * The router performs NO check of its own — `setGroupRole` gates itself through
+   * `checkGroupPermission`, because a caller must not be able to forget it. All this
+   * does is give each named refusal its own message: "you're not an admin", "this group
+   * has no admin", "the creator can't be demoted" and "that would leave nobody in
+   * charge" need four different next steps, and a generic error sends somebody looking
+   * in the wrong place.
+   */
+  setGroupRole: publicProcedure
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        targetIdentityId: z.number().int().positive(),
+        role: z.enum(["admin"]).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const res = await setGroupRole({
+        conversationId: input.conversationId,
+        actorIdentityId: me.id,
+        targetIdentityId: input.targetIdentityId,
+        role: input.role,
+      });
+      if (!res.ok) {
+        const map: Record<
+          NonNullable<typeof res.reason>,
+          { code: "NOT_FOUND" | "BAD_REQUEST" | "FORBIDDEN" | "INTERNAL_SERVER_ERROR"; message: string }
+        > = {
+          "not-found": { code: "NOT_FOUND", message: "That conversation doesn't exist." },
+          "not-a-group": { code: "BAD_REQUEST", message: "That's a direct chat — it has no admins." },
+          "not-a-member": { code: "FORBIDDEN", message: "Only members can do that." },
+          "not-an-admin": { code: "FORBIDDEN", message: "Only a group admin can change who's an admin." },
+          "target-not-a-member": { code: "NOT_FOUND", message: "They're not in this group." },
+          "creator-cannot-be-revoked": {
+            code: "BAD_REQUEST",
+            message: "The person who created the group is always an admin.",
+          },
+          "last-admin": {
+            code: "BAD_REQUEST",
+            message: "Make somebody else an admin first — a group can't be left with none.",
+          },
+          unavailable: { code: "INTERNAL_SERVER_ERROR", message: "Couldn't save that — nothing changed." },
+        };
+        const m = map[res.reason ?? "unavailable"];
+        throw new TRPCError({ code: m.code, message: m.message, cause: res.reason });
+      }
+      return { ok: true as const };
+    }),
+
+  /**
+   * A group admin removes somebody else's message, for everyone (v2.104.0).
+   *
+   * SEPARATE from `deleteMessage` (unsend), which stays sender-only. The two have
+   * different blast radii and different authority, and one endpoint serving both is how
+   * somebody deletes for everyone believing they hid it for themselves.
+   */
+  deleteAsAdmin: publicProcedure
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        messageId: z.number().int().positive(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const res = await deleteMessageAsGroupAdmin({
+        messageId: input.messageId,
+        conversationId: input.conversationId,
+        identityId: me.id,
+      });
+      if (!res.ok) {
+        const map: Record<
+          NonNullable<typeof res.reason>,
+          { code: "NOT_FOUND" | "BAD_REQUEST" | "FORBIDDEN" | "INTERNAL_SERVER_ERROR"; message: string }
+        > = {
+          "not-found": { code: "NOT_FOUND", message: "That message isn't in this group." },
+          "not-a-group": { code: "BAD_REQUEST", message: "That's a direct chat." },
+          "not-a-member": { code: "FORBIDDEN", message: "Only members can do that." },
+          "not-an-admin": { code: "FORBIDDEN", message: "Only a group admin can remove someone else's message." },
+          "own-message": { code: "BAD_REQUEST", message: "Use Unsend for your own message." },
+          unavailable: { code: "INTERNAL_SERVER_ERROR", message: "Couldn't remove that — nothing changed." },
+        };
+        const m = map[res.reason ?? "unavailable"];
+        throw new TRPCError({ code: m.code, message: m.message, cause: res.reason });
+      }
+      // Reuses the EXISTING `message` SSE kind rather than inventing one: an undeclared
+      // kind is dropped by the Redis bus allowlist whenever the recipient is on the other
+      // instance, and single-instance dev would look perfect (the v2.99.74 trap).
+      const members = await getConversationParticipantIds(input.conversationId);
+      for (const id of members) {
+        if (id !== me.id) publishToIdentity(id, { kind: "message", conversationId: input.conversationId, from: me.id });
+      }
+      return { ok: true as const };
+    }),
+
   createGroup: publicProcedure
     .input(
       z.object({
@@ -1846,6 +1948,13 @@ export const v2MessagesRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Not a member of this conversation." });
       }
       const idents = await getIdentitiesByIds(memberIds);
+      // GROUP ROLES (v2.104.0). Decoration for the roster — every real permission
+      // decision goes through `checkGroupPermission`, which fails closed, whereas
+      // `getGroupRoles` swallows its own failure so a role lookup can never stop the
+      // members list rendering.
+      const roles = await getGroupRoles(input.conversationId);
+      const storedAdmins = memberIds.filter((id) => roles.roleById.get(id) === "admin");
+      const creatorIsMember = roles.ownerIdentityId != null && memberIds.includes(roles.ownerIdentityId);
       return {
         conversationId: input.conversationId,
         members: idents.map((i) => ({
@@ -1854,7 +1963,15 @@ export const v2MessagesRouter = router({
           displayName: i.displayName,
           avatarUrl: i.avatarUrl ?? null,
           isMe: i.id === me.id,
+          isCreator: roles.ownerIdentityId != null && roles.ownerIdentityId === i.id,
+          // The creator is an admin without a stored role, so it is derived here too
+          // rather than read off the column — one rule, both places.
+          isAdmin: roles.roleById.get(i.id) === "admin" || roles.ownerIdentityId === i.id,
         })),
+        /** Whether the group has ANY administrator, so the UI can say "this group has
+         *  none" instead of offering a control that always fails. False for every group
+         *  created before v2.102.0, which have no creator recorded. */
+        hasAdmin: storedAdmins.length > 0 || creatorIsMember,
       };
     }),
 

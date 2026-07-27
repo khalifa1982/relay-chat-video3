@@ -539,10 +539,17 @@ describe("Finding 37 — a blocked user cannot show 'typing…' on the blocker's
 });
 
 describe("Finding 36 — deleteMessage is an atomic claim", () => {
-  const fn = V2DB.slice(
-    V2DB.indexOf("export async function deleteMessage"),
-    V2DB.indexOf("export async function deleteMessage") + 2200,
-  );
+  // EXACT name, and bounded by the function's own end rather than a fixed +2200.
+  //
+  // BOTH were fragile, and v2.104.0 tripped the first: `indexOf("export async function
+  // deleteMessage")` is a PREFIX match, so adding `deleteMessageAsGroupAdmin` (the group
+  // admin's override, deliberately a separate function) made this slice read that one
+  // instead — and the sender-ownership pin below, which exists to prove unsend stays
+  // sender-only, silently started asserting it about the wrong code. The `\b` rejects
+  // the longer name because the characters either side of the boundary are both word
+  // characters. Six test files shared the same prefix-matching helper; all six are fixed.
+  const at = V2DB.search(/export async function deleteMessage\b/);
+  const fn = V2DB.slice(at, V2DB.indexOf("\nexport ", at + 10));
 
   it("only the caller that flips deletedAt runs the unread decrement", () => {
     // `unreadCount` is stored, not derived, so a double decrement corrupts counts

@@ -195,7 +195,23 @@ export const IDENTITY_REFERENCING_COLUMNS = [
       "Who CREATED a group (v2.102.0). Left pointing at a deleted identity on purpose: " +
       "a group survives while anyone remains, and nulling it would be a silent " +
       "ownership change for the members — who did not ask for one and are not told. " +
-      "An unresolvable creator already reads as 'no owner' everywhere it is used.",
+      "An unresolvable creator already reads as 'no owner' everywhere it is used. " +
+      "v2.104.0 keeps that true: the creator counts as an admin only while they are " +
+      "still a PARTICIPANT, and the purge deletes their participant row — so a purged " +
+      "creator confers adminship on nobody, and there is no fallback that hands the " +
+      "group to everyone.",
+  },
+  {
+    table: "messages",
+    column: "deletedByIdentityId",
+    strategy: "keep-safer",
+    note:
+      "Which ADMIN removed somebody else's message (v2.104.0). KEPT, and `redact` would " +
+      "be actively wrong here — that was the adversarial review's catch. NULL in this " +
+      "column MEANS 'the sender unsent it', so nulling a purged admin's id would rewrite " +
+      "their deletion into an apparent self-unsend: the row would positively assert the " +
+      "sender removed their own words. Dangling reads as 'an admin, no longer here', " +
+      "which is the truth, and it names nobody — the id resolves to nothing.",
   },
   {
     table: "conversations",
