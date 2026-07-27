@@ -7557,6 +7557,41 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.100.1 — a second-device sign-in says where it came from and how (2026-07-27)
+
+Owner: *"it need to be sent always the details from where his login type, country, IP, device name,
+everything."* Closes #102.
+
+**The three ways in already existed** (v2.99.7: passcode bypass, email code that parks as pending,
+approve/decline on an online device) and are confirmed here rather than rebuilt. What was missing is
+the DETAIL — the prompt said "New sign-in waiting" and a device label, so it could not answer the one
+question it exists to answer.
+
+- **Four additive nullable columns** on `sessions`: `ip`, `country`, `city`, `method`. Pre-existing
+  rows simply have no details and each surface omits what it lacks.
+- **The IP is captured synchronously; the country is not.** Geo resolution is a 4s external call, so
+  it runs AFTER the row lands, un-awaited. A row with an IP and no place is the honest degraded state
+  and, on a LAN or behind a VPN, the ordinary one.
+- **The IP comes from `pickClientIp`** — the hop the proxy appended, never the leftmost
+  `X-Forwarded-For` (v2.98.4/F4), or anybody could write their own "where from".
+- **One geo implementation**, extracted out of `geoSelf` and shared with the top bar's flag chip; a
+  test asserts `ipapi.co` appears in the code exactly once.
+- **The login method is recorded, never inferred** — a session row looks identical however it was
+  created. `normalizeLoginMethod` fails to NULL rather than a default.
+- **One projection, three surfaces**: `pendingSessionWire` builds the approval prompt, the
+  notification-centre row and the Devices list. The phrasing lives in a pure `server/loginOrigin.ts`.
+- **The IP is shown deliberately**: the owner's own sign-in, the one detail that survives a geo
+  failure, named explicitly by them, and every procedure carrying it is scoped to `ctx.user`.
+- The notification centre names the sign-in only when there is exactly ONE waiting, and the prompt
+  ends with what to do about it.
+
+`server/loginOrigin.test.ts` (33). 31 tripwires by mutation; **three survived and all three were real
+gaps in my own tests** — an over-length IP refused for the wrong reason (so the length cap was
+untested), a fixed 700-char window that spilled into the next procedure's `if (!user)`, and a slice to
+end-of-file where another function's identical WHERE clause satisfied the assertion. Six more test
+bugs caught before that run, one of which asserted a behaviour the code does not have. Three
+pre-existing pins rewritten to the property. **Not verified on a device.** 2965 tests.
+
 ## v2.100.0 — deleting a person: one cascade, two callers, three things left alone (2026-07-27)
 
 Owner, twice: *"if I click delete, it will delete him completely. Whoever he took, whoever he had

@@ -74,11 +74,23 @@ describe("revocable-session wiring (source pins)", () => {
     // v2.99.7 split verifyOtp's call across two lines (it needs the sid for the
     // pending-approval branch), so count startSession calls directly + confirm
     // each mints the cookie with a sid.
+    // REWRITTEN in v2.100.1. The cookie assertion matched `setSessionCookie(...)`
+    // up to the next `;`, which the multi-line call the login-method argument
+    // introduced no longer fits — so it counted 1 while saying nothing about
+    // whether every path threads a sid. It now asserts the PROPERTY: every
+    // `startSession` call site is inside a statement that also sets the cookie.
     expect(routers).toMatch(/async function startSession\(/);
-    const starts = routers.match(/await startSession\(ctx, [^)]*\)/g) || [];
+    const starts = routers.match(/await startSession\(\s*ctx,[\s\S]{0,140}?\)/g) || [];
     expect(starts.length).toBe(2);
-    const cookieWithSid = routers.match(/setSessionCookie\(ctx\.res, [^;]*(await startSession\(ctx,|sid\))/g) || [];
-    expect(cookieWithSid.length).toBe(2);
+    // Each sign-in mutation reaches setSessionCookie, and no sid is minted without
+    // one — checked per call site rather than by a global count, so a third path
+    // that forgot the cookie could not hide behind the other two.
+    for (const site of ['startSession(ctx, userId, pending,', 'startSession(ctx, user.id, false, "pin")']) {
+      const at = routers.indexOf(site);
+      expect(at, site).toBeGreaterThan(0);
+      const window = routers.slice(Math.max(0, at - 400), at + 400);
+      expect(window, `${site} must set the session cookie`).toMatch(/setSessionCookie\(\s*ctx\.res/);
+    }
   });
 
   it("revoking the CURRENT device also clears this cookie; signOut drops its row", () => {

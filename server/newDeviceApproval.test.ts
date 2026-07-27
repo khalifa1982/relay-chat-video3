@@ -89,7 +89,12 @@ describe("login paths (v2.99.7)", () => {
       .join("\n");
     expect(code).not.toMatch(/wasRegistration/);
     expect(code).not.toMatch(/pending = !/);
-    expect(fn).toMatch(/await startSession\(ctx, userId, pending\)/);
+    // v2.100.1 added a fourth argument (the login method), so this no longer
+    // freezes the exact call. It asserts the PROPERTY that mattered: the pending
+    // flag handed to startSession is the one `shouldRequireApproval` returned, and
+    // nothing between them recomputes it.
+    expect(fn).toMatch(/const pending = await shouldRequireApproval\(userId\);/);
+    expect(fn).toMatch(/await startSession\(ctx, userId, pending,/);
     expect(fn).toMatch(/return \{ ok: true, verified: true, pending: true \}/);
     expect(fn).toMatch(/announcePendingDevice\(userId, sid, label\)/);
   });
@@ -111,8 +116,14 @@ describe("login paths (v2.99.7)", () => {
   });
   it("startSession threads the pending flag into recordSession (default false = byte-identical to before)", () => {
     expect(ROUTERS).toMatch(/async function startSession\([\s\S]*?pending = false,/);
-    expect(ROUTERS).toMatch(/await recordSession\(sid, userId, label, pending\)/);
-    expect(V2DB).toMatch(/export async function recordSession\(sid: string, userId: number, label: string, pending = false\)/);
+    // v2.100.1 appended an `origin` argument (ip + login method). Both assertions
+    // are now shape-tolerant but still pin the two things that matter: `pending` is
+    // threaded through positionally in the same place, and it still DEFAULTS to
+    // false, which is what makes every pre-v2.99.7 caller byte-identical.
+    expect(ROUTERS).toMatch(/await recordSession\(sid, userId, label, pending[,)]/);
+    expect(V2DB).toMatch(
+      /export async function recordSession\(\s*sid: string,\s*userId: number,\s*label: string,\s*pending = false,/
+    );
     expect(V2DB).toMatch(/pendingApproval: pending \? new Date\(\) : null/);
   });
 });

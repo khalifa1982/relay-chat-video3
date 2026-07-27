@@ -732,6 +732,23 @@ export const sessions = mysqlTable(
      *  NOT authenticate; approve = set NULL, deny = delete the row. Additive +
      *  nullable via ensureSchemaExtensions(). */
     pendingApproval: timestamp("pendingApproval"),
+    /**
+     * WHERE AND HOW THIS SIGN-IN HAPPENED (v2.100.1, owner: *"it need to be sent
+     * always the details from where his login type, country, IP, device name,
+     * everything"*). All four are additive + nullable, so every pre-existing row
+     * simply has no details and the UI omits what it does not have.
+     *
+     * The IP is captured SYNCHRONOUSLY at login and the country/city are filled in
+     * AFTERWARDS, fire-and-forget: geo resolution is an external HTTP call with a
+     * 4s timeout, and putting that in front of a sign-in would make every login
+     * wait on somebody else's service. A row with an IP and no country is the
+     * honest degraded state, not a bug.
+     */
+    ip: varchar("ip", { length: 64 }),
+    country: varchar("country", { length: 2 }),
+    city: varchar("city", { length: 96 }),
+    /** Which of the three ways in was used: "code" | "pin" | "register". */
+    method: varchar("method", { length: 16 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     lastSeenAt: timestamp("lastSeenAt").defaultNow().notNull(),
   },

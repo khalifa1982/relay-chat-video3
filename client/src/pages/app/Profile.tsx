@@ -1328,9 +1328,32 @@ function DevicesSection() {
                 <ShieldQuestion className="size-4 shrink-0 text-amber-500" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-semibold">New sign-in waiting</div>
+                  {/* Every detail the owner asked for (v2.100.1): *"the details from
+                      where his login type, country, IP, device name, everything."*
+                      Each line is withheld when the server sent null rather than
+                      rendered empty — a place we could not resolve must read as
+                      absent, not as a blank claim. */}
                   <div className="truncate text-xs text-muted-foreground">{p.label}</div>
+                  {p.detail && (
+                    <div className="truncate text-xs text-muted-foreground">{p.detail}</div>
+                  )}
+                  <div className="text-[11px] text-muted-foreground">
+                    {new Date(p.createdAt).toLocaleString()}
+                  </div>
+                  {p.ip && (
+                    <div
+                      className="truncate font-mono text-[11px] text-muted-foreground"
+                      dir="ltr"
+                    >
+                      {p.ip}
+                    </div>
+                  )}
                 </div>
               </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                If this wasn't you, decline it — the sign-in cannot complete without your
+                approval.
+              </p>
               <div className="mt-2.5 flex gap-2">
                 <Button
                   size="sm"
@@ -1383,6 +1406,14 @@ function DevicesSection() {
                   <div className="text-[11px] text-muted-foreground">
                     Active {relTime(s.lastSeenAt)} · added {new Date(s.createdAt).toLocaleDateString()}
                   </div>
+                  {/* Where and how this device signed in (v2.100.1) — the same
+                      projection the approval prompt renders, so the device you
+                      approved and the device listed here describe themselves the
+                      same way. Absent on every pre-release row, and omitted rather
+                      than filled with a guess. */}
+                  {s.detail && (
+                    <div className="truncate text-[11px] text-muted-foreground">{s.detail}</div>
+                  )}
                 </div>
                 <button
                   type="button"
