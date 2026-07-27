@@ -38,7 +38,7 @@ const env = {
   appSlug: "relay-mobile",
   // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
   // Leave empty to use the default icon from assets/images/icon.png
-  logoUrl: "/manus-storage/relay-icon_08a8c101.png",
+  logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/86205309/gICDuHUjOkeXoJiJ.png",
   scheme: schemeFromBundleId,
   iosBundleId: "com.app.relaymobile",
   androidPackage: bundleId,
