@@ -7557,6 +7557,60 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.99 — an admin can change an account type, and only one of the three directions is real (2026-07-27)
+
+Owner: *"in the admin panel for me as a admin, I can delete the user because you gave me only to change
+number. I can delete the user or change type of account from guest to registered to admin."*
+
+**THIS DELIBERATELY WIDENS A SURFACE v2.99.76 KEPT NARROW ON PURPOSE**, whose note read: *"an admin panel
+is a permanent high-value surface, so it does exactly those two things and cannot read a message, list
+contacts, delete an account, or grant itself more power — widening it is a decision somebody has to make
+on purpose rather than something that arrived for free."* The owner has now made that decision. The guard
+built for exactly this moment did its job: adding the procedure turned the capability-enumeration test
+RED, which is the deliberate act being forced.
+
+**ONLY ONE OF THE THREE DIRECTIONS IS A REAL FLAG, and saying which is most of the value here.** The tier
+is DERIVED, not stored — `admin` when `users.role = "admin"`, else `registered` when `identities.verified`,
+else `guest`. So:
+
+- **registered ↔ admin — REAL.** One enum column on a row that already exists.
+- **guest → anything — REFUSED.** A guest has NO `users` row at all; that is what being a guest *is*, so
+  there is no role column to write. Flipping `identities.verified` instead would have handed them the
+  Registered badge while they still had no email, no password and no way to sign in anywhere else — a
+  badge that lies about the account behind it. A guest becomes registered by REGISTERING, which already
+  keeps their number and all their data (v2.99.49). The panel says so in place of the control rather than
+  offering a button that always fails.
+- **anything → guest — REFUSED**, for the mirror reason: somebody with an email and a password does not
+  become a guest because a flag says so. If the intent is removal, that is deletion, not a downgrade.
+
+**AN ADMIN CANNOT REMOVE THEIR OWN ADMIN RIGHTS, and that guard is what makes the control safe rather than
+merely careful.** `users.role` is otherwise grantable only by hand — SQL, or the backend admin-tool — so a
+self-demotion could leave this deployment with NO administrator and no way back in through the app.
+Refusing it also GUARANTEES at least one admin always remains, however many others are demoted, which is a
+stronger property than a "last admin" count would have been. It is checked against the ACCOUNT rather than
+the identity, because one account can hold more than one identity over its life.
+
+**EVERY REFUSAL IS NAMED**, because the three of them need three different next steps — register, ask
+another admin, or delete instead — and a generic error would send the operator looking in the wrong place.
+The procedure writes ONE enum column and can reach nothing else: a test asserts it never touches
+`identities`, and never any credential field. Admin is re-derived from the `users` row before anything
+happens, and the trace carries ids only.
+
+**DELIBERATELY NOT SHIPPED HERE: promoting a guest by supplying an email.** It is mechanically possible and
+it is an account-takeover primitive — an admin could attach an address they control to somebody else's
+guest identity and then sign in as them with an email code. A guest can already register themselves and
+keep everything. If that is wanted anyway it should be asked for knowingly, not arrive as a side effect.
+
+**ALSO NOT IN THIS RELEASE: deleting a user.** The owner asked for it in the same breath, and it is the
+same cascade as the guest auto-purge — so it lands with that cascade, once, rather than being written
+twice. That release is being designed and adversarially reviewed first, because it permanently destroys
+data belonging to people who did not ask for it.
+
+`server/pushDoctor.test.ts` grows to 25 with five new pins: the exact capability set, the one-column
+reach, the self-demotion guard, the guest refusal, and that every refusal is named.
+
+No schema change (`users.role` has existed since v2.99.6), no new dependency, no new env var. 2870 tests.
+
 ## v2.99.98 — a Received tab, and one row per person (2026-07-27)
 
 Owner: *"now you have all these tabs, all the dial and received. You should add received, and there is a

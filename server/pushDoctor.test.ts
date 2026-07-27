@@ -227,12 +227,82 @@ describe("the panel stays a panel", () => {
     expect(ADMIN_UI).toMatch(/<PushCheck identityId=\{r\.id\}/);
   });
 
-  it("still does exactly three things, so the surface has not quietly widened", () => {
-    // An admin panel is a permanent high-value surface. Find, renumber, and now
-    // check notifications — no message reading, no contact listing, no deletion.
+  it("the panel's capabilities are an EXACT set, so the surface cannot widen quietly", () => {
+    // An admin panel is a permanent high-value surface, so every capability on it is
+    // enumerated and a new one has to be added HERE on purpose. This list grew in
+    // v2.99.99 — the owner asked for account-type control in their own words ("I can
+    // delete the user or change type of account from guest to registered to admin"),
+    // which is exactly the deliberate act this guard exists to force. The guard did
+    // its job: adding the procedure turned this test red.
+    //
+    // Still absent, and each absence is a decision: no message reading, no contact
+    // listing, no password or PIN reset, and no deletion (that lands with the purge
+    // cascade, which is a separate reviewed release).
     const calls = [...ADMIN_UI.matchAll(/trpc\.admin\.([A-Za-z]+)\./g)].map((m) => m[1]);
     expect([...new Set(calls)].sort()).toEqual(
-      ["amIAdmin", "findIdentities", "pushDiagnostics", "sendTestPush", "setIdentityNumber"].sort()
+      [
+        "amIAdmin",
+        "findIdentities",
+        "pushDiagnostics",
+        "sendTestPush",
+        "setAccountType",
+        "setIdentityNumber",
+      ].sort()
     );
+  });
+
+  it("account-type control writes ONE enum column and can reach nothing else", () => {
+    const fn = ROUTERS.slice(ROUTERS.indexOf("  setAccountType: publicProcedure"));
+    const body = fn.slice(0, fn.indexOf("\n    }),"));
+    expect(body.length).toBeGreaterThan(200);
+    // Admin is re-derived from the users row, before anything else happens.
+    expect(body).toMatch(/const me = await requireAdmin\(ctx\);/);
+    expect(body.indexOf("requireAdmin")).toBeLessThan(body.indexOf("setIdentityAccountType"));
+    // The input is a closed enum — not a free string that could name any column value.
+    expect(body).toMatch(/role: z\.enum\(\["admin", "registered", "guest"\]\)/);
+    // And it cannot write anything but the role.
+    expect(body).not.toMatch(/\.update\(identities\)/);
+    expect(body).not.toMatch(/passwordHash|loginPinHash|recoveryHash|guestToken/);
+  });
+
+  it("an admin cannot remove their OWN admin rights", () => {
+    // users.role is otherwise grantable only by hand (SQL, or the backend
+    // admin-tool), so a self-demotion could leave a deployment with no administrator
+    // and no way back in through the app. Refusing it also GUARANTEES at least one
+    // admin always remains, however many others are demoted.
+    const V2DB = read("server/v2db.ts");
+    const fn = V2DB.slice(V2DB.indexOf("export async function setIdentityAccountType"));
+    const body = fn.slice(0, fn.indexOf("\n}"));
+    expect(body.length).toBeGreaterThan(200);
+    expect(body).toMatch(/row\.userId === actingUserId/);
+    expect(body).toMatch(/reason: "self"/);
+    // The guard is checked against the ACCOUNT, not the identity: one account can
+    // hold more than one identity over its life.
+    expect(body).not.toMatch(/identityId === acting/);
+  });
+
+  it("a GUEST is refused rather than half-promoted", () => {
+    // A guest has no `users` row at all — that is what being a guest IS — so there is
+    // no role column to write. Flipping `identities.verified` instead would hand them
+    // the Registered badge while they still had no email, no password and no way to
+    // sign in anywhere else: a badge that lies about the account behind it.
+    const V2DB = read("server/v2db.ts");
+    const fn = V2DB.slice(V2DB.indexOf("export async function setIdentityAccountType"));
+    const body = fn.slice(0, fn.indexOf("\n}"));
+    expect(body).toMatch(/if \(row\.userId == null\) return \{ ok: false, reason: "no-account" \}/);
+    expect(body).not.toMatch(/verified: true/);
+    // "Become a guest" is refused for the mirror reason, before any DB work.
+    expect(body).toMatch(/if \(role === "guest"\) return \{ ok: false, reason: "unsupported" \}/);
+  });
+
+  it("every refusal is NAMED, because each needs a different next step", () => {
+    const fn = ROUTERS.slice(ROUTERS.indexOf("  setAccountType: publicProcedure"));
+    const body = fn.slice(0, fn.indexOf("\n    }),"));
+    for (const reason of ["not-found", "no-account", "self", "unsupported", "unavailable"]) {
+      expect(body, `${reason} is mapped`).toMatch(new RegExp(`"?${reason}"?:`));
+    }
+    // And the trace carries ids only — it lands in logs.
+    expect(body).toMatch(/console\.warn\(/);
+    expect(body).not.toMatch(/\$\{.*email/);
   });
 });
