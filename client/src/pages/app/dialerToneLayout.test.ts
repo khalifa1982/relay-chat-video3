@@ -57,7 +57,11 @@ describe("v2.99.36 (2) — real DTMF dial-pad tones", () => {
   });
   it("the Dialer plays a tone on a pad tap AND on hardware-keyboard digits", () => {
     expect(DIALER).toMatch(/import \{ playDtmf, disposeDtmf \} from "@\/lib\/dtmf"/);
-    const tap = DIALER.slice(DIALER.indexOf("function tap(d: string)"), DIALER.indexOf("function tap(d: string)") + 500);
+    // Bounded by the function's own end rather than a fixed +500 characters, which
+    // silently shrank as the guard above the tone grew (the v2.99.78 lesson).
+    const at = DIALER.indexOf("function tap(d: string)");
+    const tap = DIALER.slice(at, DIALER.indexOf("\n  }", at) + 4);
+    expect(tap.length).toBeGreaterThan(120);
     expect(tap).toMatch(/playDtmf\(d\)/);
     expect(DIALER).toMatch(/playDtmf\(e\.key\)/);
   });
@@ -69,11 +73,19 @@ describe("v2.99.36 (2) — real DTMF dial-pad tones", () => {
 
 describe("v2.99.36 (1) — the number-preview line no longer overlaps", () => {
   it("the sub-line can grow instead of being clipped at a fixed 16px", () => {
-    expect(DIALER).toMatch(/className="mt-1\.5 text-\[0\.78rem\] min-h-4 text-muted-foreground"/);
+    // v2.99.90 changed the MARGINS on this row (owner asked for space between the
+    // number, the information and the pad), so the exact class string is no longer
+    // the invariant. What matters — and what the v2.99.36 bug was — is that the row
+    // has a MINIMUM height it can grow past, never a fixed one.
+    expect(DIALER).toMatch(/text-\[0\.78rem\] min-h-4 text-muted-foreground/);
     expect(DIALER).not.toMatch(/text-\[0\.78rem\] h-4 text-muted-foreground/);
   });
   it("name+badge sit on line 1 and presence on line 2 (a flex column, not one row)", () => {
-    expect(DIALER).toMatch(/<span className="flex flex-col items-center gap-0\.5 leading-tight">/);
+    // The gap widened from 0.5 to 1 in v2.99.90 ("make space between the little
+    // bit"), so the exact value is not the property — being a COLUMN is, because a
+    // single row is what let the badge collide with the keypad in v2.99.36.
+    expect(DIALER).toMatch(/<span className="flex flex-col items-center gap-1 leading-tight">/);
+    expect(DIALER).not.toMatch(/<span className="flex flex-row items-center[^"]*leading-tight">/);
   });
   it("the badge renders WITHOUT its stacked caption, with the tier word inline", () => {
     expect(DIALER).toMatch(/<RoleBadge role=\{tier\} size=\{13\} caption=\{false\} \/>/);

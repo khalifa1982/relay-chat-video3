@@ -7557,6 +7557,109 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.90 — the dead keys go, the dialer says who you're calling, and a story stops dragging you onward (2026-07-27)
+- [x] **`*` AND `#` ARE GONE FROM BOTH DIAL PADS; THE BOTTOM ROW IS BLANK · 0 · ERASE** (owner, with a
+      screenshot: *"This star no need for this bottom. Remove it from here and also remove it from the … dial
+      pad, the main page … The star and the hash key. So just keep in the center below zero, and on the right
+      is the delete of the numbers."*). Neither symbol was ever usable: a RELAY number is six DIGITS, so `tap()`
+      refused them for the field and they only played a tone. `#` gave up its cell to erase (landing v2.99.36,
+      app v2.99.86); `*` gives up its cell to **nothing**. **THE BLANK IS A REAL GRID CELL, not a shortened
+      list** — that is what keeps `0` in the middle column and the erase key bottom-right under the thumb that
+      was just typing; a 3-column grid has no other way to centre it. It is a `<span aria-hidden>`, not a
+      button, so there is no empty focusable control between 9 and 0, and on the landing pad it carries no
+      `data-lp-key`, so the delegated click handler cannot route a tap on it into `press()`.
+- [x] **THE NON-DIGIT GUARD STAYS, and it is what made the removal safe rather than merely tidy**: the length
+      cap used to apply ONLY to digits, so `*` appended without limit and could push junk into a field that can
+      only ever hold six. The pin was rewritten from the exact body (`{ playDtmf(d); return; }` — the
+      consolation tone for a key that no longer exists) to the property: the guard refuses, and it refuses
+      BEFORE anything appends.
+- [x] **ADD-TO-CONTACTS: ONE GLOSSY ICON, OR NOTHING AT ALL** (owner: *"If the number is already on contact,
+      you don't need to show this message. If he's not in the contact, just show an icon added to contact but a
+      different color, make it nice color … glossy, glossy, and flashy."*). Already saved → the component
+      returns null; the old "✓ In your contacts" chip answered a question nobody asked, on a card with no spare
+      vertical space directly under three call buttons. Not saved → a 48px round `UserPlus` in **pink→fuchsia**,
+      and the colour choice is not arbitrary: green is Voice, sky is Video, violet is Group Call, red is erase,
+      amber is Do Not Disturb, so a fourth reuse would make colour stop carrying information. A test asserts
+      the new hexes appear nowhere in the call row. **FLASHY WITHOUT REPAINTING**: the halo is a STATIC
+      box-shadow on a stacked overlay with only its OPACITY animated (`relay-gloss-pulse`, the same primitive
+      as the erase key) — animating the button's own box-shadow repaints it every frame, the class v2.99.84
+      measured and removed 14 of. The gloss is a fixed specular highlight, static on purpose: a moving shine on
+      a button you are aiming at is a distraction rather than "flashy". Icon-only as asked, with the label on
+      `aria-label` + `title` so it is still reachable without sight, and `disabled` while saving.
+- [x] **THE DIALER PREVIEW, IN THE OWNER'S ORDER** (*"it shows you his badge. It shows you when was his last
+      login. First, to show you also he is online, then last login, number of hours."*): name + badge ·
+      **online-or-not** · **how long since** · the status they chose. New pure `peerPresenceLines` so the
+      ordering rule is testable without a DOM, and a test asserts the four are rendered in that order by index.
+- [x] **HOW LONG AGO IS AN ELAPSED DURATION AND NEVER A DATE** (*"Days that shows you one day, two day, three
+      days like this, not date as a date."*). New `formatElapsedSince`: `8s` under a minute, `14m` under an
+      hour, `3h 20m` under a day, `2d 4h` past 24h. Seconds stop where they stop being information — printing
+      them on a two-day-old figure is noise AND would need the line to re-render every second to stay honest.
+      A test walks four ranges and asserts NO month name, NO year, NO clock and NO `AM`/`PM` can appear.
+      **`formatLastSeen` IS DELIBERATELY UNTOUCHED** and still backs Contacts and the profile popup: the owner
+      asked for the clock THERE in v2.99.66 (*"it doesn't show you the time and the minutes"*), so replacing it
+      globally would have undone an earlier explicit request. Two formatters, two surfaces, both asked for.
+- [x] **THE ELAPSED FIGURE IS WITHHELD WHILE THEY ARE ONLINE**: "last login 3s ago" beside "online now"
+      restates the same fact and would need a per-second re-render. But **`travelling` and `away` KEEP it**,
+      because a manual label is not presence — the person set it days ago and how long since they were actually
+      here is still news. It is `dir="ltr"` + bidi-ISOLATED so an RTL locale cannot reorder `2d 4h`.
+- [x] **THE STATUS THEY PICKED GETS ITS OWN CHIP — not their bio, not their story media** (owner: *"his
+      profile, there is two things. Not the bio. If he's travel or he's not travel, his status. Not the image
+      and video."*). `peerStatus` folds the override INTO the presence text, so travelling REPLACED "offline";
+      now they coexist and the chip reads as a label the person chose rather than as live presence.
+      `peerStatus` itself is left alone — it is what Contacts and the popup render.
+- [x] **SPACE BETWEEN THE NUMBER, THE INFORMATION AND THE PAD** (*"currently, it's showing you the dialed
+      number, then the information, then the pad is all together attached. Make space between the little
+      bit."*). `mt-1.5` → `mt-3 mb-1.5`, plus the preview's own line gap widened. The card's `gap` spaces its
+      ROWS; this is the space INSIDE the number area, which the gap could not reach.
+- [x] **A STORY NO LONGER DRAGS YOU INTO THE NEXT PERSON'S** (owner: *"when you open your store, your own story
+      … it takes you to the other story after it finish your own story. This thing doesn't show … don't do it in
+      the main profile if you click there or anywhere else. Except if you are in the message and you click in
+      the other story, it will start from the first profile of your friends who published story, and it will
+      keep going to the end of the last friend … But on your personal story, with its finish, it's closed."*)
+      New `chain` prop on `StatusViewer`, **defaulting to FALSE — and that default is the safety property**: a
+      call site added later inherits the single-story behaviour, which is the rule for everywhere except the
+      Messages strip. `next()`/`prev()` both route through ONE `nextChainable` helper rather than each carrying
+      their own branch.
+- [x] **YOUR OWN STORY IS EXCLUDED INSIDE THE HELPER, not at the call site** — so a chain that STARTS on a
+      friend can never land on you either, which a call-site-only check would have missed (the feed array
+      contains your group). The strip passes `chain={!groups[viewerAt].owner.isMe}`, so tapping a friend walks
+      to the last friend and tapping My status shows yours and closes. Exactly ONE opt-in exists across the
+      whole client, asserted by count.
+- [x] **THE UNIVERSAL OPENER STOPS CHAINING BY DEFAULT.** `PeerOverlaysHost` — the imperative
+      `openPeerStatus` used by the profile popup, Contacts, History and the call tiles — hands the viewer the
+      WHOLE feed so it can locate the right group, and with no `chain` prop that array is now navigable one
+      group only. So a story opened from a contact row shows that person and closes, which is what the owner
+      asked for and was previously the opposite. The progress bars were already per-ITEM of the current group,
+      so nothing promises a chain that will not happen.
+- [x] **FOUR PRE-EXISTING PINS REWRITTEN TO THE PROPERTY rather than relaxed**: `callUiV2998` asserted the
+      "In your contacts" chip EXISTS, i.e. it pinned the very thing the owner asked to remove — it now asserts
+      the offer/no-offer rule; `topBarSpec` froze the exact non-digit-guard body; `dialerToneLayout` froze the
+      exact margin string and the exact `gap-0.5`, both of which this release deliberately changed, so they now
+      assert min-height-not-fixed-height and is-a-column; and its tone pin sliced a fixed `+500` characters
+      that the new guard pushed past, now bounded by the function's own end with a non-empty assertion.
+- [x] **FIVE MISTAKES OF MY OWN IN THE TESTS, all found before shipping and fixed rather than counted as
+      passes.** Three were the SAME declaration-vs-use trap in a row: `const KEYS: { d: string; sub: string }[]`
+      contains the `{ d: ` needle the entry count used, and `Array<[string, string]>` contains two `[` — both
+      read one or two entries too many, so the slices now start AFTER the declaration. A fourth was a 700-char
+      window past the landing pad's blank-cell branch that ran into the DIGIT branch, which legitimately
+      carries `data-lp-key` — now bounded to its own arm. The fifth is the recurring one: a `not.toMatch` for
+      the removed "In your contacts" chip matched MY OWN COMMENT explaining its removal, because `codeOnly`
+      strips comment LINES and the phrase sat mid-line inside a block comment; the comment was reworded.
+      A sixth assertion was simply wrong about the code and corrected: the landing table lists 12 entries (its
+      erase cell is one HTML string like the rest) while the app table lists 11 (its erase key needs its own
+      gradient, halo and disabled state, so it is rendered after the map) — twelve cells either way.
+- [x] `client/src/pages/app/dialPadStory.test.ts` (34), with the duration formatter and the presence ordering
+      tested BEHAVIOURALLY because a source pin cannot tell you whether `2d 4h` comes out of a 52-hour gap.
+      **All 22 tripwires verified by MUTATION** from byte-exact backups and a confirmed-GREEN baseline, with the
+      mutator aborting unless its target occurs exactly once; sources byte-identical afterwards.
+- [x] **NOT MEASURED, said plainly**: no browser measurement of the new pad or preview. Both are grid and flex
+      primitives already proven here, the blank cell cannot overflow because it renders nothing, and the pin
+      colours are opaque gradients — but how the pad and the pink button LOOK on the owner's phone is
+      unverified. **NOT DONE, and it is a data gap rather than an oversight**: group thread rows carry no story
+      ring, because a group has no avatar or status of its own yet — that is the group work already on the list,
+      not a regression here.
+- [x] No schema change, no new dependency, no new env var, no server change. 2637 tests.
+
 ## v2.99.89 — the Profile page becomes the control centre (2026-07-27)
 - [x] **OWNER, TWICE, WITH TWO MOCKUPS**: *"you build the profile page to be more advanced. Everything
       controlled entire things from there. Also, put the barcode, put your number, put the badge, put your

@@ -90,7 +90,14 @@ describe("RelayEngine minimize box + fit (v2.99.8)", () => {
 describe("dialpad save + End Call caption (v2.99.8)", () => {
   it("Dialer offers Save for any complete non-self, non-party-line number", () => {
     expect(DIALER).toMatch(/\/\^\\d\{6\}\$\/\.test\(dialed\) && dialed !== myNumber && !previewIdentity\?\.partyLine/);
-    expect(DIALER).toMatch(/In your contacts/); // already-saved confirmation
+    // v2.99.90: the "In your contacts" confirmation this used to pin is GONE at the
+    // owner's request ("If the number is already on contact, you don't need to show
+    // this message"), so pinning it asserted the very thing they asked to remove.
+    // The property that survives is the one this test is named for: a complete,
+    // saveable number gets an OFFER, and an already-saved one gets nothing.
+    const qa = DIALER.slice(DIALER.indexOf("function QuickAddContact("));
+    expect(qa).toMatch(/if \(isAlready\) return null;/);
+    expect(qa).toMatch(/upsert\.mutate\(\{ number, displayName:/);
   });
   it("pre-connect controls reserve room so the End Call caption isn't clipped", () => {
     expect(RELAY_CSS).toMatch(/#call\.pre-connect \.controls\{padding-bottom:max\(60px/);
