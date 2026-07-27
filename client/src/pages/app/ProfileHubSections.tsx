@@ -11,13 +11,7 @@ import {
   type SocialLink,
   type SocialPlatform,
 } from "@shared/profileFields";
-import {
-  MAX_STATUS_NOTE,
-  PROFILE_STATUS_META,
-  normalizeProfileStatus,
-  profileStatusMeta,
-  type ProfileStatus,
-} from "@shared/profileStatus";
+import { ProfileStatusPicker } from "@/app/ProfileStatusPicker";
 
 /** The subset of the whoami identity the hub sections read. */
 export interface HubMe {
@@ -315,84 +309,22 @@ export function BioSection({ me, onSaved }: { me: HubMe; onSaved: () => void }) 
 export function StatusSection({ me, onSaved }: { me: HubMe; onSaved: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const save = useProfileSave(onSaved, setError);
-  const current = normalizeProfileStatus(me.profileStatus);
-  const [note, setNote] = useState(me.statusNote ?? "");
-  // The note follows the server when it changes underneath us (another device, a
-  // refetch) — but only while this field is not being edited, or a poll would erase
-  // what somebody is halfway through typing.
-  const [editingNote, setEditingNote] = useState(false);
-  useEffect(() => {
-    if (!editingNote) setNote(me.statusNote ?? "");
-  }, [me.statusNote, editingNote]);
-
-  const pick = (k: ProfileStatus | null) => {
-    setError(null);
-    // Tapping the CURRENT one clears it — the picker is its own "none" control, so
-    // there is no sixth button whose only job is to undo the other five.
-    save.mutate({ profileStatus: k === current || k === null ? "" : k });
-  };
-  const saveNote = () => {
-    setEditingNote(false);
-    const next = note.trim().slice(0, MAX_STATUS_NOTE);
-    if (next === (me.statusNote ?? "")) return;
-    setError(null);
-    save.mutate({ statusNote: next });
-  };
-
   return (
     <section className="space-y-3">
       <Label className="text-xs uppercase tracking-wider text-muted-foreground">Status</Label>
-      <div className="grid grid-cols-3 gap-2">
-        {PROFILE_STATUS_META.map(({ key, label, emoji, color }) => {
-          const on = current === key;
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => pick(key)}
-              disabled={save.isPending}
-              aria-pressed={on}
-              // Inline styles, NOT template-composed Tailwind classes: the JIT
-              // compiler cannot see a class name assembled at runtime, so a
-              // `border-[${color}]` would come out unstyled (the trap recorded for
-              // the tab-bar accents).
-              style={on ? { borderColor: color, background: `${color}1f` } : undefined}
-              className={
-                "flex flex-col items-center gap-1.5 rounded-xl border p-3 transition disabled:opacity-50 disabled:pointer-events-none " +
-                (on ? "text-foreground" : "border-border bg-card/40 text-muted-foreground hover:bg-card/70")
-              }
-            >
-              <span aria-hidden="true" className="text-lg leading-none">{emoji}</span>
-              <span className="text-xs font-medium text-center leading-tight">{label}</span>
-            </button>
-          );
-        })}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {profileStatusMeta(current)?.hint ??
-          "No status — presence decides: online when you're active, offline otherwise."}
-      </p>
-      {/* The note is only meaningful ALONGSIDE a status, so it appears with one. On
-          its own it would be a caption for nothing. */}
-      {current && (
-        <div className="space-y-1.5">
-          <Label htmlFor="status-note" className="text-xs text-muted-foreground">
-            Note (optional)
-          </Label>
-          <Input
-            id="status-note"
-            value={note}
-            maxLength={MAX_STATUS_NOTE}
-            placeholder="back Monday"
-            onFocus={() => setEditingNote(true)}
-            onChange={(e) => setNote(e.target.value)}
-            onBlur={saveNote}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-            }}
-          />
-        </div>
-      )}
+      <ProfileStatusPicker
+        value={me.profileStatus}
+        note={me.statusNote}
+        pending={save.isPending}
+        onPick={(k) => {
+          setError(null);
+          save.mutate({ profileStatus: k ?? "" });
+        }}
+        onSaveNote={(next) => {
+          setError(null);
+          save.mutate({ statusNote: next });
+        }}
+      />
       <SaveError message={error} />
     </section>
   );

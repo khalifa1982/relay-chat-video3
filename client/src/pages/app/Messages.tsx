@@ -64,6 +64,7 @@ import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
 import { videoRecorderSupported } from "@/lib/videoNote";
 import { VideoRecordSheet } from "@/app/VideoRecordSheet";
+import { GroupInfoSheet } from "@/app/GroupInfoSheet";
 import { linkify } from "@/lib/linkify";
 import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
@@ -671,6 +672,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const groupStatusText = isGroup
     ? describeProfileStatus(thread?.groupStatus, thread?.groupStatusNote)
     : null;
+  // v2.102.1 — tapping the header opens the GROUP's own info sheet (below).
+  const [groupInfoOpen, setGroupInfoOpen] = useState(false);
   const [muted, setMuted] = useThreadMuted(conversationId);
   // For groups, fetch the roster so we can label messages with sender names.
   const infoQuery = trpc.messages.conversationInfo.useQuery(
@@ -1062,6 +1065,19 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     [muted, setMuted, thread?.peerLastSeenAt]
   );
 
+  // Tapping the header: a GROUP opens its own info sheet, where until now the tap did
+  // nothing at all for a group (it only ever opened a peer's profile for a DM), so a
+  // dead tap becomes the way in. ONE handler for both kinds, because two would be two
+  // places that can come to disagree about which tap does what.
+  const openHeader = () => {
+    if (isGroup) setGroupInfoOpen(true);
+    // A DM opens the peer's profile popup (v2.96 spec: "click anywhere on the name …
+    // see their profile") — carrying this conversation's search + notification
+    // controls and the full last-seen line, which the header has no room for
+    // (v2.99.66).
+    else if (thread?.peerNumber) openPeerProfile(thread.peerNumber, peerProfileChat);
+  };
+
   // scroll-to-bottom on new message — but DON'T yank the user down while they're
   // reading history. Only auto-scroll when already near the bottom; always jump
   // when the thread itself changes (opening a thread should land at the bottom).
@@ -1354,12 +1370,27 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         </button>
         <div className="relative shrink-0">
           {isGroup ? (
-            <div
-              className="size-9 rounded-full grid place-items-center"
-              style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
-            >
-              <Users className="size-4.5" />
-            </div>
+            /* The group's own photo when it has one (v2.102.1) — this disc still drew
+               the generic glyph even for a group with a picture, so the thread row and
+               its own header disagreed about the same group. A broken URL falls back to
+               the glyph, never the browser's broken-image icon. */
+            thread?.groupAvatarUrl ? (
+              <img
+                src={thread.groupAvatarUrl}
+                alt=""
+                className="size-9 rounded-full border border-border/60 bg-muted/40 object-cover"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).style.display = "none";
+                }}
+              />
+            ) : (
+              <div
+                className="size-9 rounded-full grid place-items-center"
+                style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
+              >
+                <Users className="size-4.5" />
+              </div>
+            )
           ) : (
             /* Real profile photo + status ring (v2.96); tap = status/profile. */
             <PeerAvatar
@@ -1386,19 +1417,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         </div>
         <div
           className="flex-1 min-w-0 leading-tight"
-          role={!isGroup && thread?.peerNumber ? "button" : undefined}
-          tabIndex={!isGroup && thread?.peerNumber ? 0 : undefined}
-          onClick={() => {
-            // Tapping the NAME opens the peer's profile popup (v2.96 spec:
-            // "click anywhere on the name … see their profile") — now carrying
-            // this conversation's search + notification controls and the full
-            // last-seen line, which the header has no room for (v2.99.66).
-            if (!isGroup && thread?.peerNumber) openPeerProfile(thread.peerNumber, peerProfileChat);
-          }}
+          role={isGroup || thread?.peerNumber ? "button" : undefined}
+          tabIndex={isGroup || thread?.peerNumber ? 0 : undefined}
+          onClick={openHeader}
           onKeyDown={(e) => {
-            if (!isGroup && thread?.peerNumber && (e.key === "Enter" || e.key === " ")) {
+            if ((isGroup || thread?.peerNumber) && (e.key === "Enter" || e.key === " ")) {
               e.preventDefault();
-              openPeerProfile(thread.peerNumber, peerProfileChat);
+              openHeader();
             }
           }}
         >
@@ -2160,6 +2185,21 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       </div>
 
       {lightbox && <MediaLightbox media={lightbox} onClose={() => setLightbox(null)} />}
+      {/* The group's own name, photo and status (v2.102.1) — the editor for the data
+          v2.102.0 added. Mounted at the view's root, outside the scroll area, so
+          closing it can never unmount an open avatar picker from under the user. */}
+      {isGroup && (
+        <GroupInfoSheet
+          open={groupInfoOpen}
+          onClose={() => setGroupInfoOpen(false)}
+          conversationId={conversationId}
+          title={thread?.title ?? null}
+          number={thread?.groupNumber ?? null}
+          avatarUrl={thread?.groupAvatarUrl ?? null}
+          status={thread?.groupStatus ?? null}
+          statusNote={thread?.groupStatusNote ?? null}
+        />
+      )}
       {/* In-app video recorder (v2.96.2): the clip lands in the normal
           attachment flow (pendingUpload), so captions and the disappearing
           timer apply before Send — and it works even during a call. */}

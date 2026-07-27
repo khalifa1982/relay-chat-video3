@@ -21,7 +21,13 @@ const ROUTERS = readFileSync(new URL("../../../../server/v2routers.ts", import.m
 
 const codeOnly = (s: string) =>
   s
-    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, "")
+    // FIXED in v2.102.1: the first pass used to be a JSX-span strip,
+    // /\{\s*\/\*[\s\S]*?\*\/\s*\}/ — but a DOCUMENTED PROP TYPE has the same
+    // shape (`}: { /** … */ value: unknown; … }`), so it swallowed the whole prop
+    // block and much of the function body. Every `not.toMatch` here was reading a
+    // gutted source and could pass vacuously. Stripping block comments FIRST is
+    // both simpler and correct: a JSX comment collapses to a bare `{}`, whose
+    // prose is gone, and no code is touched.
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .split("\n")
     .filter((l) => !/^\s*\/\//.test(l))

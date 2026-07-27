@@ -21,11 +21,29 @@ export function AvatarPicker({
   onClose,
   displayName,
   onSaved,
+  onSave,
+  title = "Choose your avatar",
+  removeLabel = "your photo",
 }: {
   open: boolean;
   onClose: () => void;
   displayName?: string;
   onSaved?: (url: string | null) => void;
+  /**
+   * Where the chosen url is WRITTEN (v2.102.1). Omitted, it saves to the caller's own
+   * identity — the historical behaviour, byte-identical. A GROUP passes its own sink
+   * (`messages.setGroupProfile`), which is why this is injected rather than branched
+   * on inside: a second copy of this component would mean a second copy of the upload
+   * pipeline, the emoji renderer, the animated-GIF path, the 4 MB cap and the mime
+   * check — and v2.99.89 found a DEAD duplicate upload path doing exactly that.
+   *
+   * The uploaded key lands in the CALLER's own storage namespace either way, which is
+   * exactly what `setGroupProfile`'s ownership gate requires, so a member setting a
+   * group photo needs no server change.
+   */
+  onSave?: (url: string | null) => Promise<void>;
+  title?: string;
+  removeLabel?: string;
 }) {
   const utils = trpc.useUtils();
   const updateProfile = trpc.identity.updateProfile.useMutation();
@@ -40,8 +58,12 @@ export function AvatarPicker({
   const bg = AVATAR_BGS[bgIdx];
 
   async function save(url: string | null) {
-    await updateProfile.mutateAsync({ avatarUrl: url });
-    await utils.identity.whoami.invalidate();
+    if (onSave) {
+      await onSave(url);
+    } else {
+      await updateProfile.mutateAsync({ avatarUrl: url });
+      await utils.identity.whoami.invalidate();
+    }
     onSaved?.(url);
     onClose();
   }
@@ -87,7 +109,7 @@ export function AvatarPicker({
     try {
       await save(null);
     } catch (err) {
-      toast.error((err as { message?: string })?.message ?? "Couldn't remove your photo.");
+      toast.error((err as { message?: string })?.message ?? `Couldn't remove ${removeLabel}.`);
     } finally {
       setBusy(false);
     }
@@ -98,12 +120,12 @@ export function AvatarPicker({
       className="dark fixed inset-0 z-[130] grid place-items-end sm:place-items-center p-0 sm:p-4 text-foreground"
       role="dialog"
       aria-modal="true"
-      aria-label="Choose an avatar"
+      aria-label={title}
     >
       <div aria-hidden className="glass-overlay absolute inset-0" onClick={busy ? undefined : onClose} />
       <div className="relative flex max-h-[88dvh] w-full flex-col overflow-hidden rounded-t-3xl border border-border/60 bg-card/95 shadow-2xl backdrop-blur-2xl sm:w-[min(94vw,440px)] sm:rounded-3xl">
         <div className="flex items-center justify-between border-b border-border/60 px-5 py-4">
-          <h2 className="text-base font-bold">Choose your avatar</h2>
+          <h2 className="text-base font-bold">{title}</h2>
           <button
             type="button"
             onClick={onClose}

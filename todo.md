@@ -7557,6 +7557,109 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.102.1 — the editor for a group's own name, photo and status (2026-07-27)
+
+Owner (#89), the other half. v2.102.0 shipped the DATA — a 6-digit group id, an avatar, a
+status from the shared vocabulary, the guarded write endpoint and every READ surface — but
+nothing in the app called it, so a member could not pick any of it from a screen.
+
+**Nothing was duplicated, and that is the release**
+
+- [x] **The status picker is EXTRACTED, not copied** into `client/src/app/ProfileStatusPicker.tsx`.
+      A group's status and a person's are the same five labels (v2.101.1), and two copies of
+      the grid is how the two come to look and behave differently one edit at a time. The
+      picker is presentational — a test asserts it reaches for no `trpc` and no
+      `useMutation` — and `StatusSection` and the group sheet each own only their own write.
+- [x] **The note's follow-the-server rule lives IN the picker**, so the second caller inherits
+      "a refetch must not erase a note somebody is halfway through typing" instead of having
+      to remember it.
+- [x] **`AvatarPicker`'s save sink is INJECTED**, defaulting to today's `identity.updateProfile`
+      so every existing call site is byte-identical. A group passes `messages.setGroupProfile`.
+      A second component would have meant a second copy of the upload pipeline, the emoji
+      renderer, the animated-GIF path, the 4 MB cap and the mime check — and v2.99.89 found a
+      DEAD duplicate upload path in Profile doing exactly that.
+- [x] The uploaded key lands in the CALLER's own storage namespace either way, which is exactly
+      what `setGroupProfile`'s ownership gate requires — so a member setting a group photo
+      needed no server change at all.
+- [x] Its copy is parameterised, so a group is not asked to remove "your photo".
+
+**The sheet**
+
+- [x] Opened by tapping the group's conversation header, **which did nothing at all for a group
+      before** (it only ever opened a peer's profile for a DM), so a dead tap becomes the way
+      in. ONE handler serves both kinds — two would be two places that can disagree about
+      which tap does what — and the header is now focusable for a group as well as a DM.
+- [x] **The header disc shows the group's own photo.** It drew the generic glyph even for a
+      group WITH a picture, so the thread row and the conversation's own header disagreed
+      about the same group.
+- [x] **Nothing is optimistic.** It writes a row other people are looking at, so a failure
+      already painted as success would leave this member believing they renamed a group
+      everybody else still sees under the old name.
+- [x] **BOTH reads are invalidated**, because the thread list renders the same photo, id and
+      status — refreshing one would leave the other advertising what was just changed (the
+      v2.99.87 defect).
+- [x] It gates nothing itself: membership is the SERVER's check, because a client-side check on
+      a row several people share is a suggestion, not a rule.
+- [x] The members list is READ-ONLY — adding and removing people stays the call screen's job,
+      and two ways to change who is in a group is two places that can disagree about it.
+- [x] The group's id is copyable, `dir="ltr"` so an RTL locale cannot reorder it, and a group
+      created before v2.102.0 says it has none rather than showing a gap.
+
+**A false claim in my own code, found by the mutation run and fixed rather than reworded**
+
+- [x] A comment said closing the sheet could not unmount an open avatar picker. `if (!open)
+      return null` means it CAN — the picker is a child. The early return now tolerates an
+      open picker (`!open && !pickingAvatar`) and the sheet's BODY is gated instead, so the
+      claim is true. Both halves are pinned, and both mutations bite.
+
+**A REAL BUG IN THE TEST HELPER, in eleven files**
+
+- [x] `codeOnly()` — the helper that strips comments before a `not.toMatch`, added because this
+      repo has matched its own prose ten times — began with a JSX-span strip,
+      `/\{\s*\/\*[\s\S]*?\*\/\s*\}/`. **A DOCUMENTED PROP TYPE has the same shape**
+      (`}: { /** … */ value: unknown; … }`), so it swallowed the whole prop block and much of
+      the function body: on the new picker it cut 5,412 characters to 1,084. Every
+      `not.toMatch` running through it was reading a gutted source and could pass vacuously —
+      which is exactly how the "the picker owns no mutation" pin survived a mutation that gave
+      it one. Found because that survivor made no sense and was traced rather than accepted.
+- [x] Fixed in all **eleven** files that carry the helper, by stripping block comments FIRST
+      (simpler and correct: a JSX comment collapses to a bare `{}`, whose prose is gone, and
+      no code is touched). **The full suite stays green afterwards**, so no live defect was
+      being hidden — what was weakened was those files' ability to catch a FUTURE one.
+
+**#96 RE-RESOLVED HONESTLY, and my earlier claim about it was WRONG**
+
+- [ ] v2.102.0's note said the group story ring "was blocked on exactly this data" and is now
+      unblocked. Read against the schema, that is **not true**: `statuses.identityId` is
+      `notNull` with no conversation reference, so **a story belongs to a person and a group
+      cannot post one**. The avatar now exists, but the STORY does not — a ring around a group
+      would signify nothing. Building it would have been decoration dressed as a feature.
+      Unblocking it means letting a GROUP post a story, which is its own feature (a nullable
+      `conversationId` on `statuses`, a per-group audience rule, and a posting surface) and
+      nobody has asked for it.
+
+**Tests**
+
+- [x] `server/groupProfileEditor.test.ts` (24), which assert the ABSENCE of a second copy
+      rather than the presence of a first.
+- [x] **All 29 tripwires verified by MUTATION** from byte-exact backups, the mutator aborting
+      unless its target occurs exactly once, from a confirmed-GREEN baseline.
+- [x] **Four survivors, all fixed:** one was the `codeOnly` bug above; one pinned
+      `title="…"`, which is a SUBSTRING of `data-title="…"`, so renaming the prop passed; one
+      matched a bare `dir="ltr"` that the member rows satisfied after it was deleted from the
+      id itself; and one compared indexes against the last `</div>`, a fragile proxy that a
+      mutation into dead code satisfied. **Two of my own mutations were bad** and are reported
+      rather than counted — an unused import owns no mutation, and moving a component into
+      dead code does not move it relative to anything.
+- [x] **The prose trap for the ELEVENTH time**: the count of `dir="ltr"` read 3, because the
+      comment above the group id explains the rule and therefore contains the string. Counted
+      on stripped code.
+- [x] Five pre-existing pins in `server/profileStatus.test.ts` repointed at the shared picker —
+      expected fallout from the extraction, and strictly better, since they now name the one
+      place the rule lives.
+- [x] No schema change, no new dependency, no new env var, no server change.
+      Suite 3070 passed / 1 skipped.
+
 ## v2.102.0 — a group gets its own 6-digit id (2026-07-27)
 
 Owner (#89): a group should have a 6-digit **group ID**, a group **avatar**, a group **status**, and a
