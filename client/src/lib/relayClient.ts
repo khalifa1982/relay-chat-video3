@@ -1216,6 +1216,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
     echoCancellation: true,
     noiseSuppression: true,
     autoGainControl: true,
+    // v2.99.84: MONO, and `ideal` rather than `exact` so a device that only
+    // offers stereo still yields a track instead of throwing OverconstrainedError
+    // and costing the person their microphone. A voice call is mono by nature —
+    // there is no spatial information in one mouth — so a stereo capture doubles
+    // the encoder's sample work for nothing, on the path where N-1 encoders are
+    // already the problem. Clarity is unaffected; only redundant channels go.
+    channelCount: { ideal: 1 },
   };
   async function acquireRawStream(useFacingMode: "user" | "environment"): Promise<MediaStream> {
     const s = await navigator.mediaDevices.getUserMedia({
@@ -3682,6 +3689,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
       '<span class="nm-text">' + escapeHtml(first) + "</span>" + pinTag + "</div>" +
       addMark +
       '<div class="tile-info">' + dev + '<span class="ti-speed"></span></div>' +
+      // v2.99.84: the active-speaker glow lives on its OWN overlay so the
+      // animation can be opacity-only. Animating the tile's own box-shadow
+      // repainted the whole tile — over LIVE VIDEO, so nothing cached — every
+      // frame, six times over at the mesh cap. Static markup, no JS toggles it:
+      // the `.speaking` class on the tile drives it in CSS, exactly as before.
+      '<span class="spk-glow" aria-hidden="true"></span>' +
       menuBtn + maxBtn
     );
   }
@@ -4182,21 +4195,62 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // random camera/audio degradation). Scale each sender's bitrate/resolution
   // with the party size; re-applied on every join/leave. Best-effort — older
   // browsers without setParameters simply keep default behaviour.
+  //
+  // v2.99.84 (owner: "my phone become verry hot whenever we have conference call
+  // multiple parties"): bitrate and resolution were capped, FRAME RATE was not —
+  // and encode cost scales roughly linearly with it, so five encoders at the
+  // camera's native 30fps were doing twice the work of five at 15. That is the
+  // largest CPU lever left on this path, and it also fixes the audio half of the
+  // same report: a thermally throttled phone starves its AUDIO encoder too, which
+  // is heard as choppy, unclear sound. Capping video is what protects voice.
   function applyMeshVideoCaps() {
     if (livekitEnabled) return;
     const n = Object.keys(peers).length;
     const maxBitrate = n <= 1 ? 1_200_000 : n <= 3 ? 700_000 : 350_000;
     const scale = n <= 3 ? 1 : 2;
+    // 1:1 keeps 30 — deliberately a real value equal to the source rate rather
+    // than an absent field, because the party can SHRINK (6 → 2) and a cap left
+    // undefined is not reliably cleared by every engine; assigning 30 back is
+    // deterministic. So 1:1 is unchanged in effect while remaining reversible.
+    const maxFramerate = n <= 1 ? 30 : n <= 3 ? 24 : 15;
     for (const id in peers) {
       peers[id].pc.getSenders().forEach(s => {
-        if (!s.track || s.track.kind !== "video") return;
+        if (!s.track) return;
+        // AUDIO: never rate-capped (it is a rounding error beside video), but
+        // marked HIGH priority so that when the uplink or the CPU runs short the
+        // engine sheds VIDEO and keeps the voice intact. On a mesh this is the
+        // difference between a call that goes blurry and one that goes unusable.
+        if (s.track.kind === "audio") {
+          try {
+            const pa = s.getParameters();
+            if (!pa.encodings || pa.encodings.length === 0) return; // nothing to mark
+            pa.encodings[0].priority = "high";
+            (pa.encodings[0] as { networkPriority?: string }).networkPriority = "high";
+            void s.setParameters(pa);
+          } catch { /* unsupported → engine default, which is still fine */ }
+          return;
+        }
+        if (s.track.kind !== "video") return;
         try {
           const p = s.getParameters();
           if (!p.encodings || p.encodings.length === 0) p.encodings = [{} as RTCRtpEncodingParameters];
           p.encodings[0].maxBitrate = maxBitrate;
           p.encodings[0].scaleResolutionDownBy = scale;
+          p.encodings[0].maxFramerate = maxFramerate;
           void s.setParameters(p);
         } catch { /* per-sender best effort */ }
+        // SEPARATE call, and that separation is the point: `degradationPreference`
+        // is a TOP-LEVEL field that some engines reject outright, and a rejected
+        // setParameters discards the WHOLE object — so folding it in above would
+        // silently lose the bitrate/framerate caps on exactly the browsers that
+        // most need them. "balanced" lets the encoder shed resolution as well as
+        // frames under CPU pressure; the common default of maintain-framerate is
+        // precisely wrong on a thermally throttled phone.
+        try {
+          const p2 = s.getParameters() as RTCRtpSendParameters & { degradationPreference?: string };
+          p2.degradationPreference = "balanced";
+          void s.setParameters(p2);
+        } catch { /* engine has no opinion setting — keep its default */ }
       });
     }
   }
