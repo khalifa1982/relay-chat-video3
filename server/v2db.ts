@@ -2317,6 +2317,13 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // v2.102.0 — a group's own identity: a 6-digit id from the shared space, a photo,
     // a status from the SAME vocabulary a person's uses, and its creator. All
     // nullable, so every DM and every pre-release group simply has none.
+    // v2.103.0 — the swipe actions' state, per person. Additive and nullable, so every
+    // existing row simply has none of it: not pinned, not archived, not hand-marked
+    // unread, nothing cleared.
+    { table: "conversation_participants", column: "pinnedAt", ddl: "ADD COLUMN `pinnedAt` timestamp NULL" },
+    { table: "conversation_participants", column: "archivedAt", ddl: "ADD COLUMN `archivedAt` timestamp NULL" },
+    { table: "conversation_participants", column: "manualUnreadAt", ddl: "ADD COLUMN `manualUnreadAt` timestamp NULL" },
+    { table: "conversation_participants", column: "clearedUpToMessageId", ddl: "ADD COLUMN `clearedUpToMessageId` int" },
     { table: "conversations", column: "number", ddl: "ADD COLUMN `number` varchar(6)" },
     { table: "conversations", column: "avatarUrl", ddl: "ADD COLUMN `avatarUrl` text" },
     { table: "conversations", column: "profileStatus", ddl: "ADD COLUMN `profileStatus` varchar(16)" },
@@ -3268,6 +3275,11 @@ export interface ThreadSummary {
   groupAvatarUrl: string | null;
   groupStatus: string | null;
   groupStatusNote: string | null;
+  /** Swipe-action state, per person (v2.103.0). */
+  pinned: boolean;
+  archived: boolean;
+  /** Marked unread by hand — a dot rather than a count, since there is no number. */
+  manualUnread: boolean;
   /** For a DM: the other participant. For a group: 0 (use title/members). */
   otherIdentityId: number;
   otherNumber: string;
@@ -3293,7 +3305,13 @@ export interface ThreadSummary {
  */
 export function composeThreadSummaries(input: {
   identityId: number;
-  myParts: Array<{ conversationId: number; unreadCount: number }>;
+  myParts: Array<{
+    conversationId: number;
+    unreadCount: number;
+    pinnedAt?: Date | null;
+    archivedAt?: Date | null;
+    manualUnreadAt?: Date | null;
+  }>;
   others: Array<{ conversationId: number; identityId: number }>;
   otherIdentities: Array<{
     id: number;
@@ -3366,6 +3384,9 @@ export function composeThreadSummaries(input: {
       groupAvatarUrl: null as string | null,
       groupStatus: null as string | null,
       groupStatusNote: null as string | null,
+      pinned: !!p.pinnedAt,
+      archived: !!p.archivedAt,
+      manualUnread: !!p.manualUnreadAt,
     };
 
     if (kind === "group") {
@@ -3415,7 +3436,14 @@ export function composeThreadSummaries(input: {
     // as the pre-refactor projection did (never mislabel it "Notes (You)").
   }
 
-  result.sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime());
+  // PINNED FIRST, then newest (v2.103.0). Pinning is only meaningful if it changes the
+  // order — a pin that merely draws a marker on a row still buried forty threads down is
+  // not a pin. Within each group the existing recency rule is untouched, so an unpinned
+  // list sorts byte-identically to before.
+  result.sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    return b.lastMessageAt.getTime() - a.lastMessageAt.getTime();
+  });
   return result;
 }
 
@@ -3479,6 +3507,29 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
   const latestByConvo = new Map<number, typeof recents[number]>();
   for (const m of recents) latestByConvo.set(m.conversationId, m);
 
+  // "Delete for me" at THREAD scope (v2.103.0). The rule needs NO write on the send
+  // path and no extra query: a cleared thread is hidden exactly while its newest
+  // message id is not greater than the id stamped when this person cleared it, and the
+  // groupwise-max above has already produced that id. So the thread returns by itself
+  // the moment something newer arrives.
+  const clearedHidden = new Set<number>();
+  const clearedByConvo = new Map<number, number>();
+  for (const p of myParts) {
+    if (p.clearedUpToMessageId) clearedByConvo.set(p.conversationId, p.clearedUpToMessageId);
+  }
+  if (clearedByConvo.size > 0) {
+    for (const [convoId, upTo] of Array.from(clearedByConvo.entries())) {
+      const newest = latestByConvo.get(convoId);
+      // An emptied conversation with nothing newer stays out of the list entirely —
+      // unlike a per-MESSAGE hide, where the thread stays with no preview, because
+      // here the person asked for the thread itself to go.
+      if (!newest || newest.id <= upTo) {
+        latestByConvo.delete(convoId);
+        clearedHidden.add(convoId);
+      }
+    }
+  }
+
   // "Delete for me" (v2.102.2), and THE FAST PATH IS PRESERVED DELIBERATELY.
   //
   // The obvious change is a NOT EXISTS inside the MAX() above — and it is the wrong
@@ -3538,9 +3589,18 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
 
   return composeThreadSummaries({
     identityId,
-    myParts: myParts.map((p) => ({
+    // A cleared thread is dropped BEFORE the projection rather than filtered after, so
+    // nothing downstream ever sees a thread this person asked to be rid of.
+    myParts: myParts
+      .filter((p) => !clearedHidden.has(p.conversationId))
+      .map((p) => ({
       conversationId: p.conversationId,
       unreadCount: p.unreadCount,
+      // v2.103.0 — threaded explicitly rather than spreading `p`, so a new participant
+      // column cannot reach the browser without a decision.
+      pinnedAt: p.pinnedAt,
+      archivedAt: p.archivedAt,
+      manualUnreadAt: p.manualUnreadAt,
     })),
     others: others.map((o) => ({
       conversationId: o.conversationId,
@@ -3717,6 +3777,92 @@ export async function recomputeUnreadFor(conversationId: number, identityId: num
   }
 }
 
+/**
+ * A thread's per-person state — pin / archive / mark-unread / clear (v2.103.0).
+ *
+ * ONE writer for all four, because they are one row and four endpoints would be four
+ * places that can forget the membership check. Membership IS the check: the row's
+ * primary key is (conversationId, identityId), so an UPDATE that names both can only
+ * ever touch the caller's own participation — a non-member's UPDATE matches nothing and
+ * `affectedRows` says so, which is why this needs no separate SELECT.
+ *
+ * `clear` is the one that needs a value rather than a flag: it stamps the newest message
+ * id at the moment of clearing, so everything up to there is hidden for this person and
+ * the thread returns by itself the instant something newer arrives.
+ */
+export async function setThreadState(input: {
+  conversationId: number;
+  identityId: number;
+  pinned?: boolean;
+  archived?: boolean;
+  unread?: boolean;
+  clear?: boolean;
+}): Promise<{ ok: boolean; reason?: "not-a-member" | "unavailable" }> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  try {
+    const now = new Date();
+    const set: Record<string, unknown> = {};
+    if (input.pinned !== undefined) set.pinnedAt = input.pinned ? now : null;
+    // Pinning an archived thread un-archives it, and vice versa: a pinned-to-the-top
+    // thread that is also hidden in Archive is a contradiction the list cannot render.
+    if (input.pinned === true) set.archivedAt = null;
+    if (input.archived !== undefined) set.archivedAt = input.archived ? now : null;
+    if (input.archived === true) set.pinnedAt = null;
+    if (input.unread !== undefined) set.manualUnreadAt = input.unread ? now : null;
+    if (input.clear) {
+      const [newest] = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(eq(messages.conversationId, input.conversationId), isNull(messages.deletedAt)))
+        .orderBy(desc(messages.id))
+        .limit(1);
+      // An empty conversation has nothing to clear, and stamping 0 would be a claim
+      // that a message id of 0 exists.
+      if (newest) set.clearedUpToMessageId = newest.id;
+      // Clearing takes the thread out of the list, so any badge on it must go too —
+      // otherwise the unread total counts a thread nobody can see.
+      set.unreadCount = 0;
+      set.manualUnreadAt = null;
+      // …and it leaves Archive, or a cleared thread would sit there with no messages.
+      set.archivedAt = null;
+      set.pinnedAt = null;
+    }
+    if (Object.keys(set).length === 0) return { ok: true };
+    const res = await db
+      .update(conversationParticipants)
+      .set(set)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, input.conversationId),
+          eq(conversationParticipants.identityId, input.identityId),
+        ),
+      );
+    const hit =
+      Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    // affectedRows is 0 for a non-member AND for a member whose values were already
+    // exactly this. Re-read rather than guess, so an idempotent tap is not reported as
+    // a permission failure.
+    if (!hit) {
+      const [row] = await db
+        .select({ identityId: conversationParticipants.identityId })
+        .from(conversationParticipants)
+        .where(
+          and(
+            eq(conversationParticipants.conversationId, input.conversationId),
+            eq(conversationParticipants.identityId, input.identityId),
+          ),
+        )
+        .limit(1);
+      if (!row) return { ok: false, reason: "not-a-member" };
+    }
+    return { ok: true };
+  } catch (e) {
+    console.warn("[messages] setThreadState skipped:", (e as Error)?.message || "");
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
 export async function listMessages(input: {
   conversationId: number;
   identityId: number;
@@ -3737,11 +3883,16 @@ export async function listMessages(input: {
     )
     .limit(1);
   if (member.length === 0) return [];
+  // "Delete for me" at THREAD scope (v2.103.0): everything up to the id stamped when
+  // this person cleared the chat is theirs alone to not see. Read off the membership row
+  // already fetched above, so this costs no extra query.
+  const clearedUpTo = member[0]?.clearedUpToMessageId ?? 0;
 
   const limit = Math.min(input.limit ?? 50, 200);
   const baseWhere = and(
     eq(messages.conversationId, input.conversationId),
     isNull(messages.deletedAt),
+    clearedUpTo > 0 ? gt(messages.id, clearedUpTo) : undefined,
     // "Delete for me" (v2.102.2). Bounded to one conversation's page of at most 200
     // rows, so the anti-join is cheap here; the THREAD PREVIEW's groupwise-max is the
     // query that needed care, and it keeps its fast path (see listThreads).
@@ -3781,6 +3932,9 @@ export async function searchMessages(input: {
     )
     .limit(1);
   if (member.length === 0) return [];
+  // A cleared thread's old messages must not come back through search either — the
+  // same reasoning as the per-message hide (v2.102.2).
+  const clearedUpTo = member[0]?.clearedUpToMessageId ?? 0;
 
   const q = input.query.trim();
   if (!q) return [];
@@ -3797,6 +3951,7 @@ export async function searchMessages(input: {
         isNull(messages.deletedAt),
       // A hidden message must not come back through search (v2.102.2).
       notHiddenFor(input.identityId),
+      clearedUpTo > 0 ? gt(messages.id, clearedUpTo) : undefined,
         like(messages.body, `%${escaped}%`)
       )
     )

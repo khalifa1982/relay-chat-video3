@@ -7557,6 +7557,96 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.103.0 — swipe a thread row for Unread / Pin / Mute / Delete / Archive (2026-07-27)
+
+Owner, with two screenshots of the intended row: in the MESSAGES LIST (outside a chat),
+dragging a thread row LEFT reveals the right-hand actions (Mute / Delete / Archive) and
+dragging RIGHT reveals the left-hand ones (Unread / Pin). Glassy buttons. Holding a
+finger on the row is a second way in.
+
+**Four of the five icons were features that did not exist**
+
+- [x] Read before building: Mute worked but per-DEVICE; Unread, Pin, Archive and
+      thread-Delete did not exist at all. So the gesture is the visible half and four new
+      capabilities are the real work — all of them **server-side per person**, because
+      pinning a chat on a phone that leaves it unpinned on a laptop is the same lie a
+      localStorage "delete for me" would have been (v2.102.2). Four additive nullable
+      columns on `conversation_participants`, which is already keyed
+      (conversationId, identityId).
+- [x] **MUTE STAYS PER-DEVICE, and that is a decision rather than an omission**: the
+      service worker has to silence a notification without asking the server anything
+      (v2.99.42). Moving it would quietly reverse that and break notification muting.
+      A test asserts the endpoint mentions mute nowhere.
+
+**The gesture lives inside a vertically scrolling list, which is the real risk**
+
+- [x] `touch-action: pan-y` — the browser keeps vertical panning for itself, so scrolling
+      never has to be given back. The fix people reach for instead
+      (`preventDefault` on touchmove) stops the list scrolling outright.
+- [x] The pointer is claimed only once movement passes a threshold AND is more horizontal
+      than vertical; a mostly-vertical move **ends** our interest in the gesture, so it
+      can never be grabbed back mid-scroll. Capture happens strictly after the claim.
+- [x] The drag writes the transform IMPERATIVELY — a state update per pointer move would
+      re-render the whole thread list on every frame of every drag (the v2.99.67
+      mistake). Only `transform` and `opacity` animate.
+- [x] A full swipe commits only when a side holds ONE unambiguous action. With three
+      buttons there is nothing a full swipe could mean, and guessing would Delete a chat.
+- [x] Buried actions are not focusable, or Tab walks every hidden button on every row;
+      and the tap that closes an open row cannot also open the conversation.
+
+**What each action does**
+
+- [x] **Pin sorts to the top.** A pin that only draws a marker on a row still buried
+      forty threads down is not a pin. Within each group the existing recency rule is
+      untouched, so an unpinned list sorts byte-identically to before.
+- [x] **Archive gives threads their own section, LAST** — out of the way but not gone —
+      and they leave Direct / Groups / Notes. Pin and archive exclude each other, because
+      a thread pinned to the top AND hidden in Archive is a contradiction the list cannot
+      render.
+- [x] **Unread shows a DOT, not a count.** There is no number, and "1 new" would be a
+      claim about a message that may not exist. Its own column rather than rewinding the
+      read watermark, which would fight `recomputeUnreadFor` and could not express
+      "unread" at all for a thread whose newest message is your own.
+- [x] Every action is a TOGGLE reading the row's own state, so a pinned thread offers
+      Unpin. An action that cannot be undone by the same gesture that did it is a trap.
+
+**Delete a thread — recoverable, and the copy says so**
+
+- [x] It stamps the newest message id rather than bulk-inserting a hide per message: one
+      column, and the filter rides the `(conversationId, id)` index — the shape
+      `identities.historyClearedAt` has used for the call log since v2.75.
+- [x] **The thread returns by itself when something newer arrives, and that costs no
+      write on the send path**: it is hidden exactly while its newest message id is not
+      greater than the stamp, and the groupwise-max has already produced that id.
+- [x] Note this DIFFERS from a per-message hide, where the thread stays with no preview:
+      there the message went, here the person asked for the thread itself to go.
+- [x] Clearing also zeroes the badge and leaves Archive — a hidden thread with a live
+      badge counts toward a total nobody can act on, and a cleared thread in Archive
+      would have no messages in it. Deleting the OPEN thread navigates away rather than
+      leaving an empty conversation nobody can escape except with Back.
+- [x] The ONLY action behind a confirmation, and the copy names what survives: everyone
+      else keeps the conversation, and it comes back if they write again.
+
+**Tests**
+
+- [x] `server/swipeActions.test.ts` (22). **All 33 tripwires verified by MUTATION** from
+      byte-exact backups, from a confirmed-GREEN baseline.
+- [x] **One survivor, and it was the same class as last release's** — the scoping
+      assertion matched the re-read SELECT's copy of the clause while the mutation
+      stripped it from the **UPDATE**. An unscoped UPDATE here pins, archives or CLEARS
+      the thread for every member of the conversation. Now pinned on the write
+      specifically, with both halves counted so a missing one on either side is caught.
+- [x] One of my own mutations was bad and is reported rather than counted: its target
+      string did not match the source, so it aborted rather than surviving.
+- [x] Two pre-existing pins updated, both expected fallout: the timestamp pin, because a
+      pinned row now shows a marker before it and `ms-auto` moves to whichever comes
+      first; and the Groups-section pin, because that filter now also excludes archived.
+- [x] **NOT VERIFIED ON A DEVICE, said plainly**: the scroll-safety rules are pinned and
+      the logic is tested, but nobody has dragged a row on a real phone. That is exactly
+      where a gesture like this is judged.
+- [x] Four additive nullable columns, no new dependency, no new env var.
+      Suite 3113 passed / 1 skipped.
+
 ## v2.102.2 — "delete for me" (2026-07-27)
 
 Owner (#81): a way to remove a message somebody ELSE sent, for you alone.

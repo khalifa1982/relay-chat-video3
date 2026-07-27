@@ -426,6 +426,36 @@ export const conversationParticipants = mysqlTable(
     unreadCount: int("unreadCount").notNull().default(0),
     lastReadMessageId: int("lastReadMessageId"),
     mutedUntil: timestamp("mutedUntil"),
+    /**
+     * SWIPE-ACTION STATE (v2.103.0) — all four PER PERSON, which is the whole reason
+     * they live here rather than in the browser: pinning a chat on a phone that does
+     * not pin it on a laptop is the same lie a localStorage "delete for me" would have
+     * been (v2.102.2). `conversation_participants` is already keyed
+     * (conversationId, identityId), so each is one additive nullable column.
+     *
+     * MUTE IS DELIBERATELY NOT HERE. `mutedUntil` above has existed unwritten since the
+     * schema was drawn, and mute stays per-DEVICE (localStorage + a Cache Storage mirror
+     * the service worker reads) because the worker has to silence a notification without
+     * asking the server anything — v2.99.42's decision, not an oversight.
+     */
+    pinnedAt: timestamp("pinnedAt"),
+    archivedAt: timestamp("archivedAt"),
+    /** Marked unread BY HAND. Its own field rather than rewinding the read watermark,
+     *  which would fight `recomputeUnreadFor` and mean "unread" could not be expressed
+     *  at all for a thread whose newest message is your own. */
+    manualUnreadAt: timestamp("manualUnreadAt"),
+    /**
+     * "Delete for me" at THREAD scope: every message up to and including this id is
+     * hidden from this person, and the thread leaves their list until a NEWER one
+     * arrives. An id rather than a timestamp so the filter rides the
+     * (conversationId, id) index, and one column rather than a bulk insert of
+     * per-message hides — the same shape `identities.historyClearedAt` has used for
+     * the call log since v2.75.
+     *
+     * The reappear rule needs NO write on the send path: the thread is hidden exactly
+     * while its newest message id is not greater than this.
+     */
+    clearedUpToMessageId: int("clearedUpToMessageId"),
     joinedAt: timestamp("joinedAt").defaultNow().notNull(),
   },
   (t) => ({

@@ -21,6 +21,11 @@ import {
   UserPlus,
   Trash2,
   EyeOff,
+  Pin,
+  PinOff,
+  MailOpen,
+  Archive,
+  ArchiveRestore,
   Reply,
   Bell,
   BellOff,
@@ -66,10 +71,11 @@ import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/l
 import { videoRecorderSupported } from "@/lib/videoNote";
 import { VideoRecordSheet } from "@/app/VideoRecordSheet";
 import { GroupInfoSheet } from "@/app/GroupInfoSheet";
+import { SwipeRow, type SwipeAction } from "@/app/SwipeRow";
 import { linkify } from "@/lib/linkify";
 import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
-import { useThreadMuted, isThreadMuted, onMutedChange } from "@/app/mutedThreads";
+import { useThreadMuted, isThreadMuted, setThreadMuted, onMutedChange } from "@/app/mutedThreads";
 import { useTypers, useTypingConversations } from "@/app/typingStore";
 import { BRAND_GRADIENT, bubbleStyleFor, nameColorFor } from "@/app/peerColors";
 import { TypingLine } from "@/app/TypingLine";
@@ -282,7 +288,7 @@ export default function MessagesPage() {
         rgb: "251,146,60",
         hex: "#fb923c",
         icon: <MessageSquare className="size-3.5" />,
-        rows: list.filter((t) => t.kind !== "group" && !isNotes(t)),
+        rows: list.filter((t) => t.kind !== "group" && !isNotes(t) && !t.archived),
       },
       {
         key: "groups",
@@ -290,7 +296,7 @@ export default function MessagesPage() {
         rgb: "167,139,250",
         hex: "#a78bfa",
         icon: <Users className="size-3.5" />,
-        rows: list.filter((t) => t.kind === "group"),
+        rows: list.filter((t) => t.kind === "group" && !t.archived),
       },
       {
         key: "notes",
@@ -298,7 +304,18 @@ export default function MessagesPage() {
         rgb: "251,191,36",
         hex: "#fbbf24",
         icon: <StickyNote className="size-3.5" />,
-        rows: list.filter(isNotes),
+        rows: list.filter((t) => isNotes(t) && !t.archived),
+      },
+      {
+        // v2.103.0 — archived threads leave the other sections and gather here, LAST,
+        // which is the whole point of archiving: out of the way but not gone. The
+        // section renders only when something is in it (the existing rule below).
+        key: "archived",
+        label: "Archived",
+        rgb: "107,114,128",
+        hex: "#6b7280",
+        icon: <Archive className="size-3.5" />,
+        rows: list.filter((t) => t.archived),
       },
     ];
     return cats.filter((c) => c.rows.length > 0);
@@ -307,6 +324,81 @@ export default function MessagesPage() {
     // cached unfiltered list (threads.data is stable via structural sharing), and
     // search silently did nothing.
   }, [threads.data, me, threadSearch]);
+
+  /**
+   * The swipe actions (v2.103.0). Every one is a TOGGLE reading the row's own state, so
+   * a pinned thread offers Unpin rather than Pin — an action that cannot be undone by the
+   * same gesture that did it is a trap.
+   *
+   * Mute is here alongside four server-backed actions but is the odd one out on purpose:
+   * it stays per-DEVICE (v2.99.42), because the service worker has to silence a
+   * notification without asking the server anything.
+   */
+  const utils = trpc.useUtils();
+  // Delete-a-thread is the one action behind a confirmation (v2.103.0): it takes the
+  // conversation out of this person's list and hides their copy of its messages, where
+  // the other four are undone by the same gesture that did them.
+  const [clearingThread, setClearingThread] = useState<{
+    conversationId: number;
+    label: string;
+  } | null>(null);
+  // Derived from the query's own output, so a wire change cannot leave these builders
+  // typed against a shape the server no longer sends.
+  type ThreadRow = NonNullable<typeof threads.data>[number];
+  const threadState = trpc.messages.setThreadState.useMutation({
+    onSuccess: () => utils.messages.threads.invalidate(),
+    onError: (e) => toast.error(e.message || "Couldn't save that — nothing changed."),
+  });
+
+  const swipeLeftActions = (t: ThreadRow): SwipeAction[] => [
+    {
+      key: "unread",
+      label: t.manualUnread ? "Read" : "Unread",
+      icon: <MailOpen className="size-5" />,
+      color: "#6b7280",
+      onSelect: () =>
+        threadState.mutate({ conversationId: t.conversationId, unread: !t.manualUnread }),
+    },
+    {
+      key: "pin",
+      label: t.pinned ? "Unpin" : "Pin",
+      icon: t.pinned ? <PinOff className="size-5" /> : <Pin className="size-5" />,
+      color: "#22c55e",
+      onSelect: () => threadState.mutate({ conversationId: t.conversationId, pinned: !t.pinned }),
+    },
+  ];
+
+  const swipeRightActions = (t: ThreadRow): SwipeAction[] => [
+    {
+      key: "mute",
+      label: isThreadMuted(t.conversationId) ? "Unmute" : "Mute",
+      icon: isThreadMuted(t.conversationId) ? <Bell className="size-5" /> : <BellOff className="size-5" />,
+      color: "#e0912f",
+      onSelect: () => setThreadMuted(t.conversationId, !isThreadMuted(t.conversationId)),
+    },
+    {
+      key: "delete",
+      label: "Delete",
+      icon: <Trash2 className="size-5" />,
+      color: "#dc2626",
+      // Behind a confirmation, unlike the other four: it takes the conversation out of
+      // this person's list and hides their copy of its messages. The other four are all
+      // one tap away from being undone by the same gesture.
+      onSelect: () =>
+        setClearingThread({
+          conversationId: t.conversationId,
+          label: t.title || t.peerDisplayName || t.peerNumber || "this chat",
+        }),
+    },
+    {
+      key: "archive",
+      label: t.archived ? "Unarchive" : "Archive",
+      icon: t.archived ? <ArchiveRestore className="size-5" /> : <Archive className="size-5" />,
+      color: "#6b7280",
+      onSelect: () =>
+        threadState.mutate({ conversationId: t.conversationId, archived: !t.archived }),
+    },
+  ];
 
   // While a conversation is open on MOBILE, hide the app's top bar so the chat
   // has ONE compact header (name + status) instead of two stacked headers
@@ -467,12 +559,14 @@ export default function MessagesPage() {
                           ? previewOf(t.lastMessageKind ?? "text", t.lastMessageBody)
                           : "No messages yet";
                         return (
-                          <div
+                          <SwipeRow
                             key={t.conversationId}
-                            className={
-                              "flex items-center gap-3.5 rounded-2xl mx-1.5 my-0.5 px-3 py-3.5 transition-colors " +
+                            rowClassName={
+                              "flex items-center gap-3.5 rounded-2xl mx-1.5 my-0.5 px-3 py-3.5 transition-colors bg-background " +
                               (isActive ? "bg-muted/45" : "hover:bg-muted/25 active:bg-muted/35")
                             }
+                            left={swipeLeftActions(t)}
+                            right={swipeRightActions(t)}
                           >
                             {/* Avatar — its OWN button (status ring → status viewer /
                                 profile), so it must stay OUTSIDE the open-thread
@@ -565,11 +659,22 @@ export default function MessagesPage() {
                                      tall and has overflowed a one-line row before. */
                                   <RoleBadge role={tier} size={16} caption={false} className="shrink-0" />
                                 )}
+                                {/* Pinned (v2.103.0) — a small marker, because the pin's
+                                    real effect is the SORT: a pinned thread is already at
+                                    the top, so this only has to say why. `ms-auto` moves
+                                    here so the timestamp still ends the line. */}
+                                {t.pinned && (
+                                  <Pin
+                                    aria-label="Pinned"
+                                    className="ms-auto size-3.5 shrink-0 -rotate-45 text-[color:var(--relay-green-text)]"
+                                  />
+                                )}
                                 {t.lastMessageAt && (
                                   <span
                                     dir="ltr"
                                     className={
-                                      "ms-auto shrink-0 pl-1 text-[11.5px] tabular-nums [unicode-bidi:isolate] " +
+                                      (t.pinned ? "shrink-0 pl-1.5 " : "ms-auto shrink-0 pl-1 ") +
+                                      "text-[11.5px] tabular-nums [unicode-bidi:isolate] " +
                                       (unread ? "font-semibold text-[#fb923c]" : "text-muted-foreground")
                                     }
                                   >
@@ -622,9 +727,19 @@ export default function MessagesPage() {
                                     {t.unreadCount > 99 ? "99+" : t.unreadCount} new
                                   </span>
                                 )}
+                                {/* Hand-marked unread (v2.103.0): a DOT, not a count —
+                                    there is no number, and inventing "1 new" would be a
+                                    claim about a message that may not exist. Withheld
+                                    when a real count is already shown. */}
+                                {!unread && t.manualUnread && (
+                                  <span
+                                    aria-label="Marked unread"
+                                    className="size-2.5 shrink-0 rounded-full bg-[#fb923c]"
+                                  />
+                                )}
                               </div>
                             </button>
-                          </div>
+                          </SwipeRow>
                         );
                       })}
                   </section>
@@ -650,6 +765,42 @@ export default function MessagesPage() {
           <ConversationView conversationId={activeConvoId} />
         )}
       </section>
+
+      {/* Delete-a-thread confirmation (v2.103.0). The one swipe action behind a
+          confirmation, and the copy's job is to say what it does NOT do: nobody else
+          loses anything, and the chat comes back by itself if they write again — which
+          is what makes this recoverable rather than final. */}
+      <AlertDialog
+        open={clearingThread !== null}
+        onOpenChange={(open) => !open && setClearingThread(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this chat for you?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {clearingThread?.label} leaves your list and its messages are hidden on all your
+              devices. Everyone else keeps the conversation, and it comes back here if they
+              message you again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (clearingThread) {
+                  threadState.mutate({ conversationId: clearingThread.conversationId, clear: true });
+                  // Leaving the deleted thread open would show an empty conversation
+                  // nobody can get out of except by tapping Back.
+                  if (activeConvoId === clearingThread.conversationId) setLocation("/app/messages");
+                }
+                setClearingThread(null);
+              }}
+            >
+              Delete for me
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -77,7 +77,14 @@ describe("v2.99.37 — every element the owner listed is present", () => {
     expect(ROW).toMatch(/\{preview\}/);
   });
   it("the timestamp is right-aligned at the end of line 1 (all three judges' graft)", () => {
-    expect(ROW).toMatch(/ms-auto shrink-0 pl-1 text-\[11\.5px\] tabular-nums/);
+    // REWRITTEN in v2.103.0: a PINNED row shows a pin marker before the timestamp, and
+    // `ms-auto` moves to whichever of the two comes first — otherwise both would claim
+    // it and the timestamp would stop ending the line. The PROPERTY is that the line's
+    // last element is pushed right and stays tabular, either way.
+    expect(ROW).toMatch(/t\.pinned \? "shrink-0 pl-1\.5 " : "ms-auto shrink-0 pl-1 "/);
+    expect(ROW).toMatch(/text-\[11\.5px\] tabular-nums/);
+    expect(ROW).toMatch(/\{t\.pinned && \(\s*\n\s*<Pin/);
+    expect(ROW).toMatch(/className="ms-auto size-3\.5 shrink-0/);
   });
   it("unread reads as colour + weight, not a heavy pill", () => {
     expect(ROW).toMatch(/\{t\.unreadCount > 99 \? "99\+" : t\.unreadCount\} new/);
