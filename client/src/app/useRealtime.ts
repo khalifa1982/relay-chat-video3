@@ -31,6 +31,10 @@ type V2Event =
   | { kind: "status"; number: string; name: string; removed?: boolean }
   /** New-device approval (v2.99.7): a new sign-in on this account is waiting. */
   | { kind: "device_pending"; sid: string; label: string }
+  /** My own 6-digit number moved (v2.99.83) — Profile, admin panel, or another
+   *  device. The server declares this in BOTH its union and the bus allowlist; an
+   *  undeclared kind is silently dropped cross-instance (the v2.99.74 trap). */
+  | { kind: "number"; number: string; previousNumber: string }
   | { kind: "ping" };
 
 /* ── SSE-gated poll demotion (v2.88) ─────────────────────────────
@@ -222,6 +226,25 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
           case "contact":
             utils.contacts.list.invalidate().catch(() => {});
             break;
+          case "number": {
+            // MY OWN NUMBER MOVED (v2.99.83) — from the Profile, the admin panel,
+            // or another of my own devices. Re-read whoami so every surface showing
+            // it converges without a reload; the engine's own effect then keys off
+            // `me.number` and re-registers when it is safe to (idle, not mid-call).
+            //
+            // Fanned by identityId, so this arrives even though the number it
+            // announces is not the one the stream was opened under.
+            utils.identity.whoami.invalidate().catch(() => {});
+            utils.contacts.list.invalidate().catch(() => {});
+            void import("sonner")
+              .then(({ toast }) =>
+                toast("Your RELAY number changed", {
+                  description: `You are now ${payload.number}. Everyone who saved you was updated automatically.`,
+                })
+              )
+              .catch(() => {});
+            break;
+          }
           case "device_pending": {
             // New-device approval (v2.99.7): a new sign-in on this account is
             // waiting — refresh the notification center's pending list and

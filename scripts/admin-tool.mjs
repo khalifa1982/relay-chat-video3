@@ -37,6 +37,21 @@
  * PREFER THE ADMIN PANEL (/app/admin) for routine changes: it calls the real
  * single writer, so it cannot drift at all. This script exists for the case where
  * nobody holds the admin role yet — the bootstrap — and for direct backend repair.
+ *
+ * THIS PATH FIRES NO HOOK AND SENDS NO NOTIFICATION (v2.99.83). Stated plainly
+ * because it has a user-visible consequence. The server keeps its call-routing
+ * registry IN MEMORY, keyed on the 6-digit number, and `regenerateIdentityNumber`
+ * now notifies it so a live registration moves with the number. This script talks
+ * straight to MySQL — its only import is `mysql2/promise` — so that hook cannot
+ * fire, and the person stays registered under the OLD number until their client
+ * re-registers: unreachable at the number they now own, while the dialer still
+ * reports them online.
+ *
+ * The client-side self-heal covers it (the whoami query refetches on focus, and the
+ * engine re-registers when idle), so the window is bounded rather than permanent.
+ * Do NOT add a signalling table for this script to write — that would be a second,
+ * parallel notification mechanism for something already covered. Use the panel when
+ * the server is up, and tell the person to reopen the app if it is urgent.
  */
 import mysql from "mysql2/promise";
 
@@ -255,6 +270,14 @@ try {
                   [to],
                 );
                 console.log("OK — renumbered and propagated");
+                // v2.99.83: say the quiet part. This path cannot notify the
+                // server, so the operator needs to know the person is not
+                // instantly reachable at the new number.
+                console.log(
+                  "NOTE: no notification was sent — this identity stays registered " +
+                    "on " + number + " in the signaling layer until their client " +
+                    "re-registers (reopening the app is immediate)."
+                );
               } catch (e) {
                 await db.rollback();
                 console.error(`FAILED, rolled back: ${e?.message || e}`);

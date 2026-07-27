@@ -103,7 +103,16 @@ import {
   clusterProxyInbound,
   clusterDeliverOutbound,
   makeRemoteSocket,
+  clusterForwardRenumber,
+  isLeader,
 } from "./relayCluster";
+// The renumber hook's SETTER only (v2.99.83). `relay -> v2db` already exists
+// transitively (relay -> _core/context -> v2db), so this direct edge adds no cycle;
+// the edge that WOULD is v2db -> relay, which is exactly why the rebind is
+// registered as a hook rather than imported by the DB layer. Same shape as
+// statsFeed's setPresenceChangeHook.
+import { setNumberChangeHook } from "./v2db";
+import { publishToIdentity } from "./v2events";
 import {
   initRoomStore,
   markRoomDirty,
@@ -1000,6 +1009,219 @@ function promoteHostIfVacant(reg: RelayRegistry, roomId: string, departed: strin
     role: "host",
     hostPin: successor,
   });
+}
+
+/**
+ * RENUMBER REBIND (v2.99.83) — move a LIVE signaling registration from one
+ * 6-digit number to another, in place.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * Presence is a DB row keyed on `identityId`; this registry is in memory and keyed
+ * on PIN. `regenerateIdentityNumber` moves the database and every stored copy of
+ * the number inside one transaction and touched the registry NOT AT ALL — so a
+ * renumbered person stayed registered under their OLD pin. The owner reported four
+ * symptoms and they were all this one bug:
+ *
+ *   - the dialer preview reads presence by identityId and says "online now", while
+ *     the invite path reads `reg.clients.get(newPin)`, finds nothing, and answers
+ *     `error{offline}`. Screenshots of both, seconds apart, is what proved it.
+ *   - the room roster still names the old pin, so the in-call "Add to contacts"
+ *     pill reappears for somebody already SAVED (their contact row was rewritten
+ *     by the same transaction, so the two pins disagree).
+ *   - `pinsInCall` still reports the old pin, so Contacts shows them plain
+ *     "online" while they are in a call with the viewer.
+ *
+ * FULLY SYNCHRONOUS, DELIBERATELY. The registry is plain Maps and `handleMessage`
+ * is dispatched from the same event loop, so a rename with no `await` in its body
+ * cannot be interleaved and cannot be observed half-done. Any await here would
+ * reintroduce exactly the window this closes.
+ *
+ * THE OLD PIN IS RETIRED, NOT ALIASED. Keeping it ringing the same person would
+ * re-create the two-addresses-for-one-identity split being removed, and would
+ * silently bypass the block-follows-you property, because `contacts.number` was
+ * rewritten in the same transaction — so a caller dialling the stale number would
+ * reach them with the block on the old row no longer consulted. A dial to the old
+ * number now resolves to nothing and honestly reports `nonexistent`. It can never
+ * be handed to a stranger either: the reservation ledger is monotonic and the old
+ * number is never released.
+ */
+export function rebindRegisteredPin(
+  reg: RelayRegistry,
+  e: { identityId: number; oldNumber: string; newNumber: string }
+): "rebound" | "not-registered" | "collision" | "failed" {
+  const oldPin = e.oldNumber;
+  const newPin = e.newNumber;
+  if (!/^\d{6}$/.test(oldPin) || !/^\d{6}$/.test(newPin) || oldPin === newPin) {
+    return "not-registered";
+  }
+  const c = reg.clients.get(oldPin);
+  // STEP 1 — resolve and no-op. The COMMON case: a renumber while signed out, or
+  // an admin acting on somebody who is not connected. Cheap and silent.
+  const hasResidue =
+    !!c ||
+    reg.pinRoom.has(oldPin) ||
+    reg.heldRoom.has(oldPin) ||
+    reg.pendingRings.has(oldPin);
+  if (!hasResidue) return "not-registered";
+
+  // STEP 2 — collision check BEFORE any mutation.
+  const other = reg.clients.get(newPin);
+  if (other && other.cid !== (c?.cid ?? null)) {
+    // The only legitimate way somebody else holds the new pin is an UNVERIFIED
+    // `genPin` allocation — such a registration is already un-ringable via
+    // `pinIsAddressable`. Evicting a VERIFIED holder would be the F1 seizure
+    // class in reverse, so refuse and let the client-side self-heal converge.
+    if (other.verifiedPin) {
+      console.warn("[renumber] rebind refused, new pin held by a verified client", {
+        identityId: e.identityId,
+      });
+      return "collision";
+    }
+    try {
+      if (other.graceT) { clearTimeout(other.graceT); other.graceT = null; }
+      leaveRoom(reg, newPin);
+      reg.clients.delete(newPin);
+      if (other.cid) {
+        reg.cidToPin.delete(other.cid);
+        deviceRemove(reg, newPin, other.cid);
+      }
+    } catch {
+      /* evicting a squatter must not abort the rebind */
+    }
+  }
+
+  try {
+    const touched = new Set<string>();
+
+    // STEP 3 — SEVER THE REVERSE INDEX FIRST. `cidToPin` beats the client's
+    // requested pin in the register handler, so until it moves, a concurrent
+    // re-register either re-asserts the OLD pin or is misclassified as an
+    // identity switch — whose body DESTROYS the live call.
+    if (c?.cid) {
+      reg.cidToPin.set(c.cid, newPin);
+      const conn = reg.connections.get(c.cid);
+      if (conn) conn.pin = newPin;
+    }
+
+    // STEP 4 — move the client record. `verifiedPin` is set explicitly: after the
+    // DB commit this pin genuinely IS cookie-resolvable, and leaving it false
+    // would make the person un-ringable and un-rejoinable — an "offline"
+    // indistinguishable from the bug being fixed.
+    if (c) {
+      reg.clients.set(newPin, c);
+      reg.clients.delete(oldPin);
+      c.verifiedPin = true;
+    }
+
+    // STEP 5 — devices (multi-device ring is live on the fleet).
+    const devs = reg.devices.get(oldPin);
+    if (devs) {
+      reg.devices.set(newPin, devs);
+      reg.devices.delete(oldPin);
+    }
+
+    // STEP 6 — membership, ACTIVE **and** HELD. A pin can legitimately be in two
+    // rooms at once (talking in one, another parked), and it sits in BOTH rooms'
+    // member Sets — so iterate both maps, not one.
+    for (const map of [reg.pinRoom, reg.heldRoom]) {
+      const rid = map.get(oldPin);
+      if (rid == null) continue;
+      map.delete(oldPin);
+      map.set(newPin, rid);
+      touched.add(rid);
+      const room = reg.rooms.get(rid);
+      if (room && room.delete(oldPin)) room.add(newPin);
+    }
+    if (c && c.roomId) touched.add(c.roomId);
+
+    // STEP 7 — per-room metadata. The roster is add-only BY DESIGN everywhere
+    // else; this is the one place that discipline must be violated, and it is
+    // safe because it is the same person. Appending instead would leave a
+    // permanent phantom participant in the conference history and keep the
+    // rejoin-authorization gate honouring a dead pin.
+    // forEach, not for...of: iterating a Set trips TS2802 against this repo's
+    // downlevel target (the v2.99.72 trap, caught by `pnpm check` — `pnpm build`
+    // uses esbuild and would not have).
+    touched.forEach((rid) => {
+      const meta = reg.roomMeta.get(rid);
+      if (meta) {
+        const nm = meta.roster.get(oldPin);
+        if (nm !== undefined) { meta.roster.delete(oldPin); meta.roster.set(newPin, nm); }
+        if (meta.hostPin === oldPin) meta.hostPin = newPin;
+        if (meta.cohosts.delete(oldPin)) meta.cohosts.add(newPin);
+        const knock = meta.knocks?.get(oldPin);
+        if (knock) { meta.knocks!.delete(oldPin); meta.knocks!.set(newPin, knock); }
+      }
+      const rec = reg.recordings.get(rid);
+      if (rec && rec.by === oldPin) rec.by = newPin;
+    });
+
+    // STEP 8 — pending rings: the KEY (a ring aimed at us) and every `from` value
+    // (a ring WE placed). Missing the value leaves a ring the caller can no longer
+    // cancel, which then blind-rejects their next call.
+    const mine = reg.pendingRings.get(oldPin);
+    if (mine) { reg.pendingRings.delete(oldPin); reg.pendingRings.set(newPin, mine); }
+    reg.pendingRings.forEach((pr) => {
+      if ((pr as { from?: string }).from === oldPin) (pr as { from?: string }).from = newPin;
+    });
+
+    // STEP 9 — every OTHER client's `ringing` set holds OUR pin as a callee. Miss
+    // this and the accept authorization cannot find the ringer, so answering
+    // fails. `c.ringing` itself needs nothing — it holds callee pins, not ours.
+    reg.clients.forEach((cl) => {
+      if (cl.ringing.delete(oldPin)) cl.ringing.add(newPin);
+    });
+
+    // STEP 10 — the external mirrors. Without markRoomDirty, hydration after a
+    // leader change restores the OLD pin and the bug resurrects itself on
+    // failover; without touchBusyState, the API tier keeps reporting the old pin
+    // busy and the new pin free, so the Contacts symptom survives on the other
+    // instance.
+    touched.forEach((rid) => markRoomDirty(rid));
+    touchBusyState();
+
+    // STEP 11 — tell the client its pin moved WITHOUT making it re-register:
+    // re-registering mid-call is read as an identity switch and drops the call.
+    // `registered` is re-sent because the client's existing handler already sets
+    // `me.pin` from it and persists it, so an older client needs no change.
+    //
+    // `safeSend` takes an OBJECT — the transport serializes. Handing it a
+    // pre-stringified frame produces a JSON string with no `.type`, which the
+    // client's dispatcher silently drops, so the whole step would be a no-op that
+    // looks like it works. (Caught by this release's own test.)
+    if (c) safeSend(c.socket, { type: "registered", pin: newPin, renumbered: true });
+    return "rebound";
+  } catch (err) {
+    // The hook that calls this SWALLOWS throws, because the renumber is already
+    // committed and must never be reported as failed — which means a throw here is
+    // invisible. So the catch is the destructive-but-safe fallback: treat it as an
+    // identity switch on the OLD pin. That ends the person's live call, which is
+    // bad, but it leaves no half-renamed state and no stale registration, so their
+    // next register lands correctly. A dropped call is recoverable; a split
+    // identity is the bug being fixed.
+    //
+    // Ids only in the log line — no name, no number beyond the identity id.
+    console.warn("[renumber] rebind failed, retiring the old registration", {
+      identityId: e.identityId,
+      err: (err as Error)?.message,
+    });
+    try {
+      leaveRoom(reg, oldPin);
+      const dead = reg.clients.get(oldPin);
+      reg.clients.delete(oldPin);
+      if (dead?.cid) {
+        reg.cidToPin.delete(dead.cid);
+        deviceRemove(reg, oldPin, dead.cid);
+      }
+      reg.devices.delete(oldPin);
+      reg.pendingRings.delete(oldPin);
+      touchBusyState();
+    } catch {
+      /* nothing further to do — the client's own re-register is the backstop */
+    }
+    return "failed";
+  }
 }
 
 export function leaveRoom(reg: RelayRegistry, pin: string) {
@@ -3188,6 +3410,35 @@ export function attachRelay(
   // REDIS_URL. The provider closes over THIS registry, matching
   // activeRegistry's last-attach-wins semantics.
   initBusyStateSync(() => computeBusySnapshot(reg));
+  // RENUMBER REBIND (v2.99.83): keep the live signaling registration in step with a
+  // number that moved in the database. Registered as a hook because v2db cannot
+  // import this module without closing an import cycle — see setNumberChangeHook.
+  //
+  // In clustered mode the registry lives on the LEADER, so a renumber served by a
+  // follower is forwarded rather than applied locally, where it would be a silent
+  // no-op. The client-side self-heal covers the remaining case that no server hook
+  // can: the operator CLI writes straight to MySQL and never reaches the server.
+  setNumberChangeHook((e) => {
+    if (!clustered || isLeader()) {
+      rebindRegisteredPin(reg, e);
+    } else {
+      clusterForwardRenumber(e);
+    }
+    // Tell the person's own tabs their number moved, so every surface showing it
+    // converges without a reload. Fans by identityId, which is why it does not
+    // depend on the number being announced — the old one is retired the moment the
+    // transaction commits. Best-effort: this is a UI refresh, and the rebind above
+    // is what actually keeps them reachable.
+    try {
+      publishToIdentity(e.identityId, {
+        kind: "number",
+        number: e.newNumber,
+        previousNumber: e.oldNumber,
+      });
+    } catch {
+      /* the client's focus refetch is the backstop */
+    }
+  });
   // Round 11: the durable shadow of the room registry. Completely dormant until
   // relayCluster hands it a fence epoch, which only ever happens on winning the
   // leadership lease — so a single-process deploy writes nothing.
@@ -3243,6 +3494,28 @@ export function attachRelay(
     } else if (t === "__disconnect") {
       cleanupRegistryConn(reg, cid, c, onMissedCall);
       homeOf.delete(cid);
+    } else if (t === "__renumber") {
+      // RENUMBER REBIND, routed to the leader (v2.99.83). The registry lives ONLY
+      // here, but a renumber can be served by any instance, so applying it locally
+      // on a follower would be a silent no-op.
+      //
+      // Two properties come free from arriving through this path, both wanted:
+      // `dispatchInbound` queues behind the hydration gate, so a rebind landing
+      // mid-hydration is applied AFTER it — required, because hydration would
+      // otherwise restore the old pin on top of the rename; and the anti-spoof home
+      // check has already run.
+      const r = raw as { identityId?: unknown; oldNumber?: unknown; newNumber?: unknown };
+      if (
+        typeof r.identityId === "number" &&
+        typeof r.oldNumber === "string" &&
+        typeof r.newNumber === "string"
+      ) {
+        rebindRegisteredPin(reg, {
+          identityId: r.identityId,
+          oldNumber: r.oldNumber,
+          newNumber: r.newNumber,
+        });
+      }
     } else {
       handleMessage(
         reg,
