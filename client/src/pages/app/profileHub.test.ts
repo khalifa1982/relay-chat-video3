@@ -47,7 +47,7 @@ function codeOnly(src: string): string {
 const PAGE = (() => {
   const start = PROFILE.indexOf("export default function ProfilePage()");
   expect(start, "ProfilePage exists").toBeGreaterThan(-1);
-  const end = PROFILE.indexOf("/** The panes the hub can open. */", start);
+  const end = PROFILE.indexOf("const PANES = [", start);
   expect(end, "the Pane union follows the page component").toBeGreaterThan(start);
   return PROFILE.slice(start, end);
 })();
@@ -188,8 +188,14 @@ describe("panes are local state, not routes", () => {
   });
 
   it("every pane in the union has a title AND a body", () => {
-    const union = PROFILE.slice(PROFILE.indexOf("type Pane ="));
-    const names = [...union.slice(0, union.indexOf(";")).matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
+    // v2.101.0 made the pane set a RUNTIME array with the type derived from it, so
+    // an out-of-band pane request can be validated against the real set. Reading
+    // that array is strictly better than parsing the old hand-kept union: it is now
+    // the single source of truth, and the type cannot disagree with it.
+    const at = PROFILE.indexOf("const PANES = [");
+    expect(at, "PANES exists").toBeGreaterThan(-1);
+    const list = PROFILE.slice(at, PROFILE.indexOf("] as const", at));
+    const names = [...list.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
     expect(names.length).toBeGreaterThanOrEqual(10);
     const titles = PAGE.slice(PAGE.indexOf("const paneTitle: Record<Pane, string>"));
     for (const n of names) {

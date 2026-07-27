@@ -285,7 +285,7 @@ export function AvatarRing({
         <span
           className="absolute -left-0.5 -top-0.5 size-2.5 rounded-full border-2 border-card"
           style={{ background: "linear-gradient(135deg,#a855f7,#6d28d9)" }}
-          title="You have an active status"
+          title="You have an active story"
         />
       )}
     </span>

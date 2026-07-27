@@ -7557,6 +7557,55 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.101.0 — story and status stop being the same word (2026-07-27)
+
+Owner, third time: *"For the story is the one on the message where you can post video, voice, text,
+image… The status will be showing on your profile… So fix the pronouncing properly everywhere."*
+Part of #105.
+
+A STORY is the ephemeral Messages post people react and reply to, signified by the avatar ring. A
+STATUS is the profile label. Every user-facing string meaning the former now says story: the ring
+tooltip and aria-label, the top-bar pip, both strip titles, the composer heading/placeholder/Share
+button, "My story", the delete toasts, the reply aria-label, the story-reply chip and its four kind
+labels, and the audience row that read "Status privacy" while naming a different feature.
+
+**One-directional.** The Profile pane that opens the away/travel picker IS a status and keeps its
+name — renaming it too would swap one wrong word for another.
+
+**The API keeps its names, deliberately.** `statuses`, `status.*`, `relay:open-status` untouched: a
+half-renamed API is worse than a consistently-misnamed one.
+
+**The load-bearing test is a sweep, not a list** — it extracts every title / placeholder / aria-label
+/ toast string from six surfaces and fails if any says "status" to a person, so the next wrong string
+is caught rather than counted.
+
+**The avatar menu is rebuilt to the owner's list** (open story / add story / add status / profile /
+log out). Add-a-story is no longer the else-branch of Open — it used to be either/or, so somebody
+with one story had no way to post a second from here.
+
+**"Set my status" needed an out-of-band intent.** Profile's panes are local state because wouter's
+`useLocation` returns pathname only, so a `#pane` navigation re-renders nothing (v2.99.89). New
+`client/src/app/profilePane.ts` uses sessionStorage (Profile is a lazy route, so a module variable in
+another chunk would be a different value), is one-shot by construction, and guards every storage
+access. The pane set is now a runtime array with the type derived from it, so the request can be
+validated against the real set.
+
+`client/src/app/storyVsStatus.test.ts` (16). 24 tripwires by mutation. **One bad mutation of my own,
+reported rather than counted**: swapping `requestProfilePane` and `navigate` in one handler survived,
+and rightly — both are synchronous and Profile mounts later either way, so the order carries no
+behaviour. The assertion was replaced with one that checks both calls share a handler. The prose trap
+bit for the ninth time (the menu's comment quotes the very call a `not.toMatch` forbade). Six
+pre-existing pins updated.
+
+**Not done, and it is the other half of the ask:** the real status picker (work / vacation / travel /
+free / busy, emoji + colour + notes) is its own release. `identities.statusOverride` holds only
+`""`/`away`/`travel`, and `effectiveStatus` maps those into a four-value vocabulary `presenceDot`
+branches on for COLOUR — widening that is what CLAUDE.md warns against, so the label needs its own
+column and a derivation.
+
+**For the owner to settle:** the avatar ring means "this is you" in the top bar and "unseen story" on
+PeerAvatar. One shape, two meanings. 2981 tests.
+
 ## v2.100.1 — a second-device sign-in says where it came from and how (2026-07-27)
 
 Owner: *"it need to be sent always the details from where his login type, country, IP, device name,

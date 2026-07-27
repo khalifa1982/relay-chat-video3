@@ -93,11 +93,12 @@ describe("the client reads the verdict instead of discarding it", () => {
   });
 
   it("says something when the request itself fails", () => {
-    expect(HANDLER).toMatch(/toast\.error\("Couldn't reach the server — status not deleted\."\)/);
+    // v2.101.0: the ephemeral post is a STORY in every user-facing string.
+    expect(HANDLER).toMatch(/toast\.error\("Couldn't reach the server — story not deleted\."\)/);
   });
 
   it("confirms a delete that DID happen", () => {
-    expect(HANDLER).toMatch(/toast\.success\("Status deleted"\)/);
+    expect(HANDLER).toMatch(/toast\.success\("Story deleted"\)/);
   });
 
   it("refreshes BOTH status reads, not just the feed", () => {
@@ -129,7 +130,7 @@ describe("when a story was posted", () => {
 
   it("the time is the CURRENT item's, not the group's newest", () => {
     // A per-group timestamp would mislabel every story but the newest.
-    const hdr = STATUS.slice(STATUS.indexOf('{isMine ? "My status"'));
+    const hdr = STATUS.slice(STATUS.indexOf('{isMine ? "My story"'));
     const block = hdr.slice(0, hdr.indexOf("</div>", hdr.indexOf("timeAgo")));
     expect(block).toMatch(/timeAgo\(item\.createdAt\)/);
     expect(block).not.toMatch(/group\.items\[0\]|group\.newest/);

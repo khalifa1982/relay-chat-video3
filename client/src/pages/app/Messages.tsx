@@ -180,10 +180,10 @@ function statusReplyOf(
 
 /** How a replied-to status reads in the chip. The glyphs match `previewOf`'s. */
 const STATUS_KIND_LABEL: Record<string, string> = {
-  text: "Status",
-  image: "📷 Photo status",
-  video: "🎬 Video status",
-  audio: "🎤 Audio status",
+  text: "Story",
+  image: "📷 Photo story",
+  video: "🎬 Video story",
+  audio: "🎤 Audio story",
 };
 
 /** True when a message body is ONLY emoji (1-8 glyphs) — rendered big without a
@@ -1675,11 +1675,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       {/* The label and the kind glyph are bidi-isolated so an
                           Arabic excerpt beside them cannot reorder the phrase. */}
                       <span className="font-semibold [unicode-bidi:isolate]" dir="ltr">
-                        ↩ {mine ? "Replied to their status" : "Replied to your status"}
+                        ↩ {mine ? "Replied to their story" : "Replied to your story"}
                       </span>
                       <span className="opacity-80 [unicode-bidi:isolate]" dir="ltr">
                         {" · "}
-                        {STATUS_KIND_LABEL[sr.kind] ?? "Status"}
+                        {STATUS_KIND_LABEL[sr.kind] ?? "Story"}
                       </span>
                       {sr.excerpt && (
                         <span className="opacity-70" dir="auto">

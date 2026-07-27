@@ -40,6 +40,7 @@ import { useSignOut } from "@/app/useSignOut";
 import { AvatarPicker } from "@/app/AvatarPicker";
 import { GuestRestore } from "@/app/GuestRestore";
 import { AUDIENCE_OPTIONS } from "@/app/statusAudience";
+import { takeProfilePane } from "@/app/profilePane";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { CountryFlag } from "@/app/CountryFlag";
 // ONE formatter for "three numbers dash three number", shared with the top bar.
@@ -225,7 +226,7 @@ export default function ProfilePage() {
     pin: "Sign-in PIN",
     lock: "App lock",
     devices: "Devices",
-    privacy: "Status privacy",
+    privacy: "Story privacy",
     notifs: "Notifications",
     theme: "Appearance",
   };
@@ -240,6 +241,17 @@ export default function ProfilePage() {
       paneTopRef.current?.scrollIntoView({ block: "start", behavior: "auto" })
     );
   };
+
+  // A pane requested from somewhere else in the app (v2.101.0) — the avatar menu's
+  // "Set my status" is the first caller. Read ONCE on mount and cleared by the read
+  // itself, so coming back to Profile later does not reopen a pane the person shut.
+  // Validated against the Pane union before use: an unknown value must land on the
+  // hub rather than put this page into a state it has no branch for.
+  useEffect(() => {
+    const want = takeProfilePane();
+    if (want && PANES.includes(want as Pane)) openPane(want as Pane);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     // Flow within the AppShell's scroll container (which ends exactly at the
@@ -454,7 +466,7 @@ export default function ProfilePage() {
                 icon={<Eye className="size-4" />}
                 tint="#8b5cf6"
                 label={paneTitle.privacy}
-                sub="Who can watch your status"
+                sub="Who can watch your stories"
                 onClick={() => openPane("privacy")}
               />
             </HubGroup>
@@ -679,18 +691,27 @@ export default function ProfilePage() {
   );
 }
 
-/** The panes the hub can open. */
-type Pane =
-  | "name"
-  | "number"
-  | "status"
-  | "about"
-  | "pin"
-  | "lock"
-  | "devices"
-  | "privacy"
-  | "notifs"
-  | "theme";
+/**
+ * The panes the hub can open.
+ *
+ * A runtime array with the type DERIVED from it, rather than a hand-kept type plus a
+ * hand-kept list: an out-of-band pane request (profilePane.ts) has to be validated
+ * against the real set, and two copies of "which panes exist" is how a pane added
+ * later becomes un-requestable with nothing to say so.
+ */
+const PANES = [
+  "name",
+  "number",
+  "status",
+  "about",
+  "pin",
+  "lock",
+  "devices",
+  "privacy",
+  "notifs",
+  "theme",
+] as const;
+type Pane = (typeof PANES)[number];
 
 /**
  * One group of rows under a small caption — the mockup's card stack.
@@ -1765,7 +1786,7 @@ function StatusPrivacySection() {
     },
     onError: (_e, _v, ctx) => {
       if (ctx?.prev) utils.status.getPrivacy.setData(undefined, ctx.prev);
-      toast.error("Couldn't update who can see your status — try again.");
+      toast.error("Couldn't update who can see your stories — try again.");
     },
     onSettled: () => {
       utils.status.getPrivacy.invalidate();
@@ -1786,7 +1807,7 @@ function StatusPrivacySection() {
       <div
         className="rounded-2xl border border-border bg-card/40 divide-y divide-border/60"
         role="radiogroup"
-        aria-label="Who can see my status"
+        aria-label="Who can see my stories"
       >
         {AUDIENCE_OPTIONS.map((opt) => {
           const active = current === opt.value;

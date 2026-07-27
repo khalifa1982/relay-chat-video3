@@ -340,8 +340,9 @@ describe("the recipient sees WHAT the reply was about", () => {
   });
 
   it("renders the chip from the marker's own snapshot, never a live lookup", () => {
-    expect(MESSAGES).toMatch(/Replied to your status/);
-    expect(MESSAGES).toMatch(/Replied to their status/);
+    // v2.101.0 renamed the ephemeral post to STORY in every user-facing string.
+    expect(MESSAGES).toMatch(/Replied to your story/);
+    expect(MESSAGES).toMatch(/Replied to their story/);
     expect(MESSAGES).toMatch(/STATUS_KIND_LABEL\[sr\.kind\]/);
     // No fetch of the status: it is unreachable after 24h by design.
     expect(codeOnly(MESSAGES)).not.toMatch(/status\.byId|status\.get\b/);

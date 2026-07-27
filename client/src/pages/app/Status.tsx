@@ -136,7 +136,7 @@ export function StatusStrip() {
               <Plus className="size-3.5" strokeWidth={3} />
             </span>
           </div>
-          <span className="text-[11px] text-muted-foreground truncate w-full text-center">My status</span>
+          <span className="text-[11px] text-muted-foreground truncate w-full text-center">My story</span>
         </button>
 
         {others.map((g) => (
@@ -289,7 +289,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
       toast.success(`Status posted — ${audienceOption(effectiveAudience).posted}.`);
       onPosted();
     } catch (e) {
-      toast.error((e as Error)?.message || "Couldn't post your status.");
+      toast.error((e as Error)?.message || "Couldn't post your story.");
       setPosting(false);
     }
   }
@@ -307,7 +307,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
     <div className="fixed inset-0 z-[95] grid place-items-center bg-black/70 backdrop-blur-sm p-3" role="dialog" aria-modal="true">
       <div className="relative w-[min(96vw,440px)] max-h-[92dvh] overflow-y-auto overflow-x-hidden rounded-3xl border border-border/60 bg-card shadow-2xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
-          <h2 className="font-bold">New status</h2>
+          <h2 className="font-bold">New story</h2>
           <button type="button" onClick={onClose} aria-label="Close" className="rounded-full p-1.5 text-muted-foreground hover:bg-muted">
             <X className="size-5" />
           </button>
@@ -358,7 +358,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
                 value={text}
                 onChange={(e) => setText(e.target.value.slice(0, 700))}
                 autoFocus
-                placeholder="Type a status…"
+                placeholder="Type a story…"
                 rows={3}
                 className="w-full resize-none bg-transparent text-center text-xl font-semibold text-white placeholder-white/70 outline-none"
               />
@@ -433,7 +433,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
             disabled={posting || (mode === "text" ? !text.trim() : !file)}
             className="h-12 w-full gap-2 rounded-xl text-base font-semibold"
           >
-            {posting ? "Posting…" : (<><Send className="size-4" /> Share status</>)}
+            {posting ? "Posting…" : (<><Send className="size-4" /> Share story</>)}
           </Button>
         </div>
       </div>
@@ -617,7 +617,7 @@ export function StatusViewer({
       <div className="flex items-center gap-2.5 px-4 py-2.5">
         <StatusAvatar name={group.owner.displayName} url={group.owner.avatarUrl} ring="none" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">{isMine ? "My status" : group.owner.displayName}</div>
+          <div className="truncate text-sm font-semibold">{isMine ? "My story" : group.owner.displayName}</div>
           {/* Relative for the glance, EXACT on press — the owner could not tell when
               a story had been posted, and "16h ago" genuinely does not answer that. */}
           <div className="text-[11px] text-white/60" title={new Date(item.createdAt).toLocaleString()}>
@@ -725,7 +725,7 @@ export function StatusViewer({
                 const res = await remove.mutateAsync({ id: item.id });
                 ok = !!res?.ok;
               } catch {
-                toast.error("Couldn't reach the server — status not deleted.");
+                toast.error("Couldn't reach the server — story not deleted.");
                 return;
               }
               // Refresh BOTH reads. `mine` backs the avatar's status pip and the
@@ -737,11 +737,11 @@ export function StatusViewer({
               ]);
               if (!ok) {
                 toast.error(
-                  "That status is no longer there to delete — it may have already expired. Pull to refresh."
+                  "That story is no longer there to delete — it may have already expired. Pull to refresh."
                 );
                 return; // do NOT advance: the item is still there.
               }
-              toast.success("Status deleted");
+              toast.success("Story deleted");
               // Deleting shifts the array under the index, so re-clamp rather than
               // stepping forward blindly: `next()` from the LAST item walked past
               // the end of a list that had just got shorter.
@@ -810,8 +810,8 @@ function StatusReplyBar({
       if (!res.ok) {
         toast.error(
           res.reason === "own"
-            ? "That's your own status."
-            : "This status is no longer available."
+            ? "That's your own story."
+            : "This story is no longer available."
         );
         return;
       }
@@ -899,7 +899,7 @@ function StatusReplyBar({
           dir="auto"
           maxLength={2000}
           placeholder={`Reply to ${ownerName}…`}
-          aria-label="Reply to this status"
+          aria-label="Reply to this story"
           className="h-11 min-w-0 flex-1 rounded-full border border-white/20 bg-white/10 px-4 text-sm text-white outline-none placeholder:text-white/40 focus:border-white/40"
         />
         <button
