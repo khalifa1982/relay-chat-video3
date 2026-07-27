@@ -130,6 +130,14 @@
   --relay-offline: oklch(0.55 0.02 220);
   --relay-danger: oklch(0.65 0.24 27);
   --relay-success: oklch(0.72 0.18 145);
+  /* Green for TEXT, kept apart from the LED green above. See the light-theme
+     override for the measurement that forced the split. */
+  --relay-green-text: oklch(0.76 0.16 145);
+  /* Amber = notifications are being SUPPRESSED (Do Not Disturb). Named because
+     green now means "all clear" on the bell, and the two must not collide —
+     shipping green-when-clear without moving DND off green would leave one colour
+     meaning both "nothing waiting" and "alerts silenced". */
+  --relay-dnd: oklch(0.8 0.16 80);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
 }
@@ -168,6 +176,13 @@
   --sidebar-ring: oklch(0.54 0.18 192);
   --relay-online: oklch(0.55 0.18 145);
   --relay-offline: oklch(0.6 0.015 220);
+  /* MEASURED, not chosen by eye: oklch(0.55 0.18 145) = rgb(0,139,29) is 4.46:1
+     on this theme's white card, which FAILS WCAG AA (4.5:1) for normal-size text.
+     oklch(0.48 0.18 145) = rgb(0,117,0) measures 5.92:1 — a hair better than the
+     muted-foreground (5.97:1) it replaces on the PIN, so the owner's green digits
+     are no less readable than the grey ones were. */
+  --relay-green-text: oklch(0.48 0.18 145);
+  --relay-dnd: oklch(0.62 0.15 75);
 }
 
 .dark.relay-v2 {
@@ -395,8 +410,8 @@ body.relay-app-lock {
    + the Messages/History tab badges whenever the user has unseen missed calls
    or unread messages. Motion is gated behind prefers-reduced-motion: the class
    is inert (no animation) for users who ask for reduced motion, so it's always
-   safe to attach. `relay-blink-glow` adds a soft destructive halo pulse for the
-   bell icon itself. */
+   safe to attach. The bell's halo is `relay-blink-halo` — an opacity-animated
+   overlay carrying a static shadow, never an animated box-shadow. */
 @media (prefers-reduced-motion: no-preference) {
   @keyframes relayBlink {
     0%,
@@ -410,16 +425,83 @@ body.relay-app-lock {
   .relay-blink {
     animation: relayBlink 1.15s ease-in-out infinite;
   }
-  @keyframes relayBlinkGlow {
+  /* v2.99.86: was `@keyframes relayBlinkGlow` animating BOX-SHADOW, i.e. a repaint
+     every frame — and its one call site is the notification bell, which sits on the
+     top bar's `backdrop-blur-xl backdrop-saturate-150` surface: the most expensive
+     host in the app to repaint over. Now the halo is a STATIC box-shadow on a
+     stacked overlay and only its OPACITY moves, the same conversion v2.99.84 made
+     for the call tiles. `.relay-blink-halo` is the overlay; the ring size no longer
+     animates, which is imperceptible at 1.4s and free. */
+  .relay-blink-halo {
+    animation: relayGlossPulse 1.4s ease-in-out infinite;
+  }
+
+  /* ── v2.99.86: compositor-only motion primitives ───────────────────────────
+     Everything below animates ONLY transform or opacity. v2.99.84 measured the
+     difference and removed 14 repainting animations from the call grid; these
+     exist so the owner's "flashy / glossy" asks do not put any of that back.
+     Each is paired with a STATIC rest state on the element itself, so the class
+     going inert under reduced motion leaves a sensible still frame rather than
+     an invisible one. */
+
+  /* A soft breathing halo. The glow is a STATIC box-shadow on a stacked overlay;
+     only its opacity moves — same trick as .spk-glow on the call tiles. */
+  @keyframes relayGlossPulse {
     0%,
     100% {
-      box-shadow: 0 0 0 0 color-mix(in oklab, var(--destructive) 55%, transparent);
+      opacity: 0.35;
     }
     50% {
-      box-shadow: 0 0 0 5px color-mix(in oklab, var(--destructive) 0%, transparent);
+      opacity: 1;
     }
   }
-  .relay-blink-glow {
-    animation: relayBlinkGlow 1.4s ease-out infinite;
+  .relay-gloss-pulse {
+    animation: relayGlossPulse 1.9s ease-in-out infinite;
+  }
+
+  /* A sheen sweeping across a small mark. A narrow bright band TRANSLATES behind
+     `overflow:hidden` — no background-position animation, which would repaint the
+     whole element every frame. Deliberately slow and mostly idle: the owner asked
+     for "animated slowly … nice animation, but don't make it so much", so the
+     band spends ~85% of the cycle off-screen. */
+  @keyframes relaySheen {
+    0% {
+      transform: translateX(-140%) skewX(-18deg);
+    }
+    38%,
+    100% {
+      transform: translateX(320%) skewX(-18deg);
+    }
+  }
+  .relay-sheen {
+    animation: relaySheen 5.5s ease-in-out infinite;
+  }
+
+  /* The avatar's two-colour ring: two stacked rings, one green one white, whose
+     opacities cross-fade so it reads as a single ring breathing between the two
+     colours ("flashy but feed and feed out" = fade in and fade out, not a blink).
+     Animating a border-color or a conic gradient instead would repaint. */
+  @keyframes relayRingFade {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0;
+    }
+  }
+  .relay-ring-a {
+    animation: relayRingFade 2.6s ease-in-out infinite;
+  }
+  /* HALF-CYCLE NEGATIVE DELAY, not `reverse`. `relayRingFade` is symmetric
+     (0%,100% -> 1; 50% -> 0) and ease-in-out is point-symmetric about its
+     midpoint, so `animation-direction: reverse` produces a BYTE-IDENTICAL
+     curve — verified numerically, max |forward - reversed| = 0.000000. With it,
+     both rings peaked together and the later-declared white one covered the
+     green for the entire cycle: a white ring BLINKING, not two colours breathing.
+     Caught in review before shipping. */
+  .relay-ring-b {
+    animation: relayRingFade 2.6s ease-in-out infinite;
+    animation-delay: -1.3s;
   }
 }

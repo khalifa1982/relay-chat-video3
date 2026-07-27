@@ -273,15 +273,45 @@ export function NotificationBell({
         aria-label={total > 0 ? `${total} notifications` : "Notifications"}
         title={dnd ? "Notifications (Do Not Disturb is on)" : "Notifications"}
         onClick={() => setOpen((v) => !v)}
+        // v2.99.86 (owner): "Green, if there is nothing... no notification. Red and
+        // blinking, if there is a notification." So the bell itself now carries the
+        // state instead of being a neutral grey glyph with a badge — you can read it
+        // without focusing on it. DND keeps its own amber-ish treatment, because
+        // "muted" is a third state and colouring it green would claim all-clear while
+        // alerts are in fact being suppressed.
         className={
           "relative grid size-9 place-items-center rounded-xl active:scale-95 transition-colors outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
-          (blink && !dnd ? "relay-blink-glow " : "") +
+          "relative " +
+          // The CLEAR state is a green STROKE, not a filled chip. The owner asked for
+          // "green if there is nothing", and this honours it — but a tinted plate lit
+          // 100% of the time spends attention on the null state, which is the one
+          // state that needs none. Something waiting gets the filled plate, so "lit"
+          // still means "look at me".
           (dnd
-            ? "bg-[color:var(--relay-online)]/15 text-[color:var(--relay-online)]"
-            : "text-muted-foreground hover:text-foreground hover:bg-muted/50")
+            ? "bg-[color:var(--relay-dnd)]/15 text-[color:var(--relay-dnd)]"
+            : total > 0
+              ? "bg-destructive/15 text-destructive hover:bg-destructive/25"
+              : "text-[color:var(--relay-green-text)] hover:bg-[color:var(--relay-green-text)]/10")
         }
       >
-        {dnd ? <BellOff className="size-[18px]" /> : <Bell className="size-[18px]" />}
+        {/* The halo, as a stacked overlay with a STATIC shadow whose opacity animates
+            — see .relay-blink-halo. Rendered only while something is actually
+            waiting, so a quiet bell has no running animation at all. */}
+        {blink && !dnd && (
+          <span
+            aria-hidden="true"
+            className="absolute inset-0 rounded-xl pointer-events-none relay-blink-halo"
+            style={{ boxShadow: "0 0 0 4px color-mix(in oklab, var(--destructive) 32%, transparent)" }}
+          />
+        )}
+        {dnd ? (
+          <BellOff className="size-[18px]" />
+        ) : (
+          // The glyph blinks with the icon colour when something is waiting. The
+          // wrapper carries the halo; this carries the fade, so nothing animates a
+          // colour (which would repaint) — only opacity moves.
+          <Bell className={"size-[18px] " + (blink ? "relay-blink" : "")} />
+        )}
         {total > 0 && (
           <span
             className={

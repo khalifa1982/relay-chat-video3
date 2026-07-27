@@ -36,8 +36,20 @@ describe("NotificationBell — DND toggle lives in the panel", () => {
     expect(MISSED).toMatch(/<Switch checked=\{dnd\} onCheckedChange=\{onDndChange\}/);
   });
 
-  it("the trigger button visually reflects DND state (BellOff + tint when on)", () => {
-    expect(MISSED).toMatch(/\{dnd \? <BellOff className="size-\[18px\]" \/> : <Bell className="size-\[18px\]" \/>\}/);
+  it("the trigger button visually reflects DND state (BellOff + its own tint when on)", () => {
+    // Rewritten in v2.99.86 to the PROPERTY rather than one exact expression. The
+    // old pin froze the whole `{dnd ? <BellOff …/> : <Bell …/>}` line, so it broke
+    // the moment the Bell gained a blink class — while saying nothing about the
+    // thing that matters, which is that the three states are visually distinct.
+    // DND must be BellOff and must NOT be green: green now means "all clear", and
+    // one colour meaning both that and "alerts silenced" is the inversion this
+    // release exists partly to avoid.
+    expect(MISSED).toMatch(/dnd \? \(\s*<BellOff className="size-\[18px\]" \/>/);
+    expect(MISSED).toMatch(/<Bell className=\{"size-\[18px\] " \+ \(blink \? "relay-blink" : ""\)\}/);
+    // DND has its own token; clear is green; something waiting is destructive.
+    expect(MISSED).toMatch(/dnd\s*\?\s*"bg-\[color:var\(--relay-dnd\)\]\/15 text-\[color:var\(--relay-dnd\)\]"/);
+    expect(MISSED).toMatch(/text-\[color:var\(--relay-green-text\)\]/);
+    expect(MISSED).toMatch(/bg-destructive\/15 text-destructive/);
   });
 });
 

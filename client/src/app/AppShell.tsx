@@ -24,6 +24,8 @@ import { useDeliveryReceipts } from "./useDeliveryReceipts";
 import { useDnd } from "./dnd";
 import { useTheme } from "@/contexts/ThemeContext";
 import { NotificationBell } from "./MissedCalls";
+import { BrandMark, IdentityStrip, AvatarRing } from "./TopBar";
+import { openPeerStatus } from "./PeerOverlays";
 import { PushBanner } from "./PushBanner";
 import { CallHealthBanner } from "./CallHealthBanner";
 import { PeerOverlaysHost } from "./PeerOverlays";
@@ -121,6 +123,18 @@ function Inner({ children }: { children: React.ReactNode }) {
   const utils = trpc.useUtils();
   // Passwordless upgrade panel (guest → verified user). No third-party sign-in.
   const [authOpen, setAuthOpen] = useState(false);
+  // v2.99.86: does the signed-in person have a LIVE status? Drives the avatar's
+  // story pip and the first row of its tap menu. `status.mine` is already the
+  // canonical read; a status self-expires after 24h, so this is polled rather than
+  // cached indefinitely — 60s is far tighter than the thing it describes.
+  const myStatus = trpc.status.mine.useQuery(undefined, {
+    enabled: !!me,
+    staleTime: 60_000,
+    refetchInterval: 300_000,
+  });
+  const statusItems = myStatus.data?.items ?? [];
+  const hasStatus = statusItems.length > 0;
+
   // Do Not Disturb now lives inside the NotificationBell panel (it used to be a
   // SECOND, visually-identical bell icon next to the notification bell).
   const [dnd, setDnd] = useDnd();
@@ -542,22 +556,26 @@ function Inner({ children }: { children: React.ReactNode }) {
               <ArrowLeft className="size-5" />
             </button>
           )}
-          {/* Brand — the prototype leads the header with a cyan logo dot + the
-              RELAY wordmark on the left; identity (flag · number · avatar) sits
-              on the right. */}
-          <Link
-            href="/app/dialer"
-            aria-label="RELAY"
-            className="flex items-center gap-2 shrink-0 active:opacity-70 transition-opacity rounded-lg outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
-          >
-            <span
-              className="size-2.5 rounded-full shrink-0"
-              style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)", boxShadow: "0 0 10px rgba(63,224,197,.8)" }}
-            />
-            <span className="text-sm font-extrabold tracking-[0.22em] text-foreground">RELAY</span>
-          </Link>
-          <span className="flex-1" />
-          <div className="flex items-center gap-2 min-w-0">
+          {/* LEFT — the glossy RELAY mark (see BrandMark). The wordmark hides below
+              390px so the middle zone keeps its width on the smallest phones; the
+              dot always stays, so the bar never loses its brand anchor. */}
+          <span className="shrink-0 max-[389px]:hidden">
+            <BrandMark />
+          </span>
+          <span className="shrink-0 min-[390px]:hidden">
+            <BrandMark compact />
+          </span>
+          {/* MIDDLE — flag · first name · badge over the PIN. One tap to Profile. */}
+          <IdentityStrip
+            displayName={me.displayName}
+            number={me.number}
+            role={me.role}
+            verified={me.verified}
+            countryCode={geo.data?.country}
+            countryName={geo.data?.countryName ?? geo.data?.country ?? ""}
+          />
+          {/* RIGHT — notifications, then the account avatar. */}
+          <div className="flex items-center gap-2 shrink-0">
             <NotificationBell
               missedCount={missedCount}
               unreadCount={unreadTotal}
@@ -568,16 +586,6 @@ function Inner({ children }: { children: React.ReactNode }) {
               dnd={dnd}
               onDndChange={setDnd}
             />
-            <CountryFlag
-              code={geo.data?.country}
-              title={geo.data?.countryName ?? geo.data?.country ?? ""}
-              className="shrink-0"
-            />
-            {/* Hidden only on ultra-narrow phones (<360px) so the bar can
-                never overflow; the number is always in the avatar menu too. */}
-            <span className="font-mono text-xs text-muted-foreground shrink-0 max-[359px]:hidden">
-              {formatNumber(me.number)}
-            </span>
             {/* Avatar → ACCOUNT MENU (v2.95.10). The old layout crammed a
                 separate "Register" pill next to the avatar, which overflowed
                 the bar on phones (the pill clipped off-screen). Everything
@@ -589,23 +597,12 @@ function Inner({ children }: { children: React.ReactNode }) {
                 title={me.displayName}
                 className="relative shrink-0 active:scale-95 transition-transform rounded-full outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
               >
-                {me.avatarUrl ? (
-                  <img
-                    src={me.avatarUrl}
-                    alt={me.displayName}
-                    className="size-9 rounded-full object-cover border border-border"
-                  />
-                ) : (
-                  <span
-                    className="size-9 rounded-full grid place-items-center font-bold text-sm"
-                    style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)", color: "#08211d" }}
-                  >
-                    {initialsFrom(me.displayName)}
-                  </span>
-                )}
-                <span
-                  className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-card"
-                  style={{ background: dnd ? "#fbbf24" : "#06d6a0" }}
+                <AvatarRing
+                  avatarUrl={me.avatarUrl}
+                  displayName={me.displayName}
+                  initials={initialsFrom(me.displayName)}
+                  dnd={dnd}
+                  hasStatus={hasStatus}
                 />
                 {/* v2.99.10 (owner): the tier badge no longer crowds the header
                     avatar corner (it overlapped the flag/photo). It now lives
@@ -621,6 +618,34 @@ function Inner({ children }: { children: React.ReactNode }) {
                   <div className="font-mono text-xs text-muted-foreground">{formatNumber(me.number)}</div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                {/* v2.99.86 (owner): "if there is a status, if you click on it, you'll
+                    see your status … even if there is a status, when you click it, it
+                    will tell you to see the status or go to the profile."
+                    ONE TAP, always the same menu — deliberately NOT the double-tap the
+                    first half of the ask suggested. A dblclick would put a ~300ms
+                    disambiguation delay on every single tap of the app's most-tapped
+                    control, iOS Safari treats a double-tap as its zoom gesture, it has
+                    no keyboard or assistive equivalent, and it would assign the HIDDEN
+                    gesture to the COMMON case (most people have no status most of the
+                    time). Both of the owner's outcomes are one visible tap away. */}
+                {hasStatus ? (
+                  // The viewer is opened IMPERATIVELY through the global overlay host,
+                  // not by navigation. There is no `/app/status` route — statuses live
+                  // as a strip atop Messages — so a `navigate("/app/status")` here
+                  // would have been a silent no-op that no source test could catch.
+                  <DropdownMenuItem onClick={() => openPeerStatus(me.number)}>
+                    <Sparkles className="size-4 text-[#a855f7]" /> See my status
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {statusItems.length}
+                    </span>
+                  </DropdownMenuItem>
+                ) : (
+                  // No standalone composer route either: the "+ my status" ring lives
+                  // on the Messages strip, so that is where this honestly goes.
+                  <DropdownMenuItem onClick={() => navigate("/app/messages")}>
+                    <Sparkles className="size-4" /> Add a status
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onClick={() => navigate("/app/profile")}>
                   <UserRound className="size-4" /> Profile
                 </DropdownMenuItem>
