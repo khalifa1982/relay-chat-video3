@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useRelayEngine } from "./RelayEngine";
+import { useIdentity } from "./useIdentity";
 import { RoleBadge, roleFromFlags } from "./VerifiedBadge";
 import { StatusViewer, type FeedGroup } from "@/pages/app/Status";
 
@@ -201,6 +202,10 @@ function presenceLine(d: {
 export function PeerOverlaysHost() {
   const [, setLocation] = useLocation();
   const engine = useRelayEngine();
+  // Who WE are — needed only to answer "is this story mine?" for the synthetic
+  // group below. See the note there for why getting that wrong hides the Delete
+  // button on your own story.
+  const { me } = useIdentity();
   const utils = trpc.useUtils();
   const [statusNumber, setStatusNumber] = useState<string | null>(null);
   const [profileNumber, setProfileNumber] = useState<string | null>(null);
@@ -291,8 +296,19 @@ export function PeerOverlaysHost() {
 
   /* A viewer needs a FeedGroup. For a non-contact there is no feed entry, so
      synthesize one from the per-number result + the directory lookup we already
-     have open. `isMe: false` is safe here: this host only ever opens for another
-     peer's number, and the server's own `mine`/feed paths own the self case. */
+     have open.
+
+     `isMe` IS DERIVED, NOT HARDCODED FALSE (v2.99.95). The comment that used to
+     sit here claimed this host only ever opens for another peer's number — which
+     stopped being true in v2.99.86, when the top bar's See-my-status item started
+     routing through openPeerStatus(me.number). Whenever the feed lookup above
+     missed, the viewer rendered MY OWN story with isMe false, which hides the
+     Viewers list, the audience chip and — the reported symptom — the DELETE row.
+     The feed and whoami are cached separately, so their idea of my number can
+     disagree for a few seconds, and a renumber opens exactly that window.
+     status.forNumber does return your own stories (getViewableStatusesOfOwner
+     short-circuits self), so the content was there and only the ownership verdict
+     was wrong. */
   const syntheticGroups: FeedGroup[] =
     statusNumber && !inFeed && peerStatus.data && peerStatus.data.items.length > 0
       ? [
@@ -302,7 +318,7 @@ export function PeerOverlaysHost() {
               number: statusNumber,
               displayName: p?.displayName || "Someone",
               avatarUrl: p?.avatarUrl ?? null,
-              isMe: false,
+              isMe: !!me?.number && me.number === statusNumber,
             },
             items: peerStatus.data.items,
             hasUnseen: peerStatus.data.hasUnseen,
