@@ -56,6 +56,7 @@ import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
 import { StatusStrip } from "./Status";
 import { PeerAvatar, openPeerProfile, type PeerProfileChatActions } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
+import { matchQuery } from "@/app/searchMatch";
 import { suggestContacts, digitsOf, isNumberQuery } from "@/app/contactSuggest";
 import { formatLastSeen } from "@shared/profileFields";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
@@ -250,15 +251,12 @@ export default function MessagesPage() {
   // client filter over the already-loaded list — instant, no new request.
   const [threadSearch, setThreadSearch] = useState("");
   const threadCategories = useMemo(() => {
-    const q = threadSearch.trim().toLowerCase();
-    const qDigits = q.replace(/\D/g, "");
     const all = threads.data ?? [];
-    const list = q
-      ? all.filter(
-          (t) =>
-            (t.peerDisplayName || "").toLowerCase().includes(q) ||
-            (qDigits.length > 0 && (t.peerNumber || "").includes(qDigits)),
-        )
+    // v2.99.96: the shared rule, and the GROUP TITLE is searched too — a group was
+    // previously findable only if the query happened to appear in the composed peer
+    // name, so searching a group by its own title matched nothing.
+    const list = threadSearch.trim()
+      ? all.filter((t) => matchQuery(threadSearch, [t.peerDisplayName, t.peerNumber, t.title]))
       : all;
     const meId = me?.id;
     const isNotes = (t: (typeof list)[number]) =>
@@ -381,7 +379,11 @@ export default function MessagesPage() {
           ) : (
             <div>
               {threadCategories.map((cat) => {
-                const open = !collapsedCats[cat.key];
+                // v2.99.96: a COLLAPSED category used to swallow search matches —
+                // the filter kept the thread and the header counted it, but the body
+                // was gated on collapse state, so a search could show a count beside
+                // a heading and render no rows. A query forces every category open.
+                const open = threadSearch.trim().length > 0 || !collapsedCats[cat.key];
                 const catUnread = cat.rows.some((t) => t.unreadCount > 0);
                 return (
                   <section key={cat.key}>

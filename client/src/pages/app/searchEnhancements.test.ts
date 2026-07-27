@@ -5,18 +5,32 @@ import { resolve } from "node:path";
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 
 /**
- * Messaging + History search (v2.95). Both are pure client-side filters over the
- * already-loaded lists (no new requests) — source-pinned since there's no DOM
- * test env.
+ * Messaging + History search (v2.95, rewritten in v2.99.96).
+ *
+ * These pins used to freeze the IMPLEMENTATION — the exact
+ * `peerDisplayName.toLowerCase().includes(q)` expression and the `searchTextOf`
+ * joined-haystack helper — which is precisely what the owner's "the search doesn't
+ * detect hundred percent" required us to replace. Frozen that way, they would have
+ * asserted the defect. They now pin the PROPERTIES that must hold: both surfaces are
+ * local filters over already-loaded data, both go through the ONE shared matcher, and
+ * neither hand-rolls a substring test of its own.
  */
 describe("Messages thread-list search", () => {
   const src = read("client/src/pages/app/Messages.tsx");
-  it("has a search box that filters the thread list by name/number", () => {
+  it("filters locally through the shared matcher", () => {
     expect(src).toMatch(/const \[threadSearch, setThreadSearch\]/);
     expect(src).toMatch(/placeholder="Search conversations"/);
-    // filter matches peer name OR (digits-only) number
-    expect(src).toMatch(/peerDisplayName \|\| ""\)\.toLowerCase\(\)\.includes\(q\)/);
-    expect(src).toMatch(/qDigits\.length > 0 && \(t\.peerNumber \|\| ""\)\.includes\(qDigits\)/);
+    expect(src).toMatch(/import \{ matchQuery \} from "@\/app\/searchMatch"/);
+    expect(src).toMatch(/matchQuery\(threadSearch, \[/);
+  });
+  it("searches the group TITLE as well as the peer name and number", () => {
+    // A group used to be findable only if the query happened to appear in the
+    // composed peer name, so searching a group by its own title matched nothing.
+    expect(src).toMatch(/matchQuery\(threadSearch, \[t\.peerDisplayName, t\.peerNumber, t\.title\]\)/);
+  });
+  it("no longer hand-rolls its own substring test", () => {
+    expect(src).not.toMatch(/peerDisplayName \|\| ""\)\.toLowerCase\(\)\.includes\(q\)/);
+    expect(src).not.toMatch(/qDigits/);
   });
   it("shows a no-matches state", () => {
     expect(src).toMatch(/threadCategories\.length === 0 \?/);
@@ -26,15 +40,21 @@ describe("Messages thread-list search", () => {
 
 describe("History search", () => {
   const src = read("client/src/pages/app/History.tsx");
-  it("has a search box + a searchTextOf matcher over name/number/PIN", () => {
+  it("filters locally through the shared matcher", () => {
     expect(src).toMatch(/const \[historySearch, setHistorySearch\]/);
     expect(src).toMatch(/placeholder="Search calls by name or number"/);
-    expect(src).toMatch(/function searchTextOf\(it: Item\)/);
-    // conferences are matched on every participant + the party-line title
-    expect(src).toMatch(/c\.participants\.map\(\(p\) => `\$\{p\.name\} \$\{p\.number\}`\)/);
+    expect(src).toMatch(/import \{ matchQuery \} from "@\/app\/searchMatch"/);
+    expect(src).toMatch(/matchQuery\(historySearch, searchFieldsOf\(it, savedNameOf\)\)/);
+  });
+  it("offers FIELDS, not one joined haystack", () => {
+    // The old `searchTextOf` joined everything and then stripped non-digits from the
+    // WHOLE string, so a digit run spanning two fields matched — a false positive.
+    expect(src).toMatch(/function searchFieldsOf\(/);
+    expect(src).not.toMatch(/function searchTextOf\(/);
+    expect(src).not.toMatch(/hay\.replace\(\/\\D\/g, ""\)/);
   });
   it("search combines with the All/Dialed/Missed filter and has a no-match state", () => {
-    expect(src).toMatch(/\}, \[items, filter, historySearch\]\)/);
+    expect(src).toMatch(/\}, \[items, filter, historySearch, savedNameOf\]\)/);
     expect(src).toMatch(/No calls match/);
   });
 });

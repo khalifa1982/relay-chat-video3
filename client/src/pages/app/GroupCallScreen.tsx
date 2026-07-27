@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { presenceDot } from "@/app/presenceDot";
+import { matchQuery } from "@/app/searchMatch";
 
 function initials(name: string): string {
   const p = name.trim().split(/\s+/).slice(0, 2);
@@ -35,15 +36,13 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
   // video-default dial site.
   const [voice, setVoice] = useState(true);
 
-  const list = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return (contacts.data ?? []).filter(
-      (c) =>
-        !q ||
-        (c.displayName?.toLowerCase().includes(q) ?? false) ||
-        c.number.includes(q)
-    );
-  }, [contacts.data, search]);
+  const list = useMemo(
+    // Same shared rule as Contacts (v2.99.96) — this picker had an independent copy
+    // of the old substring test, so a number typed as `777-777` found nobody here
+    // either, and the two screens could disagree about the same query.
+    () => (contacts.data ?? []).filter((c) => matchQuery(search, [c.displayName, c.liveName, c.number])),
+    [contacts.data, search]
+  );
 
   const nameByNumber = useMemo(() => {
     const m = new Map<string, string>();

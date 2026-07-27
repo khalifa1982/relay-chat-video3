@@ -1322,6 +1322,12 @@ export const v2ContactsRouter = router({
     // frozen copy from save-time — the peer's CURRENT photo must win, else a
     // profile-photo change never propagates to anyone who saved them.
     const liveAvatarByNumber = new Map(idents.map((i) => [i.number, i.avatarUrl]));
+    // LIVE display name per number (v2.99.96), for SEARCH only — never for display.
+    // `contacts.displayName` is what you chose to call them and stays what the row
+    // shows; but somebody saved as "Dad" was previously unfindable by their real
+    // name on this screen while History (which resolves names live) found them, so
+    // one person was searchable on one screen and not another.
+    const liveNameByNumber = new Map(idents.map((i) => [i.number, i.displayName]));
     const ids = idents.map((i) => i.id);
     const presList = await getPresenceForIds(ids);
     const presByIdentity = new Map(presList.map((p) => [p.identityId, p]));
@@ -1340,6 +1346,8 @@ export const v2ContactsRouter = router({
         id: r.id,
         number: r.number,
         displayName: r.displayName,
+        /** Their own current name. Search-only — the row still shows `displayName`. */
+        liveName: liveNameByNumber.get(r.number) ?? null,
         avatarUrl: liveAvatarByNumber.get(r.number) ?? r.avatarUrl,
         favourite: r.favourite,
         notes: r.notes,
