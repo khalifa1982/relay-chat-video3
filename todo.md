@@ -7557,6 +7557,38 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.87 — a status that will not delete now says why (2026-07-27)
+- [x] **OWNER, with a screenshot of their own story viewer**: *"i put status but i found something that i
+      cant delete and i dunno why it showing and when i posted it ??!! The other status showing i can delete
+      it and who viewed but the first one is award [weird]?"*
+- [x] **THE DEFECT WAS THAT THE UI THREW THE SERVER'S ANSWER AWAY.** `status.remove` answers `{ ok: false }`
+      — deliberately NOT an error — whenever `deleteStatus` finds the row's `identityId` is not the caller's.
+      The handler was `await remove.mutateAsync({id}).catch(() => {}); invalidate(); next();`, which lies
+      three separate ways: the `.catch` swallows a real transport failure, the `ok` verdict is never read,
+      and it advances regardless — so the story slides past, comes back on the next open, and tapping Delete
+      looks like it worked. Whatever the underlying data situation, "nothing happened and nobody said
+      anything" is the bug that was actually experienced.
+- [x] **THE VERDICT IS NOW READ AND A REFUSAL IS SAID OUT LOUD**, with the honest cause named: this browser
+      can hold more than one identity (the guest→registered orphan class — the owner's own contact list shows
+      235-680, 601-586 and 737-582, all of them them), and a status posted under a different sign-in is
+      visible to you but is not yours to delete. A transport failure gets its own distinct message, a
+      successful delete gets a confirmation, and a refusal does NOT advance the viewer.
+- [x] **BOTH STATUS READS ARE REFRESHED, not just the feed.** `status.mine` backs the avatar's status pip
+      (added in v2.99.86) and the strip's own ring, so invalidating only `feed` left them advertising a
+      status that was gone.
+- [x] **THE INDEX IS RE-CLAMPED rather than stepped forward.** Deleting shifts the array under the index, so
+      `next()` from the last item walked off the end of a list that had just got shorter.
+- [x] **DOUBLE-TAP GUARDED** — the button disables while the mutation is in flight and says "Deleting…".
+- [x] **"WHEN DID I POST IT" IS ANSWERABLE NOW**: the relative time stays for the glance, with the exact
+      timestamp on press. "16h ago" genuinely does not answer the question that was asked.
+- [x] `client/src/pages/app/statusDelete.test.ts` (11), including pins that `deleteStatus` really can return
+      false and that its argument order is not the one its neighbour `deleteContact` uses.
+- [x] **NOT REPRODUCED FROM THE OWNER'S DATA, said plainly.** I cannot see their rows from here, so the
+      root cause of the undeletable item is inferred rather than confirmed. What is fixed for certain is that
+      the failure is no longer silent — the next time it happens the app will say which case it is, which is
+      what makes it diagnosable at all.
+- [x] No schema change, no new dependency, no server change. 2570 tests.
+
 ## v2.99.86 — the top bar to spec, and an erase key you can actually see (2026-07-27)
 - [x] **OWNER, three screenshots and a long brief.** The erase key: *"This delete, I couldn't make it little
       large and red colour, flashy glossy to delete the numbers in case you want to delete it."* The bar:

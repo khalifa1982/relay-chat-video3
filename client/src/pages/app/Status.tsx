@@ -577,7 +577,11 @@ export function StatusViewer({
         <StatusAvatar name={group.owner.displayName} url={group.owner.avatarUrl} ring="none" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">{isMine ? "My status" : group.owner.displayName}</div>
-          <div className="text-[11px] text-white/60">{timeAgo(item.createdAt)}</div>
+          {/* Relative for the glance, EXACT on press — the owner could not tell when
+              a story had been posted, and "16h ago" genuinely does not answer that. */}
+          <div className="text-[11px] text-white/60" title={new Date(item.createdAt).toLocaleString()}>
+            {timeAgo(item.createdAt)}
+          </div>
         </div>
         <button type="button" onClick={onClose} aria-label="Close" className="rounded-full p-1.5 hover:bg-white/10">
           <X className="size-6" />
@@ -650,14 +654,55 @@ export function StatusViewer({
           )}
           <button
             type="button"
+            disabled={remove.isPending}
             onClick={async () => {
-              await remove.mutateAsync({ id: item.id }).catch(() => {});
-              await utils.status.feed.invalidate();
-              next();
+              // v2.99.87 (owner: "i found something that i cant delete and i dunno
+              // why it showing"). This used to be
+              //   await remove.mutateAsync({ id }).catch(() => {}); invalidate(); next();
+              // which is three separate ways to lie about what happened:
+              //
+              //  1. `.catch(() => {})` swallowed a genuine transport/auth failure.
+              //  2. `status.remove` answers `{ ok: false }` — NOT an error — when the
+              //     row's identityId is not mine (`deleteStatus` returns false), and
+              //     that verdict was thrown away entirely.
+              //  3. it then advanced regardless, so the story slid past and came
+              //     BACK on the next open. Tapping Delete looked like it worked and
+              //     the status stayed forever.
+              //
+              // Now the verdict is read and a refusal is SAID OUT LOUD. The honest
+              // cause matters here: this browser can hold more than one identity
+              // (the guest→registered orphan class), and a status posted under a
+              // different sign-in is visible to you but is not yours to delete.
+              let ok = false;
+              try {
+                const res = await remove.mutateAsync({ id: item.id });
+                ok = !!res?.ok;
+              } catch {
+                toast.error("Couldn't reach the server — status not deleted.");
+                return;
+              }
+              // Refresh BOTH reads. `mine` backs the avatar's status pip and the
+              // strip's own ring; invalidating only `feed` left them claiming a
+              // status that no longer exists.
+              await Promise.all([
+                utils.status.feed.invalidate(),
+                utils.status.mine.invalidate(),
+              ]);
+              if (!ok) {
+                toast.error(
+                  "That status couldn't be deleted — it was posted from a different sign-in on this browser."
+                );
+                return; // do NOT advance: the item is still there.
+              }
+              toast.success("Status deleted");
+              // Deleting shifts the array under the index, so re-clamp rather than
+              // stepping forward blindly: `next()` from the LAST item walked past
+              // the end of a list that had just got shorter.
+              setIi((v) => Math.max(0, Math.min(v, (group.items.length - 2) | 0)));
             }}
-            className="inline-flex items-center gap-1.5 text-sm text-red-400"
+            className="inline-flex items-center gap-1.5 text-sm text-red-400 disabled:opacity-50"
           >
-            <Trash2 className="size-4" /> Delete
+            <Trash2 className="size-4" /> {remove.isPending ? "Deleting…" : "Delete"}
           </button>
         </div>
       )}
