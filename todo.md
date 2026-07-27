@@ -7557,6 +7557,131 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.102.0 — a group gets its own 6-digit id (2026-07-27)
+
+Owner (#89): a group should have a 6-digit **group ID**, a group **avatar**, a group **status**, and a
+**groups section**.
+
+**THE LOAD-BEARING FINDING IS NOT THE FEATURE — IT IS WHAT A THIRD NUMBER TABLE BREAKS.**
+
+- [x] `number_reservations` is the monotonic ledger that stops a handed-out number ever reaching a
+      stranger, and **BOTH of its deleters guarded with `NOT EXISTS` subqueries naming `identities` and
+      `party_lines` ONLY**. A group number lives in neither table, so `reapUnclaimedReservations` — whose
+      own predicate is `claimedAt IS NULL` — would have seen a LIVE group's reservation as unclaimed,
+      deleted it, and the id could later be reissued to somebody else. `releaseUnusedNumberReservation`
+      had the identical blind spot, so a failed create elsewhere could un-reserve a bound group id.
+      **This is the exact trap v2.100.0's purge hit, in a second place** (there the fix was to INSERT the
+      number with `claimedAt` stamped; here it is a third `NOT EXISTS` conjunct). All three call sites —
+      both deleters and `numberTaken` — are pinned individually, so a fourth number table cannot be
+      added without the suite naming the gap.
+
+**One allocator, three callers, and the count is asserted**
+
+- [x] `allocateGroupNumber` is four lines delegating to `allocateSharedNumber`, so a group inherits the
+      cross-table `numberTaken` check, the atomic reservation claim that closes the NEW-vs-NEW race, and
+      the global mint budget. A test asserts the 40-attempt search loop occurs exactly ONCE in `v2db.ts`
+      and that exactly THREE functions call the shared allocator — a parallel allocator here is precisely
+      the cross-table collision v2.99.30 closed.
+- [x] `numberTaken` now checks all three tables, each of the two newer ones in its own try/catch so a
+      pre-migrator boot reads *free* rather than throwing — the shape the party-line check has had since
+      v2.89.
+
+**Both machine-checked registries gained an entry, which is the point of having them**
+
+- [x] `conversations.number` → **`not-a-person`** in `NUMBER_BEARING_COLUMNS`: a MEMBER renumbering must
+      never move the group's id. The id belongs to the group, not to whoever created it — the same rule
+      a party line already has.
+- [x] `conversations.ownerIdentityId` → **`keep-safer`** in `IDENTITY_REFERENCING_COLUMNS`, with the
+      reason recorded: a purged creator's id is left pointing at a deleted row ON PURPOSE, because
+      nulling it would be a silent ownership change for members who did not ask for one and are not
+      told. An unresolvable creator already reads as "no owner" everywhere it is used.
+- [x] Neither addition was optional: both registries scan `drizzle/schema.ts` and fail the build on an
+      undeclared column, so the suite named them the moment the columns landed.
+
+**Allocation, release and degradation**
+
+- [x] The id is allocated BEFORE the transaction (so the ledger claim is settled by the time the row
+      lands) and released if the row never lands — otherwise every failed create leaks one of ~980,000
+      ids. `releaseUnusedNumberReservation` re-checks the number is absent from all three tables, so
+      even then it cannot un-reserve a bound one.
+- [x] An EXHAUSTED allocator degrades to a group with `number = null` rather than a failed create: a
+      group is reached through its thread, so the id is for identifying and sharing it, not for reaching
+      it, and refusing to create the group would be the worse failure.
+- [x] The UNIQUE index is added by the boot migrator, not the CREATE TABLE — `conversations` exists on
+      every deployment so the create never re-runs. MySQL tolerates repeated NULLs under a UNIQUE index,
+      so every DM and every pre-release group is untouched.
+
+**`setGroupProfile` — the write endpoint**
+
+- [x] The membership check lives INSIDE the function, never in options a caller passes: it writes a row
+      several people share, so "who may change it" IS the safety argument and must not be something a
+      call site can forget (the same reasoning that put the purge's guard inside
+      `claimIdentityForPurge`). Any member may edit — a group has no owner role today, and inventing one
+      here would be a permission model nobody asked for.
+- [x] Refuses a DM outright: a DM borrows the peer's name, photo and status and has none of its own.
+      Every refusal is NAMED, because "only members can change a group" and "that's a direct chat" need
+      different next steps from the reader.
+- [x] The avatar URL goes through the SAME `keyInOwnerNamespace` gate an identity's photo does, matched
+      with `lastIndexOf` so the absolute form is covered too (v2.98.4/F2 plus v2.99.26/H5). Without it a
+      group could be pointed at a stranger's private attachment and the proxy would serve it.
+- [x] **No presence is derived from a group's status**, unlike an identity's: a group has no presence,
+      so there is nothing for an availability to describe. Pinned by asserting `statusOverride` is
+      absent from the function.
+- [x] The status vocabulary is the one from v2.101.1 (`shared/profileStatus.ts`), not a second one, so a
+      group's status and a person's cannot come to read differently.
+
+**Read surfaces**
+
+- [x] Wire fields are named `group*`, never reused `peer*`: a group is not a peer, and one field meaning
+      two things is how a surface comes to render a group's id as a person's. Threaded explicitly out of
+      `listThreads` rather than spread, so a new column cannot reach the browser without a decision.
+- [x] A group is findable by its own id in thread search — most of what having one is for.
+- [x] The thread row and the conversation header both show it in the same place a person's number sits,
+      `dir="ltr"` so an RTL locale cannot reorder the digits; the tier badge is withheld for a group,
+      because that badge describes a person's account.
+- [x] A broken group photo falls back to the purple glyph, never the browser's broken-image icon — the
+      rule `PeerAvatar` already follows.
+- [x] **The groups section already existed and is CONFIRMED rather than rebuilt**: Messages has grouped
+      threads under Direct / Groups / Notes since the v2.99.98 sectioning, so the fourth item on the
+      owner's list needed nothing.
+
+**Shipped half, said plainly** (the owner authorised this split)
+
+- [x] Here: the id, the allocator wiring, all three ledger guards, both registry entries, the five
+      columns, the guarded write endpoint, and every READ surface.
+- [ ] **Not here: an editor UI.** Nothing in the app calls `setGroupProfile`, so a group's photo and
+      status can be set by an API caller and will render everywhere, but a member cannot yet pick them
+      from a screen. That plus the group story ring (#96, which was blocked on exactly this data) is
+      v2.102.1.
+
+**Tests**
+
+- [x] `server/groupIdentity.test.ts` (27) — the allocator delegation, the three ledger guards and the
+      registry entries tested against the REAL exported registries rather than a copy.
+- [x] **All 32 tripwires verified by MUTATION** from byte-exact backups, mutator aborting unless its
+      target occurs exactly once, from a confirmed-GREEN baseline.
+- [x] **Three mutation survivors, all real weaknesses in my own tests**, each fixed and re-verified:
+      (a) "allocated before the transaction" passed with the allocation moved into an UNUSED CLOSURE,
+      because the text still appeared before the transaction — it now pins the try block's body exactly;
+      (b) the avatar-gate case passed with the condition replaced by `if (false)`, the recurring
+      pin-the-TEXT-while-the-PATH-dies shape, so the condition itself is now asserted and a
+      constant-false one forbidden; (c) a `not.toMatch(/border-b/)` meant to forbid a bottom border
+      matched inside `border-border` on the group avatar's ordinary ring, failing a correct line —
+      bounded to `/border-b(?![a-z-])/`.
+- [x] **The prose trap for the TENTH time**: `setGroupProfile`'s own comment names `statusOverride` in
+      order to say it is NOT derived, which the `not.toMatch` guarding that very property matched. Fixed
+      with `codeOnly()`.
+- [x] Five pre-existing pins updated: `chooseNumber.test.ts` (froze the registry list — my first
+      insertion was in the wrong position and the test said so), `adminToolParity.test.ts` (needed the
+      new table in its SQL map), and three Messages pins — one of which,
+      `messagesRowRedesign.test.ts`, had frozen `t.peerNumber.slice(...)`, i.e. it asserted the
+      1:1-only rule this release deliberately widens.
+- [x] **NOT VERIFIED AGAINST A DATABASE, said plainly**: no MySQL is reachable here, so the third
+      `NOT EXISTS` conjunct is proven correct by reading and pinned at all three sites, but no
+      reservation has been reaped and no id observed surviving one.
+- [x] Five additive nullable columns and one additive unique index, no new dependency, no new env var.
+      Suite 3045 passed / 1 skipped.
+
 ## v2.101.1 — the real profile status: work / vacation / travel / free / busy (2026-07-27)
 
 Owner: *"you are in work, vacation, travel, free, and you can put some notes on it… and everyone has

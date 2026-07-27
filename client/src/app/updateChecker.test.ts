@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.101.1)", () => {
-    expect(APP_VERSION).toBe("2.101.1");
+  it("is the current release (2.102.0)", () => {
+    expect(APP_VERSION).toBe("2.102.0");
   });
 });
 

@@ -28,7 +28,11 @@ const ROW = M.slice(M.indexOf("cat.rows.map((t) => {"), M.indexOf("})}", M.index
 describe("v2.99.37 — the row is airy: avatar + exactly two text lines", () => {
   it("no dividers — separation is whitespace (rounded inset row, generous padding)", () => {
     expect(ROW).toMatch(/rounded-2xl mx-1\.5 my-0\.5 px-3 py-3\.5/);
-    expect(ROW).not.toMatch(/border-b/); // the old design drew a divider per row
+    // ANCHORED: `border-b` is a PREFIX of `border-border`, so an ordinary border
+    // anywhere in the row tripped this (the group avatar's, in v2.102.0). The
+    // negative lookahead pins the bottom-border UTILITY, which is what the old
+    // per-row divider used.
+    expect(ROW).not.toMatch(/border-b(?![a-z-])/);
   });
   it("the avatar is LARGE (60px) and keeps its status ring + presence LED", () => {
     expect(ROW).toMatch(/<PeerAvatar[\s\S]{0,400}size=\{60\}/);
@@ -56,8 +60,16 @@ describe("v2.99.37 — every element the owner listed is present", () => {
     expect(ROW).toMatch(/<RoleBadge role=\{tier\} size=\{16\} caption=\{false\}/);
   });
   it("the PIN is shown, formatted NNN-NNN, for 1:1 threads only", () => {
-    expect(ROW).toMatch(/isDm && t\.peerNumber && \/\^\\d\{6\}\$\/\.test\(t\.peerNumber\)/);
-    expect(ROW).toMatch(/\$\{t\.peerNumber\.slice\(0, 3\)\}-\$\{t\.peerNumber\.slice\(3\)\}/);
+    // REWRITTEN in v2.102.0: a GROUP now has its own 6-digit id too, so the number
+    // is no longer 1:1-only. The property is that the row shows the number of
+    // whatever the row is ABOUT, and notes-to-self shows none (that is me).
+    expect(ROW).toMatch(/const ownNumber = isGroup \? t\.groupNumber : isDm \? t\.peerNumber : null;/);
+    expect(ROW).toMatch(/ownNumber && \/\^\\d\{6\}\$\/\.test\(ownNumber\)/);
+    expect(ROW).toMatch(/\$\{ownNumber\.slice\(0, 3\)\}-\$\{ownNumber\.slice\(3\)\}/);
+    // …and the row's title is no longer the only thing naming a group, so a group
+    // row must be able to reach a number at all: the old assertion pinned
+    // `t.peerNumber`, which for a group is undefined.
+    expect(ROW).toMatch(/t\.groupNumber/);
   });
   it("typing REPLACES the preview while they type", () => {
     expect(ROW).toMatch(/const typing = typingConvos\.includes\(t\.conversationId\)/);

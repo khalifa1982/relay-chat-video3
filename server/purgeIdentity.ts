@@ -177,6 +177,16 @@ export const IDENTITY_REFERENCING_COLUMNS = [
   },
   {
     table: "conversations",
+    column: "ownerIdentityId",
+    strategy: "keep-safer",
+    note:
+      "Who CREATED a group (v2.102.0). Left pointing at a deleted identity on purpose: " +
+      "a group survives while anyone remains, and nulling it would be a silent " +
+      "ownership change for the members — who did not ask for one and are not told. " +
+      "An unresolvable creator already reads as 'no owner' everywhere it is used.",
+  },
+  {
+    table: "conversations",
     column: "id",
     strategy: "shared-row",
     note:

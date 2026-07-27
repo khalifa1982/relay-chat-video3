@@ -132,6 +132,8 @@ describe("there is still exactly ONE writer of an identity's number", () => {
       "contacts.number:renumber",
       "conference_participants.number:renumber",
       "conference_history.dialedNumber:live",
+      // v2.102.0 — a group's own id, from the same space, never moved by a person.
+      "conversations.number:not-a-person",
       "party_lines.number:not-a-person",
     ]);
   });
