@@ -121,6 +121,45 @@ export function effectiveStatus(isOnline: boolean, override: StatusOverride): Ef
 }
 
 /**
+ * How long ago, as an ELAPSED DURATION and never a calendar date (v2.99.90).
+ *
+ * Owner, about the dialer preview: *"It shows you when was his last login …
+ * number of hours. If it passed one day more than twenty four hours … Days that
+ * shows you one day, two day, three days like this, not date as a date. No. As a
+ * number of days and number of hours and number of seconds."*
+ *
+ *   < 60s    → "8s"
+ *   < 60m    → "14m"
+ *   < 24h    → "3h 20m"   (hours + minutes; the minutes still matter at this range)
+ *   >= 24h   → "2d 4h"    ("one day, two day, three days like this")
+ *
+ * Seconds appear only under a minute. Printing them on a two-day-old figure
+ * would be noise AND would need the line to re-render every second to stay
+ * honest, so they stop where they stop being information.
+ *
+ * `formatLastSeen` below is deliberately UNCHANGED and still used by Contacts and
+ * the profile popup: the owner asked for the clock there in v2.99.66 ("it doesn't
+ * show you the time and the minutes"), so replacing it globally would undo that.
+ * This is a second formatter for the surface that asked for a duration.
+ */
+export function formatElapsedSince(lastSeenMs: number, nowMs: number): string {
+  if (!Number.isFinite(lastSeenMs) || lastSeenMs <= 0) return "";
+  const diff = Math.max(0, nowMs - lastSeenMs);
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) {
+    const rm = m % 60;
+    return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+  }
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
+}
+
+/**
  * WhatsApp-style "last seen" string from a timestamp. Pure; `now` is injected so
  * it's deterministic to test.
  *   < 60s         → "last seen just now"

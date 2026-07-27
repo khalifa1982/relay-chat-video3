@@ -25,7 +25,12 @@ import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { GroupCallScreen } from "./GroupCallScreen";
-import { effectiveStatus, formatLastSeen, type StatusOverride } from "@shared/profileFields";
+import {
+  effectiveStatus,
+  formatElapsedSince,
+  formatLastSeen,
+  type StatusOverride,
+} from "@shared/profileFields";
 
 /**
  * Compact presence line for a looked-up peer: carrier-style "on a call"
@@ -50,6 +55,67 @@ export function peerStatus(p: {
   return { text: formatLastSeen(ts, Date.now()) || "offline", online: false };
 }
 
+/**
+ * The dialer preview's presence line, to the owner's order (v2.99.90): *"it shows
+ * you his badge. It shows you when was his last login. First, to show you also he
+ * is online, then last login, number of hours."*
+ *
+ * So: **whether they are here NOW**, then **how long since they were**, as an
+ * elapsed duration and never a calendar date. `peerStatus` above folds the two
+ * together into one string and is left ALONE, because it is what Contacts and the
+ * profile popup render — the owner asked for the clock form there in v2.99.66.
+ *
+ * The elapsed figure is withheld while they are ONLINE or on a call: "last login
+ * 3s ago" next to "online now" restates the same fact, and it would need a
+ * per-second re-render to stay true. `travelling` and `away` are manual overrides,
+ * not presence, so they DO keep the elapsed figure — the person set a label days
+ * ago and how long ago they were actually here is still news.
+ *
+ * Pure and exported so the ordering rule can be tested without a DOM.
+ */
+export function peerPresenceLines(
+  p: {
+    isOnline: boolean;
+    lastSeenAt: string | Date | null | undefined;
+    statusOverride?: string | null;
+    inCall?: boolean;
+  },
+  nowMs: number
+): { presence: string; online: boolean; busy: boolean; elapsed: string; chosen: string } {
+  const busy = !!p.inCall;
+  const eff = effectiveStatus(!!p.isOnline, (p.statusOverride ?? "") as StatusOverride);
+  const liveNow = busy || eff === "online" || eff === "away";
+  const presence = busy ? "on a call" : eff === "online" || eff === "away" ? "online now" : "offline";
+  const ts = p.lastSeenAt ? new Date(p.lastSeenAt).getTime() : 0;
+  const elapsed = busy || eff === "online" ? "" : formatElapsedSince(ts, nowMs);
+  /* Their CHOSEN status — the Away / Travelling selector in Profile → Status —
+     shown on its own line rather than swallowed into the presence text. Owner:
+     "his profile, there is two things. Not the bio. If he's travel or he's not
+     travel, his status. Not the image and video." So this is deliberately NOT the
+     bio and NOT the story media: it is the label the person picked. */
+  const chosen = eff === "travel" ? "Travelling ✈️" : eff === "away" ? "Away" : "";
+  return { presence, online: liveNow, busy, elapsed, chosen };
+}
+
+/** Sentinel for the bottom-left cell, which holds nothing at all. */
+export const PAD_GAP = "gap";
+
+/**
+ * The pad is 3×4 and the bottom row is **blank · 0 · erase** (v2.99.90).
+ *
+ * Owner, with a screenshot: *"This star no need for this bottom. Remove it from
+ * here and also remove it from the … dial pad, the main page … The star and the
+ * hash key. So just keep in the center below zero, and on the right is the delete
+ * of the numbers."*
+ *
+ * Both were pure decoration and had been for the life of this pad: a RELAY number
+ * is six DIGITS, so `*` and `#` could never be part of one — `tap()` refused them
+ * for the field and only played a tone. `#` gave up its cell to erase in v2.99.86;
+ * `*` gives up its cell to nothing, because keeping `0` in the middle column is
+ * what the owner asked for and a 3-column grid has no other way to centre it. The
+ * blank is a real grid cell rather than a shortened list, or `0` would slide left
+ * and the erase key would move out from under the thumb that was just typing.
+ */
 const KEYS: { d: string; sub: string }[] = [
   { d: "1", sub: " " },
   { d: "2", sub: "ABC" },
@@ -60,12 +126,10 @@ const KEYS: { d: string; sub: string }[] = [
   { d: "7", sub: "PQRS" },
   { d: "8", sub: "TUV" },
   { d: "9", sub: "WXYZ" },
-  { d: "*", sub: "" },
+  { d: PAD_GAP, sub: "" },
   { d: "0", sub: "+" },
   // The 12th cell is the ERASE key, rendered explicitly after this list — see the
-  // grid below. v2.99.36 made exactly this trade on the LANDING dial pad: on a
-  // 6-digit numeric pad `#` is pure decoration, and erase is what the cell is
-  // actually worth. The app pad never got the same treatment until v2.99.86.
+  // grid below.
 ];
 
 /**
@@ -221,7 +285,7 @@ export default function DialerPage() {
     }
   );
 
-  // Hardware-keyboard support: digits, *, # type into the pad; Backspace removes
+  // Hardware-keyboard support: digits type into the pad; Backspace removes.
   useEffect(() => {
     if (phase !== "idle") return; // engine owns keyboard during a call
     const onKey = (e: KeyboardEvent) => {
@@ -250,11 +314,12 @@ export default function DialerPage() {
   useEffect(() => () => disposeDtmf(), []);
 
   function tap(d: string) {
-    // Digits only. The length guard used to apply ONLY to digits, so `*` (and the
-    // old `#`) appended without limit and could push non-numeric junk into a field
-    // that can only ever hold a 6-digit RELAY number. `*` keeps its key — it plays
-    // its tone and is a spare cell — but it can no longer corrupt the number.
-    if (!/^[0-9]$/.test(d)) { playDtmf(d); return; }
+    // Digits only, and now there is nothing else on the pad to guard against —
+    // `*` and `#` are both gone (v2.99.90). The check stays because it is the
+    // thing that made their removal safe rather than merely tidy: the length
+    // guard used to apply ONLY to digits, so `*` appended without limit and could
+    // push non-numeric junk into a field that can only hold six digits.
+    if (!/^[0-9]$/.test(d)) return;
     if (dialed.length >= 6) return;
     setDialed((s) => s + d);
     // Owner spec: a real dial-pad TONE per key (standard DTMF dual tone), so
@@ -512,8 +577,14 @@ export default function DialerPage() {
                   so the badge overflowed the row and collided with the keypad
                   below ("it's overlap"). Now a min-height that can grow to two
                   lines, so nothing is ever clipped or overlapping. */}
+              {/* v2.99.90 (owner): "make little space" — the dialed number, this
+                  information block and the keypad below were reading as one
+                  attached mass. `mt-1.5` became `mt-3`, and the block's own bottom
+                  margin separates it from the pad. The card's `gap` already spaces
+                  its rows; this is the space INSIDE the number area, which the gap
+                  could not reach. */}
               <div
-                className="mt-1.5 text-[0.78rem] min-h-4 text-muted-foreground"
+                className="mt-3 mb-1.5 text-[0.78rem] min-h-4 text-muted-foreground"
                 aria-live="polite"
               >
                 {ghost.mode === "ghost" ? (
@@ -541,21 +612,28 @@ export default function DialerPage() {
                     </span>
                   ) : previewIdentity ? (
                     (() => {
-                      const st = peerStatus({
-                        isOnline: previewIdentity.isOnline,
-                        lastSeenAt: previewIdentity.lastSeenAt,
-                        statusOverride: previewIdentity.statusOverride,
-                        inCall: previewIdentity.inCall,
-                      });
-                      // Two clean LINES instead of one crowded row (owner: the
-                      // name, badge and presence overlapped). Line 1 = name +
-                      // tier mark with the tier word INLINE (caption={false}, so
-                      // the badge no longer stacks text under the mark and
-                      // spills into the keypad); line 2 = presence on its own.
+                      /* THE OWNER'S ORDER (v2.99.90): name + badge · online-or-not ·
+                         how long since their last login · the status THEY chose.
+                         Each on its own line with real breathing room between them —
+                         owner: "currently, it's showing you the dialed number, then
+                         the information, then the pad is all together attached. Make
+                         space between the little bit." */
+                      const st = peerPresenceLines(
+                        {
+                          isOnline: previewIdentity.isOnline,
+                          lastSeenAt: previewIdentity.lastSeenAt,
+                          statusOverride: previewIdentity.statusOverride,
+                          inCall: previewIdentity.inCall,
+                        },
+                        Date.now()
+                      );
+                      // Line 1 = name + tier mark with the tier word INLINE
+                      // (caption={false}, so the badge no longer stacks text under
+                      // the mark and spills into the keypad — v2.99.36).
                       const tier = roleFromFlags(previewIdentity.role, previewIdentity.verified);
                       const tierWord = roleLabel(tier);
                       return (
-                        <span className="flex flex-col items-center gap-0.5 leading-tight">
+                        <span className="flex flex-col items-center gap-1 leading-tight">
                           <span className="flex items-center justify-center gap-1 max-w-full">
                             {/* Name → profile popup (v2.96): see who it is BEFORE
                                 dialing — avatar, status, one-tap add-to-contacts. */}
@@ -578,17 +656,45 @@ export default function DialerPage() {
                               </span>
                             )}
                           </span>
-                          <span
-                            className={
-                              st.busy
-                                ? "text-amber-500 font-medium"
-                                : st.online
-                                  ? "text-[color:var(--relay-online)]"
-                                  : "text-muted-foreground"
-                            }
-                          >
-                            {st.text}
+                          {/* Presence first, then how long ago — the elapsed figure
+                              rides the SAME line as a dot separator so the block
+                              stays short on a card with no spare height. */}
+                          <span className="flex items-center justify-center gap-1.5">
+                            <span
+                              className={
+                                st.busy
+                                  ? "text-amber-500 font-medium"
+                                  : st.online
+                                    ? "text-[color:var(--relay-online)] font-medium"
+                                    : "text-muted-foreground font-medium"
+                              }
+                            >
+                              {st.presence}
+                            </span>
+                            {st.elapsed && (
+                              <>
+                                <span className="text-muted-foreground/50">·</span>
+                                {/* Elapsed, never a date (owner: "not date as a
+                                    date. No. As a number of days and number of
+                                    hours"). LTR + bidi-isolated so an RTL locale
+                                    cannot reorder "2d 4h". */}
+                                <span
+                                  dir="ltr"
+                                  className="font-mono tabular-nums [unicode-bidi:isolate] text-muted-foreground"
+                                >
+                                  {st.elapsed} ago
+                                </span>
+                              </>
+                            )}
                           </span>
+                          {/* The status they PICKED — not their bio, not their story
+                              media. Its own chip so it reads as a label they chose
+                              rather than as live presence. */}
+                          {st.chosen && (
+                            <span className="inline-flex items-center rounded-full border border-border bg-card/60 px-2 py-0.5 text-[0.7rem] font-medium text-foreground">
+                              {st.chosen}
+                            </span>
+                          )}
                         </span>
                       );
                     })()
@@ -614,7 +720,17 @@ export default function DialerPage() {
                 gridAutoRows: "clamp(48px, 9.5vh, 72px)",
               }}
             >
-              {KEYS.map((k) => (
+              {KEYS.map((k) =>
+                k.d === PAD_GAP ? (
+                  // The bottom-left cell holds nothing. It is a real, inert grid
+                  // cell rather than a shortened key list, because that is what
+                  // keeps `0` in the middle column and the erase key bottom-right
+                  // (owner: "just keep in the center below zero, and on the right
+                  // is the delete"). Not a button, so it cannot be tapped or
+                  // focused, and aria-hidden so a screen reader does not announce
+                  // an empty control between 9 and 0.
+                  <span key={k.d} aria-hidden="true" />
+                ) : (
                 <button
                   key={k.d}
                   type="button"
@@ -648,7 +764,8 @@ export default function DialerPage() {
                     {k.d}
                   </span>
                 </button>
-              ))}
+                )
+              )}
               {/* ERASE — the 12th cell (v2.99.86, owner with a screenshot of the
                   pale ghost icon): "This delete, I couldn't make it little large and
                   red colour, flashy glossy to delete the numbers in case you want to
@@ -851,26 +968,58 @@ function QuickAddContact({ number, displayName }: { number: string; displayName:
   });
   const existing = trpc.contacts.list.useQuery();
   const isAlready = (existing.data ?? []).some((c) => c.number === number);
-  const fmt = number.length === 6 ? number.slice(0, 3) + "-" + number.slice(3) : number;
-  if (isAlready) {
-    // Already saved → a quiet confirmation, no action (v2.99.8).
-    return (
-      <div className="mx-auto inline-flex items-center gap-1.5 text-[0.72rem] text-muted-foreground">
-        <Check className="size-3.5 text-[color:var(--relay-online,#06d6a0)]" />
-        In your contacts
-      </div>
-    );
-  }
-  // A prominent pill (owner wanted it obvious "down to save"), not a faint link.
+  /* ALREADY SAVED → NOTHING AT ALL (v2.99.90, owner: "If the number is already on
+     contact, you don't need to show this message"). The confirmation chip that used
+     to sit here answered a question nobody asked: there was no action to take, and
+     the row it occupied is directly under three call buttons on a card that has no
+     spare vertical space. */
+  if (isAlready) return null;
+  /* NOT SAVED → ONE GLOSSY ICON (owner: "just show an icon added to contact but a
+     different color, make it nice color … glossy, glossy, and flashy").
+     Pink→fuchsia because every other colour on this screen already means something:
+     green is Voice, sky is Video, violet is Group Call, red is erase, amber is Do
+     Not Disturb. A fourth reuse would make the colour stop carrying information.
+     The halo is a STATIC box-shadow on a stacked overlay with only its OPACITY
+     animated — animating the button's own box-shadow repaints it every frame, the
+     class of animation v2.99.84 measured and removed. */
   return (
     <button
       type="button"
       onClick={() => upsert.mutate({ number, displayName: displayName === number ? undefined : displayName })}
       disabled={upsert.isPending}
-      className="mx-auto inline-flex items-center gap-2 rounded-full border border-primary/40 bg-primary/10 px-4 py-2 text-xs font-semibold text-primary hover:bg-primary/20 active:scale-95 transition-transform disabled:opacity-60"
+      aria-label={`Add ${number} to your contacts`}
+      title="Add to contacts"
+      className="
+        relative grid place-items-center rounded-full overflow-hidden text-white
+        size-12 shrink-0
+        active:scale-[0.94] transition-transform duration-150 disabled:opacity-60
+      "
+      style={{
+        transitionTimingFunction: "var(--ease-out)",
+        background: "linear-gradient(150deg,#f9a8d4,#ec4899 52%,#c026d3)",
+        border: "1px solid rgba(255,255,255,.24)",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,.28), 0 6px 18px rgba(192,38,211,.42)",
+      }}
     >
-      <UserPlus className="size-4" />
-      {upsert.isPending ? "Saving…" : `Save ${fmt} to contacts`}
+      {!upsert.isPending && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-0 rounded-full pointer-events-none relay-gloss-pulse"
+          style={{ boxShadow: "0 0 18px 4px rgba(236,72,153,.6)" }}
+        />
+      )}
+      {/* A fixed specular highlight across the top — static on purpose: a moving
+          shine on a button you are aiming at is a distraction, not "flashy". */}
+      <span
+        aria-hidden="true"
+        className="absolute inset-x-0 top-0 h-1/2 pointer-events-none"
+        style={{ background: "linear-gradient(180deg,rgba(255,255,255,.34),rgba(255,255,255,0))" }}
+      />
+      {upsert.isPending ? (
+        <span className="relative size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+      ) : (
+        <UserPlus className="relative size-5" strokeWidth={2.3} />
+      )}
     </button>
   );
 }

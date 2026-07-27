@@ -319,7 +319,18 @@ describe("the dialer erase key", () => {
     // The length guard used to apply ONLY to digits, so `*` (and the old `#`)
     // appended without limit and pushed junk into a field that can only hold a
     // 6-digit RELAY number.
-    expect(DIALER).toMatch(/if \(!\/\^\[0-9\]\$\/\.test\(d\)\) \{ playDtmf\(d\); return; \}/);
+    //
+    // v2.99.90 rewrote this to the PROPERTY. It used to pin the exact body
+    // `{ playDtmf(d); return; }` — i.e. the specific consolation the guard gave a
+    // non-digit key — and `*` has now been removed from the pad entirely, so there
+    // is no non-digit key left to play a tone for. What matters is that the guard
+    // still refuses, whatever it does on the way out.
+    const tap = DIALER.slice(DIALER.indexOf("function tap(d: string)"));
+    const body = tap.slice(0, tap.indexOf("\n  }") + 4);
+    expect(body.length).toBeGreaterThan(100);
+    expect(body).toMatch(/if \(!\/\^\[0-9\]\$\/\.test\(d\)\)[^\n]*return/);
+    // The refusal must come BEFORE anything appends, or the guard is decorative.
+    expect(body.indexOf("test(d)")).toBeLessThan(body.indexOf("setDialed"));
   });
 });
 

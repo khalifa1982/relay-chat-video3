@@ -65,16 +65,22 @@ const ARROW_BS = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" st
 
 /** Sentinel for the keypad cell that erases instead of entering a digit. */
 const BS_KEY = "bs";
+/** Sentinel for the bottom-left cell, which holds nothing at all. */
+const GAP_KEY = "gap";
 
 const KEYS: Array<[string, string]> = [
   ["1", ""], ["2", "ABC"], ["3", "DEF"], ["4", "GHI"], ["5", "JKL"], ["6", "MNO"],
-  // The erase key takes the bottom-right cell (owner ask). It replaces "#",
-  // which was pure decoration here — this pad only ever accepts 0-9 for a
-  // 6-digit RELAY number, so "#" did nothing but play a tone. Putting erase
-  // IN the grid gives it a full 54px touch target and, unlike a button beside
-  // the number display, it can never overlap the digits (it did exactly that
-  // in Arabic, where the RTL-mirrored button landed on top of the first digit).
-  ["7", "PQRS"], ["8", "TUV"], ["9", "WXYZ"], ["*", ""], ["0", "+"], [BS_KEY, ""],
+  // Bottom row: BLANK · 0 · erase (v2.99.90, owner: "remove it from … the dial
+  // pad, the main page … The star and the hash key. So just keep in the center
+  // below zero, and on the right is the delete of the numbers.")
+  //
+  // Neither symbol was ever usable here: this pad accepts 0-9 for a 6-digit RELAY
+  // number, so "#" (dropped in v2.99.36 for erase) and "*" only played a tone.
+  // The blank stays a real grid cell so "0" keeps the middle column and the erase
+  // key keeps the bottom-right — where, unlike a button beside the number display,
+  // it can never overlap the digits (it did exactly that in Arabic, where the
+  // RTL-mirrored button landed on top of the first digit).
+  ["7", "PQRS"], ["8", "TUV"], ["9", "WXYZ"], [GAP_KEY, ""], ["0", "+"], [BS_KEY, ""],
 ];
 
 /* ── bilingual copy (owner ask: bring Arabic back to the new design). RELAY
@@ -488,7 +494,12 @@ function keypad(t: Copy): string {
   const cell =
     "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;height:54px;border-radius:14px;background:rgba(255,255,255,.045);border:1px solid rgba(233,240,242,.09)";
   return KEYS.map(([d, sub]) =>
-    d === BS_KEY
+    d === GAP_KEY
+      ? // The blank bottom-left cell. A plain <span>, so there is no button to tap
+        // or focus and nothing for a screen reader to announce between 9 and 0 —
+        // but it still occupies its grid track, which is what centres "0".
+        `<span aria-hidden="true"></span>`
+      : d === BS_KEY
       ? // Erase cell: an icon, not a character. It carries data-lp (not
         // data-lp-key) so the delegated handler routes it to backspace().
         `<button type="button" class="lp-key lp-bs" data-lp="backBtn" aria-label="${t.erase}" title="${t.erase}" style="${cell};color:#e9f0f2;opacity:.35;transition:opacity .15s,transform .15s,background .15s">${ARROW_BS}</button>`

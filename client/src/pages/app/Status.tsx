@@ -170,6 +170,13 @@ export function StatusStrip() {
         <StatusViewer
           groups={groups}
           startIndex={viewerAt}
+          /* THE ONE PLACE THAT CHAINS, and only on somebody else's ring (v2.99.90).
+             Tapping a friend walks through the remaining friends to the last one;
+             tapping MY status shows mine and closes ("on your personal story, with
+             its finish, it's closed"). The viewer also skips my group if a chain
+             happens to reach it, so this is belt and braces rather than the only
+             guard. */
+          chain={!groups[viewerAt].owner.isMe}
           onClose={() => { setViewerAt(null); feed.refetch(); }}
         />
       )}
@@ -464,10 +471,22 @@ export function StatusViewer({
   groups,
   startIndex,
   onClose,
+  chain = false,
 }: {
   groups: FeedGroup[];
   startIndex: number;
   onClose: () => void;
+  /**
+   * Walk on to the next person's story when this one finishes (v2.99.90).
+   *
+   * **Defaults to `false`, and that default is the safety property**: the owner
+   * wants chaining ONLY from the Messages story strip, on somebody else's ring.
+   * Every other entry point — the profile popup, a contact row, a History row, a
+   * call tile, and your own story anywhere — shows that one person and closes. A
+   * call site added later inherits the restrictive behaviour rather than the
+   * surprising one.
+   */
+  chain?: boolean;
 }) {
   const [gi, setGi] = useState(startIndex);
   const [ii, setIi] = useState(0);
@@ -510,16 +529,38 @@ export function StatusViewer({
     return DEFAULT_ITEM_MS;
   }, [item]);
 
+  /* WHO ELSE'S STORY THIS VIEWER MAY WALK ON TO (v2.99.90).
+     Owner: "if you are in the message and you click in the other story, it will
+     start from the first profile of your friends who published story, and it will
+     keep going to the end of the last friend … But on your personal story, with its
+     finish, it's closed. No need to take you to the next story of the people who is
+     in your contact list. … don't do it in the main profile if you click there or
+     anywhere else."
+     So chaining is OPT-IN, and it defaults to OFF: a call site that forgets the prop
+     gets the single-story behaviour, which is the rule for everywhere except the
+     Messages strip. Your OWN story is never part of the chain in either direction —
+     it is excluded here rather than at the call site, so a chain that starts on a
+     friend can never land on you either. */
+  function nextChainable(from: number, step: 1 | -1): number {
+    if (!chain) return -1;
+    for (let j = from + step; j >= 0 && j < groups.length; j += step) {
+      if (!groups[j].owner.isMe) return j;
+    }
+    return -1;
+  }
+
   // Advance to the next item/group, or close at the very end.
   function next() {
     if (!group) return onClose();
     if (ii + 1 < group.items.length) { setIi(ii + 1); resetTimer(); return; }
-    if (gi + 1 < groups.length) { setGi(gi + 1); setIi(0); resetTimer(); return; }
+    const n = nextChainable(gi, 1);
+    if (n >= 0) { setGi(n); setIi(0); resetTimer(); return; }
     onClose();
   }
   function prev() {
     if (ii > 0) { setIi(ii - 1); resetTimer(); return; }
-    if (gi > 0) { const p = gi - 1; setGi(p); setIi(Math.max(0, groups[p].items.length - 1)); resetTimer(); return; }
+    const p = nextChainable(gi, -1);
+    if (p >= 0) { setGi(p); setIi(Math.max(0, groups[p].items.length - 1)); resetTimer(); return; }
     resetTimer(); // already at the very start — restart this item
   }
   function resetTimer() { elapsedRef.current = 0; startRef.current = 0; setProgress(0); }
