@@ -65,15 +65,12 @@ import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useThreadMuted, isThreadMuted, onMutedChange } from "@/app/mutedThreads";
 import { useTypers, useTypingConversations } from "@/app/typingStore";
+import { BRAND_GRADIENT, bubbleStyleFor, nameColorFor } from "@/app/peerColors";
+import { TypingLine } from "@/app/TypingLine";
 import { useDraft } from "@/app/draftStore";
 
 /** Own (outgoing) message bubble — the brand "message" orange gradient with
  *  white copy. Received bubbles keep the neutral token surface (theme-safe). */
-const OWN_BUBBLE_STYLE: CSSProperties = {
-  background: "linear-gradient(135deg,#fb923c,#c2410c)",
-  color: "#fff",
-  borderColor: "rgba(255,255,255,.18)",
-};
 
 function initialsFrom(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
@@ -1486,14 +1483,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   return (
                     <div key={m.id} className={"flex " + (mine ? "justify-end" : "justify-start")}>
                       <div
-                        style={mine ? OWN_BUBBLE_STYLE : undefined}
-                        className={
-                          "max-w-[85%] rounded-2xl px-3.5 py-2 text-sm break-words shadow-sm border " +
-                          (mine ? "" : "bg-muted/70 text-foreground border-white/10")
-                        }
+                        style={bubbleStyleFor({ mine, isGroup, senderIdentityId: m.senderIdentityId })}
+                        className="max-w-[85%] rounded-2xl px-3.5 py-2 text-sm break-words shadow-sm border"
                       >
                         {isGroup && !mine && (
-                          <div className="text-[11px] font-semibold text-primary mb-0.5">
+                          <div
+                            className="text-[11px] font-semibold mb-0.5"
+                            style={{ color: nameColorFor({ isGroup, senderIdentityId: m.senderIdentityId }) }}
+                          >
                             {nameById.get(m.senderIdentityId) || "Member"}
                           </div>
                         )}
@@ -1513,7 +1510,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         {m.body && (
                           <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body)}</div>
                         )}
-                        <div className={"text-[10px] mt-1 " + (mine ? "text-white/70" : "text-muted-foreground")}>
+                        <div className={"text-[10px] mt-1 " + "text-white/70"}>
                           {formatTime(m.createdAt)}
                         </div>
                       </div>
@@ -1603,6 +1600,20 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   if (emojiOnly) {
                     return (
                       <div className="max-w-[75%] px-1 py-0.5">
+                        {/* v2.99.85: this branch has no bubble, and it also had no
+                            SENDER NAME — so in a group an emoji-only message arrived
+                            as a bare 🔥 attached to nobody, while every text message
+                            from the same person was labelled. Visible in the owner's
+                            own group screenshot. Same label, same per-person colour as
+                            the bubble path, so the two cannot drift. */}
+                        {isGroup && !mine && !sameAsPrev && (
+                          <div
+                            className="text-[11px] font-semibold mb-0.5"
+                            style={{ color: nameColorFor({ isGroup, senderIdentityId: m.senderIdentityId }) }}
+                          >
+                            {nameById.get(m.senderIdentityId) || "Member"}
+                          </div>
+                        )}
                         <div className="text-4xl leading-tight">{m.body}</div>
                         <div className={"text-[10px] mt-0.5 text-muted-foreground " + (mine ? "text-right" : "")}>
                           {formatTime(m.createdAt)}
@@ -1613,18 +1624,22 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   }
                   return (
                 <div
-                  style={mine ? OWN_BUBBLE_STYLE : undefined}
+                  // v2.99.85 (owner): mine orange, the other side of a 1:1 BLUE, and in
+                  // a group every member their own colour — all from one module, so a
+                  // bubble and that person's name can never disagree about who they are.
+                  // The received bubble was a neutral grey token surface; the owner has
+                  // asked for colour, and colour is what tells you who is speaking in a
+                  // group without reading the label.
+                  style={bubbleStyleFor({ mine, isGroup, senderIdentityId: m.senderIdentityId })}
                   className={
-                    "max-w-[75%] rounded-2xl px-3 py-1.5 text-sm break-words shadow-sm border " +
-                    // Own bubbles carry the brand "message" orange gradient (see
-                    // OWN_BUBBLE_STYLE); received bubbles keep the neutral
-                    // translucent token surface (iMessage-style gray) instead of
-                    // the old hard-coded loud blue.
-                    (mine ? "" : "bg-muted/70 text-foreground border-white/10 ") + tail
+                    "max-w-[75%] rounded-2xl px-3 py-1.5 text-sm break-words shadow-sm border " + tail
                   }
                 >
                   {isGroup && !mine && !sameAsPrev && (
-                    <div className="text-[11px] font-semibold text-primary mb-0.5">
+                    <div
+                      className="text-[11px] font-semibold mb-0.5"
+                      style={{ color: nameColorFor({ isGroup, senderIdentityId: m.senderIdentityId }) }}
+                    >
                       {nameById.get(m.senderIdentityId) || "Member"}
                     </div>
                   )}
@@ -1680,7 +1695,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     <div
                       className={
                         "mb-0.5 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide " +
-                        (mine ? "text-white/80" : "text-primary")
+                        "text-white/80"
                       }
                     >
                       <Voicemail className="size-3.5" /> Voicemail
@@ -1704,7 +1719,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       <div
                         className={
                           "mt-1 flex items-center gap-1 text-[10px] font-semibold " +
-                          (mine ? "text-white/75" : "text-[#a78bfa]")
+                          "text-white/75"
                         }
                       >
                         <Timer className="size-3" /> {label}
@@ -1752,7 +1767,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         <div
                           className={
                             "flex items-center gap-1.5 py-0.5 text-[12.5px] italic " +
-                            (mine ? "text-white/75" : "text-muted-foreground")
+                            "text-white/75"
                           }
                         >
                           <Timer className="size-3.5 shrink-0" />
@@ -1795,8 +1810,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       condition here to fall out of step with it. */}
                   <div
                     className={
-                      "flex justify-end items-center gap-1 text-[10px] leading-none mt-0.5 -mb-0.5 " +
-                      (mine ? "text-white/70" : "text-muted-foreground")
+                      "flex justify-end items-center gap-1 text-[10px] leading-none mt-0.5 -mb-0.5 text-white/70"
                     }
                   >
                     {formatTime(m.createdAt)}
@@ -1851,21 +1865,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       )}
       </div>
 
-      {/* typing indicator */}
-      {typers.length > 0 && (
-        <div className="px-4 md:px-5 pb-1 -mt-1 text-xs text-muted-foreground flex items-center gap-1.5">
-          <span className="inline-flex gap-0.5" aria-hidden="true">
-            <span className="size-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "0ms" }} />
-            <span className="size-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "150ms" }} />
-            <span className="size-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "300ms" }} />
-          </span>
-          {typers.length === 1
-            ? `${senderLabel(typers[0])} is typing…`
-            : typers.length === 2
-              ? `${senderLabel(typers[0])} and ${senderLabel(typers[1])} are typing…`
-              : "Several people are typing…"}
-        </div>
-      )}
+      {/* typing indicator — the walking capital + per-person colour live in
+          TypingLine, which is its OWN component so its several-times-a-second tick
+          cannot re-render this whole conversation (the v2.99.67 mistake). */}
+      <TypingLine typers={typers} isGroup={isGroup} labelFor={senderLabel} />
 
       {/* composer */}
       <div className="px-3 md:px-5 py-3 border-t border-border bg-card md:rounded-b-2xl">
@@ -2066,7 +2069,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               disabled={sendMutation.isPending || uploading}
               size="icon"
               className="h-11 w-11 rounded-full border-0"
-              style={{ background: "linear-gradient(135deg,#fb923c,#c2410c)", color: "#fff" }}
+              style={{ background: BRAND_GRADIENT, color: "#fff" }}
               aria-label="Send"
             >
               <Send className="size-4" />
@@ -2349,7 +2352,15 @@ function MessageMenu({
         type="button"
         aria-label="Message options"
         onClick={() => setOpen((v) => !v)}
-        className="grid size-7 place-items-center rounded-full text-muted-foreground hover:bg-muted/60 hover:text-foreground opacity-35 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 active:opacity-100 transition-opacity"
+        // v2.99.85 (owner: "the three dots is not clear. it's very light color. you
+        // need to make it highlighted. it means that a three dots. you can click on
+        // it"). It was 35% opacity on a phone and INVISIBLE until hover on desktop —
+        // a control nobody could tell was a control. It is now a real chip: a filled
+        // circle with a border, fully opaque, on every screen. The desktop
+        // hover-reveal is gone rather than kept at a higher opacity, because "appears
+        // on hover" is exactly what made it undiscoverable, and a touch screen has no
+        // hover to discover it with.
+        className="grid size-8 place-items-center rounded-full border border-border bg-muted/80 text-foreground shadow-sm hover:bg-muted active:scale-95 transition"
       >
         <MoreVertical className="size-4" />
       </button>
@@ -2691,12 +2702,12 @@ function VoiceNotePlayer({
   };
 
   const frac = dur > 0 && Number.isFinite(dur) ? Math.min(1, cur / dur) : 0;
-  const sub = mine ? "text-white/70" : "text-muted-foreground";
-  const track = mine ? "bg-white/25" : "bg-foreground/15";
-  const fill = mine ? "bg-white" : "bg-[color:var(--relay-online,#06d6a0)]";
+  const sub = "text-white/70";
+  const track = "bg-white/25";
+  const fill = "bg-white";
 
   return (
-    <div className={"my-1 flex w-60 max-w-full items-center gap-2.5 " + (mine ? "text-white" : "text-foreground")}>
+    <div className={"my-1 flex w-60 max-w-full items-center gap-2.5 " + "text-white"}>
       <button
         type="button"
         onClick={toggle}
@@ -2739,7 +2750,7 @@ function VoiceNotePlayer({
         aria-label="Download audio"
         className={
           "grid size-7 shrink-0 place-items-center rounded-full transition hover:brightness-110 " +
-          (mine ? "bg-white/15" : "bg-foreground/10")
+          "bg-white/15"
         }
       >
         <Download className="size-3.5" />
@@ -2886,7 +2897,7 @@ function RecordingBar({
         aria-label="Send voice note"
         title="Send"
         className="grid size-9 shrink-0 place-items-center rounded-full text-white transition active:scale-95 disabled:opacity-50"
-        style={{ background: "linear-gradient(135deg,#fb923c,#c2410c)" }}
+        style={{ background: BRAND_GRADIENT }}
       >
         <Send className="size-4" />
       </button>
@@ -2904,20 +2915,20 @@ function FileCard({ url, filename, mine }: { url: string; filename?: string; min
       rel="noreferrer"
       className={
         "my-1 flex w-60 max-w-full items-center gap-2.5 rounded-xl px-2.5 py-2 transition hover:brightness-110 " +
-        (mine ? "bg-white/15 text-white" : "bg-foreground/10 text-foreground")
+        "bg-white/15 text-white"
       }
     >
       <span
         className={
           "grid size-9 shrink-0 place-items-center rounded-lg " +
-          (mine ? "bg-white/20 text-white" : "bg-primary/15 text-primary")
+          "bg-white/20 text-white"
         }
       >
         <Paperclip className="size-4" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-semibold">{filename || "Attachment"}</span>
-        <span className={"block text-[10.5px] " + (mine ? "text-white/70" : "text-muted-foreground")}>
+        <span className={"block text-[10.5px] " + "text-white/70"}>
           Tap to open or download
         </span>
       </span>
