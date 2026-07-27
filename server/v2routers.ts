@@ -91,6 +91,8 @@ import {
   recentAutoReplyExists,
   getPublicStats,
   upsertPushSubscription,
+  listPushSubscriptions,
+  pushEnabledForIdentity,
   deleteOwnPushSubscription,
   addOnlineWatch,
   takeOnlineWatchers,
@@ -115,6 +117,7 @@ import { appBaseUrl } from "./appUrl";
 import { unsubscribeHeaders, unsubscribeLink } from "./unsubscribe";
 import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
 import { classifyNativeToken } from "./expoPush";
+import { fcmConfig } from "./fcm";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
 import { setIdentityAutoReply, autoReplyEnabledFor } from "./v2db";
@@ -3816,5 +3819,107 @@ export const v2AdminRouter = router({
         `[admin] identity ${input.identityId} renumbered ${res.oldNumber} -> ${res.newNumber} by identity ${me.id}`
       );
       return { ...res };
+    }),
+
+  /**
+   * WHY A NOTIFICATION DID NOT ARRIVE (v2.99.91).
+   *
+   * Owner: *"Can you check the Firebase configuration as still the notification for
+   * the front mobile apps for Android? It's not showing or it's not active."*
+   *
+   * A native push crosses FIVE links, and each one fails in a way that looks
+   * identical from the phone — nothing happens:
+   *   1. the shell posts a token into the WebView (external Expo app),
+   *   2. `push.subscribe` stores it with a kind the server can route,
+   *   3. the transport for that kind is configured on the fleet,
+   *   4. the user has not turned push off,
+   *   5. something actually SENDS for the event being tested.
+   * Guessing which one is broken has already cost more than building this. It
+   * reports each link separately, so a "not showing" becomes one named cause.
+   *
+   * READ-ONLY, and it never returns a token. An FCM registration token plus the
+   * project key, or an Expo token on its own, is enough to push to that handset —
+   * so the row is reported as kind + length + a short prefix, which is enough to
+   * tell two devices apart and not enough to address either.
+   */
+  pushDiagnostics: publicProcedure
+    .input(z.object({ identityId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      let rows: Array<{ endpoint: string; kind?: string | null }> = [];
+      let dbOk = true;
+      try {
+        rows = await listPushSubscriptions(input.identityId);
+      } catch {
+        dbOk = false;
+      }
+      // Legacy rows predate the column and are Web Push by construction (v2.99.79).
+      const kindOf = (k: string | null | undefined) => (k && k.length > 0 ? k : "webpush");
+      const devices = rows.map((r) => ({
+        kind: kindOf(r.kind),
+        // What the SHAPE says the token is, which is what actually decides the
+        // transport — a row whose stored kind and derived kind disagree is
+        // unroutable, and that disagreement is invisible without printing both.
+        derived: classifyNativeToken(r.endpoint) ?? (r.endpoint.startsWith("https://") ? "webpush" : "unknown"),
+        length: r.endpoint.length,
+        prefix: r.endpoint.slice(0, 12),
+      }));
+      return {
+        dbOk,
+        pushEnabled: await pushEnabledForIdentity(input.identityId),
+        devices,
+        /** Which transports THIS fleet can use right now — read from the running
+         *  process, which is stronger evidence than reading an env file. */
+        transports: {
+          // Expo needs no server credential for ordinary sends; the FCM server key
+          // and APNs key live in EAS, not here. So an Expo token is deliverable as
+          // soon as it is stored — which is why "configured" is not the same
+          // question as "will it arrive".
+          expo: true,
+          expoAccessToken: !!process.env.EXPO_ACCESS_TOKEN,
+          fcm: !!fcmConfig(),
+          webpush: !!vapidConfig(),
+        },
+        /**
+         * The kinds that any code path actually sends. Hard-coded on purpose: it is
+         * a statement about the codebase, not a runtime probe, and it is the answer
+         * to the most likely form of the owner's report — testing by CALLING a
+         * closed app and getting nothing, because `incoming-call` was removed in
+         * v2.99.11 at their own request and nothing has sent it since.
+         */
+        sendsFor: ["message", "missed-call", "voicemail", "contact-online"],
+        ringPushed: false,
+      };
+    }),
+
+  /**
+   * Send a REAL push to one identity, through the REAL sender.
+   *
+   * `sendPushToIdentity` is called directly rather than reimplemented, so this
+   * proves the actual production path — including the master push switch, the
+   * per-kind transport routing and the dead-token pruning. A parallel test sender
+   * would be able to pass while the real one was broken, which is worse than
+   * having no test at all.
+   *
+   * The body is content-free and says it is a test: it lands on somebody else's
+   * lock screen.
+   */
+  sendTestPush: publicProcedure
+    .input(z.object({ identityId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = await requireAdmin(ctx);
+      // Rate-limited even for an admin: this writes to a third party's device, and
+      // a stuck retry loop in the panel must not become a notification flood.
+      directoryGate(ctx);
+      const delivered = await sendPushToIdentity(input.identityId, {
+        kind: "message",
+        title: "RELAY test notification",
+        body: "If you can see this, notifications are working on this device.",
+        tag: `relay-test-${input.identityId}`,
+        url: "/app",
+      });
+      // Ids only — this lands in logs.
+      console.warn(`[admin] test push to identity ${input.identityId} by identity ${me.id}: ${delivered} device(s)`);
+      return { delivered };
     }),
 });

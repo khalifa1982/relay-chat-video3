@@ -7557,6 +7557,76 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.91 — why a notification did not arrive (2026-07-27)
+- [x] **OWNER**: *"Can you check the Firebase configuration as still the notification for the front mobile apps
+      for Android? It's not showing or it's not active."* **A NATIVE PUSH CROSSES FIVE LINKS AND EVERY ONE OF
+      THEM FAILS THE SAME WAY FROM THE PHONE — nothing happens**: the shell posts a token into the WebView,
+      `push.subscribe` stores it under a routable kind, the transport for that kind is configured on the fleet,
+      the recipient has not turned push off, and something actually SENDS for the event being tested. Guessing
+      which link is broken has already cost more than building the check, so the admin panel now reports them
+      **separately** and can fire a real send. The owner can run it themselves in ten seconds.
+- [x] **THE ANSWER I CAN GIVE WITHOUT THE FLEET, and it is the most likely explanation**: **no code path sends
+      a push for an incoming CALL.** `kind:"incoming-call"` was removed in v2.99.11 at the owner's own explicit
+      request (*"if the user is offline and you try to call him it should NOT ring automatically"*) and nothing
+      has sent it since — verified again here by scanning every `sendPushToIdentity` call site. So if the test
+      was "call the phone with the app closed", no Firebase configuration on earth would make it ring. What DOES
+      push: a message, a missed call, a voicemail, and a back-online alert. The panel says this out loud rather
+      than leaving it to be rediscovered, and a test **cross-checks the claimed list against the kinds the code
+      really passes** — a hard-coded list that drifts is worse than no list, because it sends somebody looking
+      in the wrong place.
+- [x] **THE SERVER-SIDE CHAIN IS COMPLETE AND WAS AUDITED RATHER THAN ASSUMED.** `sendPushToIdentity` fans out
+      to all three transports (Expo → `sendExpoPush`, raw device token → `sendFcmData`, browser → Web Push), the
+      shape-derived kind decides the transport, `push.subscribe` refuses a token it cannot classify, and the
+      WebView token bridge is mounted for every signed-in session in `RelayEngine`. Nothing in the repo is
+      missing; what cannot be verified from here is the EXTERNAL Expo app, which must post the exact
+      `{type:"SET_PUSH_TOKEN", token}` envelope — a bare token string is refused by design, because a listener
+      that registers whatever arrives is a notification-hijack primitive (the v2.99.49 R1 class).
+- [x] **`admin.pushDiagnostics` — READ-ONLY, AND IT NEVER RETURNS A TOKEN.** An FCM registration token plus the
+      project key, or an Expo token on its own, is enough to push to that handset, so a device is reported as
+      **kind + length + a 12-character prefix**: enough to tell two devices apart, not enough to address either.
+      The Firebase key is reported as *whether it parses*, never its contents; same for `EXPO_ACCESS_TOKEN`.
+      Tests forbid every shape that would leak one (`token: r.endpoint`, `...r`, the raw env var).
+- [x] **IT REPORTS THE STORED KIND *AND* THE SHAPE-DERIVED KIND, and that pairing is the point**: the sender
+      routes by the STORED kind, so an Expo token filed as `fcm` goes to FCM and is dropped with **no error
+      anywhere**. That is the one failure in the whole chain with no other symptom, and it is invisible unless
+      both are printed side by side. A legacy NULL kind is reported as `webpush` — the same reading the sender
+      takes — because calling it "unknown" would invent a problem.
+- [x] **A DB FAILURE AND AN EMPTY LIST ARE REPORTED DIFFERENTLY** (`dbOk`): "no devices registered" and "we
+      couldn't look" need different next steps, and collapsing them is how a diagnostic starts lying.
+- [x] **`admin.sendTestPush` GOES THROUGH THE REAL `sendPushToIdentity`.** A parallel test sender is the worst
+      possible thing to build here — it could pass while production was broken. Calling the real one proves the
+      actual path including the master push switch, the per-kind routing and the dead-token pruning; tests
+      forbid bypassing it via `sendFcmData` / `sendExpoPush` / `webpush.sendNotification`. It is
+      `directoryGate`-limited **even for an admin**, because it writes to a third party's device and a stuck
+      retry in the panel must not become a notification flood; the body is content-free and says it is a test,
+      since it lands on somebody else's lock screen; and the trace carries **ids only**.
+- [x] **A DELIVERED COUNT OF ZERO IS DISTINGUISHABLE FROM A FAILED REQUEST** — the panel says "nothing was
+      reachable" rather than a generic error, because those are different diagnoses.
+- [x] **THE PANEL DID NOT QUIETLY WIDEN.** An admin panel is a permanent high-value surface, so a test
+      enumerates every `trpc.admin.*` call the page makes and asserts the set is exactly
+      `amIAdmin`/`findIdentities`/`setIdentityNumber`/`pushDiagnostics`/`sendTestPush`. Adding a sixth
+      capability now has to be a deliberate act that updates that assertion. Both new procedures re-derive admin
+      from the `users` row via `requireAdmin` — never the cached whoami role — with the gate asserted to precede
+      every read and write, and the refusal is uniform so the endpoint is not an oracle for who holds the role.
+- [x] `server/pushDoctor.test.ts` (21), with `classifyNativeToken` tested BEHAVIOURALLY because sending an Expo
+      token to FCM is a silent delivery failure and a source pin cannot tell you the two are separated.
+      **All 19 tripwires verified by MUTATION** from byte-exact backups and a confirmed-GREEN baseline; sources
+      byte-identical afterwards.
+- [x] **NOT VERIFIED FROM HERE, said plainly**: the sandbox's outbound network cannot reach `your-chat.io`
+      (`curl` exits 56), so the live fleet's `FIREBASE_SERVICE_ACCOUNT_JSON` was NOT read and no live push was
+      sent. That is exactly why this ships as a panel the owner can run against production rather than a claim
+      about it. **OWNER-ONLY STEPS if the panel shows no registered device**: the Expo shell must post the
+      envelope; with **Expo** tokens the FCM server key and APNs key go to **EAS** and nothing is needed
+      server-side; with **raw device** tokens the Firebase service-account JSON goes into `/home/relay/.env` as
+      `FIREBASE_SERVICE_ACCOUNT_JSON` (that private key is a real secret — never a chat message, never a
+      `workflow_dispatch` input, where it would sit in run metadata).
+- [x] **STILL OPEN, and it is the other half of the owner's message**: minimising the app marks the person
+      OFFLINE rather than idle. Diagnosed here and shipping next — `PresenceManager` beacons offline on
+      `visibilitychange → hidden`, and the fix needs a third presence state plus care at the three sites where
+      `isOnline` decides whether to PUSH rather than what LED to draw, since a backgrounded app must keep
+      getting notifications.
+- [x] No schema change, no new dependency, no new env var. 2658 tests.
+
 ## v2.99.90 — the dead keys go, the dialer says who you're calling, and a story stops dragging you onward (2026-07-27)
 - [x] **`*` AND `#` ARE GONE FROM BOTH DIAL PADS; THE BOTTOM ROW IS BLANK · 0 · ERASE** (owner, with a
       screenshot: *"This star no need for this bottom. Remove it from here and also remove it from the … dial
