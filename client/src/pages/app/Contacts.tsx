@@ -57,6 +57,7 @@ import { trpc } from "@/lib/trpc";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
+import { matchQuery } from "@/app/searchMatch";
 
 function initialsFrom(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
@@ -155,20 +156,25 @@ export default function ContactsPage() {
 
   type Row = NonNullable<typeof contacts.data>[number];
   const filtered = useMemo<Row[]>(() => {
-    const q = search.trim().toLowerCase();
     const list = contacts.data ?? [];
     return list
-      .filter(
-        (c) =>
-          !q ||
-          (c.displayName?.toLowerCase().includes(q) ?? false) ||
-          c.number.includes(q)
+      .filter((c) =>
+        // v2.99.96: one shared rule, and the FIELDS ARE SEPARATE rather than joined
+        // into one haystack. This used to be a lowercase substring test against the
+        // saved name plus `c.number.includes(rawQuery)` — so typing the `777-777`
+        // this very list DISPLAYS matched nothing, "khalifa ali" missed "Khalifa
+        // Mohamed Ali", and "jose" missed "José". `liveName` is searched too, so
+        // somebody saved as "Dad" is also findable by their real name.
+        matchQuery(search, [c.displayName, c.liveName, c.number])
       )
       .sort((a, b) => {
         if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
         return (a.displayName || a.number).localeCompare(b.displayName || b.number);
       });
   }, [contacts.data, search]);
+
+  /** True while the user is actively searching. */
+  const searching = search.trim().length > 0;
 
   // Group into sections: Favorites first (the star pin, cross-cuts categories),
   // then each explicit category, then "Other". Within a section, online-first.
@@ -260,7 +266,13 @@ export default function ContactsPage() {
           <div>
             {sections.map((section) => {
               const SIcon = section.icon;
-              const isCollapsed = collapsed.has(section.key);
+              // A COLLAPSED SECTION USED TO SWALLOW MATCHES (v2.99.96). The
+              // filter above kept the row and the header counted it, but the body
+              // was gated on collapse state — so a search could report "1" beside a
+              // section heading and render nothing at all. That is a large part of
+              // "the search doesn't detect 100%": the match was found and then
+              // hidden. While a query is active, every section is open.
+              const isCollapsed = !searching && collapsed.has(section.key);
               // "any member active" → the online pip on the sticky header.
               const anyActive = section.rows.some(
                 (r) => !r.presenceHidden && (r.isOnline || r.inCall)

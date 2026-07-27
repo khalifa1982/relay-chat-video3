@@ -31,30 +31,16 @@ export interface SuggestableContact {
   avatarUrl?: string | null;
 }
 
+/* The text primitives moved to `searchMatch.ts` in v2.99.96, when the main search
+ * boxes needed the same folding and digit rules. They are re-exported here so every
+ * existing caller and pin keeps working — the point is that there is now exactly ONE
+ * implementation of "fold this name" and "what digits did they type", not two that
+ * can drift apart. */
+import { digitsOf, foldText, isNumberQuery } from "./searchMatch";
+
+export { digitsOf, isNumberQuery };
 /** Fold case and strip diacritics, so "Ålvaro" is reachable by typing "alv". */
-export function foldName(s: string): string {
-  return (s || "")
-    .normalize("NFD")
-    // eslint-disable-next-line no-misleading-character-class
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .trim();
-}
-
-/** The digits a person typed, ignoring the grouping they may have typed with. */
-export function digitsOf(query: string): string {
-  return (query || "").replace(/[^0-9]/g, "");
-}
-
-/**
- * Is this query a NUMBER search? Only when it contains a digit and nothing that
- * looks like a name — otherwise "7th floor" would be read as the number 7.
- */
-export function isNumberQuery(query: string): boolean {
-  const q = (query || "").trim();
-  if (!q) return false;
-  return /^[0-9\s\-.]+$/.test(q) && digitsOf(q).length > 0;
-}
+export const foldName = foldText;
 
 export function suggestContacts(
   contacts: SuggestableContact[],

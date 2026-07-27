@@ -7557,6 +7557,84 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.96 — search that actually finds it, and a match that was being hidden after it was found (2026-07-27)
+
+Owner: *"also activate the search. The search anywhere in the system, either by call, by history, by
+message, contact. Whenever I put the keywords either by words, single words, it will deduct anything on
+that single word. Let's say if a name, it will deduct on the names first, second, third … Or if I put a
+number, it will deduct the number. So make sure that the search is properly working because currently, I
+put the words doesn't deduct hundred percent."*
+
+**THERE WAS NO SHARED SEARCH PRIMITIVE AT ALL.** Four screens each hand-rolled
+`oneJoinedString.toLowerCase().includes(query.toLowerCase())`, and that one shape produces four distinct
+failures the owner would experience as "doesn't detect 100%":
+
+1. **It is a contiguous substring test.** A query whose words are not adjacent in the stored name can
+   never match: "khalifa ali" misses **"Khalifa Mohamed Ali"**, and any reversed order misses too. That is
+   precisely the "first, second, third" ask, and no surface implemented it.
+2. **The number was not digit-folded** on Contacts or the group picker, which compared the RAW query
+   against the raw number — so typing back the `777-777` those very rows DISPLAY matched nothing.
+3. **No diacritic folding anywhere**, so "jose" missed "José" and "alvaro" missed "Ålvaro".
+4. **Each surface searched a different name.** Contacts searched the frozen saved name; History searched
+   the live one. So somebody saved as "Dad" was findable in Contacts and not in History, and their real
+   name was findable in History and not in Contacts.
+
+**AND THE ONE NOBODY WOULD HAVE GUESSED, found by an adversarial review of the diagnosis: A MATCH INSIDE
+A COLLAPSED SECTION WAS FILTERED IN, COUNTED IN THE HEADER, AND NEVER RENDERED.** All three list screens
+gate their section bodies on collapse state, and none of them opened on a query — so a search could put
+"1" beside a heading and draw no rows at all. The match was found and then hidden, which is as close to
+the literal complaint as it gets. A query now forces every section open on Contacts, Messages and History.
+
+**ONE MATCHER, FOUR CONSUMERS** (`client/src/app/searchMatch.ts`). Every query token must match SOME
+field, and different tokens may match different fields — so "khalifa 777" finds the person whose name
+matches one and whose number matches the other. **THE FIELDS ARE COMPARED SEPARATELY, never pre-joined**:
+History used to glue every field together and strip non-digits from the whole string, so a digit run
+SPANNING two fields matched — a false positive in the opposite direction.
+
+**INFIX IS DELIBERATELY KEPT, not narrowed to word-start.** The v2.99.93 suggestion list is word-start
+only, and adopting that here would REGRESS the main lists: today "hammadi" does find "Alhammadi", and
+removing that to satisfy the letter of the ask would take away a match people use. The complaint is
+under-matching, so loose is the safer direction — and it does mean "ali" also matches "Khalifa", which is
+accepted out loud rather than overlooked.
+
+**THE TEXT PRIMITIVES NOW EXIST IN EXACTLY ONE PLACE.** `foldText`/`digitsOf`/`isNumberQuery` were living
+in `contactSuggest.ts`; they are promoted and re-exported from there, because two implementations of
+"fold this name" is exactly how two screens come to disagree about one query.
+
+**A REAL OVER-MATCH CAUGHT BY THIS RELEASE'S OWN TEST.** The digit rule first pulled the digits out of ANY
+token, so typing **"7th"** extracted "7" and matched every contact whose number contains a seven — which
+is most of them. A name search that returns the whole list is worse than one that returns nothing, and it
+is the same trap as a two-letter infix (v2.99.80). The digit rule now requires a digit-SHAPED token, and
+"7th floor" is a name search again.
+
+**A REDUNDANCY THE MUTATION RUN EXPOSED, and the fix was to DELETE code rather than add a test.** The
+first cut had two number mechanisms: a whole-query digit compare before tokenising, and a per-token digit
+compare. Removing either one changed no behaviour, because each was covered by the other — three
+survivors from one design flaw. Two mechanisms that are individually removable are not defence in depth,
+they are dead weight that reads as load-bearing, so the redundant branch is gone and the remaining one is
+now genuinely load-bearing (its removal bites). `777-777` still works as one number-shaped token; `777
+777` works as two tokens against the field's digits.
+
+**HISTORY EXCLUDES THE VIEWER from the roster it searches** — your own name is on every conference row, so
+including it made a search for yourself match every single call — and it now also searches the SAVED
+contact name, closing the cross-surface asymmetry. Its contacts query moved above the filter so the names
+are available to it. The server sends a search-only `liveName` on `contacts.list`, resolved from
+identities it was already fetching; the row still DISPLAYS the name you chose.
+
+`client/src/app/searchMatch.test.ts` (30), tested BEHAVIOURALLY against the owner's own cases because a
+source pin cannot tell you whether "khalifa ali" finds Khalifa Mohamed Ali; **all 23 tripwires verified by
+MUTATION** from byte-exact backups and a confirmed-GREEN baseline. **THREE PRE-EXISTING PINS REWRITTEN TO
+THE PROPERTY** rather than relaxed: `searchEnhancements.test.ts` froze the exact
+`peerDisplayName.toLowerCase().includes(q)` expression and the `searchTextOf` joined-haystack helper — so
+frozen, it asserted the defect.
+
+**NOT DONE, said plainly**: History filters over a TRUNCATED window — both call payloads are capped at 100
+rows server-side — so a call older than that cannot be found however good the matcher is. Raising the cap
+is a paging change, not a search change, so it is flagged rather than quietly bundled. Message search is
+also still scoped to one already-open conversation; there is no cross-conversation message search.
+
+No schema change, no new dependency, no new env var. 2815 tests.
+
 ## v2.99.95 — the green dot was the VIEWER'S OWN, painted on somebody else's face (2026-07-27)
 
 Owner, third report, with a screenshot: *"Here, the user showing online. But if you go into contact and

@@ -38,6 +38,7 @@ import { useIdentity } from "@/app/useIdentity";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
+import { matchQuery } from "@/app/searchMatch";
 
 /**
  * One person's live reachability, as this screen understands it (v2.99.95).
@@ -175,18 +176,32 @@ function isMissedItem(it: Item): boolean {
   return it.kind === "solo" && it.direction === "in";
 }
 
-/** Everything a History row can be matched on: contact name, number/PIN, and
- *  (for conferences) every participant + the party-line title. */
-function searchTextOf(it: Item): string {
+/**
+ * Every FIELD a History row can be matched on (v2.99.96) — a list, never one joined
+ * string.
+ *
+ * Two real bugs came out of the old joined-haystack version. It stripped non-digits
+ * from the WHOLE glued string before comparing, so a digit run spanning two fields
+ * matched — a false positive. And it included the viewer's own roster entry, so
+ * searching your own name matched every single conference row.
+ *
+ * `dialedNumber` is still searched, because somebody may genuinely remember the number
+ * they dialled — but it is one field among many rather than a fallback for the peer.
+ */
+function searchFieldsOf(it: Item, savedNameOf?: (num: string) => string | undefined): Array<string | null | undefined> {
   if (it.kind === "solo") {
-    return `${it.call.other?.displayName ?? ""} ${it.call.other?.number ?? ""}`;
+    const num = it.call.other?.number ?? "";
+    return [it.call.other?.displayName, num, savedNameOf?.(num)];
   }
   const c = it.conf;
-  return [
-    c.dialedNumber ?? "",
-    c.partyLineTitle ?? "",
-    ...c.participants.map((p) => `${p.name} ${p.number}`),
-  ].join(" ");
+  const out: Array<string | null | undefined> = [c.dialedNumber, c.partyLineTitle];
+  for (const p of c.participants) {
+    // SELF EXCLUDED: your own name is on every row, so including it made every
+    // conference row match a search for yourself.
+    if (p.isSelf) continue;
+    out.push(p.name, p.number, savedNameOf?.(p.number));
+  }
+  return out;
 }
 
 /** Bucket a call timestamp into a collapsible day-section {key,label}. Pure
@@ -295,6 +310,26 @@ export default function HistoryPage() {
     [items]
   );
 
+  // One-tap contact conversion (v2.96): which history peers are ALREADY saved
+  // (hides the + button), and the add mutation itself.
+  //
+  // Declared HERE rather than further down (v2.99.96) because the search filter
+  // below needs the saved names: a call from somebody saved as "Dad" was findable in
+  // Contacts and not in History, since History only ever knew their real name.
+  const contactsQ = trpc.contacts.list.useQuery(undefined, {
+    enabled: !!me,
+    staleTime: 30_000,
+  });
+  const savedNumbers = useMemo(
+    () => new Set((contactsQ.data ?? []).map((c) => c.number)),
+    [contactsQ.data]
+  );
+  const savedNameOf = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of contactsQ.data ?? []) if (c.displayName) m.set(c.number, c.displayName);
+    return (num: string) => m.get(num);
+  }, [contactsQ.data]);
+
   // Search across the log by contact name / number / PIN (v2.95). Local filter
   // over the already-loaded items — instant, no new request.
   const [historySearch, setHistorySearch] = useState("");
@@ -305,16 +340,11 @@ export default function HistoryPage() {
         : filter === "missed"
           ? items.filter(isMissedItem)
           : items;
-    const q = historySearch.trim().toLowerCase();
-    if (q) {
-      const qDigits = q.replace(/\D/g, "");
-      v = v.filter((it) => {
-        const hay = searchTextOf(it).toLowerCase();
-        return hay.includes(q) || (qDigits.length > 0 && hay.replace(/\D/g, "").includes(qDigits));
-      });
+    if (historySearch.trim()) {
+      v = v.filter((it) => matchQuery(historySearch, searchFieldsOf(it, savedNameOf)));
     }
     return v;
-  }, [items, filter, historySearch]);
+  }, [items, filter, historySearch, savedNameOf]);
 
   // Group the (already filtered + newest-first) rows into collapsible day
   // sections. Purely presentational: the item objects — and every prop the row
@@ -375,16 +405,6 @@ export default function HistoryPage() {
     if (num) watchOnline.mutate({ number: num });
   };
 
-  // One-tap contact conversion (v2.96): which history peers are ALREADY saved
-  // (hides the + button), and the add mutation itself.
-  const contactsQ = trpc.contacts.list.useQuery(undefined, {
-    enabled: !!me,
-    staleTime: 30_000,
-  });
-  const savedNumbers = useMemo(
-    () => new Set((contactsQ.data ?? []).map((c) => c.number)),
-    [contactsQ.data]
-  );
   const addContact = trpc.contacts.upsert.useMutation({
     onSuccess: () => {
       utils.contacts.list.invalidate();
@@ -612,7 +632,10 @@ export default function HistoryPage() {
           ) : (
             <div>
               {sections.map((sec) => {
-                const isCollapsed = collapsed.has(sec.key);
+                // v2.99.96: a COLLAPSED day section used to swallow search
+                // matches — filtered in, counted in the header, never rendered. A
+                // query forces every day open.
+                const isCollapsed = !historySearch.trim() && collapsed.has(sec.key);
                 const sectionMissed = sec.items.some(isMissedItem);
                 return (
                   <div key={sec.key}>
