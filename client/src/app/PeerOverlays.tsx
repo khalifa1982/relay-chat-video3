@@ -8,6 +8,7 @@ import { useRelayEngine } from "./RelayEngine";
 import { useIdentity } from "./useIdentity";
 import { RoleBadge, roleFromFlags } from "./VerifiedBadge";
 import { StatusViewer, type FeedGroup } from "@/pages/app/Status";
+import { profileStatusMeta } from "@shared/profileStatus";
 
 /**
  * Peer identity surfaces (v2.96, owner spec):
@@ -212,6 +213,51 @@ function presenceLine(d: {
  * pushes it forward every time they open RELAY, which is the part that makes the
  * figure non-frightening.
  */
+/**
+ * Somebody's profile STATUS, as a chip (v2.101.1).
+ *
+ * ONE component for both the popup and the full profile, so the two cannot describe
+ * the same person differently — and the emoji + label come from the shared
+ * `PROFILE_STATUS_META`, so no surface hand-rolls a word for a status.
+ *
+ * The hue is applied to the tint and the border only; the LABEL stays in the ordinary
+ * foreground colour. That is deliberate: colour here is reinforcement for an emoji
+ * that already names the status, so nothing depends on reading it, and these five
+ * hues need no contrast measurement (unlike the `--relay-*-text` tokens, which carry
+ * small coloured text — v2.99.94).
+ *
+ * Renders NOTHING without a status. The server sends null rather than a placeholder,
+ * including when presence is hidden, so there is no state in which this invents one.
+ */
+export function ProfileStatusChip({
+  status,
+  note,
+  size = "sm",
+}: {
+  status: string | null | undefined;
+  note?: string | null;
+  size?: "sm" | "md";
+}) {
+  const meta = profileStatusMeta(status);
+  if (!meta) return null;
+  const n = (note ?? "").trim();
+  return (
+    <div
+      // Inline style, not a runtime-composed Tailwind class: the JIT cannot see a
+      // class name built at render time and it would come out unstyled.
+      style={{ borderColor: `${meta.color}59`, background: `${meta.color}1f` }}
+      className={
+        "mt-2 inline-flex max-w-[18rem] items-center gap-1.5 rounded-full border px-3 py-1 " +
+        (size === "md" ? "text-xs" : "text-[11px]")
+      }
+    >
+      <span aria-hidden="true">{meta.emoji}</span>
+      <span className="font-semibold text-foreground">{meta.label}</span>
+      {n && <span className="truncate text-muted-foreground">· {n}</span>}
+    </div>
+  );
+}
+
 export function GuestExpiryNote({
   daysLeft,
   size = "sm",
@@ -423,6 +469,7 @@ export function PeerOverlaysHost() {
                   {p.isOnline ? presenceLine(p) : (chatActions?.lastSeenText || presenceLine(p))}
                 </div>
               )}
+              <ProfileStatusChip status={p.profileStatus} note={p.statusNote} />
               <GuestExpiryNote daysLeft={p.guestDaysLeft} />
 
               <div className="mt-5 grid w-full grid-cols-3 gap-2">
@@ -573,6 +620,7 @@ export function PeerOverlaysHost() {
                 {presenceLine(p)}
               </div>
             )}
+            <ProfileStatusChip status={p.profileStatus} note={p.statusNote} size="md" />
             <GuestExpiryNote daysLeft={p.guestDaysLeft} size="md" />
 
             <div className="mt-7 grid w-full max-w-sm grid-cols-3 gap-2.5">

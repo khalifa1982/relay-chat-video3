@@ -11,12 +11,22 @@ import {
   type SocialLink,
   type SocialPlatform,
 } from "@shared/profileFields";
+import {
+  MAX_STATUS_NOTE,
+  PROFILE_STATUS_META,
+  normalizeProfileStatus,
+  profileStatusMeta,
+  type ProfileStatus,
+} from "@shared/profileStatus";
 
 /** The subset of the whoami identity the hub sections read. */
 export interface HubMe {
   email?: string | null;
   bio?: string | null;
   statusOverride?: "" | "away" | "travel" | null;
+  /** The profile LABEL (v2.101.1) — separate from the presence override above. */
+  profileStatus?: string | null;
+  statusNote?: string | null;
   mobiles?: string[] | null;
   socials?: SocialLink[] | null;
   isGuest: boolean;
@@ -283,46 +293,106 @@ export function BioSection({ me, onSaved }: { me: HubMe; onSaved: () => void }) 
 }
 
 /* ── Status (online auto / away / travelling) ───────────────────────────── */
-const STATUS_CHOICES: { key: "" | "away" | "travel"; label: string; Icon: typeof Circle; hint: string }[] = [
-  { key: "", label: "Auto", Icon: Circle, hint: "Online when active, offline otherwise." },
-  { key: "away", label: "Away", Icon: Coffee, hint: "Shows you as away to others." },
-  { key: "travel", label: "Travelling", Icon: Plane, hint: "Shows a travelling badge." },
-];
-
+/**
+ * The profile STATUS picker (v2.101.1).
+ *
+ * Owner: *"you are in work, vacation, travel, free, and you can put some notes on
+ * it… and everyone has emoji and color."*
+ *
+ * The old control offered Auto / Away / Travelling — the three values of the PRESENCE
+ * override. Those three are not gone, they are DERIVED: picking a label computes the
+ * availability it implies (`overrideForStatus`, in one place server-side), so the LED
+ * keeps working with its four-colour vocabulary intact while the label carries the
+ * detail. "Away" is no longer directly selectable because "Busy" is the same
+ * availability with a word people actually use.
+ *
+ * COLOUR IS REINFORCEMENT, NOT THE CARRIER: the emoji names the status and the label
+ * is in the ordinary foreground colour, with the hue on a tint and a border. Nothing
+ * here depends on telling sky from violet, which is also why these five hues need no
+ * AA measurement of their own (unlike the `--relay-*-text` tokens, which do carry
+ * small coloured text — v2.99.94).
+ */
 export function StatusSection({ me, onSaved }: { me: HubMe; onSaved: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const save = useProfileSave(onSaved, setError);
-  const current = (me.statusOverride ?? "") as "" | "away" | "travel";
-  const pick = (k: "" | "away" | "travel") => {
-    if (k === current) return;
+  const current = normalizeProfileStatus(me.profileStatus);
+  const [note, setNote] = useState(me.statusNote ?? "");
+  // The note follows the server when it changes underneath us (another device, a
+  // refetch) — but only while this field is not being edited, or a poll would erase
+  // what somebody is halfway through typing.
+  const [editingNote, setEditingNote] = useState(false);
+  useEffect(() => {
+    if (!editingNote) setNote(me.statusNote ?? "");
+  }, [me.statusNote, editingNote]);
+
+  const pick = (k: ProfileStatus | null) => {
     setError(null);
-    save.mutate({ statusOverride: k });
+    // Tapping the CURRENT one clears it — the picker is its own "none" control, so
+    // there is no sixth button whose only job is to undo the other five.
+    save.mutate({ profileStatus: k === current || k === null ? "" : k });
   };
+  const saveNote = () => {
+    setEditingNote(false);
+    const next = note.trim().slice(0, MAX_STATUS_NOTE);
+    if (next === (me.statusNote ?? "")) return;
+    setError(null);
+    save.mutate({ statusNote: next });
+  };
+
   return (
     <section className="space-y-3">
       <Label className="text-xs uppercase tracking-wider text-muted-foreground">Status</Label>
       <div className="grid grid-cols-3 gap-2">
-        {STATUS_CHOICES.map(({ key, label, Icon }) => (
-          <button
-            key={key || "auto"}
-            type="button"
-            onClick={() => pick(key)}
-            disabled={save.isPending}
-            className={
-              "flex flex-col items-center gap-1.5 rounded-xl border p-3 transition disabled:opacity-50 disabled:pointer-events-none " +
-              (current === key
-                ? "border-primary bg-primary/10 text-foreground"
-                : "border-border bg-card/40 text-muted-foreground hover:bg-card/70")
-            }
-          >
-            <Icon className="size-5" />
-            <span className="text-xs font-medium">{label}</span>
-          </button>
-        ))}
+        {PROFILE_STATUS_META.map(({ key, label, emoji, color }) => {
+          const on = current === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => pick(key)}
+              disabled={save.isPending}
+              aria-pressed={on}
+              // Inline styles, NOT template-composed Tailwind classes: the JIT
+              // compiler cannot see a class name assembled at runtime, so a
+              // `border-[${color}]` would come out unstyled (the trap recorded for
+              // the tab-bar accents).
+              style={on ? { borderColor: color, background: `${color}1f` } : undefined}
+              className={
+                "flex flex-col items-center gap-1.5 rounded-xl border p-3 transition disabled:opacity-50 disabled:pointer-events-none " +
+                (on ? "text-foreground" : "border-border bg-card/40 text-muted-foreground hover:bg-card/70")
+              }
+            >
+              <span aria-hidden="true" className="text-lg leading-none">{emoji}</span>
+              <span className="text-xs font-medium text-center leading-tight">{label}</span>
+            </button>
+          );
+        })}
       </div>
       <p className="text-xs text-muted-foreground">
-        {STATUS_CHOICES.find((c) => c.key === current)?.hint}
+        {profileStatusMeta(current)?.hint ??
+          "No status — presence decides: online when you're active, offline otherwise."}
       </p>
+      {/* The note is only meaningful ALONGSIDE a status, so it appears with one. On
+          its own it would be a caption for nothing. */}
+      {current && (
+        <div className="space-y-1.5">
+          <Label htmlFor="status-note" className="text-xs text-muted-foreground">
+            Note (optional)
+          </Label>
+          <Input
+            id="status-note"
+            value={note}
+            maxLength={MAX_STATUS_NOTE}
+            placeholder="back Monday"
+            onFocus={() => setEditingNote(true)}
+            onChange={(e) => setNote(e.target.value)}
+            onBlur={saveNote}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+          />
+        </div>
+      )}
       <SaveError message={error} />
     </section>
   );

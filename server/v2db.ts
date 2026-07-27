@@ -53,6 +53,11 @@ import {
 import { getDb } from "./db";
 import { hashRecoveryKey, newRecoveryKey } from "./guestRecovery";
 import {
+  normalizeProfileStatus,
+  normalizeStatusNote,
+  overrideForStatus,
+} from "../shared/profileStatus";
+import {
   sanitizeMobiles,
   sanitizeSocials,
   sanitizeStatusOverride,
@@ -266,6 +271,9 @@ export interface ResolvedIdentity {
   guestExpiresAt: Date | null;
   bio: string | null;
   statusOverride: string | null;
+  /** The profile LABEL (v2.101.1) — not presence. See shared/profileStatus.ts. */
+  profileStatus: string | null;
+  statusNote: string | null;
   mobiles: string[];
   socials: SocialLink[];
   /** Email-verified → shows the blue badge. NULL column is treated as false. */
@@ -292,6 +300,8 @@ function rowToResolved(row: typeof identities.$inferSelect): ResolvedIdentity {
     guestExpiresAt: row.guestExpiresAt ?? null,
     bio: row.bio ?? null,
     statusOverride: row.statusOverride ?? null,
+    profileStatus: row.profileStatus ?? null,
+    statusNote: row.statusNote ?? null,
     mobiles: sanitizeMobiles(parseJsonSafe(row.mobiles)),
     socials: sanitizeSocials(parseJsonSafe(row.socials)),
     // Strict: only an explicit `true` badges. NULL (legacy/never-verified) and
@@ -1228,6 +1238,8 @@ export async function updateIdentityProfile(
     avatarUrl?: string | null;
     bio?: string | null;
     statusOverride?: string;
+    profileStatus?: string;
+    statusNote?: string;
     mobiles?: unknown;
     socials?: unknown;
   }
@@ -1246,6 +1258,26 @@ export async function updateIdentityProfile(
   }
   if (patch.statusOverride !== undefined) {
     set.statusOverride = sanitizeStatusOverride(patch.statusOverride) || null;
+  }
+  // THE PROFILE STATUS (v2.101.1), and the ONE place its availability is derived.
+  //
+  // `statusOverride` is what `effectiveStatus` and `presenceDot` already understand,
+  // and it stays exactly three values wide — widening it would have meant teaching
+  // the LED five new colours, which is what makes colour stop carrying information
+  // (v2.99.92). So the label is stored and the override is COMPUTED from it here.
+  // Nothing to keep in sync, because one is a function of the other: the label and
+  // the dot cannot disagree.
+  //
+  // Written even when the resolved label is null, so CLEARING the status also clears
+  // the availability it implied — otherwise somebody who came back from vacation
+  // would still read as travelling with no label explaining why.
+  if (patch.profileStatus !== undefined) {
+    const label = normalizeProfileStatus(patch.profileStatus);
+    set.profileStatus = label;
+    set.statusOverride = overrideForStatus(label) || null;
+  }
+  if (patch.statusNote !== undefined) {
+    set.statusNote = normalizeStatusNote(patch.statusNote);
   }
   if (patch.mobiles !== undefined) set.mobiles = JSON.stringify(sanitizeMobiles(patch.mobiles));
   if (patch.socials !== undefined) set.socials = JSON.stringify(sanitizeSocials(patch.socials));
@@ -2254,6 +2286,10 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // drizzle/schema.ts for why one column serves as both the fleet-wide
     // serializer and the "this row is being destroyed" tombstone.
     { table: "identities", column: "purgeStartedAt", ddl: "ADD COLUMN `purgeStartedAt` timestamp NULL" },
+    // v2.101.1 — the profile status label + its note. NULL means "no label", which
+    // is what every existing row means, so this is a no-op until somebody picks one.
+    { table: "identities", column: "profileStatus", ddl: "ADD COLUMN `profileStatus` varchar(16)" },
+    { table: "identities", column: "statusNote", ddl: "ADD COLUMN `statusNote` varchar(140)" },
     // v2.99.92 — the IDLE presence state. NULL means the app is in the foreground
     // (or offline), which is exactly the reading every pre-release row needs, so
     // this is a no-op until a client starts reporting it.

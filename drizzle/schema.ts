@@ -252,6 +252,20 @@ export const identities = mysqlTable(
      * lock on it for the whole cascade.
      */
     purgeStartedAt: timestamp("purgeStartedAt"),
+    /**
+     * THE PROFILE STATUS (v2.101.1) — the label somebody sets about themselves:
+     * work / vacation / travel / free / busy, each with an emoji and a colour, plus
+     * a free-text note. NOT presence.
+     *
+     * It is a SEPARATE column from `statusOverride` rather than a widening of it,
+     * because `statusOverride` feeds `effectiveStatus` → `presenceDot`, whose colour
+     * vocabulary is deliberately four values wide (v2.99.92: a third meaning for a
+     * colour makes colour stop carrying information). `statusOverride` is DERIVED
+     * from this by `overrideForStatus` at write time, so the label and the LED can
+     * never disagree — one is computed from the other.
+     */
+    profileStatus: varchar("profileStatus", { length: 16 }),
+    statusNote: varchar("statusNote", { length: 140 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
