@@ -40,9 +40,13 @@ workflows:
       - name: Build ipa for distribution
         script: |
           cd ios
+          # Find the workspace dynamically
+          WORKSPACE=$(ls -d *.xcworkspace | head -1)
+          SCHEME=$(echo "$WORKSPACE" | sed 's/.xcworkspace//')
+          echo "Using workspace: $WORKSPACE, scheme: $SCHEME"
           xcode-project build-ipa \
-            --workspace "relaymobile.xcworkspace" \
-            --scheme "relaymobile" \
+            --workspace "$WORKSPACE" \
+            --scheme "$SCHEME" \
             --config "Release"
     artifacts:
       - build/ios/ipa/*.ipa
