@@ -7557,6 +7557,37 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## REPO NOTE — `main` now belongs to a different project (2026-07-27)
+
+Not a release. A structural fact any future contributor has to know before touching git.
+
+The owner force-pushed `main` to an Expo Router / React Native shell (the iOS+Android
+WebView app that wraps this site, now built by Codemagic CI) and has confirmed that is
+deliberate: *"i own the main intgrated now"*.
+
+- **Zero shared ancestry.** `git merge-base` between `main` and the web app returns
+  nothing. `main` carries no `client/`, no `shared/version.ts`, no
+  `ecosystem.config.cjs`, and no `.github/workflows/` at all.
+- **The web app lives on `claude/connected-ready-glsdab`**, whose tip holds the complete
+  170-commit history through v2.103.2. That branch is its effective trunk.
+- **Do not open a PR against `main`.** Merging this codebase into the mobile project is
+  the wrong operation, not a conflict to resolve. PR #83 (v2.103.2, CI green) was closed
+  unmerged for this reason and must not be reopened.
+- **Do not delete that branch.** This environment's git proxy refuses tag pushes (four
+  attempts, consistent `send-pack` disconnect), so the branch is currently the only ref
+  from which the web app is reachable. Older snapshots survive on
+  `claude/jolly-brown-isnjrh` (v2.99.73) and
+  `claude/install-security-plugin-4g9z8p` (v2.99.57).
+- **There is no live deployment path.** `deploy.yml` triggers on
+  `push: branches: [main]` and exists only on the web app's branch, so a push deploys
+  nothing; `workflow_dispatch` is unavailable too, because GitHub only offers it for
+  workflows present on the default branch. The fleet still serves **v2.103.1**, the last
+  build that deployed — the site is up, it just will not advance. Restoring deploys is a
+  one-line change to the trigger's branch list, but it removes the merge gate (every
+  push would go straight to production), so it is the owner's call and has not been made.
+
+CLAUDE.md's TL;DR and Deploying section are corrected to match.
+
 ## v2.103.2 — the RELAY wordmark was invisible three different ways (2026-07-27)
 
 Owner: *"I saw one time you put the relay logo up in the top bar. It's moving animated.

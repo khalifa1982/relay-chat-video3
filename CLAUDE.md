@@ -6,7 +6,7 @@
 
 ## TL;DR
 
-**RELAY** is a self-hosted, browser-based voice / video / chat caller wrapped in a phone-app shell. Visitors pick a display name (or sign in), get a persistent 6-digit number, and can dial each other (peer-to-peer WebRTC mesh up to 6 participants), send SMS-style messages with attachments, and manage contacts. Hosted on **AWS** at `https://your-chat.io` (2× EC2 Mumbai + ALB + ElastiCache Redis + S3; auto-deploys on every push to `main` via `.github/workflows/deploy.yml`). The former Manus/`.org` deployment was **emptied and retired by the owner on 2026-07-21** — `.io` is the ONLY live deployment; do not target `.org` or the Manus Publish flow.
+**RELAY** is a self-hosted, browser-based voice / video / chat caller wrapped in a phone-app shell. Visitors pick a display name (or sign in), get a persistent 6-digit number, and can dial each other (peer-to-peer WebRTC mesh up to 6 participants), send SMS-style messages with attachments, and manage contacts. Hosted on **AWS** at `https://your-chat.io` (2× EC2 Mumbai + ALB + ElastiCache Redis + S3) via `.github/workflows/deploy.yml`. **As of 2026-07-27 `main` belongs to a DIFFERENT project of the owner's** (their Expo/React-Native shell) and this web app lives on the branch `claude/connected-ready-glsdab`, so there is currently no automatic deploy and the fleet is pinned at v2.103.1 — see the Deploying section before touching git. The former Manus/`.org` deployment was **emptied and retired by the owner on 2026-07-21** — `.io` is the ONLY live deployment; do not target `.org` or the Manus Publish flow.
 
 Stack: **React 19 + Vite + Tailwind 4 + Express 4 + tRPC 11 + Drizzle ORM (MySQL) + Manus OAuth + Server-Sent Events signaling + native WebRTC + MediaPipe Tasks Vision**. Deployed as a single Node.js process on Cloud Run.
 
@@ -294,7 +294,38 @@ Vitest runs Node-environment tests under `server/**/*.test.ts` and `client/src/l
 
 ## Deploying
 
-**Every push to `main` auto-deploys to `.io`** (the only live deployment): `.github/workflows/deploy.yml` builds, uploads to S3, and rolling-deploys via SSM to the EC2 fleet (one server at a time, `/api/health` gated, ~60–90s end to end). Verify with `curl https://your-chat.io/api/version`.
+> **READ THIS FIRST — `main` IS NO LONGER THIS PROJECT (2026-07-27).** The owner
+> force-pushed `main` to a different project of theirs: an Expo Router / React Native
+> iOS+Android shell (the WebView app that wraps this site), now built by Codemagic CI.
+> It shares **zero git ancestry** with the web app — `git merge-base` between them
+> returns nothing — and it carries none of this codebase: no `client/`, no
+> `shared/version.ts`, no `ecosystem.config.cjs`, and **no `.github/workflows/` at
+> all**. The owner has confirmed this is deliberate and that `main` is theirs.
+>
+> **The web app therefore lives on the branch `claude/connected-ready-glsdab`**, whose
+> tip contains the complete 170-commit history through v2.103.2. That branch is the
+> web app's effective trunk. Do not open a pull request against `main` — merging this
+> codebase into the mobile project is the wrong operation, not a merge conflict.
+> Do not force-push `main`, and do not delete that branch: because this environment's
+> git proxy refuses tag pushes, the branch is currently the **only** ref from which
+> the web app is reachable. (Two older snapshots also survive on
+> `claude/jolly-brown-isnjrh` at v2.99.73 and
+> `claude/install-security-plugin-4g9z8p` at v2.99.57.)
+>
+> **CONSEQUENCE: there is no live deployment path right now.** `deploy.yml` triggers
+> on `push: branches: [main]` and the file exists only on the web app's branch, so a
+> push deploys nothing. `workflow_dispatch` is also unavailable, because GitHub only
+> offers it for workflows present on the default branch. The fleet is still serving
+> **v2.103.1** — the last thing that deployed before the change — so the site is up,
+> it just will not advance. Restoring deploys is a one-line change to the trigger's
+> branch list, but it removes the merge gate (every push would go straight to
+> production), so it is the owner's call and has not been made.
+
+Historically — and again once a deployable target exists — **every push to the
+deployed branch auto-deploys to `.io`**: `.github/workflows/deploy.yml` builds,
+uploads to S3, and rolling-deploys via SSM to the EC2 fleet (one server at a time,
+`/api/health` gated, ~60–90s end to end). Verify with
+`curl https://your-chat.io/api/version`.
 
 The former Manus/`.org` deployment was **emptied and retired by the owner (2026-07-21)** — the Publish-button flow no longer applies. Do not point anything (docs, mobile clients, emails) at `.org` or `manus.space`. There is **no Vercel, Netlify, Railway, or Render involved**.
 
