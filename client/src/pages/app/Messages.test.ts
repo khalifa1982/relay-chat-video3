@@ -132,8 +132,15 @@ describe("Messages.tsx — v2.71 iMessage-grade chat UI", () => {
     expect(SRC).toMatch(/space-y-0\.5 bg-background md:bg-card flex flex-col"/);
     expect(SRC).toMatch(/className="mt-auto shrink-0" aria-hidden="true"/);
   });
-  it("received bubbles use the neutral glassy surface, not the old hard-coded blue", () => {
-    expect(SRC).toMatch(/bg-muted\/70 text-foreground border-white\/10/);
+  it("every bubble's colour comes from the shared rule (v2.99.85 supersedes v2.71)", () => {
+    // v2.71 pinned the neutral grey surface for received bubbles. The owner has now
+    // asked for the opposite — "the other side should be blue, but if you were in the
+    // group each one give him a different colour" — so this pin was asserting exactly
+    // what the release had to remove. Rewritten to the stronger property rather than
+    // relaxed: no bubble carries a HARD-CODED colour of any kind; all of them are
+    // resolved by one function, which is what stops the surfaces drifting apart.
+    expect(SRC).toMatch(/style=\{bubbleStyleFor\(\{ mine, isGroup, senderIdentityId: m\.senderIdentityId \}\)\}/);
+    expect(SRC).not.toMatch(/bg-muted\/70 text-foreground border-white\/10/);
     expect(SRC).not.toMatch(/bg-\[#2563eb\]/);
   });
   it("emoji-only messages render big without a bubble", () => {

@@ -7557,6 +7557,86 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.85 — who is speaking, told by colour; and the ⋮ looks like a button (2026-07-27)
+- [x] **OWNER**, from a group-chat screenshot: *"when I type it should showing typing like my name typing and
+      it's like first name is capital small letter for the rest and it keep increase. the second letter become
+      capital and the first one small. it's like nice animation smoothly … and it give a different color if
+      there is two three people typing in the same time … when he post mind bubble is orange so him he should.
+      the other side should be blue, but if you were in the group each one give him a different colour for his
+      type of chat bubble. also, the three dots is not clear. it's very light color. you need to make it
+      highlighted."*
+- [x] **ONE MODULE FOR THE COLOUR, DELIBERATELY** (`client/src/app/peerColors.ts`). A bubble colour and a
+      typing colour that disagree about the same person is worse than having neither, because the colour is
+      the only thing telling you who is who at a glance — and duplicated rules are exactly how two surfaces
+      come to promise different things (the v2.99.55 lesson, and v2.99.77's one-rule-five-call-sites bug).
+- [x] **MINE ORANGE, THE OTHER SIDE OF A 1:1 BLUE, EVERY GROUP MEMBER THEIR OWN HUE.** Blue is NAMED rather
+      than drawn from the palette: a two-person thread has no ambiguity to resolve, so it must not depend on
+      a hash that could hand out something else. The ten-hue group palette deliberately EXCLUDES blue (it
+      would read as "the other person" from the 1:1 rule) and the own orange (that is always you) — either
+      would make the colour lie about who is speaking.
+- [x] **THE COLOUR IS DERIVED FROM THE IDENTITY ID, NOT ROSTER POSITION.** Position changes as people join,
+      leave, or a query reorders them, which would silently recolour a conversation mid-scroll; an identity
+      id never moves. It also means every participant sees the same person in the same colour with nobody
+      having to agree on an ordering.
+- [x] **A REAL BUG IN MY OWN HASH, caught by this release's own test before shipping.** The first version used
+      a plain `n * 2654435761`, which produces a DOUBLE — and the following `>>>` truncates to 32 bits,
+      throwing away the high bits that carry all the mixing. At base 1000 it returned **1,1,3,1**: three of
+      four neighbours on one colour, i.e. the exact thing the palette exists to prevent. Fixed with
+      `Math.imul` throughout, and mutation-verified against the EXACT broken form.
+- [x] **AN OVERCLAIM OF MY OWN, corrected rather than left standing.** That test was first named "the case a
+      plain modulo fails" — and a plain `id % 10` **passes** it, since consecutive ids trivially differ under
+      a modulo. The mix is not justified by that property; it is there so sparse and non-consecutive ids
+      distribute as evenly as dense ones, and with ten colours some pair must always collide (pigeonhole, not
+      a defect). Renamed and the claim removed. A second, partial precision-loss mutation SURVIVES and is
+      recorded rather than hidden: it still distributes acceptably at the sampled bases, which is an honest
+      limit of a sampled property test.
+- [x] **A CONSEQUENCE THAT HAD TO BE FINISHED RATHER THAN SHIPPED HALF-DONE**: with received bubbles now
+      coloured, every inner `mine ? white : muted-foreground` ternary would have rendered **muted grey text on
+      a blue bubble**. Twelve of them collapsed to the light variant across the bubble body, the voice-note
+      player, the file card and the receipt row. `mine` still means something for the menu, the receipts and
+      the alignment — only the dead dark-on-grey branches went.
+- [x] **THREE SENDER-LABEL SITES, NOT TWO — and the COUNT is what found the third.** My first pass converted
+      one of the two bubble paths and left the other on `text-primary`, one colour for everybody, which is
+      the thing being fixed. A test asserting the exact number of label sites caught it.
+- [x] **AN EMOJI-ONLY MESSAGE IN A GROUP NOW SAYS WHO SENT IT.** That branch renders no bubble and had no
+      sender name either, so a bare 🔥 arrived attached to NOBODY while every text message from the same
+      person was labelled — visible in the owner's own screenshot. Same label, same colour, so the two paths
+      cannot drift.
+- [x] **THE BRAND ORANGE WAS WRITTEN OUT THREE TIMES** (my bubbles and both send buttons), so a change to one
+      would have silently disagreed with the others. Now one `BRAND_GRADIENT`.
+- [x] **THE TYPING LINE: ONE CAPITAL WALKS ALONG THE NAME**, letter by letter, repeating, with the handover
+      between neighbours fading rather than snapping — the "smoothly" in the request. Only LETTERS are
+      candidates: walking onto a space or a hyphen reads as the animation stalling for a beat. An Arabic name
+      has no case to change, so the walk carries on opacity instead and still reads.
+- [x] **IT IS ITS OWN COMPONENT, AND THAT IS LOAD-BEARING RATHER THAN TIDY.** It ticks several times a second;
+      inline in the conversation it would re-render the whole message list on every step — the v2.99.67
+      mistake, and the reason v2.99.73's waveform is written imperatively. Isolated, a tick repaints one
+      short line. The timer is armed on `idxs.length`, NOT the array: depending on the array re-arms the
+      interval every render — which is every tick — so the walk would never advance.
+- [x] **EACH TYPER GETS THEIR OWN COLOUR** from the same module, and two typers are STAGGERED so they are
+      never mid-step together — that is what makes "two three people typing" read as two separate names
+      rather than one blinking blur. The first two are NAMED and the rest counted, because knowing who is
+      typing is the whole value and a third name wraps on a phone.
+- [x] **THE ⋮ NOW READS AS A BUTTON.** It was 35% opacity on a phone and INVISIBLE until hover on desktop — a
+      control nobody could tell was a control. It is a real chip now: filled circle, border, shadow, fully
+      opaque, 32px, on every screen. The desktop hover-reveal is REMOVED rather than kept at a higher
+      opacity, because "appears on hover" is what made it undiscoverable and a touch screen has no hover to
+      discover it with.
+- [x] **THE TS1501 REGEX-LITERAL TRAP AGAIN**: a `/\p{L}/u` literal is a compile error at this repo's target.
+      Built with `new RegExp("\\p{L}", "u")`, the house workaround, and pinned so it cannot come back.
+- [x] **ONE PRE-EXISTING PIN REWRITTEN TO THE STRONGER INVARIANT rather than relaxed**: v2.71 asserted
+      received bubbles use the neutral grey surface — i.e. it pinned the exact thing the owner asked to
+      remove. It now asserts that NO bubble carries a hard-coded colour and all of them resolve through the
+      one function.
+- [x] `client/src/app/messagingColors.test.ts` (25) — the colour rule tested BEHAVIOURALLY, because whether
+      two different people can collide on one hue is the only question that matters about it. **18 of 20
+      tripwires bite**; the two that do not are recorded above as non-defects rather than counted, and one
+      mutation ABORTED honestly because its needle matched all three label sites (the count test covers it,
+      and a uniquely-targeted variant does bite).
+- [x] **NOT VERIFIED ON A DEVICE**: the walking capital and the new colours are not seen on a real phone from
+      here. The logic is tested; the look is not.
+- [x] No schema change, no new dependency, no server change. 2525 tests.
+
 ## v2.99.84 — the conference stops cooking the phone, and the voice survives it (2026-07-27)
 - [x] **OWNER**: *"my phone become verry hot whenever we have conference call multiple parties. I think
       because of the video or because of what? Make sure that the length of the sound to be very clear and
