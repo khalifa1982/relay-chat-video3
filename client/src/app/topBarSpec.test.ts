@@ -322,7 +322,8 @@ describe("RIGHT — the avatar's two-colour ring", () => {
     // identity signal whenever you post a photo, and would contradict PeerAvatar,
     // where a ring means somebody ELSE'S unseen story.
     expect(TOPBAR).toMatch(/\{hasStatus && \(/);
-    expect(TOPBAR).toMatch(/title="You have an active status"/);
+    // v2.101.0 renamed the ephemeral post to STORY throughout the user-facing copy.
+    expect(TOPBAR).toMatch(/title="You have an active story"/);
   });
 
   it("the presence LED goes amber on DND so the green ring cannot mislead", () => {
@@ -343,8 +344,12 @@ describe("the avatar tap: one tap, a real choice, no double-tap", () => {
     // now hit five times. Only a real handler can satisfy these.
     expect(SHELL).not.toMatch(/onDoubleClick\s*=/);
     expect(SHELL).not.toMatch(/addEventListener\(\s*["']dblclick["']/);
-    expect(SHELL).toMatch(/See my status/);
-    expect(SHELL).toMatch(/Add a status/);
+    // v2.101.0 — the owner's own wording for this menu ("open story / add story /
+    // add status / profile / log out"), and the two words now mean two things. Add
+    // is no longer the else-branch of Open, so both can be asserted unconditionally.
+    expect(SHELL).toMatch(/Open my story/);
+    expect(SHELL).toMatch(/Add a story/);
+    expect(SHELL).toMatch(/Set my status/);
     expect(SHELL).toMatch(/<UserRound className="size-4" \/> Profile/);
   });
 

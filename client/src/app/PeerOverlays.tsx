@@ -163,8 +163,8 @@ export function PeerAvatar({
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); open(); }}
-      aria-label={st?.hasAny ? `View ${label}'s status` : `View ${label}'s profile`}
-      title={st?.hasUnseen ? "New status — tap to view" : st?.hasAny ? "View status" : "View profile"}
+      aria-label={st?.hasAny ? `View ${label}'s story` : `View ${label}'s profile`}
+      title={st?.hasUnseen ? "New story — tap to view" : st?.hasAny ? "View story" : "View profile"}
       className={
         "relative inline-grid place-items-center shrink-0 outline-none rounded-full " +
         "focus-visible:ring-ring/50 focus-visible:ring-[3px] active:scale-95 transition-transform " +
@@ -397,7 +397,7 @@ export function PeerOverlaysHost() {
                   else setFullProfile(true);
                 }}
                 aria-label={statusInfo?.hasAny ? `View ${p.displayName || "profile"}'s status` : "View full profile"}
-                title={statusInfo?.hasAny ? "View status" : "View full profile"}
+                title={statusInfo?.hasAny ? "View story" : "View full profile"}
                 className="rounded-full outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] active:scale-95 transition-transform"
               >
                 <PeerAvatar

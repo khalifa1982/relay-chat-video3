@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Phone, MessageCircle, UsersRound, History, LogOut, Sparkles, Sun, Moon, Smartphone, Monitor, ArrowLeft, UserRound } from "lucide-react";
+import { Phone, MessageCircle, UsersRound, History, LogOut, Sparkles, Sun, Moon, Smartphone, Monitor, ArrowLeft, UserRound, BadgeCheck } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -30,6 +30,7 @@ import { PushBanner } from "./PushBanner";
 import { CallHealthBanner } from "./CallHealthBanner";
 import { PeerOverlaysHost } from "./PeerOverlays";
 import { unlockAudio } from "./notifications";
+import { requestProfilePane } from "./profilePane";
 
 /**
  * Tab keys used by the bottom-nav / sidebar. We hard-code the routes here
@@ -450,7 +451,7 @@ function Inner({ children }: { children: React.ReactNode }) {
                 {tab.key === "messages" && hasUnseenStatus && (
                   <span
                     className="size-2 rounded-full bg-gradient-to-tr from-[#06d6a0] to-[#0ea5e9]"
-                    title="New status updates"
+                    title="New stories"
                   />
                 )}
                 {tab.key === "messages" && unreadTotal > 0 && (
@@ -638,24 +639,40 @@ function Inner({ children }: { children: React.ReactNode }) {
                     no keyboard or assistive equivalent, and it would assign the HIDDEN
                     gesture to the COMMON case (most people have no status most of the
                     time). Both of the owner's outcomes are one visible tap away. */}
-                {hasStatus ? (
+                {/* v2.101.0 — the owner's own list for this menu: *"open story / add
+                    story / add status / profile / log out"*, and the two words now mean
+                    two different things (a STORY is the ephemeral post; a STATUS is the
+                    profile label). Open-story renders only when there IS one; add-story
+                    is always offered, because having one does not stop you posting
+                    another. */}
+                {hasStatus && (
                   // The viewer is opened IMPERATIVELY through the global overlay host,
-                  // not by navigation. There is no `/app/status` route — statuses live
+                  // not by navigation. There is no `/app/status` route — stories live
                   // as a strip atop Messages — so a `navigate("/app/status")` here
                   // would have been a silent no-op that no source test could catch.
                   <DropdownMenuItem onClick={() => openPeerStatus(me.number)}>
-                    <Sparkles className="size-4 text-[#a855f7]" /> See my status
+                    <Sparkles className="size-4 text-[#a855f7]" /> Open my story
                     <span className="ml-auto text-xs text-muted-foreground">
                       {statusItems.length}
                     </span>
                   </DropdownMenuItem>
-                ) : (
-                  // No standalone composer route either: the "+ my status" ring lives
-                  // on the Messages strip, so that is where this honestly goes.
-                  <DropdownMenuItem onClick={() => navigate("/app/messages")}>
-                    <Sparkles className="size-4" /> Add a status
-                  </DropdownMenuItem>
                 )}
+                {/* No standalone composer route either: the "+ my story" ring lives on
+                    the Messages strip, so that is where this honestly goes. */}
+                <DropdownMenuItem onClick={() => navigate("/app/messages")}>
+                  <Sparkles className="size-4" /> Add a story
+                </DropdownMenuItem>
+                {/* The profile LABEL, which is a different thing from a story. The pane
+                    is local state (see profilePane.ts for why it cannot be a URL), so
+                    the intent is set before navigating and Profile picks it up on mount. */}
+                <DropdownMenuItem
+                  onClick={() => {
+                    requestProfilePane("status");
+                    navigate("/app/profile");
+                  }}
+                >
+                  <BadgeCheck className="size-4 text-[#38bdf8]" /> Set my status
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => navigate("/app/profile")}>
                   <UserRound className="size-4" /> Profile
                 </DropdownMenuItem>
@@ -750,7 +767,7 @@ function Inner({ children }: { children: React.ReactNode }) {
                     {tab.key === "messages" && hasUnseenStatus && (
                       <span
                         className="absolute -top-0.5 -left-0.5 size-2.5 rounded-full bg-gradient-to-tr from-[#06d6a0] to-[#0ea5e9] ring-2 ring-card"
-                        title="New status updates"
+                        title="New stories"
                       />
                     )}
                     {tab.key === "messages" && unreadTotal > 0 && (
