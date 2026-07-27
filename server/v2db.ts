@@ -370,6 +370,71 @@ export interface AdminIdentityRow {
  * A blank query lists the most recent identities, which is what makes the panel
  * usable before you know what you are looking for.
  */
+/**
+ * Promote or demote an identity's account type (v2.99.99, owner request).
+ *
+ * Owner: *"I can delete the user or change type of account from guest to registered
+ * to admin."*
+ *
+ * ONLY ONE OF THOSE THREE TRANSITIONS IS A REAL FLAG, and the honest reason is worth
+ * writing down. The tier is DERIVED, not stored: `admin` when `users.role = "admin"`,
+ * else `registered` when `identities.verified`, else `guest` (see
+ * `getRolesByIdentityIds`). So:
+ *
+ *   registered <-> admin   REAL. One column on a row that already exists.
+ *   guest -> anything      REFUSED. A guest has NO `users` row at all — that is what
+ *                          being a guest IS — so there is no role column to write.
+ *                          Flipping `identities.verified` instead would hand them the
+ *                          Registered badge while they still had no email, no
+ *                          password and no way to sign in anywhere else: a badge that
+ *                          lies about the account behind it. A guest becomes
+ *                          registered by REGISTERING, which already keeps their
+ *                          number and all their data (v2.99.49).
+ *   anything -> guest      REFUSED, for the mirror reason: somebody with an email and
+ *                          a password does not become a guest because a flag says so.
+ *
+ * AN ADMIN CANNOT DEMOTE THEMSELVES, and that guard is what makes the whole control
+ * safe: `users.role` is otherwise only grantable by hand (SQL, or the backend
+ * admin-tool), so a self-demotion could leave a deployment with NO administrator and
+ * no way back in through the app. Refusing it also GUARANTEES at least one admin
+ * always remains, however many others are demoted.
+ */
+export type SetRoleResult =
+  | { ok: true; role: "admin" | "registered"; userId: number }
+  | { ok: false; reason: "not-found" | "no-account" | "self" | "unsupported" | "unavailable" };
+
+export async function setIdentityAccountType(
+  identityId: number,
+  role: "admin" | "registered" | "guest",
+  actingUserId: number | null
+): Promise<SetRoleResult> {
+  if (role === "guest") return { ok: false, reason: "unsupported" };
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  try {
+    const rows = await db
+      .select({ id: identities.id, userId: identities.userId })
+      .from(identities)
+      .where(eq(identities.id, identityId))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return { ok: false, reason: "not-found" };
+    if (row.userId == null) return { ok: false, reason: "no-account" };
+    // The self-demotion guard. Checked against the account, not the identity, because
+    // one account can hold more than one identity over its life.
+    if (role === "registered" && actingUserId != null && row.userId === actingUserId) {
+      return { ok: false, reason: "self" };
+    }
+    await db
+      .update(users)
+      .set({ role: role === "admin" ? "admin" : "user" })
+      .where(eq(users.id, row.userId));
+    return { ok: true, role, userId: row.userId };
+  } catch {
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
 export async function adminFindIdentities(
   query: string,
   limit = 25

@@ -45,6 +45,20 @@ export default function Admin() {
   const [checking, setChecking] = useState<number | null>(null);
   const [wanted, setWanted] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /** Which row has its account-type controls open (v2.99.99). */
+  const [typing, setTyping] = useState<number | null>(null);
+  const [typeError, setTypeError] = useState<string | null>(null);
+  const setType = trpc.admin.setAccountType.useMutation({
+    onSuccess: () => {
+      setTypeError(null);
+      setTyping(null);
+      utils.admin.findIdentities.invalidate();
+    },
+    // The server NAMES each refusal, because a guest, a self-demotion and
+    // "become a guest" need three different next steps. Surfacing its message
+    // verbatim is the whole point of naming them.
+    onError: (e) => setTypeError(e.message),
+  });
   const setNumber = trpc.admin.setIdentityNumber.useMutation({
     onSuccess: (res) => {
       toast.success(
@@ -173,9 +187,59 @@ export default function Admin() {
                     <BellRing className="size-3.5" />
                     {checking === r.id ? "Hide" : "Notifications"}
                   </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setTyping(typing === r.id ? null : r.id);
+                      setTypeError(null);
+                    }}
+                  >
+                    <ShieldCheck className="size-3.5" />
+                    {typing === r.id ? "Cancel" : "Account type"}
+                  </Button>
                 </div>
               </div>
               {checking === r.id && <PushCheck identityId={r.id} />}
+              {typing === r.id && (
+                <div className="mt-3 border-t border-border/60 pt-3">
+                  <p className="text-xs text-muted-foreground">
+                    Account type is <span className="font-semibold text-foreground">{r.role}</span>.
+                  </p>
+                  {r.isGuest ? (
+                    /* A guest has no account row at all — that is what being a guest
+                       IS — so there is no role to write. Said here rather than offered
+                       and then refused, because a control that always fails is worse
+                       than one that is absent. */
+                    <p className="mt-1.5 text-xs text-muted-foreground">
+                      Guests have no account behind them, so there's no role to change. They
+                      keep their number and everything in it when they register themselves.
+                    </p>
+                  ) : (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={r.role === "admin" || setType.isPending}
+                        onClick={() => setType.mutate({ identityId: r.id, role: "admin" })}
+                      >
+                        Make admin
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={r.role !== "admin" || setType.isPending}
+                        onClick={() => setType.mutate({ identityId: r.id, role: "registered" })}
+                      >
+                        Remove admin
+                      </Button>
+                    </div>
+                  )}
+                  {typeError && <p className="mt-2 text-xs text-destructive">{typeError}</p>}
+                </div>
+              )}
               {editing === r.id && (
                 <div className="mt-3 border-t border-border/60 pt-3">
                   <div className="flex flex-wrap items-center gap-2">

@@ -88,6 +88,7 @@ import {
   claimIdentityNumber,
   isUserAdmin,
   adminFindIdentities,
+  setIdentityAccountType,
   upsertContact,
   getConversationParticipantIds,
   recentAutoReplyExists,
@@ -3887,6 +3888,71 @@ export const v2AdminRouter = router({
         `[admin] identity ${input.identityId} renumbered ${res.oldNumber} -> ${res.newNumber} by identity ${me.id}`
       );
       return { ...res };
+    }),
+
+  /**
+   * Promote or demote an account type (v2.99.99, owner request: *"I can delete the
+   * user or change type of account from guest to registered to admin"*).
+   *
+   * This deliberately widens a surface v2.99.76 kept narrow on purpose, and that is
+   * the owner's decision to make rather than something that arrived for free — so it
+   * stays as narrow as the ask allows: it writes ONE enum column and can do nothing
+   * else. It cannot read a message, cannot list contacts, and cannot reach any other
+   * field of the account.
+   *
+   * Each refusal is NAMED, because the three of them need three different next steps:
+   * a guest has to register (which keeps their number and data), a self-demotion has
+   * to be done by another admin, and "become a guest" is not a thing an account can
+   * do. A generic error would send the operator looking in the wrong place.
+   */
+  setAccountType: publicProcedure
+    .input(
+      z.object({
+        identityId: z.number().int().positive(),
+        role: z.enum(["admin", "registered", "guest"]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = await requireAdmin(ctx);
+      const res = await setIdentityAccountType(
+        input.identityId,
+        input.role,
+        (ctx.user?.id as number | undefined) ?? null
+      );
+      if (!res.ok) {
+        const map: Record<
+          typeof res.reason,
+          { code: "BAD_REQUEST" | "NOT_FOUND" | "CONFLICT" | "INTERNAL_SERVER_ERROR"; message: string }
+        > = {
+          "not-found": { code: "NOT_FOUND", message: "No identity with that id." },
+          "no-account": {
+            code: "BAD_REQUEST",
+            message:
+              "That's a guest — there's no account to attach a role to. They keep their number and all their data when they register themselves, so registering is the way up from here.",
+          },
+          self: {
+            code: "CONFLICT",
+            message:
+              "You can't remove your own admin rights — that could leave this deployment with no administrator at all. Another admin has to do it.",
+          },
+          unsupported: {
+            code: "BAD_REQUEST",
+            message:
+              "An account with an email and a password doesn't become a guest because a flag says so. Delete it instead if that's what you mean.",
+          },
+          unavailable: {
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Couldn't change the account type — nothing was changed.",
+          },
+        };
+        const m = map[res.reason];
+        throw new TRPCError({ code: m.code, message: m.message, cause: res.reason });
+      }
+      // Ids only — this lands in logs, so it carries no name, email or content.
+      console.warn(
+        `[admin] identity ${input.identityId} (account ${res.userId}) set to ${res.role} by identity ${me.id}`
+      );
+      return { ok: true as const, role: res.role };
     }),
 
   /**
