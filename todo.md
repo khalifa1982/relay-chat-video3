@@ -7557,6 +7557,83 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.93 — the pending-task batch: find a contact by digit OR letter, icons, and an honest guest notice (2026-07-27)
+- [x] **THREE PENDING ITEMS CLOSED, and the rest of the list triaged HONESTLY rather than left ambiguous** —
+      see the two "not done, and why" entries at the end.
+- [x] **#91 — START A CONVERSATION BY FIRST DIGIT *OR* FIRST LETTER.** The New-conversation field ran
+      `e.target.value.replace(/\D/g, "")` on the way in, so **a name could not be typed at all** — you had to
+      know the six digits by heart. Both fields (the DM one and the group member one) now take a query, and a
+      suggestion list resolves it.
+- [x] **TWO RULES, PICKED BY WHAT WAS TYPED, because they answer different questions.** Digits match the
+      **start** of the number — never an infix, because a 6-digit number has no meaningful interior and `55`
+      matching 155234 would put a stranger above the person being dialled. Letters match the start of **any
+      word** of the name, so a SURNAME works: people search "Alhammadi" as readily as "Khalifa". A first-name
+      match outranks a surname match.
+- [x] **NEVER AN INFIX ON A SHORT QUERY** — one or two letters inside a word matches most of a contact list,
+      which is indistinguishable from no filter at all (the v2.99.80 emoji-catalogue lesson). Case and
+      diacritics fold, so "alv" finds "Ålvaro" and "nun" finds "Núñez".
+- [x] **THE SUBMIT PATH STILL ONLY EVER SEES SIX DIGITS, and `digitsOf` alone is NOT enough to guarantee it**:
+      stripping non-digits reads `7a7b7c7d7e7f` as `777777`, so a typo would become a successful open of
+      somebody else's thread. The button is gated on the digit count **and** on the query being number-SHAPED,
+      which is the same reasoning as v2.99.75's `normalizeDesiredNumber`. A name is opened by tapping its
+      suggestion, which supplies the number.
+- [x] **`isNumberQuery` REQUIRES THE WHOLE QUERY TO BE DIGITS AND GROUPING**, so "7th floor" is a name search
+      rather than the number 7 — and the grouping people actually type (`777-777`, `735 680`) is accepted,
+      because the app DISPLAYS numbers that way and refusing the shape back would be rude.
+- [x] **A CONTACT YOU BLOCKED IS NEVER SUGGESTED.** Offering to start a conversation with somebody you
+      deliberately blocked is a mis-suggestion, and unblocking is a decision to make in Contacts, on purpose.
+      A malformed stored number is skipped rather than offered and then refused, and the group list withholds
+      members already added — a suggestion that does nothing when tapped reads as broken.
+- [x] **NOTHING TYPED SHOWS FAVOURITES, THEN WHOEVER IS ONLINE**, because that is the most useful default for
+      an empty field; an empty RESULT renders **nothing** rather than a "no matches" row, since the field still
+      works by number and an error state under every unmatched keystroke would be noise. The contact list is
+      only fetched while the sheet is open. The suggestion's number is `dir="ltr"` + bidi-ISOLATED so an Arabic
+      name on the line above cannot reorder it (v2.99.77).
+- [x] **#90 (the icon half) — PER-ROW ICONS ON THE PROFILE CONTACT ROWS**, per the owner's mockup: a mail glyph
+      on Email, a phone on Mobile numbers, and a **per-platform** glyph on each social link. **THE LABELS STAY**
+      — four platforms is exactly the range where icon-only becomes a guessing game, and an icon alone gives a
+      screen reader nothing; every glyph is `aria-hidden` so it is not announced twice per row. `SocialIcon` has
+      an **exhaustive switch with a neutral fallback**, so adding a fifth platform to `SOCIAL_PLATFORMS` and
+      forgetting its icon degrades to a link glyph rather than rendering nothing.
+- [x] **#90 (the notice half) — HOW LONG A GUEST NUMBER IS HELD, stated ACCURATELY rather than alarmingly.**
+      Read from the server's own `guestExpiresAt` rather than a day count written into the copy, so the two
+      cannot drift — and it says out loud that **the clock resets every time you open RELAY**, which is true
+      (`touchGuestExpiry` pushes it forward on every visit) and is the part that makes the figure
+      non-frightening: a bare "expires in N days" implies a countdown you cannot stop. Renders nothing when
+      there is no clock to report.
+- [x] **AND IT NEVER CLAIMS THE DATA IS DELETED, because nothing deletes it.** Established by reading the code
+      rather than assumed: `guestExpiresAt` gates only the guest COOKIE lookup, and **no reaper touches guest
+      identity rows at all** — the only `.delete(identities)` in the codebase is Adopt-and-Retire's
+      provably-empty retire. So after expiry the number, contacts and messages are still there and this browser
+      can still reclaim them with the recovery key (v2.99.68). A test pins that the copy makes no
+      deletion claim and that the delete count stays at one.
+- [x] `client/src/app/contactSuggest.test.ts` (36), the ranking tested BEHAVIOURALLY because that is the entire
+      feature — a source pin cannot tell you whether typing `7` surfaces 777777. **All 28 tripwires verified by
+      MUTATION** from byte-exact backups and a confirmed-GREEN baseline.
+- [x] **A WEAKNESS OF MY OWN CAUGHT BY THAT RUN**: the "a first-name match outranks a surname match" case used
+      "Zain Ali" / "Ali Hassan", where the ALPHABETICAL tiebreak happens to produce the same order — so deleting
+      the rank comparison entirely left the test green. Rewritten with "Ahmed Ali" / "Ali Hassan", where the
+      rank-1 match sorts alphabetically BEFORE the rank-0 one, so only the rank term can produce the expected
+      order.
+- [x] **#96 RESOLVED WITHOUT BUILDING IT, and the reasoning is recorded rather than the task quietly dropped.**
+      The owner asked for the story ring "wherever it's showing history, in contact, in groups, everywhere" —
+      Contacts, the Messages thread rows, the chat header and History **already** carry it through `PeerAvatar`.
+      Call tiles were NOT in that list, and putting a ring there costs paint on the app's single most expensive
+      surface (six tiles of live video, the thing v2.99.84 measured 14 repaints out of) for an indicator that
+      cannot safely be tapped — opening a full-screen story over a live call is not a thing to offer. **Group
+      rows are the real gap and are blocked on #89**: a group has no avatar and no status of its own yet, so
+      there is nothing for a ring to mean.
+- [x] **#75 RE-AUDITED AND HANDED BACK, with the evidence.** The mailer's MIME is clean and was checked again
+      line by line: `Date`, `Message-ID` on the From domain, `MIME-Version`,
+      `multipart/alternative` with BOTH a text and an HTML part, RFC 2047 subject encoding. There is no
+      code-side defect left to fix, so verification mail landing in spam is **SPF / DKIM / DMARC alignment and
+      domain reputation** — DNS and SES configuration, owner-side. Deliberately NOT shipped: speculative header
+      tweaks dressed up as a spam fix (`Precedence: bulk` would actively HURT a transactional message, and a
+      `List-Unsubscribe` on somebody's own login code is wrong).
+- [x] **#44 STILL BLOCKED, said plainly**: live verification needs to reach `your-chat.io`, and this sandbox's
+      outbound network refuses it (`curl` exits 56). Nothing in the repo can change that.
+- [x] No schema change, no new dependency, no new env var, no server change. 2724 tests.
+
 ## v2.99.92 — minimising the app is IDLE, not offline (2026-07-27)
 - [x] **OWNER**: *"Whenever you minimize the app, the user showing offline, not the idle."* `PresenceManager`
       fired the go-offline BEACON on `visibilitychange → hidden` as well as on `pagehide`, so switching apps for

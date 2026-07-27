@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, X, Check, ExternalLink, Plane, Coffee, Circle } from "lucide-react";
+import { Plus, X, Check, ExternalLink, Plane, Coffee, Circle, Mail, Smartphone, Twitter, Globe, Ghost, MessageCircle, Link as LinkIcon } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,9 +74,16 @@ export function ContactInfoSection({ me, onSaved }: { me: HubMe; onSaved: () => 
         Contact info <SavedTick show={saved} />
       </Label>
 
-      {/* Email (read-only; validated at registration) */}
+      {/* Email (read-only; validated at registration).
+          v2.99.93 — the owner's mockup labelled these rows with ICONS rather than
+          words. The icon is `aria-hidden` and the word stays: an icon alone is a
+          guessing game for anybody who has not seen the mockup, and it gives a
+          screen reader nothing. */}
       <div className="rounded-2xl glass-surface-sm p-4 space-y-1">
-        <div className="text-xs text-muted-foreground">Email</div>
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Mail className="size-3.5 shrink-0" aria-hidden="true" />
+          Email
+        </div>
         {me.email ? (
           <div className="font-medium break-all">{me.email}</div>
         ) : (
@@ -88,7 +95,10 @@ export function ContactInfoSection({ me, onSaved }: { me: HubMe; onSaved: () => 
 
       {/* Mobile numbers */}
       <div className="rounded-2xl glass-surface-sm p-4 space-y-3">
-        <div className="text-xs text-muted-foreground">Mobile numbers (optional)</div>
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Smartphone className="size-3.5 shrink-0" aria-hidden="true" />
+          Mobile numbers (optional)
+        </div>
         {mobiles.length > 0 && (
           <ul className="space-y-2">
             {mobiles.map((m, i) => (
@@ -165,8 +175,13 @@ export function SocialLinksSection({ me, onSaved }: { me: HubMe; onSaved: () => 
               const href = d?.href(l.value) ?? null;
               return (
                 <li key={`${l.platform}-${l.value}`} className="flex items-center gap-2">
-                  <span className="w-24 shrink-0 text-xs font-medium text-muted-foreground">
-                    {d?.label ?? l.platform}
+                  {/* v2.99.93 — a per-platform ICON beside the label, per the owner's
+                      mockup. The label STAYS: four platforms is exactly the range
+                      where icon-only becomes a guess, and it is what a screen reader
+                      reads. The icon is decorative and marked so. */}
+                  <span className="flex w-24 shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <SocialIcon platform={l.platform} />
+                    <span className="truncate">{d?.label ?? l.platform}</span>
                   </span>
                   {href ? (
                     <a
@@ -311,4 +326,28 @@ export function StatusSection({ me, onSaved }: { me: HubMe; onSaved: () => void 
       <SaveError message={error} />
     </section>
   );
+}
+
+/**
+ * The icon for one social platform (v2.99.93).
+ *
+ * Kept as its own component with an exhaustive switch, so adding a fifth platform to
+ * `SOCIAL_PLATFORMS` and forgetting the icon degrades to a neutral link glyph rather
+ * than rendering nothing. `aria-hidden` throughout: the label beside it already says
+ * which platform this is, and announcing "image" twice per row is noise.
+ */
+function SocialIcon({ platform }: { platform: string }) {
+  const cls = "size-3.5 shrink-0";
+  switch (platform) {
+    case "x":
+      return <Twitter className={cls} aria-hidden="true" />;
+    case "website":
+      return <Globe className={cls} aria-hidden="true" />;
+    case "snapchat":
+      return <Ghost className={cls} aria-hidden="true" />;
+    case "whatsapp":
+      return <MessageCircle className={cls} aria-hidden="true" />;
+    default:
+      return <LinkIcon className={cls} aria-hidden="true" />;
+  }
 }

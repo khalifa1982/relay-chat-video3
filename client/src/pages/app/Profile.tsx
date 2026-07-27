@@ -510,6 +510,13 @@ export default function ProfilePage() {
                   number afterwards, but only this one. Create an account to keep your number,
                   contacts, and profile permanently across all your devices.
                 </p>
+                {/* HOW LONG THE GUEST NUMBER IS HELD (v2.99.93).
+                    Stated from the SERVER's own `guestExpiresAt` rather than from a
+                    hardcoded number of days here, so the copy cannot drift from the
+                    rule — and it deliberately says the clock RESETS on each visit,
+                    which is the part that makes the figure non-alarming and is true:
+                    `touchGuestExpiry` pushes it out on every visit. */}
+                <GuestHoldNotice expiresAt={me.guestExpiresAt ?? null} />
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Button type="button" className="flex-1" onClick={() => setShowAuth(true)}>
                     Register with email
@@ -2135,5 +2142,40 @@ function PasscodeSection({ displayName }: { displayName: string }) {
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * How long this guest number is held (v2.99.93) — the notice half of the owner's
+ * "guest ID expires" ask.
+ *
+ * ACCURATE RATHER THAN ALARMING, and the difference matters. The clock is
+ * `identities.guestExpiresAt`, which `touchGuestExpiry` pushes forward on EVERY
+ * visit — so a guest who keeps using RELAY never runs out, and a notice that said
+ * "expires in N days" without saying that would frighten people into thinking they
+ * were on a countdown they cannot stop.
+ *
+ * WHAT EXPIRY ACTUALLY DOES TODAY, said precisely because it is easy to overstate:
+ * it stops the guest COOKIE resolving. Nothing deletes the row, so the number,
+ * contacts and messages are still there — and this browser can still reclaim them
+ * with the recovery key (v2.99.68). An automatic PURGE does not exist and is not
+ * being invented here: deleting somebody's messages on a timer is a decision the
+ * owner has to make on purpose, and "hidden" and "deleted" are very different
+ * promises.
+ */
+function GuestHoldNotice({ expiresAt }: { expiresAt: string | Date | null }) {
+  if (!expiresAt) return null;
+  const ms = new Date(expiresAt).getTime();
+  if (!Number.isFinite(ms)) return null;
+  const days = Math.max(0, Math.ceil((ms - Date.now()) / (24 * 60 * 60 * 1000)));
+  return (
+    <p className="text-xs text-muted-foreground">
+      This browser holds your guest number for{" "}
+      <span className="font-semibold text-foreground">
+        {days} more {days === 1 ? "day" : "days"}
+      </span>
+      , and that resets every time you open RELAY — so it only runs down if you stop
+      using it. Registering removes the limit entirely.
+    </p>
   );
 }
