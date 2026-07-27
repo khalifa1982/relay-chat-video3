@@ -7557,6 +7557,134 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.94 — the top bar answers to two taps, the dot has a pulse, and the bottom bar stops leaving a gap (2026-07-27)
+
+Owner, verbatim: *"I circle on the notification center push it left little bit, keep space and gap
+between the notification center and the profile and also whoever click on the bar anywhere in the top
+bar. no need to take him to the profile only. there is two places to be clicked either the profile on
+the right or the notification center only whether it will take you to the notifications. colored light
+blue and there was a word mention Relay make type of animation that it keep blinking their light from
+lighter blue to light green to light different light and flashing similar to the heart way. this is for
+the dot on the top left and for the word rely make kind of nice animated animation for that word. it
+keep animated every 30 seconds … and below the flashy light put small line and [mention] online small
+letter. it means you are online now and when you are idle it will mention you are idle in yellow color
+and if you were disconnected from the internet it will […] show you you are offline red color and at
+the bottom after the bottom bar there's a still gap space so I stick the bottom down because I need the
+space for the middle frame."*
+
+**ONLY TWO THINGS IN THE BAR ARE TAPPABLE NOW, AND THAT IS A REVERSAL THE OWNER ASKED FOR.** v2.99.86
+made the identity strip a shortcut to Profile — precisely what is being removed. The strip and the brand
+mark are inert; the pin that asserted "one tap to Profile" is rewritten to assert the opposite, and
+`wouter`'s `Link` is no longer imported by the module at all. Profile is still one tap inside the
+avatar's own menu, so nothing is unreachable. **The BACK arrow is deliberately kept** — a navigation
+control the owner was not talking about, and removing it would strand people on every sub-page.
+
+**THE BELL MOVES BY WIDENING A GAP, NOT BY MOVING THE BELL.** The right-hand cluster is pinned to the
+edge by the header's `justify-between`, so the avatar cannot move without leaving the edge: growing the
+space between the two children is what pushes the bell left. `gap-2` → `gap-3.5`. **MEASURED** at
+320/360/375/390/430px against the REAL built stylesheet, five name shapes each (long Arabic,
+single-glyph CJK, blank): 14px of gap, both chips inside the header, PIN never clipped, nothing
+overlapping the middle zone, no horizontal overflow — 25/25 cases.
+
+**THE DOT IS THREE STACKED LAYERS, NOT ONE THAT CHANGES COLOUR.** An animated `background-color`
+repaints every frame and this element sits on the bar's `backdrop-blur-xl backdrop-saturate-150` surface
+— the most expensive host in the app to repaint over (v2.99.84 measured that class of cost and removed
+14 of them from the call grid). So the colour comes from opacity cross-fades over a **static opaque
+light-blue base**: three opacities engineered to sum to 1 would show a transparent hole the instant
+their easing curves disagreed, and would leave whichever layer is declared last as the reduced-motion
+still frame. **The two hue windows are DISJOINT** (measured: 0.0% of the cycle has both lit), or they
+would additively blend into a fourth colour nobody asked for.
+
+**THE HEARTBEAT IS A DOUBLE THUMP ON A WRAPPER.** "Similar to the heart way" — a single sine pulse reads
+as breathing, so the keyframe beats at 7% and again, smaller, at 26%, then rests for 66% of the cycle
+(measured from the real animation: local maxima 1.319 and 1.176). It rides a **wrapper** because two
+animations on one element do not compose — the later declaration simply wins (the v2.99.85 lesson) — so
+the scale and the opacity must live on different elements or one of them silently stops happening.
+
+**"EVERY 30 SECONDS" COSTS NO TIMER.** Both wordmark animations run a 30s cycle whose visible portion is
+only its opening fraction — measured in motion for 4.7% and 7.2% of the cycle, i.e. ~1.4s and ~2.2s of
+movement and then ~28s of rest. No interval to arm, nothing to leak, no re-render per tick, and it stays
+inside the existing reduced-motion gate. The v2.99.86 sheen is **retimed** from 5.5s rather than joined
+by a second animation: keeping both cadences would have buried the slower event under the faster one.
+Its pin, which asserted the 5.5s duration and the 38% hold, is rewritten to the property — a 30s cycle
+whose motion is confined to a small opening fraction — rather than relaxed.
+
+**THE CONNECTION LINE REPORTS THIS DEVICE'S OWN REALTIME HEALTH, and that is the whole design.** The
+tempting alternative — read my own presence row back from the server — cannot work for the one case the
+line exists for: if the connection has just died, the round trip that would tell you so is the thing
+that fails. **THE MIDDLE STATE NEEDS POSITIVE EVIDENCE**: `isSseConnected()` starts false and only flips
+on the stream's `onopen`, so a rule of "not connected ⇒ idle" would paint amber for the first few hundred
+ms of *every* app load and then snap to green — a flicker that reads as a bug. So a **second** flag,
+`realtimeDegraded`, starts FALSE and is set only when the stream actually fails; both are written from
+the same two handlers, so there is one owner of the truth and no chance of the pair drifting (the failure
+this codebase keeps relearning — v2.99.50, v2.99.71). **GREEN IS NEVER A LIE**, which is why the stream
+is consulted at all: `navigator.onLine` only reports that an interface is up, so a captive portal or a
+dead uplink still reads true and would paint "online" over a connection carrying nothing. **NO NETWORK
+OUTRANKS A DEGRADED STREAM**, because a dropped stream is a *symptom* of no network and reporting the
+symptom sends somebody looking in the wrong place. **"IDLE" IS THE HONEST WORD**: a backgrounded tab is
+precisely a tab whose EventSource the browser throttles, which is the same condition the server records
+as `presence.idle` (v2.99.92) — so the line agrees with what other people see of you without asking.
+Said plainly: you cannot watch your own "idle" label while the app is hidden; what you see is the
+reconnect window right after you return, and a genuine stream failure.
+
+**THE TWO NEW COLOUR TOKENS ARE MEASURED, NOT PICKED BY EYE, and the measurement changed the plan.**
+Reusing `--relay-dnd` — the amber already in the palette — was the obvious move and is wrong twice over:
+it computes to **3.72:1 on the light card**, which FAILS WCAG AA for text this small, and it already means
+"alerts are silenced", so borrowing it would put one colour on two meanings in a single bar (the exact
+collision v2.99.86 moved DND off green to avoid). New `--relay-amber-text` (5.16:1 light / 9.91:1 dark)
+and `--relay-red-text` (5.61:1 / 5.96:1), both within a hair of the green text's 5.91:1 so no state of
+the line is harder to read than another. The colour is applied as an **inline CSS variable**, never a
+runtime-composed Tailwind class, which would be absent from the source at build time and come out
+unstyled — the trap already documented for the bottom tab bar's accents. And the line carries a **word
+as well as a colour**, so it does not depend on being able to tell green from amber.
+
+**THE BOTTOM BAR: 81px → 68px, MEASURED.** The `0.55rem` floor under the tab row is gone and the tab's
+own padding tightened, so 13px goes back to the scroll area — real, not cosmetic, because the bar is an
+in-flow flex sibling and the scroll container ends exactly at its top edge. **The safe-area inset itself
+STAYS**: on an iPhone the home indicator sits there, and dropping it would put it on top of the tab icons.
+
+**ONE `<BrandMark>` INSTEAD OF TWO.** The shell used to mount it twice, one per breakpoint; the wordmark's
+390px rule now lives inside the component. Two mounts would mean two subscriptions to the connection
+store and the same breakpoint restated in two places. The pin that froze the two call sites is rewritten
+to the property: exactly one mount, the wordmark carrying the breakpoint, and the dot never carrying it.
+
+**A HARNESS BUG OF MY OWN, reported rather than counted as a result.** The first geometry run reported
+25/25 FAILING — the bell gap measuring 4px, the media queries not matching, the header 85px tall — and I
+was one step from "the layout is broken". It was not: `readdirSync(...).find(f => f.endsWith(".css"))`
+picked **`Docs-*.css`** (29KB of markdown styles) instead of `index-*.css` (602KB), so it measured a page
+with no Tailwind utilities at all — the 4px was inline-block whitespace between two un-flexed buttons.
+The harness now names the app stylesheet explicitly AND **aborts** unless it can prove the CSS is in
+force (the header computes to `display:flex`, the bell to exactly 36px, and the phone media query agrees
+with the emulated width) — the same shape of gate v2.99.84 added after measuring a phone at desktop width.
+
+**THREE OF MY OWN TEST BUGS, all found before shipping.** One was the recurring **unbounded-slice**
+fragility: a percentage assertion sliced from a keyframe's start to the end of the file and read
+`relayHueB`'s 94% while claiming to check `relaySheen` — now **brace-matched** to exactly one block, with
+a helper that returns `""` rather than the rest of the file when a block is absent. One matched
+`RELAY</span>`, a needle the multiline JSX does not contain. And the third is **the prose trap for the
+eighth time**: `not.toMatch(/fixed/)` matched the comment that says the bar is *not* `position: fixed`.
+The line-based `codeOnly` used across this repo cannot catch that — a JSX `{/* … */}` block's
+continuation lines begin with ordinary words — so this file's version strips the block forms as **spans**
+first, and the assertion is scoped to the element's own `className` rather than to a window of source.
+
+**A WEAKNESS THE MUTATION RUN FOUND IN A PIN I HAD JUST WRITTEN**: "the bell comes before the avatar"
+asserted DOM order only, and a `flex-row-reverse` on the cluster paints them the other way round while
+leaving the source order untouched. Now pinned in both directions.
+
+`client/src/app/topBarStatus.test.ts` (42), with the three-way connection rule tested **behaviourally**
+because that is the whole feature — a source pin cannot tell you whether losing the network turns the
+line red, or whether a fresh load flickers amber before settling. **All 37 tripwires verified by
+MUTATION** from byte-exact backups and a confirmed-GREEN baseline, sources byte-identical afterwards.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: the geometry and the animation cost are measured in headless
+Chromium against the real built stylesheet, but how the heartbeat and the 30-second flourish *look* on
+the owner's phone is not. The transcribed markup the harness drives is a transcription, not the mounted
+React component — reaching `/app` headless needs a signed-in identity plus a dozen stubbed queries, and a
+hand-written copy proves nothing about the real component (the v2.99.82 lesson), which is why every
+structural claim is additionally pinned in source.
+
+No schema change, no new dependency, no new env var, no server change. 2765 tests.
+
 ## v2.99.93 — the pending-task batch: find a contact by digit OR letter, icons, and an honest guest notice (2026-07-27)
 - [x] **THREE PENDING ITEMS CLOSED, and the rest of the list triaged HONESTLY rather than left ambiguous** —
       see the two "not done, and why" entries at the end.

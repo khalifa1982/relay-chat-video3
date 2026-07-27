@@ -10,6 +10,16 @@
  *   RIGHT   the notification bell (green when clear, red + blinking when not — see
  *            NotificationBell), then the avatar with a two-colour ring.
  *
+ * v2.99.94 — ONLY TWO THINGS IN THIS BAR ARE TAPPABLE, and that is a reversal the
+ * owner asked for in their own words: "whoever click on the bar anywhere in the top
+ * bar. no need to take him to the profile only. there is two places to be clicked
+ * either the profile on the right or the notification center". So the identity strip
+ * and the brand mark are now INERT — v2.99.86 had made the strip a shortcut to
+ * Profile, which is exactly what is being removed. Profile stays one tap from the
+ * avatar's own menu, so nothing is unreachable. The BACK arrow on sub-pages is left
+ * alone: it is a navigation control the owner was not talking about, and removing it
+ * would strand people on every sub-page.
+ *
  * THE MIDDLE ZONE IS TWO LINES, and that is the decision the whole layout rests on.
  * Seven monospace digits are ATOMIC — they cannot ellipsize without becoming a lie
  * about somebody's number — so on one line they compete against the name, the flag,
@@ -19,9 +29,14 @@
  * the PIN alone. Vertical cost is zero because the bar's height was already set by
  * the 36px avatar, not by its text.
  */
-import { Link } from "wouter";
 import { RoleBadge, roleFromFlags } from "./VerifiedBadge";
 import { CountryFlag } from "./CountryFlag";
+import {
+  CONNECTION_LABEL,
+  CONNECTION_TITLE,
+  CONNECTION_VAR,
+  useConnectionState,
+} from "./connectionStatus";
 
 /** `812345` → `812-345`. The owner's "three numbers dash three number". */
 export function formatPin(n: string | null | undefined): string {
@@ -37,50 +52,111 @@ export function firstNameOf(displayName: string | null | undefined): string {
 }
 
 /**
- * The RELAY mark: a green→cyan dot and the wordmark, with a slow sheen.
+ * The RELAY mark (v2.99.94): a heartbeat dot that cycles through three lights, the
+ * wordmark with a once-every-30-seconds flourish, and the connection line underneath.
  *
- * The sheen TRANSLATES a narrow bright band behind `overflow-hidden`. It does not
- * animate `background-position`, which would repaint the element every frame — the
- * class of animation v2.99.84 measured and removed 14 of. It is also mostly idle by
- * design ("don't make it so much"): the band is off-screen for ~62% of a 5.5s cycle.
+ *   "colored light blue and there was a word mention Relay make type of animation
+ *    that it keep blinking their light from lighter blue to light green to light
+ *    different light and flashing similar to the heart way. this is for the dot on
+ *    the top left and for the word rely make kind of nice animated animation for that
+ *    word. it keep animated every 30 seconds … and below the flashy light put small
+ *    line and [mention] online small letter."
+ *
+ * THE DOT IS THREE STACKED LAYERS, NOT ONE THAT CHANGES COLOUR. An animated
+ * `background-color` repaints the element every frame, and this element sits on the
+ * bar's `backdrop-blur-xl backdrop-saturate-150` surface — the most expensive host in
+ * the app to repaint over (v2.99.84 measured that class of cost and removed 14 of
+ * them from the call grid). So the colour comes from opacity cross-fades over a
+ * STATIC opaque base, and the heartbeat is a `transform: scale` on the WRAPPER,
+ * because two animations on one element do not compose (v2.99.85).
+ *
+ * THE 30-SECOND CADENCE COSTS NO TIMER. Both wordmark animations run a 30s cycle
+ * whose visible portion is only the first ~2s, so the flourish fires every half
+ * minute with no interval to arm, nothing to leak, and no re-render per tick.
+ *
+ * NOT A LINK ANY MORE — see the file header.
  */
-export function BrandMark({ compact }: { compact?: boolean }) {
+export function BrandMark() {
+  const conn = useConnectionState();
   return (
-    <Link
-      href="/app/dialer"
-      aria-label="RELAY"
-      className="relative flex items-center gap-2 shrink-0 overflow-hidden rounded-lg px-0.5 active:opacity-70 transition-opacity outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
-    >
+    <div className="flex shrink-0 flex-col items-start justify-center gap-[3px] pe-1">
+      <div className="flex items-center gap-2">
+        {/* The dot. The heartbeat scales this wrapper; the layers inside only fade. */}
+        <span aria-hidden="true" className="relative block size-2.5 shrink-0 relay-heartbeat">
+          {/* Base — light blue, opaque, and never animated, so the two overlays can
+              only ever ADD a colour. Three opacities engineered to sum to 1 would
+              show a transparent hole the moment their easing curves disagreed, and
+              would leave whichever layer is declared last as the reduced-motion
+              still frame. The glow is a static box-shadow (it scales with the
+              heartbeat for free — a scaled shadow is not a repainted one). */}
+          <span
+            className="absolute inset-0 rounded-full"
+            style={{
+              background: "linear-gradient(135deg,#7DD3FC,#6EE7FF)",
+              boxShadow: "0 0 10px rgba(110,231,255,.85)",
+            }}
+          />
+          <span
+            className="absolute inset-0 rounded-full relay-hue-a"
+            style={{ background: "linear-gradient(135deg,#5EEAD4,#86EFAC)", opacity: 0 }}
+          />
+          <span
+            className="absolute inset-0 rounded-full relay-hue-b"
+            style={{ background: "linear-gradient(135deg,#C4B5FD,#A5F3FC)", opacity: 0 }}
+          />
+        </span>
+        {/* The wordmark. It hides below 390px so the middle zone keeps its width on
+            the smallest phones — the dot and the connection line always stay, so the
+            bar never loses its anchor. ONE component handles both widths now: two
+            call sites would mean two subscriptions to the connection store and the
+            breakpoint restated in two places. */}
+        <span className="relative max-[389px]:hidden">
+          <span
+            className="block text-sm font-extrabold tracking-[0.22em] text-foreground relay-word-pop"
+            style={{ transformOrigin: "left center" }}
+          >
+            RELAY
+          </span>
+          {/* The sheen lives in its OWN clipping layer rather than on a shared
+              `overflow-hidden` parent: the word swells to 1.07 and a parent that
+              clipped the band would clip the swell along with it. */}
+          <span aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+            <span
+              className="absolute inset-y-0 -left-6 w-6 relay-sheen"
+              style={{
+                background:
+                  "linear-gradient(90deg,rgba(110,231,255,0),rgba(190,250,255,.55),rgba(110,231,255,0))",
+              }}
+            />
+          </span>
+        </span>
+      </div>
+      {/* The connection line. Colour AND word, never colour alone, so it does not
+          depend on being able to tell green from amber. The colour is an inline CSS
+          variable rather than a class: a class name composed at runtime is absent
+          from the source at build time, so Tailwind's JIT never emits it — the trap
+          already documented for the bottom tab bar's accents. */}
       <span
-        className="size-2.5 rounded-full shrink-0"
-        style={{
-          background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)",
-          boxShadow: "0 0 10px rgba(63,224,197,.8)",
-        }}
-      />
-      {!compact && (
-        <span className="text-sm font-extrabold tracking-[0.22em] text-foreground">RELAY</span>
-      )}
-      {/* The sheen. `pointer-events-none` so it can never eat the tap, and inert
-          under reduced motion (the class carries no animation there), where it
-          simply sits off to the left at rest. */}
-      <span
-        aria-hidden="true"
-        className="absolute inset-y-0 -left-6 w-6 pointer-events-none relay-sheen"
-        style={{
-          background: "linear-gradient(90deg,rgba(110,231,255,0),rgba(190,250,255,.55),rgba(110,231,255,0))",
-        }}
-      />
-    </Link>
+        role="status"
+        aria-live="polite"
+        title={CONNECTION_TITLE[conn]}
+        className="text-[9.5px] font-semibold leading-none tracking-wide"
+        style={{ color: `var(${CONNECTION_VAR[conn]})` }}
+      >
+        {CONNECTION_LABEL[conn]}
+      </span>
+    </div>
   );
 }
 
 /**
  * flag · FIRST NAME · badge  /  PIN
  *
- * The whole block is one tap to the profile — which is also the fix for the thing
- * the owner has complained about twice, that reaching your own profile took a
- * dropdown hop.
+ * INERT as of v2.99.94 — it displays who you are and navigates nowhere. It was a
+ * shortcut to Profile in v2.99.86; the owner has since asked for the opposite ("no
+ * need to take him to the profile only … there is two places to be clicked"), so the
+ * whole middle of the bar is now a label. Profile remains one tap away inside the
+ * avatar's menu.
  */
 export function IdentityStrip({
   displayName,
@@ -99,11 +175,9 @@ export function IdentityStrip({
 }) {
   const first = firstNameOf(displayName) || "You";
   return (
-    <Link
-      href="/app/profile"
+    <div
       title={displayName}
-      aria-label={`${displayName}, number ${formatPin(number)} — open profile`}
-      className="flex-1 min-w-0 flex flex-col items-center justify-center gap-0 rounded-lg px-1 active:opacity-70 transition-opacity outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+      className="flex-1 min-w-0 flex flex-col items-center justify-center gap-0 px-1"
     >
       <span className="flex items-center gap-1.5 max-w-full">
         {/* The flag box is RESERVED whether or not geo resolved. `geoSelf` returns a
@@ -132,7 +206,7 @@ export function IdentityStrip({
       >
         {formatPin(number)}
       </span>
-    </Link>
+    </div>
   );
 }
 

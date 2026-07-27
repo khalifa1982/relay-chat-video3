@@ -45,6 +45,25 @@ function codeOnly(src: string): string {
     .join("\n");
 }
 
+/**
+ * Exactly ONE `@keyframes` block, found by matching braces (v2.99.94).
+ *
+ * A fixed-length or open-ended slice from the block's start silently reads into the
+ * NEXT keyframe — which is how a percentage assertion here first saw a value from a
+ * completely different animation. Returns "" when the block is absent, so a caller
+ * that forgets to check gets an empty string rather than the rest of the file.
+ */
+function kfBody(name: string): string {
+  const at = CSS.indexOf(`@keyframes ${name} {`);
+  if (at < 0) return "";
+  let depth = 0;
+  for (let i = CSS.indexOf("{", at); i < CSS.length; i++) {
+    if (CSS[i] === "{") depth++;
+    else if (CSS[i] === "}" && --depth === 0) return CSS.slice(at, i + 1);
+  }
+  return "";
+}
+
 describe("the PIN format the owner asked for", () => {
   it("is three digits, a dash, three digits", () => {
     expect(formatPin("777777")).toBe("777-777");
@@ -80,26 +99,73 @@ describe("LEFT — the glossy RELAY mark", () => {
     expect(CSS).toMatch(/@keyframes relaySheen\{?[\s\S]{0,240}?transform: translateX/);
     expect(codeOnly(CSS)).not.toMatch(/@keyframes relaySheen[\s\S]{0,300}?background-position/);
     expect(TOPBAR).toMatch(/relay-sheen/);
-    // Clipped, so the band is invisible until it crosses the mark.
-    expect(TOPBAR).toMatch(/overflow-hidden/);
-    // It must never eat the tap on the brand link.
-    expect(TOPBAR).toMatch(/className="absolute inset-y-0 -left-6 w-6 pointer-events-none relay-sheen"/);
+    // Clipped, so the band is invisible until it crosses the mark. v2.99.94 moved the
+    // clip onto the band's OWN layer: the word now swells to 1.07, and a shared
+    // `overflow-hidden` parent would have clipped the swell along with the band.
+    expect(TOPBAR).toMatch(/pointer-events-none absolute inset-0 overflow-hidden/);
+    // The sheen must never intercept a pointer event, wherever the class sits.
+    const sheenLayer = TOPBAR.slice(
+      TOPBAR.lastIndexOf("pointer-events-none absolute inset-0 overflow-hidden")
+    );
+    expect(sheenLayer.slice(0, 400)).toMatch(/relay-sheen/);
   });
 
-  it("is slow and mostly idle — 'don't make it so much'", () => {
-    const m = CSS.match(/\.relay-sheen \{\s*animation: relaySheen ([\d.]+)s/);
-    expect(m, "the sheen declares a duration").toBeTruthy();
-    expect(Number(m![1])).toBeGreaterThanOrEqual(4);
-    // The band finishes its sweep at 38% and then waits, so most of the cycle is
-    // still. A band that swept continuously would be "so much".
-    expect(CSS).toMatch(/@keyframes relaySheen\{?[\s\S]{0,240}?38%,/);
+  it("fires the wordmark flourish every 30 seconds, and rests in between", () => {
+    // v2.99.94 (owner): "for the word rely make kind of nice animated animation for
+    // that word. it keep animated every 30 seconds." REWRITTEN from the v2.99.86 pin,
+    // which asserted the 5.5s cadence and the 38% hold — i.e. it pinned exactly the
+    // timing the owner has since replaced. Keeping BOTH cadences would have buried
+    // the slower event under the faster one.
+    //
+    // Asserted as the PROPERTY rather than as one hold percentage: a 30s cycle whose
+    // motion is confined to a small opening fraction. That is what gives an event
+    // every half minute with no JS timer to arm or leak.
+    for (const [cls, kf] of [
+      ["relay-sheen", "relaySheen"],
+      ["relay-word-pop", "relayWordPop"],
+    ]) {
+      const m = CSS.match(new RegExp(`\\.${cls} \\{\\s*animation: ${kf} ([\\d.]+)s`));
+      expect(m, `${cls} declares a duration`).toBeTruthy();
+      expect(Number(m![1]), `${cls} runs on the owner's 30s cadence`).toBe(30);
+      // BRACE-MATCHED to this keyframe's own block. My first cut sliced from the
+      // block's start to the end of the file, so it read percentages out of every
+      // LATER keyframe too and saw relayHueB's 94% — the fixed/unbounded-slice
+      // fragility this repo keeps having to rewrite out of its pins.
+      const body = kfBody(kf);
+      expect(body, `${kf} exists`).not.toBe("");
+      const hold = body.match(/\n\s+([\d.]+)%[,\s]/g);
+      expect(hold, `${kf} has percentage keyframes`).toBeTruthy();
+      const pcts = hold!.map((h) => Number(h.trim().replace(/[%,]/g, "")));
+      // Motion stops here and the rest of the 30s is still.
+      expect(Math.max(...pcts.filter((p) => p < 100))).toBeLessThanOrEqual(10);
+    }
   });
 
   it("keeps the brand dot on the narrowest phones and drops only the wordmark", () => {
     // The bar must never lose its brand anchor, but the wordmark is what the middle
     // zone needs the width back from.
-    expect(SHELL).toMatch(/max-\[389px\]:hidden">\s*<BrandMark \/>/);
-    expect(SHELL).toMatch(/min-\[390px\]:hidden">\s*<BrandMark compact \/>/);
+    //
+    // REWRITTEN in v2.99.94: this used to pin TWO `<BrandMark>` call sites in the
+    // shell, one per breakpoint. That froze an implementation the component has since
+    // absorbed — and two mounts now means two subscriptions to the connection store
+    // and the same breakpoint restated in two places. The property is what matters:
+    // exactly one mount, the wordmark carrying the breakpoint, and the dot never
+    // carrying it.
+    expect(SHELL.match(/<BrandMark\b/g)?.length).toBe(1);
+    expect(SHELL).not.toMatch(/<BrandMark compact/);
+    const brand = TOPBAR.slice(
+      TOPBAR.indexOf("export function BrandMark"),
+      TOPBAR.indexOf("export function IdentityStrip")
+    );
+    expect(brand.length).toBeGreaterThan(200);
+    // The wordmark hides below 390px. Matched as the rendered word rather than as
+    // `RELAY</span>`, which the multiline JSX does not contain at all.
+    expect(brand).toMatch(/>\s*RELAY\s*</);
+    expect(brand).toMatch(/relative max-\[389px\]:hidden/);
+    // …and the hiding class appears exactly once, so it cannot also be on the dot.
+    expect(brand.match(/max-\[389px\]:hidden/g)?.length).toBe(1);
+    const dot = brand.slice(brand.indexOf("relay-heartbeat"));
+    expect(dot.slice(0, 200)).not.toMatch(/max-\[389px\]:hidden/);
   });
 });
 
@@ -153,8 +219,24 @@ describe("MIDDLE — flag · first name · badge over the PIN", () => {
     expect(strip).toMatch(/<span className="shrink-0 leading-none">\s*<RoleBadge/);
   });
 
-  it("is one tap to Profile, and the old right-hand identity is gone", () => {
+  it("is INERT — it navigates nowhere, and the old right-hand identity is gone", () => {
     expect(SHELL).toMatch(/<IdentityStrip/);
+    // REWRITTEN in v2.99.94. This pin used to assert the strip was "one tap to
+    // Profile", which is precisely what the owner has now asked to remove: "no need
+    // to take him to the profile only … there is two places to be clicked either the
+    // profile on the right or the notification center". So the assertion inverts:
+    // the middle of the bar must carry no navigation and no interactive element at
+    // all — no href, no onClick, and nothing focusable to trip over by keyboard.
+    const decl = TOPBAR.slice(TOPBAR.indexOf("export function IdentityStrip"));
+    const strip = codeOnly(decl.slice(decl.indexOf("  return (")));
+    expect(strip.length).toBeGreaterThan(100);
+    expect(strip).not.toMatch(/<Link/);
+    expect(strip).not.toMatch(/href=/);
+    expect(strip).not.toMatch(/onClick=/);
+    expect(strip).not.toMatch(/<button/);
+    expect(strip).not.toMatch(/tabIndex/);
+    // And nothing anywhere in the bar's own module still routes to the profile page.
+    expect(codeOnly(TOPBAR)).not.toMatch(/\/app\/profile/);
     // The flag and mono number used to sit on the RIGHT; leaving them there would
     // render the owner's identity twice.
     const code = codeOnly(SHELL);

@@ -138,6 +138,14 @@
      shipping green-when-clear without moving DND off green would leave one colour
      meaning both "nothing waiting" and "alerts silenced". */
   --relay-dnd: oklch(0.8 0.16 80);
+  /* Amber and red for TEXT (v2.99.94), used by the top bar's connection line.
+     NOT `--relay-dnd` reused: that token is 3.72:1 on the light card, which FAILS
+     WCAG AA for text this small — MEASURED, the same way the green split was — and
+     it already means "alerts are silenced", so borrowing it would put one colour on
+     two meanings in a single bar, exactly the collision v2.99.86 moved DND off green
+     to avoid. Values here are the dark-theme ones; the light block overrides both. */
+  --relay-amber-text: oklch(0.8 0.15 80);
+  --relay-red-text: oklch(0.68 0.2 27);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
 }
@@ -183,6 +191,11 @@
      are no less readable than the grey ones were. */
   --relay-green-text: oklch(0.48 0.18 145);
   --relay-dnd: oklch(0.62 0.15 75);
+  /* Measured on this theme's white card: 5.16:1 and 5.61:1 — both clear AA, and both
+     within a hair of the 5.91:1 the green text measures, so no state of the connection
+     line is harder to read than another. */
+  --relay-amber-text: oklch(0.54 0.14 75);
+  --relay-red-text: oklch(0.54 0.2 27);
 }
 
 .dark.relay-v2 {
@@ -462,19 +475,117 @@ body.relay-app-lock {
   /* A sheen sweeping across a small mark. A narrow bright band TRANSLATES behind
      `overflow:hidden` — no background-position animation, which would repaint the
      whole element every frame. Deliberately slow and mostly idle: the owner asked
-     for "animated slowly … nice animation, but don't make it so much", so the
-     band spends ~85% of the cycle off-screen. */
+     for "animated slowly … nice animation, but don't make it so much".
+     v2.99.94 RETIMES it to the owner's own newer cadence — "for the word rely make
+     kind of nice animated animation for that word. it keep animated every 30
+     seconds" — by stretching the cycle to 30s while holding the band off-screen from
+     7% onward. THE VISIBLE PORTION IS THE FIRST ~2.1s AND THE REST IS REST, which is
+     what gives an event every half minute with ZERO JS: no interval to arm, nothing
+     to leak, no re-render per tick, and it stays inside the reduced-motion gate like
+     everything else in this block. Keeping the 5.5s cadence AND adding a 30s one
+     would have buried the slower event under the faster one. */
   @keyframes relaySheen {
     0% {
       transform: translateX(-140%) skewX(-18deg);
     }
-    38%,
+    7%,
     100% {
       transform: translateX(320%) skewX(-18deg);
     }
   }
   .relay-sheen {
-    animation: relaySheen 5.5s ease-in-out infinite;
+    animation: relaySheen 30s ease-in-out infinite;
+  }
+
+  /* The wordmark's own half of that 30s event: it swells briefly as the band passes,
+     so the two read as ONE thing happening rather than a stray glint. Same cycle
+     length and same phase; `transform-origin` is set at the call site so the word
+     grows away from the dot instead of shifting both ways. */
+  @keyframes relayWordPop {
+    0%,
+    100% {
+      transform: scale(1);
+    }
+    1.5% {
+      transform: scale(1.07);
+    }
+    5% {
+      transform: scale(1);
+    }
+  }
+  .relay-word-pop {
+    animation: relayWordPop 30s ease-in-out infinite;
+  }
+
+  /* The brand dot's HEARTBEAT — a double thump and then a rest, which is what
+     "flashing similar to the heart way" describes; a single sine pulse reads as
+     breathing, not a heartbeat. Transform only, and it rides a WRAPPER: the colour
+     cross-fade below runs on the dots INSIDE, and two animations on ONE element do
+     not compose — the later declaration simply wins (the v2.99.85 lesson). */
+  @keyframes relayHeartbeat {
+    0%,
+    62%,
+    100% {
+      transform: scale(1);
+    }
+    7% {
+      transform: scale(1.32);
+    }
+    17% {
+      transform: scale(1.03);
+    }
+    26% {
+      transform: scale(1.18);
+    }
+    38% {
+      transform: scale(1);
+    }
+  }
+  .relay-heartbeat {
+    animation: relayHeartbeat 1.9s ease-in-out infinite;
+  }
+
+  /* The dot's colour cycle: light blue → light green → a third light → back
+     ("it keep blinking their light from lighter blue to light green to light
+     different light"). STACKED layers cross-fading their OPACITY, never an animated
+     background-color, which repaints — and this sits on the top bar's
+     `backdrop-blur-xl backdrop-saturate-150` surface, the most expensive host in the
+     app to repaint over.
+     THE BASE LAYER IS STATIC AND OPAQUE, so these two only ever ADD a colour on top.
+     Three opacities engineered to sum to 1 would show a transparent hole the instant
+     the easing curves disagreed with each other, and the still frame under reduced
+     motion would be whichever layer happened to be declared last. */
+  @keyframes relayHueA {
+    0%,
+    6% {
+      opacity: 0;
+    }
+    25% {
+      opacity: 1;
+    }
+    44%,
+    100% {
+      opacity: 0;
+    }
+  }
+  @keyframes relayHueB {
+    0%,
+    56% {
+      opacity: 0;
+    }
+    75% {
+      opacity: 1;
+    }
+    94%,
+    100% {
+      opacity: 0;
+    }
+  }
+  .relay-hue-a {
+    animation: relayHueA 6.4s ease-in-out infinite;
+  }
+  .relay-hue-b {
+    animation: relayHueB 6.4s ease-in-out infinite;
   }
 
   /* The avatar's two-colour ring: two stacked rings, one green one white, whose
