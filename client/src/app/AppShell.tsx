@@ -556,16 +556,13 @@ function Inner({ children }: { children: React.ReactNode }) {
               <ArrowLeft className="size-5" />
             </button>
           )}
-          {/* LEFT — the glossy RELAY mark (see BrandMark). The wordmark hides below
-              390px so the middle zone keeps its width on the smallest phones; the
-              dot always stays, so the bar never loses its brand anchor. */}
-          <span className="shrink-0 max-[389px]:hidden">
-            <BrandMark />
-          </span>
-          <span className="shrink-0 min-[390px]:hidden">
-            <BrandMark compact />
-          </span>
-          {/* MIDDLE — flag · first name · badge over the PIN. One tap to Profile. */}
+          {/* LEFT — the heartbeat dot, the RELAY wordmark and the connection line
+              (see BrandMark). ONE instance: the wordmark's own 390px breakpoint
+              lives inside the component, so this is no longer two mounts of it — two
+              would mean two subscriptions to the connection store and the same
+              breakpoint restated in two places. */}
+          <BrandMark />
+          {/* MIDDLE — flag · first name · badge over the PIN. Inert (v2.99.94). */}
           <IdentityStrip
             displayName={me.displayName}
             number={me.number}
@@ -574,8 +571,15 @@ function Inner({ children }: { children: React.ReactNode }) {
             countryCode={geo.data?.country}
             countryName={geo.data?.countryName ?? geo.data?.country ?? ""}
           />
-          {/* RIGHT — notifications, then the account avatar. */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* RIGHT — notifications, then the account avatar. v2.99.94 (owner): "I
+              circle on the notification center push it left little bit, keep space
+              and gap between the notification center and the profile." The gap is
+              what moves the bell: this cluster is pinned to the right edge by the
+              header's `justify-between`, so widening the space between its two
+              children pushes the bell leftward and leaves the avatar where it is.
+              Measured at 320px — the two chips plus the gap still fit with the
+              middle zone intact. */}
+          <div className="flex items-center gap-3.5 shrink-0">
             <NotificationBell
               missedCount={missedCount}
               unreadCount={unreadTotal}
@@ -699,10 +703,14 @@ function Inner({ children }: { children: React.ReactNode }) {
             "supports-[backdrop-filter]:bg-card/60 supports-[backdrop-filter]:backdrop-blur-2xl supports-[backdrop-filter]:backdrop-saturate-150"
           }
           style={{
-            // A touch more breathing room than the bare safe-area minimum so
-            // the tab row sits comfortably clear of the browser's own bottom
-            // toolbar on mobile.
-            paddingBottom: "max(0.55rem, env(safe-area-inset-bottom))",
+            // v2.99.94 (owner): "at the bottom after the bottom bar there's a still
+            // gap space so I stick the bottom down because I need the space for the
+            // middle frame." The 0.55rem floor that used to sit under this row is
+            // gone, so on a phone with no home indicator the bar now ends exactly at
+            // the viewport edge and the scroll area above it gains those ~9px.
+            // The safe-area inset ITSELF stays: on an iPhone it is not decoration —
+            // without it the home indicator sits on top of the tab icons.
+            paddingBottom: "env(safe-area-inset-bottom)",
           }}
         >
           <div className="grid grid-cols-4">
@@ -714,7 +722,7 @@ function Inner({ children }: { children: React.ReactNode }) {
                   key={tab.key}
                   href={tab.path}
                   aria-current={active ? "page" : undefined}
-                  className="flex flex-col items-center gap-1 pt-2 pb-1 transition-transform duration-150 active:scale-[0.94] outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-xl"
+                  className="flex flex-col items-center gap-1 pt-1.5 pb-0.5 transition-transform duration-150 active:scale-[0.94] outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-xl"
                   style={{ transitionTimingFunction: "cubic-bezier(0.23,1,0.32,1)" }}
                 >
                   <span

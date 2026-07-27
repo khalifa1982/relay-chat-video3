@@ -55,6 +55,54 @@ export function _setSseConnected(v: boolean): void {
   sseConnected = v;
 }
 
+/* ── Realtime health, for the top bar's status line (v2.99.94) ─────────────────
+ * A SECOND flag rather than a reuse of `sseConnected`, because the two answer
+ * different questions and one of them must start optimistic:
+ *
+ *   sseConnected  starts FALSE — "may I demote the fast polls yet?" Answering yes
+ *                 before the stream is up would slow the app down for real.
+ *   degraded      starts FALSE — "has the stream actually FAILED?" Answering yes
+ *                 before the first `onopen` would paint the status line amber for
+ *                 the first few hundred ms of every load and then snap to green.
+ *
+ * They are set from the SAME two handlers, so there is one owner of the truth and no
+ * chance of the pair drifting apart — the failure mode this codebase keeps relearning
+ * (v2.99.50, v2.99.71). Subscribers exist because a module-level boolean cannot
+ * re-render anything on its own; the getter stays the only read path. */
+let realtimeDegraded = false;
+const realtimeWatchers = new Set<() => void>();
+
+/** True once the realtime stream has FAILED and not yet reopened. */
+export function isRealtimeDegraded(): boolean {
+  return realtimeDegraded;
+}
+
+/** Subscribe to realtime-health changes. Returns an unsubscribe. */
+export function subscribeRealtimeStatus(cb: () => void): () => void {
+  realtimeWatchers.add(cb);
+  return () => {
+    realtimeWatchers.delete(cb);
+  };
+}
+
+/**
+ * Internal/test setter. Notifies ONLY on a real transition, so a stream that errors
+ * repeatedly while retrying cannot re-render the shell once per failed attempt. A
+ * throwing subscriber is contained: one bad listener must not stop the others being
+ * told the connection dropped.
+ */
+export function _setRealtimeDegraded(v: boolean): void {
+  if (realtimeDegraded === v) return;
+  realtimeDegraded = v;
+  for (const cb of Array.from(realtimeWatchers)) {
+    try {
+      cb();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 /**
  * Build a React Query `refetchInterval` callback that polls at `demotedMs`
  * while the SSE channel is connected and at `fastMs` when it isn't.
@@ -109,6 +157,7 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
       es.onopen = () => {
         backoff = 1000; // reset
         _setSseConnected(true); // demote the fast polls — SSE now carries hints
+        _setRealtimeDegraded(false); // the top bar's status line goes green
         if (wasConnected) {
           // Anything could have changed while the stream was down (the demoted
           // polls are slow) — refetch the hint-driven queries immediately.
@@ -343,6 +392,10 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
         es?.close();
         es = null;
         _setSseConnected(false); // re-promote fast polling until we reconnect
+        // The one place the status line learns it is not live. Set here rather than
+        // inferred from `sseConnected` being false, which is also false before the
+        // FIRST connect — see the flag's own note.
+        _setRealtimeDegraded(true);
         // NOTE: `wasConnected` is intentionally NOT reset here. It tracks "has
         // this hook EVER connected before" — staying true once set lets the
         // NEXT onopen (the actual reconnect) recognize itself as a recovery
@@ -362,6 +415,10 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
     return () => {
       closed = true;
       _setSseConnected(false);
+      // Back to the OPTIMISTIC value, not `true`. Teardown means the stream was
+      // deliberately stopped, which is not a failure — and leaving it degraded would
+      // have a remount (a sign-in, a StrictMode re-run) start out amber for no reason.
+      _setRealtimeDegraded(false);
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
