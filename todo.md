@@ -7557,6 +7557,69 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.103.1 — the call-history filters fit a phone, and the Profile hero stops repeating itself (2026-07-27)
+
+Two owner reports, both about the same thing: a screen saying something twice, or not
+saying it at all.
+
+**The History filters overlapped** (owner, with a screenshot: *"All type of categorize and
+the call history it's overlap. you cannot see it like all calls received or outgoing
+grouping."*)
+
+- [x] **DIAGNOSED BY MEASURING, NOT BY LOOKING.** v2.99.98 added a fourth filter
+      (Received) and a fifth control (Group) to a row that already held three. Each
+      filter needs an icon, a word and a count; five such controls need ~500px and a
+      phone has ~390. With `flex-1` and no `min-w-0` the items could not shrink below
+      their content, so they collided.
+- [x] **THE FIRST FIX WAS NOT ENOUGH, AND THE MEASUREMENT IS WHAT SAID SO.** Splitting
+      into two rows removed the overlap — and headless Chromium against the REAL built
+      stylesheet then reported every label but "All" **clipped at every phone width**:
+      an 87px tab leaves ~39px for the label once icon and count are placed, and
+      "Received" needs ~58. Guessing would have shipped that.
+- [x] So the tab content is **STACKED**: icon and count share a top line, the label gets
+      the tab's full width beneath. Re-measured at 320 / 360 / 375 / 390 / 430 —
+      **0 overlaps, 0 clipped labels, no overflow, Group and Clear both visible, 5/5**.
+- [x] **NOTHING WAS DROPPED to make it fit** — the cheap fix is deleting a label or a
+      control, and all four filters plus both row-2 controls are still there.
+- [x] Group moves out of the tab strip but stays a TOGGLE (`aria-pressed`), so it still
+      composes with whichever filter is chosen — which an exclusive tab could not do
+      (v2.99.98). Splitting it out is also the better hierarchy: the filters are one
+      choice, grouping is a modifier on it.
+- [x] The harness guards both recorded measurement bugs: it names `index-*.css`
+      explicitly (v2.99.94 picked `Docs-*.css` and measured a page with no Tailwind) and
+      ABORTS unless the emulated width really took (v2.99.84 measured a phone at the
+      980px default layout viewport).
+
+**The Profile hero said the same three things as the bar above it** (owner: *"when you
+click on the profile remove this one the first name, badge and pin number because it's
+already repeated on the bar on the top bar"*)
+
+- [x] Name, badge and the six digits are gone from the hero. The top bar sits directly
+      above it and carries all three.
+- [x] **WHAT YOU CAN DO WITH THE NUMBER STAYS**, because the top bar cannot do it:
+      settings, QR and copy are the reason the block exists and none of them is anywhere
+      else. The `aria-label` still names the number, which is right — a screen reader
+      needs to know which number the button is about.
+- [x] **THE BUILD GOES IN THE SPACE INSTEAD** (owner: *"put the current version number …
+      whenever it's update we will understand which version we are"*), from
+      `shared/version.ts` — the same constant the server serves at `/api/version` and the
+      auto-updater compares against, so the stamp can never disagree with what is
+      deployed. The footer keeps only what the hero does not say, so the version is not
+      printed twice on one screen.
+
+**Tests**
+
+- [x] `client/src/pages/app/historyFilterFit.test.ts` (5) pins the structural rules the
+      measurement rests on — a layout regression here is invisible in a unit test
+      otherwise, and this bar has now broken twice.
+- [x] **Four pre-existing pins rewritten to the new rule rather than relaxed**, and all
+      four had asserted the PRESENCE of exactly what the owner asked to remove: three in
+      `profileHub.test.ts` (the badge, the number, its bidi isolation) and one in
+      `verifiedBadge.test.ts`, whose surface list no longer includes Profile — the badge's
+      surface for the signed-in user is the top bar, which that list already covered.
+- [x] No schema change, no new dependency, no new env var, no server change.
+      Suite 3117 passed / 1 skipped.
+
 ## v2.103.0 — swipe a thread row for Unread / Pin / Mute / Delete / Archive (2026-07-27)
 
 Owner, with two screenshots of the intended row: in the MESSAGES LIST (outside a chat),

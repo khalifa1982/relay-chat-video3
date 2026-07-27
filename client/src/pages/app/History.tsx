@@ -653,11 +653,11 @@ export default function HistoryPage() {
       {/* Filter bar: All / Dialed / Missed segmented control + Clear History
           on the right. Sits ABOVE the scrolling list, so it (and the bottom
           tab bar below the page) stay put while the log scrolls. */}
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-3 flex flex-col gap-2">
         <div
           role="tablist"
           aria-label="Filter calls"
-          className="flex flex-1 gap-1 rounded-xl bg-muted/50 p-1"
+          className="flex gap-1 rounded-xl bg-muted/50 p-1"
         >
           {FILTERS.map((f) => {
             const active = filter === f.key;
@@ -671,16 +671,22 @@ export default function HistoryPage() {
                 aria-selected={active}
                 onClick={() => setFilter(f.key)}
                 className={
-                  "flex flex-1 items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold transition-colors " +
+                  // STACKED, and measured rather than guessed: side by side, an 87px
+                  // tab at 390px leaves the label ~39px and "Received" needs ~58, so
+                  // every label but "All" was clipped at every phone width. On two
+                  // lines the icon and count share the top and the label gets the
+                  // tab's full width.
+                  "flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1 text-[11px] font-semibold transition-colors " +
                   "outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
                   (active
                     ? "bg-background text-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground")
                 }
               >
+                <span className="flex items-center gap-1">
                 <Icon
                   className={
-                    "size-3.5 " +
+                    "size-3.5 shrink-0 " +
                     (f.key === "missed"
                       ? active ? "text-red-500" : ""
                       : f.key === "dialed"
@@ -690,11 +696,10 @@ export default function HistoryPage() {
                           : "")
                   }
                 />
-                {f.label}
                 {n > 0 && (
                   <span
                     className={
-                      "min-w-4 rounded-full px-1 text-[10px] font-bold leading-4 " +
+                      "min-w-4 shrink-0 rounded-full px-1 text-[10px] font-bold leading-4 " +
                       (f.key === "missed"
                         ? "bg-red-500/15 text-red-500"
                         : "bg-muted text-muted-foreground")
@@ -703,9 +708,23 @@ export default function HistoryPage() {
                     {n > 99 ? "99+" : n}
                   </span>
                 )}
+                </span>
+                <span className="max-w-full truncate">{f.label}</span>
               </button>
             );
           })}
+        </div>
+
+        {/* Row 2 — the MODIFIER and the destructive action, apart from the filters.
+            v2.99.98 put Group inside the tab strip, and on a phone that was the bug the
+            owner reported: four filters (icon + label + count) plus a fifth control need
+            about 500px and a phone has ~390, so with `flex-1` and no `min-w-0` the labels
+            collided and the row was unreadable. Measured, not guessed — see
+            client/src/pages/app/historyFilterFit.test.ts.
+
+            Splitting it is also the better hierarchy: the filters are ONE choice (which
+            calls), while grouping is a modifier that composes with whichever is chosen. */}
+        <div className="flex items-center gap-2">
           {/* v2.99.98 (owner): "there is something called grouping. Grouping means
               grouping, if a person who called you several time, it will group his
               number of notification into one."
@@ -735,18 +754,19 @@ export default function HistoryPage() {
             <Layers className={"size-3.5 " + (grouped ? "text-violet-400" : "")} />
             Group
           </button>
+          <span className="flex-1" />
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Clear history"
+            title="Clear your call history"
+            disabled={clearHistory.isPending || items.length === 0}
+            onClick={() => setConfirmClear(true)}
+            className="size-9 shrink-0 rounded-lg text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+          >
+            <Trash2 className="size-[18px]" />
+          </Button>
         </div>
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="Clear history"
-          title="Clear your call history"
-          disabled={clearHistory.isPending || items.length === 0}
-          onClick={() => setConfirmClear(true)}
-          className="size-9 shrink-0 rounded-lg text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
-        >
-          <Trash2 className="size-[18px]" />
-        </Button>
       </div>
 
       <AlertDialog open={confirmClear} onOpenChange={(open) => !open && setConfirmClear(false)}>
