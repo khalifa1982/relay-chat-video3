@@ -13,16 +13,23 @@ import path from "node:path";
  */
 const ROOT = path.resolve(__dirname, "../../../..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
+import { filterItems } from "./History";
+
 const PAGE = read("client/src/pages/app/History.tsx");
 const ROUTERS = read("server/v2routers.ts");
 const V2DB = read("server/v2db.ts");
 const SCHEMA = read("drizzle/schema.ts");
 
 describe("History page — filter tabs + Clear History", () => {
-  it("exposes exactly three filters — All / Dialed / Missed — each with an icon", () => {
+  it("exposes exactly four filters — All / Dialed / Received / Missed — each with an icon", () => {
+    // v2.99.98 added Received at the owner's request; the count is asserted so a fifth
+    // tab has to be a deliberate act rather than something that drifts in.
     expect(PAGE).toMatch(/\{ key: "all", label: "All", icon: Phone \}/);
     expect(PAGE).toMatch(/\{ key: "dialed", label: "Dialed", icon: PhoneOutgoing \}/);
+    expect(PAGE).toMatch(/\{ key: "received", label: "Received", icon: PhoneIncoming \}/);
     expect(PAGE).toMatch(/\{ key: "missed", label: "Missed", icon: PhoneMissed \}/);
+    const decl = PAGE.slice(PAGE.indexOf("const FILTERS"), PAGE.indexOf("];", PAGE.indexOf("const FILTERS")));
+    expect(decl.match(/\{ key: "/g)?.length).toBe(4);
     expect(PAGE).toMatch(/role="tablist"/);
   });
 
@@ -39,9 +46,32 @@ describe("History page — filter tabs + Clear History", () => {
   });
 
   it("filters actually narrow the list (dialed = outgoing, missed = incoming missed/declined)", () => {
-    // The filter is a ternary inside `visible` (v2.95: search now composes with it).
-    expect(PAGE).toMatch(/filter === "dialed"\s*\?\s*items\.filter\(\(it\) => it\.direction === "out"\)/);
-    expect(PAGE).toMatch(/filter === "missed"\s*\?\s*items\.filter\(isMissedItem\)/);
+    // REWRITTEN in v2.99.98. This used to freeze the exact ternary that lived inside
+    // `visible`, so it broke the moment the selection became a pure exported function
+    // — while saying nothing about whether the filters actually filter. It is now a
+    // BEHAVIOURAL check against that function, which is strictly stronger; the tab
+    // semantics (including Received, and Received never containing a missed call) are
+    // covered in full by historyGrouping.test.ts.
+    const inbound = {
+      kind: "solo" as const,
+      key: "solo-1",
+      at: 2,
+      direction: "in" as const,
+      call: { id: 1, direction: "in" as const, status: "missed", startedAt: new Date(2), other: null },
+    };
+    const outbound = {
+      kind: "solo" as const,
+      key: "solo-2",
+      at: 1,
+      direction: "out" as const,
+      call: { id: 2, direction: "out" as const, status: "missed", startedAt: new Date(1), other: null },
+    };
+    const log = [inbound, outbound];
+    expect(filterItems(log, "dialed").map((x) => x.key)).toEqual(["solo-2"]);
+    expect(filterItems(log, "missed").map((x) => x.key)).toEqual(["solo-1"]);
+    expect(filterItems(log, "all").length).toBe(2);
+    // And the page routes its list through that one function rather than re-deriving.
+    expect(PAGE).toMatch(/let v = filterItems\(items, filter\);/);
   });
 });
 
