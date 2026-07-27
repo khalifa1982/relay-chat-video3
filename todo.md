@@ -7557,6 +7557,27 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.88 — the status refusal stops guessing at a cause (2026-07-27)
+- [x] **A CORRECTION TO v2.99.87, MADE BY THE OWNER'S OWN DATA.** That release made a refused status delete
+      visible, which was right — but its message asserted a CAUSE: "it was posted from a different sign-in on
+      this browser". The `recover-identity` dry run then disproved it. Identity **#3 (777777)** holds
+      **2 statuses** and 143 rows in total; the orphan **#62 (601586)** holds **0 statuses**. Both of the
+      owner's stories are on the identity they are signed into, so the cross-identity explanation was wrong.
+- [x] **THE MESSAGE NOW DESCRIBES THE EFFECT AND WHAT TO DO, and names no cause**: "That status is no longer
+      there to delete — it may have already expired. Pull to refresh." The likelier mechanism is a STALE id:
+      the feed is cached, a story expires at 24h, and tapping Delete on a row the reaper has already removed
+      returns exactly that `ok: false`. But "likelier" is not grounds for telling somebody why, and a
+      confident wrong reason sends them looking in the wrong place.
+- [x] **THE RECOVERY FOR 601-586 IS BLOCKED, and the guard is what blocked it** — `recover-identity` refused
+      because completing the swap would DELETE identity #3, which carries 39 messages, 15 conversations,
+      14 contacts, 44 calls, 28 conferences, 2 statuses and a party line. That is exactly the emptiness check
+      described in v2.99.60 doing its job on real data. **601-586's 17 rows** (4 messages, 1 conversation,
+      3 contacts, 7 calls, 2 conferences) need a genuine MERGE, not a swap — a different and larger job,
+      recorded rather than forced.
+- [x] `statusDelete.test.ts` pin rewritten to assert the message carries no cause, and explicitly that it
+      does NOT say "different sign-in".
+- [x] No schema change, no new dependency, no server change. 2570 tests.
+
 ## v2.99.87 — a status that will not delete now says why (2026-07-27)
 - [x] **OWNER, with a screenshot of their own story viewer**: *"i put status but i found something that i
       cant delete and i dunno why it showing and when i posted it ??!! The other status showing i can delete

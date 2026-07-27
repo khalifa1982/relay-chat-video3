@@ -669,10 +669,16 @@ export function StatusViewer({
               //     BACK on the next open. Tapping Delete looked like it worked and
               //     the status stayed forever.
               //
-              // Now the verdict is read and a refusal is SAID OUT LOUD. The honest
-              // cause matters here: this browser can hold more than one identity
-              // (the guest→registered orphan class), and a status posted under a
-              // different sign-in is visible to you but is not yours to delete.
+              // Now the verdict is read and a refusal is SAID OUT LOUD.
+              //
+              // The message deliberately does NOT assert a cause. My first version
+              // blamed a second identity on the browser, and the owner's own data
+              // then disproved it: both of their statuses sit on the identity they
+              // are signed into. The likelier cause is a STALE id — the feed is
+              // cached, a story expires at 24h, and tapping Delete on a row the
+              // reaper has already removed returns exactly this `ok: false`. Naming
+              // a cause I cannot prove is worse than describing the effect and
+              // saying what to do about it.
               let ok = false;
               try {
                 const res = await remove.mutateAsync({ id: item.id });
@@ -690,7 +696,7 @@ export function StatusViewer({
               ]);
               if (!ok) {
                 toast.error(
-                  "That status couldn't be deleted — it was posted from a different sign-in on this browser."
+                  "That status is no longer there to delete — it may have already expired. Pull to refresh."
                 );
                 return; // do NOT advance: the item is still there.
               }

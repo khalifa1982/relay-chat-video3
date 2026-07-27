@@ -81,7 +81,13 @@ describe("the client reads the verdict instead of discarding it", () => {
   it("says something when the delete is REFUSED, and does not advance", () => {
     // Advancing on a refusal is what made it look like it had worked.
     expect(HANDLER).toMatch(/if \(!ok\) \{/);
-    expect(HANDLER).toMatch(/couldn't be deleted/);
+    // The message describes the EFFECT and what to do, and deliberately asserts no
+    // cause: the first version blamed a second identity on the browser and the
+    // owner's own data disproved it (both of their statuses are on the identity
+    // they are signed into). A stale cached id after the 24h reaper is the likelier
+    // cause, but "likelier" is not grounds for telling somebody why.
+    expect(HANDLER).toMatch(/no longer there to delete/);
+    expect(HANDLER).not.toMatch(/different sign-in/);
     const refusal = HANDLER.slice(HANDLER.indexOf("if (!ok) {"));
     expect(refusal).toMatch(/return; \/\/ do NOT advance/);
   });
