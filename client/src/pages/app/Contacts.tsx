@@ -56,6 +56,7 @@ import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
+import { presenceDot } from "@/app/presenceDot";
 
 function initialsFrom(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
@@ -399,6 +400,7 @@ function ContactRow({
      *  / M14) = a saved number that isn't a RELAY user → no badge. */
     role?: "guest" | "registered" | "admin" | null;
     isOnline: boolean;
+    idle?: boolean;
     /** Busy line (v2.88): in a live call right now. */
     inCall: boolean;
     lastSeenAt: Date | string | null;
@@ -434,21 +436,21 @@ function ContactRow({
         rounded="rounded-2xl"
       >
         {/* Presence LED — amber "on a call" (v2.88 busy line) / green online /
-            grey offline; hidden for a stale guest. */}
-        {!c.presenceHidden && (
-          <span
-            aria-label={c.inCall ? "On a call" : c.isOnline ? "Online" : "Offline"}
-            title={c.inCall ? "On a call right now" : undefined}
-            className={
-              "absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card " +
-              (c.inCall
-                ? "bg-amber-400"
-                : c.isOnline
-                  ? "bg-[color:var(--relay-online)]"
-                  : "bg-[color:var(--relay-offline)]")
-            }
-          />
-        )}
+            FADED green away (v2.99.92 idle) / grey offline; hidden for a stale
+            guest. The rule lives in `presenceDot`, shared with every other dot in
+            the app, because eight copies is how two surfaces end up disagreeing
+            about the same person. */}
+        {!c.presenceHidden && (() => {
+          const dot = presenceDot(c);
+          return (
+            <span
+              aria-label={dot.label}
+              title={c.inCall ? "On a call right now" : dot.label}
+              className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card"
+              style={{ background: dot.color, boxShadow: dot.glow || undefined }}
+            />
+          );
+        })()}
       </PeerAvatar>
       {/* Main area → the peer PROFILE POPUP (v2.96 owner spec). */}
       <button
@@ -477,6 +479,10 @@ function ContactRow({
               <span className="text-[#ff8d84]">blocked</span>
             ) : c.presenceHidden ? null : c.inCall ? (
               <span className="text-amber-500">on a call</span>
+            ) : c.isOnline && c.idle ? (
+              // Backgrounded (v2.99.92): "away", not "online" and definitely not
+              // "last seen 3s ago", which is what minimising used to produce.
+              <span className="text-muted-foreground">away</span>
             ) : c.isOnline ? (
               <span className="text-[color:var(--relay-online)]">online</span>
             ) : (

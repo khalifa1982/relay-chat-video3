@@ -55,6 +55,7 @@ import { previewOf } from "@/app/messagePreview";
 import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
 import { StatusStrip } from "./Status";
 import { PeerAvatar, openPeerProfile, type PeerProfileChatActions } from "@/app/PeerOverlays";
+import { presenceDot } from "@/app/presenceDot";
 import { formatLastSeen } from "@shared/profileFields";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
@@ -490,15 +491,18 @@ export default function MessagesPage() {
                                   avatarUrl={t.peerAvatarUrl}
                                   size={60}
                                 >
-                                  <span
-                                    aria-label={t.peerIsOnline ? "Online" : "Offline"}
-                                    className={
-                                      "absolute bottom-0 right-0 size-[15px] rounded-full border-2 border-card " +
-                                      (t.peerIsOnline
-                                        ? "bg-[color:var(--relay-online)]"
-                                        : "bg-[color:var(--relay-offline)]")
-                                    }
-                                  />
+                                  {(() => {
+                                    // v2.99.92: one shared rule for every dot.
+                                    const dot = presenceDot({ isOnline: t.peerIsOnline, idle: t.peerIdle });
+                                    return (
+                                      <span
+                                        aria-label={dot.label}
+                                        title={dot.label}
+                                        className="absolute bottom-0 right-0 size-[15px] rounded-full border-2 border-card"
+                                        style={{ background: dot.color, boxShadow: dot.glow || undefined }}
+                                      />
+                                    );
+                                  })()}
                                 </PeerAvatar>
                               )}
                             </div>
@@ -1337,15 +1341,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             >
               {/* Presence LED: green = online, grey = offline (v2.88 —
                   red used to read as "busy/error"). */}
-              <span
-                aria-label={thread?.peerIsOnline ? "Online" : "Offline"}
-                className={
-                  "absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card " +
-                  (thread?.peerIsOnline
-                    ? "bg-[color:var(--relay-online)]"
-                    : "bg-[color:var(--relay-offline)]")
-                }
-              />
+              {(() => {
+                const dot = presenceDot({ isOnline: thread?.peerIsOnline, idle: thread?.peerIdle });
+                return (
+                  <span
+                    aria-label={dot.label}
+                    title={dot.label}
+                    className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card"
+                    style={{ background: dot.color, boxShadow: dot.glow || undefined }}
+                  />
+                );
+              })()}
             </PeerAvatar>
           )}
         </div>
@@ -1384,6 +1390,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               <span className="text-[color:var(--relay-online)] font-medium animate-pulse">typing…</span>
             ) : isGroup ? (
               <span className="text-muted-foreground">{`${thread?.memberCount ?? infoQuery.data?.members.length ?? ""} members`}</span>
+            ) : thread?.peerIsOnline && thread?.peerIdle ? (
+              // Backgrounded (v2.99.92) — "away", not "online", and not the
+              // "last seen 3s ago" that minimising used to produce.
+              <span className="text-muted-foreground font-medium">away</span>
             ) : thread?.peerIsOnline ? (
               <span className="text-[color:var(--relay-online)] font-medium">online</span>
             ) : thread?.peerLastSeenAt ? (

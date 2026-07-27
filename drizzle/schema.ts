@@ -261,8 +261,26 @@ export const presence = mysqlTable(
   "presence",
   {
     identityId: int("identityId").primaryKey(),
+    /**
+     * Has a live session — foreground OR backgrounded (v2.99.92).
+     *
+     * This deliberately does NOT mean "actively looking at the app". Minimising
+     * used to flip it false, which showed the person OFFLINE to everybody
+     * (owner: "whenever you minimize the app, the user showing offline, not the
+     * idle"). `idleSince` is what separates the two now.
+     */
     isOnline: boolean("isOnline").notNull().default(false),
     lastSeenAt: timestamp("lastSeenAt").defaultNow().notNull(),
+    /**
+     * When the app went to the background, or NULL while it is in the foreground.
+     *
+     * Non-null WITH `isOnline` true is the idle/away state. It is a timestamp
+     * rather than a flag because the offline-message email needs to know how long
+     * somebody has actually been away, and `lastSeenAt` can no longer answer that
+     * — a backgrounded app keeps heartbeating, which is what stops it decaying to
+     * offline after two minutes.
+     */
+    idleSince: timestamp("idleSince"),
     /** Active socket session id (helps when an identity has multiple tabs). */
     socketSessionId: varchar("socketSessionId", { length: 64 }),
   },

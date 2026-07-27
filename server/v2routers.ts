@@ -61,6 +61,8 @@ import {
   revealExpiringMessage,
   getPresenceAudienceIds,
   getPresenceForIds,
+  presenceNeedsNotification,
+  markIdle,
   isGuestPresenceHidden,
   listCallHistory,
   listConferenceHistory,
@@ -91,6 +93,8 @@ import {
   recentAutoReplyExists,
   getPublicStats,
   upsertPushSubscription,
+  listPushSubscriptions,
+  pushEnabledForIdentity,
   deleteOwnPushSubscription,
   addOnlineWatch,
   takeOnlineWatchers,
@@ -115,6 +119,7 @@ import { appBaseUrl } from "./appUrl";
 import { unsubscribeHeaders, unsubscribeLink } from "./unsubscribe";
 import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
 import { classifyNativeToken } from "./expoPush";
+import { fcmConfig } from "./fcm";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
 import { setIdentityAutoReply, autoReplyEnabledFor } from "./v2db";
@@ -219,7 +224,18 @@ function messageWaitingText(opts: { appUrl: string | null; unsubscribeUrl?: stri
  * notification on its own.
  */
 function awayForMs(presence: PresenceLite | undefined): number | null {
-  if (!presence || presence.isOnline) return null;
+  if (!presence) return null;
+  // IDLE (v2.99.92): a backgrounded app keeps heartbeating — that is what stops it
+  // decaying to offline after two minutes — so `lastSeenAt` no longer answers "how
+  // long have they been away" and would report a few seconds forever. `idleSince`
+  // records when they went away rather than when they last beat, which is why it is
+  // a timestamp and not a flag.
+  if (presence.isOnline) {
+    if (!presence.idle || !presence.idleSince) return null;
+    const since = new Date(presence.idleSince).getTime();
+    if (!Number.isFinite(since)) return null;
+    return Math.max(0, Date.now() - since);
+  }
   const seen = presence.lastSeenAt ? new Date(presence.lastSeenAt).getTime() : NaN;
   if (!Number.isFinite(seen)) return null;
   return Math.max(0, Date.now() - seen);
@@ -1003,6 +1019,10 @@ export const v2DirectoryRouter = router({
         lastName: id.lastName,
         avatarUrl: id.avatarUrl,
         isOnline: hidden ? false : (pres?.isOnline ?? false),
+        // v2.99.92 — signed in but backgrounded. Emitted alongside `isOnline`, never
+        // instead of it, so an older client simply ignores it and keeps today's
+        // reading. Suppressed with everything else when presence is hidden.
+        idle: hidden ? false : (pres?.idle ?? false),
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
         statusOverride: hidden ? "" : ((id.statusOverride as "" | "away" | "travel" | null) ?? ""),
         presenceHidden: hidden,
@@ -1129,7 +1149,7 @@ export const v2DirectoryRouter = router({
           isOnline: p.isOnline,
           lastSeenAt: p.lastSeenAt,
         });
-        return hidden ? { ...p, isOnline: false, lastSeenAt: null } : p;
+        return hidden ? { ...p, isOnline: false, idle: false, lastSeenAt: null } : p;
       });
     }),
 
@@ -1165,6 +1185,7 @@ export const v2DirectoryRouter = router({
         return {
           number: i.number,
           isOnline: hidden ? false : (pres?.isOnline ?? false),
+          idle: hidden ? false : (pres?.idle ?? false),
           inCall: hidden ? false : inCallSet.has(i.number),
         };
       });
@@ -1248,6 +1269,26 @@ export const v2DirectoryRouter = router({
     return { ok: true, at: new Date() };
   }),
 
+  /**
+   * "I went to the background" — the idle beat (v2.99.92).
+   *
+   * Owner: *"whenever you minimize the app, the user showing offline, not the idle."*
+   * Minimising used to fire the go-offline beacon below, so switching apps for five
+   * seconds read as OFFLINE to every contact.
+   *
+   * Deliberately does NOT fan a presence SSE event. The person is still online as far
+   * as `isOnline` goes, so the boolean every SSE consumer reads has not changed —
+   * publishing `true` again would be a no-op that costs an audience query on every
+   * background/foreground flip, and publishing `false` would be the bug. Idle reaches
+   * the UI on the next ordinary presence read, which is the honest cadence for a
+   * signal that means "not looking right now".
+   */
+  markIdle: publicProcedure.mutation(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    await markIdle(me.id);
+    return { ok: true };
+  }),
+
   /** Explicit "I'm leaving" beacon. */
   goOffline: publicProcedure.mutation(async ({ ctx }) => {
     const me = requireIdentity(ctx);
@@ -1312,6 +1353,7 @@ export const v2ContactsRouter = router({
         blocked: r.blocked === true,
         identityId: ident ?? null,
         isOnline: hidden ? false : (pres?.isOnline ?? false),
+        idle: hidden ? false : (pres?.idle ?? false),
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
         presenceHidden: hidden,
         verified: ident != null ? (verifiedById.get(ident) ?? false) : false,
@@ -1429,6 +1471,7 @@ export const v2MessagesRouter = router({
         peerDisplayName: b.otherDisplayName,
         peerAvatarUrl: b.otherAvatarUrl,
         peerIsOnline: presenceHidden ? false : (p?.isOnline ?? false),
+        peerIdle: presenceHidden ? false : (p?.idle ?? false),
         peerLastSeenAt: presenceHidden ? null : (p?.lastSeenAt ?? null),
         peerVerified: verifiedById.get(b.otherIdentityId) ?? false,
         peerRole: (rolesById.get(b.otherIdentityId) ?? "guest") as IdentityRole,
@@ -1808,7 +1851,10 @@ export const v2MessagesRouter = router({
         if (peerIds.length > 0) {
           const presences = await getPresenceForIds(peerIds);
           for (const p of presences) presenceById.set(p.identityId, p);
-          offlinePeerIds = peerIds.filter((pid) => !presenceById.get(pid)?.isOnline);
+          // v2.99.92: a BACKGROUNDED app needs this push every bit as much as a
+          // closed one — it cannot draw an in-page toast. One shared rule, so the
+          // three sites that ask this question cannot drift apart.
+          offlinePeerIds = peerIds.filter((pid) => presenceNeedsNotification(presenceById.get(pid)));
           // A voicemail already pushed its own, better-worded notification.
           if (!input.meta?.voicemail) {
             const from = me.displayName || me.number;
@@ -1926,6 +1972,12 @@ export const v2MessagesRouter = router({
         if (peerIds.length === 1 && (await autoReplyEnabledFor(peerIds[0]))) {
           const peerId = peerIds[0];
           const [pres] = await getPresenceForIds([peerId]);
+          // DELIBERATELY NOT `presenceNeedsNotification` (v2.99.92). This one posts a
+          // line in somebody else's name saying they are away and will reply later —
+          // and a person who merely switched apps for ten seconds may reply
+          // immediately, which would make the auto-reply a lie. Genuinely offline is
+          // the right trigger here, and it is the same over-reaction to minimising
+          // that this release exists to remove, in message form.
           const offline = !pres?.isOnline;
           if (
             offline &&
@@ -3707,7 +3759,9 @@ export const v2StatusRouter = router({
       }
       try {
         const [pres] = await getPresenceForIds([st.identityId]);
-        if (!pres?.isOnline && (await pushReachable(st.identityId))) {
+        // Same shared rule as `messages.send` (v2.99.92): a backgrounded app cannot
+        // draw an in-page toast, so idle needs the OS notification too.
+        if (presenceNeedsNotification(pres) && (await pushReachable(st.identityId))) {
           // Content-free by the standing rule: the sender's name, never a word of
           // the reply. "Replied to your status" is a fact about the recipient's own
           // post and reveals nothing about what was said.
@@ -3816,5 +3870,107 @@ export const v2AdminRouter = router({
         `[admin] identity ${input.identityId} renumbered ${res.oldNumber} -> ${res.newNumber} by identity ${me.id}`
       );
       return { ...res };
+    }),
+
+  /**
+   * WHY A NOTIFICATION DID NOT ARRIVE (v2.99.91).
+   *
+   * Owner: *"Can you check the Firebase configuration as still the notification for
+   * the front mobile apps for Android? It's not showing or it's not active."*
+   *
+   * A native push crosses FIVE links, and each one fails in a way that looks
+   * identical from the phone — nothing happens:
+   *   1. the shell posts a token into the WebView (external Expo app),
+   *   2. `push.subscribe` stores it with a kind the server can route,
+   *   3. the transport for that kind is configured on the fleet,
+   *   4. the user has not turned push off,
+   *   5. something actually SENDS for the event being tested.
+   * Guessing which one is broken has already cost more than building this. It
+   * reports each link separately, so a "not showing" becomes one named cause.
+   *
+   * READ-ONLY, and it never returns a token. An FCM registration token plus the
+   * project key, or an Expo token on its own, is enough to push to that handset —
+   * so the row is reported as kind + length + a short prefix, which is enough to
+   * tell two devices apart and not enough to address either.
+   */
+  pushDiagnostics: publicProcedure
+    .input(z.object({ identityId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      let rows: Array<{ endpoint: string; kind?: string | null }> = [];
+      let dbOk = true;
+      try {
+        rows = await listPushSubscriptions(input.identityId);
+      } catch {
+        dbOk = false;
+      }
+      // Legacy rows predate the column and are Web Push by construction (v2.99.79).
+      const kindOf = (k: string | null | undefined) => (k && k.length > 0 ? k : "webpush");
+      const devices = rows.map((r) => ({
+        kind: kindOf(r.kind),
+        // What the SHAPE says the token is, which is what actually decides the
+        // transport — a row whose stored kind and derived kind disagree is
+        // unroutable, and that disagreement is invisible without printing both.
+        derived: classifyNativeToken(r.endpoint) ?? (r.endpoint.startsWith("https://") ? "webpush" : "unknown"),
+        length: r.endpoint.length,
+        prefix: r.endpoint.slice(0, 12),
+      }));
+      return {
+        dbOk,
+        pushEnabled: await pushEnabledForIdentity(input.identityId),
+        devices,
+        /** Which transports THIS fleet can use right now — read from the running
+         *  process, which is stronger evidence than reading an env file. */
+        transports: {
+          // Expo needs no server credential for ordinary sends; the FCM server key
+          // and APNs key live in EAS, not here. So an Expo token is deliverable as
+          // soon as it is stored — which is why "configured" is not the same
+          // question as "will it arrive".
+          expo: true,
+          expoAccessToken: !!process.env.EXPO_ACCESS_TOKEN,
+          fcm: !!fcmConfig(),
+          webpush: !!vapidConfig(),
+        },
+        /**
+         * The kinds that any code path actually sends. Hard-coded on purpose: it is
+         * a statement about the codebase, not a runtime probe, and it is the answer
+         * to the most likely form of the owner's report — testing by CALLING a
+         * closed app and getting nothing, because `incoming-call` was removed in
+         * v2.99.11 at their own request and nothing has sent it since.
+         */
+        sendsFor: ["message", "missed-call", "voicemail", "contact-online"],
+        ringPushed: false,
+      };
+    }),
+
+  /**
+   * Send a REAL push to one identity, through the REAL sender.
+   *
+   * `sendPushToIdentity` is called directly rather than reimplemented, so this
+   * proves the actual production path — including the master push switch, the
+   * per-kind transport routing and the dead-token pruning. A parallel test sender
+   * would be able to pass while the real one was broken, which is worse than
+   * having no test at all.
+   *
+   * The body is content-free and says it is a test: it lands on somebody else's
+   * lock screen.
+   */
+  sendTestPush: publicProcedure
+    .input(z.object({ identityId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = await requireAdmin(ctx);
+      // Rate-limited even for an admin: this writes to a third party's device, and
+      // a stuck retry loop in the panel must not become a notification flood.
+      directoryGate(ctx);
+      const delivered = await sendPushToIdentity(input.identityId, {
+        kind: "message",
+        title: "RELAY test notification",
+        body: "If you can see this, notifications are working on this device.",
+        tag: `relay-test-${input.identityId}`,
+        url: "/app",
+      });
+      // Ids only — this lands in logs.
+      console.warn(`[admin] test push to identity ${input.identityId} by identity ${me.id}: ${delivered} device(s)`);
+      return { delivered };
     }),
 });

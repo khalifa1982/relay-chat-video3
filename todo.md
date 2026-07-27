@@ -7557,6 +7557,173 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.92 — minimising the app is IDLE, not offline (2026-07-27)
+- [x] **OWNER**: *"Whenever you minimize the app, the user showing offline, not the idle."* `PresenceManager`
+      fired the go-offline BEACON on `visibilitychange → hidden` as well as on `pagehide`, so switching apps for
+      five seconds told every contact you had left. Now: **hidden → idle** (a slow 60s beat), **visible → the
+      ordinary heartbeat, which clears idle in the same write**, **pagehide/beforeunload → the offline beacon,
+      exactly as before**.
+- [x] **THE HARD PART WAS NOT THE THIRD STATE — IT IS THAT `isOnline` ANSWERED TWO DIFFERENT QUESTIONS.** "What
+      LED do I draw?" and "should I push, because they cannot see this in the open app?" were the same boolean.
+      So keeping `isOnline` true while backgrounded would have **SILENTLY STOPPED NOTIFYING A MINIMISED APP** —
+      making the owner's complaint worse, in a way nothing on screen would ever show. New shared
+      `presenceNeedsNotification` (`!isOnline || idle`) is used at every site that asks the second question,
+      it FAILS TOWARD telling somebody (an unknown identity counts as needing one, because failing the other
+      way loses the message rather than a moment's quiet), and a test enumerates the call sites so a fourth
+      added later has to come through it.
+- [x] **THE AUTO-REPLY DELIBERATELY DOES NOT USE THAT RULE, and the difference is the point**: it posts a line
+      in somebody else's name saying they are away and will reply later, and a person who switched apps for ten
+      seconds may reply immediately — firing it on idle would make the auto-reply a lie, which is the same
+      over-reaction to minimising this release exists to remove, in message form. Pinned as a deliberate
+      exception rather than left to look like an oversight.
+- [x] **ONE NEW NULLABLE COLUMN, `presence.idleSince`, and NULL is exactly the reading every existing row
+      needs** — so the additive migration is a no-op until a client starts reporting idle. It is a TIMESTAMP
+      rather than a flag because the offline-message email's rule 2 asks "have they really been away a while",
+      and `lastSeenAt` can no longer answer that: a backgrounded app keeps beating, which is precisely what
+      stops it decaying to offline after two minutes. `awayForMs` now measures from `idleSince` while idle and
+      falls back to `lastSeenAt` for a genuinely offline person.
+- [x] **`markIdle` KEEPS `isOnline` TRUE — and that is the truth, not a convenience**: the SSE stream is open
+      and a call still rings, so the person really is reachable. It records the FIRST idle moment via
+      `COALESCE`, because a bare `now` would reset the clock on every beat and nobody would ever read as away
+      for a while. `markOnline` and `markOffline` both clear `idleSince`, and so does the reaper — an offline
+      row carrying an idle timestamp is a contradiction, harmless today and a trap the moment anyone reads the
+      column alone.
+- [x] **`markIdle` IS A SEPARATE ENDPOINT FROM `heartbeat`, NOT A FLAG ON IT.** `heartbeat` calls `markOnline`,
+      which clears idle AND can fire the "X is back online" watcher push — reusing it while hidden is exactly
+      the bug v2.99.25/H6 fixed, and an idle beat built on it would have reintroduced it. It also fans NO
+      presence SSE event: `isOnline` has not changed, so publishing `true` again is a no-op costing an audience
+      query per app switch, and publishing `false` would be the bug.
+- [x] **`idle` IS DERIVED IN EXACTLY ONE PLACE.** Every presence read in the routers already funnelled through
+      `getPresenceForIds`, so `idle: r.isOnline && idleSince != null` there reaches all of them at once — and no
+      consumer can combine the two fields wrongly, because none of them sees the raw pair. Guest-privacy
+      suppression covers idle too: a hidden presence must not leak "away" while withholding everything else.
+- [x] **IT MAPS ONTO THE `away` THE APP ALREADY HAS**, rather than inventing a display state: every surface
+      already knows how to render away, so an automatic idle cannot be handled inconsistently by one screen. A
+      MANUAL override still wins — somebody who set "travelling" said so on purpose, and an automatic signal
+      must not overwrite a deliberate one. `idle` DEFAULTS TO FALSE in `effectiveStatus`, and that default is the
+      safety property: a caller not yet taught about it degrades to the old reading (online), never to the
+      wrong-way failure of showing somebody offline.
+- [x] **AN AUTOMATIC IDLE IS NOT LABELLED AS A CHOSEN STATUS.** The dialer's status chip now reads the
+      OVERRIDE directly instead of the resolved status, because both resolve to `away` and reading the chip off
+      the resolution would put a label in somebody's mouth that they never selected. The presence LINE says
+      "away"; the chip stays empty. (A manual "Away" also now reads "away" on that line rather than "online
+      now", which was the line contradicting the chip.)
+- [x] **ONE LED RULE FOR EVERY DOT** (new `client/src/app/presenceDot.ts`). A third state meant eight separate
+      dots across Contacts, the Messages thread list, the chat header and the profile popup each had to learn
+      it — and eight copies is exactly how two surfaces end up disagreeing about the same person (v2.99.77 was
+      that bug: one rule applied in four places and forgotten in a fifth). **THE COLOUR VOCABULARY IS NOT
+      WIDENED**: idle is the online green FADED with no glow, not a new hue, because amber already means "on a
+      call" here and "Do Not Disturb" in the top bar and a third meaning would make colour stop carrying
+      information; the glow is what makes green read as "active right now", so idle loses it, and the LABEL is
+      what says it unambiguously — which is also what a screen reader and a colour-blind reader get.
+- [x] **`onLeave`'s DEAD BRANCH DELETED**: its `closing` parameter had exactly one false caller,
+      `visibilitychange → hidden`, which now marks idle — so the branch was unreachable, and an unreachable
+      branch in a presence path is how the wrong one gets taken later.
+- [x] **THE COST, STATED RATHER THAN HIDDEN**: on mobile Safari a real tab CLOSE often fires only
+      `visibilitychange`, so such a close now reads "away" for up to two minutes instead of going offline at
+      once. That is the trade — a wrong "offline" every time somebody checks another app, against a slightly
+      late "offline" when they close one browser tab. The 2-minute reaper still converges it. An idle identity
+      also still counts in the landing page's "online now", which makes that figure MORE stable than before,
+      since minimising no longer decrements it.
+- [x] `server/presenceIdle.test.ts` (30), with the shared rule, `effectiveStatus` and the LED tested
+      BEHAVIOURALLY — a source pin cannot tell you whether a backgrounded app still gets its push, and that is
+      the whole risk. **All 28 tripwires verified by MUTATION** from byte-exact backups and a confirmed-GREEN
+      baseline.
+- [x] **TWO WEAKNESSES OF MY OWN CAUGHT BY THAT RUN and fixed rather than counted as passes, both the same
+      class**: the markIdle assertions matched `isOnline: true` and `lastSeenAt: now` ANYWHERE in the function,
+      and since it is an upsert each string occurs twice — so breaking the UPDATE path left the test green, and
+      the UPDATE is the worse half, the one that keeps a minimised app out of the reaper's way. Now COUNTED,
+      with the insert and the update asserted separately. **A BAD MUTATION OF MY OWN, reported rather than
+      hidden**: the markOnline case inserted a COMMENT line, which changes no behaviour at all — the test was
+      right and the mutation meaningless; replaced with one that drops `idleSince: null` from the UPDATE.
+- [x] **NINE PRE-EXISTING PINS REWRITTEN**, and six of them for the SAME structural reason rather than because
+      the property changed: `ownerUiBatch2`, `qaBatch3`, `qaBatch10` (×2), `statsFeed` and `presenceReaper` all
+      sliced a FIXED number of characters from an anchor, and this release's added comments pushed the code they
+      were reading out of the window — the recurring fixed-slice fragility (v2.99.78). All now bound by the
+      function's own end with a non-empty assertion. The other three were genuine intent changes: `statusReply`,
+      `roundsGaps` and `emailNotifyPrefs` pinned the bare `!isOnline` notification check, i.e. they would have
+      pinned the silent regression; `qaBatch10` also froze `onLeave`'s deleted parameter; and the Contacts /
+      Messages / messagesRowRedesign LED pins froze inline ternaries that moved into the shared helper.
+- [x] **AND THE PROSE TRAP FOR THE SEVENTH TIME**: a `not.toMatch(/onLeave\(/)` matched MY OWN COMMENT
+      explaining `onLeave(false)`'s removal, because `codeOnly` strips comment LINES and the phrase sat
+      mid-line. Fixed by stripping comments — and the wider window it used also ran past `onVisibility` into
+      `const onClose = () => onLeave()`, which legitimately calls it, so it is bounded to its own function now.
+- [x] **NOT VERIFIED ON A DEVICE, said plainly**: the state machine is tested, but nobody has watched a real
+      phone minimise and seen a contact's dot go from green to faded green. The client half rests on
+      `visibilitychange` firing as specified, which is exactly where mobile Safari is inconsistent — hence the
+      cost stated above.
+- [x] One additive nullable column, no new dependency, no new env var. 2688 tests.
+
+## v2.99.91 — why a notification did not arrive (2026-07-27)
+- [x] **OWNER**: *"Can you check the Firebase configuration as still the notification for the front mobile apps
+      for Android? It's not showing or it's not active."* **A NATIVE PUSH CROSSES FIVE LINKS AND EVERY ONE OF
+      THEM FAILS THE SAME WAY FROM THE PHONE — nothing happens**: the shell posts a token into the WebView,
+      `push.subscribe` stores it under a routable kind, the transport for that kind is configured on the fleet,
+      the recipient has not turned push off, and something actually SENDS for the event being tested. Guessing
+      which link is broken has already cost more than building the check, so the admin panel now reports them
+      **separately** and can fire a real send. The owner can run it themselves in ten seconds.
+- [x] **THE ANSWER I CAN GIVE WITHOUT THE FLEET, and it is the most likely explanation**: **no code path sends
+      a push for an incoming CALL.** `kind:"incoming-call"` was removed in v2.99.11 at the owner's own explicit
+      request (*"if the user is offline and you try to call him it should NOT ring automatically"*) and nothing
+      has sent it since — verified again here by scanning every `sendPushToIdentity` call site. So if the test
+      was "call the phone with the app closed", no Firebase configuration on earth would make it ring. What DOES
+      push: a message, a missed call, a voicemail, and a back-online alert. The panel says this out loud rather
+      than leaving it to be rediscovered, and a test **cross-checks the claimed list against the kinds the code
+      really passes** — a hard-coded list that drifts is worse than no list, because it sends somebody looking
+      in the wrong place.
+- [x] **THE SERVER-SIDE CHAIN IS COMPLETE AND WAS AUDITED RATHER THAN ASSUMED.** `sendPushToIdentity` fans out
+      to all three transports (Expo → `sendExpoPush`, raw device token → `sendFcmData`, browser → Web Push), the
+      shape-derived kind decides the transport, `push.subscribe` refuses a token it cannot classify, and the
+      WebView token bridge is mounted for every signed-in session in `RelayEngine`. Nothing in the repo is
+      missing; what cannot be verified from here is the EXTERNAL Expo app, which must post the exact
+      `{type:"SET_PUSH_TOKEN", token}` envelope — a bare token string is refused by design, because a listener
+      that registers whatever arrives is a notification-hijack primitive (the v2.99.49 R1 class).
+- [x] **`admin.pushDiagnostics` — READ-ONLY, AND IT NEVER RETURNS A TOKEN.** An FCM registration token plus the
+      project key, or an Expo token on its own, is enough to push to that handset, so a device is reported as
+      **kind + length + a 12-character prefix**: enough to tell two devices apart, not enough to address either.
+      The Firebase key is reported as *whether it parses*, never its contents; same for `EXPO_ACCESS_TOKEN`.
+      Tests forbid every shape that would leak one (`token: r.endpoint`, `...r`, the raw env var).
+- [x] **IT REPORTS THE STORED KIND *AND* THE SHAPE-DERIVED KIND, and that pairing is the point**: the sender
+      routes by the STORED kind, so an Expo token filed as `fcm` goes to FCM and is dropped with **no error
+      anywhere**. That is the one failure in the whole chain with no other symptom, and it is invisible unless
+      both are printed side by side. A legacy NULL kind is reported as `webpush` — the same reading the sender
+      takes — because calling it "unknown" would invent a problem.
+- [x] **A DB FAILURE AND AN EMPTY LIST ARE REPORTED DIFFERENTLY** (`dbOk`): "no devices registered" and "we
+      couldn't look" need different next steps, and collapsing them is how a diagnostic starts lying.
+- [x] **`admin.sendTestPush` GOES THROUGH THE REAL `sendPushToIdentity`.** A parallel test sender is the worst
+      possible thing to build here — it could pass while production was broken. Calling the real one proves the
+      actual path including the master push switch, the per-kind routing and the dead-token pruning; tests
+      forbid bypassing it via `sendFcmData` / `sendExpoPush` / `webpush.sendNotification`. It is
+      `directoryGate`-limited **even for an admin**, because it writes to a third party's device and a stuck
+      retry in the panel must not become a notification flood; the body is content-free and says it is a test,
+      since it lands on somebody else's lock screen; and the trace carries **ids only**.
+- [x] **A DELIVERED COUNT OF ZERO IS DISTINGUISHABLE FROM A FAILED REQUEST** — the panel says "nothing was
+      reachable" rather than a generic error, because those are different diagnoses.
+- [x] **THE PANEL DID NOT QUIETLY WIDEN.** An admin panel is a permanent high-value surface, so a test
+      enumerates every `trpc.admin.*` call the page makes and asserts the set is exactly
+      `amIAdmin`/`findIdentities`/`setIdentityNumber`/`pushDiagnostics`/`sendTestPush`. Adding a sixth
+      capability now has to be a deliberate act that updates that assertion. Both new procedures re-derive admin
+      from the `users` row via `requireAdmin` — never the cached whoami role — with the gate asserted to precede
+      every read and write, and the refusal is uniform so the endpoint is not an oracle for who holds the role.
+- [x] `server/pushDoctor.test.ts` (21), with `classifyNativeToken` tested BEHAVIOURALLY because sending an Expo
+      token to FCM is a silent delivery failure and a source pin cannot tell you the two are separated.
+      **All 19 tripwires verified by MUTATION** from byte-exact backups and a confirmed-GREEN baseline; sources
+      byte-identical afterwards.
+- [x] **NOT VERIFIED FROM HERE, said plainly**: the sandbox's outbound network cannot reach `your-chat.io`
+      (`curl` exits 56), so the live fleet's `FIREBASE_SERVICE_ACCOUNT_JSON` was NOT read and no live push was
+      sent. That is exactly why this ships as a panel the owner can run against production rather than a claim
+      about it. **OWNER-ONLY STEPS if the panel shows no registered device**: the Expo shell must post the
+      envelope; with **Expo** tokens the FCM server key and APNs key go to **EAS** and nothing is needed
+      server-side; with **raw device** tokens the Firebase service-account JSON goes into `/home/relay/.env` as
+      `FIREBASE_SERVICE_ACCOUNT_JSON` (that private key is a real secret — never a chat message, never a
+      `workflow_dispatch` input, where it would sit in run metadata).
+- [x] **STILL OPEN, and it is the other half of the owner's message**: minimising the app marks the person
+      OFFLINE rather than idle. Diagnosed here and shipping next — `PresenceManager` beacons offline on
+      `visibilitychange → hidden`, and the fix needs a third presence state plus care at the three sites where
+      `isOnline` decides whether to PUSH rather than what LED to draw, since a backgrounded app must keep
+      getting notifications.
+- [x] No schema change, no new dependency, no new env var. 2658 tests.
+
 ## v2.99.90 — the dead keys go, the dialer says who you're calling, and a story stops dragging you onward (2026-07-27)
 - [x] **`*` AND `#` ARE GONE FROM BOTH DIAL PADS; THE BOTTOM ROW IS BLANK · 0 · ERASE** (owner, with a
       screenshot: *"This star no need for this bottom. Remove it from here and also remove it from the … dial

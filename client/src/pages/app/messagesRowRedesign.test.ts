@@ -32,7 +32,11 @@ describe("v2.99.37 — the row is airy: avatar + exactly two text lines", () => 
   });
   it("the avatar is LARGE (60px) and keeps its status ring + presence LED", () => {
     expect(ROW).toMatch(/<PeerAvatar[\s\S]{0,400}size=\{60\}/);
-    expect(ROW).toMatch(/aria-label=\{t\.peerIsOnline \? "Online" : "Offline"\}/);
+    // v2.99.92 moved the LED onto the shared `presenceDot` helper so the new idle
+    // state could not be learnt by some dots and not others. The property this line
+    // guards — the row HAS a presence LED with an accessible label — is unchanged.
+    expect(ROW).toMatch(/presenceDot\(\{ isOnline: t\.peerIsOnline, idle: t\.peerIdle \}\)/);
+    expect(ROW).toMatch(/aria-label=\{dot\.label\}/);
   });
   it("the name is the biggest thing in the row (19px) and goes bold when unread", () => {
     expect(ROW).toMatch(/text-\[19px\]/);

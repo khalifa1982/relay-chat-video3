@@ -80,7 +80,12 @@ describe("v2.99.13 — offline-message email on the send path (content-free + th
     // v2.99.40: presence is resolved ONCE for both the new push and this email,
     // so the loop walks the precomputed offline set instead of re-filtering.
     expect(seg).toMatch(/emailEnabled\(\) && offlinePeerIds\.length > 0/);
-    expect(routers).toMatch(/offlinePeerIds = peerIds\.filter\(\(pid\) => !presenceById\.get\(pid\)\?\.isOnline\)/);
+    // v2.99.92: widened from a bare `!isOnline` to the SHARED rule, because a
+    // BACKGROUNDED app is now `isOnline` (that is what stopped minimising reading
+    // as offline) yet still cannot draw an in-page toast. Pinning the old
+    // expression would have pinned a silent regression: messages would stop
+    // notifying anybody whose app was merely minimised.
+    expect(routers).toMatch(/offlinePeerIds = peerIds\.filter\(\(pid\) => presenceNeedsNotification\(presenceById\.get\(pid\)\)\)/);
     expect(seg).toMatch(/if \(!peer\?\.userId\) continue;/); // guests skipped
     expect(seg).toMatch(/if \(!user\?\.email\) continue;/); // email required
     expect(seg).toMatch(/claimOfflineMessageEmail\(\s*peer\.userId,\s*OFFLINE_MESSAGE_EMAIL_COOLDOWN_MS\s*\)/);

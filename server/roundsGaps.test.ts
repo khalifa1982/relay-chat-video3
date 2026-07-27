@@ -67,7 +67,12 @@ describe("R7 GAP1 — a new message wakes an offline recipient's device", () => 
   const send = ROUTERS.slice(ROUTERS.indexOf("send: publicProcedure"), ROUTERS.indexOf("markRead: publicProcedure"));
 
   it("pushes to every OFFLINE peer, tagged per conversation", () => {
-    expect(send).toMatch(/offlinePeerIds = peerIds\.filter\(\(pid\) => !presenceById\.get\(pid\)\?\.isOnline\)/);
+    // v2.99.92: widened from a bare `!isOnline` to the SHARED rule, because a
+    // BACKGROUNDED app is now `isOnline` (that is what stopped minimising reading
+    // as offline) yet still cannot draw an in-page toast. Pinning the old
+    // expression would have pinned a silent regression: messages would stop
+    // notifying anybody whose app was merely minimised.
+    expect(send).toMatch(/offlinePeerIds = peerIds\.filter\(\(pid\) => presenceNeedsNotification\(presenceById\.get\(pid\)\)\)/);
     expect(send).toMatch(/kind: "message"/);
     expect(send).toMatch(/tag: `relay-msg-\$\{input\.conversationId\}`/);
     expect(send).toMatch(/url: `\/app\/messages\?c=\$\{input\.conversationId\}`/);

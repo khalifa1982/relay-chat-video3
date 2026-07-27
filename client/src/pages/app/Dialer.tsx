@@ -39,6 +39,8 @@ import {
  */
 export function peerStatus(p: {
   isOnline: boolean;
+  /** Signed in but backgrounded (v2.99.92) — reads as "away". */
+  idle?: boolean;
   lastSeenAt: string | Date | null | undefined;
   statusOverride?: string | null;
   /** Busy line (v2.88): the peer is in a live call right now. */
@@ -47,7 +49,7 @@ export function peerStatus(p: {
   // Busy wins over everything: knowing they'll bounce you matters MORE than
   // knowing they're online.
   if (p.inCall) return { text: "on a call", online: true, busy: true };
-  const eff = effectiveStatus(!!p.isOnline, (p.statusOverride ?? "") as StatusOverride);
+  const eff = effectiveStatus(!!p.isOnline, (p.statusOverride ?? "") as StatusOverride, !!p.idle);
   if (eff === "online") return { text: "online now", online: true };
   if (eff === "away") return { text: "away", online: true };
   if (eff === "travel") return { text: "travelling ✈️", online: false };
@@ -76,6 +78,8 @@ export function peerStatus(p: {
 export function peerPresenceLines(
   p: {
     isOnline: boolean;
+    /** Signed in but backgrounded (v2.99.92). */
+    idle?: boolean;
     lastSeenAt: string | Date | null | undefined;
     statusOverride?: string | null;
     inCall?: boolean;
@@ -83,9 +87,17 @@ export function peerPresenceLines(
   nowMs: number
 ): { presence: string; online: boolean; busy: boolean; elapsed: string; chosen: string } {
   const busy = !!p.inCall;
-  const eff = effectiveStatus(!!p.isOnline, (p.statusOverride ?? "") as StatusOverride);
+  const eff = effectiveStatus(!!p.isOnline, (p.statusOverride ?? "") as StatusOverride, !!p.idle);
   const liveNow = busy || eff === "online" || eff === "away";
-  const presence = busy ? "on a call" : eff === "online" || eff === "away" ? "online now" : "offline";
+  const presence = busy
+    ? "on a call"
+    : eff === "online"
+      ? "online now"
+      : // "away" covers both a deliberate Away and an automatic idle (v2.99.92);
+        // either way the honest word for the presence line is the same.
+        eff === "away"
+        ? "away"
+        : "offline";
   const ts = p.lastSeenAt ? new Date(p.lastSeenAt).getTime() : 0;
   const elapsed = busy || eff === "online" ? "" : formatElapsedSince(ts, nowMs);
   /* Their CHOSEN status — the Away / Travelling selector in Profile → Status —
@@ -93,7 +105,11 @@ export function peerPresenceLines(
      "his profile, there is two things. Not the bio. If he's travel or he's not
      travel, his status. Not the image and video." So this is deliberately NOT the
      bio and NOT the story media: it is the label the person picked. */
-  const chosen = eff === "travel" ? "Travelling ✈️" : eff === "away" ? "Away" : "";
+  // The chip is for a status the person CHOSE. An automatic idle also resolves to
+  // `away`, but nobody selected it, so labelling it the same would put words in
+  // their mouth — the presence line above already says "away" for that case.
+  const override = (p.statusOverride ?? "") as StatusOverride;
+  const chosen = override === "travel" ? "Travelling ✈️" : override === "away" ? "Away" : "";
   return { presence, online: liveNow, busy, elapsed, chosen };
 }
 
@@ -621,6 +637,7 @@ export default function DialerPage() {
                       const st = peerPresenceLines(
                         {
                           isOnline: previewIdentity.isOnline,
+                          idle: previewIdentity.idle,
                           lastSeenAt: previewIdentity.lastSeenAt,
                           statusOverride: previewIdentity.statusOverride,
                           inCall: previewIdentity.inCall,

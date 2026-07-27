@@ -262,9 +262,19 @@ describe("the dialer preview, in the owner's order", () => {
 
     const away = peerPresenceLines({ ...base, isOnline: true, statusOverride: "away" }, t0);
     expect(away.chosen).toBe("Away");
-    expect(away.presence).toBe("online now");
+    // v2.99.92 changed this deliberately: a manual "Away" now reads "away" on the
+    // presence line too. Saying "online now" beside an Away chip was the line
+    // contradicting the chip — and the same reading is what an automatic idle needs.
+    expect(away.presence).toBe("away");
 
     expect(peerPresenceLines(base, t0).chosen).toBe("");
+    // AN AUTOMATIC IDLE IS NOT A CHOSEN STATUS (v2.99.92). Both resolve to `away`,
+    // so reading the chip off the resolved status would put a label in somebody's
+    // mouth that they never selected. The presence line says "away"; the chip stays
+    // empty because nothing was picked.
+    const idle = peerPresenceLines({ ...base, isOnline: true, idle: true }, t0);
+    expect(idle.presence).toBe("away");
+    expect(idle.chosen).toBe("");
   });
 
   it("renders badge, presence, elapsed and the chosen status — in that order", () => {
