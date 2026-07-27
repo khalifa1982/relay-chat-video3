@@ -11182,3 +11182,59 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       allocate, but no call has yet MOVED between them — the highest-value remaining test); Round 11 test 3
       (`rejoin-recreate`, needs the Redis keys deleted before the kill) and a strict split topology; and the
       phone-only visual checks above.
+
+## v2.105.0 — the /app login & registration page, rebuilt from the design handoff (2026-07-28)
+- [x] Implemented `RELAY_LOGIN_HANDOFF.md` (+ the `design_handoff_relay_login/` prototype) as the entry
+      page for `your-chat.io/app`: one glass auth card over a full-page animated canvas, then LIVE
+      NETWORK stats, feature chips, the "your identity is six digits" section and the footer. Copy,
+      tokens, spacing, radii, type scale and the four keyframes are the spec's; the icons are
+      lucide-react, which the spec asks for ("Swap for the project's icon library"). Two files:
+      `client/src/lib/relayBackground.ts` (the engine) + `client/src/app/LoginScreen.tsx` (the page),
+      with `RelayBackground.tsx` owning only the canvas lifetime.
+- [x] THE BACKGROUND IS THE SPEC'S CODE, near-verbatim as it asked — base fill + two radial glows,
+      drifting grid, 130 parallax stars, the cursor-attracted flow field, the point vortex, the
+      node/link network with travelling pulses and broadcast rings, three orbiting satellites, and the
+      12-colour palette easing at ~1.1%/frame (~5% for the Business gold override).
+- [x] THREE DEPARTURES FROM THE SPEC, each stated in the file header rather than left to be discovered:
+      (1) THE STATS ARE REAL. §4 ticks them on a 2400ms timer with random increments; RELAY already
+      pushes all five figures over SSE (v2.99.72), so the tiles read `useLiveStats` and the spec's pop
+      (scale 1.22 + tint + glow, spring easing, 350ms) fires on a REAL change. Inventing traffic on the
+      front page of a comms product would be a lie told in numbers. A cold cache shows an em-dash, never
+      a confident 0 — "0 people online" is a claim (the v2.99.72 rule). (2) `choose` IS PROBE-DRIVEN:
+      the spec offers Log in / Register as a free choice, but `otpAuth.loginProbe` already knows, and
+      picking "Log in" for an unregistered address is a dead end by construction — the step is kept as
+      designed, with the right option recommended and the other explaining itself. (3) A PIN account
+      skips `choose` entirely, because that is the fastest real path.
+- [x] NOTHING SHIPPED WAS DROPPED, which is the risk a redesign of this surface actually carries. The
+      spec's flow has no 4-digit passcode, no new-device approval and no guest recovery; all three are
+      live features and all three are preserved, rendered in the spec's own panel language: `pin`
+      (with an "email me a code instead" escape), `waiting` (v2.99.7, naming the PIN escape for a
+      closed approver device), and the `GuestRestore` card (v2.99.69) — for a returning guest restoring
+      IS the primary action, since typing a name mints a second identity and strands the first. The
+      MatrixReveal still outlasts identity landing, and the `/i/<pin>` call-link join screen is
+      deliberately NOT routed here: it has been one focused field since v2.94.5 so a shared link
+      connects in one tap, and a second decision there costs the caller the call.
+- [x] THE CANVAS IS BUDGETED, because this is the page-weight lesson of v2.99.67 and this canvas is
+      heavier than the landing page was. The spec's own performance notes are implemented rather than
+      left as advice: a low-power tier (flow field 63x63 -> 45x45, vortex 1e4 -> 5e3, DPR capped at 1),
+      a frame budget (30fps desktop / 20fps low-power) instead of uncapped rAF, an early return when
+      `document.hidden` with the rAF re-armed BEFORE it (returning first kills the loop on the first
+      hidden frame — the exact v2.99.67 bug, and now a test asserts the ORDER), and a reduced-motion
+      path that keeps the glows, grid and stars and skips everything expensive, exactly as §6 says.
+- [x] VERIFIED BY RENDERING, not just by tests: the built bundle served locally and driven in headless
+      Chromium at 1280x900 and at 390x844. Logo, tagline, card, guest note, LIVE NETWORK, chips,
+      security section and footer all present; the canvas is `position:fixed` and sized; clicking Guest
+      advances the step to `guest`, shows "GUEST ACCESS · DISPLAY NAME", renders the spec's placeholder
+      and auto-focuses the input; ZERO page errors; and no horizontal overflow at 390px.
+- [x] `client/src/app/loginRedesign.test.ts` (64): behavioural for the pure logic (name splitting, id
+      formatting, the email rule, palette/tokens) and pins for the spec's copy and for every preserved
+      capability. NINE tripwires verified by MUTATION from byte-exact backups. ONE OF MY OWN PINS WAS
+      BLIND and was fixed rather than counted: "keeps the PIN step" asserted `toContain("PinStep")`,
+      which still passes when the RENDER SITE is deleted because the component stays in the file — it
+      now asserts reachability (`{step === "pin" && <PinStep`, plus the routing `go("pin")`), and the
+      approval step got the same treatment. A SECOND weak pin was caught by the suite itself: the "no
+      simulated ticker" check matched the comment EXPLAINING the absence, so it now strips comments
+      before searching and additionally asserts exactly one `setInterval` on the page (the id re-roll).
+      3249 tests, check + build green.
+- [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
+      nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.

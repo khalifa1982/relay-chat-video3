@@ -8,6 +8,7 @@ import { AuthPanel } from "./AuthPanel";
 import { GuestRestore } from "./GuestRestore";
 import { LiveStats } from "./LiveStats";
 import { MatrixReveal } from "./MatrixReveal";
+import { LoginScreen } from "./LoginScreen";
 
 interface OnboardingGateProps {
   children: React.ReactNode;
@@ -137,6 +138,13 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
   const numberNotFound = inviteResolved && !isPartyLine && !invitee;
   const calleeOffline = inviteResolved && !isPartyLine && !!invitee && !invitee.isOnline;
   const joinBlocked = numberNotFound || calleeOffline;
+
+  /* The redesigned entry page (RELAY_LOGIN_HANDOFF.md) owns the ORDINARY login.
+     The `/i/<pin>` call-link join screen below is deliberately untouched: the
+     spec does not cover it, and it has been one focused field since v2.94.5
+     precisely so a shared link connects in a single tap — a second decision
+     there costs the caller the call. */
+  if (!showJoin) return <LoginScreen />;
 
   return (
     <div className="dark relay-login relative min-h-svh overflow-hidden grid place-items-center bg-[#08090C] text-foreground p-5">
