@@ -232,6 +232,7 @@ export function NotificationBell({
   missedCount,
   unreadCount,
   pendingDevices = 0,
+  pendingDetail,
   onOpenHistory,
   onOpenMessages,
   onOpenDevices,
@@ -242,6 +243,13 @@ export function NotificationBell({
   unreadCount: number;
   /** New-device sign-ins waiting for this account's approval (v2.99.7). */
   pendingDevices?: number;
+  /**
+   * The waiting sign-in's own details, when there is exactly ONE (v2.100.1). The
+   * owner asked the notification to carry the time, the place and the device name
+   * rather than only a count. Optional, so a caller that has not fetched them —
+   * or a pre-release client — degrades to the count line it showed before.
+   */
+  pendingDetail?: { label: string; detail: string | null; createdAt: number } | null;
   onOpenHistory: () => void;
   onOpenMessages: () => void;
   onOpenDevices?: () => void;
@@ -363,7 +371,28 @@ export function NotificationBell({
                     </span>
                     <span className="flex-1 min-w-0">
                       <span className="block text-sm font-medium">{pendingDevices} new device{pendingDevices > 1 ? "s" : ""} waiting</span>
-                      <span className="block text-xs text-muted-foreground">Approve or decline the sign-in</span>
+                      {/* v2.100.1 — the owner asked the notification itself to carry
+                          the details, not just a count: *"put the time from where,
+                          and it should be the device name also."* With more than one
+                          waiting, naming only the newest would be misleading, so the
+                          count stands on its own and the details are in Devices. */}
+                      {pendingDevices === 1 && pendingDetail ? (
+                        <>
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {pendingDetail.label}
+                          </span>
+                          {pendingDetail.detail && (
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {pendingDetail.detail}
+                            </span>
+                          )}
+                          <span className="block text-[11px] text-muted-foreground">
+                            {new Date(pendingDetail.createdAt).toLocaleString()}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="block text-xs text-muted-foreground">Approve or decline the sign-in</span>
+                      )}
                     </span>
                     <ChevronRight className="size-4 text-muted-foreground shrink-0" />
                   </button>

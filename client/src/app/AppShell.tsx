@@ -269,7 +269,11 @@ function Inner({ children }: { children: React.ReactNode }) {
     refetchInterval: 30_000,
     refetchOnWindowFocus: true,
   });
-  const pendingDevices = pendingDevicesQ.data?.pending?.length ?? 0;
+  const pendingList = pendingDevicesQ.data?.pending ?? [];
+  const pendingDevices = pendingList.length;
+  // The waiting sign-in's own details, ONLY when there is exactly one (v2.100.1).
+  // With two waiting, naming the newest would describe one and imply both.
+  const pendingDetail = pendingDevices === 1 ? pendingList[0] : null;
   const markSeen = trpc.calls.markMissedSeen.useMutation({
     onSuccess: () => utils.calls.missedSummary.invalidate(),
   });
@@ -362,6 +366,7 @@ function Inner({ children }: { children: React.ReactNode }) {
               missedCount={missedCount}
               unreadCount={unreadTotal}
               pendingDevices={pendingDevices}
+              pendingDetail={pendingDetail}
               onOpenHistory={() => navigate("/app/history?filter=missed")}
               onOpenMessages={() => navigate("/app/messages")}
               onOpenDevices={() => navigate("/app/profile#devices")}
@@ -584,6 +589,7 @@ function Inner({ children }: { children: React.ReactNode }) {
               missedCount={missedCount}
               unreadCount={unreadTotal}
               pendingDevices={pendingDevices}
+              pendingDetail={pendingDetail}
               onOpenHistory={() => navigate("/app/history?filter=missed")}
               onOpenMessages={() => navigate("/app/messages")}
               onOpenDevices={() => navigate("/app/profile#devices")}

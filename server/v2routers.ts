@@ -126,6 +126,16 @@ import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
 import { setIdentityAutoReply, autoReplyEnabledFor } from "./v2db";
 import { recordSession, listSessionsForUser, revokeSession } from "./v2db";
+import { setSessionGeo } from "./v2db";
+import {
+  describeLogin,
+  describeLoginPlace,
+  loginMethodLabel,
+  normalizeCity,
+  normalizeCountry,
+  normalizeLoginIp,
+  type LoginMethod,
+} from "./loginOrigin";
 import { getRolesByIdentityIds, type IdentityRole } from "./v2db";
 import { hasRecentApprovedSession, pendingSessionsForUser, sessionApprovalBySid, approveSession } from "./v2db";
 import { setSessionCookie, rememberToTtlMs, LOCAL_SESSION_COOKIE, newSessionId, readLocalSession,
@@ -944,6 +954,64 @@ export function isPrivateOrLocalIp(ip: string): boolean {
   return false;
 }
 
+/**
+ * Resolve an IP to a country / city / flag, cached in-process for 12h.
+ *
+ * EXTRACTED from the `geoSelf` procedure in v2.100.1 so the sign-in capture and
+ * the flag chip in the top bar use ONE implementation. Two copies of "which
+ * country is this IP" is how the two would come to disagree about the same login,
+ * and the whole point of putting a place on an approval prompt is that the owner
+ * can trust it.
+ *
+ * Never throws and never rejects: an unreachable geo service, a timeout, a private
+ * address or a GeoIP miss all yield nulls with the IP preserved, because the IP is
+ * the one detail we always have and the UI is built to omit the rest.
+ */
+export async function resolveGeoForIp(ip: string | null): Promise<GeoSelfResult> {
+  const empty: GeoSelfResult = {
+    ip: null,
+    country: null,
+    countryName: null,
+    city: null,
+    flagEmoji: null,
+  };
+  if (!ip) return empty;
+  if (isPrivateOrLocalIp(ip)) return { ...empty, ip };
+
+  const cached = geoCache.get(ip);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`https://ipapi.co/${encodeURIComponent(ip)}/json/`, {
+      signal: ctrl.signal,
+      headers: { "User-Agent": "relay-chat-video/2.0" },
+    });
+    clearTimeout(timer);
+    if (!res.ok) return { ...empty, ip };
+    const json = (await res.json()) as {
+      country_code?: string | null;
+      country_name?: string | null;
+      city?: string | null;
+      error?: boolean;
+    };
+    if (json.error) return { ...empty, ip };
+    const country = (json.country_code || "").trim().toUpperCase() || null;
+    const out: GeoSelfResult = {
+      ip,
+      country,
+      countryName: json.country_name || null,
+      city: json.city || null,
+      flagEmoji: flagEmojiFromIso2(country),
+    };
+    geoCache.set(ip, { value: out, expiresAt: Date.now() + GEO_CACHE_TTL_MS });
+    return out;
+  } catch {
+    return { ...empty, ip };
+  }
+}
+
 // SECURITY (F5): the directory endpoints are intentionally PUBLIC (an
 // unidentified visitor opening an `/i/<pin>` call link resolves the callee via
 // `lookup` before entering a name), but `lookup` reveals a number's existence,
@@ -1084,55 +1152,7 @@ export const v2DirectoryRouter = router({
    * flag chip when null.
    */
   geoSelf: publicProcedure.query(async ({ ctx }) => {
-    const empty: GeoSelfResult = {
-      ip: null,
-      country: null,
-      countryName: null,
-      city: null,
-      flagEmoji: null,
-    };
-    const ip = pickClientIp(ctx.req);
-    if (!ip) return empty;
-    if (isPrivateOrLocalIp(ip)) return { ...empty, ip };
-
-    const cached = geoCache.get(ip);
-    if (cached && cached.expiresAt > Date.now()) return cached.value;
-
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 4000);
-      const res = await fetch(
-        `https://ipapi.co/${encodeURIComponent(ip)}/json/`,
-        {
-          signal: ctrl.signal,
-          headers: { "User-Agent": "relay-chat-video/2.0" },
-        }
-      );
-      clearTimeout(timer);
-      if (!res.ok) return { ...empty, ip };
-      const json = (await res.json()) as {
-        country_code?: string | null;
-        country_name?: string | null;
-        city?: string | null;
-        error?: boolean;
-      };
-      if (json.error) return { ...empty, ip };
-      const country = (json.country_code || "").trim().toUpperCase() || null;
-      const out: GeoSelfResult = {
-        ip,
-        country,
-        countryName: json.country_name || null,
-        city: json.city || null,
-        flagEmoji: flagEmojiFromIso2(country),
-      };
-      geoCache.set(ip, {
-        value: out,
-        expiresAt: Date.now() + GEO_CACHE_TTL_MS,
-      });
-      return out;
-    } catch {
-      return { ...empty, ip };
-    }
+    return resolveGeoForIp(pickClientIp(ctx.req));
   }),
 
   /** Get presence for an array of identity ids. */
@@ -2734,10 +2754,31 @@ async function startSession(
   ctx: { req: { headers?: Record<string, unknown> } },
   userId: number,
   pending = false,
+  /** Which of the three ways in was used (v2.100.1). The owner asked for the login
+   *  TYPE on every notification, and it is not derivable after the fact — a session
+   *  row looks identical however it was created. */
+  method: LoginMethod | null = null,
 ): Promise<string> {
   const sid = newSessionId();
   const label = deviceLabelFromUA(ctx.req?.headers?.["user-agent"]);
-  await recordSession(sid, userId, label, pending);
+  const ip = normalizeLoginIp(pickClientIp(ctx.req as Parameters<typeof pickClientIp>[0]));
+  await recordSession(sid, userId, label, pending, { ip, method });
+  // The country and city are resolved AFTER the row lands, deliberately un-awaited:
+  // it is an external HTTP call with a 4s timeout, and a sign-in must never wait on
+  // somebody else's service. A row with an IP and no place is the honest degraded
+  // state — the UI already omits what it does not have.
+  if (ip) {
+    void resolveGeoForIp(ip)
+      .then((g) =>
+        setSessionGeo(sid, {
+          country: normalizeCountry(g.country),
+          city: normalizeCity(g.city),
+        }),
+      )
+      .catch(() => {
+        /* decoration on a row that already exists */
+      });
+  }
   return sid;
 }
 
@@ -2760,6 +2801,52 @@ async function announcePendingDevice(userId: number, sid: string, label: string)
   } catch {
     /* the poll is the backstop */
   }
+}
+
+/**
+ * One shape for a waiting sign-in, and one projection that builds it.
+ *
+ * The approval prompt in Profile, the notification-centre row and the Devices list
+ * all describe the same event, so they read the same fields from the same function
+ * — three projections is how three surfaces come to disagree about one login.
+ *
+ * The IP IS included, and that is a deliberate call rather than an oversight: this
+ * is the account owner being shown their OWN sign-in, it is the one detail that
+ * survives when the geo service cannot resolve a place, and the owner asked for it
+ * by name. It reaches nobody else — every procedure here is scoped to `ctx.user`.
+ */
+export type PendingSessionWire = {
+  sid: string;
+  label: string;
+  createdAt: number;
+  /** "Dubai, AE · Email code", or null when we know neither. */
+  detail: string | null;
+  place: string | null;
+  methodLabel: string | null;
+  ip: string | null;
+  country: string | null;
+};
+
+function pendingSessionWire(r: {
+  sid: string;
+  label: string | null;
+  createdAt: Date | string;
+  ip?: string | null;
+  country?: string | null;
+  city?: string | null;
+  method?: string | null;
+}): PendingSessionWire {
+  const origin = { ip: r.ip ?? null, country: r.country ?? null, city: r.city ?? null };
+  return {
+    sid: r.sid,
+    label: r.label || "Unknown device",
+    createdAt: new Date(r.createdAt).getTime(),
+    detail: describeLogin({ ...origin, method: r.method }),
+    place: describeLoginPlace(origin),
+    methodLabel: loginMethodLabel(r.method),
+    ip: origin.ip,
+    country: normalizeCountry(origin.country),
+  };
 }
 
 export const v2OtpAuthRouter = router({
@@ -2899,7 +2986,10 @@ export const v2OtpAuthRouter = router({
       // genuine first registration has no prior approved session, so it still never
       // waits, which is the property the short-circuit was reaching for.
       const pending = await shouldRequireApproval(userId);
-      const sid = await startSession(ctx, userId, pending);
+      // The login TYPE is recorded from what actually happened, not inferred later:
+      // a session row looks identical however it was created, and `accountExisted`
+      // is the only thing that distinguishes a first registration from a sign-in.
+      const sid = await startSession(ctx, userId, pending, accountExisted ? "code" : "register");
       setSessionCookie(ctx.res, userId, rememberToTtlMs(input.remember), sid);
       if (pending) {
         const label = deviceLabelFromUA(ctx.req?.headers?.["user-agent"]);
@@ -3014,7 +3104,16 @@ export const v2OtpAuthRouter = router({
             resolvedIdentityId: ctx.identity?.id ?? null,
             deviceId: ctx.deviceId ?? null,
           });
-          setSessionCookie(ctx.res, user.id, rememberToTtlMs(input.remember), await startSession(ctx, user.id));
+          // The PIN is the owner's own bypass for approval (their spec), so this path
+          // never waits — but it is still recorded, and recorded AS a passcode login,
+          // because "somebody signed in with the passcode from Dubai" is exactly the
+          // line that tells the owner whether it was them.
+          setSessionCookie(
+            ctx.res,
+            user.id,
+            rememberToTtlMs(input.remember),
+            await startSession(ctx, user.id, false, "pin"),
+          );
           return { ok: true };
         }
         case "no-pin":
@@ -3123,16 +3222,18 @@ export const v2OtpAuthRouter = router({
   /** The signed-in user's devices, newest-active first. Marks the CURRENT one. */
   listSessions: publicProcedure.query(async ({ ctx }) => {
     const user = ctx.user;
-    if (!user) return { signedIn: false, sessions: [] as Array<{
-      sid: string; label: string; createdAt: number; lastSeenAt: number; current: boolean;
-    }> };
+    if (!user)
+      return {
+        signedIn: false,
+        sessions: [] as Array<PendingSessionWire & { lastSeenAt: number; current: boolean }>,
+      };
     const rows = await listSessionsForUser(user.id);
     return {
       signedIn: true,
+      // The SAME projection the approval prompt uses (v2.100.1), so the device you
+      // approved and the device in this list describe themselves identically.
       sessions: rows.map((r) => ({
-        sid: r.sid,
-        label: r.label || "Unknown device",
-        createdAt: new Date(r.createdAt).getTime(),
+        ...pendingSessionWire(r),
         lastSeenAt: new Date(r.lastSeenAt).getTime(),
         current: ctx.sessionSid != null && r.sid === ctx.sessionSid,
       })),
@@ -3176,16 +3277,9 @@ export const v2OtpAuthRouter = router({
    *  the notification-center approve/deny rows). Empty unless signed in. */
   pendingSessions: publicProcedure.query(async ({ ctx }) => {
     const user = ctx.user;
-    if (!user) return { signedIn: false, pending: [] as Array<{ sid: string; label: string; createdAt: number }> };
+    if (!user) return { signedIn: false, pending: [] as PendingSessionWire[] };
     const rows = await pendingSessionsForUser(user.id);
-    return {
-      signedIn: true,
-      pending: rows.map((r) => ({
-        sid: r.sid,
-        label: r.label || "Unknown device",
-        createdAt: new Date(r.createdAt).getTime(),
-      })),
-    };
+    return { signedIn: true, pending: rows.map(pendingSessionWire) };
   }),
 
   /** Approve a waiting device (ownership-scoped) → it starts authenticating.

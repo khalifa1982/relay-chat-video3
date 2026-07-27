@@ -2270,6 +2270,13 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // New-device approval (v2.99.7): NULL = approved/normal (every legacy row);
     // non-NULL = sign-in is WAITING for approval from another device.
     { table: "sessions", column: "pendingApproval", ddl: "ADD COLUMN `pendingApproval` timestamp NULL" },
+    // v2.100.1 — where and how a sign-in happened, for the approval prompt and the
+    // device list. All nullable: a pre-existing row simply has no details, and the
+    // UI omits what it does not have rather than inventing it.
+    { table: "sessions", column: "ip", ddl: "ADD COLUMN `ip` varchar(64)" },
+    { table: "sessions", column: "country", ddl: "ADD COLUMN `country` varchar(2)" },
+    { table: "sessions", column: "city", ddl: "ADD COLUMN `city` varchar(96)" },
+    { table: "sessions", column: "method", ddl: "ADD COLUMN `method` varchar(16)" },
     // Email-notification preferences (v2.99.13). NULL = ENABLED (historical
     // default — the missed-call email always sent), so a user disables by
     // storing false. lastMessageEmailAt is the offline-message email cooldown.
@@ -2584,7 +2591,16 @@ export async function listContacts(ownerId: number) {
  *  the device list (auth still works via the cookie).
  *  v2.99.7: `pending` writes the row AWAITING new-device approval — such a row
  *  does NOT authenticate (sessionState treats it as revoked) until approved. */
-export async function recordSession(sid: string, userId: number, label: string, pending = false): Promise<void> {
+export async function recordSession(
+  sid: string,
+  userId: number,
+  label: string,
+  pending = false,
+  /** Where and how (v2.100.1). Every field optional — a caller that supplies none
+   *  writes exactly the row this function wrote before, so no existing call site
+   *  changes behaviour. */
+  origin?: { ip?: string | null; method?: string | null },
+): Promise<void> {
   const db = await getDb();
   if (!db) return;
   try {
@@ -2593,9 +2609,34 @@ export async function recordSession(sid: string, userId: number, label: string, 
       userId,
       label: label.slice(0, 160) || null,
       pendingApproval: pending ? new Date() : null,
+      // The IP is captured HERE, synchronously; the country and city are filled in
+      // afterwards by setSessionGeo, because geo resolution is an external call
+      // that must never sit in front of a sign-in.
+      ip: origin?.ip ?? null,
+      method: origin?.method ?? null,
     });
   } catch (e) {
     console.warn("[sessions] record skipped:", (e as Error)?.message || "");
+  }
+}
+
+/** Fill in a session's country/city once the geo lookup returns. Scoped to the sid
+ *  and best-effort: this is decoration on a row that already exists, so a failure
+ *  costs the place line and nothing else. */
+export async function setSessionGeo(
+  sid: string,
+  geo: { country?: string | null; city?: string | null },
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  if (!geo.country && !geo.city) return;
+  try {
+    await db
+      .update(sessions)
+      .set({ country: geo.country ?? null, city: geo.city ?? null })
+      .where(eq(sessions.sid, sid));
+  } catch (e) {
+    console.warn("[sessions] geo skipped:", (e as Error)?.message || "");
   }
 }
 
