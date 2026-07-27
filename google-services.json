@@ -7,9 +7,9 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:541732683953:android:d717377904e2833e9f2290",
+        "mobilesdk_app_id": "1:541732683953:android:792018d56c3cdb3a9f2290",
         "android_client_info": {
-          "package_name": "com.relaytech.calling"
+          "package_name": "com.app.relaymobile"
         }
       },
       "oauth_client": [],
