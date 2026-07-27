@@ -7557,6 +7557,109 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.102.2 — "delete for me" (2026-07-27)
+
+Owner (#81): a way to remove a message somebody ELSE sent, for you alone.
+
+**It is NOT unsend, and keeping the two apart is the whole feature**
+
+- [x] `deleteMessage` flips `messages.deletedAt`, which takes a message away from
+      EVERYBODY and is rightly restricted to its own sender. This writes a row in a new
+      `message_hides` table and changes nothing for anyone else — which is exactly why
+      it is allowed on a message the caller did not send. A test asserts the hide path
+      never touches `deletedAt` and never updates `messages` at all.
+- [x] **Two separate confirmations**, because one dialog would have to describe two
+      different blast radii — which is how somebody unsends for everyone believing they
+      hid it for themselves. Unsend says "removed for everyone"; this says "everyone
+      else keeps it, and they aren't told".
+- [x] **Server-side, not localStorage**, and that is the reason it is a feature rather
+      than a polish item: a browser-only version would be a lie, because the message
+      would come back on that person's other phone.
+
+**The performance decision is load-bearing**
+
+- [x] Four reads had to learn the rule, and one of them — the thread list's
+      groupwise-max — is polled by every client every few seconds. **The obvious change
+      is a `NOT EXISTS` inside that aggregate, and it is the wrong one**: it is a loose
+      index scan over `(conversationId, id)`, and an antijoin defeats the loose scan for
+      every user in the fleet to serve a feature almost nobody has used.
+- [x] So the aggregate is **untouched**. Instead: ask which of the WINNING ids this
+      person has hidden — one primary-key range lookup over the ids already in hand —
+      and only for the conversations that come back does a second, narrow query find the
+      next-newest visible message. With no hides the extra cost is that single lookup
+      and the plan for everyone else is byte-identical. Both the fast path and the
+      guard that protects it are pinned.
+- [x] A thread with no visible message left **stays**, with no preview. Dropping it
+      would hide a conversation other people are still in.
+
+**One predicate, four readers**
+
+- [x] `notHiddenFor(identityId)` is exported and used by `listMessages`,
+      `searchMessages`, the unread recompute and the preview fallback — so no surface
+      can forget it and start showing a message somebody hid. A `NOT EXISTS` rather
+      than a `LEFT JOIN`, because MySQL optimises it as an antijoin against the
+      `(identityId, messageId)` primary key.
+- [x] **Search was the likeliest place to forget**: a hidden message that reappears
+      under search is the feature silently not working.
+
+**The write is claimed, scoped and idempotent**
+
+- [x] Membership is checked BEFORE the row is written, and inside
+      `hideMessageForIdentity` rather than at the call site — a message id is a small
+      integer, so without it anybody could write a row naming any message in the
+      database.
+- [x] **THE INSERT IS THE ATOMIC CLAIM**: `ON DUPLICATE KEY UPDATE` reports
+      `affectedRows: 0` for a row that already existed, so a double-tap or a retry
+      cannot run the unread adjustment twice — the defect v2.99.57 found in
+      `deleteMessage`, where two concurrent unsends each moved a STORED counter. An
+      already-hidden message succeeds without touching it, so the endpoint is
+      idempotent rather than an error the UI has to explain.
+- [x] The unread count is **RECOMPUTED, never decremented** (v2.99.74: a decrement is
+      not idempotent and a retry drives a stored counter negative). New
+      `recomputeUnreadFor` derives it from the read watermark — messages after it, not
+      this person's own, not unsent, not hidden — which also heals any pre-existing
+      drift for that participant.
+- [x] "Not a member" and "no such message" answer **identically**, so probing ids
+      reveals nothing about which conversations exist or who is in them.
+
+**The machine-checked purge registry earned its keep again**
+
+- [x] `IDENTITY_REFERENCING_COLUMNS` failed the build BY NAME the moment
+      `message_hides.identityId` existed. Declared `cascade`: it is purely theirs,
+      visible to nobody else, and describes a view that is about to stop existing — and
+      unlike an `attachments` row, deleting it cannot make anything MORE readable, since
+      the rows it names are other people's messages either way. A test asserts the
+      declaration AND that the cascade really performs the delete, so a declared-but-not-
+      done entry cannot read as covered.
+
+**A guard I tripped with my own prose, and made stricter rather than looser**
+
+- [x] `contacts.test.ts` forbids destructive DDL in the boot migrator by sweeping the
+      whole function for `/\bDELETE\b/i`. The comment naming the "delete for me"
+      feature tripped it, in a function containing no DELETE statement at all —
+      scanning prose as a proxy for SQL. The sweep is now case-SENSITIVE (every DDL
+      string in the file is upper case) and matches destructive STATEMENT forms
+      (`DELETE FROM`, `DROP TABLE`, `TRUNCATE`, `RENAME`) rather than bare words, plus a
+      new assertion that every `CREATE TABLE` is `IF NOT EXISTS`. **Strictly tighter**:
+      verified by planting a `DROP COLUMN` DDL and an unguarded `CREATE TABLE`, both of
+      which the rewritten guard catches.
+- [x] **And the trap for the TWELFTH time, in the fix itself**: that new `CREATE TABLE`
+      assertion matched v2.102.0's comment "the CREATE TABLE never re-runs" and failed.
+      It now runs on stripped SQL, like the sweep beside it.
+
+**Tests**
+
+- [x] `server/messageHide.test.ts` (21). **All 26 tripwires verified by MUTATION** from
+      byte-exact backups, from a confirmed-GREEN baseline.
+- [x] **One survivor, and it was the dangerous one**: the assertion that the unread
+      recompute is scoped to one participant matched the SELECT's copy of the clause
+      while the mutation stripped it from the **UPDATE** — an unscoped UPDATE rewrites
+      every member's badge in the conversation to this person's count. Now pinned on the
+      write specifically, with the count asserted so a missing clause on either side is
+      caught rather than masked.
+- [x] One additive table, no new dependency, no new env var. Suite 3091 passed /
+      1 skipped.
+
 ## v2.102.1 — the editor for a group's own name, photo and status (2026-07-27)
 
 Owner (#89), the other half. v2.102.0 shipped the DATA — a 6-digit group id, an avatar, a

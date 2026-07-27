@@ -440,6 +440,34 @@ export type ConversationParticipant = typeof conversationParticipants.$inferSele
  * `kind` enum lets us render text, image, video, audio, file, or system events
  * (e.g. "Call ended — 02:34") uniformly.
  * ────────────────────────────────────────────────────────────────────────── */
+/**
+ * PER-PERSON MESSAGE HIDING (v2.102.2) — "delete for me".
+ *
+ * Owner (#81): hide a message somebody ELSE sent, for you alone.
+ *
+ * This is deliberately NOT `messages.deletedAt`, which is UNSEND and removes a message
+ * for everybody — rightly restricted to its own sender. A row here says "one identity
+ * does not want to see one message", and it exists at all because a browser-only
+ * version would be a lie: the message would come back on that person's other phone.
+ *
+ * The primary key is (identityId, messageId) in that order, which is the order every
+ * read uses — "which of these messages has THIS person hidden" — so the anti-join is
+ * an index lookup rather than a scan. `messageId` gets its own index for the reverse
+ * direction, so a real unsend can clear its hides without a table scan.
+ */
+export const messageHides = mysqlTable(
+  "message_hides",
+  {
+    identityId: int("identityId").notNull(),
+    messageId: int("messageId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.identityId, t.messageId] }),
+    messageIdx: index("message_hides_message_idx").on(t.messageId),
+  }),
+);
+
 export const messages = mysqlTable(
   "messages",
   {
