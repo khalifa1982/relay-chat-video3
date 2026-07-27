@@ -36,11 +36,22 @@ const V2DB = read("server/v2db.ts");
 const ROUTERS = read("server/v2routers.ts");
 const SCHEMA = read("drizzle/schema.ts");
 const SECTIONS = read("client/src/pages/app/ProfileHubSections.tsx");
+// v2.102.1 — the picker moved OUT of the section into a shared component, because a
+// group now has a status too and two copies of the grid is how the two come to look
+// and behave differently. These pins follow it to the one place the rule now lives.
+const PICKER = read("client/src/app/ProfileStatusPicker.tsx");
+const GROUPSHEET = read("client/src/app/GroupInfoSheet.tsx");
 const OVERLAYS = read("client/src/app/PeerOverlays.tsx");
 
 const codeOnly = (s: string) =>
   s
-    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, "")
+    // FIXED in v2.102.1: the first pass used to be a JSX-span strip,
+    // /\{\s*\/\*[\s\S]*?\*\/\s*\}/ — but a DOCUMENTED PROP TYPE has the same
+    // shape (`}: { /** … */ value: unknown; … }`), so it swallowed the whole prop
+    // block and much of the function body. Every `not.toMatch` here was reading a
+    // gutted source and could pass vacuously. Stripping block comments FIRST is
+    // both simpler and correct: a JSX comment collapses to a bare `{}`, whose
+    // prose is gone, and no code is touched.
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .split("\n")
     .filter((l) => !/^\s*\/\//.test(l))
@@ -242,32 +253,46 @@ describe("what reaches the wire", () => {
 
 describe("the picker and the chip", () => {
   it("the picker renders all five from the shared metadata", () => {
-    expect(SECTIONS).toMatch(/PROFILE_STATUS_META\.map/);
+    expect(PICKER).toMatch(/PROFILE_STATUS_META\.map/);
     // No hand-rolled label list survives — that is what the shared module is for.
-    expect(codeOnly(SECTIONS)).not.toMatch(/STATUS_CHOICES/);
+    expect(codeOnly(PICKER)).not.toMatch(/STATUS_CHOICES/);
+  });
+
+  it("there is exactly ONE picker, and the section renders it rather than its own", () => {
+    // A second copy is the whole defect this extraction exists to prevent: the group
+    // sheet and the profile would drift apart one edit at a time.
+    expect((PICKER.match(/export function ProfileStatusPicker/g) || []).length).toBe(1);
+    expect(codeOnly(SECTIONS)).not.toMatch(/PROFILE_STATUS_META/);
+    expect(SECTIONS).toMatch(/<ProfileStatusPicker/);
+    expect(GROUPSHEET).toMatch(/<ProfileStatusPicker/);
   });
 
   it("tapping the CURRENT status clears it", () => {
     // So the picker is its own "none" control, rather than needing a sixth button
     // whose only job is to undo the other five.
-    expect(SECTIONS).toMatch(/profileStatus: k === current \|\| k === null \? "" : k/);
+    expect(PICKER).toMatch(/onClick=\{\(\) => onPick\(on \? null : key\)\}/);
+    // …and each owner turns that null into a real clear rather than dropping it.
+    expect(SECTIONS).toMatch(/profileStatus: k \?\? ""/);
+    expect(GROUPSHEET).toMatch(/profileStatus: k \?\? ""/);
   });
 
   it("the note only appears alongside a status", () => {
-    expect(SECTIONS).toMatch(/\{current && \(/);
+    expect(PICKER).toMatch(/\{current && \(/);
   });
 
   it("a poll cannot erase a note being typed", () => {
     // The field follows the server when it changes underneath us, but not mid-edit.
-    expect(SECTIONS).toMatch(/if \(!editingNote\) setNote\(me\.statusNote \?\? ""\)/);
-    expect(SECTIONS).toMatch(/onFocus=\{\(\) => setEditingNote\(true\)\}/);
+    // Living in the shared picker means the SECOND caller inherits the rule instead
+    // of having to remember it.
+    expect(PICKER).toMatch(/if \(!editing\) setDraft\(note \?\? ""\)/);
+    expect(PICKER).toMatch(/onFocus=\{\(\) => setEditing\(true\)\}/);
   });
 
   it("colour is applied INLINE, never as a runtime-composed Tailwind class", () => {
     // The JIT compiler cannot see a class name assembled at render time, so
     // `border-[${color}]` comes out unstyled — the trap recorded for the tab accents.
-    expect(SECTIONS).toMatch(/style=\{on \? \{ borderColor: color/);
-    expect(codeOnly(SECTIONS)).not.toMatch(/border-\[\$\{/);
+    expect(PICKER).toMatch(/style=\{on \? \{ borderColor: color/);
+    expect(codeOnly(PICKER)).not.toMatch(/border-\[\$\{/);
     expect(codeOnly(OVERLAYS)).not.toMatch(/bg-\[\$\{meta\.color/);
   });
 
