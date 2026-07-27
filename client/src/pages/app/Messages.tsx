@@ -56,6 +56,7 @@ import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
 import { StatusStrip } from "./Status";
 import { PeerAvatar, openPeerProfile, type PeerProfileChatActions } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
+import { suggestContacts, digitsOf, isNumberQuery } from "@/app/contactSuggest";
 import { formatLastSeen } from "@shared/profileFields";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
@@ -3092,7 +3093,17 @@ function NewMessageDialog() {
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"dm" | "group">("dm");
+  /**
+   * What has been typed — a NUMBER OR A NAME (v2.99.93).
+   *
+   * Owner: start a conversation "by first digit or first letter". This field used to
+   * strip every non-digit on the way in, so a name could not be typed at all and you
+   * had to know the six digits by heart. It now holds the raw query; `number` for
+   * the request is DERIVED, so the submit path still only ever sees six digits.
+   */
   const [number, setNumber] = useState("");
+  // Only loaded while the sheet is open — no cost to the thread list behind it.
+  const contactsQ = trpc.contacts.list.useQuery(undefined, { enabled: open, staleTime: 30_000 });
   // group-builder state
   const [groupTitle, setGroupTitle] = useState("");
   const [groupNumbers, setGroupNumbers] = useState<string[]>([]);
@@ -3121,8 +3132,9 @@ function NewMessageDialog() {
       setLocation(`/app/messages?c=${res.conversationId}`);
     },
   });
-  function addGroupNumber() {
-    const n = groupInput.replace(/\D/g, "").slice(0, 6);
+  /** Add by the typed number, or by a number a suggestion supplied. */
+  function addGroupNumber(explicit?: string) {
+    const n = (explicit ?? digitsOf(groupInput)).slice(0, 6);
     if (n.length === 6 && !groupNumbers.includes(n)) {
       setGroupNumbers((xs) => [...xs, n]);
     }
@@ -3234,18 +3246,32 @@ function NewMessageDialog() {
                 <div className="flex gap-2">
                   <Input
                     value={number}
-                    onChange={(e) => setNumber(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                    placeholder="6-digit number"
-                    inputMode="numeric"
-                    className="font-mono"
+                    // NOT digit-stripped any more (v2.99.93) — that is what made a
+                    // name untypeable. Bounded at 64 so it stays a search box.
+                    onChange={(e) => setNumber(e.target.value.slice(0, 64))}
+                    placeholder="Number or name"
+                    // `text`, not numeric: a numeric keypad cannot type a name, and
+                    // the whole point is that either works.
+                    inputMode="text"
+                    autoComplete="off"
+                    aria-label="Search your contacts by number or name"
                   />
                   <Button
-                    onClick={() => openThread.mutate({ number })}
-                    disabled={number.length !== 6 || pending}
+                    // Enabled on SIX DIGITS only — the request takes a number, so a
+                    // half-typed name must not be submittable. A name is opened by
+                    // tapping its suggestion, which supplies the number.
+                    onClick={() => openThread.mutate({ number: digitsOf(number) })}
+                    disabled={digitsOf(number).length !== 6 || !isNumberQuery(number) || pending}
                   >
                     <Search className="size-4 mr-1.5" /> Open
                   </Button>
                 </div>
+                <SuggestList
+                  contacts={contactsQ.data ?? []}
+                  query={number}
+                  busy={pending}
+                  onPick={(n) => openThread.mutate({ number: n })}
+                />
               </>
             ) : (
               <>
@@ -3264,16 +3290,32 @@ function NewMessageDialog() {
                 <div className="flex gap-2">
                   <Input
                     value={groupInput}
-                    onChange={(e) => setGroupInput(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    // Same as the DM field (v2.99.93): a name is typeable, and
+                    // `addGroupNumber` derives the digits.
+                    onChange={(e) => setGroupInput(e.target.value.slice(0, 64))}
                     onKeyDown={(e) => { if (e.key === "Enter") addGroupNumber(); }}
-                    placeholder="6-digit number"
-                    inputMode="numeric"
-                    className="font-mono"
+                    placeholder="Number or name"
+                    inputMode="text"
                   />
-                  <Button variant="secondary" onClick={addGroupNumber} disabled={groupInput.length !== 6}>
+                  <Button
+                    variant="secondary"
+                    // Six digits only, same rule as the DM field: a half-typed name
+                    // is not a member.
+                    onClick={() => addGroupNumber()}
+                    disabled={digitsOf(groupInput).length !== 6 || !isNumberQuery(groupInput)}
+                  >
                     <UserPlus className="size-4" />
                   </Button>
                 </div>
+                <SuggestList
+                  contacts={contactsQ.data ?? []}
+                  query={groupInput}
+                  busy={false}
+                  // Already-added members are withheld: a suggestion that does
+                  // nothing when tapped reads as broken.
+                  exclude={groupNumbers}
+                  onPick={(n) => addGroupNumber(n)}
+                />
                 {groupNumbers.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mt-3">
                     {groupNumbers.map((n) => (
@@ -3308,5 +3350,82 @@ function NewMessageDialog() {
         </div>
       )}
     </>
+  );
+}
+
+/* ============================================================
+   Contact suggestions for the New-conversation sheet (v2.99.93).
+
+   Owner: start a conversation "by first digit or first letter". The ranking rules
+   live in `contactSuggest.ts` and are unit-tested there — a source pin cannot tell
+   you whether typing `7` actually surfaces 777777, and that is the whole feature.
+
+   Renders NOTHING when there is nothing to offer, rather than an empty box or a
+   "no matches" row: the field still works by number, so an absent list is not an
+   error state and saying so would just be noise under every unmatched keystroke.
+   ============================================================ */
+function SuggestList({
+  contacts,
+  query,
+  busy,
+  exclude,
+  onPick,
+}: {
+  contacts: Array<{ number: string; displayName?: string | null; blocked?: boolean | null; favorite?: boolean | null; isOnline?: boolean | null; avatarUrl?: string | null; idle?: boolean | null }>;
+  query: string;
+  busy: boolean;
+  exclude?: string[];
+  onPick: (number: string) => void;
+}) {
+  const skip = new Set(exclude ?? []);
+  const hits = suggestContacts(contacts, query, 6).filter((c) => !skip.has(c.number));
+  if (hits.length === 0) return null;
+  return (
+    <ul className="mt-3 max-h-56 overflow-y-auto rounded-xl border border-border divide-y divide-border/60">
+      {hits.map((c) => {
+        const dot = presenceDot(c);
+        return (
+          <li key={c.number}>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onPick(c.number)}
+              className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition hover:bg-foreground/[0.04] active:bg-foreground/[0.07] disabled:opacity-50"
+            >
+              <span className="relative shrink-0">
+                {c.avatarUrl ? (
+                  <img src={c.avatarUrl} alt="" className="size-8 rounded-full object-cover" />
+                ) : (
+                  <span
+                    className="grid size-8 place-items-center rounded-full text-[11px] font-bold"
+                    style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)", color: "#08211d" }}
+                  >
+                    {(c.displayName || c.number).slice(0, 2).toUpperCase()}
+                  </span>
+                )}
+                <span
+                  aria-label={dot.label}
+                  className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card"
+                  style={{ background: dot.color, boxShadow: dot.glow || undefined }}
+                />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium" dir="auto">
+                  {c.displayName || "Unnamed"}
+                </span>
+                {/* The number stays LTR + bidi-isolated so an Arabic name above
+                    cannot reorder the digits (the v2.99.77 lesson). */}
+                <span
+                  dir="ltr"
+                  className="block font-mono text-[11px] tabular-nums text-muted-foreground [unicode-bidi:isolate]"
+                >
+                  {c.number.slice(0, 3)}-{c.number.slice(3)}
+                </span>
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
