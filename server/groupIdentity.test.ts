@@ -299,6 +299,9 @@ describe("what the group's own identity looks like on screen", () => {
     // Confirmed rather than rebuilt: the owner asked for a groups section and
     // Messages has had one. This pins it so the rename/rework did not lose it.
     expect(MESSAGES).toMatch(/key: "groups",\s*\n\s*label: "Groups",/);
-    expect(MESSAGES).toMatch(/rows: list\.filter\(\(t\) => t\.kind === "group"\)/);
+    // v2.103.0 widened this: archived threads leave their section and gather in an
+    // Archived one, so the Groups filter now also excludes them. The PROPERTY is
+    // that a "Groups" section exists and holds group threads.
+    expect(MESSAGES).toMatch(/rows: list\.filter\(\(t\) => t\.kind === "group" && !t\.archived\)/);
   });
 });

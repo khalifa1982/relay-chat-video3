@@ -46,7 +46,11 @@ describe("RoleBadge — three account tiers with captions", () => {
 describe("role badge is wired into every primary identity surface", () => {
   const sites: Array<[string, RegExp]> = [
     ["client/src/app/AppShell.tsx", /<RoleBadge role=\{roleFromFlags\(me\.role, me\.verified\)\}/],
-    ["client/src/pages/app/Profile.tsx", /<RoleBadge role=\{roleFromFlags\(me\.role, me\.verified\)\}/],
+    // v2.103.1 (owner): Profile.tsx is deliberately NOT in this list any more. The top
+    // bar sits directly above the Profile hero and already carries the name, the badge
+    // and the number, so the hero said the same three things twice on one screen. The
+    // AppShell entry above is the badge's surface for the signed-in user; a test below
+    // pins that the hero does not repeat it.
     ["client/src/pages/app/Contacts.tsx", /<RoleBadge role=\{roleFromFlags\(c\.role, c\.verified\)\}/],
     // v2.99.37: the redesigned thread row computes the tier first, then renders a
     // caption-less mark beside the name (a stacked caption clipped a row before).

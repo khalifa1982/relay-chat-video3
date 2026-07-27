@@ -7557,6 +7557,159 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.103.1 — the call-history filters fit a phone, and the Profile hero stops repeating itself (2026-07-27)
+
+Two owner reports, both about the same thing: a screen saying something twice, or not
+saying it at all.
+
+**The History filters overlapped** (owner, with a screenshot: *"All type of categorize and
+the call history it's overlap. you cannot see it like all calls received or outgoing
+grouping."*)
+
+- [x] **DIAGNOSED BY MEASURING, NOT BY LOOKING.** v2.99.98 added a fourth filter
+      (Received) and a fifth control (Group) to a row that already held three. Each
+      filter needs an icon, a word and a count; five such controls need ~500px and a
+      phone has ~390. With `flex-1` and no `min-w-0` the items could not shrink below
+      their content, so they collided.
+- [x] **THE FIRST FIX WAS NOT ENOUGH, AND THE MEASUREMENT IS WHAT SAID SO.** Splitting
+      into two rows removed the overlap — and headless Chromium against the REAL built
+      stylesheet then reported every label but "All" **clipped at every phone width**:
+      an 87px tab leaves ~39px for the label once icon and count are placed, and
+      "Received" needs ~58. Guessing would have shipped that.
+- [x] So the tab content is **STACKED**: icon and count share a top line, the label gets
+      the tab's full width beneath. Re-measured at 320 / 360 / 375 / 390 / 430 —
+      **0 overlaps, 0 clipped labels, no overflow, Group and Clear both visible, 5/5**.
+- [x] **NOTHING WAS DROPPED to make it fit** — the cheap fix is deleting a label or a
+      control, and all four filters plus both row-2 controls are still there.
+- [x] Group moves out of the tab strip but stays a TOGGLE (`aria-pressed`), so it still
+      composes with whichever filter is chosen — which an exclusive tab could not do
+      (v2.99.98). Splitting it out is also the better hierarchy: the filters are one
+      choice, grouping is a modifier on it.
+- [x] The harness guards both recorded measurement bugs: it names `index-*.css`
+      explicitly (v2.99.94 picked `Docs-*.css` and measured a page with no Tailwind) and
+      ABORTS unless the emulated width really took (v2.99.84 measured a phone at the
+      980px default layout viewport).
+
+**The Profile hero said the same three things as the bar above it** (owner: *"when you
+click on the profile remove this one the first name, badge and pin number because it's
+already repeated on the bar on the top bar"*)
+
+- [x] Name, badge and the six digits are gone from the hero. The top bar sits directly
+      above it and carries all three.
+- [x] **WHAT YOU CAN DO WITH THE NUMBER STAYS**, because the top bar cannot do it:
+      settings, QR and copy are the reason the block exists and none of them is anywhere
+      else. The `aria-label` still names the number, which is right — a screen reader
+      needs to know which number the button is about.
+- [x] **THE BUILD GOES IN THE SPACE INSTEAD** (owner: *"put the current version number …
+      whenever it's update we will understand which version we are"*), from
+      `shared/version.ts` — the same constant the server serves at `/api/version` and the
+      auto-updater compares against, so the stamp can never disagree with what is
+      deployed. The footer keeps only what the hero does not say, so the version is not
+      printed twice on one screen.
+
+**Tests**
+
+- [x] `client/src/pages/app/historyFilterFit.test.ts` (5) pins the structural rules the
+      measurement rests on — a layout regression here is invisible in a unit test
+      otherwise, and this bar has now broken twice.
+- [x] **Four pre-existing pins rewritten to the new rule rather than relaxed**, and all
+      four had asserted the PRESENCE of exactly what the owner asked to remove: three in
+      `profileHub.test.ts` (the badge, the number, its bidi isolation) and one in
+      `verifiedBadge.test.ts`, whose surface list no longer includes Profile — the badge's
+      surface for the signed-in user is the top bar, which that list already covered.
+- [x] No schema change, no new dependency, no new env var, no server change.
+      Suite 3117 passed / 1 skipped.
+
+## v2.103.0 — swipe a thread row for Unread / Pin / Mute / Delete / Archive (2026-07-27)
+
+Owner, with two screenshots of the intended row: in the MESSAGES LIST (outside a chat),
+dragging a thread row LEFT reveals the right-hand actions (Mute / Delete / Archive) and
+dragging RIGHT reveals the left-hand ones (Unread / Pin). Glassy buttons. Holding a
+finger on the row is a second way in.
+
+**Four of the five icons were features that did not exist**
+
+- [x] Read before building: Mute worked but per-DEVICE; Unread, Pin, Archive and
+      thread-Delete did not exist at all. So the gesture is the visible half and four new
+      capabilities are the real work — all of them **server-side per person**, because
+      pinning a chat on a phone that leaves it unpinned on a laptop is the same lie a
+      localStorage "delete for me" would have been (v2.102.2). Four additive nullable
+      columns on `conversation_participants`, which is already keyed
+      (conversationId, identityId).
+- [x] **MUTE STAYS PER-DEVICE, and that is a decision rather than an omission**: the
+      service worker has to silence a notification without asking the server anything
+      (v2.99.42). Moving it would quietly reverse that and break notification muting.
+      A test asserts the endpoint mentions mute nowhere.
+
+**The gesture lives inside a vertically scrolling list, which is the real risk**
+
+- [x] `touch-action: pan-y` — the browser keeps vertical panning for itself, so scrolling
+      never has to be given back. The fix people reach for instead
+      (`preventDefault` on touchmove) stops the list scrolling outright.
+- [x] The pointer is claimed only once movement passes a threshold AND is more horizontal
+      than vertical; a mostly-vertical move **ends** our interest in the gesture, so it
+      can never be grabbed back mid-scroll. Capture happens strictly after the claim.
+- [x] The drag writes the transform IMPERATIVELY — a state update per pointer move would
+      re-render the whole thread list on every frame of every drag (the v2.99.67
+      mistake). Only `transform` and `opacity` animate.
+- [x] A full swipe commits only when a side holds ONE unambiguous action. With three
+      buttons there is nothing a full swipe could mean, and guessing would Delete a chat.
+- [x] Buried actions are not focusable, or Tab walks every hidden button on every row;
+      and the tap that closes an open row cannot also open the conversation.
+
+**What each action does**
+
+- [x] **Pin sorts to the top.** A pin that only draws a marker on a row still buried
+      forty threads down is not a pin. Within each group the existing recency rule is
+      untouched, so an unpinned list sorts byte-identically to before.
+- [x] **Archive gives threads their own section, LAST** — out of the way but not gone —
+      and they leave Direct / Groups / Notes. Pin and archive exclude each other, because
+      a thread pinned to the top AND hidden in Archive is a contradiction the list cannot
+      render.
+- [x] **Unread shows a DOT, not a count.** There is no number, and "1 new" would be a
+      claim about a message that may not exist. Its own column rather than rewinding the
+      read watermark, which would fight `recomputeUnreadFor` and could not express
+      "unread" at all for a thread whose newest message is your own.
+- [x] Every action is a TOGGLE reading the row's own state, so a pinned thread offers
+      Unpin. An action that cannot be undone by the same gesture that did it is a trap.
+
+**Delete a thread — recoverable, and the copy says so**
+
+- [x] It stamps the newest message id rather than bulk-inserting a hide per message: one
+      column, and the filter rides the `(conversationId, id)` index — the shape
+      `identities.historyClearedAt` has used for the call log since v2.75.
+- [x] **The thread returns by itself when something newer arrives, and that costs no
+      write on the send path**: it is hidden exactly while its newest message id is not
+      greater than the stamp, and the groupwise-max has already produced that id.
+- [x] Note this DIFFERS from a per-message hide, where the thread stays with no preview:
+      there the message went, here the person asked for the thread itself to go.
+- [x] Clearing also zeroes the badge and leaves Archive — a hidden thread with a live
+      badge counts toward a total nobody can act on, and a cleared thread in Archive
+      would have no messages in it. Deleting the OPEN thread navigates away rather than
+      leaving an empty conversation nobody can escape except with Back.
+- [x] The ONLY action behind a confirmation, and the copy names what survives: everyone
+      else keeps the conversation, and it comes back if they write again.
+
+**Tests**
+
+- [x] `server/swipeActions.test.ts` (22). **All 33 tripwires verified by MUTATION** from
+      byte-exact backups, from a confirmed-GREEN baseline.
+- [x] **One survivor, and it was the same class as last release's** — the scoping
+      assertion matched the re-read SELECT's copy of the clause while the mutation
+      stripped it from the **UPDATE**. An unscoped UPDATE here pins, archives or CLEARS
+      the thread for every member of the conversation. Now pinned on the write
+      specifically, with both halves counted so a missing one on either side is caught.
+- [x] One of my own mutations was bad and is reported rather than counted: its target
+      string did not match the source, so it aborted rather than surviving.
+- [x] Two pre-existing pins updated, both expected fallout: the timestamp pin, because a
+      pinned row now shows a marker before it and `ms-auto` moves to whichever comes
+      first; and the Groups-section pin, because that filter now also excludes archived.
+- [x] **NOT VERIFIED ON A DEVICE, said plainly**: the scroll-safety rules are pinned and
+      the logic is tested, but nobody has dragged a row on a real phone. That is exactly
+      where a gesture like this is judged.
+- [x] Four additive nullable columns, no new dependency, no new env var.
+      Suite 3113 passed / 1 skipped.
+
 ## v2.102.2 — "delete for me" (2026-07-27)
 
 Owner (#81): a way to remove a message somebody ELSE sent, for you alone.

@@ -348,29 +348,37 @@ export default function ProfilePage() {
                 />
               </div>
 
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl font-extrabold tracking-tight">{me.displayName || "You"}</h1>
-                {/* v2.99.6: three-tier badge (Guest/Registered/Admin) — me.verified
-                    keeps the fallback for a cached whoami without `role`. */}
-                <RoleBadge role={roleFromFlags(me.role, me.verified)} size={18} />
-              </div>
+              {/* v2.103.1 (owner): the NAME, the BADGE and the NUMBER are all already
+                  in the top bar directly above this, so repeating them here said the
+                  same three things twice on one screen. The photo identifies you, and
+                  the controls below are what this hero is for.
+
+                  The BUILD is what goes in the space instead, because the owner asked to
+                  be able to tell at a glance which version a screen is — it comes from
+                  `shared/version.ts`, the same constant the server serves at
+                  /api/version and the auto-updater compares against, so it can never
+                  disagree with what is actually deployed. */}
+              <span
+                className="font-mono text-[13px] font-semibold tracking-tight text-muted-foreground"
+                dir="ltr"
+              >
+                RELAY v{APP_VERSION}
+              </span>
 
               {/* The number, in the owner's NNN-NNN grouping and the measured-AA green,
                   with the barcode beside it. `dir="ltr"` + bidi isolation so an Arabic
                   display name above cannot reorder the digits (v2.99.77). */}
               <div className="flex items-center gap-2">
+                {/* The digits themselves are gone with the name above — the top bar
+                    shows them. What is NOT up there is what you can DO with the
+                    number, so the actions stay: settings, QR, copy. */}
                 <button
                   type="button"
                   onClick={() => openPane("number")}
-                  className="rounded-full border border-border bg-card/60 px-3 py-1.5 transition active:opacity-70 hover:bg-card"
+                  className="rounded-full border border-border bg-card/60 px-3 py-1.5 text-sm font-semibold transition active:opacity-70 hover:bg-card"
                   aria-label={`Your RELAY number is ${formatPin(me.number)} — open number settings`}
                 >
-                  <span
-                    dir="ltr"
-                    className="font-mono text-base font-bold tracking-[0.06em] tabular-nums [unicode-bidi:isolate] text-[color:var(--relay-green-text)]"
-                  >
-                    {formatPin(me.number)}
-                  </span>
+                  My number
                 </button>
                 <button
                   type="button"
@@ -552,10 +560,12 @@ export default function ProfilePage() {
               </button>
             </section>
 
-            {/* build stamp — mirrors the prototype's mono footer line */}
+            {/* The build stamp moved UP into the hero (v2.103.1, owner), so the footer
+                keeps only what the hero does not say. Printing the version twice on one
+                screen is exactly the repetition this release removed above. */}
             <div className="pt-1 text-center">
               <span className="font-mono text-[11px] text-muted-foreground/70">
-                RELAY v{APP_VERSION} · auto-updates on publish
+                auto-updates on publish
               </span>
             </div>
           </>

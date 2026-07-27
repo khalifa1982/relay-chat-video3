@@ -58,6 +58,7 @@ import {
   createGroupConversation,
   setGroupProfile,
   hideMessageForIdentity,
+  setThreadState,
   deleteMessage,
   consumeExpiringMessage,
   revealExpiringMessage,
@@ -1539,6 +1540,11 @@ export const v2MessagesRouter = router({
         groupAvatarUrl: b.groupAvatarUrl,
         groupStatus: b.groupStatus,
         groupStatusNote: b.groupStatusNote,
+        // Swipe-action state (v2.103.0) — so the row can render the pin marker, the
+        // hand-marked-unread dot, and which way the swipe buttons should read.
+        pinned: b.pinned,
+        archived: b.archived,
+        manualUnread: b.manualUnread,
         memberCount: b.memberCount,
         peerIdentityId: b.otherIdentityId,
         peerNumber: b.otherNumber,
@@ -1655,6 +1661,54 @@ export const v2MessagesRouter = router({
    * because a message id is a small integer and "who may hide this" is the safety
    * argument — it must not be something a second call site could forget.
    */
+  /**
+   * A thread's own per-person state — pin / archive / mark unread / clear (v2.103.0),
+   * the actions behind the swipe row.
+   *
+   * ONE procedure for all four rather than four, because they write one row and four
+   * endpoints would be four places that can forget the membership check. Membership is
+   * enforced by the WHERE clause naming both halves of the primary key, inside
+   * `setThreadState` — never here, so a second call site could not skip it.
+   *
+   * MUTE IS ABSENT ON PURPOSE. It stays per-DEVICE (localStorage plus the Cache Storage
+   * mirror the service worker reads), because the worker has to silence a notification
+   * without asking the server anything — v2.99.42's decision. Moving it here would
+   * quietly reverse that and break notification muting.
+   */
+  setThreadState: publicProcedure
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        pinned: z.boolean().optional(),
+        archived: z.boolean().optional(),
+        unread: z.boolean().optional(),
+        clear: z.boolean().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const res = await setThreadState({
+        conversationId: input.conversationId,
+        identityId: me.id,
+        pinned: input.pinned,
+        archived: input.archived,
+        unread: input.unread,
+        clear: input.clear,
+      });
+      if (!res.ok) {
+        if (res.reason === "not-a-member") {
+          // Same answer a missing conversation would get, so this is no oracle over
+          // conversation ids.
+          throw new TRPCError({ code: "NOT_FOUND", message: "That conversation isn't there." });
+        }
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Couldn't save that — nothing changed.",
+        });
+      }
+      return { ok: true as const };
+    }),
+
   hide: publicProcedure
     .input(z.object({ messageId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
