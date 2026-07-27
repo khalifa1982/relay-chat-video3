@@ -151,10 +151,15 @@ describe("the LED can no longer be keyed off dialedNumber", () => {
   it("presence reaches the rows as ONE lookup, not as pre-resolved booleans", () => {
     // The call site cannot safely decide which number a row is about — that is the
     // whole bug — so it no longer tries.
-    // COUNTED, not merely present. There are two row kinds — conference and solo —
-    // and a bare `toMatch` was satisfied by one of them while the other had been cut
-    // off from presence entirely (found by the mutation run).
-    expect(HISTORY.match(/presenceOf=\{presenceOf\}/g)?.length).toBe(2);
+    // COUNTED, not merely present: a bare `toMatch` was satisfied by one row kind
+    // while the other had been cut off from presence entirely (found by the mutation
+    // run). Counted against the number of ROW MOUNTS rather than a fixed number, so
+    // adding a view — v2.99.98's grouped list added two more mounts — cannot make
+    // this stale, and cannot let a new mount go without presence either.
+    const mounts =
+      (HISTORY.match(/<ConferenceItem\b/g)?.length ?? 0) + (HISTORY.match(/<SoloItem\b/g)?.length ?? 0);
+    expect(mounts).toBeGreaterThanOrEqual(2);
+    expect(HISTORY.match(/presenceOf=\{presenceOf\}/g)?.length).toBe(mounts);
     const code = codeOnly(HISTORY);
     expect(code).not.toMatch(/presenceOf=\{undefined\}/);
     expect(code).not.toMatch(/online=\{presence\.data/);

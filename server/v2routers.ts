@@ -2459,6 +2459,15 @@ export const v2CallsRouter = router({
         const live = typeof p.identityId === "number" ? liveById.get(p.identityId) : undefined;
         const frozenNumber = p.number ?? "";
         return {
+          /**
+           * Who they are, not what they were called (v2.99.98).
+           *
+           * The client groups a call log per person, and grouping on the NUMBER would
+           * split one person's calls in two the moment they renumber — the number
+           * moves, the identity does not. Null for a roster entry we can no longer
+           * resolve, which the client then groups by number as the best available key.
+           */
+          identityId: typeof p.identityId === "number" ? p.identityId : null,
           // Live number when we know who they are; the snapshot otherwise.
           number: live?.number ?? frozenNumber,
           frozenNumber,

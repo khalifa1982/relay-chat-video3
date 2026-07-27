@@ -7557,6 +7557,84 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.98 — a Received tab, and one row per person (2026-07-27)
+
+Owner: *"now you have all these tabs, all the dial and received. You should add received, and there is a
+missed call, and there is something called grouping. Grouping means grouping, if a person who called you
+several time, it will group his number of notification into one. Like, it will say if a user called me ten
+times, it will say this user called you ten times, and it will show me the details of these ten times
+below his ID. outgoing calls, it will show me outgoing calls."*
+
+**"RECEIVED" HAS EXACTLY ONE AVAILABLE DEFINITION, and establishing that was most of the work.**
+`call_history.status` is NEVER written as "answered": its only two writers are `recordCallStart` (which
+writes `"initiated"`) and `recordMissedCall` (`"missed"` / `"declined"`), there is no
+`.update(callHistory)` anywhere in the server, and nothing calls `calls.logStart` at all — so `answeredAt`
+is always NULL and **every answered call, 1:1 included, exists only as a `conference_history` row**.
+Received is therefore a conference row whose direction is inbound. A test asserts that claim about the
+server rather than trusting it, because if it ever stops being true the definition has to change with it.
+
+Missed and Received are now provably **disjoint**, and together they are every incoming call.
+
+**GROUPING IS A TOGGLE, NOT A FIFTH TAB, and that is a deliberate deviation.** The owner listed it
+alongside the tabs, so it sits in the tab row where they expect it — but as a toggle (`aria-pressed`) it
+composes with the filters, so you can group inside Missed or Received as well, which an exclusive tab
+could not do. A "Grouping tab" would also have shown the same rows as All, only stacked. It defaults OFF,
+so the log looks unchanged until asked.
+
+**THE GROUPING KEY IS THE IDENTITY, NEVER THE NUMBER.** The number moves and the identity does not, so
+keying on the number would file one person's calls under two headings the moment they renumber — which is
+exactly the class of bug v2.99.95 had just finished fixing three rows above. `conference_participants`
+now carries `identityId` on the wire (additive, resolved from data the server already had); a roster entry
+we can no longer resolve falls back to its number as the best key available. A **GROUP** call gets its own
+key per room rather than being filed under one member, because a five-way call is not "a call with Ahmed"
+and filing it under him would make the count beside his name wrong.
+
+**THE COUNT SAYS "IN THIS LOG", AND THAT WORDING IS LOAD-BEARING.** Both call payloads are hard-capped at
+100 rows server-side, so a lifetime "called you ten times" is a number this screen cannot know. Claiming
+one would have been worse than being specific — and a test pins both the wording and the cap it is being
+honest about.
+
+**A HIDDEN PRECONDITION REMOVED RATHER THAN PINNED.** `groupByPeer` first relied on the caller passing a
+newest-first list and took the first row it saw as the head. The mutation run then showed the final sort
+could be **deleted with nothing noticing**, because a sorted input makes insertion order already correct.
+Rather than pin the precondition, the precondition is gone: the head is chosen by COMPARING timestamps, so
+the function is right for any input and both the head choice and the ordering are now load-bearing.
+
+**THE TAB SELECTION BECAME A PURE FUNCTION** (`filterItems`) so "Received never contains a missed call" is
+a fact that can be tested rather than a line that can be read.
+
+`client/src/pages/app/historyGrouping.test.ts` (33), the key and the counting tested BEHAVIOURALLY because
+the count IS the feature and a wrong count is worse than none; **all 21 tripwires verified by MUTATION**
+from byte-exact backups and a confirmed-GREEN baseline.
+
+**TWO WEAKNESSES OF MY OWN CAUGHT BY THAT RUN.** The order-independence test's shuffle happened to
+encounter the newest group FIRST, so it passed with the sort deleted — rewritten so the older group is
+encountered first, which only the sort can correct. And nothing guarded that an EXPANDED group renders its
+own calls; replacing that map with an empty one left the suite green while an opened group would have
+rendered nothing, looking like a broken toggle.
+
+**ONE BAD MUTATION OF MY OWN, reported rather than counted as a survivor**: the first attempt added an
+inert `data-` attribute to the expanded list, which changes no behaviour, so the test was right and the
+mutation meaningless.
+
+**TWO PRE-EXISTING PINS REWRITTEN TO THE PROPERTY.** One froze the exact filter ternary that lived inside
+`visible`, so it broke the moment the selection became a function while saying nothing about whether the
+filters actually filter — it is now behavioural, which is strictly stronger. The other said "exactly three
+filters" and is now four, with the count asserted so a fifth has to be deliberate. And v2.99.95's own
+presence pin, which counted `presenceOf` call sites, now counts them against the number of ROW MOUNTS —
+the grouped view added two, and a fixed number would have gone stale while still letting a new mount go
+without presence.
+
+**NOT DONE, said plainly**: the 100-row cap itself. Grouping and search both work over the most recent 100
+calls, so an older one cannot be found or counted. Raising it is a paging change with its own cost, not a
+grouping change. And answered GROUP calls still carry no Voice/Video marker, because
+`conference_history` stores no channel column — a data gap, not an oversight.
+
+The ES5 `Map`-iteration trap (TS2802) bit again while sorting each group's own calls, and was caught by
+`pnpm check` — the same one recorded in v2.99.72.
+
+No schema change, no new dependency, no new env var. 2866 tests.
+
 ## v2.99.97 — an Online section, and counts that say how many and how many are here (2026-07-27)
 
 Owner, with a marked-up Contacts screenshot: *"these are the all categories where I usually manually add

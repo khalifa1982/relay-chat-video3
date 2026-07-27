@@ -7,8 +7,10 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Layers,
   MessageSquare,
   Phone,
+  PhoneIncoming,
   PhoneMissed,
   PhoneOutgoing,
   Radio,
@@ -93,7 +95,7 @@ type ConfRow = {
   partyLine?: boolean;
   /** The line's title (null when the line has since been deleted). */
   partyLineTitle?: string | null;
-  participants: Array<{ number: string; name: string; avatarUrl?: string | null; isSelf: boolean; role?: IdentityRole | null }>;
+  participants: Array<{ identityId?: number | null; number: string; name: string; avatarUrl?: string | null; isSelf: boolean; role?: IdentityRole | null }>;
 };
 
 type CallRow = {
@@ -103,14 +105,14 @@ type CallRow = {
   channel?: string;
   durationSec?: number | null;
   startedAt: string | Date;
-  other: { number: string; displayName: string; avatarUrl?: string | null; role?: IdentityRole | null } | null;
+  other: { identityId?: number | null; number: string; displayName: string; avatarUrl?: string | null; role?: IdentityRole | null } | null;
 };
 
 type Item =
   | { kind: "conf"; key: string; at: number; direction: "in" | "out"; conf: ConfRow }
   | { kind: "solo"; key: string; at: number; direction: "in" | "out"; call: CallRow };
 
-type Filter = "all" | "dialed" | "missed";
+type Filter = "all" | "dialed" | "received" | "missed";
 
 /**
  * The peer's 6-digit number, in brackets, right after their name (v2.99.77).
@@ -160,8 +162,132 @@ const TONE = {
 const FILTERS: Array<{ key: Filter; label: string; icon: typeof Phone }> = [
   { key: "all", label: "All", icon: Phone },
   { key: "dialed", label: "Dialed", icon: PhoneOutgoing },
+  // v2.99.98 (owner): "there is a tabs, all the dial and received. You should add
+  // received". RECEIVED means a call that came in AND WAS ANSWERED — see
+  // isReceivedItem for why that has exactly one possible definition here.
+  { key: "received", label: "Received", icon: PhoneIncoming },
   { key: "missed", label: "Missed", icon: PhoneMissed },
 ];
+
+/**
+ * An incoming call that was ANSWERED (v2.99.98).
+ *
+ * This has exactly one available definition, and it is worth writing down why.
+ * `call_history.status` is NEVER written as "answered": its only two writers are
+ * `recordCallStart` (which writes "initiated") and `recordMissedCall` (which writes
+ * "missed" or "declined"), there is no `update(callHistory)` anywhere in the server,
+ * and nothing calls `calls.logStart` at all — so `answeredAt` is always NULL and
+ * EVERY answered call, 1:1 included, exists only as a `conference_history` row.
+ *
+ * So: a conference row whose direction is inbound. The direction itself comes from
+ * roster order, which is sound because the dial path seeds the roster with the CALLER
+ * first and that insertion order survives into the stored JSON verbatim.
+ */
+function isReceivedItem(it: Item): boolean {
+  return it.kind === "conf" && it.direction === "in";
+}
+
+/**
+ * The key that groups a log by PERSON (v2.99.98).
+ *
+ * Identity first, number only as a fallback: grouping on the number would split one
+ * person's calls in two the moment they renumber, because the number moves and the
+ * identity does not. A roster entry we can no longer resolve has no identity, and its
+ * number is then the best key available.
+ *
+ * A GROUP call gets its own key per room rather than being filed under one member —
+ * a five-way call is not "a call with Ahmed", and putting it under him would make the
+ * count beside his name wrong.
+ */
+export function historyPeerKey(it: Item): string {
+  if (it.kind === "solo") {
+    const o = it.call.other;
+    if (o?.identityId != null) return `id:${o.identityId}`;
+    return o?.number ? `num:${o.number}` : `solo:${it.call.id}`;
+  }
+  const k = conferenceRowKeys(it.conf);
+  if (k.isGroup) return `room:${it.conf.roomId || it.conf.id}`;
+  const peer = it.conf.participants.find((p) => !p.isSelf);
+  if (peer?.identityId != null) return `id:${peer.identityId}`;
+  return peer?.number ? `num:${peer.number}` : `conf:${it.conf.id}`;
+}
+
+/**
+ * The name to put on a grouped row — the same name the individual rows show, so the
+ * group header and the calls under it can never disagree about who this is.
+ */
+export function groupTitleOf(it: Item): string {
+  if (it.kind === "solo") {
+    return it.call.other?.displayName || it.call.other?.number || "Unknown";
+  }
+  const c = it.conf;
+  if (c.partyLine) return `${c.partyLineTitle || `Line ${c.dialedNumber ?? ""}`.trim()} (party line)`;
+  const others = c.participants.filter((p) => !p.isSelf);
+  if (others.length > 1) return `Group · ${others.length + 1}`;
+  return others[0]?.name || others[0]?.number || c.dialedNumber || "Call";
+}
+
+/** A person's calls, newest first, with the newest one standing for the group. */
+export interface PeerGroup {
+  key: string;
+  items: Item[];
+  /** The most recent call, which supplies the name, avatar and actions. */
+  head: Item;
+  /** How many calls in THIS LOG — never a lifetime total; see the note at the UI. */
+  count: number;
+  at: number;
+  missed: number;
+}
+
+/**
+ * Collapse a list into one entry per person.
+ *
+ * Pure and exported so the counting can be tested without a DOM — the owner's ask is
+ * "it will say this user called you ten times", and a count that is wrong is worse
+ * than no count.
+ *
+ * DELIBERATELY INDEPENDENT OF INPUT ORDER. The first cut relied on the caller passing
+ * a newest-first list and took the first row it saw as the head; the mutation run then
+ * showed the final sort could be deleted with no test noticing, because a sorted input
+ * makes insertion order already correct. Rather than pin the precondition, the
+ * precondition is gone: the head is chosen by COMPARING timestamps, so this is right
+ * for any input and both the head choice and the ordering are load-bearing.
+ */
+export function groupByPeer(items: Item[]): PeerGroup[] {
+  const byKey = new Map<string, PeerGroup>();
+  for (const it of items) {
+    const key = historyPeerKey(it);
+    const g = byKey.get(key);
+    if (g) {
+      g.items.push(it);
+      g.count += 1;
+      if (isMissedItem(it)) g.missed += 1;
+      if (it.at > g.at) {
+        g.at = it.at;
+        g.head = it;
+      }
+    } else {
+      byKey.set(key, { key, items: [it], head: it, count: 1, at: it.at, missed: isMissedItem(it) ? 1 : 0 });
+    }
+  }
+  // Each group's own calls newest-first, then the groups newest-first.
+  // `Array.from` rather than iterating the Map directly: this project targets ES5, so
+  // `for (const x of map.values())` is a TS2802 build error (the trap from v2.99.72).
+  const out = Array.from(byKey.values());
+  for (const g of out) g.items.sort((a, b) => b.at - a.at);
+  return out.sort((a, b) => b.at - a.at);
+}
+
+/**
+ * Which rows a tab shows — pure, so "Received never contains a missed call" is a fact
+ * that can be tested rather than a line that can be read.
+ */
+export function filterItems(items: Item[], filter: Filter): Item[] {
+  if (filter === "dialed") return items.filter((it) => it.direction === "out");
+  if (filter === "received") return items.filter(isReceivedItem);
+  if (filter === "missed") return items.filter(isMissedItem);
+  return items;
+}
 
 /** True for the 1:1 rows we surface as standalone entries (never-connected
  *  calls). Answered calls come through conferenceHistory — skipping them here
@@ -234,9 +360,21 @@ export default function HistoryPage() {
   const search = useSearch();
   const urlFilter = useMemo<Filter | null>(() => {
     const f = new URLSearchParams(search).get("filter");
-    return f === "missed" || f === "dialed" || f === "all" ? (f as Filter) : null;
+    // "received" included (v2.99.98) so a deep link can land on it like the others.
+    return f === "missed" || f === "dialed" || f === "received" || f === "all" ? (f as Filter) : null;
   }, [search]);
   const [filter, setFilter] = useState<Filter>(urlFilter ?? "all");
+  /** Collapse repeated calls from the same person into one row (v2.99.98). */
+  const [grouped, setGrouped] = useState(false);
+  /** Which grouped rows have been opened to show the individual calls. */
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
+  const toggleGroup = (key: string) =>
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   useEffect(() => {
     if (urlFilter) setFilter(urlFilter);
   }, [urlFilter]);
@@ -305,6 +443,7 @@ export default function HistoryPage() {
     () => ({
       all: items.length,
       dialed: items.filter((it) => it.direction === "out").length,
+      received: items.filter(isReceivedItem).length,
       missed: items.filter(isMissedItem).length,
     }),
     [items]
@@ -334,12 +473,7 @@ export default function HistoryPage() {
   // over the already-loaded items — instant, no new request.
   const [historySearch, setHistorySearch] = useState("");
   const visible = useMemo(() => {
-    let v =
-      filter === "dialed"
-        ? items.filter((it) => it.direction === "out")
-        : filter === "missed"
-          ? items.filter(isMissedItem)
-          : items;
+    let v = filterItems(items, filter);
     if (historySearch.trim()) {
       v = v.filter((it) => matchQuery(historySearch, searchFieldsOf(it, savedNameOf)));
     }
@@ -363,6 +497,9 @@ export default function HistoryPage() {
     }
     return Array.from(map.values());
   }, [visible]);
+
+  /** One row per person, newest first — only computed when grouping is on. */
+  const peerGroups = useMemo(() => (grouped ? groupByPeer(visible) : []), [grouped, visible]);
   // Collapsed day-sections (by key). Default = all expanded.
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const toggleSection = (key: string) =>
@@ -548,7 +685,9 @@ export default function HistoryPage() {
                       ? active ? "text-red-500" : ""
                       : f.key === "dialed"
                         ? active ? "text-green-500" : ""
-                        : "")
+                        : f.key === "received"
+                          ? active ? "text-blue-500" : ""
+                          : "")
                   }
                 />
                 {f.label}
@@ -567,6 +706,35 @@ export default function HistoryPage() {
               </button>
             );
           })}
+          {/* v2.99.98 (owner): "there is something called grouping. Grouping means
+              grouping, if a person who called you several time, it will group his
+              number of notification into one."
+
+              It sits in the tab row where the owner expects it, but it is a TOGGLE
+              (aria-pressed) rather than a fifth exclusive tab — grouping is
+              orthogonal to filtering, so this way you can group inside Missed or
+              Received as well, which an exclusive tab could not do. A "Grouping tab"
+              would also have meant the same rows as All, just stacked. */}
+          <button
+            type="button"
+            aria-pressed={grouped}
+            onClick={() => setGrouped((g) => !g)}
+            title={
+              grouped
+                ? "Showing one row per person — tap to list every call separately"
+                : "Group repeated calls from the same person into one row"
+            }
+            className={
+              "flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors " +
+              "outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
+              (grouped
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground")
+            }
+          >
+            <Layers className={"size-3.5 " + (grouped ? "text-violet-400" : "")} />
+            Group
+          </button>
         </div>
         <Button
           size="icon"
@@ -627,7 +795,88 @@ export default function HistoryPage() {
                   ? "No missed calls. 🎉"
                   : filter === "dialed"
                     ? "No dialed calls yet — call someone from the keypad."
-                    : "No calls yet. Your conference and call history will appear here — who you dialed, how many people joined, their names and numbers, and how long the call lasted."}
+                    : filter === "received"
+                      ? "No answered incoming calls yet."
+                      : "No calls yet. Your conference and call history will appear here — who you dialed, how many people joined, their names and numbers, and how long the call lasted."}
+            </div>
+          ) : grouped ? (
+            /* GROUPED: one row per person, newest first, tap to expand.
+               The count says "in this log" and not a lifetime total, and that
+               wording is load-bearing: both call payloads are hard-capped at 100
+               rows server-side, so a lifetime figure would be a number we cannot
+               actually know. Claiming one would be worse than being specific. */
+            <div>
+              {peerGroups.map((g) => {
+                const isOpen = openGroups.has(g.key);
+                return (
+                  <section key={g.key}>
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(g.key)}
+                      aria-expanded={isOpen}
+                      className="w-full flex items-center gap-2 border-b-2 border-border px-4 py-3 text-left transition-colors hover:bg-muted/30"
+                    >
+                      {isOpen ? (
+                        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={2.4} />
+                      ) : (
+                        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={2.4} />
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[15px] font-bold text-foreground" dir="auto">
+                          {groupTitleOf(g.head)}
+                        </span>
+                        <span className="block text-[12.5px] text-muted-foreground">
+                          {g.count === 1
+                            ? "1 call in this log"
+                            : `${g.count} calls in this log`}
+                          {g.missed > 0 && (
+                            <span className="text-red-600 dark:text-red-400">
+                              {" · "}
+                              {g.missed} missed
+                            </span>
+                          )}
+                          {" · "}
+                          {formatFullWhen(new Date(g.at))}
+                        </span>
+                      </span>
+                    </button>
+                    {isOpen && (
+                      <ul className="bg-muted/20">
+                        {g.items.map((it) =>
+                          it.kind === "conf" ? (
+                            <ConferenceItem
+                              key={it.key}
+                              conf={it.conf}
+                              direction={it.direction}
+                              onRedial={redial}
+                              onRedialGroup={redialGroup}
+                              onMessage={message}
+                              onVideo={videoCall}
+                              onAddContact={quickAdd}
+                              saved={savedNumbers.has(
+                                it.conf.participants.find((p) => !p.isSelf)?.number ?? ""
+                              )}
+                              presenceOf={presenceOf}
+                            />
+                          ) : (
+                            <SoloItem
+                              key={it.key}
+                              call={it.call}
+                              onRedial={redial}
+                              onMessage={message}
+                              onVideo={videoCall}
+                              onWatch={watch}
+                              onAddContact={quickAdd}
+                              saved={savedNumbers.has(it.call.other?.number ?? "")}
+                              presenceOf={presenceOf}
+                            />
+                          )
+                        )}
+                      </ul>
+                    )}
+                  </section>
+                );
+              })}
             </div>
           ) : (
             <div>
