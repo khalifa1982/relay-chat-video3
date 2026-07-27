@@ -39,9 +39,18 @@ describe("avatar propagation — the broken-image root cause (v2.96.1)", () => {
     expect(UPLOAD_LIB).toMatch(/export async function uploadAvatarImage\(/);
     expect(UPLOAD_LIB).toMatch(/async function uploadBare\(/);
     expect(UPLOAD_LIB).toMatch(/bare: "1"/);
-    expect(PROFILE).toMatch(/uploadAvatarImage\(file/);
-    // The old row-creating path must be gone from the avatar flow.
+    // v2.99.89 moved this from Profile to AvatarPicker, which is where the avatar
+    // upload actually happens — Profile's own copy of the call turned out to be
+    // unreachable (nothing clicked its file input) and was deleted. Both the photo
+    // and the emoji/animated paths go through the bare uploader, so assert both
+    // rather than the one that happened to be pinned.
+    const PICKER = read("client/src/app/AvatarPicker.tsx");
+    expect(PICKER).toMatch(/uploadAvatarImage\(file, \{ mimeType: file\.type \}\)/);
+    expect(PICKER).toMatch(/uploadAvatarImage\(blob, \{/);
+    // The old row-creating path must be gone from the avatar flow, in BOTH files.
+    expect(PICKER).not.toMatch(/uploadAttachment\(/);
     expect(PROFILE).not.toMatch(/uploadAttachment\(/);
+    expect(PROFILE).not.toMatch(/uploadAvatarImage/);
   });
   it("legacy avatar keys (attachment-rowed) are rescued in authorizeStorageKey", () => {
     expect(V2DB).toMatch(/export async function isIdentityAvatarKey\(/);
