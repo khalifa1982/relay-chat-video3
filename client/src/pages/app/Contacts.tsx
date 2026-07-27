@@ -22,6 +22,7 @@ import {
   Heart,
   ChevronDown,
   ChevronRight,
+  Radio,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +59,26 @@ import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
 import { matchQuery } from "@/app/searchMatch";
+
+/**
+ * Is this contact reachable RIGHT NOW? (v2.99.97)
+ *
+ * ONE predicate, because it now answers three questions that must never disagree:
+ * which rows the Online section holds, what the green count beside each category
+ * header says, and whether the header shows an active marker at all. Three copies of
+ * "is this person online" is how a section comes to list four people over a header
+ * that says three.
+ *
+ * `presenceHidden` is respected FIRST: a guest inactive for over a day has their
+ * presence suppressed entirely (v2.95 privacy), so they must not be counted as online
+ * or pulled into the Online section — that would leak exactly what the suppression
+ * exists to withhold. And `inCall` counts as active, because somebody on a call is
+ * plainly there.
+ */
+function isActiveContact(c: { presenceHidden?: boolean | null; isOnline?: boolean | null; inCall?: boolean | null }): boolean {
+  if (c.presenceHidden) return false;
+  return !!c.isOnline || !!c.inCall;
+}
 
 function initialsFrom(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
@@ -176,11 +197,29 @@ export default function ContactsPage() {
   /** True while the user is actively searching. */
   const searching = search.trim().length > 0;
 
-  // Group into sections: Favorites first (the star pin, cross-cuts categories),
-  // then each explicit category, then "Other". Within a section, online-first.
+  // Group into sections: ONLINE first (v2.99.97), then Favorites (the star pin,
+  // cross-cuts categories), then each explicit category, then "Other". Within a
+  // section, online-first.
   const sections = useMemo(() => {
+    const out: Array<{
+      key: string;
+      label: string;
+      icon: typeof Crown;
+      tint: string;
+      rows: Row[];
+      /** True for the ONLINE section, whose total IS its online count. */
+      allActive?: boolean;
+    }> = [];
+    // v2.99.97 (owner): "add in the top online. Online means whoever on your
+    // contacts and all type of categories will be showing online also on that one
+    // beside of the assigned category." So this section CROSS-CUTS the others: a
+    // person appears here AND under whatever category they were filed in, exactly
+    // as Favorites already cross-cuts. It is not a category, so it is not part of
+    // CATEGORY_ORDER and nothing can be "moved into" it.
+    const online = filtered.filter(isActiveContact);
+    if (online.length)
+      out.push({ key: "online", label: "Online", icon: Radio, tint: "text-[color:var(--relay-online,#06d6a0)]", rows: online, allActive: true });
     const favorites = filtered.filter((c) => c.favourite);
-    const out: Array<{ key: string; label: string; icon: typeof Crown; tint: string; rows: Row[] }> = [];
     if (favorites.length) out.push({ key: "fav", label: "Favorites", icon: Star, tint: "text-amber-400", rows: favorites });
     for (const cat of CATEGORY_ORDER) {
       const rows = filtered.filter((c) => c.category === cat && !c.favourite);
@@ -273,10 +312,13 @@ export default function ContactsPage() {
               // "the search doesn't detect 100%": the match was found and then
               // hidden. While a query is active, every section is open.
               const isCollapsed = !searching && collapsed.has(section.key);
-              // "any member active" → the online pip on the sticky header.
-              const anyActive = section.rows.some(
-                (r) => !r.presenceHidden && (r.isOnline || r.inCall)
-              );
+              // v2.99.97 (owner): "mention number of contacts in each category and
+              // also mention number of online in each category … it will mention
+              // total ten. On beside, it will show green color … to show that is
+              // online." Both counts come from the SAME predicate the Online section
+              // uses, so a header can never disagree with the rows under it.
+              const total = section.rows.length;
+              const onlineCount = section.rows.filter(isActiveContact).length;
               return (
                 <section key={section.key}>
                   <button
@@ -293,14 +335,35 @@ export default function ContactsPage() {
                     <span className="flex-1 text-left text-[11px] font-semibold uppercase tracking-widest">
                       {section.label}
                     </span>
-                    <span className="text-[11px] text-muted-foreground/70">{section.rows.length}</span>
-                    {anyActive && (
+                    {/* The counts. The Online section's total IS its online count,
+                        so it shows one green number rather than "5 · 5". Everywhere
+                        else: total in muted, then the online count in green — and
+                        only when it is non-zero, because a green 0 spends attention
+                        on the one answer that needs none. */}
+                    {section.allActive ? (
                       <span
-                        aria-hidden
-                        className="size-2 rounded-full shrink-0"
-                        style={{ background: "#06d6a0" }}
-                      />
+                        className="text-[11px] font-bold tabular-nums text-[color:var(--relay-green-text)]"
+                        title={`${total} online`}
+                      >
+                        {total}
+                      </span>
+                    ) : (
+                      <span className="flex shrink-0 items-baseline gap-1 tabular-nums">
+                        <span className="text-[11px] text-muted-foreground/70" title={`${total} contacts`}>
+                          {total}
+                        </span>
+                        {onlineCount > 0 && (
+                          <span
+                            className="text-[11px] font-bold text-[color:var(--relay-green-text)]"
+                            title={`${onlineCount} of them online now`}
+                          >
+                            {onlineCount}
+                          </span>
+                        )}
+                      </span>
                     )}
+                    {/* The pip the counts replaced said only "somebody here is
+                        online" — strictly less than the number now beside it. */}
                   </button>
                   {!isCollapsed && (
                     <ul>

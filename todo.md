@@ -7557,6 +7557,62 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.97 — an Online section, and counts that say how many and how many are here (2026-07-27)
+
+Owner, with a marked-up Contacts screenshot: *"these are the all categories where I usually manually add
+people to it. Also, add in the top online. Online means whoever on your contacts and all type of
+categories will be showing online also on that one beside of the assigned category … where I put for you
+red circle here mention number of contacts in each category and also mention number of online in each
+category … let's say, in VIP, I have ten … it will mention total ten. On beside, it will show green color
+… to show that is online."*
+
+**AN ONLINE SECTION AT THE TOP, and it CROSS-CUTS the categories rather than being one.** Somebody online
+appears there AND under whatever category they were filed in — exactly as Favorites already cross-cuts —
+so it is deliberately NOT part of `CATEGORY_ORDER`: an "online" category would be a thing people could be
+moved into, which is not what it is. It is derived from the same filtered list every other section is
+built from, so a search applies to it identically, and it hides itself when nobody is online.
+
+**EVERY HEADER NOW CARRIES TWO NUMBERS**: the total in muted, then how many of them are online in green.
+A green ZERO is withheld, because it spends attention on the one answer that needs none. The Online
+section shows ONE number, since its total *is* its online count and "5 · 5" would be noise. Both are
+`tabular-nums` so the column cannot jitter, and each carries a title saying what it means.
+
+**THE GREEN IS THE AA-MEASURED TEXT TOKEN, not the LED green** — the LED green computes to 4.46:1 on the
+light card and fails AA for text this small (measured in v2.99.86, which is why a separate token exists).
+
+**ONE PREDICATE ANSWERS ALL THREE QUESTIONS.** `isActiveContact` decides which rows the Online section
+holds, what the green count says, and whether a header shows anything at all. Three copies of "is this
+person online" is how a section comes to list four people under a header that says three — the class of
+bug v2.99.95 had just finished removing from History. It respects `presenceHidden` FIRST, because a guest
+inactive over a day has presence suppressed for privacy (v2.95) and counting them would leak precisely
+what the suppression withholds — worse in the Online section, which is a visible list of names rather
+than a number. Being ON A CALL counts as active.
+
+**TWO ITEMS IN THE SAME MESSAGE ALREADY WORKED, and are confirmed rather than rebuilt**:
+
+- **Deleting a contact from the list** exists — the row's ⋮ menu → Delete, behind a "Remove contact?"
+  confirmation, which also still warns that removing a BLOCKED contact unblocks them (v2.99.28: the block
+  lives on the contact row, so deleting it silently drops the block). Now pinned so it cannot quietly go.
+- **The Admin area is already invisible to everyone but admins.** The Profile entry renders only on
+  `admin.amIAdmin` — a SERVER answer, never the cached whoami role — the panel itself gates on the same,
+  and every admin procedure re-derives admin from the `users` row and refuses uniformly, so typing the URL
+  gets a caller nothing (v2.99.76, v2.99.89).
+
+**A DECISION TAKEN TO THE OWNER RATHER THAN GUESSED AT.** They asked for a guest's profile to show a
+countdown to automatic deletion after five inactive days. Established by reading the code first: **nothing
+deletes guest accounts at all today** — `guestExpiresAt` gates only the guest COOKIE lookup, the sole
+`.delete(identities)` in the codebase is Adopt-and-Retire's provably-empty retire, and `GUEST_DAYS` is 30
+rather than 5. So a countdown would have been counting down to nothing, which is the exact class of lie
+this session has spent five releases removing. The purge has to be BUILT, it is irreversible, and it
+reaches other people's data — so the semantics were put to the owner, who chose a full cascade delete and
+to keep the 30-day hold. That ships as its own release with its own review rather than bolted onto a UI
+change.
+
+`client/src/pages/app/contactSections.test.ts` (18), the online RULE tested behaviourally because the two
+ways a count can silently lie are suppression and being on a call.
+
+No schema change, no new dependency, no new env var, no server change. 2833 tests.
+
 ## v2.99.96 — search that actually finds it, and a match that was being hidden after it was found (2026-07-27)
 
 Owner: *"also activate the search. The search anywhere in the system, either by call, by history, by
