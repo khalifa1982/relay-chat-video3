@@ -7557,6 +7557,44 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.101.1 — the real profile status: work / vacation / travel / free / busy (2026-07-27)
+
+Owner: *"you are in work, vacation, travel, free, and you can put some notes on it… and everyone has
+emoji and color."* Completes #105.
+
+**A second column, not a wider `statusOverride`** — and that constraint shaped everything.
+`statusOverride` feeds `effectiveStatus` → `presenceDot`, whose colour vocabulary is four values wide
+on purpose; five labels crammed in would have meant five new LED hues, which v2.99.92 forbids. So the
+label is stored and the availability is DERIVED by `overrideForStatus` in exactly one place. A test
+counts that call across the whole server and asserts it appears ONCE.
+
+**The derivation is proven closed**, not merely written: every value it can return goes back through
+the real `sanitizeStatusOverride` and `effectiveStatus` and must land in one of the four display
+states — so a label cannot produce a fifth.
+
+- **work → auto**, deliberately: somebody at work is usually at their computer, so marking them away
+  would make the LED lie about the most reachable state on the list.
+- vacation, travel → `travel`. busy → `away`, which is the point of saying busy.
+- **Clearing is written unconditionally**, or somebody back from vacation still reads as travelling
+  with no label left to explain why.
+
+**Colour is reinforcement, never the carrier** — the emoji names the status, the label is foreground
+text, and the hue only tints. That is why these five need no contrast measurement, unlike the
+`--relay-*-text` tokens (v2.99.94). Both the picker and the chip apply the hue INLINE, never as a
+runtime-composed Tailwind class (the JIT cannot see those; they come out unstyled).
+
+Tapping the current status clears it, so the picker is its own "none" control. The note appears only
+alongside a status, collapses newlines, and a refetch cannot erase one being typed.
+
+**The label is withheld with presence**: a long-inactive guest has presence suppressed for privacy
+(v2.95), and "On vacation · back Monday" leaks in words what the suppression withholds. A party line
+carries none — a line is not a person.
+
+`server/profileStatus.test.ts` (36), tested behaviourally through the real presence functions. 32
+tripwires by mutation; **one survived and it was a real gap** — the case-folding case used `"AWAY"`,
+which is not a status either way, so it never exercised the fold. `"WORK"` is the input that
+distinguishes them. Two additive nullable columns. 3017 tests.
+
 ## v2.101.0 — story and status stop being the same word (2026-07-27)
 
 Owner, third time: *"For the story is the one on the message where you can post video, voice, text,

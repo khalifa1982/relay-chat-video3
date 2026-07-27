@@ -116,6 +116,12 @@ import {
 
 } from "./v2db";
 import { adminPurgeIdentity, guestDaysLeft } from "./purgeIdentity";
+import {
+  MAX_STATUS_NOTE,
+  PROFILE_STATUSES,
+  normalizeProfileStatus,
+  normalizeStatusNote,
+} from "../shared/profileStatus";
 import { sendEmail, emailEnabled, wrapEmailDocument } from "./email";
 import { appBaseUrl } from "./appUrl";
 import { unsubscribeHeaders, unsubscribeLink } from "./unsubscribe";
@@ -479,6 +485,11 @@ export const v2AuthRouter = router({
       email,
       bio: ctx.identity.bio,
       statusOverride: (ctx.identity.statusOverride as "" | "away" | "travel" | null) ?? "",
+      // The profile LABEL (v2.101.1) — separate from the presence override above,
+      // and normalized on the way out so a hand-edited row cannot render a label
+      // the client has no entry for.
+      profileStatus: normalizeProfileStatus(ctx.identity.profileStatus),
+      statusNote: normalizeStatusNote(ctx.identity.statusNote),
       mobiles: ctx.identity.mobiles,
       socials: ctx.identity.socials,
       verified: ctx.identity.verified,
@@ -734,6 +745,11 @@ export const v2AuthRouter = router({
         avatarUrl: AvatarUrlSchema.nullable().optional(),
         bio: z.string().max(500).nullable().optional(),
         statusOverride: z.enum(["", "away", "travel"]).optional(),
+        // The five the owner named, plus "" to clear. A closed enum rather than a
+        // free string, because this label is shown to everybody who looks the
+        // person up and the server must not store one no surface can render.
+        profileStatus: z.enum(["", ...PROFILE_STATUSES]).optional(),
+        statusNote: z.string().max(MAX_STATUS_NOTE).optional(),
         mobiles: z.array(z.string().max(32)).max(20).optional(),
         socials: z
           .array(z.object({ platform: z.string().max(20), value: z.string().max(200) }))
@@ -1061,6 +1077,8 @@ export const v2DirectoryRouter = router({
           isOnline: memberCount > 0,
           lastSeenAt: null as Date | null,
           statusOverride: "" as "" | "away" | "travel",
+          profileStatus: null as string | null, // a line is not a person
+          statusNote: null as string | null,
           presenceHidden: false,
           verified: false,
           role: null as IdentityRole | null, // a line is not a person — no badge
@@ -1095,6 +1113,12 @@ export const v2DirectoryRouter = router({
         idle: hidden ? false : (pres?.idle ?? false),
         lastSeenAt: hidden ? null : (pres?.lastSeenAt ?? null),
         statusOverride: hidden ? "" : ((id.statusOverride as "" | "away" | "travel" | null) ?? ""),
+        // WITHHELD when presence is hidden, with everything else: a guest inactive
+        // over a day has presence suppressed for privacy (v2.95), and "On vacation ·
+        // back Monday" would leak exactly what the suppression withholds — in words,
+        // which is worse than a dot.
+        profileStatus: hidden ? null : normalizeProfileStatus(id.profileStatus),
+        statusNote: hidden ? null : normalizeStatusNote(id.statusNote),
         presenceHidden: hidden,
         verified: id.verified,
         // Three-tier badge (v2.99.6): guest / registered / admin.
