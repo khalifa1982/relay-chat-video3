@@ -2249,6 +2249,11 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "messages", column: "readAt", ddl: "ADD COLUMN `readAt` timestamp NULL" },
     { table: "identities", column: "recoveryHash", ddl: "ADD COLUMN `recoveryHash` varchar(64)" },
     { table: "identities", column: "recoveryIssuedAt", ddl: "ADD COLUMN `recoveryIssuedAt` timestamp NULL" },
+    // v2.100.0 — the purge claim. NULL is every living row, so this is a no-op
+    // until somebody is actually deleted; see the column's own comment in
+    // drizzle/schema.ts for why one column serves as both the fleet-wide
+    // serializer and the "this row is being destroyed" tombstone.
+    { table: "identities", column: "purgeStartedAt", ddl: "ADD COLUMN `purgeStartedAt` timestamp NULL" },
     // v2.99.92 — the IDLE presence state. NULL means the app is in the foreground
     // (or offline), which is exactly the reading every pre-release row needs, so
     // this is a no-op until a client starts reporting it.

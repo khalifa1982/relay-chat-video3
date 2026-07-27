@@ -239,6 +239,19 @@ export const identities = mysqlTable(
      *  window is deliberately NOT bounded, because "you lost your data because you
      *  waited too long" is the outcome this whole mechanism exists to prevent. */
     recoveryIssuedAt: timestamp("recoveryIssuedAt"),
+    /**
+     * When this identity was CLAIMED for deletion (v2.100.0). NULL for every
+     * living row, which is why the additive migration is a no-op.
+     *
+     * It is one column doing two jobs, both load-bearing. It is the fleet-wide
+     * SERIALIZER: the claim is a conditional UPDATE gated on `IS NULL`, so its
+     * `affectedRows` decides which of two instances owns the purge. And it is the
+     * TOMBSTONE: the claim NULLs `guestToken`, `deviceId` and `recoveryHash` in
+     * the same statement, so from the instant it commits nothing can resolve a
+     * live request onto a row that is being destroyed — without holding a write
+     * lock on it for the whole cascade.
+     */
+    purgeStartedAt: timestamp("purgeStartedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

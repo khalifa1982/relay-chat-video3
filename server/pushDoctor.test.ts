@@ -229,19 +229,19 @@ describe("the panel stays a panel", () => {
 
   it("the panel's capabilities are an EXACT set, so the surface cannot widen quietly", () => {
     // An admin panel is a permanent high-value surface, so every capability on it is
-    // enumerated and a new one has to be added HERE on purpose. This list grew in
-    // v2.99.99 — the owner asked for account-type control in their own words ("I can
-    // delete the user or change type of account from guest to registered to admin"),
-    // which is exactly the deliberate act this guard exists to force. The guard did
-    // its job: adding the procedure turned this test red.
+    // enumerated and a new one has to be added HERE on purpose. This list has grown
+    // twice, both times because the owner asked in their own words ("I can delete the
+    // user or change type of account from guest to registered to admin") — and both
+    // times the guard did its job by turning red first: `setAccountType` in v2.99.99
+    // and `deleteIdentity` in v2.100.0.
     //
     // Still absent, and each absence is a decision: no message reading, no contact
-    // listing, no password or PIN reset, and no deletion (that lands with the purge
-    // cascade, which is a separate reviewed release).
+    // listing, and no password or PIN reset.
     const calls = [...ADMIN_UI.matchAll(/trpc\.admin\.([A-Za-z]+)\./g)].map((m) => m[1]);
     expect([...new Set(calls)].sort()).toEqual(
       [
         "amIAdmin",
+        "deleteIdentity",
         "findIdentities",
         "pushDiagnostics",
         "sendTestPush",

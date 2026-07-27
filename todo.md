@@ -7557,6 +7557,63 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.100.0 — deleting a person: one cascade, two callers, three things left alone (2026-07-27)
+
+Owner, twice: *"if I click delete, it will delete him completely. Whoever he took, whoever he had
+contact data, everything will delete"*, and — chosen explicitly when asked — **"Delete everything
+they touched"** with the window **"Keep 30 days"**. Closes #103 (guest auto-purge) and #104 (admin
+delete-the-user), which are the same operation.
+
+**One cascade, two callers.** `server/purgeIdentity.ts` holds the only implementation; the guest
+reaper and the admin button differ ONLY in the predicate that decides who may be selected, and that
+predicate lives INSIDE `claimIdentityForPurge` rather than in options a caller passes. A caller that
+could supply its own WHERE would be a caller that could delete a registered account by accident.
+
+**Three things are deliberately NOT deleted, because deleting them would do active harm:**
+- `attachments` rows are KEPT. `authorizeStorageKey` classifies a key with no row as `unknown`, and
+  the proxy serves an `unknown` key to any signed-in caller — so deleting the row makes the media
+  MORE readable. v2.98.4/F3 in a second place; the row is the lock.
+- A third party's contact row carrying this number is KEPT. `blocked` lives there, so deleting it
+  would silently unblock a blocked person (v2.99.28/M13). Their own address book goes in full.
+- The 6-digit number is TOMBSTONED, never released. `number_reservations` only exists from v2.99.30
+  and `reapUnclaimedReservations` deletes rows whose number is absent from both number tables —
+  exactly what a purge creates. Step zero inserts the number with `claimedAt` stamped.
+
+**The claim does two jobs in one statement.** A conditional UPDATE of the new nullable
+`identities.purgeStartedAt`: `affectedRows` decides which instance owns the purge, and the same
+statement NULLs `guestToken`, `deviceId` and `recoveryHash`. That is also how every guest resolver is
+closed — each looks a guest up BY one of those handles, so nulling them closes all three at once and
+no fourth can be forgotten. Editing four hot auth paths was the alternative, and that is where
+v2.99.49's data loss lived.
+
+**Order is the safety property.** Zero foreign keys in this schema, so nothing cascades and nothing
+detects an orphan. Reachability is severed first; `identities` is deleted last with the claim
+restated. A DM goes whole, a group survives while anyone remains, replies are unhooked before the
+quoted message goes, `unreadCount` is recomputed rather than decremented, and a shared conference
+roster is redacted rather than deleted.
+
+**The load-bearing test is about the next table, not this one.** `IDENTITY_REFERENCING_COLUMNS` is
+machine-checked against `drizzle/schema.ts` in both directions, the contract
+`numberContinuity.test.ts` has enforced for the number since v2.99.54.
+
+**Off by default.** `RELAY_GUEST_PURGE` is one variable with three states (`off` / `dry` / `on`); the
+gate precedes `getDb`, so a disabled sweep costs nothing. Arming it is one env var and a restart.
+
+**Also:** the guest countdown beside the blue badge (one component, both profile surfaces, reads the
+server's own expiry, says the clock resets on every visit); the admin panel confirms by TYPING the
+number, not with a Yes/No, because the list shows several people at once.
+
+**Corrected from my own design review:** it claimed deleting the identity makes their profile photo
+more readable. Read against `storageProxy`, that is wrong — an avatar has always been served to any
+signed-in caller. What is true is the bytes are not erased, because there is no storage-delete path
+in this codebase, and the panel says that rather than claiming an erasure.
+
+`server/identityPurge.test.ts` (62). 38 of 39 tripwires verified by mutation. One bad mutation of my
+own (an inert `void 0;` that changed no order) replaced; it then found a real weakness — the
+severing-order test compared `indexOf` results, so deleting the `onlineWatches` sweep outright left
+it green, because `-1` is less than anything. **Not verified against a database:** no MySQL is
+reachable here, which is why it ships off by default with a dry run. 2932 tests.
+
 ## v2.99.99 — an admin can change an account type, and only one of the three directions is real (2026-07-27)
 
 Owner: *"in the admin panel for me as a admin, I can delete the user because you gave me only to change
