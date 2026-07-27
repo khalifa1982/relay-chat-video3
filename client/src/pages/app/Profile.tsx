@@ -1,30 +1,40 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import {
+  AtSign,
   Bell,
   BellRing,
   BellOff,
   Camera,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Copy,
+  Eye,
+  Hash,
+  KeyRound,
   LogOut,
   Lock,
   Mail,
   MessageSquare,
   Monitor,
   Moon,
+  Palette,
   PhoneMissed,
+  QrCode,
   ScanFace,
   Share2,
   ShieldCheck,
   ShieldQuestion,
   Smartphone,
+  Sparkles,
   Sun,
   Trash2,
+  User,
   Volume2,
+  Wrench,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
-import { uploadAvatarImage } from "@/lib/uploadAttachment";
 import { useIdentity } from "@/app/useIdentity";
 import { useSignOut } from "@/app/useSignOut";
 import { AvatarPicker } from "@/app/AvatarPicker";
@@ -32,6 +42,10 @@ import { GuestRestore } from "@/app/GuestRestore";
 import { AUDIENCE_OPTIONS } from "@/app/statusAudience";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { CountryFlag } from "@/app/CountryFlag";
+// ONE formatter for "three numbers dash three number", shared with the top bar.
+// Two copies of a display rule is how the two surfaces end up disagreeing about
+// the same number — the class this codebase keeps re-learning.
+import { formatPin } from "@/app/TopBar";
 import { QRCodeSVG } from "qrcode.react";
 import {
   Drawer,
@@ -86,25 +100,43 @@ import {
 import { useTheme } from "@/contexts/ThemeContext";
 
 /**
- * Profile page (`/app/profile`).
+ * Profile page (`/app/profile`) — the app's control centre (v2.99.89).
  *
- * Lets a registered or guest user edit their display name and upload an
- * avatar. For guests, also offers a "Register with email" CTA that opens the
- * native AuthPanel (email one-time code + optional PIN, v2.87) so the server
- * can migrate the guest identity into a permanent user row on verify.
- * v2.92 (R3): the old Manus-OAuth "Keep my number forever" path is gone —
- * AuthPanel is the ONLY sign-in.
+ * The owner asked for this twice, with two mockups: "you build the profile page to
+ * be more advanced. Everything controlled entire things from there. Also, put the
+ * barcode, put your number, put the badge, put your status, put the things that you
+ * have it, which is not in the picture."
+ *
+ * WHAT CHANGED IS THE SHAPE, NOT THE CONTROLS. This page had grown to sixteen
+ * sections stacked one under another — around sixty controls in a single column
+ * roughly six phone screens tall, where "Devices" and "App lock" were reachable only
+ * by scrolling past everything else. So the layout became a HUB: an identity hero
+ * (avatar, name, badge, the green PIN, the QR) over grouped rows, each opening one
+ * pane. Every existing section component is reused verbatim rather than rewritten —
+ * that is what makes "nothing was lost" a structural fact rather than a claim, and it
+ * is why this is a layout change with no new settings surface to re-verify.
+ *
+ * PANES ARE LOCAL STATE, NOT ROUTES. wouter's `useLocation` returns the PATHNAME
+ * only, so a `#pane` or `?pane=` navigation re-renders nothing — it would look like a
+ * dead tap. A real sub-route per pane would also put ten entries in the app's
+ * history for what is one screen.
+ *
+ * Guests get the same page: statuses, Do Not Disturb, app lock, theme and the
+ * recovery key all hang off the identity rather than a user row. Only the panes the
+ * SERVER refuses them are withheld — see the `isGuest` gate on choosing a number.
  */
 export default function ProfilePage() {
   const { me, refresh } = useIdentity();
   const [name, setName] = useState("");
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [showAuth, setShowAuth] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  /** Which pane is open; null = the hub itself. */
+  const [pane, setPane] = useState<Pane | null>(null);
+  const [, navigate] = useLocation();
+  const paneTopRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (me?.displayName) setName(me.displayName);
@@ -123,6 +155,13 @@ export default function ProfilePage() {
   // Shared sign-out flow (v2.88): AlertDialog confirm + full session/device
   // teardown — the same code path as the AppShell's sign-out buttons.
   const { requestSignOut, signOutDialog, signOutPending } = useSignOut(me);
+  // Read at the hub so the Appearance row can show which theme is live, rather than
+  // making the reader open the pane to find out.
+  const { theme } = useTheme();
+  // Whether to DRAW the Admin row. Called unconditionally, above the `!me` early
+  // return, because a hook cannot sit behind a branch. React Query dedupes by key,
+  // so this is the same single request the admin page itself makes.
+  const amIAdmin = trpc.admin.amIAdmin.useQuery(undefined, { staleTime: 60_000 });
   const updateProfile = trpc.identity.updateProfile.useMutation({
     onSuccess: () => {
       refresh();
@@ -142,46 +181,21 @@ export default function ProfilePage() {
     updateProfile.mutate({ displayName: next });
   }
 
-  async function onAvatarPick(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      setError("Avatar must be an image.");
-      return;
-    }
-    if (file.size > 4 * 1024 * 1024) {
-      setError("Avatar must be under 4 MB.");
-      return;
-    }
-    setUploading(true);
-    setError(null);
-    try {
-      // BARE upload (v2.96.1) — an attachments-row upload made the storage
-      // proxy participant-gate the photo: fine for YOU (uploader), broken
-      // image for EVERYONE else. Avatars are semi-public; no row.
-      const json = await uploadAvatarImage(file, { mimeType: file.type });
-      // AWAIT the save too (v2.98.0 — owner: a captured photo sometimes
-      // didn't post). The upload and the profile save are two separate
-      // network round-trips; a fire-and-forget `.mutate()` here let the
-      // spinner clear — telling the user it was done — the instant the
-      // UPLOAD resolved, regardless of whether the save actually persisted.
-      // A save failure (session hiccup, etc.) then left a real uploaded
-      // photo in storage that the profile never actually points at, with
-      // the UI having already reported success. `mutateAsync` makes the
-      // spinner (and the catch below) cover the whole pipeline.
-      await updateProfile.mutateAsync({ avatarUrl: json.url });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Avatar upload failed");
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
-  }
+  /* The page's own file <input> + upload handler are GONE (v2.99.89), and their
+     removal is a correction rather than a simplification: nothing clicked that
+     input. The avatar button opened `AvatarPicker`, which owns its own bare upload
+     (v2.96.1: an attachments-row upload makes the storage proxy participant-gate
+     the photo — fine for the uploader, a broken image for everybody else), so the
+     handler here was unreachable and its `uploading` flag was permanently false —
+     i.e. the avatar button's spinner branch could never render. Two upload paths for
+     one photo is also how they drift apart. `AvatarPicker` is the only one. */
 
   function clearAvatar() {
     if (!me?.avatarUrl) return;
     updateProfile.mutate({ avatarUrl: null });
   }
+
+  const copyNumber = () => copyNumberToClipboard(me?.number ?? "");
 
   if (!me) {
     return (
@@ -201,232 +215,447 @@ export default function ProfilePage() {
   // Presence pill colour/label derived from the saved status override.
   const st = selfStatus(me.statusOverride);
 
+  /* Every pane's title in one place, so the header of a pane and the label of the
+     row that opens it cannot drift apart. */
+  const paneTitle: Record<Pane, string> = {
+    name: "Name & photo",
+    number: "My RELAY number",
+    status: "Status",
+    about: "About & contact info",
+    pin: "Sign-in PIN",
+    lock: "App lock",
+    devices: "Devices",
+    privacy: "Status privacy",
+    notifs: "Notifications",
+    theme: "Appearance",
+  };
+
+  const openPane = (p: Pane) => {
+    setPane(p);
+    // A pane opens where the hub was scrolled to, which on a page this tall is
+    // frequently halfway down a list that no longer exists. Scroll the pane's own
+    // top into view rather than the window's, because the scroll container is the
+    // AppShell's, not the document (v2.78).
+    window.requestAnimationFrame(() =>
+      paneTopRef.current?.scrollIntoView({ block: "start", behavior: "auto" })
+    );
+  };
+
   return (
     // Flow within the AppShell's scroll container (which ends exactly at the
     // in-flow bottom tab bar) instead of creating a competing scroll area —
-    // otherwise the last controls get clipped with no way to reach them. The
-    // slide-up + fade echoes the prototype's full-screen Profile panel without
-    // an absolute overlay that would fight the shell's scroll. The chrome's
-    // Back button + brand already frame the page, so the hero avatar leads.
+    // otherwise the last controls get clipped with no way to reach them.
     <div className="min-h-full">
-      <div className="max-w-xl mx-auto p-5 pb-10 space-y-6 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-300">
+      {/* The error banner and the "Saved" pill live OUTSIDE the pane switch: both
+          report on `updateProfile`, which is fired from more than one pane, and a
+          confirmation that only renders on the pane you happened to be on is worse
+          than none. The pill is also outside the ANIMATED wrapper below — `animate-in`
+          animates `filter`, and a filter establishes a containing block for
+          `position: fixed` descendants, so nested it would centre itself on that box
+          instead of the viewport. */}
+      {savedAt !== null && !error && (
+        <div
+          className="
+            pointer-events-none fixed left-1/2 top-20 z-50
+            -translate-x-1/2 animate-in fade-in slide-in-from-top-2
+            flex items-center gap-2 rounded-full px-4 py-2
+            text-sm font-medium
+            border border-emerald-400/40
+            bg-emerald-500/15 text-emerald-100
+            dark:bg-emerald-500/20 dark:text-emerald-50
+            shadow-lg shadow-emerald-500/20 backdrop-blur-md
+          "
+          role="status"
+          aria-live="polite"
+        >
+          <Check className="h-4 w-4" strokeWidth={3} />
+          <span>Saved</span>
+        </div>
+      )}
+
+      <div
+        ref={paneTopRef}
+        className="max-w-xl mx-auto p-5 pb-10 space-y-6 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200"
+      >
         {error && (
           <div className="rounded-lg border border-destructive/40 bg-destructive/10 text-destructive-foreground px-4 py-3 text-sm">
             {error}
           </div>
         )}
 
-        {savedAt !== null && !error && (
-          <div
-            // Centered glassy pill, online-green tint, slides up + fades in
-            // on mount, then auto-dismisses after 1.8s via the effect above.
-            className="
-              pointer-events-none fixed left-1/2 top-20 z-50
-              -translate-x-1/2 animate-in fade-in slide-in-from-top-2
-              flex items-center gap-2 rounded-full px-4 py-2
-              text-sm font-medium
-              border border-emerald-400/40
-              bg-emerald-500/15 text-emerald-100
-              dark:bg-emerald-500/20 dark:text-emerald-50
-              shadow-lg shadow-emerald-500/20 backdrop-blur-md
-            "
-            role="status"
-            aria-live="polite"
-          >
-            <Check className="h-4 w-4" strokeWidth={3} />
-            <span>Saved</span>
-          </div>
-        )}
-
-        {/* ── identity hero: avatar (tap to set photo) + name + status ── */}
-        <section className="flex flex-col items-center gap-3 pt-1 text-center">
-          <div className="relative">
-            {/* The avatar IS the upload control (camera badge) — mirrors the
-                prototype. The same hidden <input> + onAvatarPick handler drive
-                it; the cyan ring is the shared logo gradient. */}
-            <button
-              type="button"
-              onClick={() => setPickerOpen(true)}
-              disabled={uploading || updateProfile.isPending}
-              title="Tap to set your avatar"
-              aria-label={me.avatarUrl ? "Change avatar" : "Add an avatar"}
-              className="relative grid size-24 place-items-center rounded-full outline-none transition active:scale-95 focus-visible:ring-2 focus-visible:ring-primary/60 disabled:opacity-70"
-              style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)" }}
-            >
-              <span className="grid size-[86px] place-items-center overflow-hidden rounded-full">
-                {me.avatarUrl ? (
-                  <img
-                    src={me.avatarUrl}
-                    alt={me.displayName}
-                    className="size-full rounded-full object-cover"
-                  />
-                ) : (
-                  <span className="text-3xl font-extrabold" style={{ color: "#08211d" }}>
-                    {initials}
+        {pane === null ? (
+          <>
+            {/* ── identity hero ─────────────────────────────────────────────
+                Everything the owner listed, in the order they listed it: the photo,
+                the name, the badge, the number, the barcode, the status. */}
+            <section className="flex flex-col items-center gap-3 pt-1 text-center">
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setPickerOpen(true)}
+                  disabled={updateProfile.isPending}
+                  title="Tap to set your avatar"
+                  aria-label={me.avatarUrl ? "Change avatar" : "Add an avatar"}
+                  className="relative grid size-24 place-items-center rounded-full outline-none transition active:scale-95 focus-visible:ring-2 focus-visible:ring-primary/60 disabled:opacity-70"
+                  style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)" }}
+                >
+                  <span className="grid size-[86px] place-items-center overflow-hidden rounded-full">
+                    {me.avatarUrl ? (
+                      <img
+                        src={me.avatarUrl}
+                        alt={me.displayName}
+                        className="size-full rounded-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-3xl font-extrabold" style={{ color: "#08211d" }}>
+                        {initials}
+                      </span>
+                    )}
                   </span>
-                )}
-              </span>
-              <span className="absolute -bottom-0.5 -right-0.5 grid size-8 place-items-center rounded-full border-[3px] border-background bg-secondary text-primary">
-                {uploading ? (
-                  <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                ) : (
-                  <Camera className="size-4" />
-                )}
-              </span>
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif"
-              className="hidden"
-              onChange={onAvatarPick}
-            />
-          </div>
+                  <span className="absolute -bottom-0.5 -right-0.5 grid size-8 place-items-center rounded-full border-[3px] border-background bg-secondary text-primary">
+                    <Camera className="size-4" />
+                  </span>
+                </button>
+                {/* The SAME green↔white breathing ring the top-bar avatar wears
+                    (v2.99.86), so the thing you tap up there and the thing you land
+                    on here read as one object. The classes carry only the animation,
+                    so they are size-agnostic; the anti-phase is a half-cycle negative
+                    delay, never `animation-direction: reverse`, which on this
+                    symmetric keyframe is an exact no-op and would peak both rings
+                    together — a white ring blinking. Ring B rests at opacity 0 so
+                    the reduced-motion still frame is the green one. */}
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-[-3px] rounded-full pointer-events-none relay-ring-a"
+                  style={{ boxShadow: "0 0 0 3px var(--relay-online)" }}
+                />
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-[-3px] rounded-full pointer-events-none relay-ring-b"
+                  style={{ boxShadow: "0 0 0 3px rgba(255,255,255,.92)", opacity: 0 }}
+                />
+              </div>
 
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl font-extrabold tracking-tight">{me.displayName || "You"}</h1>
-            {/* v2.99.6: three-tier badge (Guest/Registered/Admin) — me.verified
-                keeps the fallback for a cached whoami without `role`. */}
-            <RoleBadge role={roleFromFlags(me.role, me.verified)} size={18} />
-          </div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-extrabold tracking-tight">{me.displayName || "You"}</h1>
+                {/* v2.99.6: three-tier badge (Guest/Registered/Admin) — me.verified
+                    keeps the fallback for a cached whoami without `role`. */}
+                <RoleBadge role={roleFromFlags(me.role, me.verified)} size={18} />
+              </div>
 
-          {/* presence pill — LED colour reflects the saved status override */}
-          <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-3 py-1 text-xs font-medium text-muted-foreground">
-            <span
-              className="size-2 rounded-full"
-              style={{ background: st.color, boxShadow: `0 0 8px ${st.color}` }}
-            />
-            {st.label}
-            {me.verified && <span className="text-muted-foreground/70">· verified</span>}
-          </span>
+              {/* The number, in the owner's NNN-NNN grouping and the measured-AA green,
+                  with the barcode beside it. `dir="ltr"` + bidi isolation so an Arabic
+                  display name above cannot reorder the digits (v2.99.77). */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => openPane("number")}
+                  className="rounded-full border border-border bg-card/60 px-3 py-1.5 transition active:opacity-70 hover:bg-card"
+                  aria-label={`Your RELAY number is ${formatPin(me.number)} — open number settings`}
+                >
+                  <span
+                    dir="ltr"
+                    className="font-mono text-base font-bold tracking-[0.06em] tabular-nums [unicode-bidi:isolate] text-[color:var(--relay-green-text)]"
+                  >
+                    {formatPin(me.number)}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQrOpen(true)}
+                  aria-label="Show the QR code for your number"
+                  title="Share your number by QR"
+                  className="grid size-9 place-items-center rounded-full border border-border bg-card/60 text-foreground transition active:opacity-70 hover:bg-card"
+                >
+                  <QrCode className="size-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={copyNumber}
+                  aria-label="Copy your number"
+                  title="Copy your number"
+                  className="grid size-9 place-items-center rounded-full border border-border bg-card/60 text-foreground transition active:opacity-70 hover:bg-card"
+                >
+                  <Copy className="size-4" />
+                </button>
+              </div>
 
-          <div className="flex items-center gap-3 text-xs">
-            <button
-              type="button"
-              onClick={() => setPickerOpen(true)}
-              disabled={updateProfile.isPending}
-              className="font-medium text-primary transition hover:underline disabled:opacity-60"
-            >
-              {me.avatarUrl ? "Change avatar" : "Add a photo or emoji"}
-            </button>
-            {me.avatarUrl && (
+              {/* Status — tappable, because the owner asked for the status to BE here
+                  rather than be described here. */}
               <button
                 type="button"
-                onClick={clearAvatar}
-                disabled={updateProfile.isPending}
-                className="font-medium text-muted-foreground transition hover:text-destructive disabled:opacity-60"
+                onClick={() => openPane("status")}
+                className="inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-3 py-1 text-xs font-medium text-muted-foreground transition active:opacity-70 hover:bg-card"
               >
-                Remove
+                <span
+                  className="size-2 rounded-full"
+                  style={{ background: st.color, boxShadow: `0 0 8px ${st.color}` }}
+                />
+                {st.label}
+                <ChevronRight className="size-3.5 opacity-60" />
               </button>
-            )}
-          </div>
-        </section>
+            </section>
 
-        {/* your RELAY number — copy + QR share, directly under the identity */}
-        <NumberAndFlag
-          number={me.number}
-          onRegenerated={refresh}
-          onShowQr={() => setQrOpen(true)}
-        />
-
-        {/* display name — kept fully functional, restyled as a settings card */}
-        <section className="space-y-2">
-          <Label htmlFor="displayName" className="text-xs uppercase tracking-wider text-muted-foreground">
-            Display name
-          </Label>
-          <div className="rounded-2xl border border-border bg-card/50 p-4">
-            <div className="flex gap-2">
-              <Input
-                id="displayName"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                maxLength={64}
-                autoComplete="off"
-                className="flex-1"
+            {/* ── grouped rows ─────────────────────────────────────────────── */}
+            <HubGroup title="Account">
+              <HubRow
+                icon={<User className="size-4" />}
+                tint="#3FE0C5"
+                label={paneTitle.name}
+                sub={me.displayName || "Set a name"}
+                onClick={() => openPane("name")}
               />
-              <Button
+              <HubRow
+                icon={<Hash className="size-4" />}
+                tint="#6EE7FF"
+                label={paneTitle.number}
+                sub={`${formatPin(me.number)} · QR, copy, change`}
+                onClick={() => openPane("number")}
+              />
+              <HubRow
+                icon={<Sparkles className="size-4" />}
+                tint="#f59e0b"
+                label={paneTitle.status}
+                sub={st.label}
+                onClick={() => openPane("status")}
+              />
+              <HubRow
+                icon={<AtSign className="size-4" />}
+                tint="#a855f7"
+                label={paneTitle.about}
+                sub="Bio, email, mobile, links"
+                onClick={() => openPane("about")}
+              />
+            </HubGroup>
+
+            <HubGroup title="Privacy & security">
+              <HubRow
+                icon={<KeyRound className="size-4" />}
+                tint="#38bdf8"
+                label={paneTitle.pin}
+                sub="Sign in with four digits"
+                onClick={() => openPane("pin")}
+              />
+              <HubRow
+                icon={<Lock className="size-4" />}
+                tint="#f43f5e"
+                label={paneTitle.lock}
+                sub="Passcode or Face ID on this device"
+                onClick={() => openPane("lock")}
+              />
+              <HubRow
+                icon={<Smartphone className="size-4" />}
+                tint="#22c55e"
+                label={paneTitle.devices}
+                sub="Where you're signed in"
+                onClick={() => openPane("devices")}
+              />
+              <HubRow
+                icon={<Eye className="size-4" />}
+                tint="#8b5cf6"
+                label={paneTitle.privacy}
+                sub="Who can watch your status"
+                onClick={() => openPane("privacy")}
+              />
+            </HubGroup>
+
+            <HubGroup title="Alerts & appearance">
+              {/* ONE row for all three notification sections. Two of them hide
+                  themselves — EmailNotificationsSection returns null without a
+                  signed-in account — so a row per section would draw a row that opens
+                  an empty pane for every guest. Folding them together also means the
+                  "is there an account" rule stays in exactly one place instead of
+                  being restated by the row that offers it. */}
+              <HubRow
+                icon={<Bell className="size-4" />}
+                tint="#eab308"
+                label={paneTitle.notifs}
+                sub="Ringtone, push, email, Do Not Disturb"
+                onClick={() => openPane("notifs")}
+              />
+              <HubRow
+                icon={<Palette className="size-4" />}
+                tint="#64748b"
+                label={paneTitle.theme}
+                sub={theme === "dark" ? "Dark" : "Light"}
+                onClick={() => openPane("theme")}
+              />
+              {/* Admin is a LINK to its own page, not a pane, and it is drawn only for
+                  an actual admin — the single place that rule is written now that the
+                  old self-hiding section is gone. The server re-checks the role on
+                  every admin procedure, so this is discoverability, never permission. */}
+              {amIAdmin.data?.admin && (
+                <HubRow
+                  icon={<Wrench className="size-4" />}
+                  tint="#facc15"
+                  label="Admin"
+                  sub="Find an account, change its number"
+                  onClick={() => navigate("/app/admin")}
+                />
+              )}
+            </HubGroup>
+
+            {/* Restore a previous number (v2.99.68) — deliberately NOT behind a row.
+                It renders nothing unless this browser holds a recovery record that
+                still resolves, which is almost never, and a row that is usually a
+                dead end is worse than a block that is usually absent. */}
+            <GuestRestore heading="Restore a previous number" onRestored={refresh} />
+
+            {/* upgrade CTA for guests */}
+            {me.isGuest && (
+              <section className="rounded-xl border border-primary/30 bg-primary/5 p-5 space-y-3">
+                <h2 className="text-lg font-semibold">Keep this number forever</h2>
+                <p className="text-sm text-muted-foreground">
+                  Guest sessions end when you close your browser — this browser can restore your
+                  number afterwards, but only this one. Create an account to keep your number,
+                  contacts, and profile permanently across all your devices.
+                </p>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button type="button" className="flex-1" onClick={() => setShowAuth(true)}>
+                    Register with email
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Your current number and contacts carry over automatically.
+                </p>
+              </section>
+            )}
+
+            {/* sign out — the final, destructive action; styled as a danger card */}
+            <section className="pt-2">
+              <button
                 type="button"
-                onClick={saveName}
-                disabled={updateProfile.isPending || !name.trim() || name.trim() === me.displayName}
+                disabled={signOutPending}
+                onClick={requestSignOut}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm font-semibold text-destructive transition hover:bg-destructive/10 disabled:opacity-60"
               >
-                Save
-              </Button>
+                <LogOut className="size-4" /> Sign out
+              </button>
+            </section>
+
+            {/* build stamp — mirrors the prototype's mono footer line */}
+            <div className="pt-1 text-center">
+              <span className="font-mono text-[11px] text-muted-foreground/70">
+                RELAY v{APP_VERSION} · auto-updates on publish
+              </span>
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Shown to people you call and chat with.
-            </p>
+          </>
+        ) : (
+          <div className="space-y-5">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPane(null)}
+                aria-label="Back to profile"
+                className="grid size-9 shrink-0 place-items-center rounded-full border border-border bg-card/60 text-foreground transition active:opacity-70 hover:bg-card"
+              >
+                <ChevronLeft className="size-5" />
+              </button>
+              <h1 className="min-w-0 truncate text-lg font-extrabold tracking-tight">
+                {paneTitle[pane]}
+              </h1>
+            </div>
+
+            {pane === "name" && (
+              <>
+                <section className="space-y-2">
+                  <Label
+                    htmlFor="displayName"
+                    className="text-xs uppercase tracking-wider text-muted-foreground"
+                  >
+                    Display name
+                  </Label>
+                  <div className="rounded-2xl border border-border bg-card/50 p-4">
+                    <div className="flex gap-2">
+                      <Input
+                        id="displayName"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        maxLength={64}
+                        autoComplete="off"
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        onClick={saveName}
+                        disabled={
+                          updateProfile.isPending || !name.trim() || name.trim() === me.displayName
+                        }
+                      >
+                        Save
+                      </Button>
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Shown to people you call and chat with.
+                    </p>
+                  </div>
+                </section>
+                <section className="space-y-2">
+                  <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+                    Photo
+                  </Label>
+                  <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card/50 p-4">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPickerOpen(true)}
+                      disabled={updateProfile.isPending}
+                    >
+                      {me.avatarUrl ? "Change photo or emoji" : "Add a photo or emoji"}
+                    </Button>
+                    {me.avatarUrl && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={clearAvatar}
+                        disabled={updateProfile.isPending}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="size-4" /> Remove
+                      </Button>
+                    )}
+                  </div>
+                </section>
+              </>
+            )}
+
+            {pane === "number" && (
+              <NumberAndFlag
+                number={me.number}
+                isGuest={!!me.isGuest}
+                onRegenerated={refresh}
+                onShowQr={() => setQrOpen(true)}
+              />
+            )}
+            {pane === "status" && <StatusSection me={me} onSaved={refresh} />}
+            {pane === "about" && (
+              <>
+                <BioSection me={me} onSaved={refresh} />
+                <ContactInfoSection me={me} onSaved={refresh} />
+                <SocialLinksSection me={me} onSaved={refresh} />
+              </>
+            )}
+            {pane === "pin" && <LoginPinSection />}
+            {pane === "lock" && <PasscodeSection displayName={me.displayName} />}
+            {pane === "devices" && <DevicesSection />}
+            {pane === "privacy" && <StatusPrivacySection />}
+            {pane === "notifs" && (
+              <>
+                <NotificationsSection />
+                {/* Renders nothing for a guest or an account with no linked address. */}
+                <EmailNotificationsSection />
+                <DndSection />
+              </>
+            )}
+            {pane === "theme" && <ThemeToggleSection />}
           </div>
-        </section>
-
-        {/* status (auto / away / travelling) */}
-        <StatusSection me={me} onSaved={refresh} />
-
-        {/* about / bio */}
-        <BioSection me={me} onSaved={refresh} />
-
-        {/* email + mobile numbers */}
-        <ContactInfoSection me={me} onSaved={refresh} />
-
-        {/* links & social accounts */}
-        <SocialLinksSection me={me} onSaved={refresh} />
-
-        {/* admin panel entry (v2.99.76) — renders NOTHING for a non-admin. The
-            server re-checks the role on every admin procedure, so this is a
-            discoverability link, not the permission. */}
-        <AdminLinkSection />
-
-        {/* theme */}
-        <ThemeToggleSection />
-
-        {/* notifications */}
-        <NotificationsSection />
-
-        {/* email notifications (v2.99.13) — registered + email only */}
-        <EmailNotificationsSection />
-
-        {/* who can watch my status (v2.99.55) — guests included */}
-        <StatusPrivacySection />
-
-        {/* sign-in PIN (v2.87) */}
-        <LoginPinSection />
-
-        {/* signed-in devices + remote logout (v2.99.1) */}
-        <DevicesSection />
-
-        {/* do not disturb */}
-        <DndSection />
-
-        {/* app lock / passcode */}
-        <PasscodeSection displayName={me.displayName} />
-
-        {/* restore a previous number (v2.99.68) — the second half of
-            Adopt-and-Retire. The entry screen offers this before you pick a name,
-            but plenty of people will type a name out of habit first and only then
-            realise their old number is missing; without this surface that mistake
-            was unrecoverable. Renders nothing unless this browser holds a recovery
-            record that still resolves, and if the identity you're using now has its
-            own data the server refuses rather than trading one loss for another. */}
-        <RestoreNumberSection onRestored={refresh} />
-
-        {/* upgrade CTA for guests */}
-        {me.isGuest && (
-          <section className="rounded-xl border border-primary/30 bg-primary/5 p-5 space-y-3">
-            <h2 className="text-lg font-semibold">Keep this number forever</h2>
-            <p className="text-sm text-muted-foreground">
-              Guest sessions end when you close your browser — this browser can restore your
-              number afterwards, but only this one. Create an account to keep your number,
-              contacts, and profile permanently across all your devices.
-            </p>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <Button type="button" className="flex-1" onClick={() => setShowAuth(true)}>
-                Register with email
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Your current number and contacts carry over automatically.
-            </p>
-          </section>
         )}
+
+        {/* The four overlays are mounted at the ROOT of the page, never inside the
+            pane switch: closing a pane while a sheet or dialog is open would unmount
+            the open thing from under the user. */}
         {showAuth && <AuthPanel onClose={() => setShowAuth(false)} />}
         <AvatarPicker
           open={pickerOpen}
@@ -434,31 +663,91 @@ export default function ProfilePage() {
           displayName={me.displayName}
           onSaved={() => refresh()}
         />
-
-        {/* sign out — the final, destructive action; styled as a danger card */}
-        <section className="pt-2">
-          <button
-            type="button"
-            disabled={signOutPending}
-            onClick={requestSignOut}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm font-semibold text-destructive transition hover:bg-destructive/10 disabled:opacity-60"
-          >
-            <LogOut className="size-4" /> Sign out
-          </button>
-        </section>
         {signOutDialog}
-
-        {/* build stamp — mirrors the prototype's mono footer line */}
-        <div className="pt-1 text-center">
-          <span className="font-mono text-[11px] text-muted-foreground/70">
-            RELAY v{APP_VERSION} · auto-updates on publish
-          </span>
-        </div>
       </div>
 
       {/* QR / share bottom sheet (slides up from the bottom of the screen) */}
       <ShareNumberSheet open={qrOpen} onOpenChange={setQrOpen} number={me.number} />
     </div>
+  );
+}
+
+/** The panes the hub can open. */
+type Pane =
+  | "name"
+  | "number"
+  | "status"
+  | "about"
+  | "pin"
+  | "lock"
+  | "devices"
+  | "privacy"
+  | "notifs"
+  | "theme";
+
+/**
+ * One group of rows under a small caption — the mockup's card stack.
+ *
+ * `divide-y` rather than a border per row, so the hairlines cannot double up where
+ * two rows meet, and `overflow-hidden` so the first and last rows' tap highlight is
+ * clipped to the group's rounded corners.
+ */
+function HubGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="space-y-2">
+      <h2 className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+        {title}
+      </h2>
+      <div className="overflow-hidden rounded-2xl border border-border bg-card/50 divide-y divide-border/60">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * One row: a tinted circular icon chip, a bold label, an optional subtitle, a chevron.
+ *
+ * The row sets a MINIMUM height and never a fixed one — a fixed 16px line clipped a
+ * badge in the Dialer's preview (v2.99.39) and the subtitle here is caller-supplied
+ * text that can wrap in another language. The tint is an 8-digit hex so the chip's
+ * fill is the icon's own colour at low alpha, which keeps a row legible in both
+ * themes without a second token per row.
+ */
+function HubRow({
+  icon,
+  label,
+  sub,
+  tint,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  sub?: string | null;
+  tint: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full min-h-[60px] items-center gap-3 px-3.5 py-3 text-left transition active:bg-foreground/5 hover:bg-foreground/[0.03] outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:ring-inset"
+    >
+      <span
+        aria-hidden="true"
+        className="grid size-9 shrink-0 place-items-center rounded-full"
+        style={{ background: `${tint}24`, color: tint }}
+      >
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[15px] font-semibold text-foreground">{label}</span>
+        {sub && (
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">{sub}</span>
+        )}
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />
+    </button>
   );
 }
 
@@ -586,12 +875,23 @@ function ShareNumberSheet({
    is purely informational; if the geo lookup fails (e.g. private
    IP, network error) we silently render the number alone.
    ============================================================ */
+/** One clipboard path, shared by the hero's copy chip and the pane's button. */
+function copyNumberToClipboard(number: string) {
+  if (!number) return;
+  navigator.clipboard
+    ?.writeText(number)
+    .then(() => toast.success("Number copied"))
+    .catch(() => toast.error("Couldn't copy the number"));
+}
+
 function NumberAndFlag({
   number,
+  isGuest,
   onRegenerated,
   onShowQr,
 }: {
   number: string;
+  isGuest: boolean;
   onRegenerated: () => void;
   onShowQr: () => void;
 }) {
@@ -633,12 +933,7 @@ function NumberAndFlag({
   // Accept the grouping people naturally type; the server re-validates regardless.
   const wantedDigits = wanted.replace(/[\s\-.]/g, "");
   const wantedOk = /^\d{6}$/.test(wantedDigits) && !/^(000|111)/.test(wantedDigits);
-  const copyNumber = () => {
-    navigator.clipboard
-      ?.writeText(number)
-      .then(() => toast.success("Number copied"))
-      .catch(() => toast.error("Couldn't copy the number"));
-  };
+  const copyNumber = () => copyNumberToClipboard(number);
   // Same /i/<pin> invite link the share sheet + Dialer use, so the launcher
   // button's QR is itself a real, scannable code (not just an icon).
   const inviteUrl =
@@ -681,19 +976,28 @@ function NumberAndFlag({
           </button>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border/60 pt-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setChooseError(null);
-              setWanted("");
-              setChooseOpen(true);
-            }}
-            disabled={choose.isPending || regen.isPending}
-          >
-            {choose.isPending ? "Changing…" : "Choose my number"}
-          </Button>
+          {/* Choosing your own number needs a registered account — the server throws
+              FORBIDDEN for a guest, because a chosen number is first-come and
+              permanent while a guest identity is session-scoped, so a guest claim
+              would squat a memorable number and then strand it. Offering the button
+              anyway would have meant a guest tapping it, typing a number, and being
+              refused for who they are rather than what they typed. A REGENERATE is
+              still theirs: it hands out a random number and always has. */}
+          {!isGuest && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setChooseError(null);
+                setWanted("");
+                setChooseOpen(true);
+              }}
+              disabled={choose.isPending || regen.isPending}
+            >
+              {choose.isPending ? "Changing…" : "Choose my number"}
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"
@@ -810,27 +1114,6 @@ function NumberAndFlag({
    rather than reading the cached whoami, so a stale payload can neither hide the
    panel from an admin nor advertise it to somebody who would only get FORBIDDEN.
    ============================================================ */
-function AdminLinkSection() {
-  const [, navigate] = useLocation();
-  const amIAdmin = trpc.admin.amIAdmin.useQuery(undefined, { staleTime: 60_000 });
-  if (!amIAdmin.data?.admin) return null;
-  return (
-    <section className="rounded-2xl border border-border bg-card/60 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold">Admin</div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Find any account and change its 6-digit number.
-          </p>
-        </div>
-        <Button type="button" size="sm" variant="outline" onClick={() => navigate("/app/admin")}>
-          Open
-        </Button>
-      </div>
-    </section>
-  );
-}
-
 function ThemeToggleSection() {
   const { theme, setTheme } = useTheme();
   const isDark = theme === "dark";
@@ -1519,13 +1802,6 @@ function StatusPrivacySection() {
    One implementation, so the two surfaces can never make different
    promises about what restoring does.
    ============================================================ */
-function RestoreNumberSection({ onRestored }: { onRestored: () => void }) {
-  // The heading is passed IN rather than drawn here, because GuestRestore renders
-  // null whenever there is nothing to restore — which is almost always — and a
-  // heading outside that check would leave a titled section with an empty body.
-  return <GuestRestore heading="Restore a previous number" onRestored={onRestored} />;
-}
-
 /* ============================================================
    Do Not Disturb — a one-tap toggle that silences incoming-call
    rings, chimes, and desktop pop-ups (messages still arrive, and

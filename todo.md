@@ -7557,6 +7557,99 @@ This batch ships the clearest HIGH findings; the rest are queued for following b
       groups already permit 443, i.e. when the listener is the remaining gap.
 - [x] Stale `awsOps.test.ts` options pin updated for the new action. Suite 2022 passed / 1 skipped.
 
+## v2.99.89 — the Profile page becomes the control centre (2026-07-27)
+- [x] **OWNER, TWICE, WITH TWO MOCKUPS**: *"you build the profile page to be more advanced. Everything
+      controlled entire things from there. Also, put the barcode, put your number, put the badge, put your
+      status, put the things that you have it, which is not in the picture."* Deferred twice before this,
+      which is why they pushed back: *"I see so many things felt or that completed. Please redo it properly."*
+- [x] **WHAT CHANGED IS THE SHAPE, NOT THE CONTROLS.** The page had grown to sixteen sections stacked one
+      under another — roughly sixty controls in a single column about six phone screens tall, where "Devices"
+      and "App lock" were reachable only by scrolling past everything else. It is now a HUB: an identity hero
+      over grouped rows, each opening one pane. **EVERY EXISTING SECTION COMPONENT IS REUSED VERBATIM** rather
+      than rewritten, which is what makes "nothing was lost" a structural fact rather than a claim, and is why
+      this is a layout change with no new settings surface to re-verify.
+- [x] **THE LOAD-BEARING TEST CHECKS NO LAYOUT AT ALL — it checks COMPLETENESS.** Restructuring a page this
+      dense is exactly the change where a control quietly stops being reachable, and an unreachable setting is
+      worse than an ugly one because nothing tells you it is gone. So the test ENUMERATES every `*Section`
+      component defined across `Profile.tsx` and `ProfileHubSections.tsx` and asserts each is rendered; delete
+      a pane and it names the missing one. It also asserts the enumeration is not empty, because a test that
+      enumerates nothing passes for the wrong reason.
+- [x] **PANES ARE LOCAL STATE, AND THAT IS NOT A STYLE PREFERENCE.** wouter's `useLocation` returns
+      `location.pathname` ONLY, so a `#pane` or `?pane=` navigation re-renders nothing — the tap would do
+      nothing with no error to explain why. A real sub-route per pane would also put ten entries in the app's
+      history for what is one screen. Pinned: no `navigate("/app/profile#…")`, no `window.location.hash`.
+- [x] **THE HERO CARRIES EVERYTHING THE OWNER LISTED, in the order they listed it**: the photo (tapping opens
+      the picker), the name, the badge, the number in their own NNN-NNN grouping, the barcode, and the status —
+      the status **tappable**, because they asked for it to BE here rather than be described here. The number
+      uses `formatPin` IMPORTED FROM THE TOP BAR: two copies of "three numbers dash three number" is how the
+      two surfaces end up disagreeing about the same number, so a local re-implementation is forbidden by test.
+- [x] **THE HERO WEARS THE TOP BAR'S OWN BREATHING RING**, so the thing you tap up there and the thing you
+      land on read as one object. The anti-phase is a half-cycle NEGATIVE DELAY, never
+      `animation-direction: reverse`, which on this symmetric keyframe with a point-symmetric easing is an
+      EXACT no-op (verified numerically in v2.99.86) and would peak both rings together — a white ring
+      blinking, the one thing the owner ruled out. Ring B rests at `opacity: 0` so the REDUCED-MOTION still
+      frame is the green ring rather than the later-declared white one covering it.
+- [x] **A REAL PIECE OF DEAD CODE FOUND AND DELETED, not merely tidied**: `Profile.tsx` carried its own
+      `<input type="file">` + `onAvatarPick` upload pipeline that **nothing ever clicked** — the avatar button
+      opens `AvatarPicker`, which owns its own bare upload — so its `uploading` flag was permanently false and
+      the button's spinner branch could never render. Two upload paths for one photo is also how they drift
+      apart, and this one had already drifted into being unreachable without anyone noticing.
+- [x] **AND THAT EXPOSED A TEST GUARDING THE WRONG COPY.** `v298ProfileAvatarFix.test.ts` existed to pin the
+      v2.98.0 fix — upload and save in ONE try, the busy flag cleared in `finally` after BOTH awaits, no
+      fire-and-forget `.mutate()` — and every one of its assertions read the DEAD handler. The property it
+      protects was live and unguarded in `AvatarPicker`. Repointed at the live code and widened to cover BOTH
+      of its upload paths (photo and emoji/animated) rather than the one that happened to be pinned.
+- [x] **NO ROW IS A DEAD END, and the fix is structural rather than careful.** Three sections hide themselves:
+      `EmailNotificationsSection` returns null without a signed-in account, `AdminLinkSection` for a
+      non-admin, `GuestRestore` unless this browser holds a resolving recovery record. A row per section would
+      draw a row that opens an EMPTY pane. So: the three notification sections share ONE row (the "is there an
+      account" rule stays in exactly one place instead of being restated by the row that offers it); Admin
+      becomes a row drawn only when `amIAdmin.data?.admin`, with the old self-hiding section DELETED so the
+      predicate exists once; and `GuestRestore` stays a self-hiding BLOCK, because a row that is usually a dead
+      end is worse than a block that is usually absent.
+- [x] **"CHOOSE MY NUMBER" IS WITHHELD FROM A GUEST the server would refuse anyway.** `identity.setNumber`
+      throws FORBIDDEN for a guest — a chosen number is first-come and permanent while a guest identity is
+      session-scoped, so a guest claim would squat a memorable number and then strand it. Offering the button
+      meant a guest tapping it, typing a number, and being refused for who they are rather than what they
+      typed. A REGENERATE stays theirs: it hands out a random number and always has, so hiding it would take
+      away the only number control a guest has.
+- [x] **THE OVERLAYS AND THE CONFIRMATIONS LIVE AT THE ROOT, OUTSIDE THE PANE SWITCH.** `AuthPanel`,
+      `AvatarPicker`, the sign-out dialog and the share sheet: closing a pane while one is open would unmount
+      the open thing from under the user. The error banner and the "Saved" pill likewise, because
+      `updateProfile` fires from more than one pane and a confirmation that renders only on the pane you
+      happened to be on is worse than none.
+- [x] **THE "SAVED" PILL MOVED OUT OF THE ANIMATED WRAPPER, and this trap has now bitten three times.**
+      `animate-in` animates `filter`, and a filter establishes a containing block for `position: fixed`
+      descendants — nested, the pill centres on that box instead of the viewport. Same defect as `.addpad` and
+      the v2.99.54 video-consent card. A test asserts the pill is declared BEFORE the animated wrapper.
+- [x] **OPENING A PANE SCROLLS THE PANE, NOT THE WINDOW.** The scroll container is the AppShell's, not the
+      document (v2.78), so a `window.scrollTo` would do nothing; a pane opened from halfway down a list that
+      no longer exists would otherwise start off-screen.
+- [x] **A WEAKNESS OF MY OWN CAUGHT BY THE MUTATION RUN and fixed rather than counted as a pass**: the "the
+      hero shows the number" assertion matched a bare `{formatPin(me.number)}`, which also occurs INSIDE the
+      aria-label's `${formatPin(me.number)}` — so deleting the visible number left the test green. It is now
+      anchored as a rendered child (`>` … `</span>`). Same interpolation trap as v2.99.86.
+- [x] **A BAD MUTATION OF MY OWN, reported rather than counted as a survivor**: the first attempt at the
+      Saved-pill case inserted `{}` before the pill, which does not move it relative to the wrapper at all —
+      the test was right and the mutation was meaningless. Replaced with one that puts a genuine animated
+      container around the pill; it bites.
+- [x] **THREE MORE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY rather than relaxed.** `adminToolParity` froze
+      `function AdminLinkSection()` and that section's own `return null` — one particular implementation — so
+      folding the entry into the hub broke it while the property was untouched; it now asserts the entry is
+      gated on a SERVER answer and never on the cached whoami role. `guestRecovery` froze the one-line
+      `RestoreNumberSection` wrapper; it now names `GuestRestore` itself, one indirection fewer. `v2961Fixes`
+      froze the bare-upload call in Profile; it now pins both of `AvatarPicker`'s upload paths.
+- [x] `client/src/pages/app/profileHub.test.ts` (29). **All 18 tripwires verified by MUTATION** from
+      byte-exact backups, from a confirmed-GREEN baseline, with the mutator aborting unless its target occurs
+      exactly once; sources confirmed byte-identical afterwards.
+- [x] **NOT MEASURED, said plainly**: the layout is not device- or browser-verified. Reaching `/app/profile`
+      in a headless run needs a signed-in identity plus roughly a dozen stubbed tRPC queries, and a
+      hand-written copy of the markup would prove nothing about the real component (the v2.99.82 lesson). The
+      geometry relies only on `truncate` + `min-w-0` + flex primitives already proven in this codebase, and
+      the row's minimum-height and only-the-text-shrinks rules are pinned by test — but how it LOOKS on the
+      owner's phone is unverified.
+- [x] No schema change, no new dependency, no new env var, no server change. 2603 tests.
+
 ## v2.99.88 — the status refusal stops guessing at a cause (2026-07-27)
 - [x] **A CORRECTION TO v2.99.87, MADE BY THE OWNER'S OWN DATA.** That release made a refused status delete
       visible, which was right — but its message asserted a CAUSE: "it was posted from a different sign-in on

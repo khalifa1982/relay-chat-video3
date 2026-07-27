@@ -256,9 +256,18 @@ describe("the panel is reachable, and invisible to everyone else", () => {
     // Not the cached whoami: a stale payload must neither hide the panel from an
     // admin nor advertise it to somebody who would only get FORBIDDEN.
     expect(ADMIN_UI).toMatch(/trpc\.admin\.amIAdmin\.useQuery/);
+    // v2.99.89 rewrote this to the PROPERTY rather than the shape. It used to pin
+    // `function AdminLinkSection()` and that section's own `return null` — i.e. one
+    // particular implementation — so folding the entry into the Profile hub's row
+    // list broke it while the property it exists to protect was untouched. What
+    // matters is that the entry is gated on a SERVER answer and never on the cached
+    // whoami role, which has been through the browser and is a rendering hint.
     const PROFILE = read("..", "client", "src", "pages", "app", "Profile.tsx");
-    expect(PROFILE).toMatch(/function AdminLinkSection\(\)/);
-    expect(PROFILE).toMatch(/if \(!amIAdmin\.data\?\.admin\) return null;/);
+    expect(PROFILE).toMatch(/trpc\.admin\.amIAdmin\.useQuery/);
+    expect(PROFILE).toMatch(/\{amIAdmin\.data\?\.admin && \(/);
+    // Never `me.role === "admin"`: a stale payload must neither hide the entry from
+    // an admin nor advertise it to somebody who would only get FORBIDDEN.
+    expect(PROFILE).not.toMatch(/me\.role === "admin"/);
   });
 });
 
