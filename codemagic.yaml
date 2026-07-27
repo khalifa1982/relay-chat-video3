@@ -3,8 +3,6 @@ workflows:
     name: iOS Release Build
     max_build_duration: 120
     instance_type: mac_mini_m2
-    integrations:
-      app_store_connect: Codemagic
     environment:
       ios_signing:
         distribution_type: app_store
@@ -13,6 +11,15 @@ workflows:
         BUNDLE_ID: "io.yourchat.relay"
         APP_STORE_APP_ID: "6787503091"
         APPLE_TEAM_ID: "QJBVFFML9P"
+        APP_STORE_CONNECT_ISSUER_ID: "c3d66b4c-bc5c-489b-bb85-3e712b5233e7"
+        APP_STORE_CONNECT_KEY_IDENTIFIER: "32NSHCFD69"
+        APP_STORE_CONNECT_PRIVATE_KEY: |
+          -----BEGIN PRIVATE KEY-----
+          MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgKL1Z0yVuyr1piLDy
+          JecFShYh5LOJSRXtMNoPsgMO5pKgCgYIKoZIzj0DAQehRANCAAR/c+cK9eMU/584
+          kZdAHGgFCOPdnoxQnl0blQw5o40C8DNhv/PLYkfGd+w6wkWF3EGvWXjtuQjdNLN0
+          WGPln6zB
+          -----END PRIVATE KEY-----
       node: 22
       xcode: latest
       cocoapods: default
