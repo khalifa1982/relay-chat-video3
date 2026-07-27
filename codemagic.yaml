@@ -7,8 +7,6 @@ workflows:
       app_store_connect: Codemagic CI
     environment:
       ios_signing:
-        distribution_type: app_store
-        bundle_identifier: io.yourchat.relay
         provisioning_profiles:
           - profile: relay_appstore
         certificates:
