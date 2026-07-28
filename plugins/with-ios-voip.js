@@ -95,7 +95,8 @@ import Foundation`;
  * `RNVoipPushNotificationManager.h`. Collapsing the two fails with "file not
  * found" and nothing that names the cause.
  */
-const BRIDGE_IMPORTS = `${H_MARKER} PushKit + CallKit: ObjC pods, reachable from Swift only via this header.
+const BRIDGE_IMPORTS = `${H_MARKER}
+// PushKit + CallKit: ObjC pods, reachable from Swift only via this header.
 #import <RNCallKeep/RNCallKeep.h>
 #import <RNVoipPushNotification/RNVoipPushNotificationManager.h>`;
 
