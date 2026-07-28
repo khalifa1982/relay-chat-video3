@@ -11,7 +11,7 @@
     <key>provisioningProfiles</key>
     <dict>
         <key>com.app.relaymobile</key>
-        <string>relay_appstore</string>
+        <string>*[expo] com.app.relaymobile AppStore 2026-07-04T19:30:41.615Z</string>
     </dict>
     <key>uploadBitcode</key>
     <false/>
