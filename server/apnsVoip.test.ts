@@ -16,8 +16,10 @@ import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { execFileSync } from "child_process";
 import {
   apnsVoipConfig,
+  apnsCredentialExpiry,
   apnsVoipConfigured,
   derToJoseES256,
   apnsProviderToken,
@@ -32,6 +34,10 @@ const { privateKey, publicKey } = crypto.generateKeyPairSync("ec", {
   publicKeyEncoding: { type: "spki", format: "pem" },
 });
 
+/** The sender's own source — the cert path is a TLS/connection concern that no
+ *  local test can exercise without a real APNs, so those two rules are pinned. */
+const SRC_FOR_HEADERS = fs.readFileSync(path.join(__dirname, "apnsVoip.ts"), "utf8");
+
 const ENV_KEYS = [
   "APNS_P8_KEY",
   "APNS_KEY_P8",
@@ -40,6 +46,8 @@ const ENV_KEYS = [
   "APNS_BUNDLE_ID",
   "APNS_VOIP_TOPIC",
   "APNS_ENV",
+  "APNS_VOIP_CERT_PEM",
+  "APNS_VOIP_KEY_PEM",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -351,6 +359,186 @@ describe("v2.105.12 — configuration is read per call and fails to ABSENT", () 
       configure({ APNS_ENV: v });
       expect(apnsVoipConfig()!.host).toBe("api.push.apple.com");
     }
+  });
+});
+
+/**
+ * CERTIFICATE AUTH (v2.105.14).
+ *
+ * The owner turned out to hold a VoIP Services certificate rather than a .p8, so
+ * APNs' OTHER provider credential had to work too. It is a different mechanism,
+ * not a different spelling: the cert+key are presented at the TLS handshake and
+ * there is NO authorization header at all — sending an empty bearer alongside a
+ * client certificate is how a working cert setup earns a 403 that reads like a
+ * bad certificate.
+ *
+ * The config logic needs no real crypto (it keys on the PEM markers), so most of
+ * this runs anywhere. Only the EXPIRY parse needs a genuine certificate, and that
+ * one generates a throwaway self-signed pair rather than committing a key.
+ */
+const CERT_ENV = ["APNS_VOIP_CERT_PEM", "APNS_VOIP_KEY_PEM"];
+
+function certConfigure(extra: Record<string, string> = {}) {
+  // Synthetic PEMs: the config path keys on the markers, never on validity.
+  process.env.APNS_VOIP_CERT_PEM = "-----BEGIN CERTIFICATE-----\nc\n-----END CERTIFICATE-----";
+  process.env.APNS_VOIP_KEY_PEM = "-----BEGIN PRIVATE KEY-----\nk\n-----END PRIVATE KEY-----";
+  process.env.APNS_VOIP_TOPIC = "com.app.relaymobile.voip";
+  Object.assign(process.env, extra);
+}
+
+describe("v2.105.14 — certificate auth, the other APNs credential", () => {
+  beforeEach(() => {
+    for (const k of CERT_ENV) delete process.env[k];
+  });
+  afterEach(() => {
+    for (const k of CERT_ENV) delete process.env[k];
+  });
+
+  it("a cert + key with a topic is configured, in cert mode", () => {
+    certConfigure();
+    const cfg = apnsVoipConfig();
+    expect(cfg?.mode).toBe("cert");
+    expect(cfg?.topic).toBe("com.app.relaymobile.voip");
+    expect(cfg?.host).toBe("api.push.apple.com");
+    expect(apnsVoipConfigured()).toBe(true);
+  });
+
+  it("needs NO key id and NO team id — the certificate IS the identity", () => {
+    // This is the whole reason cert auth is simpler to configure. Requiring them
+    // would refuse a perfectly valid setup.
+    certConfigure();
+    delete process.env.APNS_KEY_ID;
+    delete process.env.APNS_TEAM_ID;
+    expect(apnsVoipConfigured()).toBe(true);
+  });
+
+  it("HALF a pair is not configured — neither half alone can complete a handshake", () => {
+    certConfigure();
+    delete process.env.APNS_VOIP_KEY_PEM;
+    expect(apnsVoipConfig()).toBeNull();
+    certConfigure();
+    delete process.env.APNS_VOIP_CERT_PEM;
+    expect(apnsVoipConfig()).toBeNull();
+  });
+
+  it("refuses a cert value that is not actually a certificate", () => {
+    // A path that does not exist, or a file that is not a PEM, must read as OFF
+    // rather than being handed to TLS as garbage.
+    certConfigure({ APNS_VOIP_CERT_PEM: "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----" });
+    expect(apnsVoipConfig()).toBeNull();
+    certConfigure({ APNS_VOIP_CERT_PEM: path.join(os.tmpdir(), "no-such-relay-cert.pem") });
+    expect(apnsVoipConfig()).toBeNull();
+  });
+
+  it("accepts either half as a PATH as well as inline PEM", () => {
+    const cp = path.join(os.tmpdir(), `relay-c-${process.pid}.pem`);
+    const kp = path.join(os.tmpdir(), `relay-k-${process.pid}.pem`);
+    fs.writeFileSync(cp, "-----BEGIN CERTIFICATE-----\nc\n-----END CERTIFICATE-----");
+    fs.writeFileSync(kp, "-----BEGIN PRIVATE KEY-----\nk\n-----END PRIVATE KEY-----");
+    try {
+      certConfigure({ APNS_VOIP_CERT_PEM: cp, APNS_VOIP_KEY_PEM: kp });
+      const cfg = apnsVoipConfig();
+      expect(cfg?.mode).toBe("cert");
+      expect((cfg as { certPem: string }).certPem).toContain("BEGIN CERTIFICATE");
+    } finally {
+      fs.unlinkSync(cp);
+      fs.unlinkSync(kp);
+    }
+  });
+
+  it("TOKEN AUTH WINS when both credentials are configured", () => {
+    // Operational, not aesthetic: a .p8 never expires while a certificate lapses
+    // on a date nobody is watching. If both are present, prefer the one that
+    // cannot silently die.
+    configure();
+    certConfigure();
+    expect(apnsVoipConfig()?.mode).toBe("token");
+  });
+
+  it("falls back to cert when the .p8 is only HALF configured", () => {
+    // A .p8 with no key id cannot sign a usable JWT. Falling through to a
+    // complete cert pair is better than reporting the whole feature off.
+    certConfigure();
+    process.env.APNS_P8_KEY = privateKey;
+    delete process.env.APNS_KEY_ID;
+    delete process.env.APNS_TEAM_ID;
+    expect(apnsVoipConfig()?.mode).toBe("cert");
+  });
+
+  it("honours the sandbox opt-in in cert mode too", () => {
+    certConfigure({ APNS_ENV: "sandbox" });
+    expect(apnsVoipConfig()?.host).toBe("api.sandbox.push.apple.com");
+  });
+
+  it("derives the topic from the bundle id when no explicit topic is set", () => {
+    certConfigure();
+    delete process.env.APNS_VOIP_TOPIC;
+    process.env.APNS_BUNDLE_ID = "com.app.relaymobile";
+    expect(apnsVoipConfig()?.topic).toBe("com.app.relaymobile.voip");
+  });
+
+  it("sends NO authorization header in cert mode", () => {
+    // The credential travels in the TLS handshake. A bearer here — empty or
+    // otherwise — is how a working cert setup earns a 403 blamed on the cert.
+    expect(SRC_FOR_HEADERS).toMatch(/\.\.\.\(jwt \? \{ authorization: `bearer \$\{jwt\}` \} : \{\}\)/);
+    // …and the cert is passed to the connection, not to a header.
+    expect(SRC_FOR_HEADERS).toMatch(/cfg\.mode === "cert" \? \{ key: cfg\.keyPem, cert: cfg\.certPem \} : undefined/);
+  });
+
+  it("a missing JWT aborts only TOKEN mode, never cert mode", () => {
+    // In cert mode jwt is null BY DESIGN; an unconditional `if (!jwt) return`
+    // would make certificate auth silently send nothing at all.
+    expect(SRC_FOR_HEADERS).toMatch(/if \(cfg\.mode === "token"\) \{\s*\n\s*jwt = apnsProviderToken\(cfg\);\s*\n\s*if \(!jwt\) return out;/);
+  });
+
+  it("degrades rather than throwing with a cert that TLS will reject", async () => {
+    // Config-valid but cryptographically junk. It must resolve, because the
+    // caller reads `sent` to decide whether to page and a throw would bubble
+    // into the invite path.
+    certConfigure();
+    await expect(
+      sendVoipRing(["a".repeat(64)], { callerName: "A", callerPin: "1", roomId: "r", video: false }),
+    ).resolves.toEqual({ sent: 0, invalidTokens: [] });
+  });
+});
+
+describe("v2.105.14 — a certificate EXPIRES, and the operator should hear about it", () => {
+  it("returns null for token auth — nothing to expire", () => {
+    configure();
+    expect(apnsCredentialExpiry(apnsVoipConfig())).toBeNull();
+  });
+
+  it("returns null for an unparseable certificate rather than guessing", () => {
+    // A wrong date shown to an operator is worse than no date.
+    certConfigure();
+    expect(apnsCredentialExpiry(apnsVoipConfig())).toBeNull();
+  });
+
+  it("reads notAfter from a REAL certificate", () => {
+    // Generated here rather than committed: this repo is public, and a test
+    // fixture private key is a habit worth not forming.
+    let pair: { cert: string; key: string } | null = null;
+    try {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-x509-"));
+      const kp = path.join(dir, "k.pem");
+      const cp = path.join(dir, "c.pem");
+      execFileSync("openssl", [
+        "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+        "-keyout", kp, "-out", cp, "-days", "30",
+        "-subj", "/CN=relay-test",
+      ], { stdio: "ignore" });
+      pair = { cert: fs.readFileSync(cp, "utf8"), key: fs.readFileSync(kp, "utf8") };
+    } catch {
+      pair = null; // no openssl on this machine
+    }
+    if (!pair) return; // skip rather than fail: the parse is Node's, not ours
+    certConfigure({ APNS_VOIP_CERT_PEM: pair.cert, APNS_VOIP_KEY_PEM: pair.key });
+    const when = apnsCredentialExpiry(apnsVoipConfig());
+    expect(when).toBeInstanceOf(Date);
+    const days = (when!.getTime() - Date.now()) / 86_400_000;
+    // ~30 days out; generous bounds so a slow runner cannot flake it.
+    expect(days).toBeGreaterThan(28);
+    expect(days).toBeLessThan(32);
   });
 });
 

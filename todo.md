@@ -11239,6 +11239,64 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.14 — APNs accepts TWO credentials, and the owner had the other one (2026-07-28)
+
+- [x] **THE OWNER SENT A VoIP SERVICES CERTIFICATE, NOT A .p8** — after saying the `.p8` was
+      "already on the fleet". Verified locally with openssl: `UID=com.app.relaymobile.voip`,
+      `CN=VoIP Services: com.app.relaymobile`, `OU=QJBVFFML9P`, valid 2026-07-28 → 2027-08-27,
+      2048-bit RSA, **and the private key genuinely pairs with the certificate**. So they had no
+      `.p8` at all and v2.105.12/13 could never have rung an iPhone for them.
+- [x] **A FALSE POSITIVE IN MY OWN VERIFICATION, CAUGHT AND CORRECTED.** My first pair-check
+      reported "PAIR VERIFIED" from two modulus hashes of `e3b0c442…` — the SHA-256 of the EMPTY
+      STRING. The PEM extraction had failed (the cert begins on the same line as
+      `APNS_VOIP_CERT_PEM="`, so the awk range captured the assignment prefix), both openssl calls
+      produced nothing, and comparing two empty outputs said "match". Re-done with a non-empty
+      guard before the comparison, which is the whole lesson: a comparison of two absences is not
+      agreement.
+- [x] **CERTIFICATE AUTH IS A DIFFERENT MECHANISM, NOT A DIFFERENT SPELLING.** The cert+key are
+      presented at the TLS handshake (`http2.connect(url, {key, cert})`) and there is **NO
+      `authorization` header at all** — sending an empty or stale bearer alongside a client
+      certificate is how a working cert setup earns a 403 that reads like a bad certificate.
+      `apnsVoipConfig()` is now a discriminated union (`mode: "token" | "cert"`).
+- [x] **THEIR OWN VARIABLE NAMES ARE ADOPTED**, `APNS_VOIP_CERT_PEM` / `APNS_VOIP_KEY_PEM`, so the
+      `.env` file they wrote works verbatim rather than needing a rewrite. Both accept an inline
+      PEM **or a path** — the shape decides, via one shared `readPem`.
+- [x] **TOKEN AUTH WINS WHEN BOTH ARE CONFIGURED, and the reason is operational rather than
+      aesthetic**: a `.p8` never expires while a certificate lapses on a date nobody is watching,
+      so the credential that cannot silently die is the one to prefer. A half-configured `.p8`
+      (key but no key id) falls THROUGH to a complete cert pair rather than reporting the whole
+      feature off.
+- [x] **THE PUSH DOCTOR NOW WARNS BEFORE THE CERTIFICATE LAPSES.** This is the only credential
+      here that dies on a DATE rather than because of a change — ringing would stop one morning
+      with nothing in the diff to blame. `apnsCredentialExpiry()` reads notAfter with Node's own
+      `crypto.X509Certificate` (zero dependency), the doctor reports the mode and the date, and the
+      row goes red at 30 days with copy noting Apple allows two certificates at once so a reissue
+      needs no downtime. It is ABSENT for a `.p8` rather than reassuring about a date that does
+      not exist.
+- [x] **THE "NOT CONFIGURED" HINT NAMES BOTH SHAPES.** Naming only the `.p8` is exactly what sent
+      an operator holding a certificate looking for a file they did not have.
+- [x] **VERIFIED AGAINST THE REAL CREDENTIAL**, driven through the real `apnsVoipConfig()` with
+      exactly the owner's env names: `configured: true`, `mode: cert`,
+      `topic: com.app.relaymobile.voip`, `host: api.push.apple.com`, expiry `2027-08-27`.
+- [x] `server/apnsVoip.test.ts` → 44 (15 new cert cases; the expiry parse generates a throwaway
+      self-signed pair rather than committing a key, since this repo is public), `pushDoctor` +2.
+      **11 tripwires verified by MUTATION**, sources byte-identical afterwards. **TWO SURVIVORS
+      REPORTED AS NON-DEFECTS rather than counted**: removing the `cfg.mode !== "cert"` narrowing
+      is behaviourally equivalent because `new X509Certificate(undefined)` throws into the
+      function's own catch (and the narrowing is required for the code to typecheck at all), and
+      the `Number.isNaN` guard is unreachable defence — a certificate that parses always yields a
+      well-formed notAfter.
+- [x] **A THIRD SURVIVOR WAS A REAL REDUNDANCY AND THE CODE WAS SIMPLIFIED RATHER THAN THE TEST
+      PATCHED**: an outer `certRaw && keyRaw` check decided nothing, because `readPem` already
+      answers null for an empty value — swapping the `&&` for `||` changed no behaviour. Two
+      individually-removable mechanisms are dead weight that reads as load-bearing, so the decision
+      now lives in exactly one place, and the collapsed gate bites both ways.
+- [x] **THE PRIVATE KEY WAS NEVER WRITTEN TO THE REPO.** It was extracted to the session scratchpad
+      for verification, mode 600, and wiped afterwards. The repo is PUBLIC; the only PEM material
+      in any test is generated at run time.
+- [ ] Owner-side: the key crossed a chat channel, so reissue the VoIP certificate once ringing is
+      confirmed. Apple allows two at once, so the swap needs no downtime.
+
 ## v2.105.13 — a PushKit token is not an alert token (2026-07-28)
 
 - [x] **A DEFECT IN v2.105.12, FOUND WHILE BUILDING THE SHELL HALF, AND IT WAS DESTRUCTIVE.**

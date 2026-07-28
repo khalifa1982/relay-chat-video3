@@ -41,13 +41,57 @@ const TOKEN_TTL_MS = 45 * 60_000;
 /** A ring is worthless late. APNs drops it rather than storing it. */
 const VOIP_EXPIRY_SECONDS = 45;
 
-export interface ApnsVoipConfig {
+/**
+ * APNs accepts TWO provider credentials, and RELAY supports both because an
+ * operator has whichever Apple gave them, not whichever is tidier.
+ *
+ *   • TOKEN (.p8) — a short-lived ES256 JWT in an `authorization` header. Never
+ *     expires, serves every topic, nothing to renew.
+ *   • CERT (VoIP Services certificate) — mutual TLS: the cert+key are presented
+ *     at the TLS handshake and there is NO authorization header at all. Bound to
+ *     one bundle id and it EXPIRES, which is the operational hazard the push
+ *     doctor now reports on.
+ */
+export interface ApnsTokenConfig {
+  mode: "token";
   keyPem: string;
   keyId: string;
   teamId: string;
   /** The push topic: `<bundle-id>.voip` for VoIP. Derived if only a bundle id is given. */
   topic: string;
   host: string;
+}
+
+export interface ApnsCertConfig {
+  mode: "cert";
+  certPem: string;
+  keyPem: string;
+  topic: string;
+  host: string;
+}
+
+export type ApnsVoipConfig = ApnsTokenConfig | ApnsCertConfig;
+
+/**
+ * Read a PEM that may be given INLINE or as a PATH.
+ *
+ * An inline PEM is what a `.env` can hold; a path is what a mounted secret looks
+ * like. The SHAPE decides, because guessing wrong either way is a silent
+ * misconfiguration — and the marker check at the end means a file that is not
+ * actually a PEM is refused rather than handed to TLS as garbage.
+ */
+function readPem(raw: string, marker: string): string | null {
+  const v = raw.trim();
+  if (!v) return null;
+  let pem = v;
+  if (!v.includes(marker)) {
+    try {
+      pem = fs.readFileSync(v, "utf8");
+    } catch {
+      return null;
+    }
+  }
+  return pem.includes(marker) ? pem : null;
 }
 
 /**
@@ -59,22 +103,8 @@ export interface ApnsVoipConfig {
  * PEM header is content; anything else is treated as a path.
  */
 export function apnsVoipConfig(): ApnsVoipConfig | null {
-  const raw = (process.env.APNS_P8_KEY || process.env.APNS_KEY_P8 || "").trim();
-  const keyId = (process.env.APNS_KEY_ID || "").trim();
-  const teamId = (process.env.APNS_TEAM_ID || "").trim();
   const bundleId = (process.env.APNS_BUNDLE_ID || "").trim();
   const topicEnv = (process.env.APNS_VOIP_TOPIC || "").trim();
-  if (!raw || !keyId || !teamId) return null;
-
-  let keyPem = raw;
-  if (!raw.includes("BEGIN PRIVATE KEY")) {
-    try {
-      keyPem = fs.readFileSync(raw, "utf8");
-    } catch {
-      return null;
-    }
-  }
-  if (!keyPem.includes("BEGIN PRIVATE KEY")) return null;
 
   // The VoIP topic is the bundle id plus `.voip`. Appending it ourselves when a
   // bare bundle id is given avoids the most likely configuration mistake, and an
@@ -87,7 +117,53 @@ export function apnsVoipConfig(): ApnsVoipConfig | null {
   // remove; defaulting to production means a dev build fails loudly instead.
   const sandbox = /^(1|true|sandbox|dev|development)$/i.test(process.env.APNS_ENV || "");
   const host = sandbox ? "api.sandbox.push.apple.com" : "api.push.apple.com";
-  return { keyPem, keyId, teamId, topic, host };
+
+  // TOKEN AUTH IS PREFERRED WHEN BOTH ARE PRESENT, and the reason is operational
+  // rather than aesthetic: a .p8 never expires, while a certificate lapses on a
+  // date nobody is watching. If an operator has configured both, the credential
+  // that cannot silently die is the one to use.
+  const p8 = (process.env.APNS_P8_KEY || process.env.APNS_KEY_P8 || "").trim();
+  const keyId = (process.env.APNS_KEY_ID || "").trim();
+  const teamId = (process.env.APNS_TEAM_ID || "").trim();
+  if (p8 && keyId && teamId) {
+    const keyPem = readPem(p8, "PRIVATE KEY");
+    if (keyPem) return { mode: "token", keyPem, keyId, teamId, topic, host };
+  }
+
+  // CERTIFICATE AUTH (mutual TLS). Needs no key id and no team id — the identity
+  // is the certificate itself, presented at the handshake.
+  //
+  // ONE gate, not two. BOTH halves are required (a cert with no key cannot
+  // complete a handshake; a key with no cert has nothing to present), and
+  // `readPem` already answers null for an empty value — so an outer
+  // `certRaw && keyRaw` check was redundant with this one. A mutation run proved
+  // it: swapping that `&&` for `||` changed nothing, which means it read as a
+  // guard while deciding nothing. Two individually-removable mechanisms are dead
+  // weight, so the decision lives in exactly one place.
+  const certPem = readPem(process.env.APNS_VOIP_CERT_PEM || "", "BEGIN CERTIFICATE");
+  const keyPem = readPem(process.env.APNS_VOIP_KEY_PEM || "", "PRIVATE KEY");
+  if (certPem && keyPem) return { mode: "cert", certPem, keyPem, topic, host };
+
+  return null;
+}
+
+/**
+ * When does the configured credential stop working?
+ *
+ * Only a CERTIFICATE can expire, and it does so on a date nobody is watching —
+ * ringing would simply stop one morning with no code change to blame. Node's own
+ * X509Certificate parses it with no dependency, so the admin push doctor can warn
+ * ahead of time. Returns null for token auth (nothing to expire) and for an
+ * unparseable cert, because a guess here would be worse than silence.
+ */
+export function apnsCredentialExpiry(cfg: ApnsVoipConfig | null = apnsVoipConfig()): Date | null {
+  if (!cfg || cfg.mode !== "cert") return null;
+  try {
+    const when = new Date(new crypto.X509Certificate(cfg.certPem).validTo);
+    return Number.isNaN(when.getTime()) ? null : when;
+  } catch {
+    return null;
+  }
 }
 
 export function apnsVoipConfigured(): boolean {
@@ -144,7 +220,7 @@ let cached: { token: string; exp: number; keyId: string } | null = null;
  * signature it already has, and because Apple rate-limits token minting.
  * Keyed on the key id so rotating the key cannot serve a stale token.
  */
-export function apnsProviderToken(cfg: ApnsVoipConfig, nowMs: number = Date.now()): string | null {
+export function apnsProviderToken(cfg: ApnsTokenConfig, nowMs: number = Date.now()): string | null {
   if (cached && cached.keyId === cfg.keyId && cached.exp > nowMs + 60_000) return cached.token;
   try {
     const header = b64url(Buffer.from(JSON.stringify({ alg: "ES256", kid: cfg.keyId, typ: "JWT" })));
@@ -203,8 +279,14 @@ export async function sendVoipRing(
   const out: VoipSendResult = { sent: 0, invalidTokens: [] };
   const cfg = apnsVoipConfig();
   if (!cfg || tokens.length === 0) return out;
-  const jwt = apnsProviderToken(cfg);
-  if (!jwt) return out;
+  // Token auth needs a signed JWT and cannot proceed without one. Cert auth
+  // carries no bearer at all — the credential is presented at the handshake
+  // below — so a null jwt is CORRECT there and must not abort the send.
+  let jwt: string | null = null;
+  if (cfg.mode === "token") {
+    jwt = apnsProviderToken(cfg);
+    if (!jwt) return out;
+  }
 
   const body = JSON.stringify({
     // A VoIP push has no `aps.alert` — iOS delivers it to PushKit, not to the
@@ -218,7 +300,14 @@ export async function sendVoipRing(
 
   let session: http2.ClientHttp2Session | null = null;
   try {
-    session = http2.connect(`https://${cfg.host}`);
+    // CERT AUTH HAPPENS HERE, not in a header: the client certificate is
+    // presented during the TLS handshake, which is why cert mode needs no
+    // `authorization` at all. TLS verification of APNs itself is untouched —
+    // these options ADD our identity, they do not relax theirs.
+    session = http2.connect(
+      `https://${cfg.host}`,
+      cfg.mode === "cert" ? { key: cfg.keyPem, cert: cfg.certPem } : undefined,
+    );
     // A dial cannot wait on a wedged connection; the caller's own no-answer
     // backstop is the outer bound, but this must not hold it open either.
     await new Promise<void>((resolve, reject) => {
@@ -245,7 +334,10 @@ export async function sendVoipRing(
                 // a missed call.
                 "apns-priority": "10",
                 "apns-expiration": String(Math.floor(Date.now() / 1000) + VOIP_EXPIRY_SECONDS),
-                authorization: `bearer ${jwt}`,
+                // Present ONLY for token auth. Sending an empty or bogus bearer
+                // alongside a client certificate is how a working cert setup
+                // earns a 403 that reads like a bad certificate.
+                ...(jwt ? { authorization: `bearer ${jwt}` } : {}),
                 "content-type": "application/json",
                 "content-length": Buffer.byteLength(body),
               });
