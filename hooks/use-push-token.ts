@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus, Platform } from "react-native";
 import * as Notifications from "expo-notifications";
+import Constants from "expo-constants";
 import type { WebView } from "react-native-webview";
 
 /**
@@ -45,9 +46,58 @@ export function usePushToken(webViewRef: React.RefObject<WebView | null>) {
       }
       if (finalStatus !== "granted") return null;
 
-      // Get the native device push token (APNs on iOS, FCM on Android)
-      const tokenData = await Notifications.getDevicePushTokenAsync();
-      const pushToken = tokenData.data;
+      // PREFER THE EXPO PUSH TOKEN, AND THE REASON IS THAT APNs IS NOT FCM.
+      //
+      // `getDevicePushTokenAsync()` returns an FCM registration token on Android but an
+      // APNs device token on iOS. RELAY's server sends native pushes through FCM v1
+      // `messages:send`, which requires an FCM REGISTRATION token — handed a raw APNs
+      // token it answers 400/404, and the sender reads that as a stale token and DELETES
+      // the subscription. So an iPhone was silently deregistered on its very first push.
+      //
+      // An Expo push token (`ExponentPushToken[…]`) is delivered by Expo's own service,
+      // which holds the APNs key uploaded to EAS, and RELAY has had the matching
+      // transport since v2.99.79. It is routable on BOTH platforms.
+      //
+      // GUARDED, because `getExpoPushTokenAsync` THROWS when no EAS projectId is
+      // configured — and it is not configured in app.config.ts today. Falling back keeps
+      // Android working exactly as before rather than trading one broken platform for two.
+      let pushToken: string | null = null;
+      try {
+        const projectId =
+          (Constants?.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas
+            ?.projectId ?? (Constants as { easConfig?: { projectId?: string } })?.easConfig?.projectId;
+        // iOS ONLY, AND THAT RESTRICTION IS THE POINT.
+        //
+        // Expo's push service needs its OWN credential PER PLATFORM: the APNs key for
+        // iOS, and a SEPARATE FCM V1 service account uploaded to EAS for Android.
+        // RELAY's own FCM service account (in the fleet's .env) does NOT satisfy the
+        // Android one.
+        //
+        // Android already works today, because there the device token IS an FCM
+        // registration token and RELAY sends to it directly. Routing Android through
+        // Expo as well makes it depend on a credential that may not be in EAS — so
+        // merely SETTING extra.eas.projectId would fix iOS and silently break Android.
+        // Only iOS is broken, so only iOS changes transport. Moving Android across is a
+        // deliberate follow-up once that credential is confirmed, never a side effect of
+        // configuring a project id.
+        //
+        // (Restored: this guard was dropped from the branch after it was first pushed,
+        // and the projectId landed in the same window — precisely the combination it
+        // exists to make safe.)
+        if (projectId && Platform.OS === "ios") {
+          const expoToken = await Notifications.getExpoPushTokenAsync({ projectId });
+          if (expoToken?.data) pushToken = expoToken.data;
+        }
+      } catch {
+        /* no EAS project, or Expo's service unreachable — fall through */
+      }
+      if (!pushToken) {
+        // On Android this is an FCM registration token and fully routable. On iOS it is
+        // an APNs token, which RELAY now stores as kind "apns": not deliverable, but
+        // visible in the admin push doctor so the cause is diagnosable rather than silent.
+        const tokenData = await Notifications.getDevicePushTokenAsync();
+        pushToken = tokenData.data;
+      }
       setToken(pushToken);
       return pushToken;
     } catch {
@@ -80,5 +130,19 @@ export function usePushToken(webViewRef: React.RefObject<WebView | null>) {
     }
   }, [token, sendTokenToWebView]);
 
-  return { token, onWebViewLoadEnd, registerForPush };
+  /**
+   * Re-send in response to the web app announcing it is listening.
+   *
+   * `onWebViewLoadEnd` is not sufficient on its own: the document can finish loading
+   * before RELAY's bridge attaches its listener in a React effect, so a token posted
+   * then is dropped with nothing reporting it. This is the acknowledged handshake.
+   */
+  const onWebReady = useCallback(() => {
+    if (token) sendTokenToWebView(token);
+    // A token we never obtained (permission granted late, or a transient failure on
+    // mount) is worth one more attempt now that we know the other side is up.
+    else void registerForPush().then((t) => { if (t) sendTokenToWebView(t); });
+  }, [token, sendTokenToWebView, registerForPush]);
+
+  return { token, onWebViewLoadEnd, onWebReady, registerForPush };
 }
