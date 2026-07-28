@@ -303,3 +303,142 @@ describe("aws-ops.yml — recover-identity: a production DB write, gated and inj
     ).toBe(true);
   });
 });
+
+describe("aws-ops.yml — live-verify: read-only, two vantage points, injection-safe", () => {
+  /* v2.105.2. Task #44 asked for live verification and sat blocked for six
+     releases because the agent sandbox cannot reach `your-chat.io` at all. This
+     action is how it gets done: the same script, run from the runner (a real
+     visitor's path) and from an instance against 127.0.0.1 (the app alone). Every
+     property below is either what makes the result trustworthy or what keeps a
+     read-only check from becoming a way to run commands on production. */
+  /* BOUNDED to this step's own text. An unbounded slice to end-of-file is a
+     fragility this repo has been bitten by several times, and it bit here: a
+     mutation that DELETED the number shape-check survived, because the slice
+     still contained `recover-identity`'s identical check 200 lines later. The
+     end anchor is searched FROM the start so it cannot resolve to something
+     earlier, and the window is asserted non-empty — a slice that collapses to
+     "" makes every assertion in it pass vacuously. */
+  const lvAt = OPS.indexOf("live-verify — prove the live site is serving");
+  const lvEnd = OPS.indexOf("- name: recover-identity", lvAt);
+  const lv = OPS.slice(lvAt, lvEnd);
+  it("the window this describe reads is real and bounded to one step", () => {
+    expect(lvAt).toBeGreaterThan(0);
+    expect(lvEnd).toBeGreaterThan(lvAt);
+    expect(lv.length).toBeGreaterThan(1500);
+    expect(lv).not.toMatch(/recover-identity|admin-tool/);
+  });
+
+  it("exists as an explicit action with its own inputs", () => {
+    const opts = (OPS.match(/options: \[([^\]]+)\]/) || [, ""])[1]
+      .split(",")
+      .map((x) => x.trim());
+    expect(opts).toContain("live-verify");
+    for (const k of ["verify_number", "verify_email", "verify_email_send"]) {
+      expect(OPS).toMatch(new RegExp(`\\n      ${k}:`));
+    }
+    expect(lv).toMatch(/if: inputs\.action == 'live-verify'/);
+  });
+
+  it("probes BOTH vantage points, and names which side failed", () => {
+    // The whole reason for two probes: a check that fails from outside and passes
+    // inside localises the fault to the edge. Reporting only a combined verdict
+    // would throw away exactly the information the second probe was run for.
+    expect(lv).toMatch(/--base "https:\/\/\$DOMAIN"/);
+    expect(lv).toMatch(/--base http:\/\/127\.0\.0\.1:/);
+    expect(lv).toMatch(/this is an EDGE problem/);
+    expect(lv).toMatch(/the fault is in the application or its deploy/);
+  });
+
+  it("builds with byte-for-byte the same env deploy.yml builds with", () => {
+    // Both values are baked into the client bundle, so a different build env
+    // produces different bytes and a different content hash — the byte
+    // comparison would then report a mismatch on a deployment that is perfectly
+    // in sync, i.e. a false alarm on the check that carries the most weight.
+    const deploy = fs.readFileSync(
+      path.resolve(__dirname, "..", ".github", "workflows", "deploy.yml"),
+      "utf8"
+    );
+    const envOf = (src: string) => ({
+      forge: (src.match(/VITE_FRONTEND_FORGE_API_URL: (\S+)/) || [])[1],
+      appId: (src.match(/VITE_APP_ID: (\S+)/) || [])[1],
+    });
+    const mine = envOf(OPS.slice(OPS.indexOf("live-verify (checkout + build)")));
+    expect(mine.forge).toBeDefined();
+    expect(mine.appId).toBeDefined();
+    expect(mine).toEqual(envOf(deploy));
+  });
+
+  it("is READ-ONLY: it mutates no AWS resource and writes nothing on the instance", () => {
+    // A verification action that can change things is a verification action
+    // somebody will eventually be afraid to run.
+    for (const forbidden of [
+      /aws ec2 authorize-security-group/, /aws elbv2 (create|modify|delete)/,
+      /aws acm (request|delete)/, /aws cloudfront (create|update)/,
+      /aws ssm put-parameter/, /pm2 (restart|reload|startOrReload)/,
+      / > \/home\/relay/, /aws s3 cp/,
+    ]) {
+      expect(lv).not.toMatch(forbidden);
+    }
+    // The only SSM verb is send-command + reading its result.
+    const verbs = [...lv.matchAll(/aws ssm ([a-z-]+)/g)].map((m) => m[1]);
+    expect([...new Set(verbs)].sort()).toEqual(["list-command-invocations", "send-command"]);
+  });
+
+  it("shape-checks the number and base64-encodes every free-text input", () => {
+    // This file has been bitten by an unescaped free-text input reaching a remote
+    // shell three times (SES_EMAIL/DOMAIN, `region`, then the recovery inputs).
+    expect(lv).toMatch(/\*\[!0-9\]\*\)/);
+    expect(lv).toMatch(/\[ "\$\{#VNUM\}" -eq 6 \]/);
+    expect(lv).toMatch(/NUM_B64=\$\(printf %s "\$VNUM" \| base64 -w0\)/);
+    expect(lv).toMatch(/EMAIL_B64=\$\(printf %s "\$VEMAIL" \| base64 -w0\)/);
+    // …and the raw values never appear in the string executed on the instance.
+    // Scoped to the ASSIGNMENTS, not to the region between two anchors: the
+    // region legitimately contains `if [ -n "$VEMAIL" ]`, a presence test that
+    // interpolates nothing, so a region-wide `not.toMatch` failed on correct
+    // code. What matters is only what gets built INTO the command string.
+    const asg = lv.split("\n").filter((l) => /^\s*CMD_APP=/.test(l));
+    expect(asg.length).toBeGreaterThanOrEqual(4);
+    for (const line of asg) {
+      expect(line, line).not.toMatch(/\$VEMAIL/);
+      expect(line, line).not.toMatch(/\$VNUM\b/);
+    }
+  });
+
+  it("sends mail only when explicitly asked, and only from the instance", () => {
+    // The default stops before DATA, so a health check nobody asked for never
+    // arrives in somebody's inbox — which is what stops it being switched off.
+    const send = OPS.slice(OPS.indexOf("      verify_email_send:"), OPS.indexOf("      turn_apply:"));
+    expect(send).toMatch(/type: boolean/);
+    expect(send).toMatch(/default: false/);
+    expect(lv).toMatch(/\[ "\$VSEND" = "true" \] && SENDFLAG=" --send"/);
+    // The mail check is inside the SSM branch, never run on the runner: the
+    // credentials exist only in /home/relay/.env.
+    const runnerHalf = lv.slice(0, lv.indexOf("IID="));
+    expect(runnerHalf).not.toMatch(/mail-verify/);
+    expect(lv).toMatch(/node scripts\/mail-verify\.mjs/);
+  });
+
+  it("reads each verdict from the script's own printed marker, not the SSM status", () => {
+    expect(lv).toMatch(/grep -q "LIVE_VERIFY_EXIT=0"/);
+    expect(lv).toMatch(/grep -q "MAIL_VERIFY_EXIT=0"/);
+  });
+
+  it("both scripts it invokes are actually shipped to the instances", () => {
+    const deploy = fs.readFileSync(
+      path.resolve(__dirname, "..", ".github", "workflows", "deploy.yml"),
+      "utf8"
+    );
+    expect(deploy).toMatch(/\[ -d scripts \] && echo scripts/);
+    // shared/ too — live-verify reads shared/version.ts off disk to know what the
+    // fleet ought to be serving, so without it the version check would SKIP.
+    expect(deploy).toMatch(/drizzle\.config\.ts drizzle shared tsconfig\.json/);
+    for (const f of ["live-verify.mjs", "mail-verify.mjs"]) {
+      expect(fs.existsSync(path.resolve(__dirname, "..", "scripts", f))).toBe(true);
+    }
+  });
+
+  it("a non-zero verdict from either vantage point fails the run", () => {
+    // A status report that always exits 0 is a report nobody can gate on.
+    expect(lv).toMatch(/\[ \$EDGE -eq 0 \] && \[ \$APP -ne 1 \] && \[ \$MAIL -eq 0 \] \|\| exit 1/);
+  });
+});
