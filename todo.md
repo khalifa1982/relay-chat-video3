@@ -257,3 +257,54 @@
 - [x] Double protection: BuildStatusRow also returns null internally on iOS
 - [x] No BETA badge, no build number, no refresh button visible on iOS
 - [x] tsc clean + 65 tests pass
+
+## Round 24 — the bridging-header fix was necessary but not sufficient; the Swift still could not compile
+- [x] Round 23's `fix(ios): use bridging header` was the right diagnosis for the IMPORTS and is kept.
+      What it left behind were four more compile errors in the same injected Swift, each verified against
+      the pods' own ObjC headers rather than recalled.
+- [x] **TWO CALLS NAMED METHODS THAT DO NOT EXIST.** `RNVoipPushNotificationManager.didUpdate(_:forType:)`
+      — the real selector is `didUpdatePushCredentials:forType:`; and
+      `didReceiveIncomingPush(with:forType:)` — the real first label is `withPayload:`. Read straight off
+      `RNVoipPushNotificationManager.h`.
+- [x] **THE WITNESSES HAD TO BE `public`.** The SDK 54 template is `public class AppDelegate:
+      ExpoAppDelegate`, and Swift requires a witness for a requirement of a public protocol to be at least
+      as visible as the conformance — an internal `func pushRegistry` fails with "must be declared public
+      because it matches a requirement in public protocol 'PKPushRegistryDelegate'". All three now are.
+- [x] **`import Foundation` ADDED for what the injected code itself uses.** The template imports neither
+      Foundation nor UIKit and resolves both transitively; `NSLog`, `String(format:)` and `UUID()` are all
+      Foundation, and an injection should not depend on the host file's import list.
+- [x] **THE BRIDGING HEADER IS NOW APPENDED, NOT OVERWRITTEN, AND ITS NAME IS DERIVED.** Round 23 wrote
+      the whole file from a template with the name hardcoded `RELAY-Bridging-Header.h`. Two problems: a
+      whole-file write destroys whatever another plugin put there, and the Expo template already emits
+      `<Project>-Bridging-Header.h` and already points `SWIFT_OBJC_BRIDGING_HEADER` at it — so a hardcoded
+      name leaves an orphan the day the app is renamed. Appending under a marker is idempotent AND lets
+      plugins coexist; the file is still CREATED if absent, so a template that stops emitting one degrades
+      to "we make it ourselves" rather than to a build that cannot ring.
+- [x] **BOTH POD IMPORTS USE THE ANGLE FORM.** Round 23 mixed `<RNCallKeep/RNCallKeep.h>` with
+      `"RNVoipPushNotificationManager.h"`; the quoted form works only while a flattened search path
+      happens to be present. Note the pod directory and the header file DIFFER for the VoIP pod
+      (`RNVoipPushNotification/` vs `RNVoipPushNotificationManager.h`) — collapsing them fails with "file
+      not found" and nothing that names the cause.
+- [x] **ROUND 23's `NSLog` INVALIDATE HANDLER IS KEPT, and its finding was right**: the library exposes no
+      `didInvalidate` class method, so a log is the whole available behaviour. My own first pass deleted
+      the method outright; a diagnostic you can see in Console.app is the better call.
+- [x] **A FALSE COMMENT OF MINE CORRECTED rather than left standing.** It claimed the stable uuid exists
+      "so the answer JS reports later refers to the same CallKit call" — read against
+      `use-voip-callkit.ts`, the hook answers via CallKeep's own `answerCall`/`endCall` events and never
+      re-derives the uuid. The real value is that a RETRANSMITTED push for one room does not stack a
+      second ringing call on the lock screen.
+- [x] **THE LOAD-BEARING NEW TEST CROSS-CHECKS EVERY INJECTED CALL AGAINST THE POD'S OWN ObjC HEADER**,
+      which is exactly what its absence allowed twice over. No test here can compile Swift, but the
+      headers are on disk, so "does this method exist" is answerable for real. It also pins all twelve
+      `reportNewIncomingCall` labels against the declaration, asserts the invalidate handler calls no
+      library method BECAUSE the header has none, and reports whether the cross-check ran rather than
+      skipping silently.
+- [x] `tests/voip-callkit.test.ts` → 41. **All 9 new tripwires verified by MUTATION** from a byte-exact
+      backup, with the mutator aborting unless its target occurs exactly once; source byte-identical
+      afterwards. One aborted on a non-unique anchor and was re-run against both sites individually.
+- [x] Verified by a REAL `expo prebuild --platform ios --clean`: the generated `AppDelegate.swift`,
+      `RELAY-Bridging-Header.h` and the pbxproj's `SWIFT_OBJC_BRIDGING_HEADER` were all read back.
+- [x] **NOT COMPILED, said plainly**: there is no Xcode or Swift toolchain on this machine, so this rests
+      on reading the real generated artefacts and the real pod headers. The Codemagic run is what proves
+      it. The one pre-existing test failure (`relay-config.test.ts` fetching your-chat.io) is this
+      sandbox's egress proxy, unrelated.

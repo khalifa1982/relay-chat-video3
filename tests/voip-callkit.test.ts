@@ -1,7 +1,13 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { injectSwift, MARKER } from "../plugins/with-ios-voip.js";
+import {
+  injectSwift,
+  injectBridgingHeader,
+  bridgingHeaderPath,
+  MARKER,
+  H_MARKER,
+} from "../plugins/with-ios-voip.js";
 import { readVoipPayload } from "../lib/voip-payload";
 
 /**
@@ -56,6 +62,28 @@ describe("the config plugin injects PushKit into AppDelegate.swift", () => {
     // via the bridging header, NOT via Swift import statements.
     expect(out).not.toContain("import RNCallKeep");
     expect(out).not.toContain("import RNVoipPushNotification");
+  });
+
+  it("imports Foundation for what the injected code itself uses", () => {
+    // The template imports neither Foundation nor UIKit and gets both transitively.
+    // `NSLog`, `String(format:)` and `UUID()` are Foundation, and an injection that
+    // leans on the host file's import list is one template change from not building.
+    expect(out).toContain("import Foundation");
+    expect(out).toContain("NSLog(");
+    expect(out).toMatch(/String\(format: "%02x"/);
+    expect(out).toContain("UUID().uuidString");
+  });
+
+  it("declares every witness `public`, which the template REQUIRES", () => {
+    /* NOT STYLISTIC. The Expo SDK 54 template is `public class AppDelegate:
+       ExpoAppDelegate`, and Swift requires a witness for a requirement of a public
+       protocol to be at least as visible as the conformance — an internal
+       `func pushRegistry` fails with "must be declared public because it matches a
+       requirement in public protocol 'PKPushRegistryDelegate'". */
+    const ext = out.slice(out.indexOf("extension AppDelegate: PKPushRegistryDelegate"));
+    const witnesses = ext.match(/^\s*(public\s+)?func pushRegistry\(/gm) ?? [];
+    expect(witnesses.length).toBe(3);
+    for (const w of witnesses) expect(w).toContain("public func");
   });
 
   it("puts the imports AFTER the last existing one, never above it", () => {
@@ -155,6 +183,149 @@ describe("the config plugin injects PushKit into AppDelegate.swift", () => {
  * way to know the anchors match the template Expo actually emits is to read the
  * template Expo actually emitted.
  */
+describe("every injected call exists in the pod's OWN header", () => {
+  /* THE LOAD-BEARING TEST IN THIS FILE, and the one whose absence let two calls to
+   * non-existent methods ship. No test here can compile Swift — there is no Xcode on
+   * this machine — but the pods' ObjC headers ARE on disk, so "does the method I am
+   * calling exist" is answerable for real rather than frozen as a string.
+   */
+  const ROOT = path.resolve(__dirname, "..");
+  const voipH = path.join(
+    ROOT,
+    "node_modules/react-native-voip-push-notification/ios/RNVoipPushNotification/RNVoipPushNotificationManager.h",
+  );
+  const callKeepH = path.join(ROOT, "node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.h");
+  const have = fs.existsSync(voipH) && fs.existsSync(callKeepH);
+  const out = injectSwift(APP_DELEGATE);
+
+  it.skipIf(!have)("the ObjC selectors backing each Swift call are declared", () => {
+    const voip = fs.readFileSync(voipH, "utf8");
+    const ck = fs.readFileSync(callKeepH, "utf8");
+    // Swift call site  ->  the ObjC selector it is imported from.
+    const pairs: [string, string, string][] = [
+      ["RNVoipPushNotificationManager.voipRegistration()", "+ (void)voipRegistration", voip],
+      [
+        "RNVoipPushNotificationManager.didUpdatePushCredentials(",
+        "+ (void)didUpdatePushCredentials:",
+        voip,
+      ],
+      [
+        "RNVoipPushNotificationManager.didReceiveIncomingPush(withPayload:",
+        "+ (void)didReceiveIncomingPushWithPayload:",
+        voip,
+      ],
+      ["RNCallKeep.reportNewIncomingCall(", "+ (void)reportNewIncomingCall:", ck],
+    ];
+    for (const [swift, selector, header] of pairs) {
+      expect(out, `Swift calls ${swift}`).toContain(swift);
+      expect(header, `header declares ${selector}`).toContain(selector);
+    }
+  });
+
+  it.skipIf(!have)("the recalled names that do not exist stay gone", () => {
+    // Neither of these compiled in anybody's build. Kept as a named tripwire.
+    expect(out).not.toMatch(/didUpdate\(pushCredentials/);
+    expect(out).not.toMatch(/didReceiveIncomingPush\(with:/);
+  });
+
+  it.skipIf(!have)("the invalidate handler calls no library method, because there is none", () => {
+    // RNVoipPushNotificationManager genuinely exposes no invalidation hook — checked
+    // against the header, not assumed — so a LOG is the whole available behaviour.
+    const voip = fs.readFileSync(voipH, "utf8");
+    expect(voip).not.toContain("didInvalidatePushToken");
+    const body = out.slice(out.indexOf("didInvalidatePushTokenFor"));
+    const fn = body.slice(0, body.indexOf("\n  }"));
+    expect(fn).toContain("NSLog(");
+    expect(fn).not.toContain("RNVoipPushNotificationManager.");
+  });
+
+  it.skipIf(!have)("reportNewIncomingCall is called with the header's exact labels", () => {
+    // Twelve labelled arguments: one wrong or missing label is a compile error, and
+    // reading them off the header is the only way to be sure without Xcode.
+    const ck = fs.readFileSync(callKeepH, "utf8");
+    const decl = ck.slice(ck.indexOf("+ (void)reportNewIncomingCall:"));
+    const sig = decl.slice(0, decl.indexOf(";"));
+    const labels = [
+      "handle", "handleType", "hasVideo", "localizedCallerName", "supportsHolding",
+      "supportsDTMF", "supportsGrouping", "supportsUngrouping", "fromPushKit",
+      "payload", "withCompletionHandler",
+    ];
+    const call = out.slice(out.indexOf("RNCallKeep.reportNewIncomingCall("));
+    const callArgs = call.slice(0, call.indexOf("\n    )"));
+    for (const l of labels) {
+      expect(sig, `header declares ${l}:`).toContain(`${l}:`);
+      expect(callArgs, `call passes ${l}:`).toContain(`${l}:`);
+    }
+    // The first argument is unlabelled in ObjC, so it must be unlabelled in Swift.
+    expect(callArgs).toMatch(/reportNewIncomingCall\(\s*\n?\s*uuid,/);
+  });
+
+  it("reports whether the header cross-check actually ran", () => {
+    // A skip nobody sees is a green run pretending to be coverage.
+    expect(have, "node_modules present so the selector cross-check ran").toBe(true);
+  });
+});
+
+describe("the bridging header is how the ObjC pods reach Swift", () => {
+  const BLANK = `//
+// Use this file to import your target's public headers that you would like to expose to Swift.
+//
+`;
+
+  it("adds both pod headers", () => {
+    const out = injectBridgingHeader(BLANK);
+    expect(out).toContain("#import <RNVoipPushNotification/RNVoipPushNotificationManager.h>");
+    expect(out).toContain("#import <RNCallKeep/RNCallKeep.h>");
+  });
+
+  it("names the DIRECTORY and the FILE separately, because they differ", () => {
+    // The pod is RNVoipPushNotification; the header inside it is
+    // RNVoipPushNotificationManager.h. Collapsing the two fails with "file not
+    // found" and nothing that names the cause.
+    const out = injectBridgingHeader(BLANK);
+    expect(out).not.toContain("<RNVoipPushNotification/RNVoipPushNotification.h>");
+    expect(out).not.toContain("<RNVoipPushNotificationManager/");
+  });
+
+  it("APPENDS rather than overwriting, so plugins can coexist", () => {
+    // A whole-file write destroys whatever another plugin put there. This one used
+    // to do exactly that.
+    const other = BLANK + '\n#import "SomeOtherPlugin.h"\n';
+    const out = injectBridgingHeader(other);
+    expect(out).toContain('#import "SomeOtherPlugin.h"');
+    expect(out).toContain("Use this file to import your target's public headers");
+  });
+
+  it("is IDEMPOTENT — a second prebuild does not import twice", () => {
+    const once = injectBridgingHeader(BLANK);
+    expect(injectBridgingHeader(once)).toBe(once);
+    expect(once.split("#import <RNCallKeep/RNCallKeep.h>").length - 1).toBe(1);
+  });
+
+  it("works from nothing, so a template that stops emitting one still builds", () => {
+    const out = injectBridgingHeader("");
+    expect(out).toContain("#import <RNCallKeep/RNCallKeep.h>");
+    expect(out.startsWith(H_MARKER)).toBe(true);
+  });
+
+  it("marks its own work with a C comment, since the file is C", () => {
+    expect(H_MARKER.startsWith("/*")).toBe(true);
+    expect(injectBridgingHeader(BLANK)).toContain(H_MARKER);
+  });
+
+  it("DERIVES the filename from the project, never hardcodes RELAY-", () => {
+    /* The template emits `<Project>-Bridging-Header.h` and points
+       SWIFT_OBJC_BRIDGING_HEADER at it. A hardcoded `RELAY-Bridging-Header.h` agrees
+       only while the app is called RELAY, and leaves an orphaned header the day it
+       is renamed. */
+    expect(bridgingHeaderPath("/x/ios", "RELAY")).toBe("/x/ios/RELAY/RELAY-Bridging-Header.h");
+    expect(bridgingHeaderPath("/x/ios", "Other")).toBe("/x/ios/Other/Other-Bridging-Header.h");
+    const src = fs.readFileSync(path.join(__dirname, "..", "plugins", "with-ios-voip.js"), "utf8");
+    expect(src).not.toMatch(/"RELAY-Bridging-Header\.h"/);
+    expect(src).not.toMatch(/\$\{projectName\}\/RELAY-Bridging-Header/);
+  });
+});
+
 describe("the transform against a REAL prebuilt AppDelegate", () => {
   const ROOT = path.resolve(__dirname, "..");
   const dir = path.join(ROOT, "ios");
