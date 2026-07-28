@@ -11239,6 +11239,78 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.18 — a MINIMISED app now rings (2026-07-28)
+
+- [x] **THE OWNER'S ASK, verbatim**: *"if someone calling and I'm in away or idle (minimize the front app in
+      Android, iOS, or desktop), it will ring add a notification, and pop up."*
+- [x] **THIS IS THE FOURTH READER OF A RULE THAT HAS EXISTED SINCE v2.99.92, and naming that is the whole
+      diagnosis.** That release established that minimising is **IDLE, not offline** — `markIdle`
+      deliberately keeps `isOnline` TRUE, because the SSE stream is still open and a call still routes —
+      and it added `presenceNeedsNotification` (`!isOnline || idle`) for exactly the question *"can they
+      see this in the open app, or must the OS tell them?"*. **Its three readers are all in the MESSAGE
+      path.** The CALL path never learned it.
+- [x] **SO A CALL TO A MINIMISED CALLEE TOOK THE LIVE BRANCH AND SENT NO PUSH.** `targetReachable` is
+      decided by the registry and the socket — it knows nothing about presence — so an idle-but-connected
+      callee is rung LIVE: an SSE ring plus the `call_offer` hint. That is enough for a visible tab and
+      nothing like enough for a backgrounded one: **a hidden tab has its EventSource throttled and its
+      AudioContext suspended, and a backgrounded WebView on Android or iOS has its JS frozen outright**,
+      so `playCallRing()` never sounds and the page-level Notification is never raised. The phone stayed
+      silent while the server believed it had rung.
+- [x] **THE FIX IS THAT `onInvite` NOW ALSO PUSHES, GATED ON THE SHARED RULE — and the elegant part is
+      that nothing downstream needed building.** `sw.js` already renders a `kind:"incoming-call"` push as
+      a `requireInteraction` notification with sound and vibration and focuses the app on tap, whereupon
+      `deliverPendingRing` hands over the real ring and the in-page card pops; the Android shell already
+      turns it into a full-screen intent; the iOS shell already turns an `apns-voip` token into the
+      CallKit screen. **The call path simply never asked.** So the owner's three platforms — Android, iOS
+      and desktop — are all covered by the same server-side change.
+- [x] **A VISIBLE CALLEE IS DELIBERATELY NOT PUSHED.** They are looking at the app, the SSE ring is
+      already sounding, and an OS notification on top of it is noise. `presenceNeedsNotification` is what
+      draws that line, and REUSING it rather than re-deriving `!isOnline || idle` locally is what keeps
+      the call path and the message path agreeing about what "away" means — two copies is how they come
+      to disagree. A mutation that re-derives it is caught.
+- [x] **IT FAILS TOWARD RINGING**: the helper returns true for a null presence row, so an unknown or
+      unreadable presence still rings. A spurious notification costs a moment's noise; a missed one costs
+      the call.
+- [x] **ONE FUNNEL, AND ONE TAG.** The push goes through `sendPushToIdentity`, where the user's own master
+      push switch is enforced (v2.99.40) and where every transport fans out — a parallel ring sender would
+      bypass that switch however well-intentioned, and a test forbids naming `sendVoipRing`/`sendFcmData`/
+      `sendExpoPush`/`webpush.sendNotification` directly. It reuses the paged ring's `relay-call` tag, so
+      when BOTH hooks fire for one call (idle now, offline a moment later) the second REPLACES the first
+      rather than stacking two "X is calling" notifications for the same call.
+- [x] **`InviteHook` GAINS AN OPTIONAL `video`**, because a CallKit / full-screen-intent screen renders a
+      video call differently. OPTIONAL deliberately: an omitted value reads as VOICE, which is the
+      recoverable direction — a voice ring for a video dial under-promises, while claiming video for a
+      voice dial would light up a camera nobody offered.
+- [x] **THE HOOK STAYS NOTIFICATION-ONLY AND CANNOT BREAK CALL SETUP**: it records no miss, writes no call
+      state, touches no `pendingRings`, both awaits carry their own `.catch`, and the whole body is inside
+      the pre-existing try — so a push failure can never surface as a failed dial. Pinned.
+- [x] **THE E4 BLOCK GUARD WENT RED, WHICH IS IT WORKING — AND BOTH OF ITS PINS WERE MY OWN ANCHORS
+      BREAKING RATHER THAN THE PROPERTY.** E4 (v2.98.6) exists because a blocked caller must not be able
+      to pop the callee's ring, and a push is the loudest possible form of that. The gate was and remains
+      ahead of both senders (measured: gate@900, hint@979, push@4008). What broke was how the test found
+      the code: the hooks are ANONYMOUS positional arrows passed to `attachRelay`, so there is no
+      `onPageCallee:` identifier and both pins anchored on COMMENT TEXT. Rewording the onInvite comment
+      collapsed one slice to `""`; and **my new comment mentioning `onPageCallee` moved the other
+      anchor backwards** so the window spanned two hooks and compared one hook's gate against the other
+      hook's send — **the prose-anchor trap, for the fifteenth time in this repo.** Both are rewritten to
+      split on `async (info) => {`, which no comment can move, with each region then identified by its own
+      unique CODE; the onPageCallee slice is also BOUNDED by the hook boundary rather than running to
+      end-of-file. The onInvite pin is now strictly STRONGER: it asserts the gate precedes BOTH senders,
+      because this release is what added the second one.
+- [x] `server/idleCallRing.test.ts` (17). **All 9 tripwires verified by MUTATION** from byte-exact
+      backups, with the mutator aborting unless its target occurs exactly once; both sources
+      byte-identical afterwards.
+- [x] **ONE SURVIVOR, AND IT WAS A REAL GAP IN MY OWN TEST — the pin-the-location-not-the-property class
+      again.** "The SSE hint is sent regardless" compared INDEXES (`hint < gate`), and
+      `if (false) publishToIdentity(...)` satisfies that untouched: the pin froze the call's LOCATION while
+      saying nothing about whether it still runs. It now asserts the call is a BARE STATEMENT, and bites.
+- [x] **NOT VERIFIED ON A DEVICE, said plainly.** The routing premise is pinned against the real relay and
+      the rule is tested behaviourally, but the hook's own body needs MySQL (a presence read and a
+      push-subscription lookup) and there is none here — so nobody has minimised an app, been called, and
+      watched it ring. What IS now true is that the call path asks the same question about "away" that the
+      message path has asked since v2.99.92.
+- [x] One additive optional hook field, no schema change, no new dependency, no new env var. 3684 tests.
+
 ## v2.105.17 — five config readers that reported READY for a value they could not use (2026-07-28)
 
 - [x] **THE DEFECT WAS MINE, FROM FOUR HOURS EARLIER, AND THE OWNER'S OWN DEPLOY IS WHAT EXPOSED IT.**

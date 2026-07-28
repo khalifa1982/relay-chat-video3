@@ -20,6 +20,10 @@ import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpir
   claimMissedCallEmail,
   releaseMissedCallEmailClaim,
   MISSED_CALL_EMAIL_COOLDOWN_MS,
+  // v2.105.18: the call path becomes the fourth reader of the v2.99.92 idle rule,
+  // so a MINIMISED app is rung at the OS level rather than only over SSE.
+  getPresenceForIds,
+  presenceNeedsNotification,
 } from "../v2db";
 import { reapExpiredGuests } from "../purgeIdentity";
 import { sendPushToIdentity } from "../webPush";
@@ -221,7 +225,8 @@ async function startServer() {
   attachRelay(
     app,
     async (info) => {
-      // onInvite: desktop-notify the callee on their other tabs.
+      // onInvite: alert the callee on their other tabs AND — when their app is
+      // MINIMISED — at the OS level.
       try {
         const callee = await getIdentityByNumber(info.toPin);
         if (!callee) return;
@@ -230,6 +235,10 @@ async function startServer() {
         // client-only (auto-decline after the ring) + only on messages.send;
         // suppress the notification server-side too. (Notification-only hooks —
         // this doesn't touch the synchronous call-routing state machine.)
+        //
+        // THE GATE STAYS AHEAD OF THE PUSH ADDED BELOW. E4 (v2.98.6) exists
+        // precisely because a blocked caller could otherwise fire the callee's
+        // full-screen ring, and a push is the loudest possible form of that.
         if (await isNumberBlockedBy(callee.id, info.fromPin).catch(() => false)) return;
         publishToIdentity(callee.id, {
           kind: "call_offer",
@@ -237,6 +246,66 @@ async function startServer() {
           fromName: info.fromName,
           roomId: info.roomId,
         });
+        /* ── A MINIMISED APP NOW RINGS (v2.105.18) ─────────────────────────────
+         * THE GAP THIS CLOSES, and it is the FOURTH reader of a rule that has
+         * existed since v2.99.92. That release established that minimising is
+         * IDLE, not offline — `markIdle` deliberately keeps `isOnline` TRUE
+         * because the SSE stream is still open — and it added
+         * `presenceNeedsNotification` (`!isOnline || idle`) for exactly the
+         * question "can they see this in the open app, or must the OS tell them".
+         * Its three readers are all in the MESSAGE path. The CALL path never
+         * learned it.
+         *
+         * So a call to a minimised callee took the LIVE branch: an SSE ring plus
+         * this `call_offer` hint, and NO push. That is enough for a visible tab
+         * and nothing like enough for a backgrounded one — a hidden tab has its
+         * EventSource throttled and its AudioContext suspended, and a
+         * backgrounded WebView on Android or iOS has its JS frozen outright, so
+         * `playCallRing()` never sounds and the page-level Notification is never
+         * raised. The phone stays silent while the server believes it rang.
+         *
+         * The push is what survives that, and every transport behind it already
+         * exists: `sw.js` renders a `requireInteraction` call notification with
+         * sound and vibration and focuses the app on tap (whereupon
+         * `deliverPendingRing` hands over the real ring and the in-page card
+         * pops), the Android shell turns it into a full-screen intent, and the
+         * iOS shell turns an `apns-voip` token into the CallKit screen. Nothing
+         * downstream needed building — the call path simply never asked.
+         *
+         * A VISIBLE callee is deliberately NOT pushed: they are looking at the
+         * app, the SSE ring is already sounding, and an OS notification on top of
+         * it is noise. `presenceNeedsNotification` is what draws that line, and
+         * reusing it rather than re-deriving one keeps the call path and the
+         * message path agreeing about what "away" means.
+         *
+         * FAILS TOWARD RINGING: an unknown presence row reads as needing the
+         * notification (the helper returns true for null), because a spurious
+         * notification costs a moment's noise while a missed one costs the call.
+         */
+        const [pres] = await getPresenceForIds([callee.id]).catch(() => []);
+        if (!presenceNeedsNotification(pres)) return;
+        // ONE FUNNEL, deliberately — the same one `onPageCallee` uses, because
+        // that is where the user's own master push switch is enforced (v2.99.40)
+        // and where every transport fans out. A parallel ring sender would
+        // bypass that switch however well-intentioned.
+        await sendPushToIdentity(callee.id, {
+          kind: "incoming-call",
+          title: `${info.fromName || "Someone"} is calling`,
+          body: "Tap to answer on RELAY",
+          // The SAME tag the paged ring uses, so the two can never stack two
+          // notifications for one call: whichever arrives second replaces the
+          // first.
+          tag: "relay-call",
+          url: "/app/dialer",
+          call: {
+            callerName: info.fromName || "Someone",
+            callerPin: info.fromPin,
+            // The room the callee must join to answer. A ring with no room is a
+            // phone that rings and then cannot connect.
+            roomId: info.roomId,
+            video: !!info.video,
+          },
+        }).catch(() => 0);
       } catch {
         /* swallow — the call still completes via the relay channel */
       }
