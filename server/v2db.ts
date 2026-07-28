@@ -3268,6 +3268,7 @@ export type GroupCapability =
   /** Unconditional for members, forever (see MEMBER_CAPABILITIES below). */
   | "edit-profile"
   | "post-story"
+  | "start-call"
   /** Requires a stored admin or the derived creator, with NO fallback. */
   | "delete-any-message"
   | "manage-roles";
@@ -3283,7 +3284,7 @@ export type GroupCapability =
  * is a decision; adding one anywhere else makes it admin-only by default, which is
  * the safe direction to be wrong in.
  */
-const MEMBER_CAPABILITIES = new Set<GroupCapability>(["edit-profile", "post-story"]);
+const MEMBER_CAPABILITIES = new Set<GroupCapability>(["edit-profile", "post-story", "start-call"]);
 
 export type GroupPermission =
   | { ok: true; isAdmin: boolean; isCreator: boolean; hasAdmin: boolean }

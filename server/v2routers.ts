@@ -2006,7 +2006,12 @@ export const v2MessagesRouter = router({
       // the not-found refusal and the fail-closed `unavailable` behaviour are not
       // a second copy. A conversation id is a small sequential integer, so without
       // this anybody could name any group and learn its admin set.
-      const gate = await checkGroupPermission(input.conversationId, me.id, "post-story");
+      /* `start-call`, not `post-story`: the capability's NAME has to say what is being
+         checked, or a later reader cannot tell whether restricting stories would also
+         restrict calling. Both are unconditional for members today, so this changes no
+         behaviour — it makes the two separately restrictable, which is the point of
+         having names at all. */
+      const gate = await checkGroupPermission(input.conversationId, me.id, "start-call");
       if (!gate.ok) {
         const message =
           gate.reason === "not-a-group"

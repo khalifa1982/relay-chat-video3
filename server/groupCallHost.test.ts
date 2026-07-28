@@ -393,6 +393,12 @@ describe("#113 — the procedure resolves what the client must not assert", () =
     const rolesAt = proc.indexOf("getGroupRoles(");
     expect(gateAt).toBeGreaterThan(-1);
     expect(rolesAt).toBeGreaterThan(gateAt);
+    // …and it checks the capability whose NAME says what is being checked. Both
+    // `start-call` and `post-story` are unconditional for members, so borrowing the
+    // story capability would behave identically today and lie about what the gate is
+    // for — a later reader could not tell whether restricting stories also
+    // restricted calling.
+    expect(proc).toMatch(/checkGroupPermission\(input\.conversationId, me\.id, "start-call"\)/);
     // The refusal is real, reached before the role read, and throws.
     expect(proc).toMatch(/if \(!gate\.ok\) \{/);
     const refusalAt = proc.indexOf("if (!gate.ok) {");

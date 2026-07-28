@@ -75,7 +75,7 @@ describe("v2.104.0 — ONE predicate, and no fallback that grants power", () => 
       V2DB.indexOf("export type GroupPermission ="),
     );
     expect(decl.length).toBeGreaterThan(40);
-    for (const cap of ["edit-profile", "post-story", "delete-any-message", "manage-roles"]) {
+    for (const cap of ["edit-profile", "post-story", "start-call", "delete-any-message", "manage-roles"]) {
       expect(decl).toContain(`"${cap}"`);
     }
     // The member set names exactly the two unconditional ones. A capability added to
@@ -84,7 +84,7 @@ describe("v2.104.0 — ONE predicate, and no fallback that grants power", () => 
     const members = /const MEMBER_CAPABILITIES = new Set<GroupCapability>\(\[([^\]]*)\]\)/.exec(V2DB);
     expect(members).toBeTruthy();
     const listed = Array.from(members![1].matchAll(/"([a-z-]+)"/g)).map((m) => m[1]).sort();
-    expect(listed).toEqual(["edit-profile", "post-story"]);
+    expect(listed).toEqual(["edit-profile", "post-story", "start-call"]);
   });
 
   it("membership is established BEFORE any role or capability is considered", () => {

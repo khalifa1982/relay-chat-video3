@@ -11278,6 +11278,13 @@ stolen seed is useless to another number. Not a disclosure: the pins reach a mem
 could already read them (`conversationInfo` has returned every member's number alongside
 `isAdmin` since v2.104.0).
 
+### Calling gets its own capability name
+`start-call`, not a borrowed `post-story`. Both are unconditional for members, so the
+behaviour is identical today — which is exactly why the name matters: a later reader could
+not otherwise tell whether restricting stories would also restrict calling, and the
+member/admin set is the one place where being wrong about which side a capability sits on is
+a takeover rather than a nuisance.
+
 ### Promotion, and what it deliberately does not do
 It lives in `joinRoomMember` — the one funnel every route into a room passes through
 (accept, admit-after-knock, rejoin, merge) — so no path can forget it. ADDITIVE ONLY: it
