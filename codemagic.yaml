@@ -3,6 +3,13 @@ workflows:
     name: iOS Release Build
     max_build_duration: 120
     instance_type: mac_mini_m2
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: mobile-main
+          include: true
+          source: true
     integrations:
       app_store_connect: Codemagic CI
     environment:
@@ -14,9 +21,9 @@ workflows:
       vars:
         BUNDLE_ID: "com.app.relaymobile"
         APP_STORE_APP_ID: "6787503091"
-        APPLE_TEAM_ID: "BNHM5YKRWM"
+        APPLE_TEAM_ID: "QJBVFFML9P"
       node: 22
-      xcode: 16.2
+      xcode: latest
       cocoapods: default
     scripts:
       - name: Install dependencies
@@ -35,8 +42,14 @@ workflows:
       - name: Increment build number
         script: |
           cd ios
-          LATEST_BUILD_NUMBER=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APP_ID")
-          agvtool new-version -all $(($LATEST_BUILD_NUMBER + 1))
+          LATEST_BUILD_NUMBER=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APP_ID" 2>/dev/null || echo "0")
+          # Ensure we always increment past any previously uploaded version
+          if [ -z "$LATEST_BUILD_NUMBER" ] || [ "$LATEST_BUILD_NUMBER" -lt 10002 ]; then
+            LATEST_BUILD_NUMBER=10002
+          fi
+          NEW_BUILD_NUMBER=$(($LATEST_BUILD_NUMBER + 1))
+          echo "Setting build number to $NEW_BUILD_NUMBER (latest was $LATEST_BUILD_NUMBER)"
+          agvtool new-version -all $NEW_BUILD_NUMBER
       - name: Build ipa for distribution
         script: |
           cd ios
@@ -57,7 +70,15 @@ workflows:
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             CODE_SIGN_STYLE=Manual \
-            2>&1 | tee /tmp/xcodebuild_full.log | tail -100
+            2>&1 | tee /tmp/xcodebuild_full.log
+
+          ARCHIVE_EXIT=$?
+          if [ $ARCHIVE_EXIT -ne 0 ]; then
+            echo "=== ARCHIVE FAILED (exit $ARCHIVE_EXIT) ==="
+            echo "=== Last 200 lines of build log ==="
+            tail -200 /tmp/xcodebuild_full.log
+            exit $ARCHIVE_EXIT
+          fi
           
           # If archive succeeded, export IPA
           xcodebuild -exportArchive \
