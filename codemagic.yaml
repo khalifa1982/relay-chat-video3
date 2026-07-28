@@ -36,7 +36,10 @@ workflows:
         script: |
           cd ios
           LATEST_BUILD_NUMBER=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APP_ID")
-          agvtool new-version -all $(($LATEST_BUILD_NUMBER + 1))
+          FLOOR=10004
+          NEXT=$(($LATEST_BUILD_NUMBER + 1))
+          if [ $NEXT -le $FLOOR ]; then NEXT=$FLOOR; fi
+          agvtool new-version -all $NEXT
       - name: Build ipa for distribution
         script: |
           cd ios

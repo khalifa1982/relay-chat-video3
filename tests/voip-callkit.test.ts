@@ -50,10 +50,12 @@ public class AppDelegate: ExpoAppDelegate {
 describe("the config plugin injects PushKit into AppDelegate.swift", () => {
   const out = injectSwift(APP_DELEGATE);
 
-  it("adds the PushKit and CallKit imports", () => {
+  it("adds the PushKit import (ObjC modules come via bridging header)", () => {
     expect(out).toContain("import PushKit");
-    expect(out).toContain("import RNVoipPushNotification");
-    expect(out).toContain("import RNCallKeep");
+    // RNCallKeep and RNVoipPushNotification are pure Obj-C — they are exposed
+    // via the bridging header, NOT via Swift import statements.
+    expect(out).not.toContain("import RNCallKeep");
+    expect(out).not.toContain("import RNVoipPushNotification");
   });
 
   it("puts the imports AFTER the last existing one, never above it", () => {
