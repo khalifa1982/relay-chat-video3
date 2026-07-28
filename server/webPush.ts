@@ -202,16 +202,23 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
     await Promise.all(r.dead.map(t => deletePushSubscription(t).catch(() => {})));
   }
   subs = subs.filter(s => s.kind !== "expo");
-  // APNs VoIP (kind="apns", v2.105.12): the endpoint IS the APNs device token.
-  // This is the ONLY transport that makes a locked iPhone show the real
-  // full-screen CallKit call screen, and it is deliberately RING-ONLY: a VoIP
-  // push carries no `aps.alert`, so iOS delivers it to PushKit rather than to
-  // the notification centre — using it for a message would produce a
-  // notification nobody ever sees, and Apple terminates apps that send VoIP
-  // pushes without reporting a call. Everything else for an `apns` row is
-  // simply not deliverable, which is why v2.105.11 kept `apns` out of
-  // ROUTABLE_PUSH_KINDS so the offline-message EMAIL still goes out.
-  const apnsTokens = subs.filter(s => s.kind === "apns").map(s => s.endpoint);
+  // APNs VoIP (kind="apns-voip", v2.105.12; the kind narrowed in v2.105.13).
+  // The endpoint IS the PushKit token. This is the ONLY transport that makes a
+  // locked iPhone show the real full-screen CallKit call screen, and it is
+  // deliberately RING-ONLY: a VoIP push carries no `aps.alert`, so iOS delivers
+  // it to PushKit rather than the notification centre — using it for a message
+  // would produce a notification nobody ever sees, and Apple terminates apps
+  // that send VoIP pushes without reporting a call.
+  //
+  // IT MUST BE `apns-voip` AND NOT `apns`, and getting that wrong is destructive
+  // rather than merely ineffective: iOS issues TWO hex tokens per device — the
+  // PushKit one (topic `<bundle>.voip`) and the ordinary ALERT one (topic
+  // `<bundle>`). A VoIP push sent to an ALERT token earns `BadDeviceToken`,
+  // which this function then reads as stale and PRUNES — deleting the very row
+  // v2.105.11 chose to keep so the admin push doctor could report it. So a plain
+  // `apns` row stays inert and diagnosable, exactly as it was, and only a token
+  // the shell explicitly declared as PushKit is ever rung.
+  const apnsTokens = subs.filter(s => s.kind === "apns-voip").map(s => s.endpoint);
   let apnsDelivered = 0;
   if (apnsTokens.length > 0 && payload.kind === "incoming-call" && payload.call) {
     const r = await sendVoipRing(apnsTokens, payload.call);
@@ -221,7 +228,10 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
     // defect v2.105.11 fixed on the FCM path, where a 400 was read as stale.
     await Promise.all(r.invalidTokens.map(t => deletePushSubscription(t).catch(() => {})));
   }
-  subs = subs.filter(s => s.kind !== "apns");
+  // Both hex kinds leave the webpush list: `apns-voip` was just handled, and a
+  // plain `apns` alert token is not a Web Push subscription and must never be
+  // handed to the webpush sender.
+  subs = subs.filter(s => s.kind !== "apns-voip" && s.kind !== "apns");
   const nativeDelivered = fcmDelivered + expoDelivered + apnsDelivered;
   const cfg = vapidConfig();
   if (!cfg) return nativeDelivered;

@@ -11239,6 +11239,46 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.13 — a PushKit token is not an alert token (2026-07-28)
+
+- [x] **A DEFECT IN v2.105.12, FOUND WHILE BUILDING THE SHELL HALF, AND IT WAS DESTRUCTIVE.**
+      iOS issues TWO hex tokens per device: the PushKit one (topic `<bundle>.voip`, the only thing that
+      rings a locked phone) and the ordinary ALERT one (topic `<bundle>`). v2.105.12 sent VoIP pushes
+      to every `apns` row — so an ALERT token would get a VoIP push, earn `BadDeviceToken`, and be
+      **PRUNED**, deleting exactly the diagnostic rows v2.105.11 deliberately kept so the admin push
+      doctor could report them. Not merely ineffective: it destroys the registration.
+- [x] **THE ONE PLACE THE SHAPE CANNOT DECIDE, and saying so is the whole design.** Both tokens are
+      pure hex of the same length, so `classifyNativeToken` physically cannot tell them apart — the
+      client's declaration is the only available signal. `isVoipDeclaration` is therefore the single
+      kind a client is TRUSTED to assert, and it is safe for a narrow reason: a shell that mislabels
+      its own token breaks only its own delivery. There is nothing to gain and no other user to
+      affect. Everywhere else the shape still overrides the label, and a declaration on a NON-hex
+      token is ignored so it can never relabel an Expo or FCM token onto a transport that cannot carry
+      it.
+- [x] **`apns-voip` IS RING-ONLY AND STILL NOT "REACHABLE".** A VoIP push carries no `aps.alert`, so
+      it can deliver a call and nothing else. It therefore stays out of `ROUTABLE_PUSH_KINDS` — an
+      iPhone that can only ring must still get the offline-message EMAIL, or it ends up with neither,
+      which is strictly worse than the bug v2.105.11 fixed.
+- [x] **A plain `apns` alert row stays inert and diagnosable**, exactly as v2.105.11 intended, and is
+      now also filtered out of the WEBPUSH sender — it is a bare device token, not a subscription with
+      keys.
+- [x] **Nine characters, so `varchar(10)` takes it with no migration** — and a new test DERIVES every
+      declared kind from the union and asserts each one fits, because MySQL would TRUNCATE rather than
+      refuse, leaving a row whose kind silently routes to the wrong transport.
+- [x] **The bridge dedup became a SET, not a slot.** An iOS shell now legitimately posts TWO tokens
+      (Expo for notifications, PushKit for ringing) which may alternate on every foreground; a
+      one-slot `last` would read each as changed and re-register both forever. Keyed on kind as well,
+      so a shell CORRECTING a mislabelled token is not swallowed.
+- [x] **TypeScript caught the widening at the storage layer the moment the kind grew**, which is the
+      guard working: a stored kind the sender cannot route must be a deliberate decision.
+- [x] **ONE PRE-EXISTING PIN FIXED FOR THE RIGHT REASON.** `nativeAndroid.test.ts`'s parity regex used
+      `"[a-z]+"`, which excludes a hyphen — so it read the kind union as EMPTY and failed for a reason
+      unrelated to parity. Widened to `[a-z-]`, which is worse to get wrong than it looks: an empty
+      read makes a parity guard vacuous rather than loud.
+- [x] `server/pushApnsAndMediaFloor.test.ts` → 18, plus new bridge cases; **all 10 tripwires verified
+      by MUTATION** from byte-exact backups off a confirmed-GREEN baseline, sources byte-identical
+      afterwards. No schema change, no new dependency. 3556 tests.
+
 ## v2.105.12 — ringing restored, gated on the push actually landing (2026-07-28)
 
 - [x] **The owner asked for the opposite of a decision they made in v2.99.11, and both hold.**

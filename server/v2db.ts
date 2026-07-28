@@ -6330,8 +6330,15 @@ export async function upsertPushSubscription(input: {
   /** v2.105.11: "apns" joins them as a RECOGNISED-BUT-UNROUTABLE kind. It is stored so
    *  the admin push doctor can say why an iPhone gets nothing, and it is excluded from
    *  `hasPushSubscription` so it cannot suppress the offline-message email. Nothing
-   *  sends to it — the fan-out filters on "fcm" / "expo" explicitly. */
-  kind?: "webpush" | "fcm" | "expo" | "apns";
+   *  sends to it — an ordinary APNs ALERT token has no transport here. */
+  /** v2.105.13: "apns-voip" is the PushKit token, and it is a DIFFERENT token from
+   *  "apns" even though both are hex — which is exactly why the client is trusted to
+   *  declare it (see `isVoipDeclaration`). It is RING-ONLY: a VoIP push carries no
+   *  `aps.alert`, so it can deliver a call and nothing else. It therefore stays out of
+   *  `ROUTABLE_PUSH_KINDS` too, or an iPhone with one would be counted as reachable and
+   *  lose the offline-message EMAIL as well — strictly worse than having neither path.
+   *  Nine characters, so the varchar(10) column takes it with no migration. */
+  kind?: "webpush" | "fcm" | "expo" | "apns" | "apns-voip";
   /** sha256 of the browser's push claim, when it has one (v2.99.49). */
   claimHash?: string | null;
 }): Promise<{ owned: boolean }> {

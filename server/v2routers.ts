@@ -144,7 +144,7 @@ import { sendEmail, emailEnabled, wrapEmailDocument } from "./email";
 import { appBaseUrl } from "./appUrl";
 import { unsubscribeHeaders, unsubscribeLink } from "./unsubscribe";
 import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
-import { classifyNativeToken, type NativeTokenKind } from "./expoPush";
+import { classifyNativeToken, isVoipDeclaration, type NativeTokenKind } from "./expoPush";
 import { fcmConfig } from "./fcm";
 import { apnsVoipConfigured } from "./apnsVoip";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
@@ -3851,7 +3851,12 @@ export const v2PushRouter = router({
           // "apns" is accepted as a LABEL (v2.105.11) so an iOS shell can say what it
           // has — but it is only ever a hint: `classifyNativeToken` below re-derives the
           // kind from the token's SHAPE, so a client gains nothing by lying here.
-          kind: z.enum(["webpush", "fcm", "expo", "apns"]).optional(),
+          //
+          // "apns-voip" (v2.105.13) is the ONE exception, because the shape cannot
+          // carry it: a PushKit VoIP token and an ordinary APNs alert token are both
+          // pure hex of the same length. See `isVoipDeclaration` for why trusting it
+          // here is safe — a shell that mislabels breaks only its own delivery.
+          kind: z.enum(["webpush", "fcm", "expo", "apns", "apns-voip"]).optional(),
           /** Proof-of-possession secret (v2.99.49): a per-browser value the
            *  client keeps in localStorage. Optional — an old client, or one with
            *  storage disabled, simply doesn't send it and falls back to the
@@ -3883,7 +3888,11 @@ export const v2PushRouter = router({
         if (!actual) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Unrecognised push token." });
         }
-        kind = actual;
+        // The shape wins — EXCEPT for the one distinction it cannot express. A
+        // PushKit VoIP token and an APNs alert token are both pure hex, so the
+        // client's declaration is the only available signal, and misdeclaring it
+        // costs the declarer their own ring and nobody else anything.
+        kind = isVoipDeclaration(input.kind, actual) ? "apns-voip" : actual;
       }
       // SECURITY (S8): a webpush endpoint is a URL the server later connects to;
       // reject anything that isn't https on a known push service so it can't be

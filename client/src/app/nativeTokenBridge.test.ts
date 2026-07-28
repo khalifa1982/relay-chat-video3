@@ -22,6 +22,7 @@ import {
   acceptTokenMessage,
   looksLikePushToken,
   tokenKind,
+  resolveKind,
   mountNativeTokenBridge,
 } from "./nativeTokenBridge";
 import { classifyNativeToken } from "../../../server/expoPush";
@@ -38,17 +39,53 @@ const msg = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+/**
+ * Mount the real bridge against a fake window and drive it.
+ *
+ * This env is Node with no DOM, and the bridge reads `window.location.origin`
+ * and installs a real listener — so the only honest way to exercise the dedup is
+ * to stand in a window it accepts and post through the listener it registered.
+ * The global is always restored, so one test cannot leak into the next.
+ */
+function withFakeWindow(
+  body: (post: (data: unknown) => void, register: ReturnType<typeof vi.fn>) => void,
+) {
+  const listeners: Array<(e: MessageEvent) => void> = [];
+  const g = globalThis as unknown as { window?: unknown };
+  const prev = g.window;
+  const fakeWin = {
+    location: { origin: SELF },
+    addEventListener: (_t: string, fn: (e: MessageEvent) => void) => listeners.push(fn),
+    removeEventListener: () => {},
+    postMessage: () => {},
+  };
+  g.window = fakeWin;
+  try {
+    const register = vi.fn();
+    const off = mountNativeTokenBridge(register);
+    const post = (data: unknown) =>
+      listeners.forEach((fn) =>
+        fn({ origin: SELF, source: fakeWin, data: JSON.stringify(data) } as unknown as MessageEvent),
+      );
+    body(post, register);
+    off();
+  } finally {
+    if (prev === undefined) delete g.window;
+    else g.window = prev;
+  }
+}
+
 describe("the gates — which messages are REFUSED", () => {
   it("accepts a same-origin post from our own window", () => {
-    expect(acceptTokenMessage(msg(), SELF, WIN)).toBe(EXPO);
+    expect(acceptTokenMessage(msg(), SELF, WIN)?.token).toBe(EXPO);
   });
 
   it("accepts the native-injection shape: empty or 'null' origin, no source", () => {
     // An injected-JS post from a WebView has no separate window, and on iOS the
     // origin is reported empty. Refusing these would refuse the only case this
     // module exists for.
-    expect(acceptTokenMessage(msg({ origin: "", source: undefined }), SELF, WIN)).toBe(EXPO);
-    expect(acceptTokenMessage(msg({ origin: "null", source: null }), SELF, WIN)).toBe(EXPO);
+    expect(acceptTokenMessage(msg({ origin: "", source: undefined }), SELF, WIN)?.token).toBe(EXPO);
+    expect(acceptTokenMessage(msg({ origin: "null", source: null }), SELF, WIN)?.token).toBe(EXPO);
   });
 
   it("REFUSES a cross-origin post — the gate that does the actual work", () => {
@@ -93,9 +130,70 @@ describe("the gates — which messages are REFUSED", () => {
     }
   });
 
+  it("carries the shell's apns-voip declaration through, and nothing else", () => {
+    // v2.105.13. iOS issues TWO hex tokens — PushKit (rings via CallKit) and the
+    // ordinary alert token — and they are indistinguishable by shape, so this
+    // label is the only signal. Everything else stays shape-decided.
+    const voip = { type: "SET_PUSH_TOKEN", token: "b".repeat(64), kind: "apns-voip" };
+    expect(acceptTokenMessage(msg({ data: voip }), SELF, WIN)).toEqual({
+      token: "b".repeat(64),
+      voip: true,
+    });
+    // No declaration ⇒ not voip. An alert token must never be rung by default,
+    // because a VoIP push to it earns BadDeviceToken and gets the row PRUNED.
+    expect(acceptTokenMessage(msg({ data: { ...voip, kind: undefined } }), SELF, WIN)?.voip).toBe(false);
+    for (const kind of ["apns", "expo", "fcm", "webpush", "VOIP", 1, {}, null]) {
+      expect(
+        acceptTokenMessage(msg({ data: { ...voip, kind } }), SELF, WIN)?.voip,
+        `${String(kind)} is not a voip declaration`,
+      ).toBe(false);
+    }
+  });
+
+  it("resolveKind applies the declaration ONLY to a hex token", () => {
+    // A declaration on an Expo or FCM token must not relabel it — that would route
+    // it to a transport that cannot carry it, which is a silent delivery failure.
+    expect(resolveKind("b".repeat(64), true)).toBe("apns-voip");
+    expect(resolveKind("b".repeat(64), false)).toBe("apns");
+    expect(resolveKind(EXPO, true)).toBe("expo");
+    expect(resolveKind(FCM, true)).toBe("fcm");
+    expect(resolveKind("nope", true)).toBeNull();
+  });
+
+  it("registers BOTH of an iPhone's tokens, and each only once", () => {
+    // An iOS shell now legitimately posts two tokens: Expo for notifications and
+    // PushKit for ringing. A one-slot dedup would treat the alternation as a
+    // change and re-register both on every foreground, forever.
+    const VOIP = "c".repeat(64);
+    withFakeWindow((post, register) => {
+      for (let i = 0; i < 3; i++) {
+        post({ type: "SET_PUSH_TOKEN", token: EXPO });
+        post({ type: "SET_PUSH_TOKEN", token: VOIP, kind: "apns-voip" });
+      }
+      expect(register.mock.calls).toEqual([
+        [EXPO, "expo"],
+        [VOIP, "apns-voip"],
+      ]);
+    });
+  });
+
+  it("a token re-posted with a CORRECTED kind is not swallowed by the dedup", () => {
+    // A shell that first posted its PushKit token unlabelled and then fixed the
+    // label must be able to upgrade it, or the ring stays broken until reinstall.
+    const T = "d".repeat(64);
+    withFakeWindow((post, register) => {
+      post({ type: "SET_PUSH_TOKEN", token: T });
+      post({ type: "SET_PUSH_TOKEN", token: T, kind: "apns-voip" });
+      expect(register.mock.calls).toEqual([
+        [T, "apns"],
+        [T, "apns-voip"],
+      ]);
+    });
+  });
+
   it("accepts an already-parsed object, since not every shell stringifies", () => {
     expect(
-      acceptTokenMessage(msg({ data: { type: "SET_PUSH_TOKEN", token: FCM } }), SELF, WIN)
+      acceptTokenMessage(msg({ data: { type: "SET_PUSH_TOKEN", token: FCM } }), SELF, WIN)?.token
     ).toBe(FCM);
   });
 

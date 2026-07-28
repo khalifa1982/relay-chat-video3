@@ -67,13 +67,25 @@ describe("server — FCM transport", () => {
     // unanchored match reads that one instead.
     const UPSERT = V2DB.slice(V2DB.indexOf("export async function upsertPushSubscription("));
     expect(UPSERT.length, "upsertPushSubscription still exists").toBeGreaterThan(200);
-    const dbKinds = /kind\?: ((?:"[a-z]+"(?: \| )?)+);/.exec(UPSERT)?.[1] ?? "";
+    // `[a-z-]`, not `[a-z]`: v2.105.13's "apns-voip" carries a hyphen, and a
+    // character class that excluded it made this read EMPTY — the guard failing
+    // for a reason unrelated to parity, which is worse than failing loudly.
+    const dbKinds = /kind\?: ((?:"[a-z-]+"(?: \| )?)+);/.exec(UPSERT)?.[1] ?? "";
     const enumKinds = /kind: z\.enum\(\[([^\]]+)\]\)\.optional\(\)/.exec(ROUTERS)?.[1] ?? "";
     expect(dbKinds, "v2db declares the kind union").not.toBe("");
     expect(enumKinds, "the router declares the kind enum").not.toBe("");
     for (const k of ["webpush", ...NATIVE_KINDS]) {
       expect(dbKinds, `v2db kind union covers ${k}`).toContain(`"${k}"`);
       expect(enumKinds, `router kind enum covers ${k}`).toContain(`"${k}"`);
+    }
+
+    // EVERY declared kind must FIT varchar(10) (v2.105.13). "apns-voip" is nine
+    // characters, so the column takes it with no migration — but the next one
+    // might not, and MySQL would TRUNCATE rather than refuse, leaving a row whose
+    // kind silently routes to the wrong transport (or to none). Derived from the
+    // declaration rather than hard-coded, so a new kind is checked automatically.
+    for (const m of dbKinds.matchAll(/"([a-z-]+)"/g)) {
+      expect(m[1].length, `"${m[1]}" fits the varchar(10) kind column`).toBeLessThanOrEqual(10);
     }
 
     // Keys are required for webpush only. Expressed as "not webpush ⇒ no keys
