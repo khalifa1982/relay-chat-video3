@@ -11239,6 +11239,105 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.2 — #44 done: live verification runs where the site is reachable (2026-07-28)
+- [x] **OWNER**, on the blocked list: *"you have to activate task 44 and make it work"*. #44 asked for live
+      verification of three things — Arabic sizing parity, offline-message email delivery, and the landing
+      dialer's name/online preview — and had sat blocked for six releases behind one sentence: this sandbox's
+      outbound network refuses `your-chat.io`.
+- [x] **THAT BLOCKER IS REAL, AND IT IS AN ENVIRONMENT POLICY RATHER THAN A REPO PROBLEM** — the agent proxy's
+      own status endpoint says so verbatim: `connect_rejected`, *"gateway answered 403 to CONNECT (policy
+      denial or upstream failure)"*, host `your-chat.io:443`. Nothing in this repository can change that, so
+      the check moves to two places that CAN reach the site.
+- [x] **RUNNING BOTH VANTAGE POINTS IS THE DESIGN, not thoroughness for its own sake**: the GitHub runner has
+      ordinary internet and therefore sees exactly what a visitor sees (DNS → ALB → app), while an app
+      INSTANCE probing `http://127.0.0.1:3000` sees only the application. A check that fails from one and
+      passes from the other **localises the fault to the edge** — a stale target, a listener rule, DNS,
+      CloudFront — and either value alone cannot tell those apart. Same reasoning as `turn-check.mjs`. The
+      summary NAMES which side failed instead of leaving it to be read out of the logs.
+- [x] **THE RENDER HALF IS VERIFIED BY IDENTITY, WHICH IS STRONGER THAN RE-MEASURING IN THE CLOUD.** Proving
+      "Arabic renders at the same size as English" by measurement needs a browser, and adding Playwright for
+      one manual workflow is a cost this repo has refused everywhere else (the SMTP client, the S3 signer, the
+      FCM sender, the GIF encoder and the STUN/TURN client are all hand-written for that reason). Instead the
+      live `/assets/*` are proven **byte-identical by sha256** to what this commit builds, so every
+      measurement already taken locally transfers to production by identity. If the bytes differ, the site is
+      not running this code and no cloud measurement of it would have meant anything.
+- [x] The build step's env is copied from `deploy.yml` and a test CROSS-CHECKS the two, because both values are
+      baked into the client bundle: a different build env yields different bytes and a different content hash,
+      so the comparison would report a mismatch on a deployment that is perfectly in sync — a false alarm on
+      the check that carries the most weight.
+- [x] **THE MAIL CHECK STOPS BEFORE `DATA`, and that is the point.** What actually broke in production
+      (v2.97.2) was SES sitting in its SANDBOX, refusing every recipient that was not a verified identity —
+      and an SMTP server decides that at `RCPT TO`, before one byte of body. So the default dialogue is
+      EHLO → STARTTLS → EHLO → AUTH → MAIL FROM → RCPT TO → RSET → QUIT: it answers "can this fleet deliver to
+      that person" exactly and sends them nothing. A health check that mails somebody every run is a health
+      check people switch off. `--send` is opt-in behind its own workflow input.
+- [x] It runs on an INSTANCE because the SMTP credentials exist only in `/home/relay/.env`; it resolves the
+      From address by the SAME precedence `server/smtp.ts` uses (a second rule there is how a check comes to
+      pass against a sender production never uses — on SES the wrong answer is an `AKIA…` key id the service
+      rejects); it requires STARTTLS exactly as the real mailer does; and it passes the server's own refusal
+      wording through UNTOUCHED, because that wording is what tells an operator which knob to turn.
+- [x] **IT DOES NOT REIMPLEMENT `sendEmail`** — a parallel sender could pass while production was broken, the
+      objection recorded against exactly that in v2.99.91. It verifies the TRANSPORT and the CREDENTIALS, the
+      half that can only fail in production; the message-building half stays unit-tested against the real
+      functions in `server/emailTemplates.test.ts`.
+- [x] **THE CHECKS ARE PROVEN TO BITE.** Nothing here can watch them work against the real site, so each is
+      pointed at a local server serving a deliberately broken response and must go red. A verification tool
+      that cannot fail is worse than none, because it reports health.
+- [x] **THREE DEFECTS IN MY OWN CHECKS, all found by running them against a HEALTHY site, and every one would
+      have been a false alarm on the exact thing being verified.** (1) **The prose trap, for the thirteenth
+      time**: the unsubstituted-`%VITE_*%` scan matched `client/index.html`'s own COMMENT explaining that a
+      static analytics tag used to leave that literal behind — text ABOUT a pattern satisfying a search FOR
+      it. Now scanned on markup with comments stripped, with a test pinning that the REAL file still contains
+      the string while the stripped form does not. (2) **The Arabic rules are not in the stylesheet at all** —
+      the landing CSS is a template literal inside the code-split `Home-*.js` chunk, which `index.html` never
+      references, so a `.css`-only search reported them missing from a perfectly good build; the chunk is now
+      discovered the way the browser discovers it, by name out of the bundle that imports it. (3) **A null
+      lookup read as a nameless user**: superjson wraps a null result as `{json: null}`, and `data?.json ?? data`
+      falls through on null to the WRAPPER — a truthy object — so a number that does not exist was reported as
+      a resolved user who is offline. That is the same false claim the landing page itself was fixed for in
+      v2.99.25, reintroduced inside the check written to detect it, and it made the check **PASS for the wrong
+      reason**; caught by reading the note rather than trusting the verdict.
+- [x] **A FOURTH DEFECT WOULD HAVE MADE THE TWO-VANTAGE-POINT DESIGN A LIE**: the result list was module state,
+      so the second run appended to the first and a reader looking a check up by name got the EDGE verdict
+      while believing it was the app's — precisely the comparison both probes exist for. Now per-call.
+- [x] **INJECTION PROVEN EMPIRICALLY, not asserted.** The free-text inputs reach a command string executed on
+      production EC2 — the class this file has been bitten by three times (SES_EMAIL/DOMAIN, then `region`,
+      then the recovery inputs) — so both get the established base64-on-runner / decode-on-instance treatment,
+      and the step's own construction was replayed with 8 hostile values (quote+semicolon, double-quote break,
+      `$( )`, backticks, `&&`, `|`, embedded quote, tab) against a stub `node`: **0/8 executed**, each value
+      arriving as ONE literal argument — and the harness was FIRST proven to have actually run the stub in all
+      8 cases, because a harness reporting safe because nothing happened is the v2.99.70 mistake.
+- [x] **THE ACTION IS READ-ONLY BY ASSERTION**: a test forbids every mutating AWS verb and pins that the only
+      SSM verbs are `send-command` and reading its result. A verification action that can change things is one
+      somebody will eventually be afraid to run.
+- [x] Every verdict is read from each script's own printed `LIVE_VERIFY_EXIT=` / `MAIL_VERIFY_EXIT=` marker
+      rather than the SSM status, because a wrapper or a pipeline can mask a non-zero exit (v2.99.46).
+- [x] `server/liveVerify.test.ts` (40) drives the real scripts against real spawned servers, including a fake
+      SMTP server that performs a genuine STARTTLS upgrade against a per-run certificate — handed to the
+      client as its CA so verification stays FULL-STRENGTH, where `rejectUnauthorized: false` would have
+      turned it off and made the test meaningless. `server/awsOps.test.ts` grows to 43.
+- [x] **ALL 32 TRIPWIRES VERIFIED BY MUTATION** from byte-exact backups off a confirmed-GREEN baseline, with
+      the mutator aborting unless its target occurs exactly once; sources confirmed byte-identical afterwards.
+- [x] **FOUR REAL WEAKNESSES IN MY OWN TESTS, each found by that run, each fixed then re-verified**: the byte
+      comparison — the check carrying the entire render-side argument — was **never actually exercised**,
+      because every case used an empty root so it always SKIPped and gutting it changed nothing; the
+      socket-close fix was masked by the fake server's own teardown; the "port does not offer STARTTLS" branch
+      was untested because the only STARTTLS case exercised the *refusal* branch one check later, and those
+      two need different messages because they need different fixes; and **the unbounded-slice fragility bit
+      again** — the workflow window ran to end-of-file, so a mutation DELETING the number shape-check survived
+      on `recover-identity`'s identical check 200 lines later. Now bounded, with the window asserted non-empty.
+- [x] **TWO BAD MUTATIONS OF MY OWN, reported rather than counted as results**: a module-level array that the
+      surviving local declaration simply shadowed, and a mail-check line inserted after `IID=` — still inside
+      the in-fleet branch, so it never created the runner-side bug the test guards.
+- [x] One coarse pin of my own was NARROWED rather than relaxed: it forbade `$VEMAIL` anywhere in a region that
+      legitimately contains `if [ -n "$VEMAIL" ]`, a presence test that interpolates nothing, so it now reads
+      the assignments that actually build the command string.
+- [x] **SAID PLAINLY — WHAT THIS STILL DOES NOT DO**: nobody has looked at the Arabic page on a phone, and no
+      mail has been delivered to an inbox unless the owner runs it with `verify_email_send`. What is proven is
+      that production serves these exact bytes and that the fleet's credentials are accepted for a given
+      recipient.
+- [x] One optional env var (`SMTP_TLS_CA`), no schema change, no new dependency, no server change. 3309 tests.
+
 ## v2.105.1 — registration rejected any one-word name (owner report) (2026-07-28)
 - [x] REPORTED FROM PRODUCTION with the exact payload, which made the diagnosis immediate:
       `[{"code":"too_small","minimum":1,"path":["lastName"],"message":"Too small: expected string to

@@ -12,6 +12,15 @@
 #                group (instance A only), and the /api/relay/* listener rule
 #                that pins ALL signaling to that one node (the in-memory relay
 #                registry is single-process — see docs-aws-scale-out.md).
+#   live-verify — read-only proof that the LIVE site is serving THIS commit and
+#                that the things #44 asked about actually work in production. Runs
+#                the same script from TWO vantage points and prints both: the
+#                runner (a real visitor's view, through DNS -> ALB -> app) and an
+#                app instance against 127.0.0.1 (the app alone). A check that
+#                fails from one and passes from the other localises the fault to
+#                the edge; one value alone cannot. Optionally proves mail delivery
+#                to an address (verify_email), which must run on an instance
+#                because that is where the SMTP credentials are.
 #   ses        — email delivery ops (v2.97.1: OTP emails only reached verified
 #                addresses = the SES SANDBOX signature). Prints account status
 #                (production access? quota? suppression for ses_email), and:
@@ -67,7 +76,7 @@ on:
         type: choice
         required: true
         default: verify
-        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix, recover-identity, admin-tool]
+        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix, recover-identity, admin-tool, live-verify]
       admin_op:
         description: "admin-tool only: which operation to run"
         type: choice
@@ -106,6 +115,21 @@ on:
         default: ""
       recover_apply:
         description: "recover-identity only: actually WRITE the change. Off = dry run, which is what you should run first."
+        type: boolean
+        required: false
+        default: false
+      verify_number:
+        description: "live-verify only: a real 6-digit RELAY number to resolve through the public directory, so the landing dialer's own preview query is exercised against live data (optional)"
+        type: string
+        required: false
+        default: ""
+      verify_email:
+        description: "live-verify only: an address to prove the FLEET can deliver mail to. Stops before DATA — no mail is sent — unless verify_email_send is also on."
+        type: string
+        required: false
+        default: ""
+      verify_email_send:
+        description: "live-verify only: actually SEND a test message to verify_email (a human then reads it). Off = probe the recipient without sending."
         type: boolean
         required: false
         default: false
@@ -1040,6 +1064,139 @@ jobs:
           [ -n "$FINAL" ] || { echo "::error::no instances ran the command — check the relay-app tag + SSM agent"; exit 1; }
           case "$FINAL" in *Failed*|*TimedOut*|*Cancelled*) exit 1 ;; esac
           echo "env-set done — both servers restarted with the new value and passed their health check."
+
+      # ────────────────────────────────────────────────────────────────
+      - name: live-verify (checkout + build) — the byte comparison needs THIS
+          commit's own assets to compare production against
+        if: inputs.action == 'live-verify'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - if: inputs.action == 'live-verify'
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - if: inputs.action == 'live-verify'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: 22, cache: pnpm }
+      - if: inputs.action == 'live-verify'
+        run: pnpm install --frozen-lockfile
+      - if: inputs.action == 'live-verify'
+        run: pnpm run build
+        env:
+          # IDENTICAL to deploy.yml's build env, and that is load-bearing rather
+          # than tidy: both values are baked into the client bundle, so building
+          # with different ones produces different bytes and a different content
+          # hash — the comparison would then report a mismatch on a deployment
+          # that is perfectly in sync. If deploy.yml's build env changes, this
+          # must change with it.
+          VITE_FRONTEND_FORGE_API_URL: https://forge.manus.ai
+          VITE_APP_ID: LDUyWQ6Lzxde96UDvwdvU2
+
+      - name: live-verify — prove the live site is serving THIS commit, from a
+          visitor's vantage point and then from inside the fleet
+        if: inputs.action == 'live-verify'
+        env:
+          VNUM: ${{ inputs.verify_number }}
+          VEMAIL: ${{ inputs.verify_email }}
+          VSEND: ${{ inputs.verify_email_send }}
+        run: |
+          set -uo pipefail
+          echo "=================================================================="
+          echo "LIVE VERIFY — https://$DOMAIN"
+          echo "=================================================================="
+          # PART 1, FROM THE RUNNER. This is the vantage point that matters most:
+          # ordinary internet, so it traverses DNS -> ALB -> app exactly as a
+          # visitor does. It is also the only place the byte comparison can run,
+          # because it is the only place that has this commit's build.
+          NUMARG=""
+          if [ -n "$VNUM" ]; then
+            case "$VNUM" in
+              ''|*[!0-9]*) echo "::error::verify_number must be digits only."; exit 1 ;;
+            esac
+            [ "${#VNUM}" -eq 6 ] || { echo "::error::verify_number must be exactly 6 digits."; exit 1; }
+            NUMARG="--number $VNUM"
+          fi
+          set +e
+          node scripts/live-verify.mjs --base "https://$DOMAIN" $NUMARG
+          EDGE=$?
+          set -e
+          echo ""
+
+          # PART 2, FROM AN INSTANCE. Same script, against the app's own port, so
+          # a discrepancy between the two localises the fault: FAIL here and PASS
+          # there means the app; PASS here and FAIL there means the edge (a stale
+          # target, a listener rule, DNS, CloudFront). The byte comparison SKIPs
+          # there — the instance has no build of this tree — and a SKIP is
+          # reported as a skip rather than quietly counted as a pass.
+          IID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=relay-app" "Name=instance-state-name,Values=running" \
+            --query 'sort_by(Reservations[].Instances[],&LaunchTime)[0].InstanceId' \
+            --output text 2>/dev/null)
+          APP=0
+          MAIL=0
+          if [ -z "$IID" ] || [ "$IID" = "None" ]; then
+            echo "::warning::no running instance tagged Name=relay-app — skipping the in-fleet half."
+          else
+            echo "------------------- from inside the fleet ($IID) -------------------"
+            # SECURITY: verify_email is free text reaching a command string that
+            # runs on production EC2, the class this file has been bitten by
+            # three times (SES_EMAIL/DOMAIN, then `region`, then the recovery
+            # inputs). Same established treatment: base64 on the runner, decode
+            # only on the instance, so no quote or semicolon can break out of the
+            # remote shell. verify_number is shape-checked above AND encoded.
+            NUM_B64=$(printf %s "$VNUM" | base64 -w0)
+            EMAIL_B64=$(printf %s "$VEMAIL" | base64 -w0)
+            SENDFLAG=""
+            [ "$VSEND" = "true" ] && SENDFLAG=" --send"
+            CMD_APP="cd /home/relay/app 2>/dev/null || cd /home/relay; set -a; . /home/relay/.env 2>/dev/null; set +a;"
+            CMD_APP="$CMD_APP N=\$(echo $NUM_B64 | base64 -d);"
+            CMD_APP="$CMD_APP node scripts/live-verify.mjs --base http://127.0.0.1:\${PORT:-3000} \${N:+--number \$N};"
+            if [ -n "$VEMAIL" ]; then
+              # The mail check runs HERE and nowhere else: the SMTP credentials
+              # exist only in /home/relay/.env. It stops before DATA unless
+              # --send, so the default costs the recipient nothing.
+              CMD_APP="$CMD_APP node scripts/mail-verify.mjs --to \"\$(echo $EMAIL_B64 | base64 -d)\"${SENDFLAG};"
+            fi
+            PARAMS=$(jq -n --arg c "$CMD_APP" '{commands:[$c]}')
+            SSMID=$(aws ssm send-command --instance-ids "$IID" \
+              --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 0 \
+              --parameters "$PARAMS" --query 'Command.CommandId' --output text) || {
+                echo "::warning::could not start the in-fleet half via SSM"; SSMID=""; }
+            if [ -n "$SSMID" ]; then
+              for i in $(seq 1 36); do
+                S=$(aws ssm list-command-invocations --command-id "$SSMID" --query 'CommandInvocations[].Status' --output text)
+                case "$S" in *InProgress*|*Pending*|"") sleep 5 ;; *) break ;; esac
+              done
+              OUT=$(aws ssm list-command-invocations --command-id "$SSMID" --details \
+                --query 'CommandInvocations[0].CommandPlugins[0].Output' --output text)
+              echo "$OUT" | head -c 8000
+              # The verdict comes from each script's own printed marker, never
+              # from the SSM status: a wrapper or a pipeline can mask a non-zero
+              # exit, which is the bug v2.99.46 exists to prevent.
+              echo "$OUT" | grep -q "LIVE_VERIFY_EXIT=0" || APP=1
+              if [ -n "$VEMAIL" ]; then
+                echo "$OUT" | grep -q "MAIL_VERIFY_EXIT=0" || MAIL=1
+              fi
+            else
+              APP=2
+            fi
+          fi
+
+          echo ""
+          echo "=================================================================="
+          echo "VERDICT"
+          echo "=================================================================="
+          echo "  from a visitor (https://$DOMAIN):  $( [ $EDGE -eq 0 ] && echo OK || echo PROBLEMS )"
+          echo "  from inside the fleet (app only):  $( [ $APP -eq 0 ] && echo OK || ( [ $APP -eq 2 ] && echo 'not run' || echo PROBLEMS ) )"
+          if [ -n "$VEMAIL" ]; then
+            echo "  mail delivery to the given address: $( [ $MAIL -eq 0 ] && echo OK || echo PROBLEMS )"
+          fi
+          # Naming which side failed is the whole reason both are probed, so the
+          # summary says it rather than leaving it to be inferred from the logs.
+          if [ $EDGE -ne 0 ] && [ $APP -eq 0 ]; then
+            echo "::error::the app is healthy but the public URL is not — this is an EDGE problem (ALB target health, listener rules, DNS or CloudFront), not the application."
+          elif [ $EDGE -ne 0 ] && [ $APP -ne 0 ]; then
+            echo "::error::both vantage points report problems — the fault is in the application or its deploy, not the edge."
+          fi
+          [ $EDGE -eq 0 ] && [ $APP -ne 1 ] && [ $MAIL -eq 0 ] || exit 1
+          echo "Live verification passed."
 
       # ────────────────────────────────────────────────────────────────
       - name: recover-identity — re-attach an ORPHANED guest identity to its
