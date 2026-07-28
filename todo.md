@@ -11239,6 +11239,122 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.7 — a group you can call, and its admins moderate the call (2026-07-28)
+
+Owner, #113, on the previously-declined list: **"DO IT"**.
+
+### The ask had no precondition, and finding that out was the first half of the work
+A group conversation had **no call button at all** — both header buttons are gated
+`!isGroup && thread?.peerNumber` — and the Group Call screen dials arbitrary NUMBERS with
+no conversation attached. So there was no way to start a call AS a group, and therefore
+nothing for group roles to seed. The header now carries Voice and Video for a group.
+
+### The direction is ONE-WAY, and that is the entire safety argument
+Group admin → call co-host. Never the reverse, because hostship is handed out by things
+nobody decided:
+
+- whoever DIALS creates the room and is its host, so any member could take group adminship
+  simply by starting a call;
+- `promoteHostIfVacant` promotes the longest-standing CONNECTED member when the host leaves
+  with no co-host, so somebody who merely stayed would acquire it;
+- `knock-approve` / `admitToRoom` can admit a link-joined stranger, and a party line is
+  joinable by number.
+
+Any of those becoming a route to group adminship is the takeover class the v2.104.0 review
+killed before it was written. A test forbids the signaling layer from naming `setGroupRole`,
+`groupRole` or `conversationParticipants` at all.
+
+### A signed seed, because the dial path cannot afford an await
+The room is created SYNCHRONOUSLY inside the invite handler — which is exactly why
+`onResolveDial` needs a timeout and a settled flag, since a wedged resolver must never
+strand a dial. And the client cannot be asked who the admins are: that is an assertion
+about authority (the hole closed by v2.99.43/M45 and v2.99.57/R-GENPIN).
+
+So membership and adminship are resolved in a new `messages.startGroupCall`, where the
+database already lives, and handed back as a capability the fleet signed — new
+`server/groupCallSeed.ts`, following `roomCapability` exactly. Bound to the minting
+caller's pin, with the subject taken from the CONNECTION rather than the message, so a
+stolen seed is useless to another number. Not a disclosure: the pins reach a member who
+could already read them (`conversationInfo` has returned every member's number alongside
+`isAdmin` since v2.104.0).
+
+### Calling gets its own capability name
+`start-call`, not a borrowed `post-story`. Both are unconditional for members, so the
+behaviour is identical today — which is exactly why the name matters: a later reader could
+not otherwise tell whether restricting stories would also restrict calling, and the
+member/admin set is the one place where being wrong about which side a capability sits on is
+a takeover rather than a nuisance.
+
+### Promotion, and what it deliberately does not do
+It lives in `joinRoomMember` — the one funnel every route into a room passes through
+(accept, admit-after-knock, rejoin, merge) — so no path can forget it. ADDITIVE ONLY: it
+never demotes, never moves the host, and never grants anything to a pin the seed did not
+name.
+
+**Host succession needed no change, and that is the elegant part**: it already prefers a
+CONNECTED co-host, so a departing host now hands the room to a group admin who is actually
+present — for free, and without succession ever consulting group roles (which would risk
+promoting an admin who is absent).
+
+### It survives a leader change
+`PersistedRoom` gains an OPTIONAL `groupAdminPins`. Optional deliberately: a record written
+by a not-yet-updated instance mid-rollout simply lacks it and the room returns unseeded,
+which is today's behaviour rather than a broken room — the additive discipline the bus
+envelope has had since v2.99.49. A malformed list drops the WHOLE record rather than being
+partially applied, because hydration feeds this into the live registry where it GRANTS
+moderation.
+
+### Degradations, all stated
+- A group with **no admin** is still callable: `hostSeed` is null, the dial proceeds,
+  nothing is seeded. The call is the point; the seeding is the refinement.
+- With **no fleet secret** the feature does not exist rather than existing
+  unauthenticated.
+- A **forged** seed promotes nobody and does not fail the dial.
+
+### Tests
+`server/groupCallHost.test.ts` (35) — the seed and the promotion tested BEHAVIOURALLY
+against the real registry, because a source pin cannot tell you whether an admin ends up
+able to moderate. **All 23 tripwires verified by MUTATION** off a confirmed-GREEN baseline;
+sources byte-identical afterwards.
+
+- **A real, if narrow, hole found by that run**: a mutation giving only VERIFY a fallback
+  key SURVIVED, because the no-secret test observed mint and verify together and mint was
+  still gated — so the pair looked closed while verification alone would accept anything
+  signed with a guessable constant. Each side now refuses on its own, over four guesses.
+- **A real weakness of the pin-the-declaration kind**: the membership assertion checked
+  that `checkGroupPermission` is CALLED and ORDERED before the role read, and `if (false)`
+  left both true — so any caller could have named any group and learned its admin set while
+  the pin stayed green. It now pins the REFUSAL, its position, and that it throws.
+- **A test of mine that passed by doing nothing**, reported rather than counted: I drove a
+  host reconnect with `{type:"rejoin"}`, and `rejoin` is OUTBOUND ONLY — there is no
+  inbound handler, so the message was discarded and the assertions held because nothing
+  happened. Chasing it produced the honest reading of that guard: `ensureDialRoom` calls
+  `joinRoomMember` BEFORE `roomMeta.set`, so the creator never reaches the seeding at
+  creation, and `roleOf` returns "host" before it looks at `cohosts` — so
+  `if (meta.hostPin === pin) return` is a TIDINESS guard, not a safety one. The property
+  worth pinning is the PRECEDENCE that makes demotion impossible. That survivor is recorded
+  as a non-defect and its mutation replaced with one that bites.
+- **A second scenario corrected for being unreal**: a first hydration test snapshotted
+  before the admin accepted and then had them `accept` against the new leader — but an
+  accept must name the room the ring carried (v2.99.43/M45) and a fresh registry has no
+  pending ring, so in reality a lost ring means the CALLER redials. The test now asserts
+  what holds and matters: a co-hostship earned before a leader change survives it, and the
+  admin set comes back so a LATER join is still promotable.
+- **Two of my own assertions were wrong about the code** and were corrected rather than
+  forced: `\binsert(`/`\bupdate(` as a no-database needle also matches crypto's own
+  `.update()` HMAC call, and `hostPin =` matches the `===` comparison it meant to exclude.
+- **One pre-existing pin rewritten to the property**: `groupRoles.test.ts` bounded
+  `conversationInfo` at `list:`, and inserting a procedure between them grew the window past
+  its own sanity bound. Naming the new neighbour would move the fragility one insertion
+  along, so the end anchor is now "the next procedure declaration".
+
+### Not verified
+No MySQL and no second browser here, so the seed round-trip and the promotion are proven
+against the real in-memory registry — but nobody has pressed Call on a group and watched an
+admin receive the host panel.
+
+No schema change, no new dependency, no new env var. 3454 tests.
+
 ## v2.105.6 — a group can have a story, and the ring around it finally means something (2026-07-28)
 
 Owner, #110, on the previously-declined list: **"DO IT"**.

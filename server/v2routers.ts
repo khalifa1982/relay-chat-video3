@@ -11,6 +11,7 @@ import { s3Config } from "./s3";
 import { storageGetSignedUrl } from "./storage";
 import { z } from "zod";
 import { personReelKey, groupReelKey } from "../shared/reelKey";
+import { mintGroupCallSeed } from "./groupCallSeed";
 import { eq } from "drizzle-orm";
 import { getDb, getUserById } from "./db";
 import { identities } from "../drizzle/schema";
@@ -1977,6 +1978,73 @@ export const v2MessagesRouter = router({
          *  none" instead of offering a control that always fails. False for every group
          *  created before v2.102.0, which have no creator recorded. */
         hasAdmin: storedAdmins.length > 0 || creatorIsMember,
+      };
+    }),
+
+  /**
+   * Start a call FOR A GROUP (#113, v2.105.7): who to ring, and a signed seed
+   * naming the group's admins so they become CO-HOSTS of the room.
+   *
+   * WHY THIS PROCEDURE EXISTS AT ALL, rather than the client just dialling the
+   * numbers it already has from `conversationInfo`: the room is created
+   * synchronously inside the signaling invite handler, so resolving adminship
+   * there would put a database read on the one path a call cannot afford to wait
+   * on (which is why `onResolveDial` needs a timeout and a settled flag). And the
+   * client must not be asked who the admins are — that is an assertion about
+   * authority. So it is resolved HERE, where the database already lives and where
+   * membership can be checked, and handed back as a capability the fleet signed.
+   *
+   * ONE-WAY, ALWAYS: this reads group roles and writes none. A call host never
+   * becomes a group admin — see `server/groupCallSeed.ts` for why every mechanism
+   * that hands out hostship would otherwise be a takeover route.
+   */
+  startGroupCall: publicProcedure
+    .input(z.object({ conversationId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      // Membership FIRST, and via the group module's own gate so the DM refusal,
+      // the not-found refusal and the fail-closed `unavailable` behaviour are not
+      // a second copy. A conversation id is a small sequential integer, so without
+      // this anybody could name any group and learn its admin set.
+      /* `start-call`, not `post-story`: the capability's NAME has to say what is being
+         checked, or a later reader cannot tell whether restricting stories would also
+         restrict calling. Both are unconditional for members today, so this changes no
+         behaviour — it makes the two separately restrictable, which is the point of
+         having names at all. */
+      const gate = await checkGroupPermission(input.conversationId, me.id, "start-call");
+      if (!gate.ok) {
+        const message =
+          gate.reason === "not-a-group"
+            ? "That's a direct chat — call them from their own thread."
+            : gate.reason === "unavailable"
+              ? "Couldn't check that group just now."
+              : "That group isn't yours to call.";
+        throw new TRPCError({
+          code: gate.reason === "unavailable" ? "INTERNAL_SERVER_ERROR" : "FORBIDDEN",
+          message,
+        });
+      }
+      const memberIds = await getConversationParticipantIds(input.conversationId);
+      const idents = await getIdentitiesByIds(memberIds);
+      const roles = await getGroupRoles(input.conversationId);
+      const isAdmin = (id: number) =>
+        roles.roleById.get(id) === "admin" || roles.ownerIdentityId === id;
+      // Everyone to ring: the members except me, with a dialable number. A member
+      // whose number is malformed is dropped rather than dialled and refused.
+      const targets = idents
+        .filter((i) => i.id !== me.id && /^\d{6}$/.test(i.number))
+        .map((i) => ({ number: i.number, displayName: i.displayName }));
+      // The admins' pins, INCLUDING mine if I am one — the seed is a statement
+      // about the group, not about who is calling, and the signaling side already
+      // makes the room's creator its host (host outranks co-host, so seeding my
+      // own pin changes nothing for me and keeps the seed honest).
+      const adminPins = idents.filter((i) => isAdmin(i.id)).map((i) => i.number);
+      return {
+        conversationId: input.conversationId,
+        targets,
+        /** Null when the group has no admin, or when the fleet has no signing
+         *  secret. The dial proceeds either way; only the seeding is absent. */
+        hostSeed: mintGroupCallSeed(input.conversationId, me.number, adminPins),
       };
     }),
 
