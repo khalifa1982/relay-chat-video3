@@ -104,6 +104,11 @@ on:
         type: string
         required: false
         default: ""
+      admin_allow_reserved:
+        description: "admin-tool set-number only: allow a RESERVED 000/111 prefix. Off by default; the random allocator and self-service always refuse them regardless."
+        type: boolean
+        required: false
+        default: false
       admin_apply:
         description: "admin-tool only: actually WRITE the change. Off = dry run, which is what you should run first."
         type: boolean
@@ -1280,6 +1285,7 @@ jobs:
           ADM_NUM: ${{ inputs.admin_number }}
           ADM_TO: ${{ inputs.admin_to }}
           ADM_APPLY: ${{ inputs.admin_apply }}
+          ADM_ALLOW_RESERVED: ${{ inputs.admin_allow_reserved }}
         run: |
           set -uo pipefail
           echo "=================================================================="
@@ -1328,6 +1334,13 @@ jobs:
             echo "MODE: APPLY — this will write to the production database."
           else
             echo "MODE: DRY RUN — nothing will be written. Re-run with admin_apply=true once the output looks right."
+          fi
+          # A CLOSED boolean, so it needs no base64: it is compared to the literal
+          # "true" and can only ever add a fixed flag. Every free-TEXT input above
+          # still crosses on base64.
+          if [ "$ADM_ALLOW_RESERVED" = "true" ]; then
+            FLAG="$FLAG --allow-reserved"
+            echo "RESERVED PREFIX: allowed for this run (000/111). The allocator and self-service still refuse them."
           fi
           IID=$(aws ec2 describe-instances \
             --filters "Name=tag:Name,Values=relay-app" "Name=instance-state-name,Values=running" \

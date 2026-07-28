@@ -23,6 +23,21 @@ import path from "node:path";
 import { normalizeDesiredNumber, NUMBER_BEARING_COLUMNS } from "./v2db";
 import { codeOnly } from "./testing/codeOnly";
 
+/**
+ * Locate a function EXACTLY by name. v2.105.8 reproduced the v2.104.0 collision in a
+ * sixth place: `claimIdentityNumberAsAdmin` was added beside `claimIdentityNumber`,
+ * and a bare `indexOf("export async function claimIdentityNumber")` then matched the
+ * ADMIN one — which sits earlier in the file — so every slice below silently read the
+ * wrong function (three of them collapsed to ""). A `\b` boundary is the fix, and it
+ * is why the count is asserted too: a needle that matches twice is not a locator.
+ */
+function fnAt(src: string, name: string): number {
+  const re = new RegExp(`export async function ${name}\\b`);
+  const at = src.search(re);
+  expect(at, `${name} not found`).toBeGreaterThan(-1);
+  return at;
+}
+
 const read = (...p: string[]) => fs.readFileSync(path.resolve(__dirname, ...p), "utf8");
 
 const V2DB = read("v2db.ts");
@@ -88,8 +103,8 @@ describe("there is still exactly ONE writer of an identity's number", () => {
 
   it("the chosen number joins the SAME transaction, so it inherits every copy", () => {
     const fn = V2DB.slice(
-      V2DB.indexOf("export async function regenerateIdentityNumber"),
-      V2DB.indexOf("export async function claimIdentityNumber")
+      fnAt(V2DB, "regenerateIdentityNumber"),
+      fnAt(V2DB, "claimIdentityNumber")
     );
     // One transaction covering the identity and every "renumber" copy.
     expect(fn).toMatch(/await db\.transaction\(async \(tx\) => \{/);
@@ -102,8 +117,11 @@ describe("there is still exactly ONE writer of an identity's number", () => {
 
   it("claimIdentityNumber writes no number of its own", () => {
     const fn = V2DB.slice(
-      V2DB.indexOf("export async function claimIdentityNumber"),
-      V2DB.indexOf("export async function claimIdentityNumber") + 2600
+      fnAt(V2DB, "claimIdentityNumber"),
+      // Bounded by the function's OWN end, not a fixed +2600 — the recurring
+      // fixed-slice fragility. v2.105.8's extra parameter and comment pushed the
+      // body past that window, which is exactly how it goes stale.
+      V2DB.indexOf("\nexport ", fnAt(V2DB, "claimIdentityNumber") + 10)
     );
     expect(codeOnly(fn)).not.toMatch(/\.update\(identities\)/);
     expect(codeOnly(fn)).not.toMatch(/\.update\(contacts\)/);
@@ -129,8 +147,8 @@ describe("there is still exactly ONE writer of an identity's number", () => {
 
 describe("taking a specific number safely", () => {
   const fn = V2DB.slice(
-    V2DB.indexOf("export async function regenerateIdentityNumber"),
-    V2DB.indexOf("export async function claimIdentityNumber")
+    fnAt(V2DB, "regenerateIdentityNumber"),
+    fnAt(V2DB, "claimIdentityNumber")
   );
 
   it("re-validates the number itself rather than trusting the caller", () => {
@@ -162,8 +180,8 @@ describe("taking a specific number safely", () => {
 
 describe("a failed claim never steals someone else's reservation", () => {
   const fn = V2DB.slice(
-    V2DB.indexOf("export async function claimIdentityNumber"),
-    V2DB.indexOf("export async function claimIdentityNumber") + 2600
+    fnAt(V2DB, "claimIdentityNumber"),
+    V2DB.indexOf("\nexport ", fnAt(V2DB, "claimIdentityNumber") + 10)
   );
 
   it("the pre-flight refusals release NOTHING", () => {

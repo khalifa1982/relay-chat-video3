@@ -74,7 +74,7 @@ const RESERVED_PREFIXES = ["000", "111"];
 
 const OPS = ["grant-admin", "revoke-admin", "set-number", "whois"];
 if (!OPS.includes(OP)) {
-  console.error(`usage: --op <${OPS.join("|")}> [--email <addr>] [--number <6 digits>] [--to <6 digits>] [--apply]`);
+  console.error(`usage: --op <${OPS.join("|")}> [--email <addr>] [--number <6 digits>] [--to <6 digits>] [--allow-reserved] [--apply]`);
   process.exit(2);
 }
 if (!process.env.DATABASE_URL) {
@@ -189,8 +189,19 @@ try {
     if (!/^\d{6}$/.test(number) || !/^\d{6}$/.test(to)) {
       console.error("set-number needs --number <6 digits> and --to <6 digits>");
       exit = 2;
-    } else if (RESERVED_PREFIXES.some((p) => to.startsWith(p))) {
+    } else if (RESERVED_PREFIXES.some((p) => to.startsWith(p)) && !args["allow-reserved"]) {
+      /* The reservation stays the DEFAULT answer here, exactly as it is in the
+         server's own `normalizeDesiredNumber`. `--allow-reserved` is the deliberate
+         administrative override, and it is spelled out rather than implied because a
+         CLI typo is more plausible than a mis-click: an operator who means it can say
+         so in five words.
+
+         WHAT IS NOT RELAXED: the random allocator skips 000/111 unconditionally, and
+         self-service "Choose my number" still refuses them — so no ordinary signup,
+         regenerate or user choice can ever produce one. Never handed out by accident,
+         assignable on purpose. */
       console.error(`--to ${to} uses a reserved prefix (${RESERVED_PREFIXES.join(", ")})`);
+      console.error("Pass --allow-reserved to assign it anyway (an admin-only, deliberate act).");
       exit = 2;
     } else if (!(await preflight(needed))) {
       exit = 3;
