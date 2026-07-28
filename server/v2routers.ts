@@ -4220,22 +4220,28 @@ export const v2StatusRouter = router({
   }),
 
   /**
-   * My own active stories with a "seen by N" count each — personal AND the ones I
-   * posted to groups (v2.105.6), because both are mine to delete and to see the
-   * viewers of. `getActiveStatusesForOwners` deliberately excludes group stories
-   * (it also backs the profile-visit surface, where a group story must not leak),
-   * so the group half is fetched explicitly rather than by relaxing that filter.
+   * The stories on MY OWN RING, with a "seen by N" count each.
+   *
+   * PERSONAL ONLY — a decision I got wrong first and corrected by reading what this
+   * actually feeds (v2.105.6). Its single consumer is the top bar: the story pip on my
+   * avatar and the "Open my story - N" row in its menu, which calls
+   * `openPeerStatus(me.number)` and therefore opens MY PERSON REEL. Including group
+   * stories here lit the pip and read 1 for somebody whose only story was posted to a
+   * group, and the tap then found no person reel, fell through to `status.forNumber`
+   * (personal-only by design, since that is the contacts-authorized surface) and
+   * rendered NOTHING. A dead tap plus an overstated count — the v2.99.86
+   * silent-no-op class, reintroduced by my own change and caught by reading the
+   * consumer rather than by any test.
+   *
+   * Nothing is lost by narrowing it. The pip means "there is a story on your own
+   * ring", which is the honest reading of the ring vocabulary — a group story's ring
+   * is on the GROUP, and the author already sees it in the Messages strip and on the
+   * group's own thread row. Viewers of a group story come from `status.viewers`, which
+   * is author-gated and reachable from the group reel itself.
    */
   mine: publicProcedure.query(async ({ ctx }) => {
     const me = requireIdentity(ctx);
-    const personal = await getActiveStatusesForOwners([me.id]);
-    const myGroupIds = await getGroupConversationIdsFor(me.id);
-    const inGroups = myGroupIds.length
-      ? (await getActiveStatusesForConversations(myGroupIds)).filter((r) => r.identityId === me.id)
-      : [];
-    const rows = [...personal, ...inGroups].sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-    );
+    const rows = await getActiveStatusesForOwners([me.id]);
     const counts = await getStatusViewCounts(rows.map((r) => r.id));
     return { items: rows.map((r) => ({ ...publicStatus(r, true), viewCount: counts.get(r.id) ?? 0 })) };
   }),

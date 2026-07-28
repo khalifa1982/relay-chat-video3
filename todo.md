@@ -11349,6 +11349,21 @@ hidden; what was weakened was those files' ability to catch a future one.
   anchored on `{isMine ? "My story"`. Every one had frozen a LOCATION this release
   legitimately moves.
 
+### A defect of my own, found by reading the consumer rather than by any test
+My first cut had `status.mine` include group stories, "because both are mine". Its ONLY
+consumer is the top bar — the story pip and the "Open my story · N" row, which calls
+`openPeerStatus(me.number)` and therefore opens MY PERSON REEL. So for somebody whose only
+story went to a group the pip lit, the count read 1, and the tap found no person reel, fell
+through to `status.forNumber` (personal-only by design, since that is the
+contacts-authorized surface) and rendered NOTHING: a dead tap plus an overstated count, the
+v2.99.86 silent-no-op class reintroduced by my own change.
+
+`mine` is personal-only, which is also the honest reading of the ring vocabulary — a group
+story's ring is on the GROUP, where the author already sees it. Nothing is lost: `viewCount`
+is rendered on no surface, and viewers come from the author-gated `status.viewers`, reachable
+from the group reel itself. Pinned and mutation-verified, and the pin names WHY (the opener
+is person-reel-only) so the narrowing can be revisited if that ever changes.
+
 ### Not verified, and not done
 - **No MySQL is reachable here**, so the statements are proven correct by reading and
   pinned, but no group story has been written, watched or deleted.
@@ -11358,7 +11373,7 @@ hidden; what was weakened was those files' ability to catch a future one.
   the cost is per-post whoever it is addressed to.
 
 One additive nullable column, one additive index, no new dependency, no new env var.
-3418 tests.
+3419 tests.
 
 ## v2.105.5 — the in-fleet verification runs on every instance, and comparing them is the check (2026-07-28)
 - [x] **OWNER**: *"build the verification to run on EC2 better"*.

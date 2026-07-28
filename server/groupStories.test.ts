@@ -308,14 +308,34 @@ describe("v2.105.6 — the realtime fan-out reaches the right people", () => {
   });
 });
 
-describe("v2.105.6 — `mine` covers both kinds, because both are mine", () => {
-  it("personal AND my group stories, with the personal query left strict", () => {
-    // Relaxing `getActiveStatusesForOwners` to include group rows would have been
-    // the small change and the wrong one — it also backs the profile-visit surface.
+describe("v2.105.6 — `mine` stays about MY OWN RING", () => {
+  it("returns PERSONAL stories only, or the top bar's story tap is dead", () => {
+    /* A DEFECT I INTRODUCED AND THEN CORRECTED BY READING THE CONSUMER, recorded
+       here because no test would have caught it. `mine`'s only consumer is the top
+       bar: the story pip on my avatar and the "Open my story - N" row, which calls
+       `openPeerStatus(me.number)` and so opens MY PERSON REEL. My first cut had
+       `mine` include group stories, which lit the pip and read 1 for somebody whose
+       only story went to a group — and the tap then found no person reel, fell
+       through to `status.forNumber` (personal-only, since it is the
+       contacts-authorized surface) and rendered NOTHING. A dead tap plus an
+       overstated count: the v2.99.86 silent-no-op class.
+
+       Narrowing costs nothing. The pip means "there is a story on your own ring",
+       which is the ring vocabulary's own reading; a group story's ring is on the
+       GROUP, where the author already sees it. */
     const m = proc("mine", "remove");
     expect(m).toMatch(/getActiveStatusesForOwners\(\[me\.id\]\)/);
-    expect(m).toMatch(/getActiveStatusesForConversations\(myGroupIds\)/);
-    expect(m).toMatch(/\.filter\(\(r\) => r\.identityId === me\.id\)/);
+    expect(m).not.toMatch(/getActiveStatusesForConversations/);
+    expect(m).not.toMatch(/getGroupConversationIdsFor/);
+  });
+
+  it("the pip's opener really is the PERSON-reel one, which is why that matters", () => {
+    // If this ever became a kind-aware opener, the narrowing above could be revisited
+    // — so the reason is pinned next to the rule rather than only in a comment.
+    const shell = R("client/src/app/AppShell.tsx");
+    expect(shell).toMatch(/trpc\.status\.mine\.useQuery/);
+    expect(shell).toMatch(/const hasStatus = statusItems\.length > 0;/);
+    expect(shell).toMatch(/openPeerStatus\(me\.number\)/);
   });
 });
 
