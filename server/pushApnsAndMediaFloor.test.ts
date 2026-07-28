@@ -8,10 +8,15 @@
  *     never learned it, so an invite-link joiner could read pre-join media by
  *     walking sequential attachment ids. Pinned at source: no MySQL here.
  * ────────────────────────────────────────────────────────────────────────── */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs";
 import path from "path";
-import { classifyNativeToken, isVoipDeclaration, ROUTABLE_PUSH_KINDS } from "./expoPush";
+import {
+  classifyNativeToken,
+  isVoipDeclaration,
+  ROUTABLE_PUSH_KINDS,
+  sendExpoPush,
+} from "./expoPush";
 import { codeOnly } from "./testing/codeOnly";
 
 const ROOT = path.resolve(__dirname, "..");
@@ -187,5 +192,65 @@ describe("v2.105.11 — the media gate is the FOURTH reader of the join floor", 
     // conjunct must be additive, not a replacement.
     expect(fn).toMatch(/JSON_EXTRACT\(.*'\$\.expire'\) IS NULL/);
     expect(fn).toMatch(/'\$\.consumedAt'\) IS NOT NULL/);
+  });
+});
+
+describe("v2.105.17 — a blank EXPO_ACCESS_TOKEN must not replace a working request", () => {
+  /* THE DEFECT, and it belongs to the same release theme: a config value that is
+   * PRESENT but unusable turning a working path into a failing one.
+   *
+   * Expo's send endpoint accepts an UNAUTHENTICATED request for an ordinary project.
+   * The header was gated on truthiness alone, so `EXPO_ACCESS_TOKEN=""` — or a line
+   * that picked up a trailing space — sent `authorization: Bearer ` with nothing after
+   * it, which Expo answers 401 to. That is strictly worse than not setting the variable
+   * at all: setting a variable to nothing broke pushes that worked before it existed.
+   *
+   * Driven through the real sender with a stubbed fetch, because the property is which
+   * HEADERS go on the wire and a source pin on `.trim()` says nothing about that.
+   */
+  const EXPO_TOKEN = "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]";
+  let saved: string | undefined;
+  let seen: Record<string, string> | null = null;
+
+  beforeEach(() => {
+    saved = process.env.EXPO_ACCESS_TOKEN;
+    seen = null;
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      seen = init.headers as Record<string, string>;
+      return {
+        ok: true,
+        json: async () => ({ data: [{ status: "ok" }] }),
+      } as unknown as Response;
+    });
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env.EXPO_ACCESS_TOKEN;
+    else process.env.EXPO_ACCESS_TOKEN = saved;
+    vi.unstubAllGlobals();
+  });
+
+  const send = () => sendExpoPush([EXPO_TOKEN], { title: "t", body: "b" });
+
+  it("sends NO authorization header for a whitespace-only value", async () => {
+    for (const blank of ["", "   ", "\t", "\n"]) {
+      process.env.EXPO_ACCESS_TOKEN = blank;
+      await expect(send()).resolves.toMatchObject({ ok: true, sent: 1 });
+      expect(seen).not.toBeNull();
+      expect(Object.keys(seen!)).not.toContain("authorization");
+    }
+  });
+
+  it("sends none when the variable is absent — the ordinary case", async () => {
+    delete process.env.EXPO_ACCESS_TOKEN;
+    await send();
+    expect(Object.keys(seen!)).not.toContain("authorization");
+  });
+
+  it("a REAL token is still sent, and surrounding whitespace is stripped", async () => {
+    // The fix must not cost an enhanced-security Expo account its credential, and a
+    // padded value has to work rather than be silently dropped.
+    process.env.EXPO_ACCESS_TOKEN = "  abc123  ";
+    await send();
+    expect(seen!.authorization).toBe("Bearer abc123");
   });
 });

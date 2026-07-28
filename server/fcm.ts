@@ -23,13 +23,47 @@ interface ServiceAccount {
   private_key: string;
 }
 
+/**
+ * Read the service account, and PROVE THE KEY CAN SIGN before calling it configured.
+ *
+ * ── WHY THE PARSE (v2.105.17) ────────────────────────────────────────────────
+ * This used to gate on TRUTHINESS alone: any non-empty `private_key` made
+ * `fcmConfig()` non-null, so `admin.pushDiagnostics` reported `fcm: true` and the
+ * Push Doctor rendered a green "Firebase is configured on the server" row — while
+ * `sendFcmData` returned `{delivered: 0, invalidTokens: []}`, which is BYTE-IDENTICAL
+ * to having no credential at all, and logged nothing.
+ *
+ * THE TRIGGER IS THE SINGLE MOST COMMON FIREBASE MISCONFIGURATION: a service-account
+ * JSON whose `private_key` carries LITERAL backslash-n instead of real newlines. It
+ * is what you get from most copy-paste routes, it parses as JSON perfectly, and it
+ * cannot sign. So the transport the owner reported broken ("i have problem with
+ * firebase to send the notification") had a diagnostic that said it was fine.
+ *
+ * `\n`-escaped keys are REPAIRED rather than refused, because that form is so common
+ * that refusing it would send an operator hunting for a problem they cannot see — and
+ * the repair is unambiguous: a real PEM never contains a literal backslash-n.
+ * Anything still unloadable after that is reported NOT configured, which is the loud,
+ * recoverable direction: the doctor then says "Firebase is NOT configured".
+ */
 export function fcmConfig(): ServiceAccount | null {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (!raw) return null;
   try {
     const j = JSON.parse(raw) as Partial<ServiceAccount>;
-    if (!j.project_id || !j.client_email || !j.private_key) return null;
-    return j as ServiceAccount;
+    const projectId = (j.project_id || "").trim();
+    const clientEmail = (j.client_email || "").trim();
+    let privateKey = (j.private_key || "").trim();
+    if (!projectId || !clientEmail || !privateKey) return null;
+    // The common copy-paste damage, repaired: literal \n → real newlines.
+    if (privateKey.includes("\\n")) privateKey = privateKey.replace(/\\n/g, "\n");
+    try {
+      crypto.createPrivateKey(privateKey);
+    } catch {
+      // Non-empty but unsignable. Reporting NOT configured is the honest answer; the
+      // alternative is the green row above with nothing behind it.
+      return null;
+    }
+    return { project_id: projectId, client_email: clientEmail, private_key: privateKey };
   } catch {
     return null;
   }

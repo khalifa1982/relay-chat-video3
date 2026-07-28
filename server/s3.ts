@@ -55,17 +55,44 @@ export function normalizeS3Prefix(raw: string): string {
 /** Read the S3 driver config from env. Null (driver off) unless all four
  *  required vars are present. Read per-call so secrets can be added live. */
 export function s3Config(): S3Config | null {
-  const bucket = process.env.S3_BUCKET || "";
-  const region = process.env.S3_REGION || "";
-  const accessKey = process.env.S3_ACCESS_KEY || "";
-  const secret = process.env.S3_SECRET || "";
+  const bucket = (process.env.S3_BUCKET || "").trim();
+  const region = (process.env.S3_REGION || "").trim();
+  const accessKey = (process.env.S3_ACCESS_KEY || "").trim();
+  const secret = (process.env.S3_SECRET || "").trim();
   if (!bucket || !region || !accessKey || !secret) return null;
+  /* THE ENDPOINT IS PARSED HERE, ONCE (v2.105.17), because `s3Config()` returning
+     non-null is the backend SELECTOR — `storage.ts` commits to the S3 branch and never
+     falls back to Forge. An unparsed endpoint therefore fails per REQUEST, in two ways
+     that are both worse than an honest "driver off":
+       • `S3_ENDPOINT=abc.r2.cloudflarestorage.com` — exactly how Cloudflare's dashboard
+         presents it, with no scheme — throws `TypeError: Invalid URL` on every call,
+         surfacing as a generic 500 that names neither S3 nor the variable.
+       • `S3_ENDPOINT=minio:9000` — how MinIO endpoints are conventionally written — does
+         NOT throw: `new URL()` accepts it as protocol "minio:", so nothing downstream
+         ever speaks the scheme the operator meant.
+     THE PROTOCOL CHECK IS WHAT CATCHES BOTH; the `!u.host` conjunct is measured to be
+     UNREACHABLE and is said so rather than left reading as load-bearing. For a special
+     scheme the WHATWG parser cannot yield an empty host: it either fails (`https://`,
+     `https://:8080/x`) or promotes the first path segment (`https:///bucket` → host
+     "bucket"). It is kept because this is a config gate and the conjunct costs nothing,
+     but a mutation removing it SURVIVES by construction, not for want of a test. */
+  const rawEndpoint = (process.env.S3_ENDPOINT || "").trim();
+  let endpoint: string | undefined;
+  if (rawEndpoint) {
+    try {
+      const u = new URL(rawEndpoint);
+      if ((u.protocol !== "http:" && u.protocol !== "https:") || !u.host) return null;
+      endpoint = rawEndpoint;
+    } catch {
+      return null;
+    }
+  }
   return {
     bucket,
     region,
     accessKey,
     secret,
-    endpoint: process.env.S3_ENDPOINT || undefined,
+    endpoint,
     forcePathStyle: /^(1|true)$/i.test(process.env.S3_FORCE_PATH_STYLE || ""),
     // `??` not `||`: an explicit S3_PREFIX="" means "no prefix".
     prefix: normalizeS3Prefix(process.env.S3_PREFIX ?? "relay-chat/"),

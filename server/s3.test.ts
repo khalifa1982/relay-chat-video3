@@ -345,6 +345,49 @@ describe("s3Config gating (per-call env read)", () => {
     expect(s3Config()!.forcePathStyle).toBe(false);
   });
 
+  /* ── THE ENDPOINT IS PARSED AT CONFIG TIME (v2.105.17) ─────────────────────
+   * `s3Config()` non-null is the backend SELECTOR: storage.ts commits to the S3 branch
+   * and never falls back to Forge. So an endpoint that cannot be used must make the
+   * driver report OFF, not fail once per request — and the two real ways to write one
+   * wrong fail in two different, equally undiagnosable ways.
+   */
+
+  it("an endpoint with no scheme reports the driver OFF, not a per-request 500", () => {
+    // Exactly how Cloudflare's dashboard presents an R2 endpoint. `new URL()` THROWS
+    // on it, which used to surface as a generic 500 naming neither S3 nor the variable.
+    enableS3Env({ S3_ENDPOINT: "abc123.r2.cloudflarestorage.com" });
+    expect(s3Config()).toBeNull();
+  });
+
+  it("an endpoint with an EMPTY host is refused — the silent one", () => {
+    /* `new URL("minio:9000")` does NOT throw: it yields protocol "minio:" and an empty
+       host. The signer then presigns https:///bucket/key with the signature computed
+       over an empty Host header, so the fetch resolves the BUCKET NAME as a hostname —
+       a wrong request that looks like a DNS problem. This is how MinIO endpoints are
+       conventionally written, so it is the likelier of the two. */
+    enableS3Env({ S3_ENDPOINT: "minio:9000" });
+    expect(s3Config()).toBeNull();
+    // A scheme we cannot speak is refused for the same reason.
+    enableS3Env({ S3_ENDPOINT: "s3://bucket" });
+    expect(s3Config()).toBeNull();
+    enableS3Env({ S3_ENDPOINT: "ftp://files.example.org" });
+    expect(s3Config()).toBeNull();
+  });
+
+  it("a REAL endpoint still configures — http and https, with and without a port", () => {
+    // The fail-shut direction is only correct if it does not refuse what works: R2,
+    // MinIO over plain http on a LAN, and a bare https host must all pass through.
+    for (const ok of [
+      "https://abc.r2.cloudflarestorage.com",
+      "http://minio.local:9000",
+      "https://minio.local:9000",
+      "http://127.0.0.1:9000",
+    ]) {
+      enableS3Env({ S3_ENDPOINT: ok });
+      expect(s3Config()?.endpoint).toBe(ok);
+    }
+  });
+
   it("normalizeS3Prefix trims slashes and guarantees one trailing slash", () => {
     expect(normalizeS3Prefix("/a/b/")).toBe("a/b/");
     expect(normalizeS3Prefix("a")).toBe("a/");

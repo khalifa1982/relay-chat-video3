@@ -159,7 +159,9 @@ export async function sendExpoPush(
         "content-type": "application/json",
         accept: "application/json",
       };
-      const accessToken = process.env.EXPO_ACCESS_TOKEN;
+      // Trimmed (v2.105.17): a whitespace-only value used to REPLACE the working
+  // no-credential request with an `authorization: Bearer` header carrying nothing.
+  const accessToken = (process.env.EXPO_ACCESS_TOKEN || "").trim();
       if (accessToken) headers.authorization = `Bearer ${accessToken}`;
       const res = await fetch(EXPO_SEND_URL, {
         method: "POST",
