@@ -49,6 +49,17 @@
 const EXPO_TOKEN = /^Expo(nent)?PushToken\[[^\]\s]+\]$/;
 /** A raw FCM registration token / APNs device token. */
 const DEVICE_TOKEN = /^[A-Za-z0-9_:%.~-]{32,4096}$/;
+/**
+ * An APNs device token is PURE HEX (32 bytes → 64 chars classically, up to 100 on newer
+ * iOS). An FCM registration token never is — it carries a `:` plus `-`/`_`.
+ *
+ * This has to be here, and not only on the server, because `nativeTokenBridge.test.ts`
+ * cross-checks `tokenKind` against the server's `classifyNativeToken` over a table of
+ * inputs: two gates disagreeing about one rule is the recurring defect this repo keeps
+ * re-learning (v2.99.50, v2.99.71), and here a disagreement is a broken registration.
+ * That guard is what caught v2.105.11 changing the server alone.
+ */
+const APNS_TOKEN = /^[0-9a-fA-F]{64,200}$/;
 
 export function looksLikePushToken(v: unknown): boolean {
   if (typeof v !== "string") return false;
@@ -57,9 +68,12 @@ export function looksLikePushToken(v: unknown): boolean {
 }
 
 /** The kind we ask the server to store. Shape-derived, never label-derived. */
-export function tokenKind(token: string): "expo" | "fcm" | null {
+export function tokenKind(token: string): "expo" | "fcm" | "apns" | null {
   const t = token.trim();
   if (EXPO_TOKEN.test(t)) return "expo";
+  // BEFORE the FCM branch, or a hex token matches the looser pattern first and is
+  // reported as an FCM registration token it is not.
+  if (APNS_TOKEN.test(t) && t.length % 2 === 0) return "apns";
   if (DEVICE_TOKEN.test(t)) return "fcm";
   return null;
 }
@@ -110,7 +124,7 @@ export function acceptTokenMessage(
  * app switch forever.
  */
 export function mountNativeTokenBridge(
-  register: (token: string, kind: "expo" | "fcm") => void
+  register: (token: string, kind: "expo" | "fcm" | "apns") => void
 ): () => void {
   if (typeof window === "undefined") return () => {};
   let last: string | null = null;

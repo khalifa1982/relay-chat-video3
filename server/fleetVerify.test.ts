@@ -36,6 +36,9 @@ function report(opts: {
   pm2?: string;
   diskKb?: number;
   extraFail?: string;
+  /** Host uptime in seconds. The restart check divides by it (v2.105.10), so a case
+   *  about restart RATE has to be able to set the window. */
+  uptimeSec?: number | null;
 } = {}) {
   const {
     version = "2.105.4",
@@ -47,6 +50,7 @@ function report(opts: {
     pm2 = "relay:restarts=2,status=online",
     diskKb = 8_000_000,
     extraFail,
+    uptimeSec = 100234.5,
   } = opts;
   const lines = [
     "LIVE VERIFY — http://127.0.0.1:3000",
@@ -70,7 +74,11 @@ function report(opts: {
   if (mailExit != null) {
     lines.push("MAIL VERIFY", "  PASS  rcpt to     <a@b> accepted (250)", `MAIL_VERIFY_EXIT=${mailExit}`);
   }
-  lines.push(`FACT_UPTIME=100234.5`, `FACT_DISKFREE=${diskKb}`, `FACT_PM2=${pm2}`);
+  lines.push(
+    uptimeSec == null ? `FACT_UPTIME=` : `FACT_UPTIME=${uptimeSec}`,
+    `FACT_DISKFREE=${diskKb}`,
+    `FACT_PM2=${pm2}`,
+  );
   return lines.join("\n");
 }
 
@@ -336,11 +344,50 @@ describe("aggregate — what only a comparison can see", () => {
     expect(dead.ok).toBe(false);
     expect(dead.findings.find((f: { name: string }) => /pm2 process not online/.test(f.name))).toBeTruthy();
 
+    // 97 restarts over 1.16 days ≈ 84/day. A warning, not a failure: it is serving. But
+    // it is the signal that a box answering health perfectly is doing so between crashes.
+    //
+    // REWRITTEN IN v2.105.10 TO THE PROPERTY. This matched the finding's wording
+    // (`restarted a lot`), so it pinned a STRING while the property is a RATE — and it
+    // would have gone on passing for the reading that made this release necessary: 46/47
+    // restarts on production with status=online and 8.4 days of uptime, which is one per
+    // ~4.3 hours, i.e. pm2 restarting once per deploy. The check now divides by uptime,
+    // so the two cases are asserted separately.
     const loop = aggregate([rep("i-1", report({ pm2: "relay:restarts=97,status=online" }))]);
-    // A warning, not a failure: it is serving. But it is the signal that a box
-    // answering health perfectly is doing so between crashes.
     expect(loop.ok).toBe(true);
-    expect(loop.findings.find((f: { name: string }) => /restarted a lot/.test(f.name))).toBeTruthy();
+    const warned = loop.findings.find((f: { severity: string; name: string }) =>
+      /restarting faster than deploys explain/.test(f.name),
+    );
+    expect(warned).toBeTruthy();
+    expect(warned!.severity).toBe("warn");
+  });
+
+  it("a DEPLOY-CADENCE restart count is reported as information, not a warning", () => {
+    // The real production reading: 47 restarts over ~8.4 days = 5.6/day, status online.
+    // A WARN here is a false alarm, and a false alarm is what hides a real one.
+    const res = aggregate([
+      rep("i-1", report({ pm2: "relay:restarts=47,status=online", uptimeSec: 8.4 * 86400 })),
+    ]);
+    expect(res.ok).toBe(true);
+    expect(res.findings.some((f: { severity: string }) => f.severity === "warn")).toBe(false);
+    const info = res.findings.find((f: { name: string }) => /deploy cadence, not a loop/.test(f.name));
+    // Reported rather than hidden, so an operator seeing a count in the forties can tell
+    // it was accounted for instead of wondering why nothing mentioned it.
+    expect(info).toBeTruthy();
+    expect((info as { severity: string }).severity).toBe("info");
+    expect((info as { detail: string }).detail).toMatch(/5\.6\/day/);
+  });
+
+  it("with no uptime reading the rate cannot be checked, so the absolute cap stands", () => {
+    // Degrading to silence here would drop crash-loop detection entirely whenever the
+    // uptime line is missing. Today's behaviour is the safe fallback.
+    const res = aggregate([
+      rep("i-1", report({ pm2: "relay:restarts=47,status=online", uptimeSec: null })),
+    ]);
+    const f = res.findings.find((x: { name: string }) => /restarted a lot/.test(x.name));
+    expect(f).toBeTruthy();
+    expect((f as { severity: string }).severity).toBe("warn");
+    expect((f as { detail: string }).detail).toMatch(/uptime unknown/);
   });
 
   it("WARNS on low disk — the classic reason a deploy 'succeeded' without extracting", () => {

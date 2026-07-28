@@ -2144,7 +2144,21 @@ export async function hasPushSubscription(identityId: number): Promise<boolean> 
     const rows = await db
       .select({ id: pushSubscriptions.id })
       .from(pushSubscriptions)
-      .where(eq(pushSubscriptions.identityId, identityId))
+      .where(
+        and(
+          eq(pushSubscriptions.identityId, identityId),
+          // ONLY A ROUTABLE KIND COUNTS (v2.105.11), AND THIS CONJUNCT IS LOAD-BEARING.
+          //
+          // The one consumer that matters is `pushReachable`, which the offline-message
+          // email uses to decide "they already got a notification, so do not mail them"
+          // (v2.99.42 GAP3). An `apns` row is stored so the admin push doctor can explain
+          // itself, but nothing delivers to it — so counting it here would leave the
+          // recipient with NEITHER a push nor an email, which is strictly worse than the
+          // bug this release fixes. A legacy NULL kind reads as webpush, the same reading
+          // the sender takes.
+          sql`(${pushSubscriptions.kind} IS NULL OR ${pushSubscriptions.kind} IN ('webpush','fcm','expo'))`,
+        ),
+      )
       .limit(1);
     return rows.length > 0;
   } catch {
@@ -5299,6 +5313,26 @@ export async function getAttachmentForIdentity(attachmentId: number, identityId:
   // the SENDER) already returned above, so this restricts recipients only, and
   // a CONSUMED message has its `attachmentId` nulled and therefore stops
   // matching at all (fails closed, per F3).
+  // SECURITY (v2.105.11) — THE JOIN FLOOR APPLIES HERE TOO, AND THIS IS A FOURTH READER.
+  //
+  // v2.105.9 gave the three MESSAGE readers `visibleFloorFor` (listMessages,
+  // searchMessages, recomputeUnreadFor) and its own test says exactly that — "all three
+  // MESSAGE readers use the shared floor". This function is the FOURTH reader and it did
+  // not get the rule, so a member who joined a group later could read every photo, voice
+  // note and video posted BEFORE they joined while `listMessages` correctly withheld the
+  // messages carrying them.
+  //
+  // REACHABLE BY ENUMERATION, NOT BY A LEAKED KEY: `attachments.get` takes a sequential
+  // integer id (and its own comment above names that vector), and this single funnel also
+  // backs `authorizeStorageKey`, so `/manus-storage/<key>` leaked identically.
+  //
+  // IT ONLY BECAME REACHABLE IN v2.105.9. Before invite links, membership in an existing
+  // group had no writer at all — everybody was present from creation, so there was no
+  // "before you joined" for a floor to protect. Adding late joiners without teaching this
+  // gate the floor is what opened it.
+  //
+  // The floor is compared against the MESSAGE's own id, so the join watermark and the
+  // per-person "delete for me" clear both apply, exactly as they do to the message list.
   const ref = await db
     .select({ conversationId: messages.conversationId })
     .from(messages)
@@ -5310,7 +5344,12 @@ export async function getAttachmentForIdentity(attachmentId: number, identityId:
       and(
         eq(messages.attachmentId, attachmentId),
         eq(conversationParticipants.identityId, identityId),
-        sql`(JSON_EXTRACT(${messages.meta}, '$.expire') IS NULL OR JSON_EXTRACT(${messages.meta}, '$.consumedAt') IS NOT NULL)`
+        sql`(JSON_EXTRACT(${messages.meta}, '$.expire') IS NULL OR JSON_EXTRACT(${messages.meta}, '$.consumedAt') IS NOT NULL)`,
+        // GREATEST over the two watermarks, with COALESCE so NULL — every pre-release row,
+        // and every founding member — reads as 0 and changes nothing.
+        sql`${messages.id} > GREATEST(
+          COALESCE(${conversationParticipants.clearedUpToMessageId}, 0),
+          COALESCE(${conversationParticipants.joinedAtMessageId}, 0))`
       )
     )
     .limit(1);
@@ -6288,7 +6327,11 @@ export async function upsertPushSubscription(input: {
   /** "webpush" (default) or "fcm" (native Android — endpoint = device token). */
   /** v2.99.79: "expo" joins these — an Expo push token needs Expo's own
    *  transport, not FCM. The column is varchar(10), so it fits. */
-  kind?: "webpush" | "fcm" | "expo";
+  /** v2.105.11: "apns" joins them as a RECOGNISED-BUT-UNROUTABLE kind. It is stored so
+   *  the admin push doctor can say why an iPhone gets nothing, and it is excluded from
+   *  `hasPushSubscription` so it cannot suppress the offline-message email. Nothing
+   *  sends to it — the fan-out filters on "fcm" / "expo" explicitly. */
+  kind?: "webpush" | "fcm" | "expo" | "apns";
   /** sha256 of the browser's push claim, when it has one (v2.99.49). */
   claimHash?: string | null;
 }): Promise<{ owned: boolean }> {

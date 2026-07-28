@@ -144,7 +144,7 @@ import { sendEmail, emailEnabled, wrapEmailDocument } from "./email";
 import { appBaseUrl } from "./appUrl";
 import { unsubscribeHeaders, unsubscribeLink } from "./unsubscribe";
 import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
-import { classifyNativeToken } from "./expoPush";
+import { classifyNativeToken, type NativeTokenKind } from "./expoPush";
 import { fcmConfig } from "./fcm";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
@@ -3847,7 +3847,10 @@ export const v2PushRouter = router({
               auth: z.string().min(6).max(120),
             })
             .optional(),
-          kind: z.enum(["webpush", "fcm", "expo"]).optional(),
+          // "apns" is accepted as a LABEL (v2.105.11) so an iOS shell can say what it
+          // has — but it is only ever a hint: `classifyNativeToken` below re-derives the
+          // kind from the token's SHAPE, so a client gains nothing by lying here.
+          kind: z.enum(["webpush", "fcm", "expo", "apns"]).optional(),
           /** Proof-of-possession secret (v2.99.49): a per-browser value the
            *  client keeps in localStorage. Optional — an old client, or one with
            *  storage disabled, simply doesn't send it and falls back to the
@@ -3860,7 +3863,12 @@ export const v2PushRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
-      let kind = input.kind ?? "webpush";
+      // Widened for `apns` (v2.105.11): the WIRE enum stays the three kinds a client may
+      // CLAIM, but the shape re-derivation below can answer with a fourth that no client
+      // is allowed to assert. TypeScript caught this the moment the kind widened, which is
+      // the guard working — a stored kind the sender cannot route must be a deliberate
+      // decision, never something that slipped through a narrowing.
+      let kind: "webpush" | NativeTokenKind = input.kind ?? "webpush";
       // NATIVE tokens: the SHAPE decides the transport, not the label (v2.99.79).
       //
       // The label arrives from a mobile shell over a WebView bridge, and getting it
