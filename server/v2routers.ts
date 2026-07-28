@@ -146,7 +146,7 @@ import { unsubscribeHeaders, unsubscribeLink } from "./unsubscribe";
 import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
 import { classifyNativeToken, isVoipDeclaration, type NativeTokenKind } from "./expoPush";
 import { fcmConfig } from "./fcm";
-import { apnsVoipConfigured } from "./apnsVoip";
+import { apnsVoipConfigured, apnsVoipConfig, apnsCredentialExpiry } from "./apnsVoip";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
 import { setIdentityAutoReply, autoReplyEnabledFor } from "./v2db";
@@ -5016,10 +5016,20 @@ export const v2AdminRouter = router({
           webpush: !!vapidConfig(),
           // APNs VoIP (v2.105.12) — the only transport that makes a LOCKED iPhone
           // show the real full-screen call screen. Reported separately because an
-          // iOS device holding an `apns` token on a fleet with no .p8 key is
+          // iOS device holding an `apns` token on a fleet with no credential is
           // precisely the case that stores a token nothing can deliver to, and it
           // is invisible otherwise.
           apnsVoip: apnsVoipConfigured(),
+          /** "token" (.p8) or "cert" (VoIP Services certificate), or null. */
+          apnsVoipMode: apnsVoipConfig()?.mode ?? null,
+          /**
+           * When a CERTIFICATE credential stops working (v2.105.14). Null for .p8,
+           * which never expires. This is the one credential here that dies on a
+           * date rather than because of a change — ringing would stop one morning
+           * with nothing in the diff to blame — so the operator gets to see it
+           * coming instead of finding out from a user.
+           */
+          apnsVoipExpiresAt: apnsCredentialExpiry()?.toISOString() ?? null,
         },
         /**
          * The kinds that any code path actually sends. Hard-coded on purpose: it is

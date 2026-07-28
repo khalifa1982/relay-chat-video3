@@ -496,10 +496,37 @@ function PushCheck({ identityId }: { identityId: number }) {
           label={d.transports.apnsVoip ? "iPhone ring (APNs VoIP) is configured" : "iPhone ring (APNs VoIP) is NOT configured"}
           detail={
             d.transports.apnsVoip
-              ? "A locked iPhone shows the full-screen call screen."
-              : "Needs APNS_P8_KEY, APNS_KEY_ID, APNS_TEAM_ID and APNS_BUNDLE_ID. Android is unaffected."
+              ? `A locked iPhone shows the full-screen call screen. Credential: ${
+                  d.transports.apnsVoipMode === "cert"
+                    ? "VoIP Services certificate"
+                    : "signing key (.p8)"
+                }.`
+              : "Needs either APNS_P8_KEY + APNS_KEY_ID + APNS_TEAM_ID, or APNS_VOIP_CERT_PEM + APNS_VOIP_KEY_PEM, plus a topic (APNS_VOIP_TOPIC or APNS_BUNDLE_ID). Android is unaffected."
           }
         />
+        {/* A certificate expires on a date nobody is watching — ringing would just
+            stop one morning with nothing in the diff to blame. Warn a month out,
+            which is enough time to reissue without downtime. A .p8 never expires,
+            so this row is absent for it rather than reassuring about nothing. */}
+        {d.transports.apnsVoipExpiresAt ? (
+          (() => {
+            const when = new Date(d.transports.apnsVoipExpiresAt);
+            const days = Math.round((when.getTime() - Date.now()) / 86_400_000);
+            return (
+              <Row
+                ok={days > 30}
+                label={
+                  days <= 0
+                    ? `The VoIP certificate EXPIRED ${Math.abs(days)} days ago — iPhones cannot ring`
+                    : days <= 30
+                      ? `The VoIP certificate expires in ${days} days — reissue it now`
+                      : `The VoIP certificate is valid for ${days} more days`
+                }
+                detail={`Expires ${when.toISOString().slice(0, 10)}. Apple lets two certificates exist at once, so you can reissue and swap with no downtime.`}
+              />
+            );
+          })()
+        ) : null}
         {/* The most likely reading of "it's not showing": testing by CALLING. */}
         <Row
           ok={d.ringPushed}

@@ -262,15 +262,39 @@ Two rules that are easy to get wrong and produce a SILENT failure rather than an
    the page would then hand us a token for its own device and start receiving somebody else's
    notifications (the v2.99.49 R1 class).
 
-- **`apns`** — an APNs device token, sent VoIP-style by the zero-dep `server/apnsVoip.ts`. This is the
-  ONLY transport that makes a **locked iPhone** show the real full-screen CallKit call screen: iOS
-  hands a `apns-push-type: voip` message on the `<bundle>.voip` topic to PushKit even with the app
-  not running. Needs `APNS_P8_KEY` (inline PEM, or a path to one), `APNS_KEY_ID`, `APNS_TEAM_ID` and
-  `APNS_BUNDLE_ID` in the server env; `APNS_VOIP_TOPIC` and `APNS_ENV` (sandbox opt-in) are optional.
-  **The `.p8` is a real secret** — same rule as the Firebase key. It is **ring-only**: a VoIP push
-  carries no `aps.alert`, so anything else sent this way is a notification nobody sees, and Apple
-  terminates apps that send VoIP pushes without reporting a call. That is also why `apns` stays out
-  of `ROUTABLE_PUSH_KINDS` — the offline-message email fallback must still fire for such a device.
+- **`apns-voip`** — a **PushKit** device token, sent VoIP-style by the zero-dep `server/apnsVoip.ts`.
+  This is the ONLY transport that makes a **locked iPhone** show the real full-screen CallKit call
+  screen: iOS hands an `apns-push-type: voip` message on the `<bundle>.voip` topic to PushKit even
+  with the app not running.
+
+  **APNs takes EITHER of two provider credentials and RELAY supports both**, because an operator has
+  whichever Apple gave them:
+    - **token** — `APNS_P8_KEY` (inline PEM or a path) + `APNS_KEY_ID` + `APNS_TEAM_ID`. Signs a
+      short-lived ES256 JWT. Never expires. **Preferred when both are configured**, precisely because
+      it cannot silently lapse.
+    - **cert** — `APNS_VOIP_CERT_PEM` + `APNS_VOIP_KEY_PEM` (each inline or a path). Mutual TLS: the
+      pair is presented at the handshake and there is **NO `authorization` header at all**. Sending a
+      bearer alongside a client certificate is how a working cert setup earns a 403 that reads like a
+      bad certificate. It **EXPIRES**, which is why the admin push doctor reports the date and goes
+      red 30 days out.
+
+  Plus a topic — `APNS_VOIP_TOPIC`, or derived as `<APNS_BUNDLE_ID>.voip`. `APNS_ENV` opts into
+  sandbox; production is the default so a production build is never silently un-ringable.
+
+  **Both credentials are real secrets** — same rule as the Firebase key: `/home/relay/.env` only,
+  never a commit, never a `workflow_dispatch` input.
+
+  **`apns-voip` IS NOT `apns`, and the difference is destructive.** iOS issues TWO hex tokens per
+  device: the PushKit one (topic `<bundle>.voip`) and the ordinary ALERT one (topic `<bundle>`). They
+  are indistinguishable by shape, so `isVoipDeclaration` trusts the shell's `kind` label for this one
+  case only — safe because mislabelling costs the declarer their own ring and nobody else anything. A
+  VoIP push sent to an ALERT token earns `BadDeviceToken`, which the sender reads as stale and
+  **PRUNES**. A plain `apns` row therefore stays inert and diagnosable (v2.105.11) and is never rung.
+
+  It is **ring-only**: a VoIP push carries no `aps.alert`, so anything else sent this way is a
+  notification nobody sees, and Apple terminates apps that send VoIP pushes without reporting a call.
+  That is also why both hex kinds stay out of `ROUTABLE_PUSH_KINDS` — the offline-message email
+  fallback must still fire for a device that can only ring.
 
 **A ring IS pushed (v2.105.12).** `kind:"incoming-call"` was removed in v2.99.11 at the owner's
 explicit request and restored at their request; `onPageCallee` in `server/_core/index.ts` sends it and

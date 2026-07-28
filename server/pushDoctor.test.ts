@@ -151,6 +151,29 @@ describe("the report names each link separately", () => {
     expect(ADMIN_UI).toMatch(/ok=\{d\.transports\.apnsVoip\}/);
   });
 
+  it("reports WHICH credential and when a certificate expires (v2.105.14)", () => {
+    // A VoIP Services certificate is the one credential here that dies on a DATE
+    // rather than because of a change: ringing would stop one morning with nothing
+    // in the diff to blame. The doctor surfaces it so the operator sees it coming.
+    expect(body).toMatch(/apnsVoipMode: apnsVoipConfig\(\)\?\.mode \?\? null/);
+    expect(body).toMatch(/apnsVoipExpiresAt: apnsCredentialExpiry\(\)\?\.toISOString\(\) \?\? null/);
+    // The row must be ABSENT for a .p8 rather than reassuring about a date that
+    // does not exist — hence the null guard, not a fallback string.
+    expect(ADMIN_UI).toMatch(/d\.transports\.apnsVoipExpiresAt \?/);
+    // Warn AHEAD of the lapse, not after it.
+    expect(ADMIN_UI).toMatch(/days > 30/);
+    expect(ADMIN_UI).toMatch(/EXPIRED/);
+  });
+
+  it("the 'not configured' hint names BOTH credential shapes", () => {
+    // Naming only the .p8 sent an operator holding a certificate looking for a
+    // file they do not have — which is exactly what happened here.
+    const ui = ADMIN_UI.slice(ADMIN_UI.indexOf("APNs VoIP) is NOT configured"));
+    expect(ui).toMatch(/APNS_P8_KEY/);
+    expect(ui).toMatch(/APNS_VOIP_CERT_PEM/);
+    expect(ui).toMatch(/APNS_VOIP_KEY_PEM/);
+  });
+
   it("the claimed send list matches what the code ACTUALLY sends", () => {
     // A hard-coded list that drifts from reality is worse than no list: it would
     // send somebody looking in the wrong place. Cross-checked against every real
