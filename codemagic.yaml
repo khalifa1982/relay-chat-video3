@@ -16,7 +16,7 @@ workflows:
         APP_STORE_APP_ID: "6787503091"
         APPLE_TEAM_ID: "QJBVFFML9P"
       node: 22
-      xcode: 16.2
+      xcode: 26.0
       cocoapods: default
     scripts:
       - name: Install dependencies
