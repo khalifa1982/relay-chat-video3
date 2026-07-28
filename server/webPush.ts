@@ -22,6 +22,7 @@ import crypto from "crypto";
 import { listPushSubscriptions, deletePushSubscription, pushEnabledForIdentity } from "./v2db";
 import { sendFcmData } from "./fcm";
 import { sendExpoPush } from "./expoPush";
+import { sendVoipRing } from "./apnsVoip";
 import { appBaseUrl } from "./appUrl";
 
 export interface PushPayload {
@@ -32,6 +33,19 @@ export interface PushPayload {
   tag?: string;
   /** App path to open on tap, e.g. "/app/dialer". */
   url?: string;
+  /**
+   * Ring-only, and only APNs VoIP reads it (v2.105.12). A VoIP push is NOT a
+   * notification — iOS hands it to PushKit, which reports a real CallKit call —
+   * so it needs the things an ANSWER requires rather than the things a banner
+   * requires: who is calling, and the room to join. A title/body alone cannot be
+   * answered.
+   */
+  call?: {
+    callerName: string;
+    callerPin: string;
+    roomId: string;
+    video: boolean;
+  };
 }
 
 const b64url = (b: Buffer) => b.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -188,7 +202,37 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
     await Promise.all(r.dead.map(t => deletePushSubscription(t).catch(() => {})));
   }
   subs = subs.filter(s => s.kind !== "expo");
-  const nativeDelivered = fcmDelivered + expoDelivered;
+  // APNs VoIP (kind="apns-voip", v2.105.12; the kind narrowed in v2.105.13).
+  // The endpoint IS the PushKit token. This is the ONLY transport that makes a
+  // locked iPhone show the real full-screen CallKit call screen, and it is
+  // deliberately RING-ONLY: a VoIP push carries no `aps.alert`, so iOS delivers
+  // it to PushKit rather than the notification centre — using it for a message
+  // would produce a notification nobody ever sees, and Apple terminates apps
+  // that send VoIP pushes without reporting a call.
+  //
+  // IT MUST BE `apns-voip` AND NOT `apns`, and getting that wrong is destructive
+  // rather than merely ineffective: iOS issues TWO hex tokens per device — the
+  // PushKit one (topic `<bundle>.voip`) and the ordinary ALERT one (topic
+  // `<bundle>`). A VoIP push sent to an ALERT token earns `BadDeviceToken`,
+  // which this function then reads as stale and PRUNES — deleting the very row
+  // v2.105.11 chose to keep so the admin push doctor could report it. So a plain
+  // `apns` row stays inert and diagnosable, exactly as it was, and only a token
+  // the shell explicitly declared as PushKit is ever rung.
+  const apnsTokens = subs.filter(s => s.kind === "apns-voip").map(s => s.endpoint);
+  let apnsDelivered = 0;
+  if (apnsTokens.length > 0 && payload.kind === "incoming-call" && payload.call) {
+    const r = await sendVoipRing(apnsTokens, payload.call);
+    apnsDelivered = r.sent;
+    // Prune ONLY what APNs reports as gone (410 / BadDeviceToken). A transient
+    // failure must never cost somebody their registration — that is exactly the
+    // defect v2.105.11 fixed on the FCM path, where a 400 was read as stale.
+    await Promise.all(r.invalidTokens.map(t => deletePushSubscription(t).catch(() => {})));
+  }
+  // Both hex kinds leave the webpush list: `apns-voip` was just handled, and a
+  // plain `apns` alert token is not a Web Push subscription and must never be
+  // handed to the webpush sender.
+  subs = subs.filter(s => s.kind !== "apns-voip" && s.kind !== "apns");
+  const nativeDelivered = fcmDelivered + expoDelivered + apnsDelivered;
   const cfg = vapidConfig();
   if (!cfg) return nativeDelivered;
   if (subs.length === 0) return nativeDelivered;

@@ -134,20 +134,32 @@ describe("the report names each link separately", () => {
     expect(body).toMatch(/dbOk = false/);
   });
 
-  it("says out loud that a CALL pushes nothing", () => {
-    // The likeliest reading of "it's not showing": testing by calling a closed app.
-    // `incoming-call` was removed in v2.99.11 at the owner's own request and
-    // nothing has sent it since, so no configuration can make that ring.
-    expect(body).toMatch(/ringPushed: false/);
-    expect(body).toMatch(/sendsFor: \["message", "missed-call", "voicemail", "contact-online"\]/);
-    expect(ADMIN_UI).toMatch(/A CALL does not push at all/);
+  it("reports whether a CALL rings, and does not hard-code the answer in the UI", () => {
+    // The likeliest reading of "it's not showing" is testing by calling a closed
+    // app, so this row is the report's most consequential line — which is exactly
+    // why it must not be a literal. It said "A CALL does not push at all" while
+    // v2.99.11 held; v2.105.12 restored the ring, and a hard-coded `ok={false}`
+    // would have gone on telling the owner their phone cannot ring while it rang.
+    // The row now READS the server's own flag, so the two cannot diverge again.
+    expect(body).toMatch(/ringPushed: true/);
+    expect(ADMIN_UI).toMatch(/ok=\{d\.ringPushed\}/);
+    expect(ADMIN_UI).not.toMatch(/A CALL does not push at all"\s*$/m);
+    // The transport that actually rings a LOCKED iPhone is reported separately:
+    // an apns token on a fleet with no .p8 key is undeliverable and invisible
+    // otherwise.
+    expect(body).toMatch(/apnsVoip: apnsVoipConfigured\(\)/);
+    expect(ADMIN_UI).toMatch(/ok=\{d\.transports\.apnsVoip\}/);
   });
 
   it("the claimed send list matches what the code ACTUALLY sends", () => {
     // A hard-coded list that drifts from reality is worse than no list: it would
     // send somebody looking in the wrong place. Cross-checked against every real
     // call site's `kind`.
-    const declared = ["message", "missed-call", "voicemail", "contact-online"];
+    // `incoming-call` joined this list in v2.105.12 — the ring push removed in
+    // v2.99.11 is back at the owner's request. The guard worked exactly as
+    // intended: it went red the moment the code sent a kind the operator-facing
+    // list did not claim, which is the drift it exists to catch.
+    const declared = ["incoming-call", "message", "missed-call", "voicemail", "contact-online"];
     const sources = [ROUTERS, read("server/_core/index.ts")];
     const actual = new Set<string>();
     for (const src of sources) {
@@ -157,8 +169,10 @@ describe("the report names each link separately", () => {
     }
     expect(actual.size, "found the real call sites").toBeGreaterThan(0);
     expect([...actual].sort()).toEqual([...declared].sort());
-    // And `incoming-call` really is sent by nothing.
-    expect(actual.has("incoming-call")).toBe(false);
+    // A ring IS pushed now, so the doctor must not still tell an operator it isn't
+    // — that claim is the single most misleading thing this report could carry.
+    expect(actual.has("incoming-call")).toBe(true);
+    expect(ROUTERS).toMatch(/ringPushed: true/);
   });
 });
 

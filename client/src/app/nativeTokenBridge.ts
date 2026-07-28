@@ -78,6 +78,26 @@ export function tokenKind(token: string): "expo" | "fcm" | "apns" | null {
   return null;
 }
 
+/** Every kind this bridge can ask the server to store. */
+export type BridgeKind = "expo" | "fcm" | "apns" | "apns-voip";
+
+/**
+ * The ONE thing the shape cannot answer (v2.105.13).
+ *
+ * iOS issues TWO hex tokens: the PushKit one (rings via CallKit, topic
+ * `<bundle>.voip`) and the ordinary alert one (topic `<bundle>`). They are
+ * indistinguishable by shape, so the shell's declaration is the only signal —
+ * and it is safe to trust because mislabelling costs the declarer their own ring
+ * and nobody else anything. Mirrors the server's `isVoipDeclaration`; a
+ * declaration on a NON-hex token is ignored, so it can never relabel an Expo or
+ * FCM token.
+ */
+export function resolveKind(token: string, declaredVoip: boolean): BridgeKind | null {
+  const shape = tokenKind(token);
+  if (!shape) return null;
+  return declaredVoip && shape === "apns" ? "apns-voip" : shape;
+}
+
 /**
  * Is this message one we should act on?
  *
@@ -89,7 +109,7 @@ export function acceptTokenMessage(
   ev: { origin?: string; source?: unknown; data?: unknown },
   selfOrigin: string,
   selfWindow: unknown
-): string | null {
+): { token: string; voip: boolean } | null {
   // 1. Origin. Empty / "null" is the native-injection case; anything else must
   //    match us exactly.
   const origin = ev.origin ?? "";
@@ -110,10 +130,13 @@ export function acceptTokenMessage(
     }
   }
   if (typeof data !== "object" || data === null) return null;
-  const d = data as { type?: unknown; token?: unknown };
+  const d = data as { type?: unknown; token?: unknown; kind?: unknown };
   if (d.type !== "SET_PUSH_TOKEN") return null;
   if (!looksLikePushToken(d.token)) return null;
-  return (d.token as string).trim();
+  // The shell may declare `kind: "apns-voip"` for its PushKit token. Any other
+  // value is IGNORED rather than refused — `platform` and other hints have always
+  // been tolerated here, and the shape still decides everything else.
+  return { token: (d.token as string).trim(), voip: d.kind === "apns-voip" };
 }
 
 /**
@@ -124,16 +147,25 @@ export function acceptTokenMessage(
  * app switch forever.
  */
 export function mountNativeTokenBridge(
-  register: (token: string, kind: "expo" | "fcm" | "apns") => void
+  register: (token: string, kind: BridgeKind) => void
 ): () => void {
   if (typeof window === "undefined") return () => {};
-  let last: string | null = null;
+  // A SET, not a single slot (v2.105.13). An iOS shell now legitimately posts TWO
+  // tokens — the Expo one for notifications and the PushKit one for ringing — and
+  // they may alternate on every foreground. A one-slot `last` would see each as
+  // "changed" and re-register both on every app switch, forever.
+  const seen = new Set<string>();
   const onMessage = (ev: MessageEvent) => {
-    const token = acceptTokenMessage(ev, window.location.origin, window);
-    if (!token || token === last) return;
-    const kind = tokenKind(token);
+    const accepted = acceptTokenMessage(ev, window.location.origin, window);
+    if (!accepted) return;
+    const { token, voip } = accepted;
+    // Keyed on kind too, so a shell that corrects a mislabelled token — posting
+    // the same string first as apns and then as apns-voip — is not ignored.
+    const kind = resolveKind(token, voip);
     if (!kind) return;
-    last = token;
+    const key = `${kind}:${token}`;
+    if (seen.has(key)) return;
+    seen.add(key);
     register(token, kind);
   };
   window.addEventListener("message", onMessage);

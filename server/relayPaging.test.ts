@@ -12,15 +12,20 @@ import {
 /**
  * Offline-callee behavior — protocol tests.
  *
- * v2.99.11 (owner directive: "if the user is offline it should NOT ring
- * automatically — tell the caller he's offline; you can leave an SMS or voice
- * message"): the v2.83 PAGING model (keep the dial alive + push-wake the phone
- * + redeliver the ring on reconnect) is RETIRED for a cold offline dial. An
- * invite to an unreachable number now resolves the identity via the hook and
- * returns a FAST, honest error{offline} (real identity) or error{nonexistent},
- * recording the miss immediately so it surfaces on the callee's History +
- * (pref-gated) email when they return. The LIVE-path ring redelivery
- * (deliverPendingRing on a mid-ring reload) is unchanged.
+ * TWO OWNER DIRECTIVES THAT READ AS OPPOSITES, AND THE ONE RULE THAT SATISFIES
+ * BOTH. v2.99.11: "if the user is offline it should NOT ring automatically —
+ * tell the caller he's offline; you can leave an SMS or voice message", which
+ * retired the v2.83 paging model. v2.105.12: "build the incoming-call push path
+ * and restore ringing", so a closed or locked phone rings like WhatsApp's does.
+ *
+ * The relay now pages ONLY when a push ACTUALLY REACHED a device (`pushed > 0`
+ * from the hook). So:
+ *   • a phone with the app installed → PAGE: dial held open, ring redeliverable,
+ *     caller told "Reaching their phone…" via ringing{paging:true}.
+ *   • nobody reachable → the v2.99.11 behaviour, unchanged: fast honest
+ *     error{offline}, miss recorded, leave-a-message card.
+ * A hook that omits `pushed` reads as 0, which is why every pre-v2.105.12 case
+ * below still describes current behaviour rather than having been rewritten.
  */
 
 type Sent = Record<string, unknown>;
@@ -84,7 +89,7 @@ describe("offline-callee paging", () => {
     expect(reg.pendingRings.size).toBe(0);
   });
 
-  it("a REAL but unreachable number → FAST error{offline} + records the miss, NO keep-alive ring (v2.99.11)", async () => {
+  it("a REAL but unreachable number whose hook omits `pushed` still fails fast (the additive default)", async () => {
     const misses: string[] = [];
     const paged: string[] = [];
     const onPage: PageCalleeHook = async (info) => {
@@ -165,6 +170,145 @@ describe("offline-callee paging", () => {
     const b2 = register(reg, "Bob", "222222", "cid-bob");
     expect(b2.ofType("ring").length).toBe(0);
     expect(reg.pendingRings.has("222222")).toBe(false);
+  });
+
+  // ── v2.105.12: ringing restored, gated on the push actually landing ──────
+
+  /** A hook standing in for a callee whose phone WAS woken by a push. */
+  const wokeOneDevice: PageCalleeHook = async () => ({ exists: true, name: "Bob", pushed: 1 });
+
+  it("a push that REACHED a device pages: dial held open, ring redeliverable, no miss yet", async () => {
+    const misses: string[] = [];
+    const a = register(reg, "Ana", "111111");
+    handleMessage(reg, a.asConn(), { type: "invite", to: "222222" }, undefined, (i) => misses.push(i.calleePin), wokeOneDevice);
+    await flush();
+    // NOT an error — the caller stays on the dial.
+    expect(a.ofType("error").length).toBe(0);
+    const ack = a.ofType("ringing")[0];
+    expect(ack?.pin).toBe("222222");
+    // `paging` is what makes the caller's status line honest: the push has been
+    // sent but nothing is audibly ringing yet.
+    expect(ack?.paging).toBe(true);
+    // The ring must be REDELIVERABLE, or opening the app finds nothing to answer.
+    const pr = reg.pendingRings.get("222222");
+    expect(pr?.from).toBe("111111");
+    expect(pr?.roomId).toBeTruthy();
+    // deliverPendingRing refuses a ring the caller is no longer offering, so the
+    // caller's own bookkeeping has to name the callee too.
+    expect(reg.clients.get("111111")?.ringing.has("222222")).toBe(true);
+    // NO miss is recorded yet — the call is still ringing. Recording one here
+    // would put a missed call in History for a call about to be answered.
+    expect(misses).toEqual([]);
+  });
+
+  it("the paging room is the one a late accept joins — so the callee can actually answer", async () => {
+    const a = register(reg, "Ana", "111111");
+    handleMessage(reg, a.asConn(), { type: "invite", to: "222222" }, undefined, undefined, wokeOneDevice);
+    await flush();
+    const room = String(reg.pendingRings.get("222222")?.roomId);
+    // THE POINT OF CARRYING A ROOM IN THE PUSH. Bob's phone rang, he opens the
+    // app: registering delivers the ring, and accepting the room connects.
+    const b = register(reg, "Bob", "222222", "cid-bob");
+    expect(b.ofType("ring")[0]?.roomId).toBe(room);
+    handleMessage(reg, b.asConn(), { type: "accept", roomId: room });
+    expect(b.ofType("joined").length).toBe(1);
+    expect(a.ofType("peer-joined")[0]?.pin).toBe("222222");
+  });
+
+  it("the late ring UPGRADES the caller's card from paging to a real Ringing…", async () => {
+    const a = register(reg, "Ana", "111111");
+    handleMessage(reg, a.asConn(), { type: "invite", to: "222222" }, undefined, undefined, wokeOneDevice);
+    await flush();
+    expect(a.ofType("ringing")[0]?.paging).toBe(true);
+    register(reg, "Bob", "222222", "cid-bob");
+    // A SECOND ack, this one WITHOUT `paging` — the client re-labels in place.
+    const acks = a.ofType("ringing");
+    expect(acks.length).toBe(2);
+    expect(acks[1]?.paging).toBeFalsy();
+  });
+
+  it("pushed:0 (no subscription / push switched off) keeps the FAST offline bounce", async () => {
+    // The half of v2.99.11 worth keeping: paging somebody nothing can wake would
+    // sit the caller on "Reaching their phone…" for 65s to no purpose.
+    const misses: string[] = [];
+    const a = register(reg, "Ana", "111111");
+    handleMessage(
+      reg, a.asConn(), { type: "invite", to: "222222" }, undefined,
+      (i) => misses.push(i.calleePin),
+      async () => ({ exists: true, name: "Bob", pushed: 0 }),
+    );
+    await flush();
+    expect(a.ofType("error")[0]?.code).toBe("offline");
+    expect(a.ofType("ringing").length).toBe(0);
+    expect(reg.pendingRings.size).toBe(0);
+    expect(misses).toEqual(["222222"]);
+  });
+
+  it("a NONEXISTENT number never pages, however the hook is shaped", async () => {
+    const a = register(reg, "Ana", "111111");
+    handleMessage(reg, a.asConn(), { type: "invite", to: "999999" }, undefined, undefined,
+      // `pushed` on a non-existent identity is nonsense; existence must win.
+      async () => ({ exists: false, pushed: 3 }));
+    await flush();
+    expect(a.ofType("error")[0]?.code).toBe("nonexistent");
+    expect(reg.pendingRings.size).toBe(0);
+  });
+
+  it("an UNVERIFIED caller gets no NAME in the paging ack", async () => {
+    // Same reasoning as the offline reply (v2.99.49): a named ack reachable by
+    // probing the number space turns existence-checking into name-harvesting.
+    // This path is reachable by the same probe, so it withholds the same field.
+    const a = register(reg, "Ana", "111111");
+    const rec = reg.clients.get("111111")!;
+    rec.verifiedPin = false;
+    handleMessage(reg, a.asConn(), { type: "invite", to: "222222" }, undefined, undefined, wokeOneDevice);
+    await flush();
+    const ack = a.ofType("ringing")[0];
+    expect(ack?.paging).toBe(true);
+    expect(ack?.name).toBeUndefined();
+  });
+
+  it("a HANG-UP while the hook awaits leaves NO pending ring behind", async () => {
+    // The epoch guard. Without it a slow push resolving after the caller gave up
+    // would register a ring for a dial that no longer exists — the callee's phone
+    // would ring for nobody.
+    const a = register(reg, "Ana", "111111");
+    let release: (() => void) | null = null;
+    const slow: PageCalleeHook = () =>
+      new Promise((res) => { release = () => res({ exists: true, name: "Bob", pushed: 1 }); });
+    handleMessage(reg, a.asConn(), { type: "invite", to: "222222" }, undefined, undefined, slow);
+    handleMessage(reg, a.asConn(), { type: "leave" });
+    release!();
+    await flush();
+    expect(reg.pendingRings.size).toBe(0);
+    expect(a.ofType("ringing").length).toBe(0);
+  });
+
+  it("a paged ring still expires — a phone opened much later does not ring", async () => {
+    const a = register(reg, "Ana", "111111");
+    handleMessage(reg, a.asConn(), { type: "invite", to: "222222" }, undefined, undefined, wokeOneDevice);
+    await flush();
+    const pr = reg.pendingRings.get("222222")!;
+    reg.pendingRings.set("222222", { ...pr, at: Date.now() - PENDING_RING_TTL_MS - 1000 });
+    const b = register(reg, "Bob", "222222", "cid-bob");
+    expect(b.ofType("ring").length).toBe(0);
+    expect(reg.pendingRings.has("222222")).toBe(false);
+  });
+
+  it("the caller hanging up on a paged dial cancels the ring and records the miss", async () => {
+    const misses: Array<{ pin: string; reason: string }> = [];
+    const onMissed: MissedCallHook = (i) => misses.push({ pin: i.calleePin, reason: i.reason });
+    const a = register(reg, "Ana", "111111");
+    handleMessage(reg, a.asConn(), { type: "invite", to: "222222" }, undefined, onMissed, wokeOneDevice);
+    await flush();
+    expect(reg.pendingRings.has("222222")).toBe(true);
+    // The hook belongs on the LEAVE too — this is the call the `leave` handler
+    // makes, and it is the one that turns an abandoned page into a missed call.
+    handleMessage(reg, a.asConn(), { type: "leave" }, undefined, onMissed);
+    // Now the miss lands — deferred from the page to the give-up, which is when
+    // the call was actually missed.
+    expect(reg.pendingRings.has("222222")).toBe(false);
+    expect(misses).toEqual([{ pin: "222222", reason: "cancelled" }]);
   });
 
   it("a MID-DIAL re-register (geo-flag re-affirm / SSE blip) must NOT reap the caller's fresh dial room", () => {

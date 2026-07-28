@@ -889,16 +889,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
         }
         break;
       case "ringing":
-        // Server confirmed our invite was DELIVERED to a LIVE callee device —
-        // it's now actually alerting. Advance the caller's staged progress from
-        // "Calling…" (request sent) to "Ringing…" (destination being alerted).
-        // v2.99.11: the old `paging` variant ("Reaching their phone…") is gone —
-        // an OFFLINE callee is no longer auto-rung/paged, so the server now
-        // returns error{offline} instead of a paging ack (the caller then gets
-        // the leave-a-message card). A `ringing` ack therefore always means a
-        // real, live ring.
+        // Server confirmed our invite was DELIVERED — the callee's device is now
+        // being alerted. Advance the caller's staged progress from "Calling…"
+        // (request sent) to "Ringing…" (destination being alerted).
+        //
+        // `paging` (restored v2.105.12) distinguishes the two ways that happens,
+        // and the distinction is honest rather than cosmetic: without it, a
+        // pocketed phone that has been sent a wake-up push would claim to be
+        // "Ringing…" while nothing is audibly ringing yet. v2.99.11 removed
+        // paging altogether; the owner has since asked for ringing back, and the
+        // server now pages ONLY when a push actually reached a device — a callee
+        // nothing can wake still gets error{offline} and the leave-a-message
+        // card. When their app opens, `deliverPendingRing` sends a second
+        // `ringing` ack WITHOUT `paging`, which upgrades this line in place.
         if (inCall && outgoingDial && !callAnswered) {
-          setCallStatus("ringing");
+          setCallStatus("ringing", m.paging ? "Reaching their phone…" : undefined);
           // Upgrade the dial card with the callee's registered display name if
           // the dialer didn't know it (dialed a raw number, not a contact).
           if (m.name && !outgoingDial.group && !outgoingDial.name) {

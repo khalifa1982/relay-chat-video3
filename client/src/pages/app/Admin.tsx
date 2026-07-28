@@ -488,11 +488,23 @@ function PushCheck({ identityId }: { identityId: number }) {
         />
         <Row ok={d.transports.expo} label="Expo delivery is available" detail={d.transports.expoAccessToken ? "EXPO_ACCESS_TOKEN set." : "No access token — fine unless the Expo account enforces one."} />
         <Row ok={d.transports.webpush} label={d.transports.webpush ? "Browser push is configured" : "Browser push is NOT configured"} />
+        {/* A locked iPhone's real call screen comes ONLY from APNs VoIP, so an
+            iOS device holding an apns token on a keyless fleet is the one
+            combination that stores a token nothing can deliver to. */}
+        <Row
+          ok={d.transports.apnsVoip}
+          label={d.transports.apnsVoip ? "iPhone ring (APNs VoIP) is configured" : "iPhone ring (APNs VoIP) is NOT configured"}
+          detail={
+            d.transports.apnsVoip
+              ? "A locked iPhone shows the full-screen call screen."
+              : "Needs APNS_P8_KEY, APNS_KEY_ID, APNS_TEAM_ID and APNS_BUNDLE_ID. Android is unaffected."
+          }
+        />
         {/* The most likely reading of "it's not showing": testing by CALLING. */}
         <Row
-          ok={false}
-          label="A CALL does not push at all"
-          detail={`Removed in v2.99.11 at your request, so a closed app never rings. What does push: ${d.sendsFor.join(", ")}.`}
+          ok={d.ringPushed}
+          label={d.ringPushed ? "A CALL pushes a ring" : "A CALL does not push at all"}
+          detail={`What pushes: ${d.sendsFor.join(", ")}.`}
         />
       </ul>
       <Button

@@ -1701,11 +1701,21 @@ export type MissedCallHook = (info: {
  * registered, or its SSE died — a backgrounded/locked phone). The hook answers
  * from the DB whether the number belongs to a real identity (and its display
  * name) and, when it does, pushes a "call is coming in" notification to that
- * identity's subscribed devices (Web Push). The relay then PAGES: it keeps the
- * dial alive so the callee can open the app and receive the ring late
+ * identity's subscribed devices. The relay then PAGES: it keeps the dial alive
+ * so the callee can open the app and receive the ring late
  * (deliverPendingRing), instead of instantly bouncing the caller with
  * "offline". Resolving { exists: false } (or rejecting) falls back to the
  * classic offline error.
+ *
+ * `pushed` IS WHAT DECIDES WHETHER TO PAGE, and it is the whole of how this
+ * satisfies two owner directives that read as opposites (v2.105.12). v2.99.11
+ * removed paging outright — "if the user is offline it should NOT ring
+ * automatically" — and the owner has since asked for ringing back. Both hold if
+ * the relay pages ONLY when a device was actually woken: a phone with the app
+ * installed rings, and somebody no push can reach still fails fast with the
+ * leave-a-message card instead of a 65-second "Reaching their phone…" that was
+ * never going to resolve. A hook that omits the field reads as 0, so an
+ * older/bare wiring keeps exactly the v2.99.11 behaviour.
  */
 export type PageCalleeHook = (info: {
   calleePin: string;
@@ -1713,7 +1723,7 @@ export type PageCalleeHook = (info: {
   callerName: string;
   roomId: string;
   video: boolean;
-}) => Promise<{ exists: boolean; name?: string } | null>;
+}) => Promise<{ exists: boolean; name?: string; pushed?: number } | null>;
 
 /**
  * Protocol logic. Kept as a pure function over (registry, socket-state,
@@ -2123,7 +2133,24 @@ export function handleMessage(
             });
             return;
           }
-          onPageCallee({ calleePin: to, callerPin, callerName: me.name, roomId: "", video: wantVideo })
+          // THE ROOM IS CREATED BEFORE THE AWAIT, and that ordering is load-bearing
+          // rather than incidental: the push payload carries the room the callee must
+          // join to answer, so minting it afterwards would send a ring with nothing to
+          // connect to — a phone that rings and then cannot answer.
+          //
+          // Checked against BOTH client paths before doing it, because the offline
+          // branch has never produced a `room` ack before:
+          //   • 1:1 — `inParkedCall()` is `callIsGroup || roomId.startsWith("pl-")`, both
+          //     false here, so a subsequent error{offline} still reaches the fatal branch
+          //     and still raises the leave-a-message card. Unchanged.
+          //   • GROUP — an existing room means the remaining invitees are flushed off the
+          //     `room` ack, which is the ORDINARY path; v2.99.19's one-at-a-time
+          //     promotion dance exists precisely because an offline first invitee used to
+          //     create no room, and it still covers `nonexistent`/`unavailable`, which
+          //     return before this point. The per-invitee drain at the client keys on
+          //     `pin`, which every reply below carries.
+          const pagingRoom = ensureDialRoom();
+          onPageCallee({ calleePin: to, callerPin, callerName: me.name, roomId: pagingRoom, video: wantVideo })
             .then(info => {
               // Stale-continuation guard — the SAME discipline the party-line
               // resolver applies at `settle` (line ~1526). onPageCallee awaits
@@ -2132,10 +2159,35 @@ export function handleMessage(
               // ctxEpoch (a sibling group-dial invite moves only dialEpoch, so
               // those coexist). A moved epoch ⇒ this offline result belongs to a
               // dial that no longer exists — drop it, so we never fire a stray
-              // error / phantom miss into the caller's NEW context.
+              // error / phantom miss into the caller's NEW context. It is also what
+              // stops a hang-up racing the continuation into registering a pending
+              // ring for a dial that no longer exists.
               const callerNow = reg.clients.get(callerPin);
               if (!callerNow || callerNow.ctxEpoch !== ctxEpoch) return;
               if (info && info.exists) {
+                if ((info.pushed ?? 0) > 0) {
+                  // PAGING (restored v2.105.12). A device was actually woken, so hold
+                  // the dial open: the ring is redeliverable for PENDING_RING_TTL_MS,
+                  // and the moment the callee's app registers, `deliverPendingRing`
+                  // hands it over and upgrades this ack to a real "Ringing…".
+                  callerNow.ringing.add(to);
+                  reg.pendingRings.set(to, { from: callerPin, roomId: pagingRoom, video: wantVideo, at: Date.now() });
+                  safeSend(callerSocket, {
+                    type: "ringing",
+                    pin: to,
+                    // The name is withheld from an UNVERIFIED caller for exactly the
+                    // reason the offline reply withholds it (v2.99.49): a named ack
+                    // across the whole number space is name-harvesting, and a paging
+                    // ack is reachable by the same probe.
+                    name: callerNow.verifiedPin ? info.name : undefined,
+                    // The caller's client renders "Reaching their phone…" rather than
+                    // "Ringing…", because nothing is audibly ringing yet.
+                    paging: true,
+                  });
+                  return;
+                }
+                // Nothing could be woken — no subscription, push switched off, or every
+                // token stale. Fail FAST and honestly rather than paging into silence.
                 safeSend(callerSocket, {
                   type: "error",
                   code: "offline",
@@ -2146,7 +2198,7 @@ export function handleMessage(
                   // turned existence-probing into name-harvesting across the
                   // whole number space. A real user dialling a contact still
                   // gets the honest "<Name> is offline right now."
-                  message: reg.clients.get(callerPin)?.verifiedPin
+                  message: callerNow.verifiedPin
                     ? (info.name || "They") + " is offline right now."
                     : "They're offline right now.",
                 });

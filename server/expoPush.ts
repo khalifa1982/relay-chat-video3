@@ -40,7 +40,33 @@ const EXPO_BATCH = 100;
  *
  * CRITICALLY, an `apns` row must NOT count as reachable — see `hasRoutablePushKind`.
  */
-export type NativeTokenKind = "expo" | "fcm" | "apns";
+export type NativeTokenKind = "expo" | "fcm" | "apns" | "apns-voip";
+
+/**
+ * THE ONE CASE WHERE THE SHAPE CANNOT DECIDE, AND SAYING SO IS THE WHOLE POINT
+ * (v2.105.13).
+ *
+ * iOS hands an app TWO different hex tokens and they are NOT interchangeable:
+ *
+ *   • the ALERT token, from `registerForRemoteNotifications`, addressed on topic
+ *     `<bundle>` — ordinary notifications.
+ *   • the PUSHKIT token, from `PKPushRegistry`, addressed on topic
+ *     `<bundle>.voip` — VoIP pushes, and the ONLY thing that shows CallKit on a
+ *     locked phone.
+ *
+ * Both are pure hex of the same length, so `classifyNativeToken` physically
+ * cannot tell them apart. Send a VoIP push to an ALERT token and APNs answers
+ * `BadDeviceToken`, which the sender reads as stale and PRUNES — destroying the
+ * registration, the exact defect v2.105.11 fixed on the FCM path.
+ *
+ * So this is the single kind a client is TRUSTED to assert, and it is safe for a
+ * narrow reason: a shell that mislabels its own token breaks only its own
+ * delivery. There is nothing to gain and no other user to affect. Everywhere
+ * else the shape still overrides the label.
+ */
+export function isVoipDeclaration(declared: unknown, shape: NativeTokenKind | null): boolean {
+  return declared === "apns-voip" && shape === "apns";
+}
 
 /** The kinds something actually sends to. `apns` is deliberately absent: a stored token
  *  we cannot deliver to must never suppress the offline-message EMAIL fallback, or the
