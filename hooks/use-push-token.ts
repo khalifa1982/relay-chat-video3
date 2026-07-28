@@ -66,7 +66,25 @@ export function usePushToken(webViewRef: React.RefObject<WebView | null>) {
         const projectId =
           (Constants?.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas
             ?.projectId ?? (Constants as { easConfig?: { projectId?: string } })?.easConfig?.projectId;
-        if (projectId) {
+        // iOS ONLY, AND THAT RESTRICTION IS THE POINT.
+        //
+        // Expo's push service needs its OWN credential PER PLATFORM: the APNs key for
+        // iOS, and a SEPARATE FCM V1 service account uploaded to EAS for Android.
+        // RELAY's own FCM service account (in the fleet's .env) does NOT satisfy the
+        // Android one.
+        //
+        // Android already works today, because there the device token IS an FCM
+        // registration token and RELAY sends to it directly. Routing Android through
+        // Expo as well makes it depend on a credential that may not be in EAS — so
+        // merely SETTING extra.eas.projectId would fix iOS and silently break Android.
+        // Only iOS is broken, so only iOS changes transport. Moving Android across is a
+        // deliberate follow-up once that credential is confirmed, never a side effect of
+        // configuring a project id.
+        //
+        // (Restored: this guard was dropped from the branch after it was first pushed,
+        // and the projectId landed in the same window — precisely the combination it
+        // exists to make safe.)
+        if (projectId && Platform.OS === "ios") {
           const expoToken = await Notifications.getExpoPushTokenAsync({ projectId });
           if (expoToken?.data) pushToken = expoToken.data;
         }
