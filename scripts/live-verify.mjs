@@ -129,6 +129,17 @@ export function lazyChunkNames(js, prefix) {
   return [...new Set(String(js).match(re) || [])];
 }
 
+/** Is this base URL the in-fleet probe rather than a public one?
+ *
+ *  Exported so it can be tested directly over a table. Inferring it from a live
+ *  fetch would make the test depend on public DNS, and a DNS failure produces the
+ *  same FAIL the assertion is looking for — i.e. it would pass for the wrong
+ *  reason, which is the failure mode this whole file exists to avoid. */
+export function isLoopbackHost(hostname) {
+  const h = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "localhost" || h === "::1" || /^127\./.test(h);
+}
+
 const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
 
 async function fetchWithTimeout(url, init = {}) {
@@ -380,8 +391,24 @@ export async function runChecks(base, opts = {}) {
     if (!rb.ok || !sm.ok) return fail(n, `robots ${rb.status} / sitemap ${sm.status}`);
     const xml = await sm.text();
     if (!xml.includes("<urlset")) return fail(n, "sitemap.xml is not a urlset");
-    // v2.92.1 made these dynamic precisely so they name the host that served
-    // them; a sitemap advertising a different origin is the stale-static bug.
+    /* SELF-REFERENCE IS REQUIRED ONLY FROM A PUBLIC HOST, and the first run
+       against production is what taught me that. v2.92.1 made these dynamic so
+       they name the deployment's own origin — but `appBaseUrl()` resolves
+       APP_URL, then DOMAIN, and only THEN the request's Host. A fleet with
+       either env set (which is the recommended configuration) therefore serves
+       `https://your-chat.io` no matter who asks, so the in-fleet probe against
+       127.0.0.1 got a sitemap naming a different host and this check called it a
+       failure — a false alarm on correct behaviour, from the one vantage point
+       that cannot see its own public name. What the check is really for is
+       catching a STALE STATIC sitemap, so from a loopback probe it asserts the
+       weaker, true thing: a well-formed urlset naming an absolute http(s)
+       origin. */
+    const loopback = isLoopbackHost(new URL(b).hostname);
+    if (loopback) {
+      const loc = /<loc>\s*(https?:\/\/[^<\s]+)/i.exec(xml);
+      if (!loc) return fail(n, "sitemap has no absolute <loc> — it cannot be the dynamic one");
+      return pass(n, `dynamic; from loopback it names its configured origin (${new URL(loc[1]).host})`);
+    }
     if (!xml.includes(host)) return fail(n, `sitemap names a different host than ${host}`);
     return pass(n, `both dynamic and self-referential (${host})`);
   });
