@@ -22,6 +22,7 @@
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
+import { codeOnly } from "../../../server/testing/codeOnly";
 import {
   CONNECTION_LABEL,
   CONNECTION_TITLE,
@@ -42,29 +43,6 @@ const CSS = read("../index.css");
 const STATUS = read("./connectionStatus.ts");
 const REALTIME = read("./useRealtime.ts");
 
-/**
- * Strip comments so a `not.toMatch` cannot pass on the prose describing the code.
- *
- * The line-based version used elsewhere in this repo strips `//`, `*` and `/*` LINES
- * — and it has now been caught missing JSX `{/* … *​/}` blocks twice, because their
- * continuation lines begin with ordinary words. So the block forms are removed as
- * SPANS first, which is the only way to catch a comment whose middle lines look like
- * prose. (This is the eighth `not.toMatch` in this repo to have matched its own
- * commentary; doing it properly here rather than dodging it again.)
- */
-const codeOnly = (s: string) =>
-  s
-    // FIXED in v2.102.1: the first pass used to be a JSX-span strip,
-    // /\{\s*\/\*[\s\S]*?\*\/\s*\}/ — but a DOCUMENTED PROP TYPE has the same
-    // shape (`}: { /** … */ value: unknown; … }`), so it swallowed the whole prop
-    // block and much of the function body. Every `not.toMatch` here was reading a
-    // gutted source and could pass vacuously. Stripping block comments FIRST is
-    // both simpler and correct: a JSX comment collapses to a bare `{}`, whose
-    // prose is gone, and no code is touched.
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((l) => !/^\s*\/\//.test(l))
-    .join("\n");
 
 /**
  * Exactly ONE `@keyframes` block, by brace matching — an open-ended or fixed-length

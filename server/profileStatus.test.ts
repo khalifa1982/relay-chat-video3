@@ -29,6 +29,7 @@ import {
   profileStatusMeta,
 } from "../shared/profileStatus";
 import { effectiveStatus, sanitizeStatusOverride } from "../shared/profileFields";
+import { codeOnly } from "./testing/codeOnly";
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -43,19 +44,6 @@ const PICKER = read("client/src/app/ProfileStatusPicker.tsx");
 const GROUPSHEET = read("client/src/app/GroupInfoSheet.tsx");
 const OVERLAYS = read("client/src/app/PeerOverlays.tsx");
 
-const codeOnly = (s: string) =>
-  s
-    // FIXED in v2.102.1: the first pass used to be a JSX-span strip,
-    // /\{\s*\/\*[\s\S]*?\*\/\s*\}/ — but a DOCUMENTED PROP TYPE has the same
-    // shape (`}: { /** … */ value: unknown; … }`), so it swallowed the whole prop
-    // block and much of the function body. Every `not.toMatch` here was reading a
-    // gutted source and could pass vacuously. Stripping block comments FIRST is
-    // both simpler and correct: a JSX comment collapses to a bare `{}`, whose
-    // prose is gone, and no code is touched.
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((l) => !/^\s*\/\//.test(l))
-    .join("\n");
 
 describe("the five the owner named", () => {
   it("is exactly those five, in that order", () => {

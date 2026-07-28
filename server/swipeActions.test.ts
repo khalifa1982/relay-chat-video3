@@ -22,6 +22,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { codeOnly } from "./testing/codeOnly";
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -31,14 +32,6 @@ const V2DB = read("server/v2db.ts");
 const ROUTERS = read("server/v2routers.ts");
 const SCHEMA = read("drizzle/schema.ts");
 
-/** Block comments first, then line comments (the v2.102.1 fix: a JSX-span-first strip
- *  eats a documented prop type and guts the source being asserted on). */
-const codeOnly = (s: string) =>
-  s
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((l) => !/^\s*\/\//.test(l))
-    .join("\n");
 
 function fn(src: string, name: string): string {
   // EXACT name match, not a prefix. `indexOf("export async function deleteMessage")`

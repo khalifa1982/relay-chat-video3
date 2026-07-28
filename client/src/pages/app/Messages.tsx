@@ -60,7 +60,13 @@ import { EmojiPicker } from "@/app/EmojiPicker";
 import { previewOf } from "@/app/messagePreview";
 import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
 import { StatusStrip } from "./Status";
-import { PeerAvatar, openPeerProfile, type PeerProfileChatActions } from "@/app/PeerOverlays";
+import {
+  PeerAvatar,
+  openPeerProfile,
+  openGroupStatus,
+  useGroupStatusMap,
+  type PeerProfileChatActions,
+} from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
 import { dayKey, dayLabel, groupMessagesByDay } from "@/app/messageDays";
 import { matchQuery } from "@/app/searchMatch";
@@ -285,6 +291,10 @@ export default function MessagesPage() {
   });
   // Live "typing…" state per thread row (one subscription for the whole list).
   const typingConvos = useTypingConversations();
+  /* Which of my GROUPS have a live story, keyed by conversation id (v2.105.6).
+     Reads the SAME shared status-feed cache the strip above this list reads, so a
+     group's ring here and its ring in the strip cannot come to disagree. */
+  const groupStatus = useGroupStatusMap();
 
   // Collapsible, PRESENTATIONAL grouping of the flat thread list into DIRECT /
   // GROUPS / NOTES sections. Derived purely from the existing threads query
@@ -609,27 +619,67 @@ export default function MessagesPage() {
                                 not PeerAvatar adds its ~5px ring. */}
                             <div className="grid size-16 shrink-0 place-items-center">
                               {isGroup ? (
-                                t.groupAvatarUrl ? (
-                                  // The group's own photo (v2.102.0). A broken URL must
-                                  // degrade to the glyph below, never to the browser's
-                                  // broken-image icon — the same rule PeerAvatar follows.
-                                  <img
-                                    src={t.groupAvatarUrl}
-                                    alt={displayName}
-                                    className="size-[60px] rounded-full border border-border/60 bg-muted/40 object-cover"
-                                    onError={(e) => {
-                                      (e.currentTarget as HTMLImageElement).style.display = "none";
-                                    }}
-                                  />
-                                ) : (
-                                  <div
-                                    className="grid size-[60px] place-items-center rounded-full"
-                                    style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
-                                    aria-label="Group conversation"
-                                  >
-                                    <Users className="size-7" />
-                                  </div>
-                                )
+                                (() => {
+                                  /* THE GROUP'S STORY RING (v2.105.6, #110).
+                                     Unblocked at last: v2.102.1 recorded that a ring
+                                     here "would signify nothing" because a group could
+                                     not post a story — that was true then and is not
+                                     now. Same vocabulary as PeerAvatar: a gradient ring
+                                     means an unseen story, a subtle one means seen, and
+                                     no ring means no story at all, so one shape does
+                                     not acquire a second meaning.
+                                     A group with no story stays a plain, NON-clickable
+                                     disc rather than a focusable button whose handler
+                                     returns early — the v2.103.3 rule: something that
+                                     looks tappable and does nothing is worse than
+                                     something that is plainly inert. */
+                                  const st = groupStatus.get(t.conversationId);
+                                  const ring = st?.hasAny
+                                    ? st.hasUnseen
+                                      ? "bg-gradient-to-tr from-[#06d6a0] via-[#0ea5e9] to-[#8b5cf6]"
+                                      : "bg-border"
+                                    : "";
+                                  const disc = t.groupAvatarUrl ? (
+                                    // The group's own photo (v2.102.0). A broken URL must
+                                    // degrade to the glyph below, never to the browser's
+                                    // broken-image icon — the same rule PeerAvatar follows.
+                                    <img
+                                      src={t.groupAvatarUrl}
+                                      alt={displayName}
+                                      className="size-full rounded-full border border-border/60 bg-muted/40 object-cover"
+                                      onError={(e) => {
+                                        (e.currentTarget as HTMLImageElement).style.display = "none";
+                                      }}
+                                    />
+                                  ) : (
+                                    <div
+                                      className="grid size-full place-items-center rounded-full"
+                                      style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
+                                      aria-label="Group conversation"
+                                    >
+                                      <Users className="size-7" />
+                                    </div>
+                                  );
+                                  if (!st?.hasAny) {
+                                    return <div className="size-[60px]">{disc}</div>;
+                                  }
+                                  return (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openGroupStatus(t.conversationId);
+                                      }}
+                                      aria-label={`${displayName} story`}
+                                      title={`${displayName} story`}
+                                      className={`grid size-16 place-items-center rounded-full p-[2.5px] ${ring}`}
+                                    >
+                                      <span className="grid size-full place-items-center overflow-hidden rounded-full bg-background ring-2 ring-background">
+                                        {disc}
+                                      </span>
+                                    </button>
+                                  );
+                                })()
                               ) : isNotes ? (
                                 <div
                                   className="grid size-[60px] place-items-center rounded-full"

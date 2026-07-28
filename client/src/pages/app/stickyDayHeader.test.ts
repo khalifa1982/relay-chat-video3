@@ -12,17 +12,9 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { dayKey, dayLabel, groupMessagesByDay } from "@/app/messageDays";
+import { codeOnly } from "../../../../server/testing/codeOnly";
 
 const SRC = fs.readFileSync(path.resolve(__dirname, "Messages.tsx"), "utf8");
-/** Comment lines stripped: this repo has matched its own prose at least a dozen
- *  times, and every explanation below legitimately names the thing it forbids. */
-const codeOnly = (s: string) =>
-  s
-    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, "{}")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((l) => !/^\s*(\/\/|\*)/.test(l))
-    .join("\n");
 const CODE = codeOnly(SRC);
 
 const at = (iso: string) => ({ createdAt: iso, id: iso });

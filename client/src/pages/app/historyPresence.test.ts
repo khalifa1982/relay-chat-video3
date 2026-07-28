@@ -21,24 +21,11 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { conferenceRowKeys } from "./History";
+import { codeOnly } from "../../../../server/testing/codeOnly";
 
 const HISTORY = readFileSync(new URL("./History.tsx", import.meta.url), "utf8");
 const GROUPCALL = readFileSync(new URL("./GroupCallScreen.tsx", import.meta.url), "utf8");
 
-/** Strip comments so a `not.toMatch` cannot pass on prose describing the code. */
-const codeOnly = (s: string) =>
-  s
-    // FIXED in v2.102.1: the first pass used to be a JSX-span strip,
-    // /\{\s*\/\*[\s\S]*?\*\/\s*\}/ — but a DOCUMENTED PROP TYPE has the same
-    // shape (`}: { /** … */ value: unknown; … }`), so it swallowed the whole prop
-    // block and much of the function body. Every `not.toMatch` here was reading a
-    // gutted source and could pass vacuously. Stripping block comments FIRST is
-    // both simpler and correct: a JSX comment collapses to a bare `{}`, whose
-    // prose is gone, and no code is touched.
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((l) => !/^\s*\/\//.test(l))
-    .join("\n");
 
 const ME = "777777";
 const PEER = "805555";

@@ -21,6 +21,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { NUMBER_BEARING_COLUMNS } from "./v2db";
+import { codeOnly } from "./testing/codeOnly";
 
 const read = (...p: string[]) => fs.readFileSync(path.resolve(__dirname, ...p), "utf8");
 const TOOL = read("..", "scripts", "admin-tool.mjs");
@@ -30,13 +31,6 @@ const ADMIN_UI = read("..", "client", "src", "pages", "app", "Admin.tsx");
 const APP = read("..", "client", "src", "App.tsx");
 const WORKFLOW = read("..", ".github", "workflows", "aws-ops.yml");
 
-/** Strip comment lines before asserting a token is ABSENT — a comment explaining
- *  why a pattern is gone must not be what makes the assertion pass. */
-const codeOnly = (src: string) =>
-  src
-    .split("\n")
-    .filter((l) => !/^\s*(\/\/|\*|\/\*|#)/.test(l))
-    .join("\n");
 
 /** The script's set-number block only — the rest of the file must not count. */
 const setNumberBlock = TOOL.slice(

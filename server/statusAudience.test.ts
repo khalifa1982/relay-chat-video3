@@ -158,8 +158,10 @@ describe("the audience is a property of the POST, not of the poster", () => {
   });
 
   it("markViewed passes the per-status audience too", () => {
+    // v2.105.6 — plus the group it was addressed to; see status.test.ts for why
+    // that argument is load-bearing rather than decorative.
     expect(ROUTERS).toMatch(
-      /statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience\)/,
+      /statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId\)/,
     );
   });
 

@@ -10,6 +10,7 @@ import { TRPCError } from "@trpc/server";
 import { s3Config } from "./s3";
 import { storageGetSignedUrl } from "./storage";
 import { z } from "zod";
+import { personReelKey, groupReelKey } from "../shared/reelKey";
 import { eq } from "drizzle-orm";
 import { getDb, getUserById } from "./db";
 import { identities } from "../drizzle/schema";
@@ -45,6 +46,10 @@ import {
   countActiveStatuses,
   ownersWhoBlockedNumber,
   getStatusAudienceIds,
+  getGroupStatusAudienceIds,
+  getActiveStatusesForConversations,
+  getGroupConversationIdsFor,
+  getGroupsByIds,
   getIdentityStatusAudience,
   setIdentityStatusAudience,
   getViewableStatusesOfOwner,
@@ -3811,7 +3816,16 @@ const StatusAudienceSchema = z.enum(["contacts", "everyone"]);
  * (v2.99.40 #4 serialized the caller's own credential hashes into every
  * `auth.me`). Send the minimum that the surface renders.
  */
-function publicStatus(r: StatusRow, own = false) {
+function publicStatus(
+  r: StatusRow,
+  own = false,
+  /**
+   * Who wrote it — sent ONLY for a group story (v2.105.6), where a reel legitimately
+   * mixes authors and the viewer has to say which member each slide came from. Omitted
+   * for a personal reel, where it would restate the reel's own owner on every item.
+   */
+  author?: { id: number; number: string; displayName: string; avatarUrl: string | null },
+) {
   return {
     id: r.id,
     kind: r.kind,
@@ -3821,26 +3835,90 @@ function publicStatus(r: StatusRow, own = false) {
     mimeType: r.mimeType,
     durationMs: r.durationMs,
     ...(own ? { audience: normalizeStatusAudience(r.audience) } : {}),
+    /**
+     * Is this slide MINE — i.e. may I delete it and see who watched it?
+     *
+     * PER-ITEM rather than per-reel, and that generalization is what group stories
+     * needed. Both facts have always been per-item; the reel-level `owner.isMe` was
+     * only ever a correct proxy because every reel had exactly one author. A group
+     * reel does not, so reading ownership off the reel would offer Delete on a
+     * fellow member's slide (the server would refuse it — `deleteStatus` is
+     * author-scoped — leaving a button that silently does nothing).
+     */
+    mine: own,
+    ...(author ? { author } : {}),
     createdAt: r.createdAt,
     expiresAt: r.expiresAt,
   };
 }
 
-/** Fan a realtime "status" SSE event out to everyone whose feed includes
- *  `ownerId` (v2.96). Fire-and-forget from post/remove — never blocks the
- *  mutation result on the audience query. */
+/**
+ * One reel in the story feed: everything a single ring stands for.
+ *
+ * `subject` is WHAT THE RING IS ON, and it is a discriminated record rather than a
+ * reused `owner` because a group is not a person (the v2.102.0 rule: name the group
+ * fields `group*`, never borrow `peer*`). Two properties make it hard to misread:
+ *
+ *  - `key` is `"p:<identityId>"` or `"g:<conversationId>"`, so the strip's identity
+ *    and React key are unambiguous by construction. Using a bare numeric id would
+ *    put identity ids and conversation ids in one field, which is exactly how a
+ *    surface comes to render a group's id as a person's.
+ *  - `identityId` and `conversationId` are non-null in mutually exclusive cases,
+ *    so a reader that wants a real id has to say which kind it means.
+ *
+ * `isMe` stays about a PERSON. A group reel is never "mine" — the flag drives "My
+ * story", the delete row and the chain skip — and per-item `mine` carries what is
+ * actually mine inside a reel that mixes authors.
+ */
+type StatusReel = {
+  subject: {
+    key: string;
+    kind: "person" | "group";
+    identityId: number | null;
+    conversationId: number | null;
+    number: string;
+    displayName: string;
+    avatarUrl: string | null;
+    isMe: boolean;
+  };
+  items: ReturnType<typeof publicStatus>[];
+  hasUnseen: boolean;
+  latestAt: Date;
+};
+
+/**
+ * Fan a realtime "status" SSE event out to everyone whose feed includes this post
+ * (v2.96; group-aware v2.105.6). Fire-and-forget from post/remove — never blocks
+ * the mutation result on the audience query.
+ *
+ * THE CHOICE OF AUDIENCE LIVES HERE AND NOWHERE ELSE. A group story reaches the
+ * group's members; a personal one reaches the contact graph. Those are different
+ * queries, so what has to be single is the decision between them — a second call
+ * site picking for itself is how a group story comes to be announced to the
+ * author's contacts, who cannot open it.
+ */
 async function publishStatusEvent(
   ownerId: number,
   ownerNumber: string,
   ownerName: string,
   removed?: boolean,
+  /** The group it was addressed to, or null for a personal story. */
+  conversationId?: number | null,
+  /** The group's display name, so the toast can name the group and not the author. */
+  groupName?: string | null,
 ): Promise<void> {
-  const audience = await getStatusAudienceIds(ownerId, ownerNumber);
+  const audience =
+    conversationId != null
+      ? await getGroupStatusAudienceIds(conversationId, ownerId)
+      : await getStatusAudienceIds(ownerId, ownerNumber);
   for (const id of audience) {
     publishToIdentity(id, {
       kind: "status",
       number: ownerNumber,
-      name: ownerName,
+      // The client shows "<name> posted a story"; for a group the newsworthy
+      // subject is the GROUP, so it is named and the author is not — matching
+      // where the ring appears.
+      name: conversationId != null ? (groupName || "A group") : ownerName,
       ...(removed ? { removed: true } : {}),
     });
   }
@@ -3859,12 +3937,59 @@ export const v2StatusRouter = router({
         durationMs: z.number().int().min(0).max(10 * 60_000).optional(),
         /** Per-post override; omitted ⇒ my saved default (v2.99.66). */
         audience: StatusAudienceSchema.optional(),
+        /**
+         * Post this story TO A GROUP instead of to my own ring (v2.105.6, #110).
+         * Omitted ⇒ a personal story, byte-identical to every previous caller.
+         */
+        conversationId: z.number().int().positive().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
       statusGate(ctx);
       const text = (input.text ?? "").trim();
+      /* GROUP STORIES: MEMBERSHIP IS CHECKED HERE, SERVER-SIDE, BEFORE ANY WRITE.
+       *
+       * A conversation id is a small sequential integer, so without this anybody
+       * could address a story to any group in the database — and since membership
+       * is what AUTHORIZES reading a group story, that would publish content into a
+       * room of strangers. The same reasoning that put `setGroupProfile`'s gate
+       * inside the function rather than in options a caller passes: this writes a
+       * row several people will read, so who may do it is the safety argument.
+       *
+       * `checkGroupPermission` is reused rather than a membership SELECT written
+       * here, so the DM refusal, the not-found refusal and the fail-closed
+       * `unavailable` behaviour are the group module's, not a second copy. The
+       * capability is `post-story`, which is unconditional for members — a group
+       * has no notion of "may post" today, and inventing an admin-only rule would
+       * be a permission model nobody asked for. It exists as its own capability so
+       * that restricting it later is one line in one place.
+       *
+       * A DM IS REFUSED OUTRIGHT rather than treated as a two-person group: a DM
+       * borrows the peer's name, photo and status and has no identity of its own,
+       * so there is nothing for a story to hang on — and a "story" visible to
+       * exactly one person is a message. */
+      let group: { id: number; title: string | null } | null = null;
+      if (input.conversationId != null) {
+        const gate = await checkGroupPermission(input.conversationId, me.id, "post-story");
+        if (!gate.ok) {
+          // Each refusal is NAMED because they need different next steps, and
+          // "not a member" answers identically to "no such group" so the endpoint
+          // is not an existence oracle over conversation ids.
+          const message =
+            gate.reason === "not-a-group"
+              ? "Stories go to a group, not a direct chat."
+              : gate.reason === "unavailable"
+                ? "Couldn't check that group just now."
+                : "That group isn't yours to post in.";
+          throw new TRPCError({
+            code: gate.reason === "unavailable" ? "INTERNAL_SERVER_ERROR" : "FORBIDDEN",
+            message,
+          });
+        }
+        const [g] = await getGroupsByIds([input.conversationId]);
+        group = { id: input.conversationId, title: g?.title ?? null };
+      }
       // SECURITY (M30 — status-media laundering, the F2 class again): the
       // ownership gate below used to live ONLY in the media-kind `else` branch,
       // but `input.mediaKey` was persisted for EVERY kind. So a `kind:"text"`
@@ -3906,6 +4031,7 @@ export const v2StatusRouter = router({
         input.audience ?? (await getIdentityStatusAudience(me.id).catch(() => "contacts" as const));
       const row = await insertStatus({
         identityId: me.id,
+        conversationId: group?.id ?? null,
         kind: input.kind,
         text: text || null,
         // Author-controlled bg is restricted to safe color/gradient tokens.
@@ -3918,9 +4044,17 @@ export const v2StatusRouter = router({
         ttlMs: STATUS_TTL_MS,
       });
       if (!row) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't post your status." });
-      // Realtime (v2.96): tell everyone whose feed includes me — instantly —
-      // so their rings/feed refresh and Messages can show a quiet toast.
-      publishStatusEvent(me.id, me.number, me.displayName).catch(() => {});
+      // Realtime (v2.96): tell everyone whose feed includes this post — instantly —
+      // so their rings/feed refresh and Messages can show a quiet toast. For a
+      // group story that is the group's members, not my contacts.
+      publishStatusEvent(
+        me.id,
+        me.number,
+        me.displayName,
+        undefined,
+        group?.id ?? null,
+        group?.title ?? null,
+      ).catch(() => {});
       return { id: row.id, expiresAt: row.expiresAt };
     }),
 
@@ -3969,12 +4103,15 @@ export const v2StatusRouter = router({
       arr.push(r);
       byOwner.set(r.identityId, arr);
     }
-    const groups = Array.from(byOwner.entries()).map(([oid, items]) => {
+    const reels: StatusReel[] = Array.from(byOwner.entries()).map(([oid, items]) => {
       const o = ownerById.get(oid);
       const latest = items[items.length - 1];
       return {
-        owner: {
-          id: oid,
+        subject: {
+          key: personReelKey(oid),
+          kind: "person" as const,
+          identityId: oid,
+          conversationId: null,
           number: o?.number ?? "",
           displayName: o?.displayName ?? "Someone",
           avatarUrl: o?.avatarUrl ?? null,
@@ -3985,19 +4122,120 @@ export const v2StatusRouter = router({
         latestAt: latest.createdAt,
       };
     });
-    // Order: me first, then owners with unseen updates, then most-recent.
-    groups.sort((a, b) => {
-      if (a.owner.isMe !== b.owner.isMe) return a.owner.isMe ? -1 : 1;
+
+    /* ── THE GROUP HALF (v2.105.6, #110) ─────────────────────────────────────
+     * A group's stories are ONE reel keyed by the GROUP, not one reel per author.
+     * Grouping by author instead would put the same group's ring in the strip
+     * once per member who has posted, which is not a thing a strip can mean.
+     *
+     * The candidate set is my own group memberships, so no story reaches this
+     * list that membership did not already authorize — the same set
+     * `statusAudienceAuthorized` consults, read from the same table. Blocks are
+     * NOT applied to the reel as a whole on purpose: a block is between two
+     * people, and dropping a whole group because one member in it blocked me
+     * would hide nineteen other people's stories. Per-ITEM filtering below is
+     * where the block belongs, and it is the same either-direction rule as
+     * everywhere else. */
+    const myGroupIds = await getGroupConversationIdsFor(me.id);
+    if (myGroupIds.length > 0) {
+      const groupRows = await getActiveStatusesForConversations(myGroupIds);
+      if (groupRows.length > 0) {
+        const authorIds = Array.from(new Set(groupRows.map((r) => r.identityId)));
+        const authors = await getIdentitiesByIds(authorIds);
+        const authorById = new Map(authors.map((a) => [a.id, a]));
+        // A member who blocked me, or whom I blocked, contributes nothing —
+        // reusing the two sets already computed above, so the group half cannot
+        // disagree with the personal half about who is hidden.
+        const hiddenAuthors = await ownersWhoBlockedNumber(
+          authorIds.filter((id) => id !== me.id),
+          me.number,
+        );
+        const visible = groupRows.filter(
+          (r) => r.identityId === me.id || (!hiddenAuthors.has(r.identityId) && !blockedIdents.has(r.identityId)),
+        );
+        const groupViewed = await getViewedStatusIds(me.id, visible.map((r) => r.id));
+        const meta = await getGroupsByIds(
+          Array.from(new Set(visible.map((r) => r.conversationId!).filter((v) => v != null))),
+        );
+        const metaById = new Map(meta.map((g) => [g.id, g]));
+        const byGroup = new Map<number, StatusRow[]>();
+        for (const r of visible) {
+          const cid = r.conversationId;
+          if (cid == null) continue;
+          const arr = byGroup.get(cid) ?? [];
+          arr.push(r);
+          byGroup.set(cid, arr);
+        }
+        // `Array.from`, not a bare `for…of` over the Map: this tsconfig targets ES5
+        // and direct Map iteration is a TS2802 build error (v2.99.72, v2.99.98 —
+        // `pnpm build` uses esbuild and does not typecheck, so only `pnpm check`
+        // catches it).
+        for (const [cid, items] of Array.from(byGroup.entries())) {
+          const g = metaById.get(cid);
+          // A group whose meta row did not come back is not a group I may read —
+          // getGroupsByIds filters to kind="group" — so it is dropped rather than
+          // rendered under a placeholder name.
+          if (!g) continue;
+          const latest = items[items.length - 1];
+          reels.push({
+            subject: {
+              key: groupReelKey(cid),
+              kind: "group" as const,
+              identityId: null,
+              conversationId: cid,
+              // The GROUP's own 6-digit id (v2.102.0) — null for a group created
+              // before that release, and the UI omits what it does not have.
+              number: g.number ?? "",
+              displayName: g.title || "Group",
+              avatarUrl: g.avatarUrl ?? null,
+              // Never true. A group is not me, and this flag drives "My story",
+              // the delete row and the chain skip — all of which are about a
+              // person. Per-item `mine` carries what is actually mine.
+              isMe: false,
+            },
+            items: items.map((it) => {
+              const a = authorById.get(it.identityId);
+              return publicStatus(it, it.identityId === me.id, {
+                id: it.identityId,
+                number: a?.number ?? "",
+                displayName: a?.displayName ?? "Someone",
+                avatarUrl: a?.avatarUrl ?? null,
+              });
+            }),
+            // My own slides never count as unseen — I wrote them.
+            hasUnseen: items.some((it) => it.identityId !== me.id && !groupViewed.has(it.id)),
+            latestAt: latest.createdAt,
+          });
+        }
+      }
+    }
+
+    // Order: me first, then subjects with unseen updates, then most-recent.
+    reels.sort((a, b) => {
+      if (a.subject.isMe !== b.subject.isMe) return a.subject.isMe ? -1 : 1;
       if (a.hasUnseen !== b.hasUnseen) return a.hasUnseen ? -1 : 1;
       return new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime();
     });
-    return { groups };
+    return { groups: reels };
   }),
 
-  /** My own active statuses with a "seen by N" count each. */
+  /**
+   * My own active stories with a "seen by N" count each — personal AND the ones I
+   * posted to groups (v2.105.6), because both are mine to delete and to see the
+   * viewers of. `getActiveStatusesForOwners` deliberately excludes group stories
+   * (it also backs the profile-visit surface, where a group story must not leak),
+   * so the group half is fetched explicitly rather than by relaxing that filter.
+   */
   mine: publicProcedure.query(async ({ ctx }) => {
     const me = requireIdentity(ctx);
-    const rows = await getActiveStatusesForOwners([me.id]);
+    const personal = await getActiveStatusesForOwners([me.id]);
+    const myGroupIds = await getGroupConversationIdsFor(me.id);
+    const inGroups = myGroupIds.length
+      ? (await getActiveStatusesForConversations(myGroupIds)).filter((r) => r.identityId === me.id)
+      : [];
+    const rows = [...personal, ...inGroups].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
     const counts = await getStatusViewCounts(rows.map((r) => r.id));
     return { items: rows.map((r) => ({ ...publicStatus(r, true), viewCount: counts.get(r.id) ?? 0 })) };
   }),
@@ -4007,9 +4245,28 @@ export const v2StatusRouter = router({
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
+      // Read the row BEFORE deleting it: a group story's removal has to reach the
+      // GROUP's members, and once the row is gone there is nothing left to say
+      // which group that was. Only the author may delete (deleteStatus is
+      // author-scoped), so this read reveals nothing the caller does not own.
+      const before = await getActiveStatusById(input.id);
       const ok = await deleteStatus(input.id, me.id);
       // Removal fans out too (no toast client-side) so stale rings clear.
-      if (ok) publishStatusEvent(me.id, me.number, me.displayName, true).catch(() => {});
+      if (ok) {
+        let groupName: string | null = null;
+        if (before?.conversationId != null) {
+          const [g] = await getGroupsByIds([before.conversationId]);
+          groupName = g?.title ?? null;
+        }
+        publishStatusEvent(
+          me.id,
+          me.number,
+          me.displayName,
+          true,
+          before?.conversationId ?? null,
+          groupName,
+        ).catch(() => {});
+      }
       return { ok };
     }),
 
@@ -4025,7 +4282,12 @@ export const v2StatusRouter = router({
       // Only someone in the status's audience can register a view — otherwise a
       // stranger (even a guest with an attacker-chosen name) could enumerate
       // status ids and inject themselves into the owner's "Seen by" (review §5).
-      if (!(await statusAudienceAuthorized(me.id, st.identityId, st.audience))) return { ok: false };
+      // `conversationId` is REQUIRED here, not optional decoration: for a group
+      // story the author's contacts rule is the wrong question, so omitting it
+      // would refuse the very members it was posted for and their views would
+      // silently never be recorded — the ring would stay lit forever.
+      if (!(await statusAudienceAuthorized(me.id, st.identityId, st.audience, st.conversationId)))
+        return { ok: false };
       await recordStatusView(input.id, me.id);
       return { ok: true };
     }),
@@ -4164,10 +4426,19 @@ export const v2StatusRouter = router({
       // request and cannot be carried. Re-check it — and note this one call also
       // covers blocks in BOTH directions, ahead of the "everyone" short-circuit,
       // so a block outranks a public audience.
-      if (!(await statusAudienceAuthorized(me.id, st.identityId, st.audience))) {
+      if (
+        !(await statusAudienceAuthorized(me.id, st.identityId, st.audience, st.conversationId))
+      ) {
         return { ok: false as const, reason: "unavailable" as const };
       }
 
+      /* A REPLY TO A GROUP STORY STILL GOES PRIVATELY TO ITS AUTHOR, and that is
+       * a decision rather than an oversight. The story was written by a person;
+       * replying to it is replying to them, and the band says "Reply privately".
+       * Posting it into the group thread would be a different act — everyone
+       * reads it — and would surprise somebody who believed they were answering
+       * one person. If group-visible replies are wanted, that is a feature with
+       * its own surface, not a silent change of blast radius here. */
       const convo = await getOrCreateDmConversation(me.id, st.identityId);
       // Excerpt, not media: the status's own text or caption, bounded. Kept so the
       // bubble still reads correctly once the status itself is gone.

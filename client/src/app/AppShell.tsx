@@ -252,7 +252,7 @@ function Inner({ children }: { children: React.ReactNode }) {
     refetchOnWindowFocus: true,
   });
   const hasUnseenStatus = useMemo(
-    () => (statusFeed.data?.groups ?? []).some((g) => !g.owner.isMe && g.hasUnseen),
+    () => (statusFeed.data?.groups ?? []).some((g) => !g.subject.isMe && g.hasUnseen),
     [statusFeed.data]
   );
 

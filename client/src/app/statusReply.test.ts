@@ -178,8 +178,11 @@ describe("status.reply — the guards, in order", () => {
     // Seeing the status and replying to it are separate requests; the first
     // verdict cannot be carried. This one call also covers blocks in both
     // directions, ahead of the "everyone" short-circuit.
+    // v2.105.6 — and the GROUP it was addressed to. Without that argument a group
+    // member's reply to a group story would be refused, because the author's
+    // contacts rule is the wrong question for a story the group authorized.
     expect(PROC).toMatch(
-      /statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience\)/
+      /statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId\)/
     );
   });
 

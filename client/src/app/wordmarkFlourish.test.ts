@@ -1,19 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { codeOnly } from "../../../server/testing/codeOnly";
 
 const R = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const TOPBAR = R("client/src/app/TopBar.tsx");
 const SHELL = R("client/src/app/AppShell.tsx");
 const CSS = R("client/src/index.css");
 
-/** Comments stripped, because this repo has matched its own prose twelve times. */
-const codeOnly = (s: string) =>
-  s
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((l) => !/^\s*\/\//.test(l))
-    .join("\n");
 
 const BRAND = TOPBAR.slice(
   TOPBAR.indexOf("export function BrandMark"),

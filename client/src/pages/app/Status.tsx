@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Plus, X, Camera, Type, Trash2, Eye, ChevronLeft, ChevronRight, Send, Video, Smile } from "lucide-react";
+import { Plus, X, Camera, Type, Trash2, Eye, ChevronLeft, ChevronRight, Send, Video, Smile, Users } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -38,8 +38,29 @@ const BG_OPTIONS = [
 
 const DEFAULT_ITEM_MS = 5000; // text/image dwell time
 
+/**
+ * One reel — everything a single ring in the strip stands for.
+ *
+ * `subject` is WHAT THE RING IS ON: a person, or (v2.105.6) a GROUP. It replaced a
+ * plain `owner` deliberately rather than sitting beside it: a group is not a person,
+ * and a field that sometimes means one and sometimes the other is how a surface
+ * comes to render a group under a member's name. `subject.key` is `"p:<id>"` or
+ * `"g:<id>"`, so the React key and the strip's identity cannot collide between the
+ * two kinds; `identityId` / `conversationId` are non-null in mutually exclusive
+ * cases, so anything wanting a real id must say which it means.
+ */
 export type FeedGroup = {
-  owner: { id: number; number: string; displayName: string; avatarUrl: string | null; isMe: boolean };
+  subject: {
+    key: string;
+    kind: "person" | "group";
+    identityId: number | null;
+    conversationId: number | null;
+    number: string;
+    displayName: string;
+    avatarUrl: string | null;
+    /** My own ring. Always false for a group — a group is not me. */
+    isMe: boolean;
+  };
   items: StatusItem[];
   hasUnseen: boolean;
   latestAt: string | Date;
@@ -54,6 +75,14 @@ type StatusItem = {
   durationMs: number | null;
   /** Present only on MY OWN statuses (the server omits it for other people's). */
   audience?: string | null;
+  /**
+   * Is THIS slide mine — may I delete it and see who watched it? Per-item, because
+   * a group reel mixes authors; for a personal reel it equals the reel's own
+   * `subject.isMe`.
+   */
+  mine?: boolean;
+  /** Who posted it. Sent only inside a GROUP reel, where the reel has no one author. */
+  author?: { id: number; number: string; displayName: string; avatarUrl: string | null };
   createdAt: string | Date;
   expiresAt: string | Date;
 };
@@ -115,8 +144,8 @@ export function StatusStrip() {
   const [viewerAt, setViewerAt] = useState<number | null>(null); // index into `groups`
 
   const groups = (feed.data?.groups ?? []) as FeedGroup[];
-  const myGroup = groups.find((g) => g.owner.isMe) ?? null;
-  const others = groups.filter((g) => !g.owner.isMe);
+  const myGroup = groups.find((g) => g.subject.isMe) ?? null;
+  const others = groups.filter((g) => !g.subject.isMe);
 
   return (
     <div className="border-b border-border/60 px-3 py-3">
@@ -128,7 +157,7 @@ export function StatusStrip() {
           className="flex shrink-0 flex-col items-center gap-1.5 w-16"
         >
           <div className="relative">
-            <StatusAvatar name="You" url={myGroup?.owner.avatarUrl ?? null} ring={myGroup ? "seen" : "none"} />
+            <StatusAvatar name="You" url={myGroup?.subject.avatarUrl ?? null} ring={myGroup ? "seen" : "none"} />
             <span
               onClick={(e) => { e.stopPropagation(); setComposerOpen(true); }}
               className="absolute -bottom-0.5 -right-0.5 grid size-5 place-items-center rounded-full bg-[color:var(--relay-online,#06d6a0)] text-[#04201b] ring-2 ring-background"
@@ -141,14 +170,26 @@ export function StatusStrip() {
 
         {others.map((g) => (
           <button
-            key={g.owner.id}
+            key={g.subject.key}
             type="button"
             onClick={() => setViewerAt(groups.indexOf(g))}
             className="flex shrink-0 flex-col items-center gap-1.5 w-16"
           >
-            <StatusAvatar name={g.owner.displayName} url={g.owner.avatarUrl} ring={g.hasUnseen ? "unseen" : "seen"} />
+            <StatusAvatar
+              name={g.subject.displayName}
+              url={g.subject.avatarUrl}
+              ring={g.hasUnseen ? "unseen" : "seen"}
+              /* A group with no photo gets the same generic glyph its thread row
+                 draws (v2.102.1), not two initials — a group's initials read as a
+                 person's and the two rings sit side by side in this strip. */
+              group={g.subject.kind === "group"}
+            />
             <span className="text-[11px] text-muted-foreground truncate w-full text-center">
-              {g.owner.displayName.split(/\s+/)[0]}
+              {/* A group is named in full: its title is already short and the first
+                  word of "Design team" is not a name anybody recognises. */}
+              {g.subject.kind === "group"
+                ? g.subject.displayName
+                : g.subject.displayName.split(/\s+/)[0]}
             </span>
           </button>
         ))}
@@ -176,7 +217,7 @@ export function StatusStrip() {
              its finish, it's closed"). The viewer also skips my group if a chain
              happens to reach it, so this is belt and braces rather than the only
              guard. */
-          chain={!groups[viewerAt].owner.isMe}
+          chain={!groups[viewerAt].subject.isMe}
           onClose={() => { setViewerAt(null); feed.refetch(); }}
         />
       )}
@@ -184,7 +225,18 @@ export function StatusStrip() {
   );
 }
 
-function StatusAvatar({ name, url, ring }: { name: string; url: string | null; ring: "unseen" | "seen" | "none" }) {
+function StatusAvatar({
+  name,
+  url,
+  ring,
+  group = false,
+}: {
+  name: string;
+  url: string | null;
+  ring: "unseen" | "seen" | "none";
+  /** Draw the generic group glyph instead of initials when there is no photo. */
+  group?: boolean;
+}) {
   const ringStyle =
     ring === "unseen"
       ? "bg-gradient-to-tr from-[#06d6a0] via-[#0ea5e9] to-[#8b5cf6]"
@@ -196,6 +248,10 @@ function StatusAvatar({ name, url, ring }: { name: string; url: string | null; r
       <span className="grid size-full place-items-center overflow-hidden rounded-full bg-background ring-2 ring-background">
         {url ? (
           <img src={url} alt="" className="size-full rounded-full object-cover" />
+        ) : group ? (
+          <span className="grid size-full place-items-center rounded-full bg-primary/15 text-primary">
+            <Users className="size-6" />
+          </span>
         ) : (
           <span className="grid size-full place-items-center rounded-full bg-primary/15 text-primary font-bold text-sm">
             {initials(name)}
@@ -231,6 +287,34 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
   const [audience, setAudience] = useState<"contacts" | "everyone" | null>(null);
   const effectiveAudience = audience ?? privacy.data?.audience ?? "contacts";
 
+  /* WHERE THIS STORY GOES (v2.105.6, #110): my own ring, or one of my groups.
+     Read off `messages.threads`, which the Messages tab this composer opens from
+     has already fetched — so the picker costs no extra request — and which is
+     the same list that decides what a group is called everywhere else. A
+     separate "my groups" endpoint would be a second answer to one question.
+     Archived groups are included on purpose: archiving is about where a thread
+     sits in the list, not about whether you are in it. */
+  const threads = trpc.messages.threads.useQuery(undefined, { staleTime: 30_000 });
+  const myGroups = useMemo(
+    () =>
+      (threads.data ?? [])
+        .filter((t) => t.kind === "group")
+        .map((t) => ({
+          id: t.conversationId,
+          title: t.title || "Group",
+          avatarUrl: t.groupAvatarUrl ?? null,
+        })),
+    [threads.data],
+  );
+  /** null ⇒ my own ring (the default, and every pre-v2.105.6 behaviour). */
+  const [targetGroupId, setTargetGroupId] = useState<number | null>(null);
+  const targetGroup = myGroups.find((g) => g.id === targetGroupId) ?? null;
+  /* A group's audience IS its membership — `statusAudienceAuthorized` ignores the
+     stored audience once a conversationId is present — so offering contacts/everyone
+     alongside a group target would be a control that changes nothing. Hidden rather
+     than disabled, and the copy says who will see it instead. */
+  const audiencePickerApplies = targetGroupId == null;
+
   useEffect(() => {
     if (!file) { setPreviewUrl(null); return; }
     const u = URL.createObjectURL(file);
@@ -263,6 +347,9 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           text: body,
           bgColor: BG_OPTIONS[bgIndex],
           audience: effectiveAudience,
+          // Omitted for a personal story, so the request is byte-identical to
+          // every pre-v2.105.6 one.
+          ...(targetGroupId != null ? { conversationId: targetGroupId } : {}),
         });
       } else {
         if (!file) { setPosting(false); return; }
@@ -284,9 +371,14 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           text: caption.trim() || undefined,
           durationMs,
           audience: effectiveAudience,
+          ...(targetGroupId != null ? { conversationId: targetGroupId } : {}),
         });
       }
-      toast.success(`Status posted — ${audienceOption(effectiveAudience).posted}.`);
+      toast.success(
+        targetGroup
+          ? `Story posted to ${targetGroup.title} — everyone in the group can see it for 24h.`
+          : `Status posted — ${audienceOption(effectiveAudience).posted}.`,
+      );
       onPosted();
     } catch (e) {
       toast.error((e as Error)?.message || "Couldn't post your story.");
@@ -395,7 +487,54 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           )}
         </div>
 
-        {/* Who can watch THIS post (v2.99.55). Two options, per the owner's ask. */}
+        {/* WHERE IT GOES (v2.105.6, #110) — my own ring, or one of my groups.
+            Rendered only when I am actually in a group: a picker with one option
+            is a control that cannot do anything, and every existing user with no
+            groups sees exactly the composer they saw before. */}
+        {myGroups.length > 0 && (
+          <div className="px-3 pb-1">
+            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Post to
+            </p>
+            <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1">
+              <button
+                type="button"
+                onClick={() => setTargetGroupId(null)}
+                aria-pressed={targetGroupId == null}
+                className={`shrink-0 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+                  targetGroupId == null
+                    ? "border-primary/60 bg-primary/10"
+                    : "border-border/60 text-muted-foreground hover:bg-muted/50"
+                }`}
+              >
+                My story
+              </button>
+              {myGroups.map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => setTargetGroupId(g.id)}
+                  aria-pressed={targetGroupId === g.id}
+                  className={`inline-flex max-w-[11rem] shrink-0 items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+                    targetGroupId === g.id
+                      ? "border-primary/60 bg-primary/10"
+                      : "border-border/60 text-muted-foreground hover:bg-muted/50"
+                  }`}
+                >
+                  <Users className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{g.title}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Who can watch THIS post (v2.99.55). Two options, per the owner's ask.
+            WITHHELD for a group target rather than disabled: a group story's
+            audience IS its membership (the server ignores the stored value once a
+            conversationId is present), so leaving the control on screen would
+            invite someone to pick "Everyone" and believe they had widened it. */}
+        {audiencePickerApplies ? (
         <div className="px-3 pb-1">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Who can see this
@@ -425,6 +564,14 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
             })}
           </div>
         </div>
+        ) : (
+          <div className="px-3 pb-1">
+            <p className="rounded-xl border border-border/60 bg-muted/40 px-3 py-2 text-[11px] leading-snug text-muted-foreground">
+              Everyone in <span className="font-semibold">{targetGroup?.title}</span> can see this for
+              24h, and it shows under the group — not on your own story.
+            </p>
+          </div>
+        )}
 
         <div className="px-3 pb-4 pt-2">
           <Button
@@ -519,7 +666,14 @@ export function StatusViewer({
 
   const group = groups[gi];
   const item = group?.items[ii];
-  const isMine = !!group?.owner.isMe;
+  /* IS THE CURRENT SLIDE MINE — may I delete it and see who watched it?
+     PER-ITEM (v2.105.6), not per-reel. Both facts have always been per-item; the
+     reel-level flag was only ever a correct proxy because every reel had exactly
+     one author. A GROUP reel does not, so reading ownership off the reel would
+     offer Delete on a fellow member's slide — a button the server refuses
+     (`deleteStatus` is author-scoped), i.e. one that silently does nothing.
+     Falls back to the reel's own flag for a payload from an older server. */
+  const isMine = item?.mine ?? !!group?.subject.isMe;
 
   const itemMs = useMemo(() => {
     if (!item) return DEFAULT_ITEM_MS;
@@ -544,7 +698,7 @@ export function StatusViewer({
   function nextChainable(from: number, step: 1 | -1): number {
     if (!chain) return -1;
     for (let j = from + step; j >= 0 && j < groups.length; j += step) {
-      if (!groups[j].owner.isMe) return j;
+      if (!groups[j].subject.isMe) return j;
     }
     return -1;
   }
@@ -615,13 +769,29 @@ export function StatusViewer({
 
       {/* header */}
       <div className="flex items-center gap-2.5 px-4 py-2.5">
-        <StatusAvatar name={group.owner.displayName} url={group.owner.avatarUrl} ring="none" />
+        <StatusAvatar
+          name={group.subject.displayName}
+          url={group.subject.avatarUrl}
+          ring="none"
+          group={group.subject.kind === "group"}
+        />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">{isMine ? "My story" : group.owner.displayName}</div>
+          <div className="truncate text-sm font-semibold">
+            {group.subject.kind === "group"
+              ? group.subject.displayName
+              : isMine
+                ? "My story"
+                : group.subject.displayName}
+          </div>
           {/* Relative for the glance, EXACT on press — the owner could not tell when
-              a story had been posted, and "16h ago" genuinely does not answer that. */}
-          <div className="text-[11px] text-white/60" title={new Date(item.createdAt).toLocaleString()}>
-            {timeAgo(item.createdAt)}
+              a story had been posted, and "16h ago" genuinely does not answer that.
+              IN A GROUP the author is named here too (v2.105.6): a group reel
+              legitimately mixes authors, so without it a slide would be attributed
+              to the group and there would be no way to tell who wrote it. */}
+          <div className="truncate text-[11px] text-white/60" title={new Date(item.createdAt).toLocaleString()}>
+            {group.subject.kind === "group" && item.author
+              ? `${item.mine ? "You" : item.author.displayName} · ${timeAgo(item.createdAt)}`
+              : timeAgo(item.createdAt)}
           </div>
         </div>
         <button type="button" onClick={onClose} aria-label="Close" className="rounded-full p-1.5 hover:bg-white/10">
@@ -666,7 +836,11 @@ export function StatusViewer({
           key={item.id}
           statusId={item.id}
           expiresAt={item.expiresAt}
-          ownerName={group.owner.displayName}
+          /* The person being replied to is the SLIDE'S AUTHOR, not the reel's
+             subject — in a group they differ, and the reply is a private message to
+             whoever wrote it (that is what the server does), so naming the group
+             here would promise a group-visible reply the code does not send. */
+          ownerName={item.author?.displayName ?? group.subject.displayName}
           open={replyOpen}
           setOpen={setReplyOpen}
         />
