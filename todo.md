@@ -11239,6 +11239,45 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## Open-items audit — the owner asked for a list of everything NOT done (2026-07-28)
+
+- [x] **THE ASK**: *"I gave you so many changes previously with the attachment images explaining that I
+      didn't see them being implemented … I need a list of all the things you have not done. Let me know
+      if you passed on something and tell me when you will do it. Make sure you record all the changes."*
+- [x] **NEW `OPEN-ITEMS.md` AT THE REPO ROOT**, so this stops living in a chat log. Built by extracting
+      every `NOT DONE` / `STILL OPEN` / `- [ ]` marker from this file and then **RE-CHECKING each against
+      current source** — a stale note is worse than no note, and where the check contradicted the note the
+      check wins and says so.
+- [x] **THE PROFILE ITEM THE OWNER NAMED IS SHIPPED, and that is the important finding.** They cited the
+      profile icon → "remove the first name, badge and pin number". Verified in
+      `client/src/pages/app/Profile.tsx` today: the hero renders no name, no `RoleBadge`, no digits;
+      `formatPin` survives only in an `aria-label` (a screen reader must know which number the button is
+      about) and as the deeper "My number" row's subtitle. Shipped v2.103.1, deployed.
+- [x] **AND v2.103.1 LEFT A BUILT-IN DIAGNOSTIC FOR EXACTLY THIS CONFUSION**: the build number occupies
+      the space the name used to. So `RELAY v2.105.x` on the Profile page means the current bundle, while
+      seeing the name + badge + digits means a bundle older than v2.103.1 — i.e. a cache, not a missing
+      feature. Recorded as the first thing to check, because "I don't see it" and "it isn't there" need
+      different responses and only the version string separates them.
+- [x] **FOUR ITEMS CONFIRMED GENUINELY NOT STARTED, by grep rather than by memory**: the 4-digit group
+      lock (no `groupLock`/`lockPin`/`groupPasscode` anywhere), the call-invite/party-line join screen (no
+      such page), the voice/video marker on an answered GROUP call (`conference_history` still has no
+      channel column), and the thread list's context-free emoji (`listThreads` still projects only
+      `{lastMessageBody, lastMessageKind}`, no `meta` — `server/v2routers.ts:1613`).
+- [x] **THE DELAYS ARE SEPARATED BY CAUSE, because "not done" hides three different things**: mine to
+      build (group lock, join screen, group-call channel column), blocked on a decision from the owner
+      (the Business panel, admin deletion of a member's story, the 30-cap), and impossible from here (the
+      landing tiles need VIDEO FOOTAGE — lips cannot move on a still photograph, and everything that CAN
+      be done without new assets shipped in v2.99.70/v2.105.16).
+- [x] **THREE ITEMS RECORDED AS CLOSED so they are not re-raised**: the 601-586 merge (owner: dismiss
+      permanently; the guard correctly refuses because identity #3 holds 143 rows), admin-supplied guest
+      registration (refused as an account-takeover primitive in v2.99.99, and v2.105.15 shipped the safe
+      narrower version), and `register` accepting an existing address (kept deliberately — refusing it
+      would create an email-existence oracle).
+- [x] **NEXT UP, named rather than left vague**: the 4-digit group lock, whose design is already settled
+      — a PRIVACY SCREEN and not access control, per-device, reusing `passcode.ts`'s hashing, and the
+      thread list must stop showing a locked group's preview or the lock leaks what it covers.
+- [x] No code change. One new document.
+
 ## v2.105.18 — a MINIMISED app now rings (2026-07-28)
 
 - [x] **THE OWNER'S ASK, verbatim**: *"if someone calling and I'm in away or idle (minimize the front app in
