@@ -38,13 +38,63 @@ describe("E4 — a blocked caller cannot notify the callee's devices", () => {
   it("imports the block helper", () => {
     expect(src).toMatch(/isNumberBlockedBy/);
   });
-  it("suppresses the onInvite desktop notification when blocked", () => {
-    const seg = src.slice(src.indexOf("onInvite:"), src.indexOf("onMissedCall") > -1 ? src.indexOf("onMissedCall") : src.indexOf("kind: \"call_offer\"") + 200);
-    // Fallback slice if the comment marker names differ: assert around call_offer.
-    const around = src.slice(src.indexOf("desktop-notify the callee"), src.indexOf('kind: "call_offer"'));
-    expect(around).toMatch(/isNumberBlockedBy\(callee\.id, info\.fromPin\)/);
-    expect(seg.length).toBeGreaterThanOrEqual(0);
+  /*
+   * THE HOOKS ARE SLICED BY CODE, NOT BY COMMENT TEXT (rewritten v2.105.18).
+   *
+   * Both of the assertions below used to anchor on prose — `"onInvite:"`,
+   * `"desktop-notify the callee"`, `src.indexOf("onPageCallee")` — because the
+   * hooks are ANONYMOUS positional arrows passed to `attachRelay`, so there is no
+   * `onPageCallee:` identifier in the code to find. That made them fragile in the
+   * two ways this repo keeps re-learning:
+   *
+   *   • Rewording a comment collapsed a slice to `""` and the assertion failed for
+   *     a reason unrelated to blocking (v2.105.18 reworded the onInvite comment
+   *     when the idle push landed, and this went red on an intact gate).
+   *   • Writing `onPageCallee` inside an EARLIER hook's comment moved the anchor
+   *     backwards, so the window spanned two hooks and compared one hook's gate
+   *     against another hook's send.
+   *
+   * Splitting on `async (info) => {` gives the hooks positionally, which no
+   * comment can move, and each region is then identified by its own unique CODE.
+   */
+  const hookStarts: number[] = (() => {
+    const out: number[] = [];
+    let i = src.indexOf("attachRelay(");
+    expect(i).toBeGreaterThan(-1);
+    for (;;) {
+      const j = src.indexOf("async (info) => {", i);
+      if (j < 0) break;
+      out.push(j);
+      i = j + 1;
+    }
+    return out;
+  })();
+  const hook = (n: number) => src.slice(hookStarts[n], hookStarts[n + 1] ?? src.length);
+
+  it("finds the relay hooks positionally, so no comment can move the window", () => {
+    // If this ever fails, every assertion below is reading the wrong region — so
+    // it is asserted FIRST rather than left to produce a confusing failure later.
+    expect(hookStarts.length).toBeGreaterThanOrEqual(3);
+    expect(hook(0)).toContain('kind: "call_offer"'); // onInvite
+    expect(hook(1)).toContain("recordMissedCall("); // onMissedCall
   });
+
+  it("suppresses BOTH of onInvite's alerts when blocked — the SSE hint and the push", () => {
+    /* v2.105.18 made this hook push as well as fan an SSE hint, because a
+       MINIMISED callee cannot act on the hint. So the gate now has to precede TWO
+       senders, and asserting only the first would leave the louder one open. */
+    const seg = hook(0);
+    expect(seg).toMatch(/isNumberBlockedBy\(callee\.id, info\.fromPin\)/);
+    const gate = seg.indexOf("isNumberBlockedBy");
+    const hint = seg.indexOf("publishToIdentity(");
+    const push = seg.indexOf("sendPushToIdentity(");
+    expect(gate).toBeGreaterThan(-1);
+    expect(hint).toBeGreaterThan(-1);
+    expect(push).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(hint);
+    expect(gate).toBeLessThan(push);
+  });
+
   it("a BLOCKED caller cannot wake the callee's phone through onPageCallee", () => {
     // THIS PIN EARNED ITS KEEP IN v2.105.12. E4's fix put a block gate in
     // onPageCallee; v2.99.11 then deleted the push, and the assertion was
@@ -56,7 +106,12 @@ describe("E4 — a blocked caller cannot notify the callee's devices", () => {
     //
     // Pinned as the GATE and its POSITION, not as the absence of a sender, so it
     // cannot go quiet again the next time the push moves.
-    const seg = src.slice(src.indexOf("onPageCallee"), src.indexOf("onResolveDial"));
+    // Located by its OWN code — the `{exists}` verdict only this hook returns —
+    // and BOUNDED by the hook boundaries, so it can neither be moved by a comment
+    // nor run past its own function (the unbounded-slice trap).
+    const idx = hookStarts.findIndex((_, n) => hook(n).includes("return { exists: false }"));
+    expect(idx, "found the onPageCallee hook").toBeGreaterThan(-1);
+    const seg = hook(idx);
     expect(seg).toMatch(/isNumberBlockedBy\(callee\.id, info\.callerPin\)/);
     // The gate must precede the send, or it decides nothing.
     const gate = seg.indexOf("isNumberBlockedBy");

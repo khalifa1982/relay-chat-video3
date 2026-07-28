@@ -1682,6 +1682,16 @@ export type InviteHook = (info: {
   fromName: string;
   toPin: string;
   roomId: string;
+  /**
+   * Whether the caller dialled with video (v2.105.18). OPTIONAL, so a caller
+   * that omits it reads as a voice call — the recoverable direction, since a
+   * voice ring for a video dial merely under-promises, while claiming video for
+   * a voice dial would turn on a camera nobody offered.
+   *
+   * It matters because this hook now also drives the OS-level ring for an IDLE
+   * callee, and CallKit/the full-screen intent render a video call differently.
+   */
+  video?: boolean;
 }) => void;
 
 /**
@@ -2296,6 +2306,10 @@ export function handleMessage(
               fromName: me.name,
               toPin: to,
               roomId: me.roomId,
+              // v2.105.18: the hook now also raises the OS-level ring for an
+              // IDLE callee, and a CallKit / full-screen-intent screen renders a
+              // video call differently from a voice one.
+              video: wantVideo,
             });
           } catch {
             /* never let a notification hook break call setup */
