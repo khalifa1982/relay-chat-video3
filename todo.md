@@ -308,3 +308,59 @@
       on reading the real generated artefacts and the real pod headers. The Codemagic run is what proves
       it. The one pre-existing test failure (`relay-config.test.ts` fetching your-chat.io) is this
       sandbox's egress proxy, unrelated.
+
+## Round 25 — the PushKit delegate moves to Objective-C, and two of my own claims were wrong
+- [x] **TWO CORRECTIONS FIRST, because both were mine and both were caught by the other side.**
+- [x] **(1) THE `PrecompileSwiftBridgingHeader` FAILURE WAS MY BUG, NOT A REACT HEADER PROBLEM.** My
+      `BRIDGE_IMPORTS` was `/* relay-voip-pushkit */ PushKit + CallKit: ObjC pods, reachable from Swift
+      only via this header.` — the prose AFTER the closing `*/` is BARE, UNCOMMENTED TEXT in a C header,
+      which is simply invalid C. `daa2c58` fixed it. And my own test asserted only that the marker STARTS
+      with `/*`; it never asserted the whole line was a valid comment, so it pinned the marker's shape
+      while the file it produced could not parse. The React/`RCTEventEmitter` transitive-header theory was
+      never the cause.
+- [x] **(2) MY SELECTOR "FIX" WAS WRONG AND THE REVERT IN `07fd7a4` IS CORRECT.** Swift's ObjC importer
+      applies omit-needless-words: `didUpdatePushCredentials:` with a `PKPushCredentials` first parameter
+      imports as `didUpdate(_:forType:)` — which is exactly why Apple's own PushKit delegate method is
+      `pushRegistry(_:didUpdate:for:)` — and `didReceiveIncomingPushWithPayload:` imports as
+      `didReceiveIncomingPush(with:forType:)`. So the names I deleted as "methods that do not exist" were
+      the correct Swift spellings. **My header cross-check test had a flawed PREMISE**: it compared the
+      Swift call site against the raw ObjC selector TEXT, which cannot account for the importer's
+      renaming, so it confidently verified the wrong thing. Build #30's `** ARCHIVE SUCCEEDED **` with
+      those names is the empirical settlement.
+- [x] **THE SWIFT VERSION THEREFORE WORKS, and this round is an ARCHITECTURE change rather than a fix.**
+      Build #30 archived and produced a 26.51 MB dSYM, then failed at `exportArchive` with `No "iOS App
+      Store" profiles for team 'QJBVFFML9P' matching 'com.app.relaymobile AppStore Distribution' are
+      installed` — code signing, owner-side, and this route will hit it too.
+- [x] **WHY IT IS STILL WORTH LANDING, stated from evidence rather than theory.** The ObjC route needs
+      neither of the two things that actually went wrong: it uses the LITERAL ObjC selectors, so the
+      importer's renaming cannot be got wrong; and it writes no bridging header, so a marker of mine
+      cannot produce an unparseable one. It also stops matching an anchor inside a template Expo controls
+      (`AppDelegate.swift` is not touched at all).
+- [x] **`RelayVoipBridge` OWNS ITS OWN `PKPushRegistry` AND IS ITS OWN DELEGATE**, which is the whole
+      mechanism: `RNVoipPushNotificationManager.voipRegistration` hardcodes
+      `voipRegistry.delegate = RCTSharedApplication().delegate`, and that insistence is what forced the
+      injection. A test forbids the message SEND — asserted as the send and not the bare word, because the
+      .m legitimately names it in a comment explaining why it is avoided, and a substring check matches
+      that prose instead of the code (the trap this repo keeps hitting, hit again while writing this test).
+- [x] **IT STARTS FROM `+load`**, which the ObjC runtime calls for every class in the binary before
+      `main()`, hopping to the main queue so the registry is created on the first run-loop pass. Calling
+      the libraries that early is SAFE and was CHECKED: `sendEventWithNameWrapper` buffers into
+      `_delayedEvents` with no listener and replays on subscribe, pinned against the pod's own .m.
+- [x] **THE REGISTRY IS HELD STRONGLY** — the library's own version keeps its registry in a LOCAL, which
+      is the one thing not to copy: a deallocated registry delivers nothing.
+- [x] **THE LOAD-BEARING RISK IS THE BUILD PHASE, NOT THE CODE.** A .m on disk that is not in the target's
+      Sources phase compiles nowhere and does nothing, silently. The Xcode step THROWS on a missing target
+      or group rather than returning the project untouched.
+- [x] **ONE MUTATION SURVIVOR, AND IT WAS THAT EXACT PROPERTY — a real gap in my own test.** Deleting
+      `project.addSourceFile(...)` survived, because the assertion read the pbxproj ALREADY ON DISK, which
+      still carried the reference from an earlier prebuild: it pinned a stale artefact rather than the
+      function's effect. Replaced with a test that parses the project fresh, forces the idempotency check
+      past, calls the real function and asserts the Sources phase gains exactly one entry. It bites now.
+- [x] `tests/voip-callkit.test.ts` → 36. **All 11 tripwires verified by MUTATION** from a byte-exact
+      backup, mutator aborting unless its target occurs exactly once, source byte-identical afterwards.
+      All twelve `reportNewIncomingCall` labels are cross-checked against the header — which is sound here
+      precisely because ObjC has no importer between the call and the selector.
+- [x] Verified by a real `expo prebuild --platform ios --clean`: both files written, the .m present in a
+      Sources build phase, `AppDelegate.swift` carrying no PushKit reference, bridging header untouched.
+- [x] **NOT COMPILED HERE, said plainly**: no Xcode on this machine. The export/provisioning failure is the
+      actual remaining blocker and is not something this repo can change.

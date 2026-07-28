@@ -1,5 +1,5 @@
 /**
- * Local Expo config plugin: PushKit + CallKit on iOS.
+ * Local Expo config plugin: PushKit + CallKit on iOS, in Objective-C.
  *
  * ── WHY THIS NEEDS NATIVE CODE AT ALL ──────────────────────────────────────
  * A VoIP push is the ONLY thing that shows the real full-screen call screen on a
@@ -17,245 +17,267 @@
  * PushKit handler returns. Miss it and iOS terminates the app; miss it repeatedly
  * and iOS STOPS DELIVERING VoIP PUSHES to it altogether — a failure that then
  * looks like a server problem forever. That is why the call is reported from the
- * native handler here and not from JS: when a push wakes a KILLED app, the React
- * Native bridge does not exist yet, so a JS-side report would arrive too late (or
- * never), and the penalty is silent and permanent.
+ * native handler and not from JS: when a push wakes a KILLED app, the React Native
+ * bridge does not exist yet, so a JS-side report would arrive too late (or never),
+ * and the penalty is silent and permanent.
  *
- * `RNVoipPushNotificationManager` + `RNCallKeep` do exactly this, which is why
- * they are used rather than hand-rolled: their whole value is the ordering.
+ * ── WHY OBJECTIVE-C, AFTER TWO FAILED BUILDS OF THE SWIFT VERSION ──────────
+ * The earlier shape of this plugin injected Swift into `AppDelegate.swift`, which
+ * needs `RNCallKeep` and `RNVoipPushNotificationManager` visible to Swift. Those
+ * pods are pure ObjC with no modulemap, so `import RNCallKeep` fails with "No such
+ * module" — and routing them through the bridging header instead moved the failure
+ * to `PrecompileSwiftBridgingHeader`, which is a MODULE-compilation context and is
+ * strict about non-modular headers reached transitively (`RNCallKeep.h` imports
+ * `<React/RCTEventEmitter.h>`). An ordinary ObjC translation unit in the app target
+ * has neither problem: ObjC→ObjC `#import` is exactly the integration both
+ * libraries document and thousands of shipping apps use.
+ *
+ * SO THERE IS NO BRIDGING HEADER AND NO AppDelegate INJECTION AT ALL. That is the
+ * real prize: the two most fragile things this plugin used to do — matching an
+ * anchor inside a template Expo controls, and making Swift see an ObjC pod — are
+ * both simply gone. A future template change cannot break what it does not touch.
+ *
+ * ── HOW IT STARTS WITHOUT TOUCHING AppDelegate ─────────────────────────────
+ * `RNVoipPushNotificationManager.voipRegistration` hardcodes
+ * `voipRegistry.delegate = RCTSharedApplication().delegate`, i.e. it insists the
+ * AppDelegate be the PushKit delegate — which is what forced the injection. So this
+ * does NOT call it: `RelayVoipBridge` creates its OWN `PKPushRegistry`, is its own
+ * delegate, and forwards to the two libraries. It starts itself from `+load`, which
+ * the ObjC runtime calls for every class in the binary before `main()`, hopping to
+ * the main queue so the registry is created on the first run-loop pass — the same
+ * moment `didFinishLaunchingWithOptions` would have run, with no reference to the
+ * app delegate and therefore no Swift.
+ *
+ * Calling into the libraries that early is SAFE and was checked rather than
+ * assumed: `sendEventWithNameWrapper` buffers into `_delayedEvents` when no
+ * listener is attached and replays once JS subscribes, so a token that arrives
+ * before the bridge exists is not lost.
  *
  * ── iOS ONLY, DELIBERATELY ─────────────────────────────────────────────────
  * Android already rings today through the existing FCM/Expo path plus the
  * full-screen-intent notification (`with-android-pip.js`). CallKeep also has an
  * Android ConnectionService implementation, and enabling it would add permissions
  * and a second, competing incoming-call UI to a platform that already works.
- * Only the broken platform changes — the same discipline the Expo-token switch
- * used (iOS-only, so fixing one platform cannot break the other).
- *
- * ── THE ObjC POD HEADERS GO IN THE BRIDGING HEADER, NOT IN A SWIFT `import` ──
- * Both `react-native-callkeep` and `react-native-voip-push-notification` are pure
- * Objective-C (`source_files = "ios/<Pod>/*.{h,m}"`), neither declares `header_dir`
- * or a modulemap, and the Expo Podfile leaves `use_frameworks!` OFF (it is
- * conditional on `ios.useFrameworks`/`USE_FRAMEWORKS`, and `use_modular_headers!`
- * is absent too). CocoaPods therefore builds them as static libraries with NO Swift
- * module, so `import RNCallKeep` fails with "No such module".
- *
- * They reach Swift through the bridging header, which prebuild already generates at
- * `ios/<Project>/<Project>-Bridging-Header.h` and already wires into both build
- * configurations via `SWIFT_OBJC_BRIDGING_HEADER` (verified against a real
- * prebuild). This plugin APPENDS to that file and re-asserts the build setting, so
- * it is correct whether or not the template did it.
- *
- * `import PushKit` STAYS in the Swift: that one is a real system framework.
  *
  * ── IT FAILS LOUDLY, WHICH IS THE POINT ────────────────────────────────────
- * If the AppDelegate anchor is not found (a future Expo template change), this
- * THROWS at prebuild rather than returning the file untouched. A silent no-op
- * would produce an app that builds, installs, looks correct and never rings —
- * exactly the class of failure this project keeps closing.
+ * A source file on disk that is not in the target's Sources build phase compiles
+ * nowhere and does nothing, silently — an app that builds, installs, looks correct
+ * and never rings. So the Xcode step THROWS if it cannot find the app target or the
+ * group to add the file to, rather than returning the project untouched.
  */
-const {
-  withAppDelegate,
-  withInfoPlist,
-  withDangerousMod,
-  withXcodeProject,
-} = require("@expo/config-plugins");
+const { withInfoPlist, withDangerousMod, withXcodeProject } = require("@expo/config-plugins");
 const fs = require("fs");
 const path = require("path");
 
-/** Marker so a second run is a no-op rather than a double injection. */
-const MARKER = "// relay-voip-pushkit";
+/** Basename of the injected pair. */
+const CLASS_NAME = "RelayVoipBridge";
 
-/** The bridging header is C, so its marker has to be a C comment. */
-const H_MARKER = "/* relay-voip-pushkit */";
+const HEADER_SRC = `//
+//  ${CLASS_NAME}.h
+//  Generated by plugins/with-ios-voip.js — do not edit by hand.
+//
+//  Owns the PushKit registry and forwards to RNCallKeep +
+//  RNVoipPushNotification. Deliberately NOT the AppDelegate: being its own
+//  delegate is what removes the need for any Swift, and therefore for any
+//  bridging header.
+//
+#import <Foundation/Foundation.h>
 
-/**
- * Only system frameworks belong in a Swift `import`.
- * RNCallKeep and RNVoipPushNotificationManager come through the bridging header.
- *
- * `Foundation` is listed even though the template resolves it transitively today
- * (it uses `UIWindow`/`UIScreen` without importing UIKit at all). The injected code
- * calls `NSLog`, `String(format:)` and `UUID()` — all Foundation — and an injection
- * should not depend on the host file's import list staying the shape it happens to
- * be in.
- */
-const IMPORTS = `import PushKit
-import Foundation`;
+NS_ASSUME_NONNULL_BEGIN
 
-/**
- * The two ObjC pod headers, reached through the bridging header.
- *
- * BOTH use the angle form naming the pod's public header directory, which
- * CocoaPods creates as `Pods/Headers/Public/<PodName>/` because neither podspec
- * overrides `header_dir`. The quoted form works only while a flattened search path
- * happens to be present, so the two imports may as well be consistent about it.
- *
- * Note the directory and the file DIFFER for the VoIP pod: the pod is
- * `RNVoipPushNotification`, the header inside it is
- * `RNVoipPushNotificationManager.h`. Collapsing the two fails with "file not
- * found" and nothing that names the cause.
- */
-const BRIDGE_IMPORTS = `${H_MARKER}
-// PushKit + CallKit: ObjC pods, reachable from Swift only via this header.
-#import <RNCallKeep/RNCallKeep.h>
-#import <RNVoipPushNotification/RNVoipPushNotificationManager.h>`;
+@interface ${CLASS_NAME} : NSObject
+
+/** The single instance that owns the registry. */
++ (instancetype)shared;
+
+/** Create the PKPushRegistry and start listening. Idempotent. */
+- (void)start;
 
 /**
- * The PushKit delegate.
- *
- * `didReceiveIncomingPushWith` reports the call to CallKit FIRST and forwards to
- * JS second. That order is not a style choice — see the header. The JS side then
- * takes over the UI once the bridge is up.
- *
- * EVERY METHOD IS `public`, AND THAT IS REQUIRED RATHER THAN DECORATIVE. The Expo
- * SDK 54 template declares `public class AppDelegate: ExpoAppDelegate`, and Swift
- * requires a witness for a requirement of a PUBLIC protocol to be at least as
- * visible as the conformance. An internal `func pushRegistry` fails to build with
- * "must be declared public because it matches a requirement in public protocol
- * 'PKPushRegistryDelegate'".
- *
- * EVERY SELECTOR BELOW WAS READ OFF THE POD'S OWN HEADER rather than recalled, and
- * two of them were wrong before: `didUpdate(_:forType:)` does not exist (the real
- * selector is `didUpdatePushCredentials:forType:`) and neither does
- * `didReceiveIncomingPush(with:forType:)` (the real first label is `withPayload:`).
- * `tests/voip-callkit.test.ts` now cross-checks each call against the header so a
- * recalled name cannot come back.
+ * A room id is not a uuid, so derive one deterministically: the same room always
+ * yields the same CallKit identity, which is what stops a RETRANSMITTED push
+ * stacking a second ringing call on the lock screen.
  */
-const DELEGATE = `
-${MARKER} — PushKit (VoIP) + CallKit.
-extension AppDelegate: PKPushRegistryDelegate {
-  // Registration itself is called directly from didFinishLaunchingWithOptions —
-  // deliberately NOT wrapped in a helper here. A wrapper nothing calls reads as
-  // the registration path, and the next person to change this would edit the dead
-  // one and wonder why the phone stopped ringing.
++ (NSString *)stableUUIDFromSeed:(NSString *)seed;
 
-  public func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
-    // The PushKit token. NOT the same token as the alert token expo-notifications
-    // reports — this one is addressed on the <bundle>.voip topic.
-    RNVoipPushNotificationManager.didUpdate(pushCredentials, forType: type.rawValue)
-  }
+@end
 
-  public func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
-    // Token invalidated — no-op on the native side. The server will discover the
-    // token is stale on next send attempt. RNVoipPushNotification does not expose
-    // a didInvalidate class method, so we just log and move on.
-    NSLog("[RELAY] VoIP push token invalidated for type: \\(type.rawValue)")
-  }
-
-  public func pushRegistry(
-    _ registry: PKPushRegistry,
-    didReceiveIncomingPushWith payload: PKPushPayload,
-    for type: PKPushType,
-    completion: @escaping () -> Void
-  ) {
-    let dict = payload.dictionaryPayload
-    let callerName = (dict["callerName"] as? String) ?? "RELAY"
-    let callerPin = (dict["callerPin"] as? String) ?? ""
-    let hasVideo = (dict["video"] as? String) == "1"
-    // A STABLE uuid derived from the room, so a RETRANSMITTED push for the same
-    // call joins the call already ringing instead of stacking a second one on the
-    // lock screen. (It is deliberately not a channel to JS: read against
-    // use-voip-callkit.ts, the hook answers via CallKeep's own answerCall/endCall
-    // events and never re-derives this value — the comment that used to be here
-    // claimed otherwise and was simply wrong.)
-    let room = (dict["roomId"] as? String) ?? UUID().uuidString
-    let uuid = RelayVoip.stableUUID(from: room)
-
-    // REPORTED BEFORE ANYTHING ELSE. iOS kills the app if a VoIP push does not
-    // produce a call, and repeated offences stop VoIP delivery permanently.
-    RNCallKeep.reportNewIncomingCall(
-      uuid,
-      handle: callerPin,
-      handleType: "generic",
-      hasVideo: hasVideo,
-      localizedCallerName: callerName,
-      supportsHolding: true,
-      supportsDTMF: false,
-      supportsGrouping: false,
-      supportsUngrouping: false,
-      fromPushKit: true,
-      payload: dict,
-      withCompletionHandler: completion
-    )
-    RNVoipPushNotificationManager.didReceiveIncomingPush(with: payload, forType: type.rawValue)
-  }
-}
-
-${MARKER} — a room id is not a uuid, so derive one deterministically.
-enum RelayVoip {
-  static func stableUUID(from seed: String) -> String {
-    var bytes = Array(seed.utf8)
-    // Pad/truncate to 16 bytes. Deterministic, so the same room always yields the
-    // same CallKit identity across a push and any retransmission of it.
-    if bytes.count < 16 { bytes += Array(repeating: 0, count: 16 - bytes.count) }
-    let b = Array(bytes.prefix(16))
-    let hex = b.map { String(format: "%02x", $0) }.joined()
-    let s = Array(hex)
-    return String(s[0..<8]) + "-" + String(s[8..<12]) + "-" + String(s[12..<16])
-      + "-" + String(s[16..<20]) + "-" + String(s[20..<32])
-  }
-}
+NS_ASSUME_NONNULL_END
 `;
 
-/**
- * Inject the imports and the delegate extension into AppDelegate.swift.
- *
- * Exported so the transform is unit-testable: this is a pure string function, and
- * the whole risk here is that it silently does nothing.
- */
-function injectSwift(contents) {
-  if (contents.includes(MARKER)) return contents; // already applied
-  if (!/class AppDelegate/.test(contents)) {
-    throw new Error(
-      "[with-ios-voip] Could not find `class AppDelegate` in AppDelegate.swift. " +
-        "The Expo template changed shape; update plugins/with-ios-voip.js rather than " +
-        "shipping a build that cannot ring.",
-    );
-  }
-  // Imports go after the LAST existing import, so we never land above one and
-  // never inside a comment block at the top of the file.
-  const importRe = /^import .*$/gm;
-  let lastImportEnd = -1;
-  for (const m of contents.matchAll(importRe)) lastImportEnd = m.index + m[0].length;
-  if (lastImportEnd < 0) {
-    throw new Error("[with-ios-voip] AppDelegate.swift has no import statements to anchor to.");
-  }
-  let out =
-    contents.slice(0, lastImportEnd) + "\n" + IMPORTS + contents.slice(lastImportEnd);
+const IMPL_SRC = `//
+//  ${CLASS_NAME}.m
+//  Generated by plugins/with-ios-voip.js — do not edit by hand.
+//
+#import "${CLASS_NAME}.h"
 
-  // Register for PushKit as soon as the app launches — including a launch CAUSED
-  // by a VoIP push, which is why it cannot wait for JS to ask.
-  const didFinish =
-    /(func application\(\s*_ application: UIApplication,\s*didFinishLaunchingWithOptions[\s\S]*?\{)/;
-  if (didFinish.test(out)) {
-    out = out.replace(
-      didFinish,
-      `$1\n    ${MARKER}\n    RNVoipPushNotificationManager.voipRegistration()`,
-    );
-  } else {
-    throw new Error(
-      "[with-ios-voip] Could not find didFinishLaunchingWithOptions to register PushKit in.",
-    );
-  }
+#import <PushKit/PushKit.h>
 
-  return out + "\n" + DELEGATE;
+// ObjC → ObjC, so these need no Swift module and no bridging header. The angle
+// form names the pod's public header directory, which CocoaPods creates as
+// Pods/Headers/Public/<PodName>/ because neither podspec overrides header_dir.
+// NOTE the directory and the file DIFFER for the VoIP pod: the pod is
+// RNVoipPushNotification, the header inside it is
+// RNVoipPushNotificationManager.h. Collapsing the two fails with "file not
+// found" and nothing that names the cause.
+#import <RNCallKeep/RNCallKeep.h>
+#import <RNVoipPushNotification/RNVoipPushNotificationManager.h>
+
+@interface ${CLASS_NAME} () <PKPushRegistryDelegate>
+// STRONG. The library's own voipRegistration() keeps its registry in a LOCAL,
+// which is a long-standing wart there; a deallocated registry delivers nothing.
+@property (nonatomic, strong, nullable) PKPushRegistry *registry;
+@end
+
+@implementation ${CLASS_NAME}
+
++ (instancetype)shared {
+  static ${CLASS_NAME} *instance = nil;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{ instance = [[${CLASS_NAME} alloc] init]; });
+  return instance;
+}
+
++ (void)load {
+  // The ObjC runtime calls +load for every class in the binary, before main() —
+  // which is why this needs no AppDelegate hook and no Swift. Hop to the main
+  // queue so the registry is created on the first run-loop pass, i.e. the same
+  // moment didFinishLaunchingWithOptions would have run.
+  dispatch_async(dispatch_get_main_queue(), ^{ [[self shared] start]; });
+}
+
+- (void)start {
+  if (self.registry != nil) return; // idempotent
+  PKPushRegistry *registry = [[PKPushRegistry alloc] initWithQueue:dispatch_get_main_queue()];
+  registry.delegate = self;
+  registry.desiredPushTypes = [NSSet setWithObject:PKPushTypeVoIP];
+  self.registry = registry;
+}
+
++ (NSString *)stableUUIDFromSeed:(NSString *)seed {
+  NSData *data = [seed dataUsingEncoding:NSUTF8StringEncoding];
+  // Zero-initialised, so a seed shorter than 16 bytes is PADDED rather than
+  // reading uninitialised memory.
+  uint8_t bytes[16] = {0};
+  NSUInteger take = MIN((NSUInteger)16, data.length);
+  if (take > 0) [data getBytes:bytes length:take];
+  NSMutableString *hex = [NSMutableString stringWithCapacity:32];
+  for (int i = 0; i < 16; i++) [hex appendFormat:@"%02x", bytes[i]];
+  return [NSString stringWithFormat:@"%@-%@-%@-%@-%@",
+          [hex substringWithRange:NSMakeRange(0, 8)],
+          [hex substringWithRange:NSMakeRange(8, 4)],
+          [hex substringWithRange:NSMakeRange(12, 4)],
+          [hex substringWithRange:NSMakeRange(16, 4)],
+          [hex substringWithRange:NSMakeRange(20, 12)]];
+}
+
+/** Read a dictionary value only when it really is a non-empty string. */
+static NSString *RelayVoipString(NSDictionary *dict, NSString *key, NSString *fallback) {
+  id value = dict[key];
+  return [value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0
+    ? (NSString *)value
+    : fallback;
+}
+
+#pragma mark - PKPushRegistryDelegate
+
+- (void)pushRegistry:(PKPushRegistry *)registry
+    didUpdatePushCredentials:(PKPushCredentials *)pushCredentials
+                     forType:(PKPushType)type {
+  // The PushKit token — NOT the same token expo-notifications reports. This one
+  // is addressed on the <bundle>.voip topic, and the JS hook posts it to the web
+  // app declared as kind "apns-voip".
+  [RNVoipPushNotificationManager didUpdatePushCredentials:pushCredentials forType:type];
+}
+
+- (void)pushRegistry:(PKPushRegistry *)registry didInvalidatePushTokenForType:(PKPushType)type {
+  // RNVoipPushNotificationManager exposes no invalidation hook (checked against
+  // its header), so a log is the whole available behaviour. The server prunes a
+  // dead token from the APNs response instead.
+  NSLog(@"[RELAY] VoIP push token invalidated for type: %@", type);
+}
+
+- (void)pushRegistry:(PKPushRegistry *)registry
+    didReceiveIncomingPushWithPayload:(PKPushPayload *)payload
+                              forType:(PKPushType)type
+                withCompletionHandler:(void (^)(void))completion {
+  NSDictionary *dict = payload.dictionaryPayload;
+  NSString *callerName = RelayVoipString(dict, @"callerName", @"RELAY");
+  NSString *callerPin = RelayVoipString(dict, @"callerPin", @"");
+  // The server sends the STRING "1". A bare truthiness check would read "0" as
+  // true and turn every voice call into a video one.
+  BOOL hasVideo = [RelayVoipString(dict, @"video", @"") isEqualToString:@"1"];
+  NSString *room = RelayVoipString(dict, @"roomId", [[NSUUID UUID] UUIDString]);
+  NSString *callUUID = [${CLASS_NAME} stableUUIDFromSeed:room];
+
+  // REPORTED BEFORE ANYTHING ELSE, and the completion handler is handed to
+  // CallKit rather than called here. iOS kills the app if a VoIP push does not
+  // produce a call, and repeated offences stop VoIP delivery permanently.
+  [RNCallKeep reportNewIncomingCall:callUUID
+                            handle:callerPin
+                        handleType:@"generic"
+                          hasVideo:hasVideo
+               localizedCallerName:callerName
+                   supportsHolding:YES
+                      supportsDTMF:NO
+                  supportsGrouping:NO
+                supportsUngrouping:NO
+                       fromPushKit:YES
+                           payload:dict
+             withCompletionHandler:completion];
+
+  // Then hand it to JS. Safe even before the bridge exists: the manager buffers
+  // into _delayedEvents when nothing is listening and replays on subscribe.
+  [RNVoipPushNotificationManager didReceiveIncomingPushWithPayload:payload forType:type];
+}
+
+@end
+`;
+
+/** Where the injected pair lives inside the generated project. */
+function sourcePaths(platformProjectRoot, projectName) {
+  return {
+    header: path.join(platformProjectRoot, projectName, `${CLASS_NAME}.h`),
+    impl: path.join(platformProjectRoot, projectName, `${CLASS_NAME}.m`),
+    /** Project-relative, which is the form the pbxproj wants. */
+    implRef: `${projectName}/${CLASS_NAME}.m`,
+    headerRef: `${projectName}/${CLASS_NAME}.h`,
+  };
 }
 
 /**
- * Add the ObjC pod headers to the bridging header, once.
+ * Add the .m to the app target's Sources build phase.
  *
- * Exported for the same reason `injectSwift` is: it is a pure string transform and
- * the whole risk is that it silently does nothing.
+ * Exported so the behaviour can be driven against a REAL prebuilt pbxproj rather
+ * than pinned as a string: a file that is on disk but not in the build phase
+ * compiles nowhere, and nothing reports it.
  */
-function injectBridgingHeader(contents) {
-  if (contents.includes(H_MARKER)) return contents; // already applied
-  const trimmed = contents.replace(/\s+$/, "");
-  return trimmed ? `${trimmed}\n\n${BRIDGE_IMPORTS}\n` : `${BRIDGE_IMPORTS}\n`;
-}
+function addSourceToProject(project, projectName) {
+  const { implRef, headerRef } = sourcePaths("", projectName);
+  // Idempotent: `expo prebuild` runs repeatedly, and a duplicate build file is a
+  // duplicate-symbol link error.
+  if (project.hasFile(implRef)) return false;
 
-/** Where the Expo template puts the bridging header for this project. */
-function bridgingHeaderPath(platformProjectRoot, projectName) {
-  return path.join(platformProjectRoot, projectName, `${projectName}-Bridging-Header.h`);
+  const target = project.getFirstTarget();
+  if (!target || !target.uuid) {
+    throw new Error(
+      "[with-ios-voip] Could not find an app target to compile " +
+        `${CLASS_NAME}.m into. A source file outside the Sources build phase ` +
+        "compiles nowhere and the app would install and never ring.",
+    );
+  }
+  const groupKey = project.findPBXGroupKey({ name: projectName });
+  if (!groupKey) {
+    throw new Error(
+      `[with-ios-voip] Could not find the "${projectName}" group in the Xcode ` +
+        "project to add the PushKit sources to.",
+    );
+  }
+  // The header gets a file reference so Xcode indexes it; only the .m is
+  // compiled, which is what `addSourceFile` handles.
+  project.addHeaderFile(headerRef, {}, groupKey);
+  project.addSourceFile(implRef, { target: target.uuid }, groupKey);
+  return true;
 }
 
 function withRelayIosVoip(config) {
@@ -272,96 +294,40 @@ function withRelayIosVoip(config) {
     return cfg;
   });
 
-  // Step 1: Inject Swift code into AppDelegate.swift
-  config = withAppDelegate(config, (cfg) => {
-    if (cfg.modResults.language !== "swift") {
-      throw new Error(
-        `[with-ios-voip] Expected a Swift AppDelegate, got "${cfg.modResults.language}". ` +
-          "Update this plugin for that language rather than skipping the injection.",
-      );
-    }
-    cfg.modResults.contents = injectSwift(cfg.modResults.contents);
-    return cfg;
-  });
-
-  // Step 2: put the ObjC pod headers in the bridging header.
-  //
-  // APPENDED, NEVER OVERWRITTEN, and the filename is DERIVED. The earlier version
-  // wrote the whole file from a template with the name hardcoded as
-  // `RELAY-Bridging-Header.h`, which has two problems: the Expo template already
-  // generates `<Project>-Bridging-Header.h` and already points
-  // SWIFT_OBJC_BRIDGING_HEADER at it, so a hardcoded name leaves an orphan the day
-  // the app is renamed; and a whole-file write destroys anything another plugin
-  // put there. Appending under a marker is idempotent AND lets plugins coexist.
+  // Write the pair onto disk. Overwriting is correct HERE, unlike for the shared
+  // bridging header the previous version appended to: these two files are
+  // entirely ours and are regenerated from this plugin, so the newest plugin
+  // always wins and there is nothing of anyone else's to destroy.
   config = withDangerousMod(config, [
     "ios",
     (cfg) => {
       const { platformProjectRoot, projectName } = cfg.modRequest;
       if (!projectName) {
-        throw new Error(
-          "[with-ios-voip] No iOS projectName available; cannot locate the bridging header.",
-        );
+        throw new Error("[with-ios-voip] No iOS projectName available.");
       }
-      const header = bridgingHeaderPath(platformProjectRoot, projectName);
-      // Created if the template ever stops emitting one, so a template change
-      // degrades to "we make it ourselves" rather than to a build that cannot ring.
-      const existing = fs.existsSync(header) ? fs.readFileSync(header, "utf8") : "";
-      fs.writeFileSync(header, injectBridgingHeader(existing), "utf-8");
+      const p = sourcePaths(platformProjectRoot, projectName);
+      fs.mkdirSync(path.dirname(p.impl), { recursive: true });
+      fs.writeFileSync(p.header, HEADER_SRC, "utf-8");
+      fs.writeFileSync(p.impl, IMPL_SRC, "utf-8");
       return cfg;
     },
   ]);
 
-  // Step 3: Set SWIFT_OBJC_BRIDGING_HEADER in the Xcode project build settings.
-  config = withXcodeProject(config, (cfg) => {
-    const project = cfg.modResults;
-
-    // Find the main app target's build configurations
+  // …and put the .m in the build. A separate mod because it edits the pbxproj,
+  // which withDangerousMod must not touch by hand.
+  return withXcodeProject(config, (cfg) => {
     const projectName = cfg.modRequest.projectName;
-    // Derived, not hardcoded: this must name the SAME file step 2 wrote, and the
-    // template already points here — so on an unchanged template this step is a
-    // no-op that costs nothing and covers the case where it is not set.
-    const bridgingHeaderValue = `${projectName}/${projectName}-Bridging-Header.h`;
-
-    // Set for all build configurations in the project
-    const pbxProject = project.hash.project.objects["PBXProject"];
-    const nativeTargets = project.hash.project.objects["PBXNativeTarget"];
-
-    // Iterate all native targets and set the bridging header on the app target
-    for (const key of Object.keys(nativeTargets)) {
-      if (typeof nativeTargets[key] !== "object") continue;
-      const target = nativeTargets[key];
-      // Only set on the main app target (not tests, etc.)
-      if (target.productType !== '"com.apple.product-type.application"') continue;
-
-      const configListId = target.buildConfigurationList;
-      const configList =
-        project.hash.project.objects["XCConfigurationList"][configListId];
-      if (!configList) continue;
-
-      for (const configRef of configList.buildConfigurations) {
-        const configId =
-          typeof configRef === "object" ? configRef.value : configRef;
-        const buildConfig =
-          project.hash.project.objects["XCBuildConfiguration"][configId];
-        if (!buildConfig || !buildConfig.buildSettings) continue;
-
-        buildConfig.buildSettings["SWIFT_OBJC_BRIDGING_HEADER"] =
-          `"${bridgingHeaderValue}"`;
-      }
+    if (!projectName) {
+      throw new Error("[with-ios-voip] No iOS projectName available.");
     }
-
-    console.log(
-      `[with-ios-voip] Set SWIFT_OBJC_BRIDGING_HEADER = "${bridgingHeaderValue}"`,
-    );
+    addSourceToProject(cfg.modResults, projectName);
     return cfg;
   });
-
-  return config;
 }
 
 module.exports = withRelayIosVoip;
-module.exports.injectSwift = injectSwift;
-module.exports.injectBridgingHeader = injectBridgingHeader;
-module.exports.bridgingHeaderPath = bridgingHeaderPath;
-module.exports.MARKER = MARKER;
-module.exports.H_MARKER = H_MARKER;
+module.exports.addSourceToProject = addSourceToProject;
+module.exports.sourcePaths = sourcePaths;
+module.exports.CLASS_NAME = CLASS_NAME;
+module.exports.HEADER_SRC = HEADER_SRC;
+module.exports.IMPL_SRC = IMPL_SRC;
