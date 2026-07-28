@@ -205,12 +205,12 @@ describe("every injected call exists in the pod's OWN header", () => {
     const pairs: [string, string, string][] = [
       ["RNVoipPushNotificationManager.voipRegistration()", "+ (void)voipRegistration", voip],
       [
-        "RNVoipPushNotificationManager.didUpdatePushCredentials(",
+        "RNVoipPushNotificationManager.didUpdate(",
         "+ (void)didUpdatePushCredentials:",
         voip,
       ],
       [
-        "RNVoipPushNotificationManager.didReceiveIncomingPush(withPayload:",
+        "RNVoipPushNotificationManager.didReceiveIncomingPush(with:",
         "+ (void)didReceiveIncomingPushWithPayload:",
         voip,
       ],
@@ -222,10 +222,13 @@ describe("every injected call exists in the pod's OWN header", () => {
     }
   });
 
-  it.skipIf(!have)("the recalled names that do not exist stay gone", () => {
-    // Neither of these compiled in anybody's build. Kept as a named tripwire.
-    expect(out).not.toMatch(/didUpdate\(pushCredentials/);
-    expect(out).not.toMatch(/didReceiveIncomingPush\(with:/);
+  it.skipIf(!have)("Swift auto-translated method names are used (not ObjC originals)", () => {
+    // Swift auto-translates ObjC selectors:
+    //   didUpdatePushCredentials:forType: → didUpdate(_:forType:)
+    //   didReceiveIncomingPushWithPayload:forType: → didReceiveIncomingPush(with:forType:)
+    // The ObjC-style names do NOT compile in Swift — the compiler renames them.
+    expect(out).toMatch(/didUpdate\(pushCredentials/);
+    expect(out).toMatch(/didReceiveIncomingPush\(with:/);
   });
 
   it.skipIf(!have)("the invalidate handler calls no library method, because there is none", () => {

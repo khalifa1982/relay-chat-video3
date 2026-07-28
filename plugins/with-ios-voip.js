@@ -132,7 +132,7 @@ extension AppDelegate: PKPushRegistryDelegate {
   public func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
     // The PushKit token. NOT the same token as the alert token expo-notifications
     // reports — this one is addressed on the <bundle>.voip topic.
-    RNVoipPushNotificationManager.didUpdatePushCredentials(pushCredentials, forType: type.rawValue)
+    RNVoipPushNotificationManager.didUpdate(pushCredentials, forType: type.rawValue)
   }
 
   public func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
@@ -177,7 +177,7 @@ extension AppDelegate: PKPushRegistryDelegate {
       payload: dict,
       withCompletionHandler: completion
     )
-    RNVoipPushNotificationManager.didReceiveIncomingPush(withPayload: payload, forType: type.rawValue)
+    RNVoipPushNotificationManager.didReceiveIncomingPush(with: payload, forType: type.rawValue)
   }
 }
 
