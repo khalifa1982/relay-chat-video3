@@ -3,6 +3,13 @@ workflows:
     name: iOS Release Build
     max_build_duration: 120
     instance_type: mac_mini_m2
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: mobile-main
+          include: true
+          source: true
     integrations:
       app_store_connect: Codemagic CI
     environment:
@@ -44,7 +51,7 @@ workflows:
           WORKSPACE=$(ls -d *.xcworkspace | head -1)
           SCHEME=$(echo "$WORKSPACE" | sed 's/.xcworkspace//')
           echo "Using workspace: $WORKSPACE, scheme: $SCHEME"
-          
+
           # Run xcodebuild directly to get full error output
           set -o pipefail
           xcodebuild -workspace "$WORKSPACE" \
@@ -57,8 +64,16 @@ workflows:
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             CODE_SIGN_STYLE=Manual \
-            2>&1 | tee /tmp/xcodebuild_full.log | tail -100
-          
+            2>&1 | tee /tmp/xcodebuild_full.log
+
+          ARCHIVE_EXIT=$?
+          if [ $ARCHIVE_EXIT -ne 0 ]; then
+            echo "=== ARCHIVE FAILED (exit $ARCHIVE_EXIT) ==="
+            echo "=== Last 200 lines of build log ==="
+            tail -200 /tmp/xcodebuild_full.log
+            exit $ARCHIVE_EXIT
+          fi
+
           # If archive succeeded, export IPA
           xcodebuild -exportArchive \
             -archivePath "$CM_BUILD_DIR/ios/build/RELAY.xcarchive" \
