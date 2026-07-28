@@ -11,7 +11,7 @@
     <key>provisioningProfiles</key>
     <dict>
         <key>com.app.relaymobile</key>
-        <string>com.app.relaymobile AppStore Distribution</string>
+        <string>relay_appstore</string>
     </dict>
     <key>uploadBitcode</key>
     <false/>
