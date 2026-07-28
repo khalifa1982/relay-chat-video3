@@ -44,8 +44,8 @@ workflows:
           cd ios
           LATEST_BUILD_NUMBER=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APP_ID" 2>/dev/null || echo "0")
           # Ensure we always increment past any previously uploaded version
-          if [ -z "$LATEST_BUILD_NUMBER" ] || [ "$LATEST_BUILD_NUMBER" -lt 10002 ]; then
-            LATEST_BUILD_NUMBER=10002
+          if [ -z "$LATEST_BUILD_NUMBER" ] || [ "$LATEST_BUILD_NUMBER" -lt 10003 ]; then
+            LATEST_BUILD_NUMBER=10003
           fi
           NEW_BUILD_NUMBER=$(($LATEST_BUILD_NUMBER + 1))
           echo "Setting build number to $NEW_BUILD_NUMBER (latest was $LATEST_BUILD_NUMBER)"
