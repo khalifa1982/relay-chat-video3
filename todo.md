@@ -11239,6 +11239,124 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.17 — five config readers that reported READY for a value they could not use (2026-07-28)
+
+- [x] **THE DEFECT WAS MINE, FROM FOUR HOURS EARLIER, AND THE OWNER'S OWN DEPLOY IS WHAT EXPOSED IT.**
+      v2.105.12 shipped `readPem`, which validated only that a value CONTAINED the PEM marker — and on
+      the inline branch that final check was TAUTOLOGICAL, since control only reached it if the marker
+      was already there. So `APNS_P8_KEY="-----BEGIN PRIVATE KEY-----"` with no body was ACCEPTED,
+      `apnsVoipConfig()` returned `mode:"token"`, `apnsVoipConfigured()` returned true, and **the admin
+      Push Doctor rendered a green row saying the fleet can ring** — while `crypto.sign` threw
+      `ERR_OSSL_UNSUPPORTED` into a bare catch and every VoIP push silently sent nothing.
+- [x] **TELLING AN OPERATOR THE FLEET CAN RING WHEN IT CANNOT IS THE SAME DEFECT v2.105.12 SET OUT TO
+      REMOVE, POINTING THE OTHER WAY** — and it is worse than a missing feature, because it sends
+      somebody hunting in Firebase, in Xcode, in APNs, anywhere but at the one variable that is wrong.
+- [x] **AND IT WAS REACHABLE BY THE DOCUMENTED PATH, not a hypothetical**: `aws-ops.yml`'s `env-set`
+      appends `KEY=VALUE` on ONE line, so a multi-line PEM lands as several unquoted lines and
+      `ecosystem.config.cjs`'s own `loadEnvFile` keeps only the first — reducing a real key to exactly
+      that bare header. **NO QUOTING RESCUES IT**, because the quote-strip runs per line. Verified by
+      replaying that shell rather than reasoned about. (The owner has since used the FILE form,
+      `APNS_KEY_P8=/home/relay/apns-key.p8`, which is the shape that works — and the path branch had
+      the identical hole for a truncated FILE, so it is fixed at both.)
+- [x] **`pemIsUsable` NOW PARSES**: a private key through `crypto.createPrivateKey`, a certificate
+      through `new crypto.X509Certificate`. Anything unloadable reports NOT configured, which is the
+      loud, recoverable direction — the doctor then says "APNs VoIP is NOT configured", which names the
+      thing that is actually wrong.
+- [x] **THE KEY MUST BE P-256, NOT MERELY LOADABLE, and that gap is the same lie one layer deeper.**
+      An Apple `.p8` is ALWAYS P-256, and ES256 can sign with nothing else. Hand the token path an RSA
+      key and it LOADS, the config reports `mode:"token"`, `crypto.sign` SUCCEEDS — and then
+      `derToJoseES256` returns null at an **early return that never reaches the warning**: green
+      doctor, no ring, no log. Reachable by an ordinary paste slip, since `APNS_VOIP_KEY_PEM` (the
+      certificate mode's RSA key) and `APNS_P8_KEY` are adjacent variables for one feature. Measured
+      rather than assumed: a P-384 key signs to a 103-byte DER and an RSA key to a 256-byte PKCS#1
+      blob, and `derToJoseES256` answers null for both — so **P-384 is the nastiest of the three**,
+      because `asymmetricKeyType === "ec"` is true and only the CURVE tells you the 48-byte halves will
+      be mangled into a 64-byte signature APNs answers 403 to.
+- [x] **THE SIGNING CATCH IS NO LONGER SILENT** — once per process, naming the keyId and the error text
+      and **never the key**. It should now be unreachable from a configured fleet, which is exactly the
+      branch worth leaving evidence in: a fleet that cannot ring used to leave no trace of why.
+- [x] **THE SAME CLASS SWEPT ACROSS FOUR SIBLING TRANSPORTS, because one reader getting this wrong is a
+      habit and not an accident.** Each was confirmed against source before being touched, and the weak
+      candidates were discarded with reasons rather than shipped as findings.
+- [x] **FCM — THE SINGLE MOST COMMON FIREBASE MISCONFIGURATION, and the owner reported this transport
+      broken** (*"i have problem with firebase to send the notification"*): a service-account JSON whose
+      `private_key` carries LITERAL backslash-n instead of real newlines. It is what most copy-paste
+      routes produce, it parses as JSON perfectly, and it cannot sign — while `fcmConfig()` gated on
+      TRUTHINESS alone, so `pushDiagnostics` reported `fcm: true` and `sendFcmData` returned
+      `{delivered: 0}`, **byte-identical to having no credential at all**. `\n`-escaped keys are now
+      REPAIRED rather than refused, because that form is so common that refusing it would send an
+      operator hunting for a problem they cannot see, and the repair is unambiguous — a real PEM never
+      contains a literal backslash-n. Anything still unloadable reports NOT configured.
+- [x] **SMTP — A GARBAGE PORT REPORTED READY AND THEN NEVER OPENED A SOCKET.** `Number("587 ;")` is
+      NaN, `emailEnabled()` still returned true, and `net.connect` threw `ERR_SOCKET_BAD_PORT` into a
+      catch that resolves `{ok:false}` — so mail was "enabled" and nothing was ever sent. A trailing
+      character is exactly what a hand-edited `.env` line acquires. Now bounded, falling back to the
+      default **following `SMTP_SECURE`** (465 vs 587), which is the recoverable direction and matches
+      the in-repo precedent in `relay.ts`.
+- [x] **SMTP — `MAIL FROM:<>` WAS BEING PUT ON THE WIRE.** With `SMTP_HOST` alone the From resolved to
+      `""`, i.e. the RFC 5321 null reverse-path reserved for bounces and refused by essentially every
+      submission service; and the `SMTP_USER` fallback is an `AKIA…` key id on SES, **which SES rejects
+      as a sender — exactly the production failure v2.97.2 records**. Requiring an `@` closes both, and
+      reporting NOT configured beats reporting ready and bouncing every message.
+- [x] **SMTP — AUTH now requires BOTH halves.** With only the user set it sent `base64("")` as the
+      password, and the server's refusal named the CREDENTIAL — sending an operator to rotate a key
+      when the config was the fault. A relay that needs no AUTH (a VPC-local postfix) is the case this
+      preserves.
+- [x] **S3 — THE ENDPOINT IS PARSED AT CONFIG TIME, because `s3Config()` non-null is the backend
+      SELECTOR**: `storage.ts` commits to the S3 branch and never falls back to Forge, so an unusable
+      endpoint fails per REQUEST. `S3_ENDPOINT=abc.r2.cloudflarestorage.com` — exactly how Cloudflare's
+      dashboard presents it — throws `TypeError: Invalid URL` on every call, surfacing as a generic 500
+      naming neither S3 nor the variable; `S3_ENDPOINT=minio:9000`, how MinIO endpoints are
+      conventionally written, does NOT throw and yields a scheme nothing downstream can speak.
+      Requiring http/https turns both into a driver that simply reports off.
+- [x] **EXPO — SETTING A VARIABLE TO NOTHING BROKE PUSHES THAT WORKED BEFORE IT EXISTED.** Expo's send
+      endpoint accepts an UNAUTHENTICATED request for an ordinary project, and the header was gated on
+      truthiness — so `EXPO_ACCESS_TOKEN=""`, or a line that picked up a trailing space, sent
+      `authorization: Bearer ` with nothing after it, which Expo answers 401 to. Trimmed. Tested
+      BEHAVIOURALLY through the real sender with a stubbed fetch, because the property is which HEADERS
+      go on the wire and a source pin on `.trim()` says nothing about that.
+- [x] **THREE PRE-EXISTING PINS ENCODED THE DEFECTIVE BEHAVIOUR AND WERE REWRITTEN TO THE PROPERTY.**
+      `authPinSmtp.test.ts` asserted `from === "AKIAEXAMPLEKEYID"` — on the line BELOW a comment saying
+      that value is "NOT a valid From", i.e. it pinned the v2.97.2 production failure; `email.test.ts`
+      asserted `SMTP_HOST` alone enables mail; `fcm.test.ts` asserted an unsignable key counts as
+      configured. A test that freezes the bug is worse than no test, because it reports safety.
+- [x] **ONE PRE-EXISTING TEST SCENARIO MOVED RATHER THAN BEING DROPPED, and the new place is stronger**:
+      v2.105.14's "a bad certificate yields a null expiry" was true but LATE — the config still reported
+      `mode:"cert"`, so the doctor showed a CONFIGURED row with a blank expiry. It now asserts that a bad
+      certificate never REACHES the expiry read, because it is not configured at all.
+- [x] **THE CERT TESTS NOW USE A REAL openssl-MINTED PAIR** (generated in a temp dir at run time, never
+      committed — this repo is public and a fixture private key is a habit worth not forming). Six of
+      them failed the moment `readPem` started parsing, which was the fix working: they had been driving
+      a fake `-----BEGIN CERTIFICATE-----\nc\n-----END…`. Deliberately NOT skipped when openssl is
+      absent, so the coverage cannot go quiet on a machine that lacks it.
+- [x] `server/apnsVoip.test.ts` → 58, plus new pins in `authPinSmtp.test.ts`, `s3.test.ts`,
+      `pushApnsAndMediaFloor.test.ts`, `fcm.test.ts`, `email.test.ts`. **12 of 14 tripwires verified by
+      MUTATION** from byte-exact backups off a confirmed-GREEN baseline, with the mutator aborting
+      unless its target occurs exactly once; sources byte-identical afterwards.
+- [x] **THE FIRST MUTATION RUN CAME BACK 5/14, and the eight survivors were real gaps in my own tests —
+      I had written the fixes without assertions for the specific properties.** Reported rather than
+      quietly patched: the three key-type cases, both smtp cases, both s3 cases and the expo trim were
+      each unpinned. Tests added, then re-verified.
+- [x] **TWO SURVIVORS REPORTED AS NON-DEFECTS RATHER THAN COUNTED, each MEASURED rather than argued.**
+      (1) Removing `asymmetricKeyType !== "ec"` from `keyIsP256` is behaviourally equivalent: over rsa,
+      dsa, ed25519, x25519 and three EC curves the curve comparison alone gives the identical verdict,
+      because Node reports no `namedCurve` for a non-EC key. It is KEPT, because relying on that would
+      make the function correct only via an undocumented detail of `asymmetricKeyDetails`. (2) The
+      `!u.host` conjunct in `s3Config` is UNREACHABLE: for a special scheme the WHATWG parser cannot
+      yield an empty host — it either fails (`https://`, `https://:8080/x`) or promotes the first path
+      segment (`https:///bucket` → host "bucket"). Kept as a free conjunct on a config gate, and **the
+      comment that had attributed the `minio:9000` catch to it was corrected**, since the PROTOCOL check
+      is what actually bites. One mutation ABORTED on a non-unique anchor and was re-run with a unique
+      one, after which it bit.
+- [x] **ONE ABANDONED FINDING, named rather than implied**: an unconfigured `fcm` row still counts as
+      `pushReachable`, so it suppresses the offline-message email — "neither push nor email". Making
+      `ROUTABLE_PUSH_KINDS` transport-AWARE is a real change with a duplicated SQL literal at
+      `v2db.ts:2328` and its own blast radius, so it is its own release rather than bundled here.
+- [x] **NOT VERIFIED AGAINST APNs, said plainly**: no iPhone here and APNs is unreachable from this
+      sandbox, so every claim rests on parsing real keys and driving the real senders. What IS now true
+      and was not before: a fleet whose credential cannot work says so.
+- [x] No schema change, no new dependency, no new env var. 3666 tests.
+
 ## v2.105.16 — add and remove group members by hand, plus "all users can add" (2026-07-28)
 
 - [x] **#108's ROSTER HALF** (owner's group screenshot batch: *"an 'all users can add' toggle … add by

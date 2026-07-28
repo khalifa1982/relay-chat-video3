@@ -14,12 +14,40 @@ describe("fcmConfig", () => {
       expect(fcmConfig()).toBeNull();
       process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: "p" }); // incomplete
       expect(fcmConfig()).toBeNull();
+      /* A KEY THAT CANNOT SIGN IS NOT CONFIGURED (rewritten v2.105.17).
+         The old fixture's private_key was `-----BEGIN PRIVATE KEY-----\nx\n-----END…`,
+         which cannot sign anything — so this test asserted that Firebase reports
+         CONFIGURED for a credential that makes every send a silent no-op, byte-identical
+         to having none. That green row is what the owner was looking at while reporting
+         "i have problem with firebase to send the notification". */
       process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({
         project_id: "relay-app",
         client_email: "svc@relay-app.iam.gserviceaccount.com",
         private_key: "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n",
       });
+      expect(fcmConfig()).toBeNull();
+
+      // A REAL key configures, and the \n-escaped form — the commonest Firebase
+      // copy-paste damage — is REPAIRED rather than refused, because refusing it would
+      // send an operator hunting for a problem they cannot see.
+      const real = crypto.generateKeyPairSync("rsa", {
+        modulusLength: 2048,
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        publicKeyEncoding: { type: "spki", format: "pem" },
+      }).privateKey as string;
+      process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({
+        project_id: "relay-app",
+        client_email: "svc@relay-app.iam.gserviceaccount.com",
+        private_key: real,
+      });
       expect(fcmConfig()?.project_id).toBe("relay-app");
+      process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({
+        project_id: "relay-app",
+        client_email: "svc@relay-app.iam.gserviceaccount.com",
+        private_key: real.replace(/\n/g, "\\n"),
+      });
+      expect(fcmConfig()?.project_id).toBe("relay-app");
+      expect(fcmConfig()?.private_key).toContain("\n");
     } finally {
       if (prev === undefined) delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
       else process.env.FIREBASE_SERVICE_ACCOUNT_JSON = prev;

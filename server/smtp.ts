@@ -45,12 +45,27 @@ export interface SmtpConfig {
 
 /** Resolved SMTP config, or null when not configured. */
 export function smtpConfig(): SmtpConfig | null {
-  const host = process.env.SMTP_HOST || "";
+  const host = (process.env.SMTP_HOST || "").trim();
   if (!host) return null;
-  const user = process.env.SMTP_USER || "";
+  const user = (process.env.SMTP_USER || "").trim();
   const pass = process.env.SMTP_PASS || "";
   const secure = process.env.SMTP_SECURE === "1" || process.env.SMTP_SECURE === "true";
-  const port = Number(process.env.SMTP_PORT || (secure ? 465 : 587));
+  /* A GARBAGE PORT USED TO REPORT CONFIGURED AND THEN NEVER OPEN A SOCKET
+     (v2.105.17). `Number("587 ;")` is NaN, `emailEnabled()` still returned true, and
+     `net.connect` threw ERR_SOCKET_BAD_PORT into a catch that resolved {ok:false} — so
+     mail was "enabled" and nothing was ever sent. Falling back to the default is the
+     recoverable direction and matches the in-repo precedent in relay.ts. */
+  const rawPort = Number(process.env.SMTP_PORT);
+  const port =
+    Number.isFinite(rawPort) && rawPort > 0 && rawPort < 65536 ? rawPort : secure ? 465 : 587;
+  const from = (process.env.SMTP_FROM || process.env.EMAIL_FROM || user).trim();
+  /* THE FROM ADDRESS MUST BE AN ADDRESS. With SMTP_HOST alone, `from` was "" and the
+     wire carried `MAIL FROM:<>` — the RFC 5321 null reverse-path, reserved for bounces
+     and refused by SES and essentially every submission service. And the SMTP_USER
+     fallback is an `AKIA…` key id on SES, which SES rejects as a sender: exactly the
+     production failure v2.97.2 records. Requiring an "@" closes both at once, and
+     reporting NOT configured is better than reporting ready and bouncing every mail. */
+  if (!from.includes("@")) return null;
   return {
     host,
     port,
@@ -61,7 +76,7 @@ export function smtpConfig(): SmtpConfig | null {
     // SES .env uses it. Order matters: an explicit SMTP_FROM still wins; the
     // SMTP_USER fallback stays last (it's an AKIA… access-key id on SES, which
     // SES rejects as a From — the alias exists precisely to avoid that).
-    from: process.env.SMTP_FROM || process.env.EMAIL_FROM || user,
+    from,
   };
 }
 
@@ -278,7 +293,9 @@ export async function smtpSend(input: {
       w.write(`EHLO relay.app\r\n`);
       await expect(250, "EHLO (tls)");
     }
-    if (cfg.user) {
+    // Both halves, or AUTH sends base64("") as the password and fails for a reason
+    // the log attributes to the credential rather than to the config (v2.105.17).
+    if (cfg.user && cfg.pass) {
       w.write("AUTH LOGIN\r\n");
       await expect(334, "AUTH LOGIN");
       w.write(Buffer.from(cfg.user, "utf8").toString("base64") + "\r\n");

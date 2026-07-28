@@ -133,7 +133,14 @@ describe("v2.92 R4A — MAIL_PROVIDER explicit switch", () => {
     process.env.MAIL_PROVIDER = "smtp";
     process.env.RESEND_API_KEY = "re_test";
     expect(emailEnabled()).toBe(false);
+    /* A HOST ALONE IS NO LONGER "CONFIGURED" (v2.105.17): with no From, the wire
+       carried `MAIL FROM:<>`, the RFC 5321 null reverse-path, which every submission
+       service refuses — so it reported ready and sent nothing. The forced-side property
+       this test exists for is unchanged; it just needs a config that could actually
+       send. */
     process.env.SMTP_HOST = "mail.example.com";
+    expect(emailEnabled()).toBe(false);
+    process.env.SMTP_FROM = "RELAY <no-reply@example.com>";
     expect(emailEnabled()).toBe(true);
     // Forced resend: an SMTP host alone no longer counts.
     process.env.MAIL_PROVIDER = "resend";

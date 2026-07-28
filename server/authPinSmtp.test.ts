@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "fs";
+import path from "path";
 import { judgePinAttempt, isValidPin, PIN_MAX_ATTEMPTS } from "./authPin";
 import { hashPassword } from "./authCrypto";
 import { dotStuff, bareAddress, parseSmtpReply, buildMimeMessage, smtpConfig } from "./smtp";
@@ -120,15 +122,79 @@ describe("built-in SMTP mailer (v2.87)", () => {
       // An explicit SMTP_FROM outranks the alias.
       process.env.SMTP_FROM = "RELAY <smtp-from@example.com>";
       expect(smtpConfig()?.from).toBe("RELAY <smtp-from@example.com>");
-      // Neither set → last-resort SMTP_USER (historical behavior, unchanged).
+      /* NEITHER SET → NOT CONFIGURED (rewritten v2.105.17).
+         This used to assert the last-resort SMTP_USER fallback produced
+         from === "AKIAEXAMPLEKEYID" — and the line above it already said that value is
+         "NOT a valid From". So the test was PINNING THE PRODUCTION FAILURE v2.97.2
+         recorded: SES rejects an AKIA key id as a sender, and `emailEnabled()` still
+         reported true, so mail was "enabled" and every message bounced.
+         A From must contain an "@" or `smtpConfig()` reports off — which is what sends
+         an operator to the variable that is actually missing. */
       delete process.env.SMTP_FROM;
       delete process.env.EMAIL_FROM;
-      expect(smtpConfig()?.from).toBe("AKIAEXAMPLEKEYID");
+      expect(smtpConfig()).toBeNull();
     } finally {
       for (const k of KEYS) {
         if (saved[k] === undefined) delete process.env[k];
         else process.env[k] = saved[k] as string;
       }
     }
+  });
+
+  describe("v2.105.17 — a config that reports READY must be able to open a socket", () => {
+    const KEYS = ["SMTP_HOST", "SMTP_PORT", "SMTP_SECURE", "SMTP_USER", "SMTP_PASS", "SMTP_FROM", "EMAIL_FROM"];
+    let saved: Record<string, string | undefined> = {};
+    beforeEach(() => {
+      saved = Object.fromEntries(KEYS.map(k => [k, process.env[k]]));
+      for (const k of KEYS) delete process.env[k];
+      process.env.SMTP_HOST = "mail.x.org";
+      process.env.SMTP_FROM = "RELAY <u@x.org>";
+    });
+    afterEach(() => {
+      for (const k of KEYS) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k] as string;
+      }
+    });
+
+    it("a garbage SMTP_PORT falls back to the default instead of reporting NaN", () => {
+      /* THE DEFECT. `Number("587 ;")` is NaN, and NaN passed straight through into the
+         config — so `emailEnabled()` returned true, `net.connect` threw
+         ERR_SOCKET_BAD_PORT into a catch that resolves {ok:false}, and mail was
+         "enabled" while nothing was ever sent. A trailing character is exactly what a
+         hand-edited `.env` line acquires. */
+      for (const bad of ["", "587 ;", "abc", "-1", "0", "70000", "  "]) {
+        process.env.SMTP_PORT = bad;
+        const cfg = smtpConfig();
+        expect(cfg).not.toBeNull();
+        expect(Number.isInteger(cfg!.port)).toBe(true);
+        expect(cfg!.port).toBe(587); // SMTP_SECURE unset ⇒ STARTTLS submission
+      }
+    });
+
+    it("the fallback follows SMTP_SECURE, so an implicit-TLS host lands on 465", () => {
+      process.env.SMTP_SECURE = "1";
+      process.env.SMTP_PORT = "not-a-port";
+      expect(smtpConfig()!.port).toBe(465);
+    });
+
+    it("a REAL port is still honoured — the guard refuses garbage, not values", () => {
+      for (const [raw, want] of [["25", 25], ["587", 587], ["465", 465], ["2525", 2525], ["65535", 65535]] as const) {
+        process.env.SMTP_PORT = raw;
+        expect(smtpConfig()!.port).toBe(want);
+      }
+    });
+
+    it("AUTH requires BOTH halves — never base64(\"\") as a password", () => {
+      /* Source-pinned deliberately: reaching the AUTH exchange means a real socket and
+         a TLS upgrade, and the property is one conjunct. With only the user set, the
+         dialogue used to send an empty password and the server's refusal named the
+         CREDENTIAL, sending an operator to rotate a key when the config was the fault.
+         Relays that need no AUTH (a VPC-local postfix) are the case this preserves. */
+      const src = fs.readFileSync(path.join(__dirname, "smtp.ts"), "utf8");
+      expect(src).toMatch(/if \(cfg\.user && cfg\.pass\) \{/);
+      // And it is the ONLY gate on the exchange, so neither half can be dropped later.
+      expect(src).not.toMatch(/if \(cfg\.user\) \{/);
+    });
   });
 });

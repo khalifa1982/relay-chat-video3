@@ -73,13 +73,77 @@ export interface ApnsCertConfig {
 export type ApnsVoipConfig = ApnsTokenConfig | ApnsCertConfig;
 
 /**
- * Read a PEM that may be given INLINE or as a PATH.
+ * Read a PEM that may be given INLINE or as a PATH, and PROVE IT IS USABLE before
+ * calling it configured.
  *
  * An inline PEM is what a `.env` can hold; a path is what a mounted secret looks
  * like. The SHAPE decides, because guessing wrong either way is a silent
- * misconfiguration — and the marker check at the end means a file that is not
- * actually a PEM is refused rather than handed to TLS as garbage.
+ * misconfiguration.
+ *
+ * ── WHY THIS PARSES RATHER THAN PATTERN-MATCHES (v2.105.17) ──────────────────
+ * It used to return on `pem.includes(marker)` alone, and a comment here claimed the
+ * marker check meant "a file that is not actually a PEM is refused rather than handed
+ * to TLS as garbage". **THAT WAS FALSE for the inline branch**, and tautologically so:
+ * control only reaches the final check if `v` already contained the marker, so an
+ * inline value was never validated at all.
+ *
+ * The consequence was the worst kind. A value of exactly `-----BEGIN PRIVATE KEY-----`
+ * — no key body — was accepted, `apnsVoipConfig()` returned `{mode:"token"}`,
+ * `apnsVoipConfigured()` returned true, and so the ADMIN PUSH DOCTOR REPORTED GREEN
+ * while every send failed: `crypto.sign` threw `ERR_OSSL_UNSUPPORTED` into a bare
+ * catch and `sendVoipRing` resolved `{sent: 0}`, with nothing logged anywhere.
+ * Telling an operator their fleet can ring when it cannot is the same defect
+ * v2.105.12 set out to remove, pointing the other way.
+ *
+ * AND IT WAS REACHABLE, not contrived: `aws-ops.yml`'s `env-set` appends `KEY=VALUE`
+ * on one line, so a multi-line PEM lands as several unquoted lines and the env loader
+ * keeps only the first — reducing the key to exactly that header.
+ *
+ * So the marker still selects inline-vs-path (it is the only thing that can, before
+ * the value is read), and then the content must actually LOAD. Failing means NOT
+ * configured, which is the loud, recoverable direction: a doctor that says "no" when
+ * the answer is unknown sends an operator to the right place.
  */
+function pemIsUsable(pem: string, marker: string): boolean {
+  try {
+    if (marker.includes("CERTIFICATE")) {
+      new crypto.X509Certificate(pem);
+    } else {
+      // Throws on anything that is not a loadable private key — a header with no
+      // body, a truncated file, a mangled base64 line.
+      crypto.createPrivateKey(pem);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Is this a P-256 EC key — the only kind an Apple `.p8` ever is, and the only kind
+ * ES256 can sign with?
+ *
+ * Separate from `pemIsUsable` on purpose: that one is shared with certificate mode,
+ * where an RSA key is correct.
+ *
+ * The `asymmetricKeyType` line is REDUNDANT and kept deliberately: measured over rsa,
+ * dsa, ed25519, x25519 and three EC curves, the curve comparison alone returns the
+ * identical verdict, because Node reports no `namedCurve` for a non-EC key. So a
+ * mutation removing it survives by construction, not for want of a test — but relying
+ * on that would make this function correct only via an undocumented detail of
+ * `asymmetricKeyDetails`, where the explicit check makes it correct on its own reading.
+ */
+function keyIsP256(pem: string): boolean {
+  try {
+    const k = crypto.createPrivateKey(pem);
+    if (k.asymmetricKeyType !== "ec") return false;
+    const details = k.asymmetricKeyDetails as { namedCurve?: string } | undefined;
+    return details?.namedCurve === "prime256v1";
+  } catch {
+    return false;
+  }
+}
+
 function readPem(raw: string, marker: string): string | null {
   const v = raw.trim();
   if (!v) return null;
@@ -91,7 +155,8 @@ function readPem(raw: string, marker: string): string | null {
       return null;
     }
   }
-  return pem.includes(marker) ? pem : null;
+  if (!pem.includes(marker)) return null;
+  return pemIsUsable(pem, marker) ? pem : null;
 }
 
 /**
@@ -127,7 +192,20 @@ export function apnsVoipConfig(): ApnsVoipConfig | null {
   const teamId = (process.env.APNS_TEAM_ID || "").trim();
   if (p8 && keyId && teamId) {
     const keyPem = readPem(p8, "PRIVATE KEY");
-    if (keyPem) return { mode: "token", keyPem, keyId, teamId, topic, host };
+    /* THE KEY MUST ALSO BE THE RIGHT KIND, and this check belongs HERE rather than in
+       `pemIsUsable` — that one is shared with cert mode, where an RSA key is entirely
+       legitimate.
+       FOUND BY AN ADVERSARIAL SWEEP OF THIS VERY FIX: `crypto.createPrivateKey` accepts
+       ANY loadable key, so a P-384, RSA or Ed25519 key passed the new validation and
+       still reported mode="token" — while `derToJoseES256` returned null and the send
+       bailed at an EARLY RETURN that never reaches the warning below. Green doctor, no
+       ring, no log: the same lie, one layer in.
+       It is reachable by cross-pasting `APNS_VOIP_KEY_PEM`'s RSA key into
+       `APNS_P8_KEY` — adjacent variables for one feature. Apple's .p8 is always
+       P-256, so requiring it costs nothing real. */
+    if (keyPem && keyIsP256(keyPem)) {
+      return { mode: "token", keyPem, keyId, teamId, topic, host };
+    }
   }
 
   // CERTIFICATE AUTH (mutual TLS). Needs no key id and no team id — the identity
@@ -236,9 +314,30 @@ export function apnsProviderToken(cfg: ApnsTokenConfig, nowMs: number = Date.now
     const token = `${signingInput}.${b64url(jose)}`;
     cached = { token, exp: nowMs + TOKEN_TTL_MS, keyId: cfg.keyId };
     return token;
-  } catch {
+  } catch (e) {
+    /* A signing failure used to be COMPLETELY silent: this catch returned null and
+       nothing in the file logged anything, so a fleet that could not ring left no
+       trace of why. `readPem` now proves the key loads, which should make this
+       unreachable in practice — but "should be unreachable" is exactly the branch
+       worth leaving evidence in. Logged ONCE per process, because a ring storm must
+       not flood the log with the same line, and the KEY IS NEVER LOGGED — only the
+       error text and the key id, which is not a secret. */
+    if (!signWarned) {
+      signWarned = true;
+      console.warn(
+        `[apns] provider token could not be signed (keyId ${cfg.keyId}): ${(e as Error)?.message || "unknown"} — no VoIP push can be sent until this is fixed`
+      );
+    }
     return null;
   }
+}
+
+/** One warning per process for an unsignable key (see the catch above). */
+let signWarned = false;
+
+/** Test seam: allow the once-per-process signing warning to fire again. */
+export function _resetApnsSignWarning() {
+  signWarned = false;
 }
 
 /** Test seam: drop the cached provider token. */

@@ -11,7 +11,7 @@
  * `r‖s` form: if a converted signature verifies under it, the conversion is
  * exactly right by construction rather than by inspection.
  * ────────────────────────────────────────────────────────────────────────── */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import fs from "fs";
 import os from "os";
@@ -33,6 +33,22 @@ const { privateKey, publicKey } = crypto.generateKeyPairSync("ec", {
   privateKeyEncoding: { type: "pkcs8", format: "pem" },
   publicKeyEncoding: { type: "spki", format: "pem" },
 });
+
+/** Keys that LOAD but cannot produce an ES256 signature — see the key-type tests. */
+const P384_KEY = crypto.generateKeyPairSync("ec", {
+  namedCurve: "secp384r1",
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  publicKeyEncoding: { type: "spki", format: "pem" },
+}).privateKey;
+const RSA_KEY = crypto.generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  publicKeyEncoding: { type: "spki", format: "pem" },
+}).privateKey;
+const ED25519_KEY = crypto.generateKeyPairSync("ed25519", {
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  publicKeyEncoding: { type: "spki", format: "pem" },
+}).privateKey;
 
 /** The sender's own source — the cert path is a TLS/connection concern that no
  *  local test can exercise without a real APNs, so those two rules are pinned. */
@@ -378,10 +394,47 @@ describe("v2.105.12 — configuration is read per call and fails to ABSENT", () 
  */
 const CERT_ENV = ["APNS_VOIP_CERT_PEM", "APNS_VOIP_KEY_PEM"];
 
+/**
+ * A REAL self-signed pair, minted once per run.
+ *
+ * REWRITTEN v2.105.17, and the reason is the whole point of that release. This helper
+ * used to hand out synthetic PEMs under the comment "the config path keys on the
+ * markers, never on validity" — which was an accurate description of a DEFECT. Because
+ * `readPem` validated nothing beyond the marker substring, these tests asserted that
+ * cert mode resolves for a certificate that could never complete a TLS handshake, and
+ * the same hole let a header-only `.p8` report CONFIGURED to the admin push doctor
+ * while no iPhone could ring.
+ *
+ * So the fixture is now genuine: `readPem` parses, and a test that wants cert mode has
+ * to supply something Node's own X509 parser accepts.
+ *
+ * NOT SKIPPED WHEN openssl IS MISSING — this whole describe would silently assert
+ * nothing, which reports safety, and that is the failure mode the release exists to
+ * remove. Every environment this runs in (this container, ubuntu-latest) has openssl.
+ */
+let REAL: { cert: string; key: string; dir: string };
+beforeAll(() => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-apns-cert-"));
+  const kp = path.join(dir, "k.pem");
+  const cp = path.join(dir, "c.pem");
+  execFileSync(
+    "openssl",
+    [
+      "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+      "-keyout", kp, "-out", cp, "-days", "30",
+      "-subj", "/CN=relay-test",
+    ],
+    { stdio: "ignore" },
+  );
+  REAL = { cert: fs.readFileSync(cp, "utf8"), key: fs.readFileSync(kp, "utf8"), dir };
+});
+afterAll(() => {
+  if (REAL?.dir) fs.rmSync(REAL.dir, { recursive: true, force: true });
+});
+
 function certConfigure(extra: Record<string, string> = {}) {
-  // Synthetic PEMs: the config path keys on the markers, never on validity.
-  process.env.APNS_VOIP_CERT_PEM = "-----BEGIN CERTIFICATE-----\nc\n-----END CERTIFICATE-----";
-  process.env.APNS_VOIP_KEY_PEM = "-----BEGIN PRIVATE KEY-----\nk\n-----END PRIVATE KEY-----";
+  process.env.APNS_VOIP_CERT_PEM = REAL.cert;
+  process.env.APNS_VOIP_KEY_PEM = REAL.key;
   process.env.APNS_VOIP_TOPIC = "com.app.relaymobile.voip";
   Object.assign(process.env, extra);
 }
@@ -433,8 +486,8 @@ describe("v2.105.14 — certificate auth, the other APNs credential", () => {
   it("accepts either half as a PATH as well as inline PEM", () => {
     const cp = path.join(os.tmpdir(), `relay-c-${process.pid}.pem`);
     const kp = path.join(os.tmpdir(), `relay-k-${process.pid}.pem`);
-    fs.writeFileSync(cp, "-----BEGIN CERTIFICATE-----\nc\n-----END CERTIFICATE-----");
-    fs.writeFileSync(kp, "-----BEGIN PRIVATE KEY-----\nk\n-----END PRIVATE KEY-----");
+    fs.writeFileSync(cp, REAL.cert);
+    fs.writeFileSync(kp, REAL.key);
     try {
       certConfigure({ APNS_VOIP_CERT_PEM: cp, APNS_VOIP_KEY_PEM: kp });
       const cfg = apnsVoipConfig();
@@ -502,16 +555,186 @@ describe("v2.105.14 — certificate auth, the other APNs credential", () => {
   });
 });
 
+describe("v2.105.17 — a key that cannot sign must never report CONFIGURED", () => {
+  /* THE DEFECT THIS CLOSES, and it was mine.
+   *
+   * `readPem` validated only that the value CONTAINED the marker, and on the inline
+   * branch that final check was TAUTOLOGICAL — control only reached it if the marker was
+   * already present. So `APNS_KEY_P8="-----BEGIN PRIVATE KEY-----"` with no body was
+   * accepted, apnsVoipConfig() returned mode="token", apnsVoipConfigured() returned
+   * true, and THE ADMIN PUSH DOCTOR SHOWED GREEN — while crypto.sign threw
+   * ERR_OSSL_UNSUPPORTED into a bare catch and every ring silently sent nothing.
+   *
+   * Telling an operator the fleet can ring when it cannot is the same defect v2.105.12
+   * set out to remove, pointing the other way.
+   *
+   * AND IT WAS REACHABLE: aws-ops.yml's env-set appends KEY=VALUE on ONE line, so a
+   * multi-line PEM lands as several unquoted lines and the env loader keeps only the
+   * first — reducing the key to exactly that header. Verified by replaying that shell.
+   */
+
+  it("a header-only .p8 is NOT configured — the exact production shape", () => {
+    configure({ APNS_P8_KEY: "-----BEGIN PRIVATE KEY-----" });
+    expect(apnsVoipConfig()).toBeNull();
+    expect(apnsVoipConfigured()).toBe(false);
+  });
+
+  it("the same holds for the APNS_KEY_P8 spelling", () => {
+    // Both names reach the same read, so a fix that covered only one would leave the
+    // hole open for whichever spelling the operator happened to use.
+    delete process.env.APNS_P8_KEY;
+    configure({ APNS_KEY_P8: "-----BEGIN PRIVATE KEY-----" });
+    delete process.env.APNS_P8_KEY;
+    expect(apnsVoipConfig()).toBeNull();
+  });
+
+  it("a header-plus-garbage body is refused, not just a bare header", () => {
+    configure({
+      APNS_P8_KEY: "-----BEGIN PRIVATE KEY-----\nnot base64 at all\n-----END PRIVATE KEY-----",
+    });
+    expect(apnsVoipConfig()).toBeNull();
+  });
+
+  it("a TRUNCATED but well-formed-looking key is refused", () => {
+    // The likeliest real corruption: a genuine PEM with lines lost. It still has both
+    // markers and valid base64 characters, so nothing short of parsing catches it.
+    const lines = privateKey.trim().split("\n");
+    const truncated = [lines[0], lines[1], lines[lines.length - 1]].join("\n");
+    configure({ APNS_P8_KEY: truncated });
+    expect(apnsVoipConfig()).toBeNull();
+  });
+
+  it("a REAL key still configures — the fix refuses the unusable, not the valid", () => {
+    // The fail-shut direction is only correct if it does not also reject what works.
+    configure();
+    const cfg = apnsVoipConfig();
+    expect(cfg).not.toBeNull();
+    expect(cfg!.mode).toBe("token");
+    // …and it can actually mint, which is the property the doctor is really claiming.
+    expect(apnsProviderToken(cfg as never)).toBeTruthy();
+  });
+
+  it("a PATH to an unusable key is refused as well as an inline one", () => {
+    // The path branch read the file and then applied the same substring check, so it
+    // had the identical hole for a truncated FILE — which is the shape an operator who
+    // followed the mounted-secret advice would actually hit.
+    const kp = path.join(os.tmpdir(), `relay-badkey-${process.pid}.pem`);
+    fs.writeFileSync(kp, "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----");
+    try {
+      configure({ APNS_P8_KEY: kp });
+      expect(apnsVoipConfig()).toBeNull();
+    } finally {
+      fs.unlinkSync(kp);
+    }
+  });
+
+  it("a PATH to a REAL key configures, so the mounted-secret route still works", () => {
+    const kp = path.join(os.tmpdir(), `relay-goodkey-${process.pid}.pem`);
+    fs.writeFileSync(kp, privateKey);
+    try {
+      configure({ APNS_P8_KEY: kp });
+      expect(apnsVoipConfig()?.mode).toBe("token");
+    } finally {
+      fs.unlinkSync(kp);
+    }
+  });
+
+  /* ── THE KEY MUST BE P-256, NOT MERELY LOADABLE ──────────────────────────────
+   * "It parses" is a weaker property than "it can sign an ES256 JWS", and the gap
+   * between them is the same lie one layer deeper: the config reports mode="token",
+   * `apnsProviderToken` signs successfully, and then `derToJoseES256` returns null at
+   * an EARLY RETURN that never reaches the warning — so the doctor is green, no ring
+   * is sent, and NOTHING is logged.
+   *
+   * It is reachable by an ordinary paste slip: `APNS_VOIP_KEY_PEM` (the certificate
+   * mode's RSA key) and `APNS_P8_KEY` are adjacent variables for one feature, and an
+   * Apple .p8 is ALWAYS P-256, so nothing else can legitimately appear here.
+   * Measured rather than assumed: a P-384 key signs to a 103-byte DER and an RSA key
+   * to a 256-byte PKCS#1 blob, and `derToJoseES256` answers null for both.
+   */
+
+  it("an RSA key is NOT a .p8 — refused, not reported configured", () => {
+    configure({ APNS_P8_KEY: RSA_KEY });
+    expect(apnsVoipConfig()).toBeNull();
+    expect(apnsVoipConfigured()).toBe(false);
+  });
+
+  it("a P-384 key is refused — the right family, the wrong curve", () => {
+    // The nastiest of the three, because `asymmetricKeyType === "ec"` is TRUE and the
+    // sign call succeeds: only the curve tells you the 48-byte halves will be mangled
+    // into a 64-byte ES256 signature APNs answers 403 to.
+    configure({ APNS_P8_KEY: P384_KEY });
+    expect(apnsVoipConfig()).toBeNull();
+  });
+
+  it("an Ed25519 key is refused", () => {
+    // Loads fine and is not EC at all; signing it with sha256 throws
+    // ERR_OSSL_INVALID_DIGEST, so accepting it would put the failure in the catch
+    // rather than in the config, which is where an operator can act on it.
+    configure({ APNS_P8_KEY: ED25519_KEY });
+    expect(apnsVoipConfig()).toBeNull();
+  });
+
+  it("the curve check does not reject the curve Apple actually issues", () => {
+    // The fail-shut direction is only correct if P-256 still passes AND still mints.
+    configure({ APNS_P8_KEY: privateKey });
+    expect(apnsVoipConfig()?.mode).toBe("token");
+    expect(apnsProviderToken(apnsVoipConfig() as never)).toBeTruthy();
+  });
+
+  it("the wrong-curve path can no longer reach the silent null-token return", () => {
+    // The property that actually matters: not merely that the config refuses, but that
+    // the unlogged early return in apnsProviderToken has become unreachable from a
+    // configured fleet. Driven end to end rather than asserted about source.
+    for (const key of [RSA_KEY, P384_KEY, ED25519_KEY]) {
+      configure({ APNS_P8_KEY: key });
+      expect(apnsVoipConfig()).toBeNull(); // never gets as far as signing
+    }
+  });
+
+  it("an unsignable key leaves EVIDENCE in the log, once per process", () => {
+    // The catch in apnsProviderToken used to be completely silent, so a fleet that
+    // could not ring left no trace of why. It should be unreachable now that the config
+    // validates — which is exactly the branch worth leaving evidence in.
+    const src = fs.readFileSync(path.join(__dirname, "apnsVoip.ts"), "utf8");
+    expect(src).toMatch(/if \(!signWarned\) \{/);
+    expect(src).toMatch(/console\.warn\(/);
+    // The KEY is never logged — only the error text and the key id, which is public.
+    const warn = src.slice(src.indexOf("if (!signWarned)"), src.indexOf("return null;", src.indexOf("if (!signWarned)")));
+    expect(warn).not.toMatch(/keyPem/);
+    expect(warn).not.toMatch(/cfg\.keyPem/);
+  });
+});
+
 describe("v2.105.14 — a certificate EXPIRES, and the operator should hear about it", () => {
   it("returns null for token auth — nothing to expire", () => {
     configure();
     expect(apnsCredentialExpiry(apnsVoipConfig())).toBeNull();
   });
 
-  it("returns null for an unparseable certificate rather than guessing", () => {
-    // A wrong date shown to an operator is worse than no date.
-    certConfigure();
+  it("an unparseable certificate never REACHES the expiry read — it is not configured", () => {
+    // THE SCENARIO MOVED IN v2.105.17 rather than the property being dropped, and the
+    // new place is strictly stronger. This used to assert "a bad cert yields a null
+    // expiry", which was true but late: the config still reported mode="cert", so the
+    // doctor showed a CONFIGURED row with a blank expiry and the fleet could not ring.
+    // Now `readPem` proves the PEM loads, so a bad cert means NOT CONFIGURED at all —
+    // the operator is told the thing that is actually wrong.
+    certConfigure({
+      APNS_VOIP_CERT_PEM: "-----BEGIN CERTIFICATE-----\nnope\n-----END CERTIFICATE-----",
+    });
+    expect(apnsVoipConfig()).toBeNull();
+    expect(apnsVoipConfigured()).toBe(false);
+    // And the expiry read still refuses to guess when handed nothing.
     expect(apnsCredentialExpiry(apnsVoipConfig())).toBeNull();
+  });
+
+  it("an unparseable KEY is refused too, not just the certificate", () => {
+    // Both halves go through readPem, and a cert that parses beside a key that does
+    // not cannot complete a handshake — so reporting configured would be the same lie.
+    certConfigure({
+      APNS_VOIP_KEY_PEM: "-----BEGIN PRIVATE KEY-----\nnope\n-----END PRIVATE KEY-----",
+    });
+    expect(apnsVoipConfig()).toBeNull();
   });
 
   it("reads notAfter from a REAL certificate", () => {
