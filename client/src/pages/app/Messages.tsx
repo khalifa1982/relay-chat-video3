@@ -62,6 +62,7 @@ import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
 import { StatusStrip } from "./Status";
 import { PeerAvatar, openPeerProfile, type PeerProfileChatActions } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
+import { dayKey, dayLabel, groupMessagesByDay } from "@/app/messageDays";
 import { matchQuery } from "@/app/searchMatch";
 import { describeProfileStatus } from "@shared/profileStatus";
 import { suggestContacts, digitsOf, isNumberQuery } from "@/app/contactSuggest";
@@ -213,22 +214,6 @@ function isEmojiOnly(body: string | null | undefined): boolean {
   }
 }
 
-/** Local Y-M-D key so messages can be grouped under a date divider. */
-function dayKey(iso: string | Date): string {
-  const d = typeof iso === "string" ? new Date(iso) : iso;
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-}
-
-/** WhatsApp-style date pill: "Today" / "Yesterday" / "June 28, 2026". */
-function dayLabel(iso: string | Date): string {
-  const d = typeof iso === "string" ? new Date(iso) : iso;
-  const today = new Date();
-  const yest = new Date(today);
-  yest.setDate(today.getDate() - 1);
-  if (dayKey(d) === dayKey(today)) return "Today";
-  if (dayKey(d) === dayKey(yest)) return "Yesterday";
-  return d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
-}
 
 /**
  * The sender's thumbnail beside their name in a group row (v2.103.3).
@@ -1905,18 +1890,51 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             No messages yet. Say hi 👋
           </div>
         ) : (
-          messagesQuery.data?.map((m, i, arr) => {
+          /* ONE <section> PER DAY, so the header can be sticky (v2.105.3).
+             The pill has been here since v2.71, but it lived inside the first
+             message's own wrapper — and `position: sticky` is bounded by its
+             containing block, so there it would have unstuck the instant that
+             single bubble scrolled past, which reads as a glitch rather than a
+             feature. A day has to be a BOX for its header to ride it.
+
+             The messages are still indexed against the FLAT array, which is
+             load-bearing: the stacking rules read each message's neighbours, and
+             two of those comparisons legitimately cross a day boundary (23:59 and
+             00:01 are two minutes apart), so recomputing them per-day slice would
+             stack a pair together straddling the header just inserted between
+             them. */
+          groupMessagesByDay(messagesQuery.data ?? []).map((day) => (
+            <section key={day.key} className="space-y-0.5">
+              {/* `top-0` pins to the scrollport, not to this section, so the pill
+                  rides the whole day and is then pushed out by the next day's
+                  header. z-10 keeps it above the bubbles and BELOW the search
+                  overlay (z-20) and the lightbox (z-[90]) — a date pill floating
+                  over an opened photo would be absurd. OPAQUE, not the old
+                  translucent bg-muted/70: scrolled bubbles used to be visible
+                  through it, which is invisible while the pill is in the flow and
+                  obvious the moment it starts overlapping content. */}
+              <div className="sticky top-0 z-10 flex justify-center py-1.5">
+                <span className="px-3 py-1 rounded-full bg-muted text-[11px] font-medium text-muted-foreground shadow-sm ring-1 ring-border/60">
+                  {day.label}
+                </span>
+              </div>
+              {day.items.map(({ item: m, index: i }) => {
+            const arr = messagesQuery.data ?? [];
             const mine = m.senderIdentityId === me.id;
             const prev = arr[i - 1];
             const next = arr[i + 1];
-            // Insert a date pill whenever the calendar day changes.
-            const showDay = !prev || dayKey(prev.createdAt) !== dayKey(m.createdAt);
             // WhatsApp-style grouping: tighten consecutive runs from the same
             // sender within ~5 min, and only the LAST bubble of a run gets the
             // tail + timestamp (the rest are "stacked").
             const GROUP_MS = 5 * 60_000;
             const sameAsPrev =
-              !showDay && !!prev && prev.senderIdentityId === m.senderIdentityId &&
+              // The day comparison is what stops a 23:59 bubble and a 00:01 one
+              // stacking across the header between them. It used to ride on
+              // `!showDay`; now that the header is a section's, it is stated
+              // directly rather than inferred from a variable that no longer
+              // exists here.
+              !!prev && dayKey(prev.createdAt) === dayKey(m.createdAt) &&
+              prev.senderIdentityId === m.senderIdentityId &&
               new Date(m.createdAt).getTime() - new Date(prev.createdAt).getTime() < GROUP_MS;
             const sameAsNext =
               !!next && next.senderIdentityId === m.senderIdentityId &&
@@ -1926,13 +1944,6 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             const tail = mine ? (lastOfGroup ? "rounded-br-sm" : "") : (lastOfGroup ? "rounded-bl-sm" : "");
             return (
               <div key={m.id}>
-                {showDay && (
-                  <div className="flex justify-center my-3">
-                    <span className="px-3 py-1 rounded-full bg-muted/70 text-[11px] font-medium text-muted-foreground shadow-sm">
-                      {dayLabel(m.createdAt)}
-                    </span>
-                  </div>
-                )}
                 <div
                   className={
                     "group flex items-end gap-1.5 " + (mine ? "justify-end" : "justify-start") +
@@ -2235,7 +2246,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 </div>
               </div>
             );
-          })
+              })}
+            </section>
+          ))
         )}
       </div>
       {showScrollButton && !searchOpen && (

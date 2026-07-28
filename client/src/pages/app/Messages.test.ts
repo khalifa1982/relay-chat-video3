@@ -54,11 +54,17 @@ describe("Messages.tsx — messaging overhaul", () => {
   });
 
   it("renders WhatsApp-style date dividers (Today / Yesterday) between days", () => {
-    expect(SRC).toMatch(/function dayLabel/);
-    expect(SRC).toMatch(/"Today"/);
-    expect(SRC).toMatch(/"Yesterday"/);
-    // a divider is inserted when the calendar day changes
-    expect(SRC).toMatch(/const showDay =/);
+    /* REWRITTEN in v2.105.3, to the property rather than the location. This used
+       to assert that `dayLabel` was DEFINED IN this file and that a per-message
+       `showDay` flag existed — both of which the sticky header deliberately
+       removed: the rule now lives in one shared module and the header belongs to a
+       per-day <section>. Frozen as it was, it asserted an implementation this
+       release replaces while saying nothing about whether dividers appear. */
+    expect(SRC).toMatch(/from "@\/app\/messageDays"/);
+    expect(SRC).toMatch(/groupMessagesByDay\(/);
+    expect(SRC).toMatch(/\{day\.label\}/);
+    // …and the labels themselves are behaviourally covered in
+    // client/src/pages/app/stickyDayHeader.test.ts against the real function.
   });
 
   it("groups consecutive same-sender messages (tail only on the last bubble)", () => {

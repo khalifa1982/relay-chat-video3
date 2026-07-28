@@ -11239,6 +11239,62 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.3 — the day header stays on screen while you scroll that day (2026-07-28)
+- [x] **OWNER**, on the previously-declined list: *"Sticky day headers DO IT"*.
+- [x] **THIS NEEDED A STRUCTURAL CHANGE, NOT ONE CSS CLASS.** The date pill has existed since v2.71,
+      rendered inside the FIRST MESSAGE's own wrapper — and `position: sticky` is bounded by its containing
+      block, so there it would have unstuck the instant that single bubble scrolled past, which reads as a
+      glitch rather than a feature. For a header to ride a day, the day has to be a BOX: one `<section>` per
+      day, with the header inside it.
+- [x] **THE FLAT INDEX IS CARRIED THROUGH, and it is load-bearing rather than tidy.** The WhatsApp-style
+      stacking rules read each message's neighbours in the flat list, and two of those comparisons
+      legitimately CROSS a day boundary — 23:59 and 00:01 are two minutes apart — so recomputing them per-day
+      slice would stack that pair as one run, straddling the header just inserted between them. The day
+      comparison inside `sameAsPrev` used to ride on `!showDay`, a variable the section replaced; it is now
+      stated directly.
+- [x] **THE PILL IS OPAQUE NOW, a consequence rather than a restyle**: while it sat in the flow `bg-muted/70`
+      was invisible as a defect, but the moment it pins, bubbles pass BEHIND it and text sliding through a
+      translucent pill is unreadable.
+- [x] **z-10, DELIBERATELY BELOW the search overlay (z-20) and the lightbox (z-[90])** — a date pill floating
+      over an opened photo would be absurd. Proven by hit-test, not just asserted.
+- [x] **MEASURED, NOT ASSUMED**, because the CSS is the uncertain half and no unit test can answer it:
+      headless Chromium against the REAL built stylesheet at 320 / 375 / 390 / 430 / 1280 — **31/31**. The
+      header pins at the scrollport's padding edge, rides its whole day, hands off to the next day, never
+      escapes its own section; no day section is compressed by the flex column; the pill fits inside the
+      scrollport at every width; no horizontal overflow.
+- [x] **TWO HARNESS BUGS OF MY OWN, both reported rather than counted, and the second is the more
+      interesting.** (1) The wrapper used `h-[600px]` — and an arbitrary Tailwind value only exists if it
+      appears in SCANNED SOURCE. It appears nowhere in this repo, so the class was never generated, the
+      container was auto-height, and **nothing scrolled**: `scrollHeight === clientHeight`, meaning every
+      sticky measurement was taken on a non-scrolling page. Harness geometry now goes in inline styles, and a
+      gate ABORTS unless the scroller really scrolls. (2) The corrected run then reported the header never
+      pinning — **and the measurement was right while my EXPECTATION was wrong**: sticky `top: 0` resolves
+      against the scroll container's PADDING box, and this container has `py-4`, so a pinned header's top edge
+      lands at y=16, not 0. I was one step from recording "sticky does not work" from a correct measurement.
+      The assertion now derives the expected offset from the real computed padding, so it cannot go stale if
+      that padding changes.
+- [x] **A REAL BUG IN MY OWN CODE, caught by its own test**: the grouper compared the React key — which folds
+      an index in for sibling uniqueness — against a bare day key, so it never matched and **every single
+      message became its own group**. `day` and `key` are now separate fields, because they answer different
+      questions.
+- [x] **AN OUT-OF-ORDER DAY STARTS A NEW GROUP rather than reopening the earlier one**, which is the honest
+      rendering: merging would move a message somewhere other than where the server put it, and a bubble that
+      silently jumps is worse than a repeated header.
+- [x] `dayKey`/`dayLabel` move into ONE shared `client/src/app/messageDays.ts` — two copies of "which day is
+      this" is how two surfaces come to disagree about where a divider goes — and `dayLabel` now takes an
+      injectable `now`, so its labels are deterministic instead of depending on when the suite runs.
+- [x] `client/src/pages/app/stickyDayHeader.test.ts` (17); **all 10 tripwires verified by MUTATION** from
+      byte-exact backups off a confirmed-GREEN baseline, sources byte-identical afterwards.
+- [x] **ONE REAL WEAKNESS FOUND BY THAT RUN**: swapping every date accessor for its `getUTC*` twin
+      **survived**, because this runner's timezone IS UTC so no behavioural test can tell them apart — while
+      the change would shift the divider by hours for most of the world. The property there IS "use the local
+      accessors", so that is now asserted structurally, and it bites.
+- [x] **TWO PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, both having frozen the LOCATION of the rule rather
+      than the behaviour: one asserted `dayLabel` was defined inside `Messages.tsx`, the other asserted the
+      per-message `showDay` flag — so both pinned exactly the implementation this release replaces while
+      saying nothing about whether a header appears at the top of each day.
+- [x] No schema change, no new dependency, no new env var, no server change. 3326 tests.
+
 ## v2.105.2 — #44 done: live verification runs where the site is reachable (2026-07-28)
 - [x] **OWNER**, on the blocked list: *"you have to activate task 44 and make it work"*. #44 asked for live
       verification of three things — Arabic sizing parity, offline-message email delivery, and the landing

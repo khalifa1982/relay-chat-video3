@@ -169,16 +169,20 @@ describe("v2.103.3 — what was already built and deliberately NOT rebuilt", () 
   it("day grouping with a header at the top of each day still exists untouched", () => {
     // The owner asked for this and it has worked since v2.71. Re-implementing it was
     // the likeliest waste in this batch, so its absence from the diff is pinned.
-    expect(MSG).toMatch(/function dayKey\(/);
-    expect(MSG).toMatch(/function dayLabel\(/);
-    expect(MSG).toMatch(/const showDay = !prev \|\| dayKey\(prev\.createdAt\) !== dayKey\(m\.createdAt\)/);
-    // Today / Yesterday / an explicit date — "if it's today then everything today. if
-    // it's previous it will show previous date."
-    expect(MSG).toMatch(/return "Today";/);
-    expect(MSG).toMatch(/return "Yesterday";/);
-    expect(MSG).toMatch(/toLocaleDateString\(\[\], \{ month: "long", day: "numeric", year: "numeric" \}\)/);
-    // The header renders whenever the day changes, above that day's first message.
-    expect(MSG).toMatch(/\{showDay && \(/);
+    /* REWRITTEN in v2.105.3. The original froze WHERE the rule lived — three
+       assertions on functions defined inside Messages.tsx and one on a per-message
+       `showDay` flag — so it broke the moment the header became a per-day
+       <section>'s, while never actually checking that a header appears at the top
+       of each day. That property is what this now asserts, and the labels
+       themselves are covered behaviourally against the real function in
+       stickyDayHeader.test.ts. */
+    expect(MSG).toMatch(/from "@\/app\/messageDays"/);
+    expect(MSG).toMatch(/groupMessagesByDay\(messagesQuery\.data \?\? \[\]\)/);
+    const sec = MSG.slice(MSG.indexOf("<section key={day.key}"));
+    expect(sec.length).toBeGreaterThan(200);
+    expect(sec.indexOf("{day.label}")).toBeGreaterThan(0);
+    // The header comes BEFORE that day's messages — at the top of each day.
+    expect(sec.indexOf("{day.label}")).toBeLessThan(sec.indexOf("day.items.map"));
   });
 
   it("a message from a previous day already shows its DATE as well as its time", () => {
