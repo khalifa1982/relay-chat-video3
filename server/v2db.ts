@@ -1420,15 +1420,61 @@ export function planRenumber(
  * ("777 777", "777-777") are accepted because refusing them would just be rude;
  * anything else — a letter, five digits, seven, a reserved prefix — is not.
  */
-export function normalizeDesiredNumber(input: unknown): string | null {
+export function normalizeDesiredNumber(
+  input: unknown,
+  /**
+   * Allow a RESERVED prefix (000/111). Defaults to false, and the default is the
+   * safety property: every existing caller — self-service `identity.setNumber`
+   * included — keeps refusing them, and a caller has to name this explicitly to
+   * do otherwise. See `claimIdentityNumberAsAdmin` for the only place that does.
+   *
+   * The reservation's real job is UNTOUCHED either way: `allocateSharedNumber`
+   * skips these prefixes unconditionally, so nobody is ever handed one by
+   * accident however this flag is set.
+   */
+  opts?: { allowReserved?: boolean },
+): string | null {
   if (typeof input !== "string") return null;
   // Strip only spaces and the two grouping characters a person would type. NOT
   // every non-digit: doing that would silently accept "7a7b7c7d7e7f" as 777777,
   // i.e. turn a typo into a successful renumber of somebody's identity.
   const cleaned = input.replace(/[\s\-.]/g, "");
   if (!/^\d{6}$/.test(cleaned)) return null;
-  if (RESERVED_PREFIXES.some((p) => cleaned.startsWith(p))) return null;
+  if (!opts?.allowReserved && RESERVED_PREFIXES.some((p) => cleaned.startsWith(p))) return null;
   return cleaned;
+}
+
+/**
+ * Assign a number ON AN ADMIN'S BEHALF, with the RESERVED-PREFIX rule relaxed.
+ *
+ * A SEPARATE FUNCTION rather than an `isAdmin` parameter on `claimIdentityNumber`,
+ * which is the house rule this codebase already follows for exactly this shape:
+ * v2.104.0 shipped `deleteMessageAsGroupAdmin` beside `deleteMessage` rather than
+ * widening one function with a privilege flag, because a boolean in that position
+ * is something a caller can pass by mistake and a NAME is not.
+ *
+ * WHAT IS AND IS NOT RELAXED. `000`/`111` exist to keep trivially-confused numbers
+ * out of circulation, and that is preserved where it matters:
+ *
+ *   - the RANDOM allocator still skips them unconditionally, so no ordinary signup
+ *     or regenerate can ever produce one;
+ *   - self-service "Choose my number" still refuses them, so a user cannot claim
+ *     one for themselves;
+ *   - only a deliberate administrative assignment may use one.
+ *
+ * That is the honest reading of what a reservation is for: never handed out by
+ * accident, assignable on purpose. Everything else about the operation is
+ * IDENTICAL — the same single writer, the same reservation ledger, the same
+ * propagation to every contact who saved the old number.
+ */
+export async function claimIdentityNumberAsAdmin(
+  identityId: number,
+  desired: unknown,
+): Promise<
+  | { ok: true; oldNumber: string; newNumber: string; unchanged: boolean }
+  | { ok: false; reason: ChooseNumberError | "not-found" | "unavailable" }
+> {
+  return claimIdentityNumber(identityId, desired, { allowReserved: true });
 }
 
 /** Why a chosen number could not be taken. Named, because each has a different
@@ -1580,12 +1626,16 @@ export async function regenerateIdentityNumber(
  */
 export async function claimIdentityNumber(
   identityId: number,
-  desired: unknown
+  desired: unknown,
+  /** INTERNAL. Set only by `claimIdentityNumberAsAdmin` — see the note there for
+   *  why the admin path is a named function rather than a boolean any caller
+   *  could pass. */
+  opts?: { allowReserved?: boolean },
 ): Promise<
   | { ok: true; oldNumber: string; newNumber: string; unchanged: boolean }
   | { ok: false; reason: ChooseNumberError | "not-found" | "unavailable" }
 > {
-  const want = normalizeDesiredNumber(desired);
+  const want = normalizeDesiredNumber(desired, opts);
   if (!want) return { ok: false, reason: "invalid" };
   try {
     const res = await regenerateIdentityNumber(identityId, want);

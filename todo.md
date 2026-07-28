@@ -11239,6 +11239,55 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.8 — an admin may assign a reserved number, on purpose (2026-07-28)
+
+Owner asked for **339631 → 111112**. Told that `111` is a reserved prefix, they answered:
+**"Keep all 111 blocked just do this"**.
+
+### The request was refused by the code, not by me
+`RESERVED_PREFIXES = ["000", "111"]` ("avoid trivially-confused numbers"), enforced in two
+independent places: `normalizeDesiredNumber` returns null (so self-service "Choose my
+number" refuses it) and `scripts/admin-tool.mjs` errors outright. So the change as literally
+asked could not be performed by any existing path.
+
+### What is unchanged, which is the whole of the owner's answer
+- `allocateSharedNumber` still skips those prefixes **unconditionally** — no signup,
+  regenerate or party-line mint can produce one by accident.
+- Self-service still refuses them, so nobody can claim one for themselves.
+- Only a deliberate administrative assignment may use one. That is the honest reading of
+  what a reservation is for: never handed out by accident, assignable on purpose.
+
+### A named function, never a privilege flag
+`claimIdentityNumberAsAdmin` sits beside `claimIdentityNumber` exactly as v2.104.0's
+`deleteMessageAsGroupAdmin` sits beside `deleteMessage` — a boolean in that position is
+something a caller can pass by mistake, and a name is not. It DELEGATES rather than
+duplicating, so `identities.number` still has exactly one writer and the renumber still
+propagates to every contact who saved the old number inside one transaction.
+
+- tRPC: an explicit `allowReserved`, still `requireAdmin`-gated.
+- CLI: `--allow-reserved`, and it prints how to proceed rather than only refusing.
+- Workflow: threaded as a CLOSED boolean, which is why it needs no base64 — every
+  free-TEXT input still crosses on it.
+
+### I reproduced the v2.104.0 prefix collision, in a sixth place, with my own change
+`claimIdentityNumber` is a PREFIX of `claimIdentityNumberAsAdmin`, and the new function
+sits EARLIER in the file — so `chooseNumber.test.ts`'s
+`indexOf("export async function claimIdentityNumber")` began reading the ADMIN one, and
+three of its slices collapsed to `""`, i.e. would have passed vacuously. Fixed with an exact
+`\b` locator that asserts the match exists — the same fix that file's six siblings got in
+v2.104.0. And one `+2600`-character window no longer reached the end of the body once the
+extra parameter and its comment were added; it is now bounded by the function's own end.
+
+### Tests
+`server/reservedNumberOverride.test.ts` (11). The default is tested BEHAVIOURALLY through
+the real `normalizeDesiredNumber`, because the property that matters is what happens when
+NO options are passed. The two implementations' prefix lists are cross-checked against each
+other, since a divergence would let the CLI assign something the app considers illegal.
+**All 10 tripwires verified by MUTATION** off a confirmed-GREEN baseline; sources
+byte-identical afterwards.
+
+No schema change, no new dependency, no new env var. 3465 tests.
+
 ## v2.105.7 — a group you can call, and its admins moderate the call (2026-07-28)
 
 Owner, #113, on the previously-declined list: **"DO IT"**.

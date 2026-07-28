@@ -98,6 +98,7 @@ import {
   touchGuestExpiry,
   updateIdentityProfile,
   regenerateIdentityNumber,
+  claimIdentityNumberAsAdmin,
   claimIdentityNumber,
   isUserAdmin,
   adminFindIdentities,
@@ -4619,10 +4620,29 @@ export const v2AdminRouter = router({
    * shortcut that wrote the column directly would silently skip all of it.
    */
   setIdentityNumber: publicProcedure
-    .input(z.object({ identityId: z.number().int().positive(), number: z.string().min(1).max(32) }))
+    .input(
+      z.object({
+        identityId: z.number().int().positive(),
+        number: z.string().min(1).max(32),
+        /**
+         * Assign a number using a RESERVED prefix (000/111). Explicit, because the
+         * default has to stay "no": the reservation keeps trivially-confused numbers
+         * out of circulation, and only a deliberate administrative assignment may use
+         * one. The random allocator still skips them unconditionally either way, and
+         * self-service still refuses them outright, so nobody can ever be handed one
+         * by accident or claim one for themselves.
+         */
+        allowReserved: z.boolean().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const me = await requireAdmin(ctx);
-      const res = await claimIdentityNumber(input.identityId, input.number);
+      // A NAMED function for the relaxed path, never a boolean threaded into the
+      // shared one — the `deleteMessageAsGroupAdmin` rule (v2.104.0): a privilege
+      // flag in that position is something a caller can pass by mistake.
+      const res = input.allowReserved
+        ? await claimIdentityNumberAsAdmin(input.identityId, input.number)
+        : await claimIdentityNumber(input.identityId, input.number);
       if (!res.ok) {
         const map: Record<
           typeof res.reason,
