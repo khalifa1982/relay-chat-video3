@@ -31,7 +31,7 @@ workflows:
           cd ios && pod install
       - name: Set up code signing settings on Xcode project
         script: |
-          xcode-project use-profiles
+          xcode-project use-profiles --export-options-plist "$CM_BUILD_DIR/export_options.plist"
       - name: Increment build number
         script: |
           cd ios
@@ -65,7 +65,7 @@ workflows:
           # If archive succeeded, export IPA
           xcodebuild -exportArchive \
             -archivePath "$CM_BUILD_DIR/ios/build/RELAY.xcarchive" \
-            -exportOptionsPlist ../exportOptions.plist \
+            -exportOptionsPlist "$CM_BUILD_DIR/export_options.plist" \
             -exportPath "$CM_BUILD_DIR/build/ios/ipa" \
             2>&1 | tee -a /tmp/xcodebuild_full.log
       - name: Show build errors if failed
