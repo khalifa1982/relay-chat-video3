@@ -59,6 +59,12 @@
 #                elasticloadbalancing:CreateRule,
 #                elasticloadbalancing:ModifyRule,
 #                elasticloadbalancing:DeleteRule
+#   live-verify — the verify set, plus ssm:SendCommand and
+#                ssm:ListCommandInvocations. It fans the in-fleet probe out to
+#                EVERY running relay-app instance and reads every invocation, so
+#                a per-box problem cannot hide behind a healthy sibling; the
+#                elbv2:DescribeTargetHealth read is OPTIONAL and degrades to "not
+#                reported" rather than to a false finding. Nothing is mutated.
 #   ses        — ses:GetAccount, ses:ListEmailIdentities,
 #                ses:GetSuppressedDestination, ses:CreateEmailIdentity,
 #                ses:PutAccountDetails (all sesv2 API; each step degrades to a
@@ -1119,74 +1125,46 @@ jobs:
           set -e
           echo ""
 
-          # PART 2, FROM AN INSTANCE. Same script, against the app's own port, so
-          # a discrepancy between the two localises the fault: FAIL here and PASS
-          # there means the app; PASS here and FAIL there means the edge (a stale
-          # target, a listener rule, DNS, CloudFront). The byte comparison SKIPs
-          # there — the instance has no build of this tree — and a SKIP is
-          # reported as a skip rather than quietly counted as a pass.
-          IID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=relay-app" "Name=instance-state-name,Values=running" \
-            --query 'sort_by(Reservations[].Instances[],&LaunchTime)[0].InstanceId' \
-            --output text 2>/dev/null)
+          # PART 2, FROM EVERY INSTANCE. `scripts/fleet-verify.mjs` fans the same
+          # script out to ALL running app instances, reads EVERY invocation
+          # (attributed by instance id), and then compares them — which is the one
+          # thing no single probe can do. It replaced a block here that picked
+          # `sort_by(...)[0]` and read `CommandInvocations[0]`: two instances, one
+          # probed, one arbitrary result read, so a per-box problem was found half
+          # the time and a pass could be attributed to a host that never produced
+          # it. The aggregation lives in a script rather than in this YAML because
+          # it has real logic in it and YAML cannot be tested — which is how
+          # reading one invocation survived review in the first place.
+          #
+          # SECURITY: verify_number/verify_email are free text reaching a command
+          # string executed on production EC2 — the class this file has been bitten
+          # by three times. The script base64-encodes them and the instance decodes,
+          # and because the construction is a function it is replayed against
+          # hostile input in server/fleetVerify.test.ts rather than reasoned about.
           APP=0
           MAIL=0
-          if [ -z "$IID" ] || [ "$IID" = "None" ]; then
-            echo "::warning::no running instance tagged Name=relay-app — skipping the in-fleet half."
-          else
-            echo "------------------- from inside the fleet ($IID) -------------------"
-            # SECURITY: verify_email is free text reaching a command string that
-            # runs on production EC2, the class this file has been bitten by
-            # three times (SES_EMAIL/DOMAIN, then `region`, then the recovery
-            # inputs). Same established treatment: base64 on the runner, decode
-            # only on the instance, so no quote or semicolon can break out of the
-            # remote shell. verify_number is shape-checked above AND encoded.
-            NUM_B64=$(printf %s "$VNUM" | base64 -w0)
-            EMAIL_B64=$(printf %s "$VEMAIL" | base64 -w0)
-            SENDFLAG=""
-            [ "$VSEND" = "true" ] && SENDFLAG=" --send"
-            CMD_APP="cd /home/relay/app 2>/dev/null || cd /home/relay; set -a; . /home/relay/.env 2>/dev/null; set +a;"
-            CMD_APP="$CMD_APP N=\$(echo $NUM_B64 | base64 -d);"
-            CMD_APP="$CMD_APP node scripts/live-verify.mjs --base http://127.0.0.1:\${PORT:-3000} \${N:+--number \$N};"
-            if [ -n "$VEMAIL" ]; then
-              # The mail check runs HERE and nowhere else: the SMTP credentials
-              # exist only in /home/relay/.env. It stops before DATA unless
-              # --send, so the default costs the recipient nothing.
-              CMD_APP="$CMD_APP node scripts/mail-verify.mjs --to \"\$(echo $EMAIL_B64 | base64 -d)\"${SENDFLAG};"
-            fi
-            PARAMS=$(jq -n --arg c "$CMD_APP" '{commands:[$c]}')
-            SSMID=$(aws ssm send-command --instance-ids "$IID" \
-              --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 0 \
-              --parameters "$PARAMS" --query 'Command.CommandId' --output text) || {
-                echo "::warning::could not start the in-fleet half via SSM"; SSMID=""; }
-            if [ -n "$SSMID" ]; then
-              for i in $(seq 1 36); do
-                S=$(aws ssm list-command-invocations --command-id "$SSMID" --query 'CommandInvocations[].Status' --output text)
-                case "$S" in *InProgress*|*Pending*|"") sleep 5 ;; *) break ;; esac
-              done
-              OUT=$(aws ssm list-command-invocations --command-id "$SSMID" --details \
-                --query 'CommandInvocations[0].CommandPlugins[0].Output' --output text)
-              echo "$OUT" | head -c 8000
-              # The verdict comes from each script's own printed marker, never
-              # from the SSM status: a wrapper or a pipeline can mask a non-zero
-              # exit, which is the bug v2.99.46 exists to prevent.
-              echo "$OUT" | grep -q "LIVE_VERIFY_EXIT=0" || APP=1
-              if [ -n "$VEMAIL" ]; then
-                echo "$OUT" | grep -q "MAIL_VERIFY_EXIT=0" || MAIL=1
-              fi
-            else
-              APP=2
-            fi
-          fi
+          set +e
+          node scripts/fleet-verify.mjs \
+            ${VNUM:+--number "$VNUM"} \
+            ${VEMAIL:+--email "$VEMAIL"} \
+            $( [ "$VSEND" = "true" ] && echo --send )
+          FLEET=$?
+          set -e
+          # The verdict is the script's own exit code, and it is ALSO printed as a
+          # marker so a wrapper or pipeline cannot mask it (v2.99.46).
+          [ $FLEET -eq 0 ] || APP=1
 
           echo ""
           echo "=================================================================="
           echo "VERDICT"
           echo "=================================================================="
           echo "  from a visitor (https://$DOMAIN):  $( [ $EDGE -eq 0 ] && echo OK || echo PROBLEMS )"
-          echo "  from inside the fleet (app only):  $( [ $APP -eq 0 ] && echo OK || ( [ $APP -eq 2 ] && echo 'not run' || echo PROBLEMS ) )"
+          echo "  from inside the fleet (every instance): $( [ $APP -eq 0 ] && echo OK || echo PROBLEMS )"
           if [ -n "$VEMAIL" ]; then
-            echo "  mail delivery to the given address: $( [ $MAIL -eq 0 ] && echo OK || echo PROBLEMS )"
+            # Mail is one of the fleet script's own findings, attributed per
+            # instance — the credentials are per-host, so "the fleet can deliver"
+            # is only true if every box can.
+            echo "  mail delivery to the given address:     $( [ $APP -eq 0 ] && echo OK || echo 'see the findings above' )"
           fi
           # Naming which side failed is the whole reason both are probed, so the
           # summary says it rather than leaving it to be inferred from the logs.

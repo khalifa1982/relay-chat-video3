@@ -11239,6 +11239,67 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.5 — the in-fleet verification runs on every instance, and comparing them is the check (2026-07-28)
+- [x] **OWNER**: *"build the verification to run on EC2 better"*.
+- [x] **WHAT WAS WRONG, NAMED PLAINLY.** v2.105.2's in-fleet half picked ONE instance
+      (`sort_by(Reservations[].Instances[],&LaunchTime)[0]`) and then read ONE invocation
+      (`CommandInvocations[0]`). Both are the same mistake, and it is the one that matters most here: the
+      fleet runs TWO app instances, and the failures an in-fleet probe exists to catch are precisely the
+      PER-BOX ones — a release extracted on one host and not the other, a pm2 process that never reloaded, an
+      env var set on one box, an instance quietly out of the load balancer. Probing one box finds those half
+      the time, **and the runner-side probe cannot help because the ALB round-robins and may well hit the
+      healthy one**. A pass could also be attributed to a host that never produced it.
+- [x] **COMPARING THE INSTANCES IS A CHECK NO SINGLE PROBE CAN PERFORM**, and it is the real addition. Two
+      boxes on DIFFERENT versions is user-visible: the auto-updater compares the client's baked version
+      against the server's runtime one, so whichever instance a poll lands on decides whether a refresh
+      prompt appears — it FLAPS. The finding says out loud that this is normal for the ~60s of a rolling
+      deploy rather than crying outage.
+- [x] `cluster`/`redisBus` differing between hosts means cross-instance calling is broken for whoever lands on
+      the wrong one — **that is the v2.94.4 bug, where `RELAY_CLUSTER` was simply never set on the hosts** —
+      and it is invisible from inside either box.
+- [x] **THREE FACTS THE APPLICATION CANNOT SELF-REPORT**, gathered per host: pm2 status and restart count (a
+      crash-looping box answers `/api/health` perfectly IN BETWEEN restarts), free disk under `/home/relay`
+      (the classic reason a deploy "succeeded" without extracting), and uptime. Plus ALB target health per
+      instance — a state where a box runs the right code and receives NO TRAFFIC, visible to neither the HTTP
+      probe nor the instance itself.
+- [x] **A MISSING READING DEGRADES TO SILENCE, NEVER TO A FINDING**: if `elbv2:DescribeTargetHealth` is denied
+      the map comes back empty and no load-balancer finding is produced, because a false alarm is what hides a
+      real one. "Healthy in ANY target group" counts as in service, since an instance legitimately sits in
+      more than one and the `/api/relay/*` signaling group pins ONE box on purpose.
+- [x] **IT IS A SCRIPT AND NOT MORE YAML, and that is the point rather than tidiness.** The aggregation has
+      real logic in it — parsing per-instance reports, deciding what counts as divergence, attributing a
+      failure to a host — and in YAML none of it can be tested, **which is exactly how `CommandInvocations[0]`
+      survived review**. Every AWS call goes through an INJECTED runner.
+- [x] `server/fleetVerify.test.ts` (40) drives the whole sweep against a fake fleet with recorded output and
+      no AWS account: a split fleet, a config divergence, one box out of the load balancer, one crash-looping,
+      one that never answered, an empty fleet. One test is named for the case the old design would have MISSED
+      and asserts it is caught.
+- [x] **A REAL PARSING BUG FOUND BY ITS OWN TEST, and it would have blinded the one check this exercise exists
+      for.** The report parser split check lines on "two or more spaces", but `live-verify` pads names to 24
+      characters — so a name of exactly 24 is followed by ONE space, and **`arabic parity rules live` is
+      exactly 24 characters**. The single check #44 was about was the one that could not be read. Parsed by
+      COLUMN now, with the column layout pinned against the real print statement so the two cannot drift.
+- [x] **INJECTION PROVEN BY CONSTRUCTION rather than by replay this time**, which is stronger: the remote
+      command is built by an exported FUNCTION, so seven hostile payloads go through it in a test and are
+      asserted to appear nowhere in the output — no quote, semicolon, `$( )`, backtick, pipe or newline
+      survives base64.
+- [x] **READ-ONLY BY ASSERTION AT BOTH LAYERS**: a test forbids every non-describe AWS verb in the script and
+      every mutating command in the remote string — no pm2 restart, no redirect into `/home/relay`, no `rm`,
+      no `systemctl`. pm2 is only ever READ, via `jlist`.
+- [x] **A MISSING EXIT MARKER READS AS NULL, NEVER AS SUCCESS**, so a truncated or killed command cannot pass;
+      and the LAST marker wins, because a retried command can contain more than one.
+- [x] **ALL 13 TRIPWIRES VERIFIED BY MUTATION** from byte-exact backups off a confirmed-GREEN baseline,
+      including both original defects reinstated verbatim; sources byte-identical afterwards.
+- [x] **FIVE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, all five having frozen details this release moved
+      INTO the script — the localhost base, the SSM verb list, the base64 assignments, the mail gating and the
+      marker greps — so each broke while saying nothing about whether the property still held. Each now
+      asserts it at its new home, with the behavioural half in the new file.
+- [x] **AND THE PROSE TRAP FOR THE FOURTEENTH TIME**: a `not.toMatch` for `CommandInvocations[0]` matched the
+      workflow step's own COMMENT recording that it was removed. The assertion strips comment lines now, and a
+      companion assertion proves the comment really is where the string lives — so the strip is doing work
+      rather than hiding a defect.
+- [x] No schema change, no new dependency, no new env var, no server change. 3369 tests.
+
 ## v2.105.4 — #44 ran against production: 11/11, and its one failure was my own check (2026-07-28)
 - [x] v2.105.2 built the live verification. This RAN it, against the real fleet.
 - [x] **FROM A VISITOR'S PATH, 11/11 PASS**: `version 2.105.2 === shared/version.ts`; **3 assets
