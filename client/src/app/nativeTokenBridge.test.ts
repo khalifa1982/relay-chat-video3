@@ -207,9 +207,25 @@ describe("the server stores and delivers it", () => {
     "utf8"
   );
 
-  it("push.subscribe accepts expo and re-derives the kind from the token", () => {
-    expect(ROUTERS).toMatch(/kind: z\.enum\(\["webpush", "fcm", "expo"\]\)\.optional\(\)/);
+  it("push.subscribe accepts every native kind and re-derives it from the token", () => {
+    // REWRITTEN IN v2.105.11 TO THE PROPERTY. This froze the exact enum LIST
+    // `["webpush", "fcm", "expo"]`, so adding the `apns` kind broke it while saying
+    // nothing about the property that matters — which is that the label is only a HINT
+    // and the SHAPE decides. A frozen list forbids every legitimate addition and cannot
+    // catch the one thing worth catching: the re-derivation going away.
+    const enumLine = /kind: z\.enum\(\[([^\]]*)\]\)\.optional\(\)/.exec(ROUTERS);
+    expect(enumLine).toBeTruthy();
+    // Every kind the SERVER can classify must be expressible on the wire, or an honest
+    // shell cannot say what it holds.
+    for (const k of ["webpush", "fcm", "expo", "apns"]) {
+      expect(enumLine![1], `wire enum accepts ${k}`).toContain(`"${k}"`);
+    }
+    // …and the label is overridden by the shape, which is what makes a lying client
+    // harmless. Both must be present AND in this order.
     expect(ROUTERS).toMatch(/const actual = classifyNativeToken\(input\.endpoint\);/);
+    expect(ROUTERS.indexOf("kind: z.enum([")).toBeLessThan(
+      ROUTERS.indexOf("const actual = classifyNativeToken(input.endpoint);")
+    );
     // A token that is neither shape is refused, not stored.
     expect(ROUTERS).toMatch(/message: "Unrecognised push token\."/);
   });

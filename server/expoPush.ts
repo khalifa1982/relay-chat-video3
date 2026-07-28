@@ -30,7 +30,22 @@ const EXPO_SEND_URL = "https://exp.host/--/api/v2/push/send";
 /** Expo caps a single request at 100 messages. */
 const EXPO_BATCH = 100;
 
-export type NativeTokenKind = "expo" | "fcm";
+/**
+ * `apns` is a RECOGNISED but NOT-YET-DELIVERABLE kind (v2.105.11). RELAY has no direct
+ * APNs transport, so nothing sends to it — but it is stored rather than refused, because
+ * the admin push doctor reporting "this device registered an APNs token, which needs the
+ * shell to send an Expo push token instead" is the one thing that makes the failure
+ * diagnosable. Refusing outright would leave the operator with an empty device list and
+ * no reason for it.
+ *
+ * CRITICALLY, an `apns` row must NOT count as reachable — see `hasRoutablePushKind`.
+ */
+export type NativeTokenKind = "expo" | "fcm" | "apns";
+
+/** The kinds something actually sends to. `apns` is deliberately absent: a stored token
+ *  we cannot deliver to must never suppress the offline-message EMAIL fallback, or the
+ *  recipient gets neither, which is strictly worse than the bug this release fixes. */
+export const ROUTABLE_PUSH_KINDS = ["webpush", "fcm", "expo"] as const;
 
 /**
  * Which transport does this token belong to?
@@ -49,9 +64,21 @@ export function classifyNativeToken(token: unknown): NativeTokenKind | null {
   // has shipped both, and the closing bracket is required so a truncated token
   // cannot pass as a valid one.
   if (/^Expo(nent)?PushToken\[[^\]\s]+\]$/.test(t)) return "expo";
-  // A raw FCM registration token: long, URL-safe-ish, no whitespace. APNs device
-  // tokens are 64 hex chars and also reach FCM (via the APNs key uploaded to
-  // Firebase), so they are accepted here too.
+  // AN APNs DEVICE TOKEN IS NOT AN FCM TOKEN, AND SAYING SO IS THE WHOLE FIX.
+  //
+  // This branch used to return "fcm" for a bare hex token, under a comment claiming
+  // APNs tokens "also reach FCM (via the APNs key uploaded to Firebase)". THAT WAS
+  // FALSE. FCM v1 `messages:send` takes an FCM REGISTRATION token; handed a raw APNs
+  // device token it answers 400/404, and `sendFcmData` reads 400/404 as a stale token
+  // and PRUNES the row. So an iOS shell that posted its APNs token got silently
+  // deregistered on the very first push — it did not merely fail, it destroyed its own
+  // registration.
+  //
+  // An APNs device token is pure hex (32 bytes → 64 chars classically, up to 100 bytes
+  // on newer iOS). An FCM registration token is never pure hex: it carries a `:` (the
+  // `<instance-id>:APA91b…` shape) plus `-`/`_`. So the hex-only test is a safe, narrow
+  // discriminator that cannot swallow an Android token.
+  if (/^[0-9a-fA-F]{64,200}$/.test(t) && t.length % 2 === 0) return "apns";
   if (/^[A-Za-z0-9_:%.~-]{32,4096}$/.test(t)) return "fcm";
   return null;
 }

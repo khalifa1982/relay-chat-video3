@@ -239,6 +239,29 @@ export function aggregate(reports, opts = {}) {
 
   // Crash-looping and disk, per instance.
   const restartCap = opts.restartCap ?? 20;
+  /**
+   * RESTARTS ARE JUDGED BY RATE, NOT BY COUNT (v2.105.10).
+   *
+   * The absolute cap of 20 was calibrated for crash-loop detection and this fleet trips
+   * it on deploy cadence alone: pm2 restarts once per release, so the counter ticks +1
+   * per box per deploy and reached 46/47 with `status=online` on both and ~8.4 days of
+   * uptime. That is one restart per ~4.3 hours — the release schedule, not a fault — and
+   * a WARN there is a false alarm, which is the thing that hides a real one.
+   *
+   * A genuine crash loop is not a bigger number, it is a different RATE: pm2 restarts
+   * within seconds and backs off, so over eight days it would show thousands. One per
+   * hour sustained is already an order of magnitude above any plausible deploy cadence
+   * and two below a loop, so that is the line.
+   *
+   * The window is HOST uptime, which is the only clock the report carries. If pm2 were
+   * started before the counter's own epoch the rate would read HIGH, which is the
+   * fail-loud direction. With no uptime the rate cannot be computed at all, so the
+   * absolute cap stands — today's behaviour rather than silence.
+   */
+  const restartsPerDayCap = opts.restartsPerDayCap ?? 24;
+  /** Below this, the window is too short to divide by: a box up two minutes after a
+   *  reboot would turn one ordinary restart into a screaming rate. */
+  const restartRateMinWindowSec = 3600;
   const diskFloorKb = opts.diskFloorKb ?? 512 * 1024; // 512 MB
   for (const r of live) {
     for (const proc of parsePm2(r.report.pm2)) {
@@ -246,8 +269,34 @@ export function aggregate(reports, opts = {}) {
         add("fail", `${r.id} pm2 process not online`, `${proc.name} is ${proc.status}`);
       }
       if (proc.restarts != null && proc.restarts >= restartCap) {
-        // A box that restarts constantly answers health perfectly in between.
-        add("warn", `${r.id} has restarted a lot`, `${proc.name} restart_time=${proc.restarts}`);
+        // A box that restarts constantly answers health perfectly in between — which is
+        // why this is checked at all — but the count alone cannot tell a crash loop from
+        // a deploy history. Divide by the window.
+        const up = r.report.uptimeSec;
+        const rate =
+          up != null && up >= restartRateMinWindowSec ? proc.restarts / (up / 86400) : null;
+        if (rate == null) {
+          add(
+            "warn",
+            `${r.id} has restarted a lot`,
+            `${proc.name} restart_time=${proc.restarts} (uptime unknown, so the rate could not be checked)`,
+          );
+        } else if (rate >= restartsPerDayCap) {
+          add(
+            "warn",
+            `${r.id} is restarting faster than deploys explain`,
+            `${proc.name} restart_time=${proc.restarts} over ${(up / 86400).toFixed(1)}d = ${rate.toFixed(1)}/day`,
+          );
+        } else {
+          // Reported, not hidden: an operator looking at a count in the forties should
+          // be able to see that it was accounted for rather than wonder why nothing said
+          // anything about it.
+          add(
+            "info",
+            `${r.id} restart count is deploy cadence, not a loop`,
+            `${proc.name} restart_time=${proc.restarts} over ${(up / 86400).toFixed(1)}d = ${rate.toFixed(1)}/day, status=${proc.status ?? "?"}`,
+          );
+        }
       }
     }
     if (r.report.diskFreeKb != null && r.report.diskFreeKb < diskFloorKb) {

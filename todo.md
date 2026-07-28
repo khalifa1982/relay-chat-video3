@@ -11239,6 +11239,60 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.11 — two gates that never applied a rule they already owned (2026-07-28)
+
+- **The media gate is a FOURTH reader of the join floor.** v2.105.9 taught the three
+  MESSAGE readers `visibleFloorFor`; `getAttachmentForIdentity` authorized on membership
+  alone, so an invite-link joiner could read every photo, voice note and video posted
+  before they joined by walking sequential `attachments.get` ids — and the same funnel
+  backs `authorizeStorageKey`. Only reachable from v2.105.9, because before invite links
+  nobody could join an existing group. Now floored by `GREATEST` over both watermarks,
+  with `COALESCE` so NULL reads as 0 (without it the comparison is NULL and authorizes
+  nobody — every group attachment becomes a broken image).
+- **An APNs token is not an FCM token** (owner: Firebase notifications not arriving).
+  `classifyNativeToken` returned `fcm` for pure hex under a comment claiming APNs tokens
+  "also reach FCM". False: FCM v1 wants a REGISTRATION token, answers 400/404 to an APNs
+  one, and `sendFcmData` reads that as stale and PRUNES the row — so an iOS shell
+  deregistered itself on its first push. New `apns` kind, discriminated by pure-hex
+  (an FCM token always carries a `:`).
+- **`hasPushSubscription` counts only routable kinds** — the load-bearing part. An
+  unroutable stored row would make `pushReachable` true and suppress the offline-message
+  email, leaving the recipient with neither.
+- TypeScript caught the widening at two call sites; the client/server parity guard caught
+  the bridge being left behind. One pre-existing pin rewritten from a frozen enum list to
+  the property.
+- `server/pushApnsAndMediaFloor.test.ts` (13); 5/5 tripwires mutation-verified.
+- **Still no incoming-call push** (removed v2.99.11 at the owner's request), and nothing
+  here delivers to APNs — the shell should send an Expo push token.
+- Corrected: PR #94 was never blocked by an Actions outage; it had a merge conflict from
+  #93's squash merge, so GitHub never queued checks.
+
+3506 tests.
+
+## v2.105.10 — the restart warning was crying wolf at the deploy schedule (2026-07-28)
+
+Owner: the fleet WARN is explained; "consider whether the finding should say so
+rather than looking like a problem".
+
+- **The reading was never a fault.** `restart_time` 46/47 with `status=online` on both
+  boxes and ~8.4 days of uptime is one restart per ~4.3 hours — pm2 restarting once per
+  release. The absolute cap of 20 was calibrated for crash-loop detection and is
+  guaranteed to trip on a fleet that deploys several times a day.
+- **A crash loop is a different RATE, not a bigger count.** pm2 restarts within seconds
+  and backs off, so over eight days a real loop shows thousands. The check now divides by
+  host uptime and warns only above 24/day.
+- **The count is still reported, as `info`.** Suppressing it would leave an operator
+  wondering why a number in the forties went unmentioned.
+- **No uptime ⇒ the absolute cap stands**, because a rate cannot be computed and silence
+  would drop crash-loop detection whenever that line is missing. The window has a 1h
+  floor so a just-rebooted box does not read as a loop.
+- One pre-existing pin rewritten to the property: it matched the finding's WORDING, so it
+  would have gone on passing for exactly the production reading that motivated this.
+- `server/fleetVerify.test.ts` → 42; 4/4 tripwires mutation-verified, source
+  byte-identical afterwards.
+
+3493 tests.
+
 ## v2.105.9 — a group invite link, with no row behind it (2026-07-28)
 
 Owner, #114, on the previously-declined list: **"DO IT"**.
