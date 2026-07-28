@@ -2573,6 +2573,9 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // yet); `joinedAtMessageId` NULL reads as "sees everything", which is what every
     // pre-release participant is. Both no-ops until somebody mints or redeems a link.
     { table: "conversations", column: "inviteEpoch", ddl: "ADD COLUMN `inviteEpoch` int" },
+    // v2.105.16 — "all users can add". NULL/false = admin-only, which is what every
+    // pre-release group already means, so this is a no-op until an admin turns it on.
+    { table: "conversations", column: "membersCanAdd", ddl: "ADD COLUMN `membersCanAdd` boolean" },
     {
       table: "conversation_participants",
       column: "joinedAtMessageId",
@@ -3523,7 +3526,23 @@ export type GroupCapability =
   /** Minting or revoking an invite link (v2.105.9). Admin-only DELIBERATELY: a link
    *  admits a stranger, and letting every member hand one out is a decision nobody
    *  has made. Its absence from MEMBER_CAPABILITIES is what makes it admin-only. */
-  | "invite-link";
+  | "invite-link"
+  /**
+   * Adding somebody by number (v2.105.16). Admin-only by DEFAULT and widened to every
+   * member per-group by `conversations.membersCanAdd` — the owner's "all users can add".
+   *
+   * The ONLY conditional capability, and it is absent from MEMBER_CAPABILITIES on
+   * purpose: the widening is decided per group inside `checkGroupPermission`, never by
+   * adding to that process-global set.
+   */
+  | "add-member"
+  /**
+   * Removing somebody (v2.105.16). Admin-only UNCONDITIONALLY — there is no toggle and
+   * deliberately so: ejecting a member is the higher-privilege half of managing a
+   * roster, and one member able to remove another is a takeover primitive nobody asked
+   * for. "All users can add" says add, and it is taken literally.
+   */
+  | "remove-member";
 
 /**
  * The capabilities every MEMBER holds, unconditionally and forever.
@@ -3555,7 +3574,12 @@ export async function checkGroupPermission(
   if (!db) return { ok: false, reason: "unavailable" };
   try {
     const [convo] = await db
-      .select({ id: conversations.id, kind: conversations.kind, ownerIdentityId: conversations.ownerIdentityId })
+      .select({
+        id: conversations.id,
+        kind: conversations.kind,
+        ownerIdentityId: conversations.ownerIdentityId,
+        membersCanAdd: conversations.membersCanAdd,
+      })
       .from(conversations)
       .where(eq(conversations.id, conversationId))
       .limit(1);
@@ -3608,6 +3632,17 @@ export async function checkGroupPermission(
     }
 
     if (MEMBER_CAPABILITIES.has(capability)) return { ok: true, isAdmin, isCreator, hasAdmin };
+
+    /* THE ONE PER-GROUP WIDENING (v2.105.16), computed here rather than by adding to
+       MEMBER_CAPABILITIES — that set is module-level, so mutating it for one group would
+       grant the capability in EVERY group for the life of the process, which is a
+       cross-request authority leak rather than a feature.
+       Only an EXPLICIT true widens it: NULL is what every pre-release group carries and
+       must keep meaning admin-only, so a falsy read is the safe direction. */
+    if (capability === "add-member" && convo.membersCanAdd === true) {
+      return { ok: true, isAdmin, isCreator, hasAdmin };
+    }
+
     if (!isAdmin) return { ok: false, reason: "not-an-admin", hasAdmin };
     return { ok: true, isAdmin, isCreator, hasAdmin };
   } catch (e) {
@@ -3812,12 +3847,20 @@ export async function revokeGroupInvites(input: {
 }
 
 /**
- * Redeem an invite: make this identity a member, watermarked at the group's newest
- * message so the history before them is not theirs.
+ * ADMIT AN IDENTITY TO A GROUP, watermarked at its newest message so the history
+ * before them is not theirs.
  *
- * THE CALLER HAS ALREADY VERIFIED THE SIGNATURE AND THE EPOCH. This function performs
- * the join and nothing else, so the authorization lives in exactly one place — the
- * procedure — rather than being half here and half there.
+ * THE ONE WRITER FOR "SOMEBODY BECOMES A MEMBER AFTER THE GROUP EXISTED" (v2.105.16).
+ * Two routes reach it — redeeming an invite link (v2.105.9) and being added by hand —
+ * and they differ ONLY in how the caller earned the right to call it: a signed token in
+ * one case, a capability check in the other. The WRITE is identical, and "which message
+ * does a new member start seeing from" is exactly the kind of rule that must have a
+ * single owner: a second copy is how the two routes come to disagree about whether a
+ * new member can read the backlog.
+ *
+ * AUTHORIZATION IS DELIBERATELY NOT HERE. Each caller has already established it, so it
+ * lives in exactly one place per route rather than being half here and half there — the
+ * same split `joinRoomMember` uses.
  *
  * ALREADY-A-MEMBER SUCCEEDS AND CHANGES NOTHING. Re-opening a link you already used is
  * the ordinary case (a link sits in a chat and gets tapped twice), and rewriting the
@@ -3825,7 +3868,7 @@ export async function revokeGroupInvites(input: {
  * own view — the worst possible outcome of a harmless double-tap. So the insert is
  * guarded by a read and the watermark is only ever stamped on a row being CREATED.
  */
-export async function joinGroupByInvite(input: {
+export async function admitGroupMember(input: {
   conversationId: number;
   identityId: number;
 }): Promise<{ ok: boolean; joined: boolean; reason?: "not-found" | "not-a-group" | "unavailable" }> {
@@ -3859,11 +3902,11 @@ export async function joinGroupByInvite(input: {
       .orderBy(desc(messages.id))
       .limit(1);
 
-    // The ON DUPLICATE KEY clause makes a concurrent double-redeem harmless: it assigns
+    // The ON DUPLICATE KEY clause makes a concurrent double-admit harmless: it assigns
     // the identityId to itself, so the loser's insert is a no-op against the
     // (conversationId, identityId) primary key rather than a thrown duplicate, and the
-    // winner's watermark stands untouched. Nothing here grants a role — a link-joined
-    // member is an ORDINARY member, which is what stops an invite reaching adminship.
+    // winner's watermark stands untouched. Nothing here grants a role — an admitted
+    // member is an ORDINARY member, which is what stops either route reaching adminship.
     await db
       .insert(conversationParticipants)
       .values({
@@ -3876,8 +3919,144 @@ export async function joinGroupByInvite(input: {
       .onDuplicateKeyUpdate({ set: { identityId: input.identityId } });
     return { ok: true, joined: true };
   } catch (e) {
-    console.warn("[groups] joinGroupByInvite failed:", (e as Error)?.message || "");
+    console.warn("[groups] admitGroupMember failed:", (e as Error)?.message || "");
     return { ok: false, joined: false, reason: "unavailable" };
+  }
+}
+
+/**
+ * The invite-link route's name for the same admission, kept so the v2.105.9 procedure
+ * and its tests read as being about invites rather than about membership plumbing.
+ *
+ * A thin alias rather than a copy — a test asserts the participant INSERT occurs in
+ * exactly one place, because the whole point of `admitGroupMember` is that the
+ * watermark rule has one owner.
+ */
+export async function joinGroupByInvite(input: {
+  conversationId: number;
+  identityId: number;
+}): Promise<{ ok: boolean; joined: boolean; reason?: "not-found" | "not-a-group" | "unavailable" }> {
+  return admitGroupMember(input);
+}
+
+export type RemoveMemberResult =
+  | { ok: true; removed: boolean }
+  | { ok: false; reason: "not-found" | "not-a-group" | "is-creator" | "self" | "unavailable" };
+
+/**
+ * REMOVE A MEMBER FROM A GROUP (v2.105.16).
+ *
+ * AUTHORIZATION IS THE CALLER'S — the procedure has already required `remove-member`,
+ * which is admin-only unconditionally. What lives HERE is the set of removals that are
+ * wrong no matter who asks:
+ *
+ *   • THE CREATOR CANNOT BE REMOVED. `checkGroupPermission` derives adminship from
+ *     `ownerIdentityId` while they are still a participant, so removing them would strip
+ *     the group's own creator of adminship with no route back — and in a group whose only
+ *     admin is the derived creator, it would leave the group permanently adminless, which
+ *     is the state v2.104.0 deliberately made unrecoverable rather than add a fallback to.
+ *
+ *   • NOBODY REMOVES THEMSELVES. That is "leave the group", a different act with
+ *     different copy and different consequences (an admin leaving may strand the group),
+ *     and it does not exist yet — so accepting it here would ship a leave button wearing
+ *     a remove button's label. Named rather than silently ignored.
+ *
+ * THEIR MESSAGES STAY. The rows belong to everybody in the thread, not only to their
+ * author — the same reasoning that keeps a group alive while anyone remains
+ * (`purgeIdentity.ts`) and that keeps a third party's contact row on a purge. Removing
+ * somebody withdraws their ACCESS; it does not rewrite everybody else's history.
+ *
+ * `removed: false` for somebody who was not a member is a SUCCESS, not an error: a
+ * double-tap or a retry after a dropped response must be harmless, and "they are not in
+ * the group" is precisely the state the caller asked for.
+ */
+export async function removeGroupMember(input: {
+  conversationId: number;
+  identityId: number;
+  actingIdentityId: number;
+}): Promise<RemoveMemberResult> {
+  if (input.identityId === input.actingIdentityId) return { ok: false, reason: "self" };
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  try {
+    const [convo] = await db
+      .select({
+        id: conversations.id,
+        kind: conversations.kind,
+        ownerIdentityId: conversations.ownerIdentityId,
+      })
+      .from(conversations)
+      .where(eq(conversations.id, input.conversationId))
+      .limit(1);
+    if (!convo) return { ok: false, reason: "not-found" };
+    if (convo.kind !== "group") return { ok: false, reason: "not-a-group" };
+    if (convo.ownerIdentityId != null && convo.ownerIdentityId === input.identityId) {
+      return { ok: false, reason: "is-creator" };
+    }
+
+    // Scoped to BOTH halves of the primary key, so this can only ever touch the one
+    // participation named — never every row for that identity, and never the whole group.
+    const res = await db
+      .delete(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, input.conversationId),
+          eq(conversationParticipants.identityId, input.identityId),
+        ),
+      );
+    const removed =
+      Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    return { ok: true, removed };
+  } catch (e) {
+    console.warn("[groups] removeGroupMember failed:", (e as Error)?.message || "");
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
+/**
+ * Turn "all users can add" on or off for one group (v2.105.16).
+ *
+ * Writes ONE boolean and can reach nothing else. Stored explicitly rather than as
+ * "absent means on", so an admin turning it back off is a real value the read can
+ * distinguish from a group that never had it set.
+ */
+/**
+ * Read the toggle for a READ surface (the members sheet).
+ *
+ * Returns null when it cannot be read, which the caller renders as OFF — the same
+ * falsy-is-safe direction `checkGroupPermission` takes, so a blip hides a control
+ * rather than offering one the server will refuse.
+ */
+export async function getGroupMembersCanAdd(conversationId: number): Promise<boolean | null> {
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    const [row] = await db
+      .select({ membersCanAdd: conversations.membersCanAdd })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+    return row ? row.membersCanAdd === true : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setGroupMembersCanAdd(
+  conversationId: number,
+  allowed: boolean,
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    await db
+      .update(conversations)
+      .set({ membersCanAdd: allowed })
+      .where(and(eq(conversations.id, conversationId), eq(conversations.kind, "group")));
+    return true;
+  } catch (e) {
+    console.warn("[groups] setGroupMembersCanAdd failed:", (e as Error)?.message || "");
+    return false;
   }
 }
 

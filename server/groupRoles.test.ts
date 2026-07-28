@@ -341,7 +341,14 @@ describe("v2.104.0 — the router names each refusal, and checks nothing itself"
     // Back up to that declaration's own line start so the slice ends cleanly.
     const proc = ROUTERS.slice(ciAt, ROUTERS.lastIndexOf("\n", nextProc));
     expect(proc.length).toBeGreaterThan(400);
-    expect(proc.length).toBeLessThan(3000); // it is ONE procedure, not several
+    // "IT IS ONE PROCEDURE" ASSERTED DIRECTLY RATHER THAN VIA A CHARACTER COUNT
+    // (rewritten v2.105.16). The old bound was `< 3000`, an arbitrary proxy for the real
+    // invariant — and v2.105.16 added one field with a comment, which took the procedure
+    // to 3580 and broke the pin while saying nothing about whether the slice had
+    // over-run. Bumping the number would move the fragility one addition along, which is
+    // exactly what the note above warns about; counting declarations cannot go stale on a
+    // legitimate addition and catches the thing the bound was standing in for.
+    expect((proc.match(/: publicProcedure/g) || []).length).toBe(1);
     expect(proc).toMatch(/isCreator:/);
     expect(proc).toMatch(/isAdmin:/);
     expect(proc).toMatch(/hasAdmin:/);

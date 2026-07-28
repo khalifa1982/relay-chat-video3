@@ -273,10 +273,26 @@ describe("#114 — minting is admin-only and joining grants nothing", () => {
   it("joining an existing membership changes nothing — the watermark is never rewritten", () => {
     // Re-opening a link you already used is the ordinary case. Rewriting the watermark on
     // a founding member would silently delete their entire history from their own view.
-    const fn = fnAt(db, "joinGroupByInvite");
+    //
+    // The rule now lives in `admitGroupMember`, the ONE writer for "somebody becomes a
+    // member after the group existed" (v2.105.16) — the invite-link route and adding by
+    // hand share it, because two copies of "which message does a new member start seeing
+    // from" is how the two routes come to disagree about reading the backlog. The property
+    // is unchanged; only its home moved, so this pin follows it rather than being relaxed.
+    const fn = fnAt(db, "admitGroupMember");
     const guard = fn.indexOf("if (existing) return { ok: true, joined: false }");
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(fn.indexOf("joinedAtMessageId:"));
+  });
+
+  it("the invite route reaches that single writer rather than inserting its own row", () => {
+    // If `joinGroupByInvite` ever grows its own INSERT again, the watermark rule has two
+    // owners and this is the assertion that catches it.
+    const fn = fnAt(db, "joinGroupByInvite");
+    expect(fn).toMatch(/return admitGroupMember\(input\)/);
+    expect(fn).not.toMatch(/\.insert\(conversationParticipants\)/);
+    // And exactly one place in the file performs that insert-with-watermark.
+    expect((db.match(/joinedAtMessageId: newest\?\.id \?\? null/g) || []).length).toBe(1);
   });
 
   it("the accept procedure re-checks the epoch, not just the signature", () => {

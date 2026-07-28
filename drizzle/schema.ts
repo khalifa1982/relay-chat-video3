@@ -441,6 +441,23 @@ export const conversations = mysqlTable(
      * somebody revokes. Only ever increases.
      */
     inviteEpoch: int("inviteEpoch"),
+    /**
+     * MAY ORDINARY MEMBERS ADD PEOPLE? (v2.105.16, the owner's "all users can add".)
+     *
+     * NULL / false = admin-only, which is both the safe default and what every
+     * pre-release group already means — so the additive migration changes nothing
+     * until an admin turns it on.
+     *
+     * It widens ONE capability and never the rest: `remove-member` stays admin-only
+     * unconditionally, because ejecting somebody is the higher-privilege half and a
+     * member able to remove other members is a takeover primitive nobody asked for.
+     *
+     * Read PER GROUP inside `checkGroupPermission` rather than by mutating the
+     * module-level `MEMBER_CAPABILITIES` set — that set is process-global, so adding
+     * to it for one group would silently grant the capability in EVERY group for the
+     * life of the process.
+     */
+    membersCanAdd: boolean("membersCanAdd"),
     lastMessageAt: timestamp("lastMessageAt").defaultNow().notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },

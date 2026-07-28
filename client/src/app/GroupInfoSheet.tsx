@@ -191,6 +191,47 @@ export function GroupInfoSheet({
   // nothing (the server is the gate), so this only decides what to OFFER.
   const iAmAdmin = !!info.data?.members.find((m) => m.isMe)?.isAdmin;
 
+  /* ROSTER MANAGEMENT (v2.105.16, #108). None of these is optimistic: each writes a row
+     several people are looking at, so a failure painted as success would leave this
+     member believing they changed a roster everybody else still sees unchanged (the
+     v2.102.1 reasoning). Only `conversationInfo` is invalidated by the add/remove pair —
+     the thread list renders a group's name and photo, not who is in it. */
+  const [addNumber, setAddNumber] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
+  const addMember = trpc.messages.addGroupMember.useMutation({
+    onSuccess: async (res) => {
+      setAddNumber("");
+      setAddError(null);
+      toast.success(
+        res.added
+          ? `Added ${res.displayName || "them"} to the group.`
+          : `${res.displayName || "They"} were already in this group.`,
+      );
+      await utils.messages.conversationInfo.invalidate({ conversationId });
+    },
+    // The server's own wording: "not a RELAY user yet" and "already in this group" need
+    // different things from the reader, which is why they are named separately.
+    onError: (e) => setAddError(e.message || "Couldn't add them."),
+  });
+  /** Which member a Remove has been requested for, held until it is confirmed. */
+  const [removing, setRemoving] = useState<{ id: number; name: string } | null>(null);
+  const removeMember = trpc.messages.removeGroupMember.useMutation({
+    onSuccess: async () => {
+      setRemoving(null);
+      await utils.messages.conversationInfo.invalidate({ conversationId });
+    },
+    onError: (e) => {
+      setRemoving(null);
+      toast.error(e.message || "Couldn't remove them.");
+    },
+  });
+  const setCanAdd = trpc.messages.setGroupMembersCanAdd.useMutation({
+    onSuccess: async () => {
+      await utils.messages.conversationInfo.invalidate({ conversationId });
+    },
+    onError: (e) => toast.error(e.message || "Couldn't change that — nothing changed."),
+  });
+
   // The early return TOLERATES an open avatar picker, and that is the whole reason it
   // is written this way: a bare `if (!open) return null` unmounts the picker along with
   // the sheet, so a close arriving while somebody is mid-upload would tear the upload's
@@ -403,9 +444,136 @@ export function GroupInfoSheet({
                         {m.isAdmin ? "Remove admin" : "Make admin"}
                       </button>
                     )}
+                    {/* REMOVE FROM GROUP (v2.105.16). Admin-only with NO toggle — "all
+                        users can add" says add, and one member ejecting another is a
+                        different, larger power. Withheld against the CREATOR (removing
+                        them would strip the group of its own admin with no route back)
+                        and against YOURSELF (that is leaving, which does not exist yet,
+                        so the button would wear the wrong label). The server refuses all
+                        three regardless; this only avoids offering them. */}
+                    {iAmAdmin && !m.isCreator && !m.isMe && (
+                      <button
+                        type="button"
+                        disabled={removeMember.isPending}
+                        onClick={() => setRemoving({ id: m.id, name: m.displayName || "Someone" })}
+                        aria-label={`Remove ${m.displayName || "this member"} from the group`}
+                        className="shrink-0 rounded-lg border border-destructive/40 px-2 py-1 text-[11px] font-semibold text-destructive transition hover:bg-destructive/10 disabled:opacity-50"
+                      >
+                        Remove
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
+
+              {/* REMOVAL IS CONFIRMED, and the copy names what actually happens — that
+                  their messages STAY is the part somebody would otherwise assume the
+                  opposite of. Matches this file's own inline-confirm shape (the invite
+                  revoke) rather than importing a dialog, so the sheet keeps one
+                  confirmation idiom. */}
+              {removing && (
+                <div className="rounded-xl border border-border/60 bg-muted/40 p-3">
+                  <p className="text-xs">
+                    Remove {removing.name} from this group? They lose access to it. Messages
+                    they already sent stay — those are part of everybody's history here.
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        removeMember.mutate({ conversationId, identityId: removing.id })
+                      }
+                      disabled={removeMember.isPending}
+                      className="flex-1 rounded-lg bg-destructive px-3 py-2 text-xs font-semibold text-destructive-foreground disabled:opacity-60"
+                    >
+                      {removeMember.isPending ? "Removing…" : "Remove"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRemoving(null)}
+                      className="flex-1 rounded-lg border border-border px-3 py-2 text-xs font-semibold"
+                    >
+                      Keep them
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ADD SOMEBODY BY NUMBER (v2.105.16, #108).
+                  Offered to an admin, and to an ORDINARY MEMBER only when the group's own
+                  "all users can add" is on — read from the SERVER's answer rather than
+                  inferred, so the control and the rule that governs it cannot disagree. */}
+              {(iAmAdmin || info.data?.membersCanAdd) && (
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      // Text with a numeric keypad: type="number" brings spinners,
+                      // accepts "1e5" and drops a leading zero.
+                      type="text"
+                      inputMode="numeric"
+                      dir="ltr"
+                      autoComplete="off"
+                      maxLength={9}
+                      placeholder="777777"
+                      value={addNumber}
+                      onChange={(e) => {
+                        setAddNumber(e.target.value);
+                        setAddError(null);
+                      }}
+                      aria-label="Add someone to this group by their 6-digit number"
+                      className="w-32 rounded-lg border border-border bg-background px-3 py-2 text-center font-mono text-sm tracking-[0.12em] outline-none focus:border-primary"
+                    />
+                    <button
+                      type="button"
+                      disabled={!/^\d{6}$/.test(addNumber.replace(/[\s\-.]/g, "")) || addMember.isPending}
+                      onClick={() => addMember.mutate({ conversationId, number: addNumber })}
+                      className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition disabled:opacity-50"
+                    >
+                      {addMember.isPending ? "Adding…" : "Add"}
+                    </button>
+                  </div>
+                  {/* The server's own message: "not a RELAY user" and "already a member"
+                      need different things from the reader. */}
+                  {addError && <p className="text-[11px] text-destructive">{addError}</p>}
+                  <p className="text-[11px] text-muted-foreground">
+                    They'll see messages from when they join, not the history before it.
+                  </p>
+                </div>
+              )}
+
+              {/* WHO MAY ADD (v2.105.16) — admin-only, and absent rather than disabled for
+                  everyone else (the v2.103.3 rule). */}
+              {iAmAdmin && (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!!info.data?.membersCanAdd}
+                  disabled={setCanAdd.isPending}
+                  onClick={() =>
+                    setCanAdd.mutate({ conversationId, allowed: !info.data?.membersCanAdd })
+                  }
+                  className="flex w-full items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2 text-start transition hover:bg-muted/40 disabled:opacity-60"
+                >
+                  <span className="min-w-0">
+                    <span className="block text-xs font-semibold">Any member can add people</span>
+                    <span className="block text-[11px] text-muted-foreground">
+                      Removing people stays admin-only either way.
+                    </span>
+                  </span>
+                  <span
+                    aria-hidden
+                    className={`h-5 w-9 shrink-0 rounded-full p-0.5 transition ${
+                      info.data?.membersCanAdd ? "bg-primary" : "bg-muted"
+                    }`}
+                  >
+                    <span
+                      className={`block size-4 rounded-full bg-background transition ${
+                        info.data?.membersCanAdd ? "translate-x-4" : ""
+                      }`}
+                    />
+                  </span>
+                </button>
+              )}
               <p className="text-[11px] text-muted-foreground">
                 Any member can change the name, photo and status.{" "}
                 {info.data
