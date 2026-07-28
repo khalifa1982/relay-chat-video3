@@ -30,7 +30,7 @@ const schemeFromBundleId = `manus${timestamp}`;
 // compares the server manifest's buildNumber against THIS value to decide
 // whether a newer APK is available. Bump this every time you publish a new APK
 // (and set the manifest's buildNumber to match the new release).
-const ANDROID_BUILD_NUMBER = 17;
+const ANDROID_BUILD_NUMBER = 18;
 
 const env = {
   // App branding - update these values directly (do not use env vars)
@@ -47,7 +47,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.17",
+  version: "1.0.18",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -173,6 +173,13 @@ const config: ExpoConfig = {
     ],
     // Local plugin: enable Android picture-in-picture for active calls.
     "./plugins/with-android-pip.js",
+    // Local plugin: PushKit + CallKit on iOS, so a LOCKED iPhone shows the real
+    // full-screen call screen. A VoIP push is the only thing that can do that and
+    // it needs native code — PushKit has no managed-Expo equivalent. iOS only:
+    // Android already rings through the full-screen-intent notification above,
+    // and CallKeep's Android ConnectionService would add a second, competing
+    // incoming-call UI to a platform that works.
+    "./plugins/with-ios-voip.js",
   ],
   extra: {
     eas: {

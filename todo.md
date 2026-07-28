@@ -99,6 +99,60 @@
 - [x] Visually verified all phases; tsc clean + 52 tests pass
 - [ ] Bump app.config.ts to 1.0.8 / build 8 for the next APK build (pending user request)
 
+## Round 11 — PushKit + CallKit: a LOCKED iPhone shows the real call screen
+- [x] **The ask, verbatim: "Implement PushKit + CallKit for iOS".** Before this the shell had
+      `fullScreenIntent` (Android) and `interruptionLevel: "timeSensitive"` (iOS), so an iPhone got a
+      time-sensitive notification rather than the FaceTime-style screen. A VoIP push is the only thing
+      that can produce that screen, and PushKit has no managed-Expo equivalent — so it needs native
+      code, delivered as a config plugin since this project is CNG (no checked-in `ios/`).
+- [x] `plugins/with-ios-voip.js` — injects `PKPushRegistryDelegate` into `AppDelegate.swift`, registers
+      for PushKit inside `didFinishLaunchingWithOptions`, and merges the `voip` background mode.
+- [x] **THE RULE THAT MATTERS MOST, and why the report is native rather than in JS.** Since iOS 13
+      every VoIP push MUST produce a `reportNewIncomingCall` before the handler returns; miss it and
+      iOS terminates the app, miss it repeatedly and iOS **stops delivering VoIP pushes at all** — a
+      penalty that then looks like a server fault forever. When a push wakes a KILLED app the React
+      Native bridge does not exist yet, so a JS-side report would arrive too late or never. The
+      injected handler reports to CallKit FIRST and forwards to JS second; a mutation swapping that
+      order bites.
+- [x] **It FAILS LOUDLY.** If the AppDelegate anchor is not found the plugin THROWS at prebuild
+      instead of returning the file untouched. A silent no-op yields an app that builds, installs,
+      looks correct and never rings, with nothing reporting why — the class of failure this project
+      keeps closing.
+- [x] **iOS ONLY, deliberately.** Android already rings through the existing FCM/Expo path plus the
+      full-screen-intent notification. CallKeep's Android ConnectionService would add a second,
+      competing incoming-call UI plus permissions to a platform that works — the same discipline the
+      iOS-only Expo-token switch used, so fixing one platform cannot break the other. A test forbids
+      the plugin naming any Android mod.
+- [x] **A PUSHKIT TOKEN IS NOT THE ALERT TOKEN, and that is the sharpest detail here.** iOS issues
+      TWO hex tokens: PushKit (topic `<bundle>.voip`) and the ordinary alert token (topic
+      `<bundle>`). They are indistinguishable by shape, so `hooks/use-voip-callkit.ts` posts
+      `kind: "apns-voip"` alongside it — the one label the server trusts, precisely because the shape
+      cannot carry it and mislabelling costs only this device its own ring. Sending a VoIP push to an
+      ALERT token earns `BadDeviceToken`, which the server reads as stale and PRUNES, so getting this
+      wrong DESTROYS the registration rather than merely failing.
+- [x] **The native modules are loaded OPTIONALLY.** They exist only in a real prebuild — not Expo Go,
+      not web, not a unit test — so every use is behind a guarded require. An unguarded one would take
+      the whole app down at startup, and the app is more useful without ringing than not launching.
+- [x] **The shell does not try to join the call itself.** CallKit's Answer button brings the WebView
+      forward and refreshes the camera; the web app's own pending-ring delivery is what connects. One
+      implementation of "answer", not two that can diverge.
+- [x] `tests/voip-callkit.test.ts` (27). **VERIFIED AGAINST A REAL PREBUILD, not only a fixture**:
+      `expo prebuild --platform ios` was run and the generated `ios/RELAY/AppDelegate.swift` inspected
+      — the imports land after the existing ones, the delegate extension appears exactly once, the
+      report-before-forward order holds, `UIBackgroundModes` reads `['audio','voip','remote-notification']`,
+      and a SECOND prebuild changes nothing. Two tests read that real artefact when present and skip
+      in CI, where `ios/` is gitignored. **All 15 tripwires verified by MUTATION**, sources
+      byte-identical afterwards.
+- [x] **Dead code found by that real prebuild and removed.** The extension carried a
+      `voipRegistration()` wrapper nothing called — registration happens straight from
+      `didFinishLaunchingWithOptions`. A wrapper nothing calls reads as the registration path, and the
+      next person to change this would edit the dead one and wonder why the phone stopped ringing.
+- [x] **NOT VERIFIED ON A DEVICE, said plainly.** No Mac and no iPhone here, so the injected Swift has
+      never been compiled and no handset has rung. What is proven: the transform, its idempotency, its
+      loud failure, and that Expo's own prebuild accepts it. The build itself needs Codemagic.
+- [ ] Owner-side: upload the APNs key to EAS (or keep using the fleet's `.p8` — the server sends VoIP
+      pushes directly either way) and run a Codemagic iOS build from this branch.
+
 ## Round 10 — UI/UX match-to-web + footer Beta/Installed wording
 - [ ] Footer: show "Beta {bundled appVersion}" line (the app build shipped)
 - [ ] Footer: show "Installed {device versionName} (build N)" line clearly

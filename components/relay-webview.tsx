@@ -25,6 +25,7 @@ import { useCallSession } from "@/hooks/use-call-session";
 import { useCallNotifications } from "@/hooks/use-call-notifications";
 import { useBackgroundPresence } from "@/hooks/use-background-presence";
 import { usePushToken } from "@/hooks/use-push-token";
+import { useVoipCallKit } from "@/hooks/use-voip-callkit";
 
 // Palette aligned to the live RELAY web app (oklch(0.12 0.008 245) background
 // ~ #050608) so the native shell's splash/error chrome blends seamlessly with
@@ -135,6 +136,25 @@ export function RelayWebView() {
       },
     });
 
+  // PushKit + CallKit (iOS). A SECOND token, and a DIFFERENT one: only the
+  // PushKit token can be addressed on the `<bundle>.voip` topic, and only a VoIP
+  // push shows the real full-screen call screen on a LOCKED iPhone. It is posted
+  // with `kind: "apns-voip"` because both of iOS's tokens are hex and nothing
+  // downstream can tell them apart by shape. A no-op on Android, which already
+  // rings through the full-screen-intent notification above.
+  const { onWebReady: sendVoipTokenOnReady } = useVoipCallKit(webViewRef, {
+    onAnswer: () => {
+      // CallKit's Answer button. The shell deliberately does not try to join the
+      // call itself — it does not know about rooms. It brings the WebView forward
+      // and refreshes the camera; the web app's own pending-ring delivery is what
+      // connects, which keeps one implementation of "answer" rather than two.
+      reacquireCamera();
+    },
+    onEnd: () => {
+      void dismissIncomingCall();
+    },
+  });
+
   // --- Web-content version change detection ---
   const [webUpdateAvailable, setWebUpdateAvailable] = useState(false);
   const webVersionRef = useRef<string | null>(null);
@@ -218,6 +238,10 @@ export function RelayWebView() {
         // was dropped and nothing anywhere said so.
         case "web-ready":
           sendPushTokenOnReady();
+          // The PushKit token rides the SAME handshake. It is a separate token on
+          // a separate transport, so a shell that posted only one of the two
+          // would leave either notifications or ringing broken.
+          sendVoipTokenOnReady();
           break;
         case "online":
           setOnline(msg.online);
@@ -233,6 +257,7 @@ export function RelayWebView() {
       showIncomingCall,
       dismissIncomingCall,
       showIncomingMessage,
+      sendVoipTokenOnReady,
       sendPushTokenOnReady,
     ],
   );
