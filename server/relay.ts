@@ -120,6 +120,7 @@ import {
   type PersistedRoom,
 } from "./roomStore";
 import { mintRoomCap, verifyRoomCap } from "./roomCapability";
+import { verifyGroupCallSeed } from "./groupCallSeed";
 
 // TURN credentials are read on every call so the operator can add them via
 // `webdev_request_secrets` without restarting the server, and so unit tests
@@ -232,6 +233,16 @@ export interface RoomMeta {
    * applyHydratedRooms and only read for HYDRATED_GRACE_MS.
    */
   hydratedAt?: number;
+  /**
+   * #113 — pins the GROUP this call was started for lists as its ADMINS, so each
+   * of them becomes a CO-HOST when they join. Captured from a signed seed at room
+   * creation (see `server/groupCallSeed.ts`); absent for a 1:1, a party line, an
+   * ad-hoc number-picker group call, and any dial whose seed did not verify.
+   *
+   * ONE-WAY: this is READ to grant hostship and is never written back to a group
+   * role. Nothing in this file imports the role writer.
+   */
+  groupAdminPins?: Set<string>;
 }
 
 /**
@@ -425,7 +436,48 @@ function joinRoomMember(reg: RelayRegistry, roomId: string, pin: string) {
   // Busy-line mirror (v2.91): a coalesced next-tick sync, so an accept that
   // joins + flips roomMeta.accepted in the same handler is observed settled.
   touchBusyState();
+  // #113: if this room was started FOR A GROUP and this pin is one of its
+  // admins, they join as a co-host. Placed here rather than at the accept /
+  // admit / rejoin sites so no path can forget it — every route into a room
+  // goes through this function.
+  seedCohostOnJoin(reg, roomId, pin);
   markRoomDirty(roomId); // Round 11: shadow the room into Redis (leader only)
+}
+
+/**
+ * #113 — read a signed group-call seed into the admin pin set, or undefined.
+ *
+ * A thin wrapper so the room-creation site stays synchronous and readable, and so
+ * the ONE-WAY property is inspectable in one place: this reads a signature and
+ * returns a set of pins. It performs no database access and writes nothing.
+ */
+function seededGroupAdmins(callerPin: string, seed: unknown): Set<string> | undefined {
+  const claim = verifyGroupCallSeed(seed, callerPin);
+  if (!claim || claim.adminPins.length === 0) return undefined;
+  return new Set(claim.adminPins);
+}
+
+/**
+ * #113 — a group ADMIN who joins a call started for that group becomes a CO-HOST.
+ *
+ * ADDITIVE ONLY, and that is what makes it safe: it never demotes anybody, never
+ * moves the host, and never grants anything to a pin the seed did not name. The
+ * room's creator stays its host — they are present and they started it — and
+ * `roleOf` already treats a co-host as a moderator, so an admin gets the full set
+ * of powers the ask is about without any reshuffling.
+ *
+ * HOST SUCCESSION NEEDS NO CHANGE, and that is worth saying: `pickSuccessor`
+ * already prefers a CONNECTED co-host, so a departing host now hands the room to a
+ * group admin who is actually in the call — for free, and without succession ever
+ * consulting group roles (which would risk promoting an admin who is absent).
+ */
+function seedCohostOnJoin(reg: RelayRegistry, roomId: string, pin: string): void {
+  const meta = reg.roomMeta.get(roomId);
+  if (!meta?.groupAdminPins?.has(pin)) return;
+  if (meta.hostPin === pin) return; // host outranks co-host; nothing to add
+  if (meta.cohosts.has(pin)) return;
+  meta.cohosts.add(pin);
+  markRoomDirty(roomId);
 }
 
 /** Fully tear down a room (abandoned, or last member explicitly left). */
@@ -1280,6 +1332,9 @@ export function snapshotRoom(reg: RelayRegistry, roomId: string): PersistedRoom 
     members,
     hostPin: meta.hostPin,
     cohosts: Array.from(meta.cohosts),
+    // #113 — omitted when absent, so a pre-feature record and a personal call
+    // serialize byte-identically to before.
+    ...(meta.groupAdminPins?.size ? { groupAdminPins: Array.from(meta.groupAdminPins) } : {}),
     startedAt: meta.startedAt,
     answeredAt: meta.answeredAt,
     lastActiveAt: meta.lastActiveAt,
@@ -1332,6 +1387,7 @@ export function applyHydratedRooms(reg: RelayRegistry, rooms: readonly Persisted
       roster: new Map(rec.roster),
       hostPin: rec.hostPin,
       cohosts: new Set(rec.cohosts),
+      ...(rec.groupAdminPins?.length ? { groupAdminPins: new Set(rec.groupAdminPins) } : {}),
       hydratedAt: Date.now(),
     });
     // Every hydrated room starts with zero connected members, so arm the
@@ -1960,6 +2016,12 @@ export function handleMessage(
               roster: new Map([[callerPin, me.name]]),
               hostPin: callerPin, // the creator is the host
               cohosts: new Set(),
+              /* #113: the group's admins, from a seed the FLEET signed for THIS
+                 caller's pin. The subject comes from the connection, never the
+                 message, so a leaked seed is useless to another number; a bad,
+                 expired or unsigned seed yields undefined and the call proceeds
+                 exactly as it did before this feature existed. */
+              groupAdminPins: seededGroupAdmins(callerPin, (msg as { seed?: unknown }).seed),
             });
             safeSend(callerSocket, { type: "room", roomId: rid, selfRole: "host", hostPin: callerPin, cap: mintRoomCap(rid, callerPin, "host") });
             // On the LiveKit path, the caller joins the SFU room immediately (alone)

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type ReactNode } from "react";
 import { useLocation, useSearch } from "wouter";
+import { useRelayEngine } from "@/app/RelayEngine";
 import { toast } from "sonner";
 import {
   ChevronLeft,
@@ -941,6 +942,40 @@ function ConversationView({ conversationId }: { conversationId: number }) {
    */
   const iAmGroupAdmin = !!(isGroup && infoQuery.data?.members.find((mem) => mem.isMe)?.isAdmin);
 
+  /* CALL THE GROUP (#113, v2.105.7).
+   *
+   * The ROUND TRIP IS THE POINT, and it is why this is not just
+   * `engine.dialGroup(memberNumbers)`. The server resolves two things the client
+   * must not assert: that I am really in this group, and WHO ITS ADMINS ARE. It
+   * hands back the numbers to ring plus a signed seed, and the seed — not a
+   * client-supplied list — is what makes those admins co-hosts of the room.
+   *
+   * The dial goes ahead even when `hostSeed` is null (a group with no admin, or a
+   * fleet with no signing secret): the call is the point and the seeding is the
+   * refinement, so its absence must not cost anybody a call. */
+  const engine = useRelayEngine();
+  const startGroupCallMutation = trpc.messages.startGroupCall.useMutation();
+  async function startGroupCall(voice: boolean) {
+    if (!isGroup || !thread) return;
+    try {
+      const res = await startGroupCallMutation.mutateAsync({
+        conversationId: thread.conversationId,
+      });
+      if (res.targets.length === 0) {
+        toast.error("Nobody else in this group has a number to call.");
+        return;
+      }
+      const ok = engine.dialGroup(
+        res.targets.map((t) => t.number),
+        { voice, seed: res.hostSeed },
+      );
+      if (!ok) toast.error("Couldn't start the call.");
+      else setLocation("/app/call");
+    } catch (e) {
+      toast.error((e as Error)?.message || "Couldn't start the call.");
+    }
+  }
+
   const memberById = useMemo(() => {
     const m = new Map<number, { name: string; number: string; avatarUrl: string | null }>();
     for (const mem of infoQuery.data?.members ?? []) {
@@ -1834,6 +1869,34 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               title="Video call"
               size={34}
               onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(thread.peerNumber)}&video=1`)}
+            >
+              <Video className="size-4" />
+            </AccentCircle>
+          </>
+        )}
+        {/* CALL THIS GROUP (#113, v2.105.7) — the precondition the ask needed.
+            Until now a group conversation had NO call button at all (both of the
+            buttons above are gated on `!isGroup && peerNumber`), so there was no
+            way to start a call AS a group and therefore nothing for group roles to
+            seed. The picker on the Group Call screen dials arbitrary NUMBERS and
+            carries no conversation, which is why it cannot do this. */}
+        {isGroup && thread && (
+          <>
+            <AccentCircle
+              rgb="34,197,94"
+              hex="#22c55e"
+              title="Call the group"
+              size={34}
+              onClick={() => void startGroupCall(true)}
+            >
+              <Phone className="size-4" />
+            </AccentCircle>
+            <AccentCircle
+              rgb="56,189,248"
+              hex="#38bdf8"
+              title="Video call the group"
+              size={34}
+              onClick={() => void startGroupCall(false)}
             >
               <Video className="size-4" />
             </AccentCircle>

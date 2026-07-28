@@ -2368,7 +2368,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // room, so the first to accept joins and the rest keep ringing (call-waiting
   // style). We gate the extra invites on the server's `room` confirmation so a
   // fresh group dial can't race into two rooms.
-  async function programmaticGroupDial(targets: string[], opts?: { voice?: boolean }): Promise<boolean> {
+  async function programmaticGroupDial(
+    targets: string[],
+    opts?: { voice?: boolean; seed?: string | null },
+  ): Promise<boolean> {
     if (!me.pin) return false;
     const deduped = Array.from(
       new Set(
@@ -2406,7 +2409,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const [first, ...rest] = clean;
       pendingGroupInvites = rest;
       groupDialOutstanding = new Set(clean);
-      sendWS({ type: "invite", to: first, video: camOn });
+      /* #113 — the seed rides the invite that CREATES the room, and only that one:
+         the room is created once, so the later invites have nothing to seed. It is
+         a capability the fleet signed for our own pin, not an assertion, so a
+         client that omits or forges it simply gets a call with no co-hosts. */
+      sendWS({ type: "invite", to: first, video: camOn, ...(opts?.seed ? { seed: opts.seed } : {}) });
     }
     toast("Starting group call (" + clean.length + ")…");
     return true;
@@ -6711,7 +6718,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       void programmaticDial(target, opts);
       return true;
     },
-    dialGroup(targets: string[], opts?: { voice?: boolean }): boolean {
+    dialGroup(targets: string[], opts?: { voice?: boolean; seed?: string | null }): boolean {
       if (!me.pin) return false;
       const valid = targets.filter(t => /^\d{6}$/.test(String(t)) && t !== me.pin);
       if (valid.length === 0) return false;

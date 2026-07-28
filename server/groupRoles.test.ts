@@ -331,7 +331,15 @@ describe("v2.104.0 — the router names each refusal, and checks nothing itself"
     // `createGroup` swept in the procedures between, one of which has its own
     // `code: "FORBIDDEN"` — so deleting THIS procedure's membership throw left the pin
     // satisfied by a stranger's and the mutation SURVIVED.
-    const proc = ROUTERS.slice(ciAt, ROUTERS.indexOf("  list: publicProcedure", ciAt));
+    // REWRITTEN v2.105.7 to the NEXT PROCEDURE, whichever it is, rather than the
+    // one that happened to follow: #113 inserted `startGroupCall` between these two,
+    // which grew the window past its own 3000-char sanity bound. Naming the new
+    // neighbour would just move the fragility one insertion along, so the end anchor
+    // is now "the next procedure declaration" and cannot go stale again.
+    const nextProc = ROUTERS.indexOf(": publicProcedure", ciAt + 40);
+    expect(nextProc).toBeGreaterThan(ciAt);
+    // Back up to that declaration's own line start so the slice ends cleanly.
+    const proc = ROUTERS.slice(ciAt, ROUTERS.lastIndexOf("\n", nextProc));
     expect(proc.length).toBeGreaterThan(400);
     expect(proc.length).toBeLessThan(3000); // it is ONE procedure, not several
     expect(proc).toMatch(/isCreator:/);

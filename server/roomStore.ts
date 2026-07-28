@@ -98,6 +98,17 @@ export interface PersistedRoom {
    *  history roster, which must survive a leader change or the call is logged
    *  with only whoever happened to still be present. */
   roster: Array<[string, string]>;
+  /**
+   * #113 — the admins of the GROUP this call was started for, so a leader change
+   * does not silently strip moderation from an admin who joins afterwards.
+   *
+   * OPTIONAL, deliberately: a record written by a not-yet-updated instance
+   * mid-rollout simply has no field, and the room comes back without seeding —
+   * which is exactly today's behaviour, not a broken room. Round 11's wire format
+   * stays additive for the same reason the bus envelope does (v2.99.49): a shape
+   * change would make every older instance drop every record during a deploy.
+   */
+  groupAdminPins?: string[];
 }
 
 const isStr = (v: unknown): v is string => typeof v === "string";
@@ -123,6 +134,14 @@ export function isPersistedRoom(v: unknown): v is PersistedRoom {
   }
   if (o.hostPin !== null && !(isStr(o.hostPin) && /^\d{6}$/.test(o.hostPin))) return false;
   if (!Array.isArray(o.cohosts) || o.cohosts.some((c) => !isStr(c) || !/^\d{6}$/.test(c))) return false;
+  // Absent is fine (a pre-#113 record). Present must be a clean pin list —
+  // hydration feeds this into the live registry, where it GRANTS moderation, so a
+  // malformed entry drops the whole record rather than being partially applied.
+  if (o.groupAdminPins !== undefined) {
+    if (!Array.isArray(o.groupAdminPins)) return false;
+    if (o.groupAdminPins.some((c) => !isStr(c) || !/^\d{6}$/.test(c))) return false;
+    if (o.groupAdminPins.length > 32) return false;
+  }
   if (!isNum(o.startedAt) || !isNum(o.lastActiveAt)) return false;
   if (o.answeredAt !== null && !isNum(o.answeredAt)) return false;
   if (o.dialedNumber !== null && !isStr(o.dialedNumber)) return false;

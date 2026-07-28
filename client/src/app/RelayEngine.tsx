@@ -23,7 +23,7 @@ interface RelayEngineValue {
    *  `opts.voice` starts a voice call (camera off). */
   dial: (number: string, opts?: { voice?: boolean; displayName?: string }) => boolean;
   /** Start a GROUP call — ring up to `maxParticipants` numbers into one room. */
-  dialGroup: (numbers: string[], opts?: { voice?: boolean }) => boolean;
+  dialGroup: (numbers: string[], opts?: { voice?: boolean; seed?: string | null }) => boolean;
   /** Max participants the active transport supports (SFU 10 / mesh 6). The
    *  group-call picker caps selection to this so it never rings more than can
    *  connect. Defaults to 10 until the engine registers. */
