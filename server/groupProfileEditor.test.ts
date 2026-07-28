@@ -194,10 +194,45 @@ describe("the sheet itself", () => {
     expect(SHEET).toMatch(/<Users className="size-10" \/>/);
   });
 
-  it("the members list is read-only — adding people stays the call screen's job", () => {
-    // Two ways to change who is in a group is two places that can disagree about it.
-    expect(codeOnly(SHEET)).not.toMatch(/addMember|removeMember|kick/i);
+  it("the roster is managed here, through the ONE conversation-membership writer", () => {
+    // REWRITTEN v2.105.16 (#108). v2.102.1 pinned this list as READ-ONLY, and the reason
+    // it gave is the one that still matters: "two ways to change who is in a group is two
+    // places that can disagree about it." The owner asked for add/remove by hand, so the
+    // list is no longer read-only — but that concern is honoured rather than dropped,
+    // because the two things are different domains: the CALL screen's add-person puts
+    // somebody in a signaling ROOM, while this puts them in the CONVERSATION, and
+    // conversation membership still has exactly one writer (`admitGroupMember`), asserted
+    // in groupInvite.test.ts.
+    //
+    // So what this pin now checks is that the sheet reaches the SERVER for every roster
+    // change and invents no membership rule of its own.
     expect(SHEET).toMatch(/trpc\.messages\.conversationInfo\.useQuery/);
+    expect(SHEET).toMatch(/trpc\.messages\.addGroupMember\.useMutation/);
+    expect(SHEET).toMatch(/trpc\.messages\.removeGroupMember\.useMutation/);
+    expect(SHEET).toMatch(/trpc\.messages\.setGroupMembersCanAdd\.useMutation/);
+    // Nothing is optimistic: each write invalidates and re-reads rather than painting a
+    // roster change this member cannot know landed for everybody else.
+    for (const m of ["addMember", "removeMember", "setCanAdd"]) {
+      const at = SHEET.indexOf(`const ${m} = trpc.messages.`);
+      expect(at, `${m} should be declared`).toBeGreaterThan(-1);
+      const decl = SHEET.slice(at, at + 900);
+      expect(decl, `${m} re-reads rather than guessing`).toMatch(
+        /utils\.messages\.conversationInfo\.invalidate/,
+      );
+      expect(decl, `${m} is not optimistic`).not.toMatch(/onMutate/);
+    }
+  });
+
+  it("the destructive half is admin-only and never offered where it cannot work", () => {
+    // Removing is admin-only with NO toggle, and withheld against the creator (their
+    // adminship is derived from having made the group, so no write could restore it) and
+    // against yourself (that is leaving, which does not exist yet). The server refuses all
+    // three regardless; this is about not offering them.
+    expect(SHEET).toMatch(/\{iAmAdmin && !m\.isCreator && !m\.isMe && \(/);
+    // Adding widens to a plain member ONLY on the server's own answer, never inferred.
+    expect(SHEET).toMatch(/\{\(iAmAdmin \|\| info\.data\?\.membersCanAdd\) && \(/);
+    // And the toggle itself stays admin-only.
+    expect(SHEET).toMatch(/\{iAmAdmin && \(\s*\n\s*<button[\s\S]{0,200}role="switch"/);
   });
 
   it("closing the sheet cannot unmount an OPEN avatar picker", () => {

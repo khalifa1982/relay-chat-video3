@@ -11239,6 +11239,94 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.16 — add and remove group members by hand, plus "all users can add" (2026-07-28)
+
+- [x] **#108's ROSTER HALF** (owner's group screenshot batch: *"an 'all users can add' toggle … add by
+      pin, or by contact name"*). Until now a group's membership was fixed at creation, with an
+      invite link (v2.105.9) the only way in afterwards — so there was no way to add one person, and
+      no way to remove anybody at all.
+- [x] **THE ONE HAZARD WORTH NAMING FIRST, because the tempting implementation is a
+      CROSS-REQUEST AUTHORITY LEAK.** `MEMBER_CAPABILITIES` is a MODULE-LEVEL `Set`, so
+      `MEMBER_CAPABILITIES.add("add-member")` when a group allows it would grant the capability in
+      **EVERY group for the life of the process** — and no single-group test would ever show it. The
+      widening is therefore a per-call comparison against the conversation's own column, `add-member`
+      stays OUT of the static set, and a test forbids `.add` / `.delete` / `.clear` on it outright.
+      A mutation that reinstates the mutation bites.
+- [x] **ONLY AN EXPLICIT `true` WIDENS IT.** NULL is what every pre-release group carries and has to
+      keep meaning admin-only, so falsy-is-safe — the same direction `checkGroupPermission` already
+      takes. The widening also sits AFTER the static member check and BEFORE the admin refusal: put
+      after the refusal it could never be reached by a non-admin, i.e. by the only caller it exists
+      for, and both boundaries are pinned by index.
+- [x] **`remove-member` HAS NO TOGGLE AND DELIBERATELY SO.** "All users can add" says add, and it is
+      taken literally: one member able to eject another is a different, larger power nobody asked
+      for. The toggle column is consulted for exactly ONE capability, asserted by count.
+- [x] **ONE WRITER FOR "SOMEBODY BECOMES A MEMBER AFTER THE GROUP EXISTED".** This is the SECOND
+      route in — the first is an invite link — and the two differ only in how the caller earned the
+      right: a signed token, or a capability check. The WRITE is identical, and "which message does a
+      new member start seeing from" is exactly the kind of rule that must have a single owner, since
+      a second copy is how the two routes come to disagree about reading the backlog. So
+      `joinGroupByInvite` is now a thin alias over the extracted `admitGroupMember`, and a test
+      asserts the insert-with-watermark occurs in exactly one place.
+- [x] **ADDING IS NOT A ROUTE AROUND A BLOCK.** Putting somebody in a group is a way to put messages
+      in front of them, which is precisely what v2.98.6/E2 closed for `openThread` and `createGroup`.
+      A blocked adder is refused, and — the part that matters — the refusal is the SAME
+      `TRPCError` OBJECT as "that number isn't a RELAY user yet", reused rather than duplicated, so
+      the two cannot drift into being distinguishable. Two messages would tell somebody they had been
+      blocked, which is the one thing a block must not announce.
+- [x] **THE NUMBER IS SHAPE-CHECKED, NOT `\D`-STRIPPED**, because stripping reads `7a7b7c7d7e7f` as
+      777777 and would add a stranger (the v2.99.75 reasoning).
+- [x] **TWO REMOVALS ARE WRONG WHOEVER ASKS, AND BOTH LIVE IN THE WRITER** so no future call site can
+      forget them. **THE CREATOR CANNOT BE REMOVED**: their adminship is DERIVED from having made the
+      group, so removing them strips it with no route back — and in a group whose only admin is the
+      derived creator it leaves the group permanently adminless, which is the state v2.104.0 chose
+      not to add a fallback for. **NOBODY REMOVES THEMSELVES**: that is leaving, a different act with
+      different consequences, and it does not exist yet — so accepting it would ship a leave button
+      wearing a remove button's label. Refused BEFORE any read, since it needs no database to know.
+- [x] **THEIR MESSAGES STAY.** The rows belong to everybody in the thread, not only to their author —
+      the same reasoning that keeps a group alive while anyone remains and that keeps a third party's
+      contact row through a purge. Removing withdraws ACCESS; it does not rewrite everybody else's
+      history. The confirmation copy says so, because that is the part somebody would assume the
+      opposite of. The DELETE is scoped to BOTH halves of the key, or it would remove that identity
+      from every conversation.
+- [x] **REMOVING A NON-MEMBER IS A SUCCESS**, so a double-tap or a retry after a dropped response is
+      harmless — "they are not in the group" is exactly the state the caller asked for.
+- [x] **NOTHING IS OPTIMISTIC.** Each write touches a row several people are looking at, so a failure
+      painted as success would leave this member believing they changed a roster everybody else still
+      sees unchanged (the v2.102.1 reasoning); a test asserts each mutation re-reads and that none
+      carries an `onMutate`.
+- [x] `server/groupRoster.test.ts` (31); **all 28 tripwires verified by MUTATION** from byte-exact
+      backups off a confirmed-GREEN baseline, sources byte-identical afterwards.
+- [x] **TWO SURVIVORS, BOTH REAL GAPS IN MY OWN TESTS, each fixed then re-verified** — and both are
+      the same class, pinning a rule's PRESENCE rather than its USE. (1) Replacing the remove gate
+      with a literal `{ok: true}` changed nothing any assertion could see: the tests checked WHERE the
+      creator/self rules live and never that authority was checked at all, so **the admin-only
+      property of removal was completely unasserted**. Now pinned on the call, its position, AND with
+      a constant-true gate forbidden by name, because pinning the call alone let the literal straight
+      through. (2) Pointing the row's Remove button directly at `removeMember.mutate` left the
+      confirmation markup in the file — so the copy assertions still passed while the confirmation had
+      become **unreachable dead code**. Now the button is asserted to route through `setRemoving`, and
+      the write is asserted to occur exactly once.
+- [x] **TWO BUGS IN MY OWN TESTS caught before the mutation run**: a `membersCanAdd` occurrence count
+      of 1 that read 3, because the SELECT projection mentions the column twice more and is not a
+      second decision (now counted on `convo.`); and a `fnBody` floor of 60 characters that failed on
+      `joinGroupByInvite`, which is legitimately a one-line alias (the floor is now a parameter, kept
+      so a locator that matched the wrong brace still cannot pass by reading nothing).
+- [x] **TWO PRE-EXISTING PINS REWRITTEN TO THE PROPERTY.** `groupProfileEditor.test.ts` asserted the
+      members list was READ-ONLY — i.e. it pinned exactly what the owner asked to change — and the
+      reason it gave is the one still worth keeping: *"two ways to change who is in a group is two
+      places that can disagree about it."* That is honoured rather than dropped, because the two are
+      different domains: the CALL screen's add-person puts somebody in a signaling ROOM, this puts
+      them in the CONVERSATION, and conversation membership still has exactly one writer. And
+      `groupRoles.test.ts` bounded `conversationInfo` at `< 3000` characters as a proxy for "it is ONE
+      procedure" — one added field with a comment took it to 3580 and broke the pin while saying
+      nothing about whether the slice had over-run, so it now COUNTS procedure declarations and
+      cannot go stale on a legitimate addition.
+- [x] **NOT VERIFIED AGAINST A DATABASE, said plainly**: no MySQL is reachable here, so the
+      statements are proven correct by reading and pinned, but nobody has been added to a group,
+      removed from one, or watched the toggle change what a member is offered.
+- [x] **NOT DONE from #108**: the 4-digit group lock. One additive nullable column, no new
+      dependency, no new env var. 3641 tests.
+
 ## v2.105.15 — an admin can suggest how a guest registers, and cannot register them (2026-07-28)
 
 - [x] **#111 SHIPS, AND IT SHIPS BY BEING NARROWER THAN THE THING v2.99.99 REFUSED** (owner:

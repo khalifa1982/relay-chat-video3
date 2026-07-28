@@ -166,6 +166,15 @@ import { hasRecentApprovedSession, pendingSessionsForUser, sessionApprovalBySid,
 // v2.105.15 — the admin's registration SUGGESTION for a guest. `activeRegInvite` is
 // the one reader of the expiry rule, shared by whoami and the admin panel.
 import { activeRegInvite, clearRegInvite, inviteGuestRegistration } from "./v2db";
+// v2.105.16 — group roster management. `admitGroupMember` is the ONE writer for
+// "somebody becomes a member after the group existed", shared with the invite-link
+// route so the history watermark cannot come to mean two different things.
+import {
+  admitGroupMember,
+  getGroupMembersCanAdd,
+  removeGroupMember,
+  setGroupMembersCanAdd,
+} from "./v2db";
 import { setSessionCookie, rememberToTtlMs, LOCAL_SESSION_COOKIE, newSessionId, readLocalSession,
   unlockPasswordLogin,
 } from "./authLocal";
@@ -2013,6 +2022,16 @@ export const v2MessagesRouter = router({
          *  none" instead of offering a control that always fails. False for every group
          *  created before v2.102.0, which have no creator recorded. */
         hasAdmin: storedAdmins.length > 0 || creatorIsMember,
+        /**
+         * "All users can add" (v2.105.16). On the wire so a MEMBER's UI knows whether to
+         * offer the Add control at all, rather than showing one the server will refuse.
+         *
+         * Only an explicit `true` reads as on — NULL is what every pre-release group
+         * carries and has to keep meaning admin-only, which is the same falsy-is-safe
+         * direction `checkGroupPermission` takes. Both read the column, and neither
+         * infers the other's answer.
+         */
+        membersCanAdd: (await getGroupMembersCanAdd(input.conversationId)) === true,
       };
     }),
 
@@ -2149,6 +2168,174 @@ export const v2MessagesRouter = router({
         });
       }
       return { ok: true };
+    }),
+
+  /**
+   * ADD SOMEBODY TO A GROUP BY THEIR 6-DIGIT NUMBER (v2.105.16, #108).
+   *
+   * Admin-only unless the group's own "all users can add" is on — that decision lives in
+   * `checkGroupPermission`, so this procedure never has to know which it is.
+   *
+   * THE BLOCK CHECK IS THE PART WORTH BEING CAREFUL ABOUT. Adding somebody to a group is
+   * a way to put messages in front of them, so it must not become a route around a block
+   * they placed — the same reasoning that gated `openThread` and `createGroup` in
+   * v2.98.6/E2. It refuses IDENTICALLY to "no such number", so the block is never
+   * revealed to the person it was placed against.
+   *
+   * The number resolves through the ordinary directory, and an unknown one answers the
+   * same way as a blocked one for that reason.
+   */
+  addGroupMember: publicProcedure
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        number: z.string().min(1).max(32),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      directoryGate(ctx);
+      const gate = await checkGroupPermission(input.conversationId, me.id, "add-member");
+      if (!gate.ok) {
+        const message =
+          gate.reason === "not-a-group"
+            ? "That's a direct chat — there's nobody to add to it."
+            : gate.reason === "not-an-admin"
+              ? gate.hasAdmin
+                ? "Only a group admin can add people, unless the group lets every member do it."
+                : "This group was created before admins existed, so nobody can add people to it."
+              : gate.reason === "unavailable"
+                ? "Couldn't check that group just now."
+                : "That group isn't yours.";
+        throw new TRPCError({
+          code: gate.reason === "unavailable" ? "INTERNAL_SERVER_ERROR" : "FORBIDDEN",
+          message,
+        });
+      }
+
+      const digits = (input.number || "").replace(/[\s\-.]/g, "");
+      const target = /^\d{6}$/.test(digits) ? await getIdentityByNumber(digits) : null;
+      // ONE message for "no such number" and for "they blocked you", so this cannot be
+      // used to discover either. Adding yourself is refused separately, because that one
+      // reveals nothing and a distinct message is genuinely more useful.
+      const notFound = new TRPCError({
+        code: "NOT_FOUND",
+        message: "That number isn't a RELAY user yet.",
+      });
+      if (!target) throw notFound;
+      if (target.id === me.id) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "You're already in this group." });
+      }
+      if (await isNumberBlockedBy(target.id, me.number).catch(() => false)) throw notFound;
+
+      const res = await admitGroupMember({
+        conversationId: input.conversationId,
+        identityId: target.id,
+      });
+      if (!res.ok) {
+        throw new TRPCError({
+          code: res.reason === "unavailable" ? "INTERNAL_SERVER_ERROR" : "BAD_REQUEST",
+          message: "Couldn't add them to that group just now.",
+        });
+      }
+      // `joined: false` means they were ALREADY a member, which is a success and not
+      // worth an error — but the client says so rather than claiming a fresh add.
+      return { ok: true as const, added: res.joined, displayName: target.displayName };
+    }),
+
+  /**
+   * REMOVE A MEMBER (v2.105.16, #108). Admin-only UNCONDITIONALLY — there is no toggle,
+   * because "all users can add" says add and one member ejecting another is a different,
+   * larger power nobody asked for.
+   *
+   * The removals that are wrong whoever asks — the creator, and yourself — are refused in
+   * `removeGroupMember`, not here, so no call site can forget them.
+   */
+  removeGroupMember: publicProcedure
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        identityId: z.number().int().positive(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const gate = await checkGroupPermission(input.conversationId, me.id, "remove-member");
+      if (!gate.ok) {
+        const message =
+          gate.reason === "not-a-group"
+            ? "That's a direct chat — there's nobody to remove from it."
+            : gate.reason === "not-an-admin"
+              ? gate.hasAdmin
+                ? "Only a group admin can remove people."
+                : "This group was created before admins existed, so nobody can remove people from it."
+              : gate.reason === "unavailable"
+                ? "Couldn't check that group just now."
+                : "That group isn't yours.";
+        throw new TRPCError({
+          code: gate.reason === "unavailable" ? "INTERNAL_SERVER_ERROR" : "FORBIDDEN",
+          message,
+        });
+      }
+      const res = await removeGroupMember({
+        conversationId: input.conversationId,
+        identityId: input.identityId,
+        actingIdentityId: me.id,
+      });
+      if (!res.ok) {
+        // Each of these needs a different next step, so each is named.
+        const map: Record<typeof res.reason, { code: "BAD_REQUEST" | "INTERNAL_SERVER_ERROR"; message: string }> = {
+          "not-found": { code: "BAD_REQUEST", message: "No group with that id." },
+          "not-a-group": { code: "BAD_REQUEST", message: "That's a direct chat." },
+          "is-creator": {
+            code: "BAD_REQUEST",
+            message:
+              "The person who created this group can't be removed — that would leave it with no admin and no way to appoint one.",
+          },
+          self: {
+            code: "BAD_REQUEST",
+            message: "Removing yourself isn't the same as leaving a group, and leaving isn't built yet.",
+          },
+          unavailable: { code: "INTERNAL_SERVER_ERROR", message: "Couldn't update that group just now." },
+        };
+        const m = map[res.reason];
+        throw new TRPCError({ code: m.code, message: m.message, cause: res.reason });
+      }
+      return { ok: true as const, removed: res.removed };
+    }),
+
+  /**
+   * Turn "all users can add" on or off (v2.105.16). ADMIN-ONLY via `manage-roles`, which
+   * is the capability that already means "change who may do what in this group" — a new
+   * capability naming the same authority would be two names for one decision.
+   */
+  setGroupMembersCanAdd: publicProcedure
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        allowed: z.boolean(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const gate = await checkGroupPermission(input.conversationId, me.id, "manage-roles");
+      if (!gate.ok) {
+        throw new TRPCError({
+          code: gate.reason === "unavailable" ? "INTERNAL_SERVER_ERROR" : "FORBIDDEN",
+          message:
+            gate.reason === "not-an-admin"
+              ? "Only a group admin can change who may add people."
+              : "Couldn't update that group just now.",
+        });
+      }
+      const ok = await setGroupMembersCanAdd(input.conversationId, input.allowed);
+      if (!ok) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Couldn't update that group just now.",
+        });
+      }
+      return { ok: true as const, allowed: input.allowed };
     }),
 
   /**
