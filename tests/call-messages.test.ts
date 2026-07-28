@@ -77,6 +77,25 @@ describe("parseRelayMessage", () => {
     ).toEqual({ type: "online", online: false });
   });
 
+  it("parses the web app's READY handshake, spelled the way the web app sends it", () => {
+    // This closes a real token-loss race on BOTH platforms: `onLoadEnd` can fire before
+    // RELAY's nativeTokenBridge attaches its listener in a React effect, so a token
+    // posted then is dropped with nothing reporting it. The web side has posted
+    // RELAY_WEB_READY for exactly this since v2.99.79 and the shell ignored it.
+    expect(
+      parseRelayMessage(JSON.stringify({ type: "RELAY_WEB_READY" })),
+    ).toEqual({ type: "web-ready" });
+  });
+
+  it("does NOT accept a `relay-` spelling of the ready message", () => {
+    // The sender's exact spelling is the contract. Renaming it to match the local
+    // convention would make the case look present and never fire — which is precisely
+    // how the handshake came to be missing in the first place.
+    expect(
+      parseRelayMessage(JSON.stringify({ type: "relay-web-ready" })).type,
+    ).toBe("unknown");
+  });
+
   it("returns unknown for malformed / non-string / empty version", () => {
     expect(parseRelayMessage("{not json").type).toBe("unknown");
     expect(parseRelayMessage(42 as unknown).type).toBe("unknown");
