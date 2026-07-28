@@ -343,19 +343,70 @@ async function startServer() {
       }
     },
     async (info) => {
-      // onPageCallee (v2.99.11 — now purely an IDENTITY RESOLVER): an invite
-      // targeted a number with NO live signaling connection. We answer only
-      // whether the number belongs to a real identity (+ its display name) so
-      // the relay can return a fast, honest "they're offline" to the caller.
+      // onPageCallee: an invite targeted a number with NO live signaling
+      // connection (never registered, or a backgrounded/locked phone whose SSE
+      // died). Resolve the identity, then TRY TO WAKE THE DEVICE, and report
+      // whether anything was reached — `pushed` is what the relay uses to decide
+      // between paging and a fast honest "offline".
       //
-      // Owner directive: an offline user must NOT be auto-rung — so we NO LONGER
-      // send a full-screen incoming-call Web Push here (that woke a pocketed
-      // phone with a ring). The caller instead gets to leave an SMS / voice
-      // message, and the callee learns of the missed call from their History +
-      // the (preference-gated) missed-call email/notification when they return.
+      // RESTORED IN v2.105.12, and the history matters because the two owner
+      // directives look contradictory. v2.99.11 removed this push entirely — "if
+      // the user is offline and you try to call him it should NOT ring
+      // automatically" — and the owner has now asked for the opposite: "build the
+      // incoming-call push path and restore ringing", so a closed or locked phone
+      // rings like WhatsApp does. Both are honoured because the decision is made
+      // on the RESULT: a device that can be woken rings, and a callee no push can
+      // reach still gets today's fast bounce plus the leave-a-message card rather
+      // than a caller staring at "Reaching their phone…" for 65 seconds.
       const callee = await getIdentityByNumber(info.calleePin);
       if (!callee) return { exists: false };
-      return { exists: true, name: callee.displayName ?? undefined };
+      // BLOCKING (E4, v2.98.6 — and this gate had to come BACK with the push).
+      // The original finding was that a blocked caller could still fire the
+      // callee's full-screen incoming-call push; v2.99.11 made that hold
+      // trivially by deleting the push, so restoring the push without restoring
+      // the gate re-opens exactly that bypass — a blocked person waking a locked
+      // phone with a CallKit ring is the loudest possible version of it.
+      //
+      // Reported as `pushed: 0`, NOT as a distinct outcome: the caller then gets
+      // the ordinary "<Name> is offline right now.", byte-identical to a genuinely
+      // unreachable callee, so the reply is no oracle for having been blocked.
+      // The miss is likewise suppressed by `onMissedCall`'s own block check.
+      if (await isNumberBlockedBy(callee.id, info.callerPin).catch(() => false)) {
+        return { exists: true, name: callee.displayName ?? undefined, pushed: 0 };
+      }
+      let pushed = 0;
+      try {
+        // ONE FUNNEL, deliberately — `sendPushToIdentity` is where the user's own
+        // master push switch is enforced (v2.99.40) and where every transport
+        // (Web Push / FCM / Expo / APNs VoIP) fans out. A parallel ring sender
+        // would bypass that switch, which is a bug however well-intentioned.
+        //
+        // CONTENT-FREE by the owner's standing rule: the caller's own name and
+        // number, which the callee is about to see on the ring card anyway.
+        // Nothing about the conversation, and no third party's data. `call`
+        // carries the ROOM, because a PushKit/CallKit answer means joining the
+        // room the caller already created — a ring with no room is a phone that
+        // rings and then cannot connect.
+        pushed = await sendPushToIdentity(callee.id, {
+          kind: "incoming-call",
+          title: `${info.callerName || "Someone"} is calling`,
+          body: "Tap to answer on RELAY",
+          // One tag for every ring, so a redial REPLACES the notification
+          // instead of stacking a second one for the same call.
+          tag: "relay-call",
+          url: "/app/dialer",
+          call: {
+            callerName: info.callerName || "Someone",
+            callerPin: info.callerPin,
+            roomId: info.roomId,
+            video: info.video,
+          },
+        });
+      } catch {
+        // A push failure must never break call setup. `pushed` stays 0, so the
+        // relay bounces the caller honestly instead of paging into silence.
+      }
+      return { exists: true, name: callee.displayName ?? undefined, pushed };
     },
     async (pin) => {
       // onResolveDial (v2.89): party lines. A dialed number that matches a

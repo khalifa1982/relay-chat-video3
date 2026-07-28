@@ -240,8 +240,15 @@ describe("the server stores and delivers it", () => {
     expect(PUSH).toMatch(/const expoTokens = subs\.filter\(s => s\.kind === "expo"\)/);
     expect(PUSH).toMatch(/await sendExpoPush\(expoTokens, \{/);
     expect(PUSH).toMatch(/subs = subs\.filter\(s => s\.kind !== "expo"\);/);
-    // …and both native transports count toward the delivered total.
-    expect(PUSH).toMatch(/const nativeDelivered = fcmDelivered \+ expoDelivered;/);
+    // …and EVERY native transport counts toward the delivered total. Pinned as
+    // the set rather than as one frozen expression, because the count is what
+    // `onPageCallee` returns as `pushed` and what the relay reads to decide
+    // whether to page — a transport missing from this sum would ring a phone and
+    // then tell the caller the callee was offline. v2.105.12 added apns.
+    const sum = PUSH.match(/const nativeDelivered = ([^;]+);/)?.[1] ?? "";
+    for (const t of ["fcmDelivered", "expoDelivered", "apnsDelivered"]) {
+      expect(sum, `${t} counts toward the delivered total`).toContain(t);
+    }
   });
 
   it("only a PERMANENTLY dead token is deleted", () => {

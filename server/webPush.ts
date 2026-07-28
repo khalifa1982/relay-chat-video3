@@ -22,6 +22,7 @@ import crypto from "crypto";
 import { listPushSubscriptions, deletePushSubscription, pushEnabledForIdentity } from "./v2db";
 import { sendFcmData } from "./fcm";
 import { sendExpoPush } from "./expoPush";
+import { sendVoipRing } from "./apnsVoip";
 import { appBaseUrl } from "./appUrl";
 
 export interface PushPayload {
@@ -32,6 +33,19 @@ export interface PushPayload {
   tag?: string;
   /** App path to open on tap, e.g. "/app/dialer". */
   url?: string;
+  /**
+   * Ring-only, and only APNs VoIP reads it (v2.105.12). A VoIP push is NOT a
+   * notification — iOS hands it to PushKit, which reports a real CallKit call —
+   * so it needs the things an ANSWER requires rather than the things a banner
+   * requires: who is calling, and the room to join. A title/body alone cannot be
+   * answered.
+   */
+  call?: {
+    callerName: string;
+    callerPin: string;
+    roomId: string;
+    video: boolean;
+  };
 }
 
 const b64url = (b: Buffer) => b.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -188,7 +202,27 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
     await Promise.all(r.dead.map(t => deletePushSubscription(t).catch(() => {})));
   }
   subs = subs.filter(s => s.kind !== "expo");
-  const nativeDelivered = fcmDelivered + expoDelivered;
+  // APNs VoIP (kind="apns", v2.105.12): the endpoint IS the APNs device token.
+  // This is the ONLY transport that makes a locked iPhone show the real
+  // full-screen CallKit call screen, and it is deliberately RING-ONLY: a VoIP
+  // push carries no `aps.alert`, so iOS delivers it to PushKit rather than to
+  // the notification centre — using it for a message would produce a
+  // notification nobody ever sees, and Apple terminates apps that send VoIP
+  // pushes without reporting a call. Everything else for an `apns` row is
+  // simply not deliverable, which is why v2.105.11 kept `apns` out of
+  // ROUTABLE_PUSH_KINDS so the offline-message EMAIL still goes out.
+  const apnsTokens = subs.filter(s => s.kind === "apns").map(s => s.endpoint);
+  let apnsDelivered = 0;
+  if (apnsTokens.length > 0 && payload.kind === "incoming-call" && payload.call) {
+    const r = await sendVoipRing(apnsTokens, payload.call);
+    apnsDelivered = r.sent;
+    // Prune ONLY what APNs reports as gone (410 / BadDeviceToken). A transient
+    // failure must never cost somebody their registration — that is exactly the
+    // defect v2.105.11 fixed on the FCM path, where a 400 was read as stale.
+    await Promise.all(r.invalidTokens.map(t => deletePushSubscription(t).catch(() => {})));
+  }
+  subs = subs.filter(s => s.kind !== "apns");
+  const nativeDelivered = fcmDelivered + expoDelivered + apnsDelivered;
   const cfg = vapidConfig();
   if (!cfg) return nativeDelivered;
   if (subs.length === 0) return nativeDelivered;

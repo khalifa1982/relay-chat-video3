@@ -11239,6 +11239,97 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.12 — ringing restored, gated on the push actually landing (2026-07-28)
+
+- [x] **The owner asked for the opposite of a decision they made in v2.99.11, and both hold.**
+      v2.99.11, verbatim: *"if the user is offline and you try to call him it should NOT ring
+      automatically."* Now, verbatim: *"Go ahead. Use the .p8 key for VoIP pushes (it's already on
+      the fleet). Build the incoming-call push path and restore ringing."* Reconciled by making
+      the relay page **only when a push actually reached a device** (`pushed > 0` from the hook):
+      a phone with the app installed rings, and a callee nothing can wake still gets the fast
+      honest `offline` plus the leave-a-message card. Sitting somebody on "Reaching their phone…"
+      for 65 seconds when no push could ever arrive is exactly what v2.99.11 was right to remove,
+      so it is preserved rather than traded away. A hook that omits `pushed` reads as 0, which is
+      why every pre-existing offline test still describes current behaviour.
+- [x] **`server/apnsVoip.ts` — a zero-dependency APNs VoIP sender.** A VoIP push is the ONLY
+      thing that shows the real full-screen CallKit call screen on a locked iPhone, and it cannot
+      travel over Expo or FCM: it goes straight to APNs with `apns-push-type: voip` on the
+      `<bundle>.voip` topic, where iOS hands it to PushKit even with the app not running.
+      Hand-written for the same reason `smtp.ts`, `s3.ts`, `fcm.ts` and `expoPush.ts` are.
+      **The subtle part is the signature, not the request:** ES256 JWS requires raw `r‖s` and
+      Node's `crypto.sign` emits ASN.1 DER, so it must be converted — hand APNs a DER signature
+      and it answers **403 InvalidProviderToken**, which reads like a wrong key and sends an
+      operator looking anywhere but at the encoding. Proven by converting real signatures and
+      verifying them under Node's own `ieee-p1363` encoding, which IS raw `r‖s`, so the
+      conversion is right by construction rather than by inspection.
+- [x] **A .p8 key rather than the certificate, and it keeps a private key out of the repo.**
+      The owner offered a VoIP Services certificate; the `.p8` signs a short-lived JWT, never
+      expires, serves every topic, and needs nothing committed. `APNS_P8_KEY` accepts the PEM
+      inline (what a `.env` holds) or a path (what a mounted secret looks like) — the shape
+      decides, because guessing wrong either way is a silent misconfiguration. **Sandbox is a
+      deliberate opt-in:** defaulting to it would make a production build silently un-ringable,
+      which is the failure this file exists to remove; defaulting to production makes a dev build
+      fail loudly instead, the recoverable direction.
+- [x] **THE SHARPEST FINDING IS A SECURITY REGRESSION I INTRODUCED, CAUGHT BY AN EXISTING PIN.**
+      E4 (v2.98.6) put a block gate in `onPageCallee` so a blocked caller could not fire the
+      callee's full-screen ring. v2.99.11 then deleted the push, and the assertion was rewritten
+      to *"there is no push here"* — so it passed for a reason unrelated to blocking. Restoring
+      the push re-opened the bypass, and `enumBlockHardening.test.ts` went red: a blocked person
+      waking a locked phone with a CallKit ring is the loudest possible form of what E4 closed.
+      The gate is back, and the pin is now on the **gate and its position** rather than on the
+      absence of a sender, so it cannot go quiet again. The refusal reports `pushed: 0`, i.e. it
+      is byte-identical to an ordinary unreachable callee, so the reply is no oracle for having
+      been blocked.
+- [x] **ONE FUNNEL, deliberately.** The ring goes through `sendPushToIdentity`, where the user's
+      own master push switch is enforced (v2.99.40) and every transport fans out. A parallel ring
+      sender would bypass that switch however well-intentioned; a test forbids the hook naming
+      `sendVoipRing` directly. `apns` is now routable **for a ring only** — a VoIP push carries no
+      `aps.alert`, so using it for a message would produce a notification nobody ever sees, and
+      Apple terminates apps that send VoIP pushes without reporting a call. It stays OUT of
+      `ROUTABLE_PUSH_KINDS`, so the offline-message email fallback still fires (the v2.105.11
+      property).
+- [x] **The room is created BEFORE the hook awaits, and the ordering is load-bearing.** The push
+      payload carries the room the callee must join, so minting it afterwards would send a ring
+      with nothing to connect to — a phone that rings and then cannot answer. Checked against both
+      client paths first: for a 1:1, `inParkedCall()` is false so a subsequent `error{offline}`
+      still raises the voicemail card; for a GROUP dial an existing room means the remaining
+      invitees flush off the `room` ack, which is the ORDINARY path — v2.99.19's one-at-a-time
+      promotion dance exists precisely because an offline first invitee used to create no room,
+      and it still covers `nonexistent`/`unavailable`, which return earlier.
+- [x] **No miss is recorded on the paging branch.** The call is still ringing; a missed-call row
+      for a call about to be answered is simply wrong. It lands on the give-up instead, which is
+      when the call was actually missed — and `deliverPendingRing` already upgrades the caller's
+      card from "Reaching their phone…" to a real "Ringing…" the moment the callee's app opens,
+      a comment that had been describing a path with no sender behind it since v2.99.11.
+- [x] **The push doctor stops lying to its operator.** Its row read *"A CALL does not push at
+      all"* as a hard-coded `ok={false}`, so it would have gone on saying a phone cannot ring
+      while it rang. The row now reads the server's own `ringPushed` flag, and `apnsVoip` is
+      reported beside the other transports — an iOS device holding an `apns` token on a fleet
+      with no `.p8` key is the one combination that stores a token nothing can deliver to, and it
+      is invisible otherwise.
+- [x] `server/apnsVoip.test.ts` (29) + `server/relayPaging.test.ts` → 17; **23 tripwires verified
+      by MUTATION** from byte-exact backups off a confirmed-GREEN baseline, sources byte-identical
+      afterwards. **Three real weaknesses in my own tests, each found by that run and fixed then
+      re-verified:** the padding case used a short `r` with a full-length `s`, so `s.copy(out, 32)`
+      — wrong in general, right whenever `s` is 32 bytes — survived it; the half-configured case
+      added the bundle id LAST, so every intermediate `false` was really the TOPIC check answering
+      and dropping the keyId/teamId requirement entirely survived; and the no-config case left the
+      token cache empty, so the `cached &&` short-circuit meant `cfg.keyId` was never evaluated and
+      the throw landed inside a catch — with a token already cached that comparison runs OUTSIDE
+      it. **One survivor reported as a NON-DEFECT rather than counted:** removing the
+      `r.length > 32` bound is behaviourally equivalent, because `r.copy(out, -2)` throws a
+      `RangeError` that the function's own catch converts to the same `null` (verified directly).
+- [x] **NOT VERIFIED ON A PHONE, said plainly.** No iPhone here, and APNs is unreachable from this
+      sandbox, so the signature, the config gating and the paging decision are proven by test while
+      nobody has watched a locked handset ring. **AND THE SHELL STILL NEEDS PUSHKIT + CALLKIT:** the
+      Expo shell has `fullScreenIntent` (Android) and `interruptionLevel: "timeSensitive"` (iOS),
+      not CallKit — so today an iPhone gets a time-sensitive notification rather than the FaceTime
+      screen. That is a config plugin plus a Mac/Codemagic build, which cannot be done from here.
+      Android rings via the existing FCM/Expo path with no change.
+- [x] **Env the fleet needs** (`/home/relay/.env`, never a workflow input — inputs are visible in
+      run metadata): `APNS_P8_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, optional
+      `APNS_VOIP_TOPIC` / `APNS_ENV`. No schema change, no new dependency. 3549 tests.
+
 ## v2.105.11 — two gates that never applied a rule they already owned (2026-07-28)
 
 - **The media gate is a FOURTH reader of the join floor.** v2.105.9 taught the three

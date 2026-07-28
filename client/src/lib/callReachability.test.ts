@@ -91,16 +91,21 @@ describe("issue 1 — pre-ring dial drops", () => {
     expect(SERVER).toMatch(/clearPendingRing\(reg, newcomerPin, \{ roomId \}\)/);         // accept
   });
 
-  it("CALLER UX (v2.99.11): a cold OFFLINE dial gets a fast honest error + leave-a-message card — the 'Reaching their phone…' paging status is RETIRED", () => {
-    // Owner directive: an offline user must NOT be auto-rung. The server answers
-    // a cold dial to an offline identity with error{offline} naming the callee
-    // (no `paging: true` ack), and the client turns that into the voicemail/SMS
-    // card via failDial("server-error:offline").
-    // v2.99.44 adds `pin` (which invitee) so a group dial can tell when the
-    // LAST one has resolved; the message itself is unchanged.
-    expect(SERVER).toMatch(/code: "offline",\s*\n\s*pin: to,(?:[\s\S]{0,700}?)verifiedPin\s*\n?\s*\? \(info\.name \|\| "They"\) \+ " is offline right now\."/);
-    expect(SERVER).not.toMatch(/paging: true/);
-    expect(CLIENT).not.toMatch(/setCallStatus\("ringing", "Reaching their phone…"\)/);
+  it("CALLER UX: an UNREACHABLE callee still gets a fast honest error + leave-a-message card", () => {
+    // The half of v2.99.11 that survives v2.105.12 unchanged, and the reason
+    // ringing was restored CONDITIONALLY rather than outright. When no push
+    // reached a device (`pushed: 0` — no subscription, push switched off, or the
+    // caller is blocked) the server still answers error{offline} naming the
+    // callee, and the client still turns that into the voicemail/SMS card via
+    // failDial("server-error:offline"). Paging somebody nothing can wake would
+    // sit the caller on a status line for 65 seconds to no purpose.
+    //
+    // `paging: true` is no longer forbidden here — it is the OTHER branch, taken
+    // only when a device really was woken, and it is pinned behaviourally in
+    // server/relayPaging.test.ts because a source read cannot tell you whether a
+    // ring survives to be answered.
+    expect(SERVER).toMatch(/code: "offline",\s*\n\s*pin: to,(?:[\s\S]{0,900}?)verifiedPin\s*\n?\s*\? \(info\.name \|\| "They"\) \+ " is offline right now\."/);
+    expect(SERVER).toMatch(/\(info\.pushed \?\? 0\) > 0/);
     expect(CLIENT).toMatch(/reason === "no-answer" \|\| reason === "peer-rejected" \|\| reason === "server-error:offline"/);
   });
 
@@ -168,17 +173,19 @@ describe("issue 2 — iOS ring sound + notifications", () => {
     expect(SHELL).toMatch(/<PushBanner \/>/);
   });
 
-  it("server records the miss + wakes the RETURNING callee with a missed-call push (v2.99.11: no incoming-call auto-ring), stable derived VAPID keys", () => {
-    // v2.99.11 (owner: an offline user must NOT be auto-rung): _core's paging
-    // hook no longer sends a full-screen incoming-call push. It resolves the
-    // identity only; the miss is recorded and a missed-call push/email reaches
-    // the callee when they next open the app.
-    expect(CORE).not.toMatch(/kind: "incoming-call"/);
+  it("server rings an offline callee's devices AND still records the miss, with stable derived VAPID keys", () => {
+    // RESTORED IN v2.105.12 (owner: "build the incoming-call push path and
+    // restore ringing"), reversing v2.99.11's removal. Both pushes exist and
+    // answer different questions: `incoming-call` wakes the phone WHILE the
+    // caller waits, `missed-call` tells the callee afterwards if nobody answered.
+    expect(CORE).toMatch(/kind: "incoming-call"/);
     expect(CORE).toMatch(/kind: "missed-call"/);
-    expect(CORE).toMatch(/return \{ exists: true, name: callee\.displayName \?\? undefined \}/);
+    // `pushed` is what the relay reads to decide between paging and bouncing, so
+    // the hook has to report it rather than merely resolving the identity.
+    expect(CORE).toMatch(/return \{ exists: true, name: callee\.displayName \?\? undefined, pushed \}/);
     expect(WEBPUSH).toMatch(/export function deriveVapidKeys/);
-    // The incoming-call push kind + its 70s TTL stay as generic push infra (the
-    // native Android app still uses it for ring-when-closed via FCM data).
+    // A ring is worthless late — the short TTL is what stops a push arriving
+    // minutes after the caller gave up and ringing a phone for nobody.
     expect(WEBPUSH).toMatch(/TTL: payload\.kind === "incoming-call" \? 70 : 3600/);
   });
 });

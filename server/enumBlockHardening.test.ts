@@ -45,17 +45,29 @@ describe("E4 — a blocked caller cannot notify the callee's devices", () => {
     expect(around).toMatch(/isNumberBlockedBy\(callee\.id, info\.fromPin\)/);
     expect(seg.length).toBeGreaterThanOrEqual(0);
   });
-  it("onPageCallee no longer pushes at all — it is a pure identity resolver (v2.99.11), so a blocked caller can't notify via it either", () => {
-    // Owner directive: an OFFLINE user must NOT be auto-rung. The v2.83 paging
-    // model (a full-screen incoming-call Web Push that woke a pocketed phone)
-    // is retired, so onPageCallee no longer sends ANY push — the block-secrecy
-    // property holds trivially because nobody is notified through this path.
+  it("a BLOCKED caller cannot wake the callee's phone through onPageCallee", () => {
+    // THIS PIN EARNED ITS KEEP IN v2.105.12. E4's fix put a block gate in
+    // onPageCallee; v2.99.11 then deleted the push, and the assertion was
+    // rewritten to "there is no push here" — which made the pin pass for a
+    // reason unrelated to blocking. Restoring the incoming-call push in
+    // v2.105.12 therefore re-opened the bypass, and this test went red: a
+    // blocked person waking a locked phone with a full-screen CallKit ring is
+    // the loudest possible form of the very thing E4 closed.
+    //
+    // Pinned as the GATE and its POSITION, not as the absence of a sender, so it
+    // cannot go quiet again the next time the push moves.
     const seg = src.slice(src.indexOf("onPageCallee"), src.indexOf("onResolveDial"));
-    expect(seg).not.toMatch(/kind: "incoming-call"/);
-    expect(seg).not.toMatch(/sendPushToIdentity\(/);
-    // It answers only whether the number is a real identity (+ name) so the
-    // relay can return a fast, honest "they're offline" to the caller.
-    expect(seg).toMatch(/return \{ exists: true, name: callee\.displayName/);
+    expect(seg).toMatch(/isNumberBlockedBy\(callee\.id, info\.callerPin\)/);
+    // The gate must precede the send, or it decides nothing.
+    const gate = seg.indexOf("isNumberBlockedBy");
+    const send = seg.indexOf("sendPushToIdentity(");
+    expect(gate).toBeGreaterThan(-1);
+    expect(send).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(send);
+    // …and the refusal must be INDISTINGUISHABLE from an ordinary unreachable
+    // callee (`pushed: 0` ⇒ the relay's normal "they're offline"), or the reply
+    // becomes an oracle for having been blocked.
+    expect(seg).toMatch(/return \{ exists: true, name: callee\.displayName \?\? undefined, pushed: 0 \}/);
     expect(seg).toMatch(/return \{ exists: false \}/);
   });
 });

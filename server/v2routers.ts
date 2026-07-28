@@ -146,6 +146,7 @@ import { unsubscribeHeaders, unsubscribeLink } from "./unsubscribe";
 import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
 import { classifyNativeToken, type NativeTokenKind } from "./expoPush";
 import { fcmConfig } from "./fcm";
+import { apnsVoipConfigured } from "./apnsVoip";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
 import { setIdentityAutoReply, autoReplyEnabledFor } from "./v2db";
@@ -5004,16 +5005,33 @@ export const v2AdminRouter = router({
           expoAccessToken: !!process.env.EXPO_ACCESS_TOKEN,
           fcm: !!fcmConfig(),
           webpush: !!vapidConfig(),
+          // APNs VoIP (v2.105.12) — the only transport that makes a LOCKED iPhone
+          // show the real full-screen call screen. Reported separately because an
+          // iOS device holding an `apns` token on a fleet with no .p8 key is
+          // precisely the case that stores a token nothing can deliver to, and it
+          // is invisible otherwise.
+          apnsVoip: apnsVoipConfigured(),
         },
         /**
          * The kinds that any code path actually sends. Hard-coded on purpose: it is
          * a statement about the codebase, not a runtime probe, and it is the answer
          * to the most likely form of the owner's report — testing by CALLING a
-         * closed app and getting nothing, because `incoming-call` was removed in
-         * v2.99.11 at their own request and nothing has sent it since.
+         * closed app and seeing what happens. `incoming-call` was removed in
+         * v2.99.11 at the owner's own request and RESTORED in v2.105.12 at their
+         * request, so a closed app rings again. A test cross-checks this list
+         * against every real call site's `kind`, because a list that drifts from
+         * reality is worse than none — it sends an operator looking in the wrong
+         * place.
          */
-        sendsFor: ["message", "missed-call", "voicemail", "contact-online"],
-        ringPushed: false,
+        sendsFor: ["incoming-call", "message", "missed-call", "voicemail", "contact-online"],
+        /**
+         * True once a ring is genuinely pushed. A ring only reaches a LOCKED
+         * iPhone's real call screen over APNs VoIP, which is why `apns` is
+         * reported beside the other transports: an iOS device that registered an
+         * APNs token and a fleet with no .p8 key is the one combination that
+         * stores a token it cannot deliver to.
+         */
+        ringPushed: true,
       };
     }),
 
