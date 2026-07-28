@@ -11238,3 +11238,44 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       3249 tests, check + build green.
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
+
+## v2.105.1 — registration rejected any one-word name (owner report) (2026-07-28)
+- [x] REPORTED FROM PRODUCTION with the exact payload, which made the diagnosis immediate:
+      `[{"code":"too_small","minimum":1,"path":["lastName"],"message":"Too small: expected string to
+      have >=1 characters"}]`. MY BUG, introduced by v2.105.0: the redesigned page asks for ONE
+      "permanent display name" (the spec's §3) and `splitDisplayName` splits it on the first space, so a
+      MONONYM — "Prince", "Zendaya", and the many naming conventions that are simply one name — arrives
+      as `{firstName:"Prince", lastName:""}`. `otpAuth.register` declared `lastName: NameSchema`
+      (`.min(1)`), so zod refused it before the resolver ran and the raw validator dump reached the user.
+- [x] THE OLD PANEL MADE THIS UNREACHABLE, which is why the strictness shipped unnoticed for as long as
+      it existed: it had two separate REQUIRED boxes, so an empty surname could never be submitted. The
+      single-field redesign turned a latent over-strictness into a live failure — the class of bug a
+      redesign surfaces rather than causes.
+- [x] THE FIX IS THE SCHEMA, NOT THE CLIENT, because nothing downstream ever wanted the surname: BOTH
+      places that build a display name already do `${firstName ?? ""} ${lastName ?? ""}`.trim() ||
+      email.split("@")[0]`, which yields a clean "Prince" with no trailing space. New
+      `OptionalSurnameSchema` (`z.string().trim().max(64).optional().default("")`) on `register` only;
+      `firstName` stays `NameSchema`, so relaxing the surname cannot produce a nameless account.
+- [x] CHECKED AGAINST THE SECURITY HISTORY BEFORE TOUCHING IT, because `NameSchema` is named in the
+      v2.99.81 comment at the approval branch: that short-circuit inferred "first device" from the
+      PRESENCE of a name and was DELETED — `shouldRequireApproval` answers it now — so an optional
+      surname cannot reintroduce the bypass. `NameSchema` had exactly one use site, so the blast radius
+      was one line.
+- [x] `server/registerMononym.test.ts` (10) drives the REAL procedure input pulled off the router
+      (`_def.procedures.register`), not a hand-written copy — a duplicated schema is precisely the thing
+      that drifts from the one the server enforces. Mutation-verified: restoring `lastName: NameSchema`
+      fails 3 of the 10.
+- [x] ONE OF MY OWN ASSERTIONS WAS WRONG ABOUT THE CODE and was corrected rather than forced: I asserted
+      the schema rejects a malformed email, but `EmailSchema` is deliberately permissive
+      (`z.string().trim().max(320)`) and `register`'s RESOLVER does the real check via
+      `isValidEmail(normalizeEmail(...))` — validation one layer down. The test now pins where the rule
+      actually lives.
+- [x] THE WHOLE PAGE IS NOW DRIVEN END TO END, which the first pass did not do — it only clicked Guest,
+      which is why the Registered path shipped broken. A headless harness against the built bundle with
+      a mock server that ENFORCES the real zod rules exercises: guest → startGuest → matrix reveal;
+      Registered → email → probe → choose (both the "new address" and "already has an account"
+      wordings); Register with a two-word name AND with a mononym, asserting the exact payload and that
+      no zod text reaches the screen; Log in → requestOtp → code step → six digits auto-verify; a PIN
+      account skipping `choose` straight to the passcode and calling loginWithPin; the Business toggle
+      showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
+      returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
