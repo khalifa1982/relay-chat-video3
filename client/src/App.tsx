@@ -5,6 +5,7 @@ import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { AppShell } from "./app/AppShell";
+import { OnboardingGate } from "./app/OnboardingGate";
 import { RelayEngineProvider } from "./app/RelayEngine";
 import { PresenceManager } from "./app/PresenceManager";
 import { MessagePopups } from "./app/MessagePopups";
@@ -31,6 +32,7 @@ const Messages = lazy(() => import("./pages/app/Messages"));
 const Contacts = lazy(() => import("./pages/app/Contacts"));
 const Profile = lazy(() => import("./pages/app/Profile"));
 const Admin = lazy(() => import("./pages/app/Admin"));
+const GroupInvite = lazy(() => import("./pages/GroupInvite"));
 
 /** Minimal route-loading fallback — theme-aware, no layout shift drama. */
 function RouteSpinner() {
@@ -91,6 +93,21 @@ function Router() {
             const pin = (params.pin ?? "").replace(/\D/g, "").slice(0, 6);
             return <Redirect to={pin ? `/app/dialer?to=${pin}` : "/app/dialer"} replace />;
           }}
+        </Route>
+        {/* A group INVITE LINK. Deliberately its own route rather than a second meaning
+            for /i/<pin>: that one carries a NUMBER and dials it, this carries a signed
+            capability and joins a conversation, and one screen guessing which of the two
+            a path segment meant would be guessing on a string somebody else chose.
+            Wrapped in OnboardingGate because joining needs an identity, so a visitor with
+            none picks a name first — exactly as the rest of the app does. */}
+        <Route path={"/g/:token"}>
+          {(params) => (
+            <OnboardingGate>
+              <Suspense fallback={<RouteSpinner />}>
+                <GroupInvite token={params.token ?? ""} />
+              </Suspense>
+            </OnboardingGate>
+          )}
         </Route>
         <Route path={"/docs"} component={Docs} />
         <Route path={"/technology"} component={Technology} />

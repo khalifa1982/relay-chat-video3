@@ -2380,6 +2380,15 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // working, because `edit-profile` stays unconditional for members.
     { table: "conversation_participants", column: "groupRole", ddl: "ADD COLUMN `groupRole` varchar(16)" },
     { table: "messages", column: "deletedByIdentityId", ddl: "ADD COLUMN `deletedByIdentityId` int" },
+    // v2.105.9 — group invite links. `inviteEpoch` NULL reads as 0 (nothing revoked
+    // yet); `joinedAtMessageId` NULL reads as "sees everything", which is what every
+    // pre-release participant is. Both no-ops until somebody mints or redeems a link.
+    { table: "conversations", column: "inviteEpoch", ddl: "ADD COLUMN `inviteEpoch` int" },
+    {
+      table: "conversation_participants",
+      column: "joinedAtMessageId",
+      ddl: "ADD COLUMN `joinedAtMessageId` int",
+    },
     { table: "conversations", column: "number", ddl: "ADD COLUMN `number` varchar(6)" },
     { table: "conversations", column: "avatarUrl", ddl: "ADD COLUMN `avatarUrl` text" },
     { table: "conversations", column: "profileStatus", ddl: "ADD COLUMN `profileStatus` varchar(16)" },
@@ -3321,7 +3330,11 @@ export type GroupCapability =
   | "start-call"
   /** Requires a stored admin or the derived creator, with NO fallback. */
   | "delete-any-message"
-  | "manage-roles";
+  | "manage-roles"
+  /** Minting or revoking an invite link (v2.105.9). Admin-only DELIBERATELY: a link
+   *  admits a stranger, and letting every member hand one out is a decision nobody
+   *  has made. Its absence from MEMBER_CAPABILITIES is what makes it admin-only. */
+  | "invite-link";
 
 /**
  * The capabilities every MEMBER holds, unconditionally and forever.
@@ -3550,6 +3563,132 @@ export async function setGroupRole(input: {
   } catch (e) {
     console.warn("[groups] setGroupRole failed:", (e as Error)?.message || "");
     return { ok: false, reason: "unavailable" };
+  }
+}
+
+/* ── group invite links (v2.105.9) ─────────────────────────────────────────── */
+
+/** The current revocation epoch, NULL read as 0. Exported so the mint, the preview and
+ *  the join all ask ONE function — three copies of "NULL means zero" is how a token
+ *  minted at epoch 0 comes to be refused by a check that read NULL as something else. */
+export async function getGroupInviteEpoch(conversationId: number): Promise<number | null> {
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    const [row] = await db
+      .select({ kind: conversations.kind, inviteEpoch: conversations.inviteEpoch })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+    if (!row || row.kind !== "group") return null;
+    return row.inviteEpoch ?? 0;
+  } catch (e) {
+    console.warn("[groups] invite epoch read failed:", (e as Error)?.message || "");
+    return null;
+  }
+}
+
+/**
+ * Bump the epoch, invalidating every outstanding invite link for this group.
+ *
+ * ONE statement, and it derives the new value IN SQL (`COALESCE(inviteEpoch,0)+1`)
+ * rather than read-then-write: two admins revoking at the same moment would otherwise
+ * both read the same value and both write the same successor, so the second revoke
+ * would be a no-op and any link minted between the two reads would SURVIVE a revocation
+ * its holder was told had happened. Monotonic by construction.
+ */
+export async function revokeGroupInvites(input: {
+  conversationId: number;
+  actorIdentityId: number;
+}): Promise<{
+  ok: boolean;
+  epoch?: number;
+  reason?: "not-found" | "not-a-group" | "not-a-member" | "not-an-admin" | "unavailable";
+}> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  const gate = await checkGroupPermission(input.conversationId, input.actorIdentityId, "invite-link");
+  if (!gate.ok) return { ok: false, reason: gate.reason };
+  try {
+    await db
+      .update(conversations)
+      .set({ inviteEpoch: sql`COALESCE(${conversations.inviteEpoch}, 0) + 1` })
+      .where(eq(conversations.id, input.conversationId));
+    const epoch = await getGroupInviteEpoch(input.conversationId);
+    return { ok: true, epoch: epoch ?? undefined };
+  } catch (e) {
+    console.warn("[groups] revokeGroupInvites failed:", (e as Error)?.message || "");
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
+/**
+ * Redeem an invite: make this identity a member, watermarked at the group's newest
+ * message so the history before them is not theirs.
+ *
+ * THE CALLER HAS ALREADY VERIFIED THE SIGNATURE AND THE EPOCH. This function performs
+ * the join and nothing else, so the authorization lives in exactly one place — the
+ * procedure — rather than being half here and half there.
+ *
+ * ALREADY-A-MEMBER SUCCEEDS AND CHANGES NOTHING. Re-opening a link you already used is
+ * the ordinary case (a link sits in a chat and gets tapped twice), and rewriting the
+ * watermark on a founding member would silently delete their whole history from their
+ * own view — the worst possible outcome of a harmless double-tap. So the insert is
+ * guarded by a read and the watermark is only ever stamped on a row being CREATED.
+ */
+export async function joinGroupByInvite(input: {
+  conversationId: number;
+  identityId: number;
+}): Promise<{ ok: boolean; joined: boolean; reason?: "not-found" | "not-a-group" | "unavailable" }> {
+  const db = await getDb();
+  if (!db) return { ok: false, joined: false, reason: "unavailable" };
+  try {
+    const [convo] = await db
+      .select({ id: conversations.id, kind: conversations.kind })
+      .from(conversations)
+      .where(eq(conversations.id, input.conversationId))
+      .limit(1);
+    if (!convo) return { ok: false, joined: false, reason: "not-found" };
+    if (convo.kind !== "group") return { ok: false, joined: false, reason: "not-a-group" };
+
+    const [existing] = await db
+      .select({ identityId: conversationParticipants.identityId })
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, input.conversationId),
+          eq(conversationParticipants.identityId, input.identityId),
+        ),
+      )
+      .limit(1);
+    if (existing) return { ok: true, joined: false };
+
+    const [newest] = await db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(and(eq(messages.conversationId, input.conversationId), isNull(messages.deletedAt)))
+      .orderBy(desc(messages.id))
+      .limit(1);
+
+    // The ON DUPLICATE KEY clause makes a concurrent double-redeem harmless: it assigns
+    // the identityId to itself, so the loser's insert is a no-op against the
+    // (conversationId, identityId) primary key rather than a thrown duplicate, and the
+    // winner's watermark stands untouched. Nothing here grants a role — a link-joined
+    // member is an ORDINARY member, which is what stops an invite reaching adminship.
+    await db
+      .insert(conversationParticipants)
+      .values({
+        conversationId: input.conversationId,
+        identityId: input.identityId,
+        // Stamp 0 as NULL: a message id of 0 does not exist, and NULL is already the
+        // "sees everything" reading an empty group needs.
+        joinedAtMessageId: newest?.id ?? null,
+      })
+      .onDuplicateKeyUpdate({ set: { identityId: input.identityId } });
+    return { ok: true, joined: true };
+  } catch (e) {
+    console.warn("[groups] joinGroupByInvite failed:", (e as Error)?.message || "");
+    return { ok: false, joined: false, reason: "unavailable" };
   }
 }
 
@@ -3961,6 +4100,21 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
     }
   }
 
+  // A LATER JOIN (v2.105.9) — and note carefully how this DIFFERS from the block above,
+  // which is the whole reason the two watermarks are separate columns.
+  //
+  // A member who joined after the last message may not read it, so it must not be their
+  // preview. But the thread STAYS, with no preview: they are in this group, it belongs in
+  // their list, and dropping it would make a quiet group they were just added to
+  // invisible until somebody happened to speak. So this removes the preview and
+  // deliberately does NOT touch `clearedHidden`.
+  for (const p of myParts) {
+    const joinedAt = p.joinedAtMessageId ?? 0;
+    if (joinedAt <= 0) continue;
+    const newest = latestByConvo.get(p.conversationId);
+    if (newest && newest.id <= joinedAt) latestByConvo.delete(p.conversationId);
+  }
+
   // "Delete for me" (v2.102.2), and THE FAST PATH IS PRESERVED DELIBERATELY.
   //
   // The obvious change is a NOT EXISTS inside the MAX() above — and it is the wrong
@@ -4099,6 +4253,33 @@ export function notHiddenFor(identityId: number) {
 }
 
 /**
+ * The lowest message id this participant may read — for a MESSAGE query (v2.105.9).
+ *
+ * Two independent rules produce a floor and they COMPOSE BY MAX, because each says
+ * "everything at or below this id is not yours to see" and obeying both means obeying
+ * the higher one:
+ *   • `clearedUpToMessageId` — this person cleared the chat (v2.103.0).
+ *   • `joinedAtMessageId`    — this person joined the group later (v2.105.9), so the
+ *                              history before them is not theirs.
+ *
+ * ONE helper so that a reader added later cannot honour one rule and forget the other —
+ * the class of bug this codebase keeps re-learning (v2.99.77's fifth call site).
+ *
+ * ── IT IS DELIBERATELY NOT USED BY THE THREAD-DROP RULE ────────────────────────────
+ * `listThreads` REMOVES a conversation whose newest message is at or below
+ * `clearedUpToMessageId`, because "delete for me" means the thread itself should go.
+ * Applying that to a JOIN watermark would make a group you were just added to
+ * invisible until somebody spoke. So the drop rule keeps reading the cleared column
+ * ALONE, and only the message queries take the max.
+ */
+export function visibleFloorFor(part: {
+  clearedUpToMessageId?: number | null;
+  joinedAtMessageId?: number | null;
+}): number {
+  return Math.max(part.clearedUpToMessageId ?? 0, part.joinedAtMessageId ?? 0);
+}
+
+/**
  * Hide ONE message for ONE person — "delete for me" (v2.102.2, owner #81).
  *
  * DELIBERATELY NOT UNSEND. `deleteMessage` flips `messages.deletedAt`, which removes
@@ -4171,7 +4352,11 @@ export async function recomputeUnreadFor(conversationId: number, identityId: num
   if (!db) return;
   try {
     const [part] = await db
-      .select({ lastReadMessageId: conversationParticipants.lastReadMessageId })
+      .select({
+        lastReadMessageId: conversationParticipants.lastReadMessageId,
+        clearedUpToMessageId: conversationParticipants.clearedUpToMessageId,
+        joinedAtMessageId: conversationParticipants.joinedAtMessageId,
+      })
       .from(conversationParticipants)
       .where(
         and(
@@ -4181,7 +4366,10 @@ export async function recomputeUnreadFor(conversationId: number, identityId: num
       )
       .limit(1);
     if (!part) return;
-    const after = part.lastReadMessageId ?? 0;
+    // The badge must not count messages this person cannot open. Without the shared
+    // floor, a member who joins a busy group is handed an unread count for the whole
+    // history they are not allowed to read — a number no tap can ever clear.
+    const after = Math.max(part.lastReadMessageId ?? 0, visibleFloorFor(part));
     const [{ n } = { n: 0 }] = await db
       .select({ n: sql<number>`COUNT(*)` })
       .from(messages)
@@ -4314,10 +4502,10 @@ export async function listMessages(input: {
     )
     .limit(1);
   if (member.length === 0) return [];
-  // "Delete for me" at THREAD scope (v2.103.0): everything up to the id stamped when
-  // this person cleared the chat is theirs alone to not see. Read off the membership row
-  // already fetched above, so this costs no extra query.
-  const clearedUpTo = member[0]?.clearedUpToMessageId ?? 0;
+  // The floor below which nothing is this person's to read: "delete for me" at THREAD
+  // scope (v2.103.0) and a later JOIN (v2.105.9), composed by max. Read off the
+  // membership row already fetched above, so this costs no extra query.
+  const clearedUpTo = visibleFloorFor(member[0] ?? {});
 
   const limit = Math.min(input.limit ?? 50, 200);
   const baseWhere = and(
@@ -4364,8 +4552,10 @@ export async function searchMessages(input: {
     .limit(1);
   if (member.length === 0) return [];
   // A cleared thread's old messages must not come back through search either — the
-  // same reasoning as the per-message hide (v2.102.2).
-  const clearedUpTo = member[0]?.clearedUpToMessageId ?? 0;
+  // same reasoning as the per-message hide (v2.102.2) — and neither must the history
+  // from before this member joined (v2.105.9). Search is the likeliest place to forget
+  // a visibility rule, so it takes the SAME shared floor the list does.
+  const clearedUpTo = visibleFloorFor(member[0] ?? {});
 
   const q = input.query.trim();
   if (!q) return [];

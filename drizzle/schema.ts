@@ -402,6 +402,20 @@ export const conversations = mysqlTable(
     /** Who created it. Nullable: every pre-release group has no recorded creator,
      *  and the purge cascade must treat that as "no owner" rather than guessing. */
     ownerIdentityId: int("ownerIdentityId"),
+    /**
+     * INVITE-LINK REVOCATION COUNTER (v2.105.9) — NULL reads as 0.
+     *
+     * The invite token is STATELESS: it is signed and self-describing, so there is no
+     * row to delete in order to revoke one. This integer is what a signature cannot
+     * express on its own. A token names the epoch it was minted under and a join
+     * refuses any token whose epoch is not the current value, so bumping it once kills
+     * every outstanding link — which is what "revoke the link" has to mean, given that
+     * an admin cannot know how many copies exist or where they went.
+     *
+     * NULL on every pre-release row and read as 0, so the migration is a no-op until
+     * somebody revokes. Only ever increases.
+     */
+    inviteEpoch: int("inviteEpoch"),
     lastMessageAt: timestamp("lastMessageAt").defaultNow().notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
@@ -472,6 +486,22 @@ export const conversationParticipants = mysqlTable(
      * is unconditional for members — see `checkGroupPermission`.
      */
     groupRole: varchar("groupRole", { length: 16 }),
+    /**
+     * JOIN WATERMARK (v2.105.9) — messages at or below this id are not this member's
+     * to read. NULL means "sees everything", which is what every pre-release row and
+     * every founding member needs.
+     *
+     * IT MUST BE ITS OWN COLUMN. `clearedUpToMessageId` above expresses a numerically
+     * identical rule and reusing it would be a real bug: `listThreads` DROPS the thread
+     * entirely while nothing newer than that watermark exists, deliberately, because
+     * "delete for me" means the thread itself should go (v2.103.0). A member who just
+     * joined a quiet group would therefore find it INVISIBLE until somebody spoke. Here
+     * the thread must stay and merely show no preview, so the two rules cannot share a
+     * column however alike they look.
+     *
+     * An id, not a timestamp, so every filter rides the (conversationId, id) index.
+     */
+    joinedAtMessageId: int("joinedAtMessageId"),
     joinedAt: timestamp("joinedAt").defaultNow().notNull(),
   },
   (t) => ({

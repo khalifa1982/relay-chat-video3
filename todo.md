@@ -11239,6 +11239,60 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.9 — a group invite link, with no row behind it (2026-07-28)
+
+Owner, #114, on the previously-declined list: **"DO IT"**.
+
+- **Stateless by design.** `server/groupInvite.ts` mints `<exp>.<cid>.<epoch>.<hmac>`,
+  the same fleet-secret family as `roomCapability` and `groupCallSeed`. No `invites`
+  table: a row per link buys nothing and costs a read on the join path plus a reaper.
+- **Revocation is one integer.** `conversations.inviteEpoch` (additive, nullable, NULL
+  reads as 0). A token names its epoch; a join refuses any token whose epoch is not the
+  current one, so one write kills every outstanding copy. The bump is computed IN SQL
+  (`COALESCE(inviteEpoch,0)+1`), never read-then-written — two concurrent revokes would
+  otherwise both write the same successor and a link minted between the reads would
+  survive a revocation its holder was told had happened.
+- **Not pin-bound, deliberately.** A call seed is bound to its minter because it hands
+  out moderation. An invite is a link: pin-binding it makes it a one-person invite. It
+  is a bearer token bounded by a 7-day expiry plus the epoch. A test forbids `callerPin`
+  in either half.
+- **Minting is admin-only** via a new `invite-link` capability whose ABSENCE from
+  `MEMBER_CAPABILITIES` is the restriction.
+- **A link-joined member is an ordinary member.** No role is written, and v2.105.7's
+  co-host seeding grants nothing to a pin its signed list does not name — so an invite
+  reaches neither group adminship nor call moderation.
+- **`conversation_participants.joinedAtMessageId` is its own column, and that is the
+  load-bearing decision.** Reusing `clearedUpToMessageId` would make a quiet group you
+  were just added to INVISIBLE, because `listThreads` drops a thread while nothing newer
+  than that watermark exists (v2.103.0, deliberately). The drop rule keeps reading the
+  cleared column alone; only the message queries take both.
+- **The two rules compose by max in ONE helper** (`visibleFloorFor`), used by
+  `listMessages`, `searchMessages` and `recomputeUnreadFor`. Without it a new member gets
+  an unread badge for history they may not read — a number no tap can clear.
+- **Re-opening a link you already used changes nothing** — rewriting the watermark on a
+  founding member would silently delete their own history from their own view.
+- **`/g/<token>`** is its own route (not a second meaning for `/i/<pin>`), sits inside
+  `OnboardingGate`, and requires a TAP to join — auto-joining is the v2.99.57/M48 class.
+- **Every refusal reads identically**, so the preview is no existence oracle.
+- `server/groupInvite.test.ts` (26). **21/21 tripwires mutation-verified** from
+  byte-exact backups off a green baseline; sources byte-identical afterwards.
+- **Own mistakes, recorded:** one mutation target was copied from the sibling seed file
+  and occurs 0 times — the harness ABORTED rather than counting a survivor; and `fnAt`
+  counted braces from the destructured PARAMETER object instead of the body, so
+  assertions failed for the wrong reason until it was taught to skip param objects and
+  `Promise<{…}>` return types.
+- **Two pre-existing pins rewritten to the property**, one fragile slice re-anchored
+  after its own sanity guard caught it, and a **documentation defect in CLAUDE.md fixed**:
+  it claimed `main` was a different project with no deploy path, which cost three failed
+  production runs — `aws-ops.yml` must be dispatched with `ref: main`, because the deploy
+  role's OIDC trust policy is scoped to that ref.
+- **Not verified against a database** (no MySQL here): nobody has minted a link, joined
+  with it, or watched a revoke land.
+- **Not done:** add/remove member by hand (its watermark now exists), the "all users can
+  add" toggle, the 4-digit lock.
+
+3491 tests.
+
 ## v2.105.8 — an admin may assign a reserved number, on purpose (2026-07-28)
 
 Owner asked for **339631 → 111112**. Told that `111` is a reserved prefix, they answered:
