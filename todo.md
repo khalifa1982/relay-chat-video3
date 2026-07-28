@@ -11239,6 +11239,99 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.15 — an admin can suggest how a guest registers, and cannot register them (2026-07-28)
+
+- [x] **#111 SHIPS, AND IT SHIPS BY BEING NARROWER THAN THE THING v2.99.99 REFUSED** (owner:
+      *"I can delete the user or change type of account from guest to registered to admin"*, then
+      **"DO IT — build it SAFELY"**). That release gave the panel registered ↔ admin and declined
+      guest → registered, recording it as an **account-takeover primitive**: an admin attaches an
+      address they control to somebody else's guest identity, then signs in as them with an
+      ordinary email code and owns their number, contacts and message history.
+- [x] **NONE OF THAT REASONING IS SOFTENED. WHAT MAKES THIS SAFE IS WHERE THE CLAIM'S INPUTS COME
+      FROM, and reading that was most of the work.** `ensureUserIdentity` is the ONLY writer that
+      turns a guest identity into a registered one, and its candidates are exclusively properties
+      of the **REQUESTING BROWSER** — the identity `createContext` resolved, the request's own
+      guest cookie, the request's own device id — each claimed under
+      `WHERE id = ? AND userId IS NULL`. **No parameter names an identity.** So the obvious
+      implementation is not merely risky, it requires *breaking that invariant*; and the version
+      that does not break it cannot be completed by an admin at all, because the completing
+      request has to come from the device holding the identity. This release therefore writes a
+      **SUGGESTION** and touches the claim path only to clear the hint when it is consumed.
+- [x] **SAID PLAINLY, because the boundary deserves to be exact: this does not defeat an admin who
+      talks a guest into tapping through and reads them the code.** Nothing can. But it grants such
+      an admin **no capability they lacked** — they could already say "open Register and type this
+      address" — which is precisely the difference from the refused design, where the admin acted
+      alone. The honest mitigation is informing the one person who can refuse, so the guest's card
+      says **"Use an address you own. Whoever can read that inbox can sign in to this number."**
+      That line came out of an adversarial pass over my own design, not out of the first draft.
+- [x] **TWO ADDITIVE NULLABLE COLUMNS on `identities`** (`regInviteEmail`, `regInviteAt`), NULL on
+      both meaning no invite — i.e. every pre-release row, so the migration is a no-op until an
+      admin sends one. The suggestion is **EDITABLE by the guest**, which is strictly safer than
+      binding it: a mistyped or hostile address is corrected by the one person who owns the inbox.
+- [x] **`email-taken` IS A SECURITY REFUSAL, NOT TIDINESS.** Without it this is an
+      **ACCOUNT-DIVERSION** primitive: bind `victim@example.com` to a stranger's guest identity and
+      the victim's own registration is refused while the victim's sign-in code lands in somebody
+      else's number and history. That is the one-address-one-account invariant of v2.99.49
+      (M50/F3), re-stated here rather than assumed, and it reuses `findUserByEmailAny` — the ONE
+      resolver every sign-in path uses — because a private copy is how two gates come to disagree
+      about which addresses are free.
+- [x] **THE WRITE IS SCOPED TO AN UNCLAIMED ROW, NOT JUST THE READ.** A guest who registers between
+      the two must not have a suggestion stamped onto their now-registered identity, and the
+      read-satisfies-the-pin-while-the-write-loses-the-clause survivor has now appeared four times
+      (v2.102.2, v2.103.0, v2.104.0, v2.105.6) — so the assertion is on the UPDATE specifically,
+      with the occurrence counted.
+- [x] **`activeRegInvite` IS ONE READER FOR THE EXPIRY RULE**, used by whoami AND the admin
+      projection, because two copies of "is this invite still live" is how the guest's own card and
+      the admin's view come to disagree about whether anything was sent (v2.99.77, v2.99.96). The
+      boundary is EXCLUSIVE, and a registered identity reads as having no invite whatever the
+      columns say.
+- [x] **`suggestedEmail` IS A NEW AuthPanel PROP RATHER THAN A REUSE OF `initialEmail`, and that
+      distinction is the feature.** `initialEmail` auto-routes and MAILS A CODE, which is right
+      when the user typed it at the gate and wrong here — it would send a code to an address the
+      guest has not yet looked at, destroying the only thing a suggestion is for. Prefill and wait;
+      an address the user typed still wins.
+- [x] **THE CLAIM DROPS THE HINT** alongside `guestToken` / `recoveryHash`, because a dangling
+      leftover on a registered identity is exactly what that comment already warns about.
+- [x] **NOTHING IS MAILED BY THE INVITE AT ALL**, which is worth stating: the procedure cannot be
+      used to send anybody email, so it is not a spam amplifier aimed at a third party. A test
+      forbids `mintOtp` / `dispatchOtp` / `sendEmail` / `ensureUserIdentity` / `createOtpUser` /
+      `markUserEmailVerified` / `setSessionCookie` from appearing in it.
+- [x] **THE PANEL'S PER-ROW FIELD IS KEYED BY ROW.** It lists several people with the same control
+      in the same place, and one shared string is how a half-typed address gets submitted against
+      the wrong person — the mistake that actually happens here, and the reason Delete confirms by
+      typing the number.
+- [x] **ACCEPTED AND RECORDED RATHER THAN "FIXED":** the `email-taken` refusal distinguishes a
+      registered address from a free one, i.e. it is an existence oracle over the email space. It
+      leaks nothing an admin lacks, because `adminFindIdentities` already searches
+      `like(users.email, …)` and returns matches — and making the refusal generic would hide the
+      one reason an operator needs in order to act.
+- [x] **BOTH CAPABILITY GUARDS TURNED RED FIRST, WHICH IS THEM WORKING.** The admin panel's tRPC
+      surface is enumerated in two files precisely so a widening is a deliberate act; this is its
+      third growth and each entry says why. **ONE PRE-EXISTING PIN REWRITTEN TO THE PROPERTY:**
+      `profileHub.test.ts` froze `{showAuth && <AuthPanel` as a ONE-LINE mount, so it broke the
+      moment the panel took a prop while saying nothing about whether the mount had left the root.
+- [x] `server/guestRegInvite.test.ts` (35), the expiry rule tested BEHAVIOURALLY through the real
+      function because a source pin cannot tell you whether a lapsed invite still renders; **all 22
+      tripwires verified by MUTATION** from byte-exact backups off a confirmed-GREEN baseline,
+      sources byte-identical afterwards.
+- [x] **TWO BUGS IN MY OWN TESTS, both caught before the mutation run and both fixed rather than
+      relaxed:** the "writes ONLY the two invite columns" sweep forbade `userId:` across the whole
+      body, which matches the SELECT **projection** the not-a-guest refusal legitimately reads — so
+      it failed for a reason unrelated to the property, and is now scoped to the `.set(…)` payload
+      with its key set enumerated; and the named-refusals loop demanded a QUOTED key, which fails
+      on `unavailable`, the one key JavaScript lets you write bare.
+- [x] **ONE MUTATION ABORTED AND THE GUARD IS WHY IT IS REPORTED HONESTLY:** the unscoped-UPDATE
+      anchor occurs TWICE in `v2db.ts` — the second in `touchGuestExpiry`, which legitimately uses
+      the identical clause — so the mutator refused to run rather than recording a survivor for a
+      reason unrelated to the property. Re-run with a unique anchor, it bit.
+- [x] **NOT VERIFIED AGAINST A DATABASE, said plainly:** no MySQL is reachable here, so the
+      statements are proven correct by reading and pinned, but no suggestion has been written, seen
+      by a guest, or consumed by a real registration.
+- [x] **NOT DONE, and named rather than implied:** an admin still cannot supply a password or PIN
+      for somebody, and there is no admin-side "register them now" — by construction, since that is
+      the primitive this design exists to avoid. Two additive nullable columns, no new dependency,
+      no new env var. 3608 tests.
+
 ## v2.105.14 — APNs accepts TWO credentials, and the owner had the other one (2026-07-28)
 
 - [x] **THE OWNER SENT A VoIP SERVICES CERTIFICATE, NOT A .p8** — after saying the `.p8` was

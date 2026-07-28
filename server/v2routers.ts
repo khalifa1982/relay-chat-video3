@@ -163,6 +163,9 @@ import {
 } from "./loginOrigin";
 import { getRolesByIdentityIds, type IdentityRole } from "./v2db";
 import { hasRecentApprovedSession, pendingSessionsForUser, sessionApprovalBySid, approveSession } from "./v2db";
+// v2.105.15 — the admin's registration SUGGESTION for a guest. `activeRegInvite` is
+// the one reader of the expiry rule, shared by whoami and the admin panel.
+import { activeRegInvite, clearRegInvite, inviteGuestRegistration } from "./v2db";
 import { setSessionCookie, rememberToTtlMs, LOCAL_SESSION_COOKIE, newSessionId, readLocalSession,
   unlockPasswordLogin,
 } from "./authLocal";
@@ -517,7 +520,33 @@ export const v2AuthRouter = router({
       lastName: ctx.identity.lastName,
       /** Away auto-reply, opt-in (v2.99.66) — drives the Messages toggle. */
       autoReplyEnabled: ctx.identity.autoReplyEnabled,
+      /**
+       * An admin's SUGGESTED registration address (v2.105.15), or null.
+       *
+       * Threaded through `activeRegInvite` rather than read off the row, so the
+       * expiry rule has exactly one reader and this cannot disagree with what the
+       * admin panel shows. It reaches only the person it is about — whoami is
+       * scoped to `ctx.identity` — and it is a SUGGESTION the guest can edit, not
+       * a binding, so seeing it costs them nothing.
+       */
+      regInvite: (() => {
+        const inv = activeRegInvite(ctx.identity);
+        return inv ? { email: inv.email, expiresAt: inv.expiresAt } : null;
+      })(),
     };
+  }),
+
+  /**
+   * Dismiss an admin's registration suggestion (v2.105.15).
+   *
+   * Scoped to the CALLER'S OWN identity — it takes no id at all, so there is no
+   * way to clear somebody else's. The guest is the only person for whom the hint
+   * is on screen, so they are the only person who needs to be able to remove it.
+   */
+  dismissRegInvite: publicProcedure.mutation(async ({ ctx }) => {
+    if (!ctx.identity) throw new TRPCError({ code: "UNAUTHORIZED" });
+    await clearRegInvite(ctx.identity.id);
+    return { ok: true as const };
   }),
 
   /**
@@ -4871,7 +4900,7 @@ export const v2AdminRouter = router({
           "no-account": {
             code: "BAD_REQUEST",
             message:
-              "That's a guest — there's no account to attach a role to. They keep their number and all their data when they register themselves, so registering is the way up from here.",
+              "That's a guest — there's no account to attach a role to. They keep their number and all their data when they register themselves, so registering is the way up from here. Use “Suggest an email” to put a prompt in their app.",
           },
           self: {
             code: "CONFLICT",
@@ -4896,6 +4925,92 @@ export const v2AdminRouter = router({
         `[admin] identity ${input.identityId} (account ${res.userId}) set to ${res.role} by identity ${me.id}`
       );
       return { ok: true as const, role: res.role };
+    }),
+
+  /**
+   * SUGGEST A REGISTRATION ADDRESS TO A GUEST (v2.105.15, task #111 — the owner
+   * asked for guest → registered from the panel and said to build it SAFELY).
+   *
+   * THE FEATURE v2.99.99 DECLINED, AND THE REASON IT CAN SHIP NOW IS A NARROWING,
+   * NOT A NEW GUARD. That release refused to promote a guest by supplying an email
+   * because doing it directly is an ACCOUNT-TAKEOVER PRIMITIVE: an admin attaches
+   * an address they control to somebody else's guest identity, then signs in as
+   * them with an ordinary email code and owns their number, contacts and history.
+   *
+   * What makes that impossible here is where the claim's inputs come from.
+   * `ensureUserIdentity` is the only writer that turns a guest identity into a
+   * registered one, and its candidates are exclusively properties of the
+   * REQUESTING BROWSER — the identity `createContext` resolved, the request's own
+   * guest cookie, the request's own device id — each claimed under
+   * `WHERE id = ? AND userId IS NULL`. No parameter names an identity. So this
+   * procedure writes a SUGGESTION and the guest's own ordinary registration is
+   * what completes it, from the device that actually holds that identity.
+   *
+   * SAID PLAINLY, because the boundary is worth being exact about: this does not
+   * defeat an admin who talks a guest into tapping through and reads them the
+   * code. Nothing can. But it grants such an admin NO capability they lacked —
+   * they could already say "open Register and type this address" — whereas the
+   * design v2.99.99 refused would have let them act entirely alone.
+   *
+   * Rate-limited like every other identity-resolving admin read, and the trace
+   * carries ids only. The email is NOT logged: it is a third party's address.
+   */
+  inviteGuestRegistration: publicProcedure
+    .input(
+      z.object({
+        identityId: z.number().int().positive(),
+        email: z.string().min(3).max(320),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = await requireAdmin(ctx);
+      directoryGate(ctx);
+      const res = await inviteGuestRegistration(input.identityId, input.email);
+      if (!res.ok) {
+        const map: Record<
+          typeof res.reason,
+          { code: "BAD_REQUEST" | "NOT_FOUND" | "CONFLICT" | "INTERNAL_SERVER_ERROR"; message: string }
+        > = {
+          "not-found": { code: "NOT_FOUND", message: "No identity with that id." },
+          "not-a-guest": {
+            code: "BAD_REQUEST",
+            message:
+              "That identity already has an account, so there's nothing to invite it to. Change its role instead.",
+          },
+          "bad-email": {
+            code: "BAD_REQUEST",
+            message: "That doesn't look like an email address.",
+          },
+          // NAMED rather than folded into a generic failure: the operator needs to
+          // know the address is spoken for, and refusing it is what stops one
+          // address being bound to two different people's data.
+          "email-taken": {
+            code: "CONFLICT",
+            message:
+              "That address already belongs to an account. One address, one account — otherwise their sign-in code would land in somebody else's number and history.",
+          },
+          unavailable: {
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Couldn't save the suggestion — nothing was changed.",
+          },
+        };
+        const m = map[res.reason];
+        throw new TRPCError({ code: m.code, message: m.message, cause: res.reason });
+      }
+      // Ids only. The suggested address is a third party's and stays out of logs.
+      console.warn(
+        `[admin] registration suggested for identity ${input.identityId} by identity ${me.id}`
+      );
+      return { ok: true as const };
+    }),
+
+  /** Withdraw a suggestion. Same authority as making one; clears both columns. */
+  clearGuestRegistrationInvite: publicProcedure
+    .input(z.object({ identityId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      await clearRegInvite(input.identityId);
+      return { ok: true as const };
     }),
 
   /**

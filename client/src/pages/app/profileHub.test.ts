@@ -260,8 +260,13 @@ describe("the overlays survive a pane change", () => {
   it("AuthPanel, AvatarPicker, the sign-out dialog and the share sheet are at the root", () => {
     // Closing a pane while one of these is open would unmount the open thing from
     // under the user.
+    //
+    // The AuthPanel needle tolerates a wrapping paren and a line break: the property
+    // is "mounted at the root, gated on showAuth", and the original froze it as a
+    // ONE-LINE mount — so it broke the moment v2.105.15 passed the panel a prop while
+    // saying nothing about whether the mount had moved out of the root.
     for (const needle of [
-      /\{showAuth && <AuthPanel/,
+      /\{showAuth &&\s*\(?\s*<AuthPanel\b/,
       /<AvatarPicker\b/,
       /\{signOutDialog\}/,
       /<ShareNumberSheet\b/,

@@ -139,6 +139,13 @@ export default function ProfilePage() {
   const [, navigate] = useLocation();
   const paneTopRef = useRef<HTMLDivElement>(null);
 
+  /* Dismissing an admin's registration suggestion (v2.105.15). Takes no id — the
+     server scopes it to the caller's own identity — and `refresh()` is what makes
+     the card go away, since whoami is where the invite is read from. */
+  const dismissRegInvite = trpc.identity.dismissRegInvite.useMutation({
+    onSuccess: () => refresh(),
+  });
+
   useEffect(() => {
     if (me?.displayName) setName(me.displayName);
   }, [me?.displayName]);
@@ -537,6 +544,47 @@ export default function ProfilePage() {
                     which is the part that makes the figure non-alarming and is true:
                     `touchGuestExpiry` pushes it out on every visit. */}
                 <GuestHoldNotice expiresAt={me.guestExpiresAt ?? null} />
+                {/* AN ADMIN'S SUGGESTED ADDRESS (v2.105.15). Shown, never applied:
+                    tapping Register prefills this into the email field and stops
+                    there, so the person reads it and can change it before any code
+                    is sent. That is the point of a suggestion — the one human who
+                    owns the inbox is the one who gets to confirm which inbox it is. */}
+                {me.regInvite && (
+                  <div className="rounded-lg border border-primary/20 bg-background/60 p-3 space-y-1.5">
+                    <p className="text-sm font-medium">An administrator suggested an address</p>
+                    <p
+                      className="break-all text-sm text-muted-foreground"
+                      dir="ltr"
+                      style={{ unicodeBidi: "isolate" }}
+                    >
+                      {me.regInvite.email}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      You can change it — registering only ever uses an address you confirm, and the
+                      code goes to whichever one you finish with.
+                    </p>
+                    {/* THE ONE THING SOFTWARE CANNOT GUARD, SAID OUT LOUD.
+                        Nothing here lets an administrator complete a registration —
+                        that needs a request from this browser. What it cannot stop is
+                        somebody talking the person into using an address the somebody
+                        controls, since whoever owns the inbox can then sign in with an
+                        email code. That is unchanged by this feature (they could
+                        always have said "type this address"), so the honest mitigation
+                        is telling the one person who can refuse. */}
+                    <p className="text-xs font-medium text-amber-600 dark:text-amber-500">
+                      Use an address you own. Whoever can read that inbox can sign in to this
+                      number.
+                    </p>
+                    <button
+                      type="button"
+                      className="text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                      onClick={() => dismissRegInvite.mutate()}
+                      disabled={dismissRegInvite.isPending}
+                    >
+                      Dismiss this suggestion
+                    </button>
+                  </div>
+                )}
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Button type="button" className="flex-1" onClick={() => setShowAuth(true)}>
                     Register with email
@@ -685,7 +733,15 @@ export default function ProfilePage() {
         {/* The four overlays are mounted at the ROOT of the page, never inside the
             pane switch: closing a pane while a sheet or dialog is open would unmount
             the open thing from under the user. */}
-        {showAuth && <AuthPanel onClose={() => setShowAuth(false)} />}
+        {showAuth && (
+          <AuthPanel
+            onClose={() => setShowAuth(false)}
+            /* Prefill only — see the prop's own comment for why this is NOT
+               `initialEmail`, which would mail a code to an address the person has
+               not read yet. */
+            suggestedEmail={me.regInvite?.email ?? ""}
+          />
+        )}
         <AvatarPicker
           open={pickerOpen}
           onClose={() => setPickerOpen(false)}

@@ -274,12 +274,21 @@ describe("the panel stays a panel", () => {
     //
     // Still absent, and each absence is a decision: no message reading, no contact
     // listing, and no password or PIN reset.
+    //
+    // v2.105.15 (#111) is the third growth, and the narrowest: the two invite
+    // procedures write a SUGGESTED address onto a guest identity and nothing else.
+    // They deliberately do NOT register anybody, because the claim writer takes its
+    // candidates only from the requesting browser — which is why v2.99.99 could
+    // refuse the direct version as an account-takeover primitive and this one can
+    // ship.
     const calls = [...ADMIN_UI.matchAll(/trpc\.admin\.([A-Za-z]+)\./g)].map((m) => m[1]);
     expect([...new Set(calls)].sort()).toEqual(
       [
         "amIAdmin",
+        "clearGuestRegistrationInvite",
         "deleteIdentity",
         "findIdentities",
+        "inviteGuestRegistration",
         "pushDiagnostics",
         "sendTestPush",
         "setAccountType",
