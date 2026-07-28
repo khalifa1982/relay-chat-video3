@@ -70,7 +70,7 @@ afterEach(() => {
 function configure(extra: Record<string, string> = {}) {
   process.env.APNS_P8_KEY = privateKey;
   process.env.APNS_KEY_ID = "ABC123DEFG";
-  process.env.APNS_TEAM_ID = "QJBVFFML9P";
+  process.env.APNS_TEAM_ID = "XYZ987WVUT";
   process.env.APNS_BUNDLE_ID = "com.app.relaymobile";
   Object.assign(process.env, extra);
 }
@@ -209,7 +209,7 @@ describe("v2.105.12 — the provider token", () => {
     // `kid` is how Apple selects the key; `alg` must be ES256 for a .p8.
     expect(header).toEqual({ alg: "ES256", kid: "ABC123DEFG", typ: "JWT" });
     const claims = JSON.parse(Buffer.from(c, "base64url").toString());
-    expect(claims.iss).toBe("QJBVFFML9P");
+    expect(claims.iss).toBe("XYZ987WVUT");
     expect(claims.iat).toBe(1_700_000_000);
     const ok = crypto.verify(
       "sha256",
@@ -280,7 +280,7 @@ describe("v2.105.12 — configuration is read per call and fails to ABSENT", () 
     expect(apnsVoipConfigured()).toBe(false);
     process.env.APNS_KEY_ID = "ABC123DEFG";
     expect(apnsVoipConfigured()).toBe(false);
-    process.env.APNS_TEAM_ID = "QJBVFFML9P";
+    process.env.APNS_TEAM_ID = "XYZ987WVUT";
     // Still no topic and no bundle id — nothing to address.
     expect(apnsVoipConfigured()).toBe(false);
     process.env.APNS_BUNDLE_ID = "com.app.relaymobile";

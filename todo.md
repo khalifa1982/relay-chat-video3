@@ -11243,7 +11243,7 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 
 - [x] **THE OWNER SENT A VoIP SERVICES CERTIFICATE, NOT A .p8** — after saying the `.p8` was
       "already on the fleet". Verified locally with openssl: `UID=com.app.relaymobile.voip`,
-      `CN=VoIP Services: com.app.relaymobile`, `OU=QJBVFFML9P`, valid 2026-07-28 → 2027-08-27,
+      `CN=VoIP Services: com.app.relaymobile`, `OU=<the owner's team id>`, valid 2026-07-28 → 2027-08-27,
       2048-bit RSA, **and the private key genuinely pairs with the certificate**. So they had no
       `.p8` at all and v2.105.12/13 could never have rung an iPhone for them.
 - [x] **A FALSE POSITIVE IN MY OWN VERIFICATION, CAUGHT AND CORRECTED.** My first pair-check
