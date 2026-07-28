@@ -174,6 +174,12 @@ const config: ExpoConfig = {
     // Local plugin: enable Android picture-in-picture for active calls.
     "./plugins/with-android-pip.js",
   ],
+  extra: {
+    eas: {
+      projectId: "e157c3d8-8d70-42ad-a11c-86d75c691039",
+    },
+  },
+  owner: "uaecoms-team",
   experiments: {
     typedRoutes: true,
     reactCompiler: true,
