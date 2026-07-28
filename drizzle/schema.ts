@@ -637,7 +637,20 @@ export const statuses = mysqlTable(
   "statuses",
   {
     id: int("id").autoincrement().primaryKey(),
-    identityId: int("identityId").notNull(), // owner
+    identityId: int("identityId").notNull(), // AUTHOR — always a person
+    /**
+     * The GROUP this story belongs to, or NULL for a personal one (v2.105.5).
+     *
+     * `identityId` stays notNull and keeps meaning the AUTHOR: a group does not
+     * write, a member does, and the viewer needs to know which member. So this is
+     * an ADDRESSEE, not an owner — which is also what keeps the migration a
+     * no-op, since NULL is exactly the reading every pre-existing row needs.
+     *
+     * The audience follows from it: a group story is visible to the group's
+     * MEMBERS rather than to the author's contacts, which is why the audience
+     * rule takes the row and not just an owner id.
+     */
+    conversationId: int("conversationId"),
     /** "text" | "image" | "video" | "audio". */
     kind: varchar("kind", { length: 16 }).notNull(),
     /** The text body (kind=text) OR the caption (image/video/audio). */
@@ -666,6 +679,9 @@ export const statuses = mysqlTable(
   (t) => ({
     ownerIdx: index("statuses_owner_idx").on(t.identityId),
     expiresIdx: index("statuses_expires_idx").on(t.expiresAt),
+    // The feed asks "any live story for these groups", so the index leads with
+    // the group and carries the expiry — the same shape the owner index has.
+    convoIdx: index("statuses_convo_idx").on(t.conversationId, t.expiresAt),
   }),
 );
 export type Status = typeof statuses.$inferSelect;

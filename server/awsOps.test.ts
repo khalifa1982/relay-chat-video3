@@ -318,6 +318,7 @@ describe("aws-ops.yml — live-verify: read-only, two vantage points, injection-
      end anchor is searched FROM the start so it cannot resolve to something
      earlier, and the window is asserted non-empty — a slice that collapses to
      "" makes every assertion in it pass vacuously. */
+  const FLEET = fs.readFileSync(path.resolve(__dirname, "..", "scripts", "fleet-verify.mjs"), "utf8");
   const lvAt = OPS.indexOf("live-verify — prove the live site is serving");
   const lvEnd = OPS.indexOf("- name: recover-identity", lvAt);
   const lv = OPS.slice(lvAt, lvEnd);
@@ -340,11 +341,18 @@ describe("aws-ops.yml — live-verify: read-only, two vantage points, injection-
   });
 
   it("probes BOTH vantage points, and names which side failed", () => {
-    // The whole reason for two probes: a check that fails from outside and passes
-    // inside localises the fault to the edge. Reporting only a combined verdict
-    // would throw away exactly the information the second probe was run for.
+    /* The whole reason for two probes: a check that fails from outside and passes
+       inside localises the fault to the edge. Reporting only a combined verdict
+       would throw away exactly the information the second probe was run for.
+
+       REWRITTEN for v2.105.5: the in-fleet half moved into
+       `scripts/fleet-verify.mjs`, which fans it out to EVERY instance instead of
+       picking one — so the localhost base now lives there. The property is
+       unchanged and is asserted at its new home plus behaviourally in
+       server/fleetVerify.test.ts. */
     expect(lv).toMatch(/--base "https:\/\/\$DOMAIN"/);
-    expect(lv).toMatch(/--base http:\/\/127\.0\.0\.1:/);
+    expect(lv).toMatch(/node scripts\/fleet-verify\.mjs/);
+    expect(FLEET).toMatch(/--base http:\/\/127\.0\.0\.1:/);
     expect(lv).toMatch(/this is an EDGE problem/);
     expect(lv).toMatch(/the fault is in the application or its deploy/);
   });
@@ -379,9 +387,15 @@ describe("aws-ops.yml — live-verify: read-only, two vantage points, injection-
     ]) {
       expect(lv).not.toMatch(forbidden);
     }
-    // The only SSM verb is send-command + reading its result.
-    const verbs = [...lv.matchAll(/aws ssm ([a-z-]+)/g)].map((m) => m[1]);
+    /* The SSM verbs moved into the script with the fan-out, so they are checked
+       there now — still exactly send-command plus reading its result, and the
+       script is separately asserted to mutate nothing on the instance. */
+    expect([...lv.matchAll(/aws ssm ([a-z-]+)/g)].map((m) => m[1])).toEqual([]);
+    const verbs = [...FLEET.matchAll(/"ssm", "([a-z-]+)"/g)].map((m) => m[1]);
     expect([...new Set(verbs)].sort()).toEqual(["list-command-invocations", "send-command"]);
+    for (const forbidden of [/"ec2", "(?!describe)/, /"elbv2", "(?!describe)/, /put-parameter/]) {
+      expect(FLEET).not.toMatch(forbidden);
+    }
   });
 
   it("shape-checks the number and base64-encodes every free-text input", () => {
@@ -389,19 +403,15 @@ describe("aws-ops.yml — live-verify: read-only, two vantage points, injection-
     // shell three times (SES_EMAIL/DOMAIN, `region`, then the recovery inputs).
     expect(lv).toMatch(/\*\[!0-9\]\*\)/);
     expect(lv).toMatch(/\[ "\$\{#VNUM\}" -eq 6 \]/);
-    expect(lv).toMatch(/NUM_B64=\$\(printf %s "\$VNUM" \| base64 -w0\)/);
-    expect(lv).toMatch(/EMAIL_B64=\$\(printf %s "\$VEMAIL" \| base64 -w0\)/);
-    // …and the raw values never appear in the string executed on the instance.
-    // Scoped to the ASSIGNMENTS, not to the region between two anchors: the
-    // region legitimately contains `if [ -n "$VEMAIL" ]`, a presence test that
-    // interpolates nothing, so a region-wide `not.toMatch` failed on correct
-    // code. What matters is only what gets built INTO the command string.
-    const asg = lv.split("\n").filter((l) => /^\s*CMD_APP=/.test(l));
-    expect(asg.length).toBeGreaterThanOrEqual(4);
-    for (const line of asg) {
-      expect(line, line).not.toMatch(/\$VEMAIL/);
-      expect(line, line).not.toMatch(/\$VNUM\b/);
-    }
+    /* The encoding moved into the script, where it is a FUNCTION and therefore
+       replayable against hostile input — which server/fleetVerify.test.ts does,
+       over seven payloads. Here the property is that the workflow hands the
+       values over and builds no remote command of its own. */
+    expect(FLEET).toMatch(/base64 -d/);
+    expect(FLEET).toMatch(/Buffer\.from\(v, "utf8"\)\.toString\("base64"\)/);
+    // The workflow no longer assembles a remote command line at all.
+    expect(lv).not.toMatch(/CMD_APP=/);
+    expect(lv).not.toMatch(/AWS-RunShellScript/);
   });
 
   it("sends mail only when explicitly asked, and only from the instance", () => {
@@ -410,17 +420,28 @@ describe("aws-ops.yml — live-verify: read-only, two vantage points, injection-
     const send = OPS.slice(OPS.indexOf("      verify_email_send:"), OPS.indexOf("      turn_apply:"));
     expect(send).toMatch(/type: boolean/);
     expect(send).toMatch(/default: false/);
-    expect(lv).toMatch(/\[ "\$VSEND" = "true" \] && SENDFLAG=" --send"/);
-    // The mail check is inside the SSM branch, never run on the runner: the
-    // credentials exist only in /home/relay/.env.
-    const runnerHalf = lv.slice(0, lv.indexOf("IID="));
-    expect(runnerHalf).not.toMatch(/mail-verify/);
-    expect(lv).toMatch(/node scripts\/mail-verify\.mjs/);
+    // Passed through as a flag; the gating itself is in the script and covered
+    // behaviourally in server/fleetVerify.test.ts.
+    expect(lv).toMatch(/\[ "\$VSEND" = "true" \] && echo --send/);
+    /* The mail check must never run on the RUNNER: the SMTP credentials exist only
+       in /home/relay/.env. The workflow does not mention the mailer at all now —
+       it is inside the remote command the script builds. */
+    expect(lv).not.toMatch(/mail-verify/);
+    expect(FLEET).toMatch(/node scripts\/mail-verify\.mjs --to/);
   });
 
   it("reads each verdict from the script's own printed marker, not the SSM status", () => {
-    expect(lv).toMatch(/grep -q "LIVE_VERIFY_EXIT=0"/);
-    expect(lv).toMatch(/grep -q "MAIL_VERIFY_EXIT=0"/);
+    /* v2.99.46's lesson, one layer out now: the workflow reads the FLEET script's
+       exit code, and the fleet script reads each instance's printed
+       LIVE_VERIFY_EXIT / MAIL_VERIFY_EXIT marker rather than the SSM status —
+       because a wrapper or a pipeline can mask a non-zero exit. */
+    expect(lv).toMatch(/FLEET=\$\?/);
+    expect(FLEET).toMatch(/LIVE_VERIFY_EXIT/);
+    expect(FLEET).toMatch(/MAIL_VERIFY_EXIT/);
+    expect(FLEET).toMatch(/FLEET_VERIFY_EXIT=/);
+    // The SSM per-invocation Status is used only to know when polling may stop,
+    // never as the verdict.
+    expect(FLEET).not.toMatch(/status === "Success"/);
   });
 
   it("both scripts it invokes are actually shipped to the instances", () => {

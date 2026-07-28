@@ -2377,6 +2377,15 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // already-published status.
     { table: "identities", column: "statusAudience", ddl: "ADD COLUMN `statusAudience` varchar(16)" },
     { table: "statuses", column: "audience", ddl: "ADD COLUMN `audience` varchar(16)" },
+    // v2.105.5 — a story addressed to a GROUP rather than to the author's
+    // contacts. `identityId` still means the AUTHOR (a group does not write, a
+    // member does, and the viewer needs to know which one), so this is an
+    // ADDRESSEE column; NULL is exactly the reading every pre-existing row needs,
+    // which is what makes the migration a no-op until someone posts one. The
+    // index leads with the group and carries the expiry, because the feed asks
+    // "any live story for these groups" — the same shape the owner index has.
+    { table: "statuses", column: "conversationId", ddl: "ADD COLUMN `conversationId` int" },
+    { table: "statuses", column: "statuses_convo_idx", ddl: "ADD INDEX `statuses_convo_idx` (`conversationId`, `expiresAt`)" },
     // v2.99.49 — per-account password-login lockout (closes the v2.99.20 residual).
     { table: "users", column: "loginPwAttempts", ddl: "ADD COLUMN `loginPwAttempts` int" },
     { table: "users", column: "loginPwLockedAt", ddl: "ADD COLUMN `loginPwLockedAt` timestamp NULL" },
@@ -4958,7 +4967,15 @@ export async function authorizeStorageKey(
     if (st.identityId === identityId) return { kind: "status", authorized: true };
     // v2.99.66: the audience is a property of THIS post, not of its owner — an
     // "everyone" story and a contacts-only one can be live at the same time.
-    const ok = await statusAudienceAuthorized(identityId, st.identityId, st.audience);
+    // The group is threaded through, or a member would be refused their own
+    // group's story media — the audience rule is the same one, and it needs the
+    // whole row to answer.
+    const ok = await statusAudienceAuthorized(
+      identityId,
+      st.identityId,
+      st.audience,
+      st.conversationId,
+    );
     return { kind: "status", authorized: ok };
   }
   const att = await getAttachmentByStorageKey(storageKey);
@@ -5265,13 +5282,35 @@ export async function getIdentityIdsWhoSaved(number: string): Promise<number[]> 
 }
 
 /** A single ACTIVE status by its media key (drives storage-proxy authorization). */
+/** What the media gate needs to know about the status a key belongs to.
+ *
+ *  `conversationId` (v2.105.5) is the group it was addressed to, or null. Without
+ *  it a group story's photo would be judged by the AUTHOR's contacts rule and
+ *  refused to the very members it was posted for.
+ *
+ *  Named rather than inlined into the signature deliberately: a multi-line
+ *  `Promise<{ … }>` return type ENDS a line, and several tests locate a
+ *  function's body by finding the first `{` that ends a line — so an inline
+ *  version made them read the type literal instead of the body, silently. */
+export type ActiveStatusMediaRow = {
+  id: number;
+  identityId: number;
+  audience: string | null;
+  conversationId: number | null;
+};
+
 export async function getActiveStatusByMediaKey(
   mediaKey: string,
-): Promise<{ id: number; identityId: number; audience: string | null } | null> {
+): Promise<ActiveStatusMediaRow | null> {
   const db = await getDb();
   if (!db) return null;
   const [row] = await db
-    .select({ id: statuses.id, identityId: statuses.identityId, audience: statuses.audience })
+    .select({
+      id: statuses.id,
+      identityId: statuses.identityId,
+      audience: statuses.audience,
+      conversationId: statuses.conversationId,
+    })
     .from(statuses)
     .where(and(eq(statuses.mediaKey, mediaKey), gt(statuses.expiresAt, new Date())))
     .limit(1);
@@ -5301,6 +5340,15 @@ export async function statusAudienceAuthorized(
   requesterId: number,
   ownerId: number,
   audience?: string | null,
+  /**
+   * The GROUP this story was addressed to, or null/undefined for a personal one
+   * (v2.105.5). A FOURTH OPTIONAL PARAMETER rather than a second function,
+   * because every existing call site keeps working unchanged and — more
+   * importantly — a second predicate is how one surface comes to authorize a
+   * group story that another refuses. There are five call sites; only one
+   * predicate may decide.
+   */
+  conversationId?: number | null,
 ): Promise<boolean> {
   if (requesterId === ownerId) return true;
   const db = await getDb();
@@ -5312,6 +5360,37 @@ export async function statusAudienceAuthorized(
   // audience setting, so it is deliberately tested first.
   if (await isNumberBlockedBy(ownerId, requester.number)) return false; // owner blocked me
   if (await isNumberBlockedBy(requesterId, owner.number)) return false; // I blocked owner
+  /* A GROUP STORY IS VISIBLE TO THE GROUP'S MEMBERS, and to nobody else.
+   *
+   * Deliberately AFTER the two block checks and BEFORE the audience switch. After
+   * the blocks, because a block has always hidden statuses both ways and there is
+   * no reason a shared group should undo that — it is the same rule
+   * `messages.send` applies to people in a group who have blocked each other.
+   * Before the audience switch, because `audience` describes a PERSONAL story's
+   * reach (my contacts, or everyone) and neither meaning applies here: a group
+   * story addressed to twenty members must not become world-readable because its
+   * author's default happened to say "everyone". So membership is the whole test,
+   * and it REPLACES the audience rather than composing with it.
+   *
+   * Membership is read live rather than frozen at post time on purpose: somebody
+   * removed from a group should stop seeing its stories, and somebody added
+   * should see the ones still inside their 24h window — the alternative is a
+   * story that outlives the access it was posted under. */
+  if (conversationId != null) {
+    const [member] = await db
+      // `identityId`, not `id`: this table's primary key is the
+      // (conversationId, identityId) PAIR and it has no surrogate id column.
+      .select({ identityId: conversationParticipants.identityId })
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, conversationId),
+          eq(conversationParticipants.identityId, requesterId),
+        ),
+      )
+      .limit(1);
+    return !!member;
+  }
   // "Everyone": any signed-in identity that gets this far may watch. Note the
   // caller has already established the requester IS a resolved identity — an
   // anonymous request never reaches here (the storage proxy refuses a null

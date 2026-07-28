@@ -26,10 +26,22 @@ const ROUTERS = read("server/v2routers.ts");
 
 describe("v2.99.33 — status visibility is either-direction (post reaches your contacts)", () => {
   it("statusAudienceAuthorized authorizes when EITHER side saved the other", () => {
-    // Slice widened for v2.99.55: the function grew an "everyone" branch, which
-    // pushed `return !!theySavedMe;` past the old 1400-char window. The
-    // either-direction rule below is UNCHANGED — it is now the "contacts" option.
-    const fn = V2DB.slice(V2DB.indexOf("export async function statusAudienceAuthorized"), V2DB.indexOf("export async function statusAudienceAuthorized") + 2400);
+    /* BOUNDED BY THE FUNCTION'S OWN END, not by a character count. This window was
+       1400 chars, then widened to 2400 in v2.99.55 when an "everyone" branch was
+       added, and v2.105.5's group branch outgrew it again — a fixed length is a
+       pin that breaks on every unrelated addition while never asserting anything
+       about where the function actually ends. The end is now found by matching
+       the brace, and the window is asserted non-empty so it cannot collapse to ""
+       and pass vacuously. */
+    const fnAt = V2DB.indexOf("export async function statusAudienceAuthorized");
+    expect(fnAt).toBeGreaterThan(0);
+    let fnEnd = V2DB.indexOf("{\n", V2DB.indexOf(")", fnAt));
+    for (let depth = 0; fnEnd < V2DB.length; fnEnd++) {
+      if (V2DB[fnEnd] === "{") depth++;
+      else if (V2DB[fnEnd] === "}" && --depth === 0) break;
+    }
+    const fn = V2DB.slice(fnAt, fnEnd + 1);
+    expect(fn.length).toBeGreaterThan(600);
     expect(fn).toMatch(/if \(iSavedThem\) return true;/);
     expect(fn).toMatch(/return !!theySavedMe;/);
     // block either way still hides both directions
