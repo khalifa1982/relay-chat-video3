@@ -25,7 +25,7 @@ import { execFileSync } from "node:child_process";
 // Both scripts guard their own main body, so importing them here runs nothing.
 // @ts-expect-error — plain .mjs by design: it must run under bare `node` on an
 // EC2 instance, from the release tar, with no build step.
-import { readExpectedVersion, assetUrlsFrom, markupOnly, lazyChunkNames, runChecks } from "../scripts/live-verify.mjs";
+import { readExpectedVersion, assetUrlsFrom, markupOnly, lazyChunkNames, runChecks, isLoopbackHost } from "../scripts/live-verify.mjs";
 // @ts-expect-error — same.
 import { resolveFrom, readSmtpConfig, verifyMail } from "../scripts/mail-verify.mjs";
 import { APP_VERSION } from "../shared/version";
@@ -58,7 +58,7 @@ type Overrides = Record<string, (req: http.IncomingMessage, res: http.ServerResp
 
 /** Spin up a stub that answers every endpoint the checks probe, with named
  *  routes any test may override to inject exactly one defect. */
-async function stubSite(overrides: Overrides = {}) {
+async function stubSite(overrides: Overrides = {}, bindAll = false) {
   const routes: Overrides = {
     "/api/version": (_q, res) => res.end(JSON.stringify({ version: APP_VERSION })),
     "/api/health": (_q, res) =>
@@ -88,7 +88,7 @@ async function stubSite(overrides: Overrides = {}) {
     res.statusCode = 404;
     res.end("nope");
   });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  await new Promise<void>((r) => (bindAll ? server.listen(0, r) : server.listen(0, "127.0.0.1", r)));
   const port = (server.address() as net.AddressInfo).port;
   return {
     base: `http://127.0.0.1:${port}`,
@@ -322,10 +322,56 @@ describe("live-verify — each check actually bites", () => {
   });
 
   it("FAILS when the sitemap advertises a host other than the one that served it", async () => {
-    const rs = await checksAgainst({
+    /* The stub listens on 127.0.0.1, which the check now treats as a loopback
+       probe — so this drives it through a NON-loopback base to exercise the
+       self-reference rule. A `Host` header is enough: the stub echoes whatever it
+       is given, and the check reads the base URL it was asked about. */
+    // BOUND TO ALL INTERFACES, deliberately: the stub otherwise listens on
+    // 127.0.0.1 only, so addressing it by a non-loopback IP never connected and
+    // the check FAILED by THROWING — the assertion below then passed for the
+    // wrong reason, which a mutation disabling the self-reference rule proved by
+    // surviving. No public DNS is involved either way.
+    const site = await stubSite({
       "/sitemap.xml": (_q, res) => res.end(`<?xml version="1.0"?><urlset><url><loc>https://example.org/</loc></url></urlset>`),
+    }, true);
+    const port = new URL(site.base).port;
+    try {
+      const addr = Object.values(os.networkInterfaces())
+        .flat()
+        .find((i) => i && i.family === "IPv4" && !i.internal)?.address;
+      expect(addr, "no non-loopback IPv4 on this host — cannot exercise the public branch").toBeTruthy();
+      const rs = (await runChecks(`http://${addr}:${port}`, { root: "/nonexistent-root" })) as Result[];
+      // The SPECIFIC message, not merely "not loopback": a thrown fetch also
+      // produces a FAIL, and only the wording distinguishes the two.
+      expect(noteOf(rs, "seo is dynamic")).toMatch(/names a different host/);
+      expect(verdictOf(rs, "seo is dynamic")).toBe("FAIL");
+    } finally {
+      await site.close();
+    }
+  });
+
+  it("PASSES a loopback probe whose sitemap names the fleet's configured origin", async () => {
+    /* THE FALSE FAILURE THIS CHECK PRODUCED ON ITS FIRST REAL RUN, pinned.
+       `appBaseUrl()` resolves APP_URL, then DOMAIN, and only then the request's
+       Host — so a fleet with either set (the recommended configuration) serves
+       `https://your-chat.io` to everyone, including the in-fleet probe against
+       127.0.0.1. Demanding self-reference there called correct behaviour a
+       failure, from the one vantage point that cannot see its own public name. */
+    const rs = await checksAgainst({
+      "/sitemap.xml": (_q, res) => res.end(`<?xml version="1.0"?><urlset><url><loc>https://your-chat.io/</loc></url></urlset>`),
+    });
+    expect(verdictOf(rs, "seo is dynamic")).toBe("PASS");
+    expect(noteOf(rs, "seo is dynamic")).toMatch(/your-chat\.io/);
+  });
+
+  it("still FAILS a loopback probe served a sitemap with no absolute origin", async () => {
+    // The weaker loopback rule must still catch a stale STATIC sitemap, which is
+    // what the check exists for.
+    const rs = await checksAgainst({
+      "/sitemap.xml": (_q, res) => res.end(`<?xml version="1.0"?><urlset><url><loc>/</loc></url></urlset>`),
     });
     expect(verdictOf(rs, "seo is dynamic")).toBe("FAIL");
+    expect(noteOf(rs, "seo is dynamic")).toMatch(/no absolute <loc>/);
   });
 
   it("FAILS when an anonymous caller is served a storage object", async () => {
@@ -424,6 +470,15 @@ describe("live-verify — the pure helpers", () => {
   it("ignores an asset reference that is only inside a comment", () => {
     expect(assetUrlsFrom(`<!-- <script src="/assets/ghost.js"></script> --><script src="/assets/real.js"></script>`, "https://h"))
       .toEqual(["https://h/assets/real.js"]);
+  });
+
+  it("recognises the in-fleet probe's host, and only that", () => {
+    for (const h of ["127.0.0.1", "127.1.2.3", "localhost", "LOCALHOST", "::1", "[::1]"]) {
+      expect(isLoopbackHost(h), h).toBe(true);
+    }
+    for (const h of ["your-chat.io", "10.0.0.4", "192.168.1.9", "example.com", "1270.0.0.1", ""]) {
+      expect(isLoopbackHost(h), h).toBe(false);
+    }
   });
 
   it("discovers the lazily-imported landing chunk by name", () => {

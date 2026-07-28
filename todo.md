@@ -11239,6 +11239,40 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.4 — #44 ran against production: 11/11, and its one failure was my own check (2026-07-28)
+- [x] v2.105.2 built the live verification. This RAN it, against the real fleet.
+- [x] **FROM A VISITOR'S PATH, 11/11 PASS**: `version 2.105.2 === shared/version.ts`; **3 assets
+      BYTE-IDENTICAL to this tree's own build**, which is what makes every local measurement a statement about
+      production rather than about a sandbox; `Arabic face + RTL override + LTR islands all served` — #44's
+      first item, verified live at last; the landing dialer's own resolver answering correctly
+      (`000000 → no such user`); `3 STUN · 6 TURN` across both relays with TLS on 443; `redisBus true ·
+      cluster true`; an anonymous storage read refused 403; and `index.html 6145 bytes`, i.e. the
+      manus-runtime strip working — 372KB down to 6KB.
+- [x] **THE IN-FLEET PROBE REPORTED ONE FAILURE, AND THE APPLICATION WAS RIGHT WHILE MY CHECK WAS WRONG.**
+      `appBaseUrl()` resolves `APP_URL`, then `DOMAIN`, and only THEN the request's Host — so a fleet with
+      either set (the recommended configuration) serves `https://your-chat.io` to everybody, including the
+      loopback probe. Demanding that the sitemap name the host that asked therefore called correct behaviour a
+      failure, from the single vantage point that cannot see its own public name.
+- [x] **THIS IS THE TWO-VANTAGE-POINT DESIGN EARNING ITS KEEP ON ITS FIRST RUN.** The discrepancy is exactly
+      what it was built to surface; the job was diagnosing WHICH side was wrong rather than assuming the app.
+- [x] **THE FIX KEEPS THE CHECK'S REAL PURPOSE**, which is catching a stale STATIC sitemap: from a public host
+      self-reference is still required; from loopback it asserts the weaker true thing — a well-formed urlset
+      naming an absolute origin — so a static file with a relative `<loc>` is still caught.
+- [x] **A TEST THAT PASSED FOR THE WRONG REASON, CAUGHT BY MUTATION AND WORTH NAMING**: the public-branch case
+      addressed the stub by a non-loopback IP, but the stub binds `127.0.0.1` only — so the fetch never
+      connected, the check FAILED **by throwing**, and the assertion was satisfied by an error rather than by
+      the rule. A mutation disabling the self-reference rule survived and proved it. The stub now binds all
+      interfaces and the assertion names the SPECIFIC message, because a thrown fetch and a real refusal both
+      produce "FAIL" and only the wording separates them.
+- [x] An earlier draft of that test used a public-DNS hostname — the same trap one layer out, since a resolver
+      failure produces the very FAIL being asserted. `isLoopbackHost` is exported and tested over a table
+      instead of being inferred from a live request.
+- [x] `server/liveVerify.test.ts` → 43; **all 4 new tripwires verified by MUTATION**, one of them twice.
+- [x] **THE HONEST REMAINDER IS UNCHANGED**: nobody has looked at the Arabic page on a phone, and no mail has
+      been delivered to an inbox — the mail probe needs `verify_email`, and it stops before DATA unless
+      `verify_email_send` is also on. What is now PROVEN rather than argued: production serves these exact bytes.
+- [x] No schema change, no new dependency, no new env var, no server change. 3329 tests.
+
 ## v2.105.3 — the day header stays on screen while you scroll that day (2026-07-28)
 - [x] **OWNER**, on the previously-declined list: *"Sticky day headers DO IT"*.
 - [x] **THIS NEEDED A STRUCTURAL CHANGE, NOT ONE CSS CLASS.** The date pill has existed since v2.71,
