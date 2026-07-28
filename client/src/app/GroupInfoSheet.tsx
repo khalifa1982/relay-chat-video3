@@ -9,6 +9,109 @@ import { ProfileStatusPicker } from "@/app/ProfileStatusPicker";
 import { describeProfileStatus, type ProfileStatus } from "@shared/profileStatus";
 
 /**
+ * The group's invite link (v2.105.9, #114) — ADMIN-ONLY, and its own component so the
+ * link state cannot leak into the sheet's save/status state.
+ *
+ * NOTHING IS MINTED UNTIL ASKED. A link is a bearer capability, so generating one on
+ * every sheet open would put a live invite in the clipboard-adjacent DOM of anybody who
+ * looked at the group's details. It takes a tap, and the tap is what creates it.
+ *
+ * REVOKE IS CONFIRMED, because it cannot be undone for the people holding the old link
+ * and the copy has to say what actually happens: existing members stay, only the link
+ * stops working.
+ */
+function InviteLinkSection({ conversationId }: { conversationId: number }) {
+  const [link, setLink] = useState<string | null>(null);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const create = trpc.messages.createGroupInvite.useMutation({
+    onSuccess: (r) => setLink(`${window.location.origin}${r.path}`),
+    onError: (e) => toast.error(e.message || "Couldn't create an invite link."),
+  });
+  const revoke = trpc.messages.revokeGroupInvites.useMutation({
+    onSuccess: () => {
+      // The old link is dead, so holding onto it on screen would be a lie.
+      setLink(null);
+      setConfirmRevoke(false);
+      toast.success("Invite links revoked — old links no longer work.");
+    },
+    onError: (e) => toast.error(e.message || "Couldn't revoke the invite links."),
+  });
+
+  return (
+    <div className="space-y-2">
+      <Label className="text-xs uppercase tracking-wider text-muted-foreground">Invite link</Label>
+      {link ? (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/40 px-3 py-2.5">
+            <span dir="ltr" className="min-w-0 flex-1 truncate text-xs [unicode-bidi:isolate]">
+              {link}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                navigator.clipboard?.writeText(link).then(
+                  () => toast.success("Link copied"),
+                  () => toast.error("Couldn't copy — select and copy it by hand."),
+                );
+              }}
+              className="shrink-0 rounded-lg border border-border px-2 py-1 text-xs font-medium"
+            >
+              <Copy className="size-3.5" aria-hidden /> <span className="sr-only">Copy link</span>
+            </button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Anyone with this link can join. It expires in 7 days, and whoever joins sees only
+            messages sent from then on.
+          </p>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => create.mutate({ conversationId })}
+          disabled={create.isPending}
+          className="w-full rounded-xl border border-border px-4 py-2.5 text-sm font-medium disabled:opacity-60"
+        >
+          {create.isPending ? "Creating…" : "Create an invite link"}
+        </button>
+      )}
+      {confirmRevoke ? (
+        <div className="rounded-xl border border-border/60 bg-muted/40 p-3">
+          <p className="text-xs">
+            Revoke every invite link for this group? Anyone holding one can no longer join.
+            Members who already joined stay in the group.
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={() => revoke.mutate({ conversationId })}
+              disabled={revoke.isPending}
+              className="flex-1 rounded-lg bg-destructive px-3 py-2 text-xs font-semibold text-destructive-foreground disabled:opacity-60"
+            >
+              {revoke.isPending ? "Revoking…" : "Revoke"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmRevoke(false)}
+              className="flex-1 rounded-lg border border-border px-3 py-2 text-xs font-medium"
+            >
+              Keep it
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setConfirmRevoke(true)}
+          className="text-[11px] text-muted-foreground underline underline-offset-2"
+        >
+          Revoke all invite links
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
  * A group's own name, photo and status (v2.102.1) — the editor for the data v2.102.0
  * added. Opened by tapping a group's conversation header, which until now did nothing
  * at all for a group (it only ever opened a peer's profile for a DM), so a dead tap
@@ -316,6 +419,11 @@ export function GroupInfoSheet({
                   : ""}
               </p>
             </div>
+
+            {/* INVITE LINK (v2.105.9, #114) — ADMINS ONLY, and the section is absent
+                rather than disabled for everyone else: a control that always refuses is
+                worse than one that is not there (the v2.103.3 rule). */}
+            {iAmAdmin && <InviteLinkSection conversationId={conversationId} />}
           </div>
 
           {save.isPending && (

@@ -257,7 +257,29 @@ describe("deleting a thread is recoverable, and says so", () => {
     // v2.102.2 lesson).
     expect(fn(V2DB, "searchMessages")).toMatch(/clearedUpTo > 0 \? gt\(messages\.id, clearedUpTo\) : undefined/);
     // Read off the membership row both functions already fetch, so it costs no query.
-    expect(fn(V2DB, "listMessages")).toMatch(/member\[0\]\?\.clearedUpToMessageId \?\? 0/);
+    //
+    // REWRITTEN IN v2.105.9 TO THE PROPERTY. This froze the exact expression
+    // `member[0]?.clearedUpToMessageId ?? 0`, which #114 replaces with a shared
+    // `visibleFloorFor(member[0])` composing the clear watermark with a later JOIN
+    // watermark by max. Frozen, it forbade that consolidation while saying nothing about
+    // whether a cleared thread's messages are actually hidden. What matters is that the
+    // floor is derived from the already-fetched membership row (no extra query) and that
+    // the CLEARED column is one of its inputs.
+    expect(fn(V2DB, "listMessages")).toMatch(/visibleFloorFor\(member\[0\] \?\? \{\}\)/);
+    expect(fn(V2DB, "searchMessages")).toMatch(/visibleFloorFor\(member\[0\] \?\? \{\}\)/);
+    // `visibleFloorFor` is `export function`, not `export async function`, so the helper
+    // above cannot find it — sliced by hand rather than loosening a locator twenty other
+    // assertions depend on.
+    // …and bounded by the RETURN rather than by the next `\n}`, which is the end of the
+    // destructured PARAMETER object — the same brace-matching trap that bit twice while
+    // writing this release.
+    const floorAt = V2DB.indexOf("export function visibleFloorFor");
+    expect(floorAt).toBeGreaterThan(-1);
+    const ret = V2DB.indexOf("return Math.max(", floorAt);
+    expect(ret).toBeGreaterThan(floorAt);
+    const floorFn = V2DB.slice(ret, V2DB.indexOf(";", ret));
+    expect(floorFn).toMatch(/clearedUpToMessageId \?\? 0/);
+    expect(floorFn).toMatch(/joinedAtMessageId \?\? 0/);
   });
 
   it("the thread RETURNS by itself when something newer arrives — no write on send", () => {

@@ -154,16 +154,35 @@ describe("the sheet itself", () => {
   it("the group id renders LTR and grouped, like every number in the app", () => {
     // Pinned on the ID's OWN element. A bare /dir="ltr"/ was satisfied by the member
     // rows' numbers, so deleting it from the id itself passed (caught by mutation).
-    const btn = SHEET.slice(SHEET.indexOf("onClick={copyNumber}"), SHEET.indexOf("<span className=\"sr-only\">"));
+    // BOUNDED BY THE BUTTON'S OWN CLOSING TAG (v2.105.9). It used to end at the first
+    // `<span className="sr-only">`, and v2.105.9 added an invite-link section ABOVE this
+    // component containing one — so the end anchor moved BEFORE the start and the slice
+    // silently became `""`. The `length > 80` guard below is what caught it, which is
+    // why that guard exists; the fix is an anchor that cannot be preceded, namely the
+    // element's own terminator.
+    const btnStart = SHEET.indexOf("onClick={copyNumber}");
+    expect(btnStart).toBeGreaterThan(-1);
+    const btn = SHEET.slice(btnStart, SHEET.indexOf("</button>", btnStart));
     expect(btn.length).toBeGreaterThan(80);
     expect(btn).toMatch(/dir="ltr"/);
     expect(btn).toMatch(/\{number\.slice\(0, 3\)\}-\{number\.slice\(3\)\}/);
     // Every number-bearing element carries it, so an RTL locale cannot reorder any of
-    // them — counted, so a new one added without it is caught.
-    // COUNTED ON STRIPPED CODE: the comment above the id explains the rule and
-    // therefore contains the string, so counting the raw file read 3 and failed — the
-    // prose trap, for the eleventh time in this repo.
-    expect((codeOnly(SHEET).match(/dir="ltr"/g) || []).length).toBe(2);
+    // them. REWRITTEN IN v2.105.9 FROM A FIXED COUNT OF 2 TO THE PROPERTY ITSELF: the
+    // count went stale the moment an unrelated LTR island (the invite link, which is a
+    // URL and not a number) was legitimately added, and it never expressed the property
+    // anyway — a count rises equally for an addition that DOES carry `dir` and cannot
+    // fall for a number rendered WITHOUT one. So each number carrier is now named.
+    const memberNum = SHEET.slice(SHEET.indexOf("{m.number}") - 240, SHEET.indexOf("{m.number}"));
+    expect(memberNum).toMatch(/dir="ltr"/);
+    // …and there are still exactly two places a NUMBER is rendered, so a third arriving
+    // without the attribute has to come through this test.
+    const numberSites =
+      (codeOnly(SHEET).match(/\{m\.number\}|\{number\.slice\(0, 3\)\}/g) || []).length;
+    expect(numberSites).toBe(2);
+    // COUNTED ON STRIPPED CODE where a count is used at all: the comment above the id
+    // explains the rule and therefore contains the string, so counting the raw file read
+    // 3 and failed — the prose trap, for the eleventh time in this repo.
+    expect((codeOnly(SHEET).match(/dir="ltr"/g) || []).length).toBeGreaterThanOrEqual(numberSites);
     // A group created before v2.102.0 has none, and says so rather than showing a gap.
     expect(SHEET).toMatch(/no ID/);
   });

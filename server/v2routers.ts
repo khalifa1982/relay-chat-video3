@@ -12,6 +12,7 @@ import { storageGetSignedUrl } from "./storage";
 import { z } from "zod";
 import { personReelKey, groupReelKey } from "../shared/reelKey";
 import { mintGroupCallSeed } from "./groupCallSeed";
+import { mintGroupInvite, verifyGroupInvite, GROUP_INVITE_TTL_MS } from "./groupInvite";
 import { eq } from "drizzle-orm";
 import { getDb, getUserById } from "./db";
 import { identities } from "../drizzle/schema";
@@ -67,6 +68,9 @@ import {
   deleteMessageAsGroupAdmin,
   checkGroupPermission,
   getGroupRoles,
+  getGroupInviteEpoch,
+  revokeGroupInvites,
+  joinGroupByInvite,
   hideMessageForIdentity,
   setThreadState,
   deleteMessage,
@@ -2047,6 +2051,143 @@ export const v2MessagesRouter = router({
          *  secret. The dial proceeds either way; only the seeding is absent. */
         hostSeed: mintGroupCallSeed(input.conversationId, me.number, adminPins),
       };
+    }),
+
+  /**
+   * Mint a shareable invite link for a group (v2.105.9, #114).
+   *
+   * ADMIN-ONLY, via a capability deliberately absent from MEMBER_CAPABILITIES: a link
+   * admits a stranger and every member being able to hand one out is a decision nobody
+   * has made. `checkGroupPermission` also supplies the DM refusal, the not-found refusal
+   * and the fail-closed `unavailable`, so none of those is a second copy here.
+   */
+  createGroupInvite: publicProcedure
+    .input(z.object({ conversationId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const gate = await checkGroupPermission(input.conversationId, me.id, "invite-link");
+      if (!gate.ok) {
+        const message =
+          gate.reason === "not-a-group"
+            ? "That's a direct chat — it has no invite link."
+            : gate.reason === "not-an-admin"
+              ? gate.hasAdmin
+                ? "Only a group admin can create an invite link."
+                : "This group was created before admins existed, so nobody can create an invite link for it."
+              : gate.reason === "unavailable"
+                ? "Couldn't check that group just now."
+                : "That group isn't yours.";
+        throw new TRPCError({
+          code: gate.reason === "unavailable" ? "INTERNAL_SERVER_ERROR" : "FORBIDDEN",
+          message,
+        });
+      }
+      const epoch = await getGroupInviteEpoch(input.conversationId);
+      if (epoch == null) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't read that group just now." });
+      }
+      const token = mintGroupInvite(input.conversationId, epoch);
+      // No fleet secret ⇒ no invite links at all, said plainly rather than handing back
+      // a token that would never verify.
+      if (!token) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Invite links aren't available on this server.",
+        });
+      }
+      return { token, path: `/g/${token}`, expiresInMs: GROUP_INVITE_TTL_MS };
+    }),
+
+  /** Invalidate EVERY outstanding invite link for a group, in one write. Admin-only. */
+  revokeGroupInvites: publicProcedure
+    .input(z.object({ conversationId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const res = await revokeGroupInvites({ conversationId: input.conversationId, actorIdentityId: me.id });
+      if (!res.ok) {
+        const message =
+          res.reason === "not-a-group"
+            ? "That's a direct chat — it has no invite link."
+            : res.reason === "not-an-admin"
+              ? "Only a group admin can revoke an invite link."
+              : res.reason === "unavailable"
+                ? "Couldn't update that group just now."
+                : "That group isn't yours.";
+        throw new TRPCError({
+          code: res.reason === "unavailable" ? "INTERNAL_SERVER_ERROR" : "FORBIDDEN",
+          message,
+        });
+      }
+      return { ok: true };
+    }),
+
+  /**
+   * What is behind this link, for the join screen — name, photo, member count.
+   *
+   * A TOKEN HOLDER LEARNS THIS AND THAT IS THE POINT: somebody deciding whether to join
+   * has to see what they are joining, and a link they hold is already the authority. It
+   * reveals no member's name or number, so a leaked link tells you about the GROUP and
+   * not about the people in it.
+   *
+   * EVERY REFUSAL READS THE SAME. Expired, revoked, mis-signed and no-such-group are one
+   * message, because distinguishing them would turn the endpoint into an oracle for
+   * which conversation ids exist and which epochs are current.
+   */
+  groupInvitePreview: publicProcedure
+    .input(z.object({ token: z.string().min(1).max(256) }))
+    .query(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const claim = verifyGroupInvite(input.token);
+      if (!claim) return null;
+      const epoch = await getGroupInviteEpoch(claim.conversationId);
+      if (epoch == null || epoch !== claim.epoch) return null;
+      const group = (await getGroupsByIds([claim.conversationId]))[0];
+      if (!group) return null;
+      const memberIds = await getConversationParticipantIds(claim.conversationId);
+      return {
+        conversationId: claim.conversationId,
+        title: group.title ?? null,
+        avatarUrl: group.avatarUrl ?? null,
+        number: group.number ?? null,
+        memberCount: memberIds.length,
+        alreadyMember: memberIds.includes(me.id),
+      };
+    }),
+
+  /**
+   * Redeem an invite link: join the group.
+   *
+   * The epoch is re-checked HERE and not merely at preview, because the two are separate
+   * requests and a revoke can land between them — checking only at preview would let a
+   * link revoked seconds ago still admit somebody.
+   *
+   * A LINK-JOINED MEMBER IS AN ORDINARY MEMBER. No role is written, and v2.105.7's
+   * co-host seeding grants nothing to a pin its signed admin list does not name, so this
+   * cannot reach group adminship or call moderation. That composition is exactly what
+   * v2.104.0's review kept closed by having no "members are admins when there is no
+   * admin" fallback.
+   */
+  acceptGroupInvite: publicProcedure
+    .input(z.object({ token: z.string().min(1).max(256) }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const claim = verifyGroupInvite(input.token);
+      if (!claim) throw new TRPCError({ code: "NOT_FOUND", message: "That invite link is no longer valid." });
+      const epoch = await getGroupInviteEpoch(claim.conversationId);
+      if (epoch == null || epoch !== claim.epoch) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "That invite link is no longer valid." });
+      }
+      const res = await joinGroupByInvite({ conversationId: claim.conversationId, identityId: me.id });
+      if (!res.ok) {
+        throw new TRPCError({
+          code: res.reason === "unavailable" ? "INTERNAL_SERVER_ERROR" : "NOT_FOUND",
+          message:
+            res.reason === "unavailable"
+              ? "Couldn't join that group just now."
+              : "That invite link is no longer valid.",
+        });
+      }
+      return { conversationId: claim.conversationId, joined: res.joined };
     }),
 
   list: publicProcedure
