@@ -52,6 +52,10 @@ import {
   users,
 } from "../drizzle/schema";
 import { getDb } from "./db";
+import { normalizeEmail } from "./authCrypto";
+// The ONE "which account owns this address" resolver, reused rather than copied
+// (see inviteGuestRegistration). `authOtp` imports no v2db, so this is cycle-free.
+import { findUserByEmailAny } from "./authOtp";
 import { hashRecoveryKey, newRecoveryKey } from "./guestRecovery";
 import {
   normalizeProfileStatus,
@@ -297,6 +301,13 @@ export interface ResolvedIdentity {
   lastName: string | null;
   /** Away auto-reply, opt-in (v2.99.66). NULL column is treated as false. */
   autoReplyEnabled: boolean;
+  /**
+   * An admin's SUGGESTED registration address (v2.105.15), or null. Only ever a
+   * suggestion the guest's own app shows them — see the column comment in
+   * `drizzle/schema.ts` for why it cannot be a binding.
+   */
+  regInviteEmail: string | null;
+  regInviteAt: Date | null;
 }
 
 function parseJsonSafe(text: string | null | undefined): unknown {
@@ -327,6 +338,8 @@ function rowToResolved(row: typeof identities.$inferSelect): ResolvedIdentity {
     lastName: row.lastName ?? null,
     // Opt-in: only an explicit true enables the away auto-reply (v2.99.66).
     autoReplyEnabled: row.autoReplyEnabled === true,
+    regInviteEmail: row.regInviteEmail ?? null,
+    regInviteAt: row.regInviteAt ?? null,
   };
 }
 
@@ -381,6 +394,12 @@ export interface AdminIdentityRow {
   email: string | null;
   isGuest: boolean;
   createdAt: Date | null;
+  /**
+   * The registration address an admin already suggested to this guest (v2.105.15),
+   * or null. Resolved through the SAME `activeRegInvite` reader whoami uses, so the
+   * panel and the guest's own card can never disagree about whether one is live.
+   */
+  regInviteEmail: string | null;
 }
 
 /**
@@ -460,6 +479,138 @@ export async function setIdentityAccountType(
   }
 }
 
+/**
+ * How long an admin's registration suggestion stays on screen.
+ *
+ * An invite nobody acted on should stop being displayed rather than sit on a
+ * profile indefinitely — and because the suggestion is only ever a prefilled
+ * field, an expired one costs the guest nothing: registering is still one tap
+ * away, they just type their own address.
+ */
+export const REG_INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+export type RegInvite = { email: string; at: Date; expiresAt: Date };
+
+/**
+ * The invite on this identity, or null when there is none / it has lapsed.
+ *
+ * ONE reader for the expiry rule, used by both whoami and the admin panel. Two
+ * copies of "is this invite still live" is how the guest's own card and the
+ * admin's view come to disagree about whether anything was sent — the divergence
+ * class this codebase keeps re-learning (v2.99.77, v2.99.96).
+ */
+export function activeRegInvite(
+  identity: Pick<ResolvedIdentity, "regInviteEmail" | "regInviteAt" | "userId">,
+  nowMs = Date.now()
+): RegInvite | null {
+  // A registered identity has nothing to be invited to. Checked here rather than
+  // only at the write, so a row that somehow carries a stale invite still reads
+  // as having none.
+  if (identity.userId != null) return null;
+  const email = (identity.regInviteEmail || "").trim();
+  const at = identity.regInviteAt;
+  if (!email || !at) return null;
+  const atMs = at.getTime();
+  if (!Number.isFinite(atMs)) return null;
+  const expiresAt = new Date(atMs + REG_INVITE_TTL_MS);
+  if (expiresAt.getTime() <= nowMs) return null;
+  return { email, at, expiresAt };
+}
+
+export type RegInviteResult =
+  | { ok: true; email: string }
+  | {
+      ok: false;
+      reason: "not-found" | "not-a-guest" | "bad-email" | "email-taken" | "unavailable";
+    };
+
+/**
+ * AN ADMIN SUGGESTS AN ADDRESS FOR A GUEST TO REGISTER WITH (v2.105.15).
+ *
+ * This records a suggestion and NOTHING ELSE. It writes no `users` row, mints no
+ * OTP, creates no session and does not touch `identities.userId` — read the
+ * column comment in `drizzle/schema.ts` for why that restraint is the entire
+ * point. In one line: the claim writer (`ensureUserIdentity`) only ever takes
+ * candidates from the requesting browser, so the completing request has to come
+ * from the device holding the guest identity, and an admin acting alone can
+ * therefore link nothing.
+ *
+ * Every refusal is NAMED, because each needs a different next step from the
+ * operator — and one of them is a security property rather than tidiness:
+ *
+ * `email-taken` refuses an address that already belongs to ANY account. Without
+ * it this is an ACCOUNT-DIVERSION primitive: bind `victim@example.com` to a
+ * stranger's guest identity, and the victim's own registration is refused while
+ * the victim's email code signs them into somebody else's number, contacts and
+ * message history. That is the one-email-one-row invariant v2.99.49 (M50/F3)
+ * exists to hold, so it is re-stated here rather than assumed.
+ */
+export async function inviteGuestRegistration(
+  identityId: number,
+  rawEmail: string,
+  nowMs = Date.now()
+): Promise<RegInviteResult> {
+  const email = normalizeEmail(rawEmail);
+  // Deliberately the same shape check the sign-in field applies. A malformed
+  // address cannot be corrected by the guest reading it, because it would never
+  // have received a code in the first place.
+  if (!email || email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { ok: false, reason: "bad-email" };
+  }
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  try {
+    const rows = await db
+      .select({ id: identities.id, userId: identities.userId })
+      .from(identities)
+      .where(eq(identities.id, identityId))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return { ok: false, reason: "not-found" };
+    if (row.userId != null) return { ok: false, reason: "not-a-guest" };
+
+    // Reuse the ONE resolver every sign-in path uses rather than a second
+    // "is this address taken" query — a private copy is how the two would come
+    // to disagree about which addresses are free.
+    const owner = await findUserByEmailAny(email);
+    if (owner) return { ok: false, reason: "email-taken" };
+
+    // Scoped to an UNCLAIMED row in the write itself, not just by the read above:
+    // a guest who registers between the two must not have an invite stamped onto
+    // their now-registered identity.
+    const res = await db
+      .update(identities)
+      .set({ regInviteEmail: email, regInviteAt: new Date(nowMs) })
+      .where(and(eq(identities.id, identityId), isNull(identities.userId)));
+    const changed =
+      Array.isArray(res) && ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    if (!changed) return { ok: false, reason: "not-a-guest" };
+    return { ok: true, email };
+  } catch {
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
+/**
+ * Drop the suggestion — the guest declining it, or an admin withdrawing it.
+ *
+ * Idempotent and never throws: this only ever removes a hint, so a failure to
+ * clear one must not surface as an error on a screen the guest is trying to use.
+ */
+export async function clearRegInvite(identityId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    await db
+      .update(identities)
+      .set({ regInviteEmail: null, regInviteAt: null })
+      .where(eq(identities.id, identityId));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function adminFindIdentities(
   query: string,
   limit = 25
@@ -477,6 +628,8 @@ export async function adminFindIdentities(
     userRole: users.role,
     email: users.email,
     createdAt: identities.createdAt,
+    regInviteEmail: identities.regInviteEmail,
+    regInviteAt: identities.regInviteAt,
   };
   try {
     const base = db.select(cols).from(identities).leftJoin(users, eq(users.id, identities.userId));
@@ -503,6 +656,15 @@ export async function adminFindIdentities(
       email: r.email ?? null,
       isGuest: r.userId == null,
       createdAt: r.createdAt ?? null,
+      // Through the SHARED reader, not a second expiry comparison here — that is
+      // the whole reason `activeRegInvite` is a function rather than an inline
+      // check at each of its two call sites.
+      regInviteEmail:
+        activeRegInvite({
+          regInviteEmail: r.regInviteEmail ?? null,
+          regInviteAt: r.regInviteAt ?? null,
+          userId: r.userId ?? null,
+        })?.email ?? null,
     }));
   } catch {
     return [];
@@ -1160,6 +1322,13 @@ export async function ensureUserIdentity(input: {
           // kind of leftover a future code path forgets to check for.
           recoveryHash: null,
           recoveryIssuedAt: null,
+          // v2.105.15: an admin's registration SUGGESTION goes with the other guest
+          // handles. It has served its only purpose the moment this row stops being
+          // a guest, and `activeRegInvite` already reads a claimed row as having no
+          // invite — but a dangling hint on a registered identity is exactly the
+          // leftover the comment above is about.
+          regInviteEmail: null,
+          regInviteAt: null,
         })
         .where(and(eq(identities.id, candidateId), isNull(identities.userId)));
       claimed =
@@ -2378,6 +2547,12 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // is what every existing row means, so this is a no-op until somebody picks one.
     { table: "identities", column: "profileStatus", ddl: "ADD COLUMN `profileStatus` varchar(16)" },
     { table: "identities", column: "statusNote", ddl: "ADD COLUMN `statusNote` varchar(140)" },
+    // v2.105.15 — an admin's SUGGESTED registration address for a guest. A nudge the
+    // guest's own app surfaces and their own registration completes; the admin can
+    // never complete it, because the claim writer only ever takes candidates from
+    // the requesting browser. NULL = no invite, i.e. every pre-release row.
+    { table: "identities", column: "regInviteEmail", ddl: "ADD COLUMN `regInviteEmail` varchar(320)" },
+    { table: "identities", column: "regInviteAt", ddl: "ADD COLUMN `regInviteAt` timestamp NULL" },
     // v2.102.0 — a group's own identity: a 6-digit id from the shared space, a photo,
     // a status from the SAME vocabulary a person's uses, and its creator. All
     // nullable, so every DM and every pre-release group simply has none.

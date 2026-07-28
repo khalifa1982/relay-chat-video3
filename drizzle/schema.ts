@@ -266,6 +266,31 @@ export const identities = mysqlTable(
      */
     profileStatus: varchar("profileStatus", { length: 16 }),
     statusNote: varchar("statusNote", { length: 140 }),
+    /**
+     * AN ADMIN'S SUGGESTED REGISTRATION ADDRESS (v2.105.15) — a nudge, never a
+     * binding, and the distinction is the whole safety argument.
+     *
+     * An admin can propose that this guest register with a particular address.
+     * They CANNOT complete it: the only writer that turns a guest identity into a
+     * registered one is `ensureUserIdentity`, and its claim candidates come
+     * exclusively from the REQUESTING BROWSER (the identity `createContext`
+     * already resolved, the request's own guest cookie, the request's own device
+     * id). Nothing lets a caller name an arbitrary identity to claim, and that is
+     * precisely why v2.99.99 declined to ship this feature "the obvious way" —
+     * doing so means breaking that invariant, at which point an admin can attach
+     * an address they control to somebody else's identity and then sign in as
+     * them with an ordinary email code.
+     *
+     * So these two columns hold a SUGGESTION that the guest's own app surfaces
+     * and the guest's own ordinary registration completes. The address is
+     * editable by them, which is strictly safer than binding it: a mistyped or
+     * hostile suggestion is corrected by the one person who owns the inbox.
+     *
+     * NULL on both = no invite, which is every pre-release row, so the additive
+     * migration is a no-op until an admin sends one.
+     */
+    regInviteEmail: varchar("regInviteEmail", { length: 320 }),
+    regInviteAt: timestamp("regInviteAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

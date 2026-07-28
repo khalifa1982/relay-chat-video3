@@ -59,6 +59,35 @@ export default function Admin() {
     // verbatim is the whole point of naming them.
     onError: (e) => setTypeError(e.message),
   });
+  /**
+   * The registration address being suggested to a guest (v2.105.15, #111).
+   *
+   * Keyed per row rather than one shared string, so opening a second row's panel
+   * cannot leave somebody else's half-typed address in the field — which on a
+   * screen listing several people with the same control in the same place is
+   * exactly the mistake that actually happens (the reason Delete confirms by
+   * typing the number).
+   */
+  const [inviteEmail, setInviteEmail] = useState<Record<number, string>>({});
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const invite = trpc.admin.inviteGuestRegistration.useMutation({
+    onSuccess: () => {
+      toast.success("Suggested. It shows in their app next time they open it.");
+      setInviteError(null);
+      utils.admin.findIdentities.invalidate().catch(() => {});
+    },
+    // Verbatim: the server names "already has an account", a malformed address and
+    // "that address belongs to somebody" separately, and those are three different
+    // next steps for the operator.
+    onError: (e) => setInviteError(e.message || "Couldn't save that suggestion."),
+  });
+  const withdrawInvite = trpc.admin.clearGuestRegistrationInvite.useMutation({
+    onSuccess: () => {
+      setInviteError(null);
+      utils.admin.findIdentities.invalidate().catch(() => {});
+    },
+    onError: (e) => setInviteError(e.message || "Couldn't withdraw that suggestion."),
+  });
   /** Which row's DELETE panel is open, and the number typed to confirm it (v2.100.0). */
   const [deleting, setDeleting] = useState<number | null>(null);
   const [confirmNum, setConfirmNum] = useState("");
@@ -306,10 +335,82 @@ export default function Admin() {
                        IS — so there is no role to write. Said here rather than offered
                        and then refused, because a control that always fails is worse
                        than one that is absent. */
-                    <p className="mt-1.5 text-xs text-muted-foreground">
-                      Guests have no account behind them, so there's no role to change. They
-                      keep their number and everything in it when they register themselves.
-                    </p>
+                    <div className="mt-1.5 space-y-2">
+                      <p className="text-xs text-muted-foreground">
+                        Guests have no account behind them, so there's no role to change. They
+                        keep their number and everything in it when they register themselves.
+                      </p>
+                      {/* SUGGEST AN ADDRESS (v2.105.15, #111).
+                          This puts a prompt in THEIR app and does nothing else — it
+                          mints no account, sends no code and signs nobody in. Only a
+                          request from the device that actually holds this identity can
+                          complete a registration, which is what stops an admin
+                          attaching an address they control and then signing in as
+                          somebody else. The copy says so, because an operator should
+                          not have to guess how far a button reaches. */}
+                      <p className="text-xs text-muted-foreground">
+                        You can suggest the address they should use. They see it in their app,
+                        can change it, and finish registering themselves — this doesn't create
+                        an account or send anything.
+                      </p>
+                      {r.regInviteEmail && (
+                        <p className="text-xs">
+                          <span className="text-muted-foreground">Already suggested: </span>
+                          <span
+                            className="break-all font-medium"
+                            dir="ltr"
+                            style={{ unicodeBidi: "isolate" }}
+                          >
+                            {r.regInviteEmail}
+                          </span>
+                        </p>
+                      )}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          type="email"
+                          inputMode="email"
+                          dir="ltr"
+                          autoComplete="off"
+                          maxLength={320}
+                          placeholder="them@example.com"
+                          value={inviteEmail[r.id] ?? ""}
+                          onChange={(e) => {
+                            setInviteEmail((m) => ({ ...m, [r.id]: e.target.value }));
+                            setInviteError(null);
+                          }}
+                          aria-label={`Suggested registration address for ${r.displayName || r.number}`}
+                          className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={
+                            !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((inviteEmail[r.id] ?? "").trim()) ||
+                            invite.isPending
+                          }
+                          onClick={() =>
+                            invite.mutate({
+                              identityId: r.id,
+                              email: (inviteEmail[r.id] ?? "").trim(),
+                            })
+                          }
+                        >
+                          {invite.isPending ? "Saving…" : "Suggest"}
+                        </Button>
+                        {r.regInviteEmail && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={withdrawInvite.isPending}
+                            onClick={() => withdrawInvite.mutate({ identityId: r.id })}
+                          >
+                            Withdraw
+                          </Button>
+                        )}
+                      </div>
+                      {inviteError && <p className="text-xs text-destructive">{inviteError}</p>}
+                    </div>
                   ) : (
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <Button

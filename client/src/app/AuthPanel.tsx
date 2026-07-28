@@ -131,15 +131,29 @@ export function AuthPanel({
   onClose,
   onVerified,
   initialEmail = "",
+  suggestedEmail = "",
 }: {
   onClose: () => void;
   onVerified?: () => void;
   /** Prefill + auto-send the code (when the gate already collected the email). */
   initialEmail?: string;
+  /**
+   * Prefill WITHOUT sending anything (v2.105.15) — an address somebody ELSE
+   * proposed, currently an admin suggesting how a guest should register.
+   *
+   * Deliberately NOT `initialEmail`: that one auto-routes and mails a code,
+   * which is right when the user typed it themselves at the gate and wrong here,
+   * because it would send a code to an address the person has not yet looked at.
+   * The whole value of a suggestion is that they get to read and correct it, so
+   * this fills the field and waits.
+   */
+  suggestedEmail?: string;
 }) {
   const utils = trpc.useUtils();
   const [stage, setStage] = useState<Stage>("email");
-  const [email, setEmail] = useState(initialEmail);
+  // `initialEmail` wins when both are set: an address the user typed outranks one
+  // proposed for them.
+  const [email, setEmail] = useState(initialEmail || suggestedEmail);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [code, setCode] = useState("");
