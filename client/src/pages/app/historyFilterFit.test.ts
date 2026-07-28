@@ -1,14 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { codeOnly } from "../../../../server/testing/codeOnly";
 
 const H = readFileSync(resolve(process.cwd(), "client/src/pages/app/History.tsx"), "utf8");
-const codeOnly = (s: string) =>
-  s
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((l) => !/^\s*\/\//.test(l))
-    .join("\n");
 
 /**
  * v2.103.1 — the History filter bar stopped being readable on a phone.

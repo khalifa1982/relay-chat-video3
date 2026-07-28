@@ -130,7 +130,9 @@ describe("when a story was posted", () => {
 
   it("the time is the CURRENT item's, not the group's newest", () => {
     // A per-group timestamp would mislabel every story but the newest.
-    const hdr = STATUS.slice(STATUS.indexOf('{isMine ? "My story"'));
+    // v2.105.6: the header's name line branches on the reel kind (a group is named
+    // in full and never as "My story"), so the anchor moved to timeAgo's own site.
+    const hdr = STATUS.slice(STATUS.indexOf("{/* header */}"));
     const block = hdr.slice(0, hdr.indexOf("</div>", hdr.indexOf("timeAgo")));
     expect(block).toMatch(/timeAgo\(item\.createdAt\)/);
     expect(block).not.toMatch(/group\.items\[0\]|group\.newest/);

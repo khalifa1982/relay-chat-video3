@@ -21,22 +21,10 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeDesiredNumber, NUMBER_BEARING_COLUMNS } from "./v2db";
+import { codeOnly } from "./testing/codeOnly";
 
 const read = (...p: string[]) => fs.readFileSync(path.resolve(__dirname, ...p), "utf8");
 
-/**
- * Drop comment lines before asserting a token is ABSENT.
- *
- * Four releases running, a "this pattern is gone" assertion has matched a comment
- * explaining why the pattern is gone — so it passed or failed on prose rather than
- * on behaviour, which is worse than having no assertion at all. Any `not.toMatch`
- * against a source file goes through this.
- */
-const codeOnly = (src: string) =>
-  src
-    .split("\n")
-    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-    .join("\n");
 const V2DB = read("v2db.ts");
 const ROUTERS = read("v2routers.ts");
 const PROFILE = read("..", "client", "src", "pages", "app", "Profile.tsx");

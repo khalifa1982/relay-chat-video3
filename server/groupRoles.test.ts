@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { IDENTITY_REFERENCING_COLUMNS } from "./purgeIdentity";
+import { codeOnly } from "./testing/codeOnly";
 
 const R = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const V2DB = R("server/v2db.ts");
@@ -10,13 +11,6 @@ const SCHEMA = R("drizzle/schema.ts");
 const SHEET = R("client/src/app/GroupInfoSheet.tsx");
 const MSG = R("client/src/pages/app/Messages.tsx");
 
-/** Comments stripped — this repo has matched its own prose twelve times. */
-const codeOnly = (s: string) =>
-  s
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((l) => !/^\s*\/\//.test(l))
-    .join("\n");
 
 /** A function's body, matched EXACTLY by name and bounded by its own end. A prefix
  *  match here is what v2.104.0 itself broke in six files by adding
@@ -70,17 +64,36 @@ describe("v2.104.0 — the schema is additive and reads correctly for every exis
 describe("v2.104.0 — ONE predicate, and no fallback that grants power", () => {
   const gate = fn(V2DB, "checkGroupPermission");
 
-  it("the capability set is closed and small", () => {
-    expect(V2DB).toMatch(
-      /export type GroupCapability = "edit-profile" \| "delete-any-message" \| "manage-roles";/,
+  it("the capability set is closed and small, and splits members from admins", () => {
+    /* REWRITTEN v2.105.6 (was: the exact one-line union). That froze the LOCATION of
+       the list rather than the property, so adding a capability broke it while saying
+       nothing about the thing that matters — which side of the member/admin line each
+       one lands on. The union is now multi-line and there is an explicit
+       MEMBER_CAPABILITIES set, so this asserts the membership of both sides. */
+    const decl = V2DB.slice(
+      V2DB.indexOf("export type GroupCapability ="),
+      V2DB.indexOf("export type GroupPermission ="),
     );
+    expect(decl.length).toBeGreaterThan(40);
+    for (const cap of ["edit-profile", "post-story", "delete-any-message", "manage-roles"]) {
+      expect(decl).toContain(`"${cap}"`);
+    }
+    // The member set names exactly the two unconditional ones. A capability added to
+    // it is a decision; one added anywhere else is admin-only, which is the safe
+    // direction to be wrong in.
+    const members = /const MEMBER_CAPABILITIES = new Set<GroupCapability>\(\[([^\]]*)\]\)/.exec(V2DB);
+    expect(members).toBeTruthy();
+    const listed = Array.from(members![1].matchAll(/"([a-z-]+)"/g)).map((m) => m[1]).sort();
+    expect(listed).toEqual(["edit-profile", "post-story"]);
   });
 
   it("membership is established BEFORE any role or capability is considered", () => {
     // A non-member must not learn anything about the group, including whether it has
     // admins — so the membership refusal comes first.
     expect(gate).toMatch(/if \(!mine\) return \{ ok: false, reason: "not-a-member" \}/);
-    expect(gate.indexOf('reason: "not-a-member"')).toBeLessThan(gate.indexOf('capability === "edit-profile"'));
+    expect(gate.indexOf('reason: "not-a-member"')).toBeLessThan(
+      gate.indexOf("MEMBER_CAPABILITIES.has(capability)"),
+    );
   });
 
   it("`edit-profile` is UNCONDITIONAL for members — and that IS the security", () => {
@@ -93,9 +106,13 @@ describe("v2.104.0 — ONE predicate, and no fallback that grants power", () => 
     // The fix is no fallback at all. `edit-profile` — the only thing a member can do
     // today — is granted to every member forever, so there is nothing for a first-mover
     // to take away. Everything else needs a real admin.
-    expect(gate).toMatch(/if \(capability === "edit-profile"\) return \{ ok: true/);
-    // …and the admin refusal comes AFTER it, so edit-profile can never fall through it.
-    expect(gate.indexOf('capability === "edit-profile"')).toBeLessThan(gate.indexOf('reason: "not-an-admin"'));
+    /* REWRITTEN v2.105.6: was `if (capability === "edit-profile")`, i.e. it froze the
+       one-capability shape. The property is that a MEMBER capability returns ok
+       without consulting adminship at all, and that the admin refusal sits after it. */
+    expect(gate).toMatch(/if \(MEMBER_CAPABILITIES\.has\(capability\)\) return \{ ok: true/);
+    expect(gate.indexOf("MEMBER_CAPABILITIES.has(capability)")).toBeLessThan(
+      gate.indexOf('reason: "not-an-admin"'),
+    );
   });
 
   it("no capability is granted merely because the group has no admin", () => {

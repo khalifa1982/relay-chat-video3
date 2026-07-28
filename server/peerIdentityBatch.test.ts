@@ -46,7 +46,11 @@ describe("status realtime (v2.96)", () => {
   it("status.post AND remove fan out to the reverse audience", () => {
     // One publish helper, called from both mutations.
     expect(V2ROUTERS).toMatch(/async function publishStatusEvent\(/);
-    const calls = V2ROUTERS.match(/publishStatusEvent\(me\.id,\s*me\.number,\s*me\.displayName/g) ?? [];
+    /* REWRITTEN v2.105.6: the old needle required the three arguments on ONE line,
+       which the group-aware signature (two more arguments) no longer is. The property
+       is that the helper has at least two CALL SITES — post and remove — so a removal
+       cannot silently stop clearing stale rings. */
+    const calls = V2ROUTERS.match(/publishStatusEvent\(\s*me\.id,/g) ?? [];
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
   it("the reverse audience mirrors the feed rule (saved me, non-blocked, both ways)", () => {

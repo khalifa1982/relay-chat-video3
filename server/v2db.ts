@@ -3264,7 +3264,26 @@ export async function createGroupConversation(input: {
  * "This group has no admin" is a known, reasoned state and is reported as such. "The read
  * threw" is not knowledge, and fails CLOSED as `unavailable`.
  */
-export type GroupCapability = "edit-profile" | "delete-any-message" | "manage-roles";
+export type GroupCapability =
+  /** Unconditional for members, forever (see MEMBER_CAPABILITIES below). */
+  | "edit-profile"
+  | "post-story"
+  /** Requires a stored admin or the derived creator, with NO fallback. */
+  | "delete-any-message"
+  | "manage-roles";
+
+/**
+ * The capabilities every MEMBER holds, unconditionally and forever.
+ *
+ * A named set rather than a chain of `if (capability === …)`, because the v2.104.0
+ * review killed a design in which members gained admin rights whenever a group had
+ * no admin — a first-mover takeover primitive, default-on for every pre-v2.102.0
+ * group. The fix was to have NO fallback at all, which only holds while it stays
+ * obvious which side of the line a new capability lands on. Adding one to this set
+ * is a decision; adding one anywhere else makes it admin-only by default, which is
+ * the safe direction to be wrong in.
+ */
+const MEMBER_CAPABILITIES = new Set<GroupCapability>(["edit-profile", "post-story"]);
 
 export type GroupPermission =
   | { ok: true; isAdmin: boolean; isCreator: boolean; hasAdmin: boolean }
@@ -3335,7 +3354,7 @@ export async function checkGroupPermission(
       hasAdmin = !!ownerRow;
     }
 
-    if (capability === "edit-profile") return { ok: true, isAdmin, isCreator, hasAdmin };
+    if (MEMBER_CAPABILITIES.has(capability)) return { ok: true, isAdmin, isCreator, hasAdmin };
     if (!isAdmin) return { ok: false, reason: "not-an-admin", hasAdmin };
     return { ok: true, isAdmin, isCreator, hasAdmin };
   } catch (e) {
@@ -5095,7 +5114,10 @@ export function normalizeStatusAudience(v: string | null | undefined): StatusAud
 
 export interface StatusRow {
   id: number;
+  /** The AUTHOR. Always a person — a group does not write, a member does. */
   identityId: number;
+  /** The GROUP this was addressed to, or null for a personal story (v2.105.6). */
+  conversationId: number | null;
   kind: string;
   text: string | null;
   bgColor: string | null;
@@ -5103,7 +5125,9 @@ export interface StatusRow {
   mediaUrl: string | null;
   mimeType: string | null;
   durationMs: number | null;
-  /** Per-post audience; NULL = "contacts". Read via normalizeStatusAudience. */
+  /** Per-post audience; NULL = "contacts". Read via normalizeStatusAudience.
+   *  MEANINGLESS on a group story, where membership replaces it — see
+   *  `statusAudienceAuthorized`, which ignores it once a conversationId is given. */
   audience: string | null;
   createdAt: Date;
   expiresAt: Date;
@@ -5111,6 +5135,8 @@ export interface StatusRow {
 
 export async function insertStatus(input: {
   identityId: number;
+  /** Addressee group, or null/omitted for a personal story (v2.105.6). */
+  conversationId?: number | null;
   kind: string;
   text: string | null;
   bgColor: string | null;
@@ -5126,6 +5152,7 @@ export async function insertStatus(input: {
   const expiresAt = new Date(Date.now() + input.ttlMs);
   await db.insert(statuses).values({
     identityId: input.identityId,
+    conversationId: input.conversationId ?? null,
     kind: input.kind,
     text: input.text,
     bgColor: input.bgColor,
@@ -5147,16 +5174,103 @@ export async function insertStatus(input: {
   return (row as StatusRow) ?? null;
 }
 
-/** Active (unexpired) statuses for a set of owners, oldest→newest. */
+/**
+ * Active (unexpired) PERSONAL statuses for a set of owners, oldest→newest.
+ *
+ * EXCLUDES group stories, and that is a security property rather than tidiness.
+ * This function backs `getViewableStatusesOfOwner`, which backs `status.forNumber`
+ * — the profile-visit surface authorized by the CONTACTS rule. Without the
+ * `conversationId IS NULL` filter, opening the profile of somebody in a group with
+ * you would hand their group stories to anyone who has merely saved them, i.e. the
+ * story would escape the group it was addressed to via a completely different
+ * endpoint from the one that carries the membership check.
+ *
+ * It also keeps the strip coherent: a group story belongs under the GROUP's ring,
+ * so pulling it into the author's personal reel would render it twice and put a
+ * group's content behind a person's name.
+ */
 export async function getActiveStatusesForOwners(ownerIds: number[]): Promise<StatusRow[]> {
   const db = await getDb();
   if (!db || ownerIds.length === 0) return [];
   const rows = await db
     .select()
     .from(statuses)
-    .where(and(inArray(statuses.identityId, ownerIds), gt(statuses.expiresAt, new Date())))
+    .where(
+      and(
+        inArray(statuses.identityId, ownerIds),
+        isNull(statuses.conversationId),
+        gt(statuses.expiresAt, new Date()),
+      ),
+    )
     .orderBy(statuses.createdAt);
   return rows as StatusRow[];
+}
+
+/**
+ * Active stories addressed to a set of GROUPS, oldest→newest (v2.105.6).
+ *
+ * The caller is responsible for having established membership of every id it
+ * passes — this is a projection, not a gate, and it is called with the caller's own
+ * group list. Deliberately NOT given an identity parameter to check for itself:
+ * `statusAudienceAuthorized` is the single predicate that decides who may watch a
+ * group story, and a second membership test living here is exactly how one surface
+ * comes to authorize what another refuses.
+ */
+export async function getActiveStatusesForConversations(
+  conversationIds: number[],
+): Promise<StatusRow[]> {
+  const db = await getDb();
+  if (!db || conversationIds.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(statuses)
+    .where(
+      and(inArray(statuses.conversationId, conversationIds), gt(statuses.expiresAt, new Date())),
+    )
+    .orderBy(statuses.createdAt);
+  return rows as StatusRow[];
+}
+
+/**
+ * The GROUP conversations I am a member of (v2.105.6) — the candidate set for the
+ * group half of the story feed, and the reverse of it for the realtime fan-out.
+ */
+export async function getGroupConversationIdsFor(identityId: number): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .innerJoin(
+      conversationParticipants,
+      eq(conversationParticipants.conversationId, conversations.id),
+    )
+    .where(
+      and(eq(conversationParticipants.identityId, identityId), eq(conversations.kind, "group")),
+    );
+  return Array.from(new Set(rows.map((r) => r.id)));
+}
+
+/** A group's own identity for the strip and the viewer header (v2.105.6). */
+export async function getGroupsByIds(ids: number[]): Promise<
+  Array<{
+    id: number;
+    title: string | null;
+    number: string | null;
+    avatarUrl: string | null;
+  }>
+> {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  return db
+    .select({
+      id: conversations.id,
+      title: conversations.title,
+      number: conversations.number,
+      avatarUrl: conversations.avatarUrl,
+    })
+    .from(conversations)
+    .where(and(inArray(conversations.id, ids), eq(conversations.kind, "group")));
 }
 
 /** A single active status (or null if missing/expired). */
@@ -5527,6 +5641,35 @@ export async function getStatusAudienceIds(
   const blockedNumbers = new Set(ownerBlocks.map((r) => r.number));
   const idents = await getIdentitiesByIds(candidateIds);
   return idents.filter((i) => !blockedNumbers.has(i.number)).map((i) => i.id);
+}
+
+/**
+ * The realtime audience for a GROUP story (v2.105.6): the group's other members.
+ *
+ * A SEPARATE function from `getStatusAudienceIds` rather than a branch inside it,
+ * because the two sets are not variations of one query — one walks the contact
+ * graph in both directions and the other reads a membership table. What must stay
+ * single is the CHOICE between them, which lives in `publishStatusEvent` alone.
+ *
+ * Blocks are deliberately NOT applied here, and that is a decision rather than an
+ * omission. A block hides the story itself — `statusAudienceAuthorized` refuses a
+ * blocked pair before it ever looks at membership — so the worst a delivered event
+ * can do is prompt a refetch that returns nothing. Filtering here as well would
+ * mean two independently-written gates for one rule, which is the trap this
+ * codebase keeps paying for; the gate that decides is the predicate, and this is
+ * only a hint about when to ask it again.
+ */
+export async function getGroupStatusAudienceIds(
+  conversationId: number,
+  authorId: number,
+): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ identityId: conversationParticipants.identityId })
+    .from(conversationParticipants)
+    .where(eq(conversationParticipants.conversationId, conversationId));
+  return rows.map((r) => r.identityId).filter((id) => id !== authorId);
 }
 
 /** Of `ownerIds`, which have BLOCKED `number` (so hide their statuses from it). */

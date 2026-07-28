@@ -21,6 +21,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { codeOnly } from "./testing/codeOnly";
 import {
   GUEST_PURGE_BATCH,
   GUEST_PURGE_DAYS,
@@ -42,23 +43,6 @@ const BOOT = read("server/_core/index.ts");
 const ADMIN_PAGE = read("client/src/pages/app/Admin.tsx");
 const OVERLAYS = read("client/src/app/PeerOverlays.tsx");
 
-/** Strip comments so a `not.toMatch` cannot pass on prose describing the code —
- *  the trap CLAUDE.md records biting eight times. Block forms are stripped as
- *  SPANS, because a JSX `{/* … *␘/}` block's continuation lines start with
- *  ordinary words that a line-based filter cannot recognise. */
-const codeOnly = (s: string) =>
-  s
-    // FIXED in v2.102.1: the first pass used to be a JSX-span strip,
-    // /\{\s*\/\*[\s\S]*?\*\/\s*\}/ — but a DOCUMENTED PROP TYPE has the same
-    // shape (`}: { /** … */ value: unknown; … }`), so it swallowed the whole prop
-    // block and much of the function body. Every `not.toMatch` here was reading a
-    // gutted source and could pass vacuously. Stripping block comments FIRST is
-    // both simpler and correct: a JSX comment collapses to a bare `{}`, whose
-    // prose is gone, and no code is touched.
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((l) => !/^\s*\/\//.test(l))
-    .join("\n");
 
 /**
  * Every (table, column) pair declared in `drizzle/schema.ts`.

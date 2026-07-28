@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { Phone, Video, MessageSquare, UserPlus, Check, CircleUserRound, ArrowLeft, X, Search, Bell, BellOff } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { personReelKeyByNumber } from "@shared/reelKey";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useRelayEngine } from "./RelayEngine";
 import { useIdentity } from "./useIdentity";
@@ -31,9 +32,26 @@ import { profileStatusMeta } from "@shared/profileStatus";
 // dependency-light for Node tests — keep the names in sync.
 const OPEN_STATUS = "relay:open-status";
 const OPEN_PROFILE = "relay:open-profile";
+/** A GROUP's story reel, addressed by conversation id (v2.105.6). */
+const OPEN_GROUP_STATUS = "relay:open-group-status";
 
 export function openPeerStatus(number: string): void {
   window.dispatchEvent(new CustomEvent(OPEN_STATUS, { detail: { number } }));
+}
+
+/**
+ * Open a GROUP's story reel (v2.105.6, #110).
+ *
+ * A SEPARATE opener from `openPeerStatus`, addressed by conversation id rather
+ * than by number, because a group's 6-digit id and a person's live in the same
+ * space (v2.102.0 mints them from one allocator) — so a single number-addressed
+ * opener could not tell which of the two a caller meant, and would eventually open
+ * the wrong reel. There is also no `forNumber` fallback here on purpose: a group
+ * story is authorized by MEMBERSHIP, so if it is absent from my feed I am not in
+ * the group and there is nothing to pull.
+ */
+export function openGroupStatus(conversationId: number): void {
+  window.dispatchEvent(new CustomEvent(OPEN_GROUP_STATUS, { detail: { conversationId } }));
 }
 
 /**
@@ -76,8 +94,43 @@ export function usePeerStatusMap(): Map<string, { hasUnseen: boolean; hasAny: bo
   return useMemo(() => {
     const map = new Map<string, { hasUnseen: boolean; hasAny: boolean }>();
     for (const g of feed.data?.groups ?? []) {
-      if (g.owner.isMe || !g.owner.number) continue;
-      map.set(g.owner.number, { hasUnseen: g.hasUnseen, hasAny: g.items.length > 0 });
+      // PERSON reels only. A group reel's number is the GROUP's own 6-digit id
+      // (v2.102.0), and this map is keyed by number for PeerAvatar — feeding a
+      // group in would draw a group's story ring on any person who happened to
+      // hold that number. The group ring is drawn from the thread row, which
+      // knows it is looking at a group.
+      if (g.subject.kind !== "person") continue;
+      if (g.subject.isMe || !g.subject.number) continue;
+      map.set(g.subject.number, { hasUnseen: g.hasUnseen, hasAny: g.items.length > 0 });
+    }
+    return map;
+  }, [feed.data]);
+}
+
+/**
+ * Per-GROUP story presence, keyed by conversation id (v2.105.6, #110).
+ *
+ * Keyed by CONVERSATION ID, not by the group's 6-digit number: a group created
+ * before v2.102.0 has no number at all, so a number-keyed map would silently
+ * exclude exactly those groups, and a group's number lives in the same space as a
+ * person's, so the key would not be unique across the two maps either.
+ *
+ * Reads the same shared feed cache as `usePeerStatusMap`, so a group ring and the
+ * strip can never disagree about whether a group has an unseen story.
+ */
+export function useGroupStatusMap(): Map<number, { hasUnseen: boolean; hasAny: boolean }> {
+  const feed = trpc.status.feed.useQuery(undefined, {
+    staleTime: 20_000,
+    refetchOnWindowFocus: true,
+  });
+  return useMemo(() => {
+    const map = new Map<number, { hasUnseen: boolean; hasAny: boolean }>();
+    for (const g of feed.data?.groups ?? []) {
+      if (g.subject.kind !== "group" || g.subject.conversationId == null) continue;
+      map.set(g.subject.conversationId, {
+        hasUnseen: g.hasUnseen,
+        hasAny: g.items.length > 0,
+      });
     }
     return map;
   }, [feed.data]);
@@ -292,6 +345,8 @@ export function PeerOverlaysHost() {
   const { me } = useIdentity();
   const utils = trpc.useUtils();
   const [statusNumber, setStatusNumber] = useState<string | null>(null);
+  /** A GROUP's reel, opened by conversation id (v2.105.6). */
+  const [statusGroupId, setStatusGroupId] = useState<number | null>(null);
   const [profileNumber, setProfileNumber] = useState<string | null>(null);
   /** Set only when the popup was opened from inside a conversation. */
   const [chatActions, setChatActions] = useState<PeerProfileChatActions | null>(null);
@@ -307,21 +362,31 @@ export function PeerOverlaysHost() {
       setProfileNumber(d.number ?? null);
       setChatActions((d.chat as PeerProfileChatActions | undefined) ?? null);
     };
+    const onGroupStatus = (e: Event) => {
+      const cid = (e as CustomEvent).detail?.conversationId;
+      setStatusGroupId(typeof cid === "number" ? cid : null);
+    };
     window.addEventListener(OPEN_STATUS, onStatus);
     window.addEventListener(OPEN_PROFILE, onProfile);
+    window.addEventListener(OPEN_GROUP_STATUS, onGroupStatus);
     return () => {
       window.removeEventListener(OPEN_STATUS, onStatus);
       window.removeEventListener(OPEN_PROFILE, onProfile);
+      window.removeEventListener(OPEN_GROUP_STATUS, onGroupStatus);
     };
   }, []);
 
   /* ── status viewer (global) ── */
   const feed = trpc.status.feed.useQuery(undefined, {
     staleTime: 20_000,
-    enabled: statusNumber != null,
+    enabled: statusNumber != null || statusGroupId != null,
   });
   const groups = feed.data?.groups ?? [];
-  const statusIdx = statusNumber ? groups.findIndex((g) => g.owner.number === statusNumber) : -1;
+  // Person reels only: this host opens a PERSON's story by number, and a group
+  // reel's number is the group's own id, which could otherwise match.
+  const statusIdx = statusNumber
+    ? groups.findIndex((g) => g.subject.kind === "person" && g.subject.number === statusNumber)
+    : -1;
 
   /* ── the "Everyone" discovery surface (v2.99.66) ──
      The story FEED is bounded to my contacts and the people who saved me — it
@@ -336,7 +401,9 @@ export function PeerOverlaysHost() {
      allowed to watch, and returns an empty list — not an error — for a
      contacts-only poster, so it reveals nothing a contacts-only story wouldn't. */
   const peerNumber = statusNumber ?? profileNumber;
-  const inFeed = !!peerNumber && groups.some((g) => g.owner.number === peerNumber);
+  const inFeed =
+    !!peerNumber &&
+    groups.some((g) => g.subject.kind === "person" && g.subject.number === peerNumber);
   const peerStatus = trpc.status.forNumber.useQuery(
     { number: peerNumber ?? "" },
     { enabled: !!peerNumber && !inFeed, staleTime: 20_000 },
@@ -397,8 +464,16 @@ export function PeerOverlaysHost() {
     statusNumber && !inFeed && peerStatus.data && peerStatus.data.items.length > 0
       ? [
           {
-            owner: {
-              id: 0,
+            subject: {
+              // Its OWN prefix: this reel is known by NUMBER, not identity id, and a
+              // 6-digit number can legitimately equal some other identity's id.
+              key: personReelKeyByNumber(statusNumber),
+              kind: "person",
+              // Not known from `forNumber`, which answers by number. Null rather
+              // than 0: a placeholder id is a lie that something downstream will
+              // eventually compare against a real one.
+              identityId: null,
+              conversationId: null,
               number: statusNumber,
               displayName: p?.displayName || "Someone",
               avatarUrl: p?.avatarUrl ?? null,
@@ -413,6 +488,17 @@ export function PeerOverlaysHost() {
   const viewerGroups = statusIdx >= 0 ? groups : syntheticGroups;
   const viewerIndex = statusIdx >= 0 ? statusIdx : 0;
 
+  /* A GROUP's reel is located in the feed by conversation id (v2.105.6). No
+     synthetic fallback: a group story is authorized by membership, so a reel
+     absent from my feed is one I am not entitled to — nothing to pull, and
+     inventing an empty reel would render a black screen rather than say so. */
+  const groupIdx =
+    statusGroupId != null
+      ? groups.findIndex(
+          (g) => g.subject.kind === "group" && g.subject.conversationId === statusGroupId,
+        )
+      : -1;
+
   return (
     <>
       {statusNumber != null && viewerGroups.length > 0 && (
@@ -425,6 +511,21 @@ export function PeerOverlaysHost() {
             // The synthesized group came from forNumber, so refresh THAT too or a
             // just-watched story keeps its unseen ring until the cache expires.
             utils.status.forNumber.invalidate();
+          }}
+        />
+      )}
+
+      {statusGroupId != null && groupIdx >= 0 && (
+        <StatusViewer
+          groups={groups}
+          startIndex={groupIdx}
+          /* NO CHAINING (the default). Opening a group's story from its thread row
+             is a targeted act, and walking on to whatever reel happens to sit next
+             in the feed — a different group, or a friend — is the behaviour the
+             owner ruled out for everywhere except the Messages strip (v2.99.90). */
+          onClose={() => {
+            setStatusGroupId(null);
+            utils.status.feed.invalidate();
           }}
         />
       )}

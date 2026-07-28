@@ -111,9 +111,15 @@ describe("status privacy hardening (review §3/§4/§5)", () => {
     // let a later privacy change retroactively decide who may register a view on
     // an already-published story; asserting the third argument is the stronger
     // invariant, so this replaces the old two-argument pin rather than relaxing it.
-    expect(router).toMatch(
-      /statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience\)\)\) return \{ ok: false \}/,
-    );
+    /* v2.105.6 — a FOURTH argument, `st.conversationId`, joins it. Required rather
+       than decorative: for a group story the author's contacts rule is the wrong
+       question, so omitting it would refuse the very members it was posted for and
+       their views would never be recorded (the ring would stay lit forever). Both the
+       audience AND the group are asserted, so dropping either fails. */
+    const mv = router.slice(router.indexOf("  markViewed: publicProcedure"), router.indexOf("  getPrivacy:"));
+    expect(mv.length).toBeGreaterThan(200);
+    expect(mv).toMatch(/statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId\)/);
+    expect(mv).toMatch(/return \{ ok: false \}/);
     expect(router).toMatch(/statusGate\(ctx\)/);
   });
 

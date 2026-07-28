@@ -345,12 +345,16 @@ describe("a story only chains where the owner said it should", () => {
 
   it("YOUR OWN story is never part of the chain, in either direction", () => {
     // "on your personal story, with its finish, it's closed."
+    // v2.105.6: `owner` became `subject` (a reel's ring can now be on a GROUP, and
+    // a field that means either is how a group gets rendered as a person). The
+    // property is unchanged — the skip is inside the helper, not at a call site, so
+    // a chain that STARTS on a friend can never land on me either.
     const fn = STATUS.slice(STATUS.indexOf("function nextChainable("));
-    expect(fn.slice(0, 500)).toMatch(/if \(!groups\[j\]\.owner\.isMe\) return j;/);
+    expect(fn.slice(0, 500)).toMatch(/if \(!groups\[j\]\.subject\.isMe\) return j;/);
   });
 
   it("the Messages strip is the ONLY thing that opts in", () => {
-    expect(STATUS).toMatch(/chain=\{!groups\[viewerAt\]\.owner\.isMe\}/);
+    expect(STATUS).toMatch(/chain=\{!groups\[viewerAt\]\.subject\.isMe\}/);
     // Exactly one opt-in across the whole client.
     const all = [STATUS, OVERLAYS, read("client/src/pages/app/Messages.tsx")];
     const optIns = all.reduce((n, src) => n + [...src.matchAll(/chain=\{/g)].length, 0);
@@ -360,10 +364,19 @@ describe("a story only chains where the owner said it should", () => {
   it("the universal opener (profile popup, contacts, history, call tiles) does NOT chain", () => {
     // PeerOverlaysHost hands the viewer the WHOLE feed so it can locate the right
     // group; without `chain` that array is now navigable one group only.
-    const mount = OVERLAYS.slice(OVERLAYS.indexOf("<StatusViewer"));
-    const tag = mount.slice(0, mount.indexOf("/>") + 2);
-    expect(tag).toMatch(/groups=\{viewerGroups\}/);
-    expect(tag).not.toMatch(/chain/);
+    //
+    // WIDENED v2.105.6, because it had to be: this host now mounts TWO viewers (a
+    // person's reel by number, and a GROUP's by conversation id), and the old
+    // version read only the FIRST — so a `chain` added to the second would have
+    // survived. Every mount is checked, and the count is asserted so a third
+    // mount cannot slip past unexamined either.
+    const mounts = OVERLAYS.split("<StatusViewer").slice(1);
+    expect(mounts.length).toBeGreaterThanOrEqual(2);
+    for (const m of mounts) {
+      const tag = m.slice(0, m.indexOf("/>") + 2);
+      expect(tag).toMatch(/groups=\{(viewerGroups|groups)\}/);
+      expect(tag).not.toMatch(/chain/);
+    }
   });
 
   it("the progress bars only ever describe the story on screen", () => {

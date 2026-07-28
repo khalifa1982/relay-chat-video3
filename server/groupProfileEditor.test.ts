@@ -17,6 +17,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { codeOnly } from "./testing/codeOnly";
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -27,26 +28,6 @@ const SECTIONS = read("client/src/pages/app/ProfileHubSections.tsx");
 const MESSAGES = read("client/src/pages/app/Messages.tsx");
 const ROUTERS = read("server/v2routers.ts");
 
-/**
- * Comments legitimately quote the very patterns these tests forbid — a note saying
- * "NOT `identity.updateProfile`" contains that string. Line comments and both block
- * forms are stripped, the latter as SPANS because a JSX `{/* … *\/}` block's
- * continuation lines start with ordinary words (the trap that has now bitten ten
- * times in this repo).
- */
-const codeOnly = (s: string) =>
-  s
-    // FIXED in v2.102.1: the first pass used to be a JSX-span strip,
-    // /\{\s*\/\*[\s\S]*?\*\/\s*\}/ — but a DOCUMENTED PROP TYPE has the same
-    // shape (`}: { /** … */ value: unknown; … }`), so it swallowed the whole prop
-    // block and much of the function body. Every `not.toMatch` here was reading a
-    // gutted source and could pass vacuously. Stripping block comments FIRST is
-    // both simpler and correct: a JSX comment collapses to a bare `{}`, whose
-    // prose is gone, and no code is touched.
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((l) => !/^\s*\/\//.test(l))
-    .join("\n");
 
 describe("one status picker, two owners of the mutation", () => {
   it("the picker is its own component and there is exactly one of it", () => {

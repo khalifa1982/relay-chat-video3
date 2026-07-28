@@ -11239,6 +11239,142 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
 - [ ] NOT DONE, and it needs the owner: the spec's Business path is a "coming soon" panel by design, so
       nothing is wired behind it. The gold accent sweep across the page and canvas IS implemented.
 
+## v2.105.6 — a group can have a story, and the ring around it finally means something (2026-07-28)
+
+Owner, #110, on the previously-declined list: **"DO IT"**.
+
+### The declining reason was true and is now obsolete
+v2.102.1 recorded this as a correction to my own earlier overclaim: `statuses.identityId` is
+`notNull` with no conversation reference, so a story belonged to a PERSON and a group could
+not post one — which is also exactly why the group story ring "would signify nothing" and
+was closed as unbuildable rather than built. This release adds the ADDRESSEE, so the ring
+stands for something and #96's last gap closes with it.
+
+### The data
+- One additive nullable `statuses.conversationId`, plus `statuses_convo_idx` on
+  `(conversationId, expiresAt)`. NULL is exactly the reading every pre-existing row needs,
+  so the migration is a no-op until somebody posts to a group.
+- `identityId` stays `notNull` and keeps meaning the AUTHOR. A group does not write; a
+  member does, and the viewer has to know which member.
+
+### The leak that would have opened somewhere else entirely
+`getActiveStatusesForOwners` backs `getViewableStatusesOfOwner`, which backs
+`status.forNumber` — the profile-visit surface authorized by the CONTACTS rule. Without an
+`isNull(conversationId)` filter, opening the profile of somebody in a group with you would
+hand you their group stories on the strength of merely having saved them: the story escapes
+via a path that carries no membership check at all. The filter is a security property, not
+tidiness, which is why `mine` fetches the group half EXPLICITLY rather than relaxing that
+one query.
+
+### Authorization
+- **Membership REPLACES the audience** rather than composing with it. `audience` describes a
+  personal story's reach; neither of its meanings applies to a group, so an author whose
+  default says "everyone" must not make a twenty-member group's story world-readable. The
+  branch sits AFTER both block checks and BEFORE the audience switch, and returns.
+- **Membership is read live**, not frozen at post time: somebody removed stops seeing the
+  group's stories, somebody added sees the ones still inside their 24h window.
+- **`post-story` is its own capability**, unconditional for members, and the member/admin
+  split is now a named `MEMBER_CAPABILITIES` set rather than a chain of `if`s. The v2.104.0
+  review killed a design where members gained admin rights whenever a group had no admin
+  (a first-mover takeover primitive, default-on for every pre-v2.102.0 group); the fix was
+  to have NO fallback, which only holds while it stays obvious which side of the line a new
+  capability lands on.
+- **Three predicate call sites had to learn the group or they would have failed silently**:
+  the media gate (a member refused their own group's photo renders as a broken image, not an
+  error), `markViewed` (the view is never recorded, so the ring stays lit forever) and
+  `reply` (refused as the generic "unavailable").
+
+### The wire
+- The feed groups by the GROUP, not the author — grouping by author would put one group's
+  ring in the strip once per member who had posted.
+- `owner` became `subject`, a discriminated record. The v2.102.0 rule applied: a field that
+  sometimes means a person and sometimes a group is how a surface renders one as the other.
+  TypeScript found every reader.
+- New `shared/reelKey.ts`: `"p:<identityId>"` / `"g:<conversationId>"` / `"pn:<number>"`.
+  Three constructors because one real case has no id (`status.forNumber` answers by number)
+  and reusing the person prefix would put an identity id and a 6-digit number in one
+  namespace, where 601586 can legitimately be both. An unrecognised key resolves to NULL,
+  never "person" — guessing person is the direction that renders somebody's face on a
+  group's story.
+- **Ownership became per-item.** `mine` and the viewers list have always been per-item
+  facts; the reel-level `isMe` was only a correct proxy because a reel had one author.
+  Reading it off the reel would offer Delete on a fellow member's slide — a button
+  `deleteStatus` refuses, i.e. one that silently does nothing.
+
+### Behaviour decisions, stated
+- A reply to a group story still goes PRIVATELY to its author, and the bar names the
+  slide's author rather than the reel's subject. Posting into the group would be a
+  different act with a different blast radius.
+- Delete reads the row BEFORE destroying it, or there is nothing left to say which group
+  the removal must reach and members keep a stale ring for up to 24h.
+- The fan-out's choice of audience lives in exactly one place; each audience query is
+  asserted to have exactly one call site.
+- A blocked member contributes nothing but never hides the whole group.
+- The ring speaks the vocabulary `PeerAvatar` already speaks (gradient = unseen, subtle =
+  seen, absent = none), and a story-less group stays a plain, non-clickable disc rather
+  than a focusable button whose handler returns early.
+- The group→story map is keyed by CONVERSATION ID: a group created before v2.102.0 has no
+  number at all, so a number-keyed map would silently exclude exactly those groups.
+
+### A real pre-existing defect in the shared test helper
+`codeOnly`'s block-comment regex read the `/*` in `accept="image/*,video/*,audio/*"` as a
+comment opener and ate **7,015 characters** of `Status.tsx` — the whole media-picker section
+and everything up to the next real divider comment. **Eight test files** read a source
+containing that attribute, and every `not.toMatch` of theirs landing in the swallowed region
+was VACUOUS: it passed because the code was gone, not because the pattern was. That is the
+v2.102.1 defect in a second place (there the JSX-span strip cut 5,412 characters to 1,084,
+fixed by hand in eleven files), so this time it is ONE shared `server/testing/codeOnly.ts`
+with all 21 copies repointed at it, and the rule ERRS TOWARD KEEPING TEXT — failing to strip
+a real comment makes an assertion stricter and loud, while wrongly stripping code makes it
+vacuous and silent. The full suite stays green after the repoint, so no live defect was
+hidden; what was weakened was those files' ability to catch a future one.
+
+### Tests
+- `server/groupStories.test.ts` (42) + `server/testing/codeOnly.test.ts` (7, behavioural
+  against the real files).
+- **All 32 tripwires verified by MUTATION** from byte-exact backups off a confirmed-GREEN
+  baseline, sources byte-identical afterwards.
+- **One survivor, the fourth appearance of this exact class** (v2.102.2, v2.103.0,
+  v2.104.0): the `deleteStatus` author-scoping assertion was satisfied by the SELECT's copy
+  of the clause while the mutation stripped it from the DELETE — an unscoped DELETE lets
+  anybody remove anybody's story. Now pinned on the write specifically with both
+  occurrences counted, then re-verified.
+- **One weakness widened because it had to be**: the "the universal opener does not chain"
+  pin read only the FIRST `<StatusViewer>` mount, and this release adds a second, so a
+  `chain` on the new one would have survived. It now checks every mount and asserts the
+  count.
+- **Eleven pre-existing pins rewritten to the property** rather than relaxed: three froze
+  the capability decision's exact one-line shape, four froze `statusAudienceAuthorized`'s
+  three-argument call, two froze `.owner.isMe`, one froze a single-line import and one
+  anchored on `{isMine ? "My story"`. Every one had frozen a LOCATION this release
+  legitimately moves.
+
+### A defect of my own, found by reading the consumer rather than by any test
+My first cut had `status.mine` include group stories, "because both are mine". Its ONLY
+consumer is the top bar — the story pip and the "Open my story · N" row, which calls
+`openPeerStatus(me.number)` and therefore opens MY PERSON REEL. So for somebody whose only
+story went to a group the pip lit, the count read 1, and the tap found no person reel, fell
+through to `status.forNumber` (personal-only by design, since that is the
+contacts-authorized surface) and rendered NOTHING: a dead tap plus an overstated count, the
+v2.99.86 silent-no-op class reintroduced by my own change.
+
+`mine` is personal-only, which is also the honest reading of the ring vocabulary — a group
+story's ring is on the GROUP, where the author already sees it. Nothing is lost: `viewCount`
+is rendered on no surface, and viewers come from the author-gated `status.viewers`, reachable
+from the group reel itself. Pinned and mutation-verified, and the pin names WHY (the opener
+is person-reel-only) so the narrowing can be revisited if that ever changes.
+
+### Not verified, and not done
+- **No MySQL is reachable here**, so the statements are proven correct by reading and
+  pinned, but no group story has been written, watched or deleted.
+- A group admin cannot delete another member's group story — a separate capability nobody
+  has asked for, and the story expires in 24h regardless.
+- A group story counts against the poster's own 30-active cap, which is the honest reading:
+  the cost is per-post whoever it is addressed to.
+
+One additive nullable column, one additive index, no new dependency, no new env var.
+3419 tests.
+
 ## v2.105.5 — the in-fleet verification runs on every instance, and comparing them is the check (2026-07-28)
 - [x] **OWNER**: *"build the verification to run on EC2 better"*.
 - [x] **WHAT WAS WRONG, NAMED PLAINLY.** v2.105.2's in-fleet half picked ONE instance

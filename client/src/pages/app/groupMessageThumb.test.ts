@@ -2,19 +2,13 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { GROUP_PALETTE, peerPaletteIndex } from "@/app/peerColors";
+import { codeOnly } from "../../../../server/testing/codeOnly";
 
 const R = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const MSG = R("client/src/pages/app/Messages.tsx");
 const ROUTERS = R("server/v2routers.ts");
 const OVERLAYS = R("client/src/app/PeerOverlays.tsx");
 
-/** Comments stripped — this repo has matched its own prose twelve times. */
-const codeOnly = (s: string) =>
-  s
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((l) => !/^\s*\/\//.test(l))
-    .join("\n");
 
 const THUMB = MSG.slice(MSG.indexOf("function SenderThumb"), MSG.indexOf("export default function MessagesPage"));
 
@@ -58,7 +52,12 @@ describe("v2.103.3 — the sender thumbnail", () => {
     expect(THUMB.length).toBeGreaterThan(300);
     expect(THUMB).toMatch(/<PeerAvatar/);
     expect(THUMB).toMatch(/size=\{28\}/);
-    expect(MSG).toMatch(/import \{ PeerAvatar[^}]*\} from "@\/app\/PeerOverlays"/);
+    // v2.105.6: the import became multi-line (the group story ring needs two more
+    // symbols from the same module), so the property is that PeerAvatar comes from
+    // PeerOverlays — not that the import fits on one line.
+    const imp = MSG.slice(MSG.indexOf("import {"), MSG.indexOf('from "@/app/PeerOverlays";') + 30);
+    expect(imp).toContain("PeerAvatar");
+    expect(imp).toContain('from "@/app/PeerOverlays"');
     // …and no hand-rolled <img>/initials disc inside the thumb.
     expect(codeOnly(THUMB)).not.toMatch(/<img\b/);
   });

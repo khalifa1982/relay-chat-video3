@@ -24,6 +24,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { IDENTITY_REFERENCING_COLUMNS } from "./purgeIdentity";
+import { codeOnly } from "./testing/codeOnly";
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -33,14 +34,6 @@ const SCHEMA = read("drizzle/schema.ts");
 const MESSAGES = read("client/src/pages/app/Messages.tsx");
 const PURGE = read("server/purgeIdentity.ts");
 
-/** Block comments first, then line comments — see v2.102.1: a JSX-span-first strip
- *  eats a documented prop type and guts the source being asserted on. */
-const codeOnly = (s: string) =>
-  s
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((l) => !/^\s*\/\//.test(l))
-    .join("\n");
 
 /** `fn(name)` → that function's source, bounded by the NEXT top-level export so it can
  *  never run past its own end (the recurring unbounded-slice fragility). */
