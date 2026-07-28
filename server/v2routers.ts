@@ -2928,6 +2928,23 @@ export const v2StatsRouter = router({
 const EmailSchema = z.string().trim().max(320);
 const CodeSchema = z.string().regex(/^\d{6}$/, { message: "Enter the 6-digit code" });
 const NameSchema = z.string().trim().min(1).max(64);
+/**
+ * A SURNAME may be empty, because the login page asks for ONE "permanent display
+ * name" (RELAY_LOGIN_HANDOFF.md §3) and splits it on the first space — so a
+ * mononym ("Prince", "Zendaya", and most of the world's single-name conventions)
+ * legitimately arrives with `lastName: ""`. Requiring it rejected those
+ * registrations outright with a raw zod error:
+ *
+ *   {"code":"too_small","minimum":1,"path":["lastName"], … }
+ *
+ * The old two-field panel made that unreachable, so the strictness never showed.
+ * Nothing downstream needs it: BOTH places that build a display name already do
+ * `${firstName ?? ""} ${lastName ?? ""}`.trim() || email.split("@")[0]`, which
+ * yields a clean "Prince" with no trailing space. It also cannot reach the
+ * v2.99.81 approval bypass — that short-circuit inferred "first device" from the
+ * PRESENCE of a name and was deleted; `shouldRequireApproval` answers it now.
+ */
+const OptionalSurnameSchema = z.string().trim().max(64).optional().default("");
 
 const otpIpLimiter = createRateLimiter({ capacity: 30, refillPerSec: 30 / 60 });
 setInterval(() => otpIpLimiter.sweep(Date.now(), 30 * 60_000), 30 * 60_000).unref();
@@ -3165,7 +3182,7 @@ export const v2OtpAuthRouter = router({
   /** Registration: capture first/last name + email, email a code. The user row is
    *  created by verifyOtp, so an address is never registered unproven. */
   register: publicProcedure
-    .input(z.object({ firstName: NameSchema, lastName: NameSchema, email: EmailSchema }))
+    .input(z.object({ firstName: NameSchema, lastName: OptionalSurnameSchema, email: EmailSchema }))
     .mutation(async ({ ctx, input }) => {
       otpGate(ctx);
       const email = normalizeEmail(input.email);
