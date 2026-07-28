@@ -40,15 +40,36 @@ function fnBody(src: string, name: string): string {
     if (src[i] === "(") depth++;
     else if (src[i] === ")" && --depth === 0) break;
   }
-  // The body's `{` is the one that ENDS a line. A return-type annotation can
-  // itself contain braces (`Promise<{ id: number; … }>`), and those sit inline.
-  const open = src.indexOf("{\n", i);
-  expect(open, `${name} has a body`).toBeGreaterThan(-1);
-  let j = open;
-  for (let depth = 0; j < src.length; j++) {
-    if (src[j] === "{") depth++;
-    else if (src[j] === "}" && --depth === 0) break;
+  // The body's `{` is the one whose MATCHING `}` sits at column 0 — i.e. the one
+  // that opens the function block.
+  //
+  // It used to be "the first `{` that ends a line", and that was wrong the moment
+  // a return type was written across several lines: `): Promise<{` also ends a
+  // line, so the helper returned the TYPE LITERAL and every assertion against the
+  // body silently searched the wrong text. Found when a genuinely-present
+  // `audience: statuses.audience` was reported missing.
+  let open = -1;
+  let j = -1;
+  for (let k = i; k < src.length; k++) {
+    if (src[k] !== "{") continue;
+    // Brace-match this candidate; the function's own block is the one that closes
+    // with a `}` at the start of a line (column 0).
+    let end = k;
+    for (let depth = 0; end < src.length; end++) {
+      if (src[end] === "{") depth++;
+      else if (src[end] === "}" && --depth === 0) break;
+    }
+    // Column 0 alone is NOT enough: a multi-line return type closes with
+    // `} | null> {`, which also starts at column 0. The function's own block is
+    // the one whose closing line is NOTHING BUT the brace (optionally `};`).
+    const rest = src.slice(end + 1, src.indexOf("\n", end) === -1 ? undefined : src.indexOf("\n", end));
+    if (src[end - 1] === "\n" && /^;?\s*$/.test(rest)) {
+      open = k;
+      j = end;
+      break;
+    }
   }
+  expect(open, `${name} has a body`).toBeGreaterThan(-1);
   return src.slice(start, j + 1);
 }
 
@@ -117,9 +138,17 @@ describe("the audience is a property of the POST, not of the poster", () => {
     // The retroactive-widening trap: reading the identity's CURRENT preference
     // here would republish every live contacts-only story the moment someone
     // flipped their default to everyone.
-    expect(V2DB).toMatch(
-      /statusAudienceAuthorized\(identityId, st\.identityId, st\.audience\)/,
-    );
+    /* REWRITTEN for v2.105.5, to the property rather than the formatting: the
+       call grew a fourth argument (the group a story was addressed to) and became
+       multi-line, so the frozen single-line shape broke while saying nothing about
+       whether the gate reads THIS post's audience. */
+    const gate = fnBody(V2DB, "authorizeStorageKey");
+    expect(gate).toMatch(/statusAudienceAuthorized\(/);
+    // The arguments come from the STATUS ROW, never from the owner's preference.
+    const call = gate.slice(gate.indexOf("statusAudienceAuthorized("));
+    expect(call).toMatch(/st\.identityId/);
+    expect(call).toMatch(/st\.audience/);
+    expect(gate).not.toMatch(/getIdentityStatusAudience/);
     expect(V2DB).not.toMatch(/getIdentityStatusAudience\([^)]*\)[\s\S]{0,80}authorizeStorageKey/);
   });
 
