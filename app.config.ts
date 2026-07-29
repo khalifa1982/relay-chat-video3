@@ -128,6 +128,10 @@ const config: ExpoConfig = {
   },
   plugins: [
     "expo-router",
+    "expo-font",
+    "expo-image",
+    "expo-secure-store",
+    "expo-web-browser",
     [
       "expo-audio",
       {
