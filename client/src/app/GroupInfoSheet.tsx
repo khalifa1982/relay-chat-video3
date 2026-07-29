@@ -21,12 +21,35 @@ import { isGroupLocked, removeGroupLock, setGroupLock, useGroupLocks } from "@/a
  * REVOKE IS CONFIRMED, because it cannot be undone for the people holding the old link
  * and the copy has to say what actually happens: existing members stay, only the link
  * stops working.
+ *
+ * THE AUDIENCE IS CHOSEN BEFORE MINTING (v2.105.23) and is baked into the token, so two
+ * links with different audiences can be live at once and picking one here never rewrites
+ * a link already handed out. The label under a minted link is read back from the server's
+ * echo of what it SIGNED, not from the picker — otherwise a failed mint could leave the
+ * screen describing a restriction the token does not carry.
  */
+type InviteAudience = "all" | "guest" | "registered";
+
+const AUDIENCE_OPTIONS: { value: InviteAudience; label: string; hint: string }[] = [
+  { value: "all", label: "Anyone", hint: "Guests and registered accounts can join." },
+  {
+    value: "registered",
+    label: "Registered",
+    hint: "Only accounts with a verified email can join.",
+  },
+  { value: "guest", label: "Guests", hint: "Only guest accounts can join." },
+];
+
 function InviteLinkSection({ conversationId }: { conversationId: number }) {
   const [link, setLink] = useState<string | null>(null);
+  const [linkAudience, setLinkAudience] = useState<InviteAudience>("all");
+  const [audience, setAudience] = useState<InviteAudience>("all");
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const create = trpc.messages.createGroupInvite.useMutation({
-    onSuccess: (r) => setLink(`${window.location.origin}${r.path}`),
+    onSuccess: (r) => {
+      setLink(`${window.location.origin}${r.path}`);
+      setLinkAudience(r.audience);
+    },
     onError: (e) => toast.error(e.message || "Couldn't create an invite link."),
   });
   const revoke = trpc.messages.revokeGroupInvites.useMutation({
@@ -42,6 +65,30 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
   return (
     <div className="space-y-2">
       <Label className="text-xs uppercase tracking-wider text-muted-foreground">Invite link</Label>
+      {/* WHO THE NEXT LINK IS FOR. Stays visible after minting, because changing it and
+          tapping again is how an admin gets a SECOND link for a different audience —
+          both remain valid, which is the whole reason the audience lives in the token. */}
+      <div role="radiogroup" aria-label="Who can join with this link" className="flex gap-1.5">
+        {AUDIENCE_OPTIONS.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={audience === o.value}
+            onClick={() => setAudience(o.value)}
+            className={`flex-1 rounded-lg border px-2 py-1.5 text-[11px] font-medium ${
+              audience === o.value
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border text-muted-foreground"
+            }`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        {AUDIENCE_OPTIONS.find((o) => o.value === audience)?.hint}
+      </p>
       {link ? (
         <div className="space-y-2">
           <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/40 px-3 py-2.5">
@@ -62,20 +109,23 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
             </button>
           </div>
           <p className="text-[11px] text-muted-foreground">
-            Anyone with this link can join. It expires in 7 days, and whoever joins sees only
-            messages sent from then on.
+            {linkAudience === "registered"
+              ? "Only registered accounts can join with this link."
+              : linkAudience === "guest"
+                ? "Only guest accounts can join with this link."
+                : "Anyone with this link can join."}{" "}
+            It expires in 7 days, and whoever joins sees only messages sent from then on.
           </p>
         </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => create.mutate({ conversationId })}
-          disabled={create.isPending}
-          className="w-full rounded-xl border border-border px-4 py-2.5 text-sm font-medium disabled:opacity-60"
-        >
-          {create.isPending ? "Creating…" : "Create an invite link"}
-        </button>
-      )}
+      ) : null}
+      <button
+        type="button"
+        onClick={() => create.mutate({ conversationId, audience })}
+        disabled={create.isPending}
+        className="w-full rounded-xl border border-border px-4 py-2.5 text-sm font-medium disabled:opacity-60"
+      >
+        {create.isPending ? "Creating…" : link ? "Create another link" : "Create an invite link"}
+      </button>
       {confirmRevoke ? (
         <div className="rounded-xl border border-border/60 bg-muted/40 p-3">
           <p className="text-xs">
