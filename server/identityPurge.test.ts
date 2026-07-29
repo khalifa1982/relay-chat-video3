@@ -671,6 +671,12 @@ describe("the admin delete", () => {
       "deleteIdentity",
       "findIdentities",
       "inviteGuestRegistration",
+      // v2.105.22, the fourth growth and the narrowest: a READ-ONLY report of which
+      // media stack the fleet is on and which relays it advertises. It takes no input,
+      // reaches no user data and writes nothing. Enumerated here AND in
+      // pushDoctor.test.ts on purpose — two guards mean a widening cannot be an
+      // accident, and both went red on this addition, which is them working.
+      "mediaDiagnostics",
       "pushDiagnostics",
       "sendTestPush",
       "setAccountType",

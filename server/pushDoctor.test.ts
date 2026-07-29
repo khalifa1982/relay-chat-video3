@@ -289,6 +289,10 @@ describe("the panel stays a panel", () => {
         "deleteIdentity",
         "findIdentities",
         "inviteGuestRegistration",
+        // v2.105.22 is the fourth growth, and it is READ-ONLY: it reports which media
+        // stack the fleet is on and which relays it advertises. It reaches no user
+        // data at all and writes nothing — the narrowest addition this set has taken.
+        "mediaDiagnostics",
         "pushDiagnostics",
         "sendTestPush",
         "setAccountType",
