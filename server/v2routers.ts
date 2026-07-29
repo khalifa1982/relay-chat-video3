@@ -12,7 +12,13 @@ import { storageGetSignedUrl } from "./storage";
 import { z } from "zod";
 import { personReelKey, groupReelKey } from "../shared/reelKey";
 import { mintGroupCallSeed } from "./groupCallSeed";
-import { mintGroupInvite, verifyGroupInvite, GROUP_INVITE_TTL_MS } from "./groupInvite";
+import {
+  mintGroupInvite,
+  verifyGroupInvite,
+  inviteAudienceAdmits,
+  GROUP_INVITE_TTL_MS,
+  type GroupInviteAudience,
+} from "./groupInvite";
 import { eq } from "drizzle-orm";
 import { getDb, getUserById } from "./db";
 import { identities } from "../drizzle/schema";
@@ -364,9 +370,38 @@ function requireIdentity(ctx: { identity: unknown }) {
     number: string;
     displayName: string;
     isGuest: boolean;
+    /* Carried so `identityTier` can answer guest-vs-registered with NO database work.
+     * `getRolesByIdentityIds` fails soft by design (it backs a badge), so without this
+     * a DB blip would read a registered caller as a guest — which for the invite-link
+     * audience gate means refusing somebody a link was minted for. */
+    verified: boolean;
   } | null;
   if (!id) throw new TRPCError({ code: "UNAUTHORIZED", message: "No identity" });
   return id;
+}
+
+/**
+ * The caller's account tier — the app's own three-tier rule (v2.99.6): `admin` when
+ * their `users` row says so, else `registered` when the identity is verified, else
+ * `guest`.
+ *
+ * ONE EXPRESSION, because there are now three readers (whoami's badge, and the
+ * invite link's audience gate at both preview and accept). Two copies of "which
+ * tier is this" is how a badge and a gate come to disagree about the same person —
+ * and here that disagreement would mean a screen offering a Join button that the
+ * accept then refuses.
+ *
+ * `getRolesByIdentityIds` swallows its own failure (it backs a badge, so it must
+ * never break a payload), which is why the fallback is derived from the already-
+ * resolved identity row rather than from a second query: the guest/registered half
+ * of the answer is available without any database work at all, and only the
+ * admin/registered distinction depends on the join.
+ */
+async function identityTier(identity: { id: number; verified?: boolean }): Promise<IdentityRole> {
+  return (
+    (await getRolesByIdentityIds([identity.id])).get(identity.id) ??
+    (identity.verified ? "registered" : "guest")
+  );
 }
 
 /**
@@ -502,10 +537,9 @@ export const v2AuthRouter = router({
         /* email is best-effort */
       }
     }
-    // Three-tier badge (v2.99.6): guest / registered / admin.
-    const role: IdentityRole =
-      (await getRolesByIdentityIds([ctx.identity.id])).get(ctx.identity.id) ??
-      (ctx.identity.verified ? "registered" : "guest");
+    // Three-tier badge (v2.99.6): guest / registered / admin. Via the shared reader,
+    // so the badge and the invite-link audience gate cannot disagree about a tier.
+    const role: IdentityRole = await identityTier(ctx.identity);
     return {
       id: ctx.identity.id,
       number: ctx.identity.number,
@@ -2109,9 +2143,19 @@ export const v2MessagesRouter = router({
    * admits a stranger and every member being able to hand one out is a decision nobody
    * has made. `checkGroupPermission` also supplies the DM refusal, the not-found refusal
    * and the fail-closed `unavailable`, so none of those is a second copy here.
+   *
+   * THE AUDIENCE IS PER-LINK (v2.105.23) and travels INSIDE the signed token, so an
+   * admin can have an open link and a registered-only one live at the same time and
+   * neither is rewritten when the other is minted. An omitted audience is `all`, which
+   * is exactly what every link minted before this existed already means.
    */
   createGroupInvite: publicProcedure
-    .input(z.object({ conversationId: z.number().int().positive() }))
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        audience: z.enum(["all", "guest", "registered"]).optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
       const gate = await checkGroupPermission(input.conversationId, me.id, "invite-link");
@@ -2135,7 +2179,8 @@ export const v2MessagesRouter = router({
       if (epoch == null) {
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't read that group just now." });
       }
-      const token = mintGroupInvite(input.conversationId, epoch);
+      const audience: GroupInviteAudience = input.audience ?? "all";
+      const token = mintGroupInvite(input.conversationId, epoch, audience);
       // No fleet secret ⇒ no invite links at all, said plainly rather than handing back
       // a token that would never verify.
       if (!token) {
@@ -2144,7 +2189,10 @@ export const v2MessagesRouter = router({
           message: "Invite links aren't available on this server.",
         });
       }
-      return { token, path: `/g/${token}`, expiresInMs: GROUP_INVITE_TTL_MS };
+      // The audience is echoed back from the value that was actually SIGNED, not from
+      // the input — so the sheet can never label a link with a restriction the token
+      // does not carry.
+      return { token, path: `/g/${token}`, expiresInMs: GROUP_INVITE_TTL_MS, audience };
     }),
 
   /** Invalidate EVERY outstanding invite link for a group, in one write. Admin-only. */
@@ -2349,6 +2397,12 @@ export const v2MessagesRouter = router({
    * EVERY REFUSAL READS THE SAME. Expired, revoked, mis-signed and no-such-group are one
    * message, because distinguishing them would turn the endpoint into an oracle for
    * which conversation ids exist and which epochs are current.
+   *
+   * THE AUDIENCE IS REPORTED, AND THAT IS NOT A NEW ORACLE. Reaching this point already
+   * required a signature this fleet minted for this group at the current epoch, so it
+   * tells nobody anything they did not already hold a legitimate link for — and knowing
+   * BEFORE the tap that a link needs a registered account is the difference between one
+   * clear sentence and a refused join the person has to interpret.
    */
   groupInvitePreview: publicProcedure
     .input(z.object({ token: z.string().min(1).max(256) }))
@@ -2361,13 +2415,20 @@ export const v2MessagesRouter = router({
       const group = (await getGroupsByIds([claim.conversationId]))[0];
       if (!group) return null;
       const memberIds = await getConversationParticipantIds(claim.conversationId);
+      const alreadyMember = memberIds.includes(me.id);
       return {
         conversationId: claim.conversationId,
         title: group.title ?? null,
         avatarUrl: group.avatarUrl ?? null,
         number: group.number ?? null,
         memberCount: memberIds.length,
-        alreadyMember: memberIds.includes(me.id),
+        alreadyMember,
+        audience: claim.audience,
+        /* THE AUDIENCE GOVERNS ADMISSION, NOT MEMBERSHIP — so an existing member is
+         * admitted whatever their tier. Without that, somebody who joined through a
+         * guest-only link and later REGISTERED (keeping their identity and number, per
+         * v2.99.49) would be told they cannot join a group they are already in. */
+        admitted: alreadyMember || inviteAudienceAdmits(claim.audience, await identityTier(me)),
       };
     }),
 
@@ -2383,6 +2444,12 @@ export const v2MessagesRouter = router({
    * cannot reach group adminship or call moderation. That composition is exactly what
    * v2.104.0's review kept closed by having no "members are admins when there is no
    * admin" fallback.
+   *
+   * THE AUDIENCE IS RE-CHECKED HERE and not merely at preview, for the same reason the
+   * epoch is: they are separate requests. The refusal NAMES the requirement, unlike every
+   * other refusal on this endpoint — it is reached only after a signature this fleet
+   * minted has already verified, so it reveals nothing, and "you need a registered
+   * account" is only useful if it is said.
    */
   acceptGroupInvite: publicProcedure
     .input(z.object({ token: z.string().min(1).max(256) }))
@@ -2393,6 +2460,21 @@ export const v2MessagesRouter = router({
       const epoch = await getGroupInviteEpoch(claim.conversationId);
       if (epoch == null || epoch !== claim.epoch) {
         throw new TRPCError({ code: "NOT_FOUND", message: "That invite link is no longer valid." });
+      }
+      // Membership is read BEFORE the audience gate, deliberately: the gate governs
+      // ADMISSION, so an existing member re-opening the link must never be refused for a
+      // tier they have since changed. It also fails in the safe direction — an
+      // unreadable roster reads as "not a member", so the gate still applies.
+      if (!(await getConversationParticipantIds(claim.conversationId)).includes(me.id)) {
+        if (!inviteAudienceAdmits(claim.audience, await identityTier(me))) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              claim.audience === "registered"
+                ? "This invite is for registered accounts. Register with email from your profile — your number and contacts carry over — then open the link again."
+                : "This invite is open to guest accounts only.",
+          });
+        }
       }
       const res = await joinGroupByInvite({ conversationId: claim.conversationId, identityId: me.id });
       if (!res.ok) {

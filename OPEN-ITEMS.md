@@ -70,6 +70,24 @@ Two things the design pass had not anticipated and that the build settled:
 
 No schema change was needed after all — it is localStorage, so nothing is stored server-side.
 
+### 1b. ~~Invite-link audience (guests-only / registered-only / all)~~ — **DONE, v2.105.23**
+**I had counted this as done and it was not.** #108's sentence asked for the link *and* an
+admin-chosen audience; v2.105.9 built the link and the clause was never implemented. Found by
+re-reading the owner's task text against the token rather than against my own notes — the same
+failure mode as §0, one step earlier: an audit that checks what I built cannot find what I skipped.
+
+The audience travels in the TOKEN (per-link, so two audiences can be live at once) while the epoch
+stays in a column (per-group revocation). An open link keeps the four-segment format byte-for-byte,
+so outstanding links survived the deploy. The gate governs admission and not membership, and its
+refusal is the one on that endpoint that is named — it is reached only after a fleet-minted
+signature verifies, so it leaks nothing.
+
+**#108 IS NOW CLOSED.** Every clause in it has shipped: creator/admin roles and admin-only deletion
+(v2.104.0), per-person bubble colours and the clickable sender thumbnail (v2.103.3), day headers
+(v2.71, sticky in v2.105.3), the invite link (v2.105.9), group calls with host/co-host seeding
+(v2.105.7), add/remove member and the "all users can add" toggle (v2.105.16), the 4-digit lock
+(v2.105.20), and the audience (v2.105.23).
+
 ### 2. Call-invite / party-line join screen  (#109)
 No dedicated screen exists (`client/src/pages/app/` has none). Was deliberately sequenced behind group
 roles, which are now done (v2.104.0 / v2.105.7 / v2.105.16) — so nothing blocks it any more.

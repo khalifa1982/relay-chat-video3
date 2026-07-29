@@ -38,6 +38,27 @@
  *
  * With no fleet secret, minting returns null and verification refuses
  * everything — the feature does not exist rather than existing unauthenticated.
+ *
+ * ── WHO A LINK IS FOR (v2.105.23, the last piece of #108) ──────────────────
+ * An admin may restrict a link to GUESTS only or to REGISTERED accounts only.
+ * `all` is the default and is what every link minted before this existed means.
+ *
+ * THE AUDIENCE LIVES IN THE TOKEN, NOT IN A COLUMN — the opposite of where the
+ * epoch lives, and for a reason. The epoch is a property of the GROUP ("every
+ * link is dead now"), so it has to sit somewhere a signature cannot reach. The
+ * audience is a property of THIS LINK: an admin can reasonably have a
+ * registered-only link in one place and an open one in another, both live at
+ * once. A column would collapse them into a single setting AND would rewrite a
+ * link already handed out — so a link minted registered-only yesterday would
+ * start admitting guests because a toggle moved today, which is not what the
+ * person who minted it agreed to.
+ *
+ * AN OPEN TOKEN IS BYTE-IDENTICAL TO THE OLD FORMAT, deliberately: `all` is still
+ * four segments MAC'd over the same string, so every link minted in the last
+ * seven days keeps working across the deploy that adds this. A RESTRICTED token
+ * is five segments whose MAC input INCLUDES the audience, so the two shapes are
+ * domain-separated — appending `.registered` to an open token, or dropping the
+ * segment from a restricted one, changes the expected MAC and is refused.
  * ────────────────────────────────────────────────────────────────────────── */
 import crypto from "crypto";
 import { busSecret } from "./redisBus";
@@ -52,17 +73,67 @@ export const GROUP_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const MAX_TOKEN_LEN = 256;
 
+/** Who a link admits. `all` is the default and the pre-v2.105.23 meaning. */
+export type GroupInviteAudience = "all" | "guest" | "registered";
+
+const AUDIENCES: readonly string[] = ["all", "guest", "registered"];
+
+/**
+ * Resolve an audience value, or null for anything that is not one of the three.
+ *
+ * FAILS TO NULL, never to `all`: a value we do not recognise must refuse rather
+ * than quietly widen a link to everybody. The one place `all` is inferred is an
+ * ABSENT audience, which is the four-segment token shape and is a real claim
+ * ("this link was minted before audiences existed"), not an unreadable one.
+ */
+export function normalizeInviteAudience(v: unknown): GroupInviteAudience | null {
+  return typeof v === "string" && AUDIENCES.includes(v) ? (v as GroupInviteAudience) : null;
+}
+
 function inviteMac(
   conversationId: number,
   epoch: number,
   exp: number,
+  audience: GroupInviteAudience,
   key: string,
 ): string {
+  // `all` is MAC'd over the pre-audience string, so a token minted before this
+  // existed still verifies. A restricted audience gets its own domain, which is
+  // what stops one shape being edited into the other.
+  const base = `invite|${conversationId}|${epoch}|${exp}`;
   return crypto
     .createHmac("sha256", key)
-    .update(`invite|${conversationId}|${epoch}|${exp}`)
+    .update(audience === "all" ? base : `${base}|${audience}`)
     .digest("hex")
     .slice(0, 32); // 128-bit tag
+}
+
+/**
+ * Does a link with this audience admit somebody of this account tier?
+ *
+ * Pure, so the rule can be tested without a database, and so the ONE place that
+ * decides it is not buried in a procedure. The tier vocabulary is the app's own
+ * three-tier one (guest / registered / admin, v2.99.6); the caller derives it.
+ *
+ * AN OPEN LINK DOES NOT CONSULT THE TIER AT ALL. It imposes no requirement, so
+ * refusing it because a tier could not be read would break the default case for
+ * everybody. A RESTRICTED link fails SHUT on an unreadable tier for the mirror
+ * reason — admitting somebody who cannot be classified is the thing it exists to
+ * stop.
+ *
+ * `registered` admits an ADMIN, because an admin holds a registered account by
+ * construction. `guest` does NOT admit either of the others: guests-only was
+ * asked for as guests-only, and reading it more loosely would make the setting
+ * mean nothing.
+ */
+export function inviteAudienceAdmits(
+  audience: GroupInviteAudience,
+  tier: string | null | undefined,
+): boolean {
+  if (audience === "all") return true;
+  if (audience === "registered") return tier === "registered" || tier === "admin";
+  if (audience === "guest") return tier === "guest";
+  return false;
 }
 
 /**
@@ -75,14 +146,23 @@ function inviteMac(
 export function mintGroupInvite(
   conversationId: number,
   epoch: number,
+  audience: GroupInviteAudience = "all",
   nowMs: number = Date.now(),
 ): string | null {
   const key = busSecret();
   if (!key) return null;
   if (!Number.isInteger(conversationId) || conversationId <= 0) return null;
   if (!Number.isInteger(epoch) || epoch < 0) return null;
+  // An unrecognised audience REFUSES rather than falling back to `all`: a mint that
+  // silently drops the restriction hands out a link the admin did not ask for.
+  const aud = normalizeInviteAudience(audience);
+  if (!aud) return null;
   const exp = nowMs + GROUP_INVITE_TTL_MS;
-  const token = `${exp}.${conversationId}.${epoch}.${inviteMac(conversationId, epoch, exp, key)}`;
+  const mac = inviteMac(conversationId, epoch, exp, aud, key);
+  const token =
+    aud === "all"
+      ? `${exp}.${conversationId}.${epoch}.${mac}`
+      : `${exp}.${conversationId}.${epoch}.${aud}.${mac}`;
   return token.length <= MAX_TOKEN_LEN ? token : null;
 }
 
@@ -92,6 +172,9 @@ export interface GroupInviteClaim {
    *  the conversation's current epoch — this module cannot, it has no database. */
   epoch: number;
   exp: number;
+  /** Who this link admits. A four-segment token has none and reads as `all`, which
+   *  is the meaning every link minted before v2.105.23 was handed out under. */
+  audience: GroupInviteAudience;
 }
 
 /**
@@ -110,23 +193,39 @@ export function verifyGroupInvite(
   if (!key) return null;
   if (typeof token !== "string" || token.length > MAX_TOKEN_LEN) return null;
   const parts = token.split(".");
-  if (parts.length !== 4) return null;
-  const [expRaw, cidRaw, epochRaw, mac] = parts;
+  // Four segments is an OPEN link (including every link minted before audiences
+  // existed); five carries a restricted audience.
+  if (parts.length !== 4 && parts.length !== 5) return null;
+  const [expRaw, cidRaw, epochRaw] = parts;
+  const audRaw = parts.length === 5 ? parts[3] : "all";
+  const mac = parts.length === 5 ? parts[4] : parts[3];
   if (!/^\d{1,15}$/.test(expRaw)) return null;
   if (!/^\d{1,12}$/.test(cidRaw)) return null;
   if (!/^\d{1,12}$/.test(epochRaw)) return null;
+  const audience = normalizeInviteAudience(audRaw);
+  /* KEPT THOUGH REDUNDANT, and recorded rather than quietly removed: a mutation
+   * replacing this with `?? "all"` SURVIVES, because the one-encoding guard below then
+   * refuses the same token (measured, not assumed — an unknown five-segment audience
+   * comes back null either way). It stays because it makes "an audience we do not
+   * recognise is refused" a LOCAL statement instead of a consequence of the next guard's
+   * ordering; relying on that ordering is how a later reorder would open it silently. */
+  if (!audience) return null;
+  // ONE ENCODING PER TOKEN. A five-segment token carrying the literal "all" is not a
+  // shape this fleet mints, and since `all` is MAC'd over the four-segment string it
+  // would otherwise verify — a second spelling of the same token for no benefit.
+  if (parts.length === 5 && audience === "all") return null;
   const exp = Number(expRaw);
   const conversationId = Number(cidRaw);
   const epoch = Number(epochRaw);
   if (!Number.isFinite(exp) || exp <= nowMs) return null;
   if (!Number.isInteger(conversationId) || conversationId <= 0) return null;
   if (!Number.isInteger(epoch) || epoch < 0) return null;
-  const expected = inviteMac(conversationId, epoch, exp, key);
+  const expected = inviteMac(conversationId, epoch, exp, audience, key);
   if (typeof mac !== "string" || mac.length !== expected.length) return null;
   try {
     if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(mac))) return null;
   } catch {
     return null;
   }
-  return { conversationId, epoch, exp };
+  return { conversationId, epoch, exp, audience };
 }

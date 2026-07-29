@@ -106,9 +106,20 @@ describe("#114 — the invite token round-trips and is bounded", () => {
   it("refuses an expired token", async () => {
     const { mintGroupInvite, verifyGroupInvite, GROUP_INVITE_TTL_MS } = await mod();
     const now = 1_000_000_000_000;
-    const t = mintGroupInvite(5, 0, now)!;
+    const t = mintGroupInvite(5, 0, "all", now)!;
     expect(verifyGroupInvite(t, now + GROUP_INVITE_TTL_MS - 1)).not.toBeNull();
     expect(verifyGroupInvite(t, now + GROUP_INVITE_TTL_MS + 1)).toBeNull();
+  });
+
+  it("a clock in the audience position refuses rather than minting", async () => {
+    // v2.105.23 inserted `audience` ahead of `nowMs`, so a caller that still passes a
+    // timestamp third lands a number where an audience belongs. `normalizeInviteAudience`
+    // fails to NULL, so that mints NOTHING — which is the direction that matters: the
+    // alternative reading (fall back to `all`) would hand out an OPEN link to a caller
+    // who believes they restricted it. Test files are excluded from `tsc`, so this is
+    // the only thing standing between that mistake and a silently wrong token.
+    const { mintGroupInvite } = await mod();
+    expect(mintGroupInvite(5, 0, 1_000_000_000_000 as never)).toBeNull();
   });
 
   it("refuses a tampered conversation id, epoch or signature", async () => {
@@ -369,7 +380,12 @@ describe("#114 — the join route is its own, and does not auto-join", () => {
     // anybody who merely looked at the group's details.
     const sheet = codeOnly(read("client/src/app/GroupInfoSheet.tsx"));
     const sec = sheet.slice(sheet.indexOf("function InviteLinkSection"), sheet.indexOf("export function GroupInfoSheet"));
-    expect(sec).toMatch(/onClick=\{\(\) => create\.mutate\(\{ conversationId \}\)\}/);
+    // Pinned as the PROPERTY rather than the argument list: there is exactly ONE mint in
+    // this section and it is reached from a click. Freezing `{ conversationId }` broke the
+    // moment the audience joined it while saying nothing about whether a mint could fire
+    // on mount — which is the only thing this test exists to prevent.
+    expect(sec.match(/create\.mutate\(/g)?.length ?? 0).toBe(1);
+    expect(sec).toMatch(/onClick=\{\(\) => create\.mutate\(\{[^}]*conversationId/);
     expect(sec).not.toMatch(/useEffect/);
   });
 });

@@ -17,10 +17,24 @@
  * Expired, revoked, mis-signed and no-such-group are one message, deliberately: the
  * preview endpoint answers them identically so it cannot be used to discover which
  * conversation ids exist, and this screen must not undo that by inferring a reason.
+ *
+ * ── ONE EXCEPTION: THE AUDIENCE (v2.105.23) ────────────────────────────────
+ * A link can be restricted to guests or to registered accounts. That refusal IS named,
+ * because it is reached only after a signature this fleet minted has verified — so it
+ * reveals nothing a legitimate link-holder did not already have — and it is the one
+ * refusal with something the person can actually do about it. It is shown BEFORE the
+ * tap rather than after a rejected join, and the Join button is replaced rather than
+ * disabled, so there is no control that looks live and refuses.
+ *
+ * A GUEST HITTING A REGISTERED-ONLY LINK IS SENT TO THEIR PROFILE, which carries the
+ * "Register with email" button and says the number and contacts carry over. That is one
+ * extra tap, and it is deliberate: telling an identity-LESS visitor the requirement
+ * before they pick a name would mean making the preview endpoint anonymous, i.e.
+ * widening a signed-capability read to callers with no identity at all.
  * ────────────────────────────────────────────────────────────────────────── */
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { Users, ArrowRight, Loader2 } from "lucide-react";
+import { Users, ArrowRight, Loader2, Lock } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 
@@ -112,22 +126,54 @@ export default function GroupInvite({ token }: { token: string }) {
                 </>
               ) : null}
             </p>
-            <p className="mt-4 text-xs text-muted-foreground">
-              You'll see messages sent from now on — not the conversation's history.
-            </p>
-            <button
-              type="button"
-              onClick={join}
-              disabled={joining}
-              className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
-            >
-              {joining ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden />
-              ) : (
-                <ArrowRight className="size-4" aria-hidden />
-              )}
-              {g.alreadyMember ? "Open the group" : "Join group"}
-            </button>
+            {g.admitted ? (
+              <>
+                <p className="mt-4 text-xs text-muted-foreground">
+                  You'll see messages sent from now on — not the conversation's history.
+                </p>
+                <button
+                  type="button"
+                  onClick={join}
+                  disabled={joining}
+                  className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+                >
+                  {joining ? (
+                    <Loader2 className="size-4 animate-spin" aria-hidden />
+                  ) : (
+                    <ArrowRight className="size-4" aria-hidden />
+                  )}
+                  {g.alreadyMember ? "Open the group" : "Join group"}
+                </button>
+              </>
+            ) : (
+              <div className="mt-5 rounded-xl border border-border/60 bg-muted/40 p-4 text-left">
+                <p className="flex items-center gap-2 text-sm font-medium">
+                  <Lock className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  {g.audience === "registered"
+                    ? "This link is for registered accounts"
+                    : "This link is for guest accounts only"}
+                </p>
+                {g.audience === "registered" ? (
+                  <>
+                    <p className="mt-1.5 text-xs text-muted-foreground">
+                      Register with email from your profile — your number and contacts carry
+                      over — then open this link again.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => navigate("/app/profile")}
+                      className="mt-3 w-full rounded-lg bg-primary px-3 py-2.5 text-sm font-semibold text-primary-foreground"
+                    >
+                      Go to my profile
+                    </button>
+                  </>
+                ) : (
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    Ask a group admin for a link that includes registered accounts.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

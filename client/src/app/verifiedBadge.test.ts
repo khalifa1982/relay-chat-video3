@@ -84,7 +84,15 @@ describe("role badge is wired into every primary identity surface", () => {
   });
   it("the server emits role on whoami / directory.lookup / contacts.list / messages.threads", () => {
     const routers = read("server/v2routers.ts");
-    expect(routers).toMatch(/getRolesByIdentityIds\(\[ctx\.identity\.id\]\)/); // whoami
+    // whoami. Pinned as "it emits a role through the shared single-identity reader"
+    // rather than as the inline `getRolesByIdentityIds([ctx.identity.id])` expression it
+    // used to be: v2.105.23 extracted that into `identityTier`, because the invite-link
+    // audience gate needs the SAME answer and two copies of the rule is how a badge and a
+    // gate come to disagree about one person. The property is unchanged; only its home is.
+    expect(routers).toMatch(/const role: IdentityRole = await identityTier\(ctx\.identity\)/);
+    expect(routers).toMatch(
+      /async function identityTier[\s\S]{0,400}?getRolesByIdentityIds\(\[identity\.id\]\)/,
+    );
     expect(routers).toMatch(/role: \(\(await getRolesByIdentityIds\(\[id\.id\]\)\)\.get\(id\.id\)/); // lookup
     // v2.99.28 (M14): an unresolved (non-RELAY) saved number now emits role null
     // (no badge) instead of a false "guest"; a real identity still defaults guest.
