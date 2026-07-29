@@ -213,7 +213,7 @@ import { createRateLimiter, clientIpOf, trustedProxyHops } from "./rateLimit";
 // serves signaling, and the Redis mirror (`relay:busypins`/`relay:plcounts`)
 // when it's an API-tier instance behind the scale-out ALB (REDIS_URL set, no
 // local relay clients). Single-instance deploys are byte-identical.
-import { pinsInCallAsync, partyLineLiveCountsAsync, liveRoomFor } from "./relay";
+import { pinsInCallAsync, partyLineLiveCountsAsync, liveRoomFor, livekitConfig, iceServers } from "./relay";
 
 /**
  * Offline-message email (v2.99.13). CONTENT-FREE by design (owner: "it will
@@ -5279,6 +5279,94 @@ export const v2AdminRouter = router({
    * so the row is reported as kind + length + a short prefix, which is enough to
    * tell two devices apart and not enough to address either.
    */
+  /**
+   * WHICH MEDIA STACK THIS FLEET IS ACTUALLY USING (v2.105.22).
+   *
+   * Owner: *"make sure livekit details is already in your system"*, while diagnosing
+   * *"slowness … when the voice and video started together"*.
+   *
+   * `/api/health` already answers WHETHER LiveKit is configured (v2.105.20), as a
+   * bare boolean — but that cannot tell an operator WHICH LiveKit project the fleet
+   * is pointed at, and "the credentials are set" is not the same claim as "they are
+   * the right ones". Until now the only way to find out was to open a call and read
+   * `livekitUrl` out of the `registered` frame in devtools.
+   *
+   * ADMIN-GATED RATHER THAN ADDED TO `/api/health`, and that placement is the whole
+   * decision. v2.105.20 deliberately made health report a boolean and never the URL;
+   * widening an UNAUTHENTICATED endpoint to name the fleet's media infrastructure one
+   * release later would undo that for the sake of a convenience. The URL is not
+   * secret — every signed-in browser already receives it — but "not secret" and
+   * "worth publishing to anonymous callers" are different questions.
+   *
+   * THE HOST ONLY, NEVER A CREDENTIAL. The API key and secret are what actually
+   * matter, they live in `/home/relay/.env`, and nothing here reads them: the key is
+   * reported as a boolean and the secret is not touched at all. The TURN block
+   * likewise reports URL SHAPES with the minted username/credential stripped, since
+   * `iceServers()` returns live short-lived credentials and echoing them back would
+   * hand an admin screen a working relay credential for no reason.
+   *
+   * TURN IS REPORTED BESIDE LIVEKIT because of what the v2.105.21 readout is looking
+   * for: if a call shows "via TURN relay", the next question is immediately which
+   * relays are being advertised and whether TLS is among them.
+   */
+  mediaDiagnostics: publicProcedure.query(async ({ ctx }) => {
+    await requireAdmin(ctx);
+    const lk = livekitConfig();
+    let livekitHost: string | null = null;
+    try {
+      // Parsed rather than string-sliced, so a URL with a port or a path cannot be
+      // mis-reported as a hostname — and a malformed value yields null instead of
+      // a confident wrong answer.
+      if (lk.url) livekitHost = new URL(lk.url).host || null;
+    } catch {
+      livekitHost = null;
+    }
+    /* The relay list EXACTLY as a client is told it, so this cannot drift from what
+       calls actually use — the parity lesson of v2.99.71, where a checker and the
+       server disagreed about which endpoints existed. A throwaway pin is passed
+       because the signature requires one; only the URL strings are read back. */
+    let urls: string[] = [];
+    try {
+      for (const s of iceServers("000000")) {
+        const u = (s as { urls?: string | string[] }).urls;
+        if (typeof u === "string") urls.push(u);
+        else if (Array.isArray(u)) urls = urls.concat(u.filter((x) => typeof x === "string"));
+      }
+    } catch {
+      urls = [];
+    }
+    return {
+      livekit: {
+        /** All three of URL + key + secret present. False means calls run the MESH. */
+        enabled: lk.enabled,
+        /** e.g. "your-project.livekit.cloud" — host only, no scheme, path or query. */
+        host: livekitHost,
+        /** Whether a key is set. The VALUE is never returned, and the secret is never read. */
+        apiKeySet: !!process.env.LIVEKIT_API_KEY,
+        cloud: !!livekitHost && livekitHost.endsWith(".livekit.cloud"),
+      },
+      /** What clients are told about relays — url shapes only, never a credential. */
+      turn: {
+        stun: urls.filter((u) => u.startsWith("stun:")).length,
+        turnUdp: urls.filter((u) => u.startsWith("turn:") && u.includes("transport=udp")).length,
+        turnTcp: urls.filter((u) => u.startsWith("turn:") && u.includes("transport=tcp")).length,
+        turnsTls: urls.filter((u) => u.startsWith("turns:")).length,
+        hosts: Array.from(
+          new Set(
+            urls
+              .filter((u) => u.startsWith("turn:") || u.startsWith("turns:"))
+              .map((u) => {
+                const m = /^turns?:([^:?]+)/.exec(u);
+                return m ? m[1] : "";
+              })
+              .filter(Boolean),
+          ),
+        ),
+        secretSet: !!process.env.TURN_SECRET,
+      },
+    };
+  }),
+
   pushDiagnostics: publicProcedure
     .input(z.object({ identityId: z.number().int().positive() }))
     .query(async ({ ctx, input }) => {

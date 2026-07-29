@@ -11278,6 +11278,60 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.105.22 — the admin panel says which media stack the fleet is on (2026-07-29)
+
+- [x] **THE OWNER'S ASK**: *"make sure livekit details is already in your system"*, mid-diagnosis of the
+      voice+video slowness — and then, picking between two options I offered, *"this one"*: put the LiveKit
+      host on the admin panel's fleet readout.
+- [x] **WHAT WAS ALREADY TRUE, and what still was not.** `/api/health` has reported `media.livekit` since
+      v2.105.20, so *whether* LiveKit is configured was answerable — that boolean is how the owner
+      corrected my mesh assumption. What it could NOT say is WHICH project the fleet points at, and
+      **"the credentials are set" is not the same claim as "they are the right ones"**. Until now the only
+      way to find out was to open a call and read `livekitUrl` out of the `registered` frame in devtools.
+- [x] **ADMIN-GATED RATHER THAN ADDED TO `/api/health`, and that placement is the whole decision.**
+      v2.105.20 deliberately made health report a boolean and never the URL; widening an
+      **unauthenticated** endpoint to name the fleet's media infrastructure one release later would undo
+      that for a convenience. The URL is not secret — every signed-in browser already receives it — but
+      "not secret" and "worth publishing to anonymous callers" are different questions.
+- [x] **THE HOST ONLY, NEVER A CREDENTIAL, and that is where the test weight went.** A screen that reports
+      config is one small mistake from reporting a secret. `LIVEKIT_API_SECRET` is not read at all
+      (asserted); the API key is reported as `!!` and its single occurrence is counted so a second use
+      cannot appear; `TURN_SECRET` likewise. **The relay list strips the minted credential**: `iceServers()`
+      returns LIVE short-lived TURN credentials, so only `urls` is read and `.credential`/`.username` are
+      forbidden by name — echoing them back would hand an admin screen a working relay credential for no
+      reason.
+- [x] **PARSED, NOT SLICED**: the host comes from `new URL(...).host`, so a URL with a port or a path
+      cannot be mis-reported as a hostname, and a malformed value yields **null** rather than a confident
+      wrong answer — which the panel renders as "host unreadable" instead of a blank.
+- [x] **THE RELAY LIST IS READ FROM `iceServers()`, i.e. exactly what a client is told**, rather than
+      re-derived from `TURN_HOSTS`. That is the v2.99.71 lesson: a checker that re-derived the endpoint
+      list disagreed with the server and reported two permanent FALSE failures. A test forbids reading
+      those env vars here.
+- [x] **TURN SITS BESIDE LIVEKIT because of what the v2.105.21 readout is looking for**: if a call reports
+      "via TURN relay", the immediate next question is which relays are advertised and whether TLS is
+      among them. The two halves are complementary — this says what the fleet is CONFIGURED with, the
+      in-call chip says what a call is actually DOING — and the panel links to it in those words.
+- [x] **IT WRITES NOTHING AND TAKES NO INPUT**: a parameterless query cannot be aimed at anybody, and a
+      test forbids `getDb`, `identities`, `users`, `.update(`, `.insert(` and `.delete(` in its body.
+- [x] **A FAILED READ IS REPORTED AS A FAILURE, never as "not configured"** — those need different next
+      steps and conflating them sends an operator to the wrong file; no TURN at all is called out rather
+      than shown as a neutral zero.
+- [x] **BOTH CAPABILITY GUARDS WENT RED, WHICH IS THEM WORKING.** The panel's tRPC surface is enumerated
+      in TWO files (`pushDoctor.test.ts` and `identityPurge.test.ts`) precisely so a widening cannot be an
+      accident. This is the set's fourth growth and the narrowest: read-only, no input, no user data.
+- [x] `server/mediaDiagnostics.test.ts` (19); **all 16 tripwires verified by MUTATION** from byte-exact
+      backups off a confirmed-GREEN baseline, sources byte-identical afterwards. **ONE MUTATION ABORTED
+      rather than recording a false survivor** — my anchor said "N−1 party call" where the copy says
+      "N-party call", so it matched 0 times and the harness refused; re-run with the exact text, it bit.
+- [x] **A DEFECT IN MY OWN TEST, caught by it failing on correct code**: the mount-ordering assertion
+      anchored on the bare phrase "Find a person", which also appears in `Admin.tsx`'s own HEADER DOC
+      COMMENT — so it resolved to character 201 and failed on a perfectly correct mount. The prose-anchor
+      trap, for the fourth time in this session's releases; now anchored on the `aria-label` attribute.
+- [x] **NOT VERIFIED AGAINST THE FLEET, said plainly**: this sandbox cannot read `/home/relay/.env` and
+      cannot reach `your-chat.io`, so nobody has seen the real host rendered. What is proven is that the
+      procedure returns the host and can never return a credential.
+- [x] No schema change, no new dependency, no new env var. 3801 tests.
+
 ## v2.105.21 — call quality, as numbers (2026-07-29)
 
 - [x] **THE OWNER'S REPORT**: *"I feel slowness in the voice and video calls"*, then the sharper form —

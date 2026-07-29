@@ -150,6 +150,10 @@ export default function Admin() {
         <h1 className="text-lg font-bold">Admin</h1>
       </div>
 
+      {/* FLEET state, above the per-person search, because it describes the whole
+          deployment rather than anybody in particular (v2.105.22). */}
+      <MediaCheck />
+
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -511,6 +515,72 @@ function Row({ ok, label, detail }: { ok: boolean; label: string; detail?: strin
         {detail && <span className="block text-muted-foreground">{detail}</span>}
       </span>
     </li>
+  );
+}
+
+/**
+ * WHICH MEDIA STACK THE FLEET IS ON (v2.105.22).
+ *
+ * Owner, while diagnosing "slowness … when the voice and video started together":
+ * *"make sure livekit details is already in your system"*. `/api/health` says WHETHER
+ * LiveKit is configured; it deliberately does not say WHICH project, because that
+ * endpoint is unauthenticated. This screen is `requireAdmin`-gated, so it can.
+ *
+ * NOT per-identity: it describes the FLEET, so it renders once at the top rather than
+ * inside a searched user's card. It is also the first thing to look at when the
+ * v2.105.21 call readout says "via TURN relay" — the relay list is right here.
+ */
+function MediaCheck() {
+  const q = trpc.admin.mediaDiagnostics.useQuery(undefined, { staleTime: 30_000 });
+  if (q.isLoading) {
+    return (
+      <div className="flex items-center gap-2 rounded-2xl border border-border/70 bg-card/40 p-3 text-xs text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin" /> Reading the media config…
+      </div>
+    );
+  }
+  if (!q.data) {
+    // A failure is reported as a failure, never as "not configured" — those need
+    // different next steps and conflating them sends somebody to the wrong file.
+    return (
+      <p className="rounded-2xl border border-border/70 bg-card/40 p-3 text-xs text-destructive">
+        Couldn&apos;t read the media config.
+      </p>
+    );
+  }
+  const { livekit: lk, turn } = q.data;
+  return (
+    <div className="space-y-2 rounded-2xl border border-border/70 bg-card/40 p-3">
+      <h3 className="text-xs font-semibold">Call media — this fleet</h3>
+      <ul className="space-y-1.5 text-xs">
+        <Row
+          ok={lk.enabled}
+          label={lk.enabled ? "LiveKit SFU in use" : "WebRTC mesh in use"}
+          detail={
+            lk.enabled
+              ? // The host is the whole point: "configured" is not the same claim as
+                // "pointed at the right project".
+                `${lk.host ?? "host unreadable"}${lk.cloud ? " · LiveKit Cloud" : ""}`
+              : "No LIVEKIT_URL/KEY/SECRET — every phone in an N-party call runs N−1 encoders."
+          }
+        />
+        <Row ok={lk.apiKeySet} label="LiveKit API key set" detail="The value is never shown here." />
+        <Row
+          ok={turn.turnsTls > 0}
+          label={`Relays: ${turn.hosts.length} host${turn.hosts.length === 1 ? "" : "s"}, ${turn.turnsTls} TLS`}
+          detail={
+            turn.hosts.length
+              ? `${turn.hosts.join(", ")} · ${turn.stun} STUN · ${turn.turnUdp} UDP · ${turn.turnTcp} TCP`
+              : "No TURN advertised — a call behind a strict NAT has no fallback."
+          }
+        />
+        <Row ok={turn.secretSet} label="TURN secret set" detail="Credentials are minted per call, never shown." />
+      </ul>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        In a call, tap <span className="font-semibold">Stats</span> in the control bar for live
+        round-trip, packet loss, and whether media is going through a relay.
+      </p>
+    </div>
   );
 }
 
