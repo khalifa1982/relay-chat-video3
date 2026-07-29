@@ -177,7 +177,16 @@ describe("v2.70 multi-party grid + exit + quality (verified)", () => {
   it("published camera/screen tracks carry a contentHint; SFU uses the speech Opus preset", () => {
     expect(CLIENT).toMatch(/contentHint = "motion"/);
     expect(CLIENT).toMatch(/contentHint = "detail"/);
-    expect(CLIENT).toMatch(/publishDefaults = \{ audioPreset: AudioPresetsEnum\.speech \}/);
+    /* REWRITTEN v2.105.21 to the PROPERTY. This froze the whole publishDefaults
+       object as one literal, so it broke the moment a SECOND publish default was
+       added (`degradationPreference`) while saying nothing about what it was for —
+       that the SFU publishes audio with the 24 kbps speech preset rather than the
+       48 kbps music default. Asserted as the assignment, so the object may grow. */
+    expect(CLIENT).toMatch(/pubDefaults\.audioPreset = AudioPresetsEnum\.speech/);
+    expect(CLIENT).toMatch(/roomOpts\.publishDefaults = pubDefaults/);
+    // …and the preset stays CONDITIONAL on the enum existing, or an older
+    // livekit-client would publish `audioPreset: undefined`.
+    expect(CLIENT).toMatch(/if \(AudioPresetsEnum\?\.speech\) pubDefaults\.audioPreset/);
   });
 });
 

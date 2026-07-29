@@ -96,28 +96,39 @@ into the search work (v2.99.96, v2.99.98).
 ---
 
 ### 6. Agora as the primary voice/video transport, LiveKit as fallback  (asked 2026-07-29)
-**Read the premise correction first, because it changes the decision.** Calls do **not** run on LiveKit
-today. `livekitConfig()` requires `LIVEKIT_URL` + `LIVEKIT_API_KEY` + `LIVEKIT_API_SECRET`, none of which
-appear in `ecosystem.config.cjs` or any workflow — so unless all three were pasted into
-`/home/relay/.env` by hand, the fleet runs the **WebRTC mesh**, where every phone in an N-party call runs
-N-1 encoders and N-1 decoders. That is the biggest single cause of call latency and heat here (measured in
-v2.99.84), and it is almost certainly what is being felt.
+**Premise corrected 2026-07-29.** I first said the fleet was probably on the WebRTC mesh. It is not —
+`/api/health` reports `"media":{"livekit":true}`, so **LiveKit Cloud is live** and the three env vars are
+in `/home/relay/.env`. Being on LiveKit Cloud also means the region hypothesis is largely closed: they
+route regionally.
 
-v2.105.20 added `media.livekit` to `/api/health` so this is now a one-command check:
-`curl -s https://your-chat.io/api/health` → `"media":{"livekit":false}` means mesh.
+**Symptom, as reported:** slowness *when voice and video start together*.
 
-Sequencing that follows from it:
-1. **If it reads `false`** — set the three LiveKit vars and restart pm2. Zero code, and it turns every
-   call from an N-1-encoder mesh into a single upstream. Re-judge the latency after that.
-2. **Then, if Agora is still wanted**, it is a real release, not a config change: a second transport
-   adapter beside the mesh and LiveKit paths in `relayClient.ts`, server-side token minting
-   (`mintLivekitToken`'s equivalent), a channel-name mapping off the room id, and the SDK as the first
-   npm media dependency this repo has taken. Doable; just not something to start before step 1, because
-   otherwise Agora gets compared against a mesh rather than against an SFU.
+**Three hypotheses formed and killed by reading** — recorded so they are not re-raised:
+1. the mesh (refuted by `/api/health`);
+2. audio unprioritised on the SFU path — `livekit-client` sets `networkPriority: 'high'` itself;
+3. our own `audioPreset: speech` overriding that downward — the preset carries no `priority`, so
+   `?? 'high'` still applies.
 
-**Not a coherent option, and worth saying explicitly:** "Agora on the front end, LiveKit on the back."
-Both are complete stacks — client SDK plus media server — and Agora's SDK only talks to Agora's cloud.
-There is no join between them; you would be paying for two SFUs to do one SFU's job.
+**One real inconsistency found and fixed in v2.105.21:** `degradationPreference: "balanced"` had never
+reached the SFU path — v2.99.84 reasoned it out and applied it only inside the mesh-only function. It is a
+plausible fit for the reported moment. **It is not claimed as the cause.**
+
+**What v2.105.21 shipped so this stops being guesswork:** a Stats chip in the call bar giving RTT, packet
+loss, jitter, publish/receive resolution + fps, throughput, and **whether media is going via a TURN
+relay** — one shape for both transports so they are comparable.
+
+**Next step is a reading, not a build.** Turn the Stats chip on, start a call, enable video, and look:
+- **`via TURN relay`** → that alone explains it, and **Agora would be equally slow**. Fix is coturn/ICE.
+- **RTT > 300ms** on LiveKit Cloud → region or network, again not a vendor problem.
+- **publish fps collapsing as video starts** → device/encoder; the new `balanced` preference may already
+  have helped.
+- **all clean and still slow** → then Agora is the right call and I will build it: a third transport
+  adapter beside the mesh and LiveKit paths, server-side token minting, channel mapping off the room id,
+  and the SDK as this repo's first npm media dependency.
+
+**Not a coherent option, recorded because it was the original framing:** "Agora on the front end, LiveKit
+on the back." Both are complete stacks — client SDK plus media server — and Agora's SDK only talks to
+Agora's cloud. Primary/fallback is the version of that idea which works.
 
 ## §2 — NOT DONE, and needs a decision from you first
 
