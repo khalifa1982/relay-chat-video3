@@ -1,11 +1,9 @@
 import { Platform, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
-import Constants from "expo-constants";
 
 import { RelayWebView } from "@/components/relay-webview";
 import { ApkUpdateBanner } from "@/components/apk-update-banner";
-import { BuildStatusRow } from "@/components/build-status-row";
 import { useApkUpdate } from "@/hooks/use-apk-update";
 import { RELAY_APP_URL } from "@/lib/relay-config";
 
@@ -29,12 +27,6 @@ export default function HomeScreen() {
     progress,
     manifest,
     mandatory,
-    installedBuild,
-    installedVersionName,
-    lastReason,
-    lastCheckAt,
-    pollIntervalMs,
-    check,
     startDownload,
     applyUpdate,
   } = useApkUpdate();
@@ -57,25 +49,6 @@ export default function HomeScreen() {
       <View style={styles.webviewWrap}>
         <RelayWebView />
       </View>
-
-      {/* Compact build/status footer with manual re-check. */}
-      <BuildStatusRow
-        installedBuild={installedBuild}
-        installedVersionName={installedVersionName}
-        betaVersionName={
-          (Constants.expoConfig?.version ?? installedVersionName) || null
-        }
-        latestBuild={manifest?.buildNumber}
-        latestVersionName={manifest?.versionName}
-        reason={lastReason}
-        status={status}
-        progress={progress}
-        lastCheckAt={lastCheckAt}
-        pollIntervalMs={pollIntervalMs}
-        onCheck={() => void check()}
-        onDownload={startDownload}
-        onApply={() => void applyUpdate()}
-      />
 
       {/* Update banner (or full blocking overlay when the update is mandatory). */}
       <ApkUpdateBanner

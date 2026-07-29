@@ -47,12 +47,12 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.26",
+  version: "1.0.27",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
   userInterfaceStyle: "automatic",
-  newArchEnabled: true,
+  newArchEnabled: false,
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
@@ -172,6 +172,8 @@ const config: ExpoConfig = {
     ],
     // Local plugin: enable Android picture-in-picture for active calls.
     "./plugins/with-android-pip.js",
+    // Local plugin: enable iOS VoIP push for full-screen incoming call on locked screen.
+    "./plugins/with-ios-voip.js",
   ],
     extra: {
     eas: {
