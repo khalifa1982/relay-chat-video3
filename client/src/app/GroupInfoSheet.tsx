@@ -31,13 +31,13 @@ import { isGroupLocked, removeGroupLock, setGroupLock, useGroupLocks } from "@/a
 type InviteAudience = "all" | "guest" | "registered";
 
 const AUDIENCE_OPTIONS: { value: InviteAudience; label: string; hint: string }[] = [
-  { value: "all", label: "Anyone", hint: "Guests and registered accounts can join." },
+  { value: "all", label: "Anyone", hint: "guests and registered accounts can join." },
   {
     value: "registered",
     label: "Registered",
-    hint: "Only accounts with a verified email can join.",
+    hint: "only accounts with a verified email can join.",
   },
-  { value: "guest", label: "Guests", hint: "Only guest accounts can join." },
+  { value: "guest", label: "Guests", hint: "only guest accounts can join." },
 ];
 
 function InviteLinkSection({ conversationId }: { conversationId: number }) {
@@ -86,8 +86,12 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
           </button>
         ))}
       </div>
+      {/* NAMED AS "the next link", because this caption and the one under an already-minted
+          link below describe DIFFERENT links and sit next to each other: pick Guests after
+          minting a registered-only link and the two lines legitimately disagree. Saying
+          which is which is the whole point of a per-link audience. */}
       <p className="text-[11px] text-muted-foreground">
-        {AUDIENCE_OPTIONS.find((o) => o.value === audience)?.hint}
+        The next link you create: {AUDIENCE_OPTIONS.find((o) => o.value === audience)?.hint}
       </p>
       {link ? (
         <div className="space-y-2">
