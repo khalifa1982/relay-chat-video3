@@ -11278,6 +11278,65 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.105.19 — the avatar menu shows the BUILD, and the Profile hero is restored (2026-07-29)
+
+- [x] **THE OWNER'S ASK, verbatim, with a screenshot circling the name + badge + PIN**: *"If you remember
+      previously, I mentioned to you about this on the profile icon on the main page … when you click on the
+      right, I told you you remove this one, and you need to put the rely and the version number of the
+      current built whenever it's updated. This one, you passed it. I'm sure you passed other things also."*
+- [x] **I HAD APPLIED THIS TO THE WRONG SURFACE, AND THEN AUDITED THE WRONG SURFACE TO CONFIRM IT.** v2.103.1
+      read *"when you click on the profile remove this one"* as the Profile **PAGE** and stripped its hero.
+      The ask is the top bar's **AVATAR MENU** — the thing that opens when you tap the icon on the right.
+      Then, asked yesterday for a list of what was undone, I checked the surface I had changed, found it
+      matching my own note, and told the owner the ask was shipped and their browser was probably stale.
+      **An audit that only looks where the previous change landed cannot find a change that landed in the
+      wrong place; it just confirms itself.** Recorded in `OPEN-ITEMS.md` §0 rather than quietly corrected.
+- [x] **THE GENERALISABLE LESSON, because this will recur**: a request phrased by WHAT YOU TAP ("click on the
+      profile") does not name a screen. Two surfaces fit it and I picked the one whose FILENAME matched
+      instead of asking which one.
+- [x] **THE MENU HEADER IS NOW `RELAY v<version>`** and carries no name, badge or PIN — from
+      `shared/version.ts`, the same constant the server serves at `/api/version` and the auto-updater
+      compares against, so the stamp can never disagree with what is deployed. A hardcoded literal would
+      satisfy a source pin and break that promise, so the test asserts BEHAVIOURALLY that the constant is
+      real and that no `RELAY v<digit>` literal appears in the header.
+- [x] **THE REMOVAL IS A DE-DUPLICATION ARGUMENT, SO THE THING IT DEPENDS ON IS PINNED TOO**: `TopBar.tsx`'s
+      `IdentityStrip` sits directly behind the open menu and renders the first name, the `RoleBadge` and
+      `formatPin(number)`. If a later release strips it, the test goes red and the menu has to be
+      reconsidered rather than silently leaving somebody with nowhere to read their own number.
+- [x] **`dir="ltr"` ON THE VERSION** — a dot-separated number can render with its parts reordered in an RTL
+      paragraph (the v2.99.77 lesson, applied to a version rather than a PIN).
+- [x] **THE PROFILE HERO IS RESTORED BYTE-FOR-BYTE** (owner: *"restore what you did in the profile page, back
+      it as it was"*): name, `RoleBadge`, and the digits in the NNN-NNN grouping with the measured-AA green
+      and bidi isolation. The build stamp went back to its footer line, and the hero is asserted NOT to carry
+      a second copy — one screen printing the version twice is the repetition v2.103.1 was right about even
+      though it removed the wrong thing.
+- [x] **THE SIDEBAR IS DELIBERATELY UNTOUCHED**: the desktop `hidden md:flex` account link is a different
+      surface, is not behind the avatar the owner circled, and is the only place carrying the device chip —
+      so it keeps name + badge + number. Exactly ONE `RoleBadge` now remains in `AppShell.tsx`, asserted by
+      count, or the menu's copy could be "removed" merely by moving it out of the test's slice.
+- [x] **FOUR PRE-EXISTING PINS REWRITTEN, AND THREE OF THEM ARE RESTORATIONS**: `profileHub.test.ts`'s badge /
+      number / bidi assertions had been replaced by their own NEGATIONS in v2.103.1, i.e. they pinned the
+      wrong-surface change; `verifiedBadge.test.ts` had dropped `Profile.tsx` from the badge-surface list.
+      The fourth, `badgePinSurfaces.test.ts`, froze the v2.99.10 menu PLACEMENT — name + badge + PIN inside
+      the dropdown label — so it forbade this change while saying nothing about what v2.99.10 was actually
+      for, which is that the badge is not stuck on the avatar's corner overlapping the photo. That corner
+      rule still holds and is untouched; the additional property (the badge renders SOMEWHERE the signed-in
+      user can see it) is now pinned at the top bar where it lives.
+- [x] `client/src/app/appShellVersionLabel.test.ts` (8); **all 17 tripwires verified by MUTATION** from
+      byte-exact backups off a confirmed-GREEN baseline, sources byte-identical afterwards.
+- [x] **ONE SURVIVOR, A REAL GAP IN MY OWN TEST, and the same class as last release's**: "the top bar still
+      carries all three" read `toMatch(/<IdentityStrip/)`, which `{false && <IdentityStrip …}` satisfies
+      untouched — the pin froze the element's PRESENCE while saying nothing about whether it RENDERS. It now
+      requires the element to open a line of its own, which a gate cannot do. Pin-the-location-not-the-
+      property, for the second release running.
+- [x] **AND A DEFECT IN MY OWN TEST CAUGHT BEFORE THE RUN, by counting the anchor**: the `dir="ltr"`
+      assertion was satisfied by my own comment explaining why the attribute is there — the prose-anchor
+      trap, for the sixteenth time. Now on stripped code.
+- [x] **NOT VERIFIED ON A DEVICE, said plainly**: nobody has opened the menu on the owner's phone. The
+      geometry is a single line of mono text inside a `w-56` dropdown, narrower than the two lines it
+      replaces, so it cannot overflow what already fitted.
+- [x] No schema change, no new dependency, no new env var, no server change. 3694 tests.
+
 ## v2.105.18 — a MINIMISED app now rings (2026-07-28)
 
 - [x] **THE OWNER'S ASK, verbatim**: *"if someone calling and I'm in away or idle (minimize the front app in

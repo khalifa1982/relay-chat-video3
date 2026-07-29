@@ -8,37 +8,47 @@ Let me know if you passed on something and tell me when you will do it."*
 stale note is worse than no note. Where the check contradicted the note, the check wins and that is
 said. Nothing here is a guess about what the code does.
 
-**One thing to check before reading further:** several items the owner reports as missing are
-implemented and deployed. The Profile hero is the clearest case, and there is a built-in diagnostic
-for it — see §0.
-
 ---
 
-## §0 — Reported missing, but SHIPPED (so probably a stale bundle)
+## §0 — I GOT THIS ONE WRONG, TWICE  (corrected 2026-07-29, fixed in v2.105.19)
 
-### The profile page: "remove the first name, badge and pin number"
-**Status: DONE in v2.105.18-era code, deployed.** Verified in `client/src/pages/app/Profile.tsx`
-today: the hero renders no name, no `RoleBadge` and no digits. `formatPin` survives there only inside
-an `aria-label` (a screen reader must be told which number the button concerns) and as the subtitle of
-the deeper "My number" row — not in the hero.
+The first version of this file opened by telling the owner the Profile ask was **already shipped** and
+that they were probably looking at a stale bundle. **That was wrong, and the way it was wrong is worth
+recording rather than quietly deleting.**
 
-**HOW TO TELL WHICH BUNDLE YOU ARE LOOKING AT.** v2.103.1 put the build number in the exact space the
-name used to occupy. So on the Profile page:
+**The ask.** *"the profile icon on the main page … when you click on the right, I told you you remove
+this one, and you need to put the rely and the version number of the current built."* It is the top
+bar's **avatar menu** — the thing that opens when you tap the icon on the right — whose header showed
+the name, the tier badge and the 6-digit PIN.
 
-- you see **`RELAY v2.105.x`** → you have the current bundle and the change is present;
-- you see **your name + badge + 6 digits** → you are on a bundle older than v2.103.1. Hard-refresh
-  (or, in the app shell, force-quit and reopen).
+**Mistake 1 (v2.103.1).** I read *"when you click on the profile remove this one"* as the Profile
+**page**, and stripped its hero. Wrong surface. The page was fine.
 
-If it still shows the name on a confirmed-current build, that is a real regression and I want a
-screenshot with that version string in it.
+**Mistake 2 (this file, first draft).** Asked to audit, I checked the surface I had changed, found it
+matching my own note, and reported the ask as done — then told the owner their browser was stale. An
+audit that only looks where the previous change landed cannot find a change that landed in the wrong
+place; it just confirms itself.
 
-### Also shipped, in case these are the ones being looked for
+**The generalisable lesson, since this will happen again:** a request phrased by **what you tap**
+("click on the profile") does not name a screen. Two surfaces fit it, and I picked the one whose
+filename matched instead of asking which one.
+
+**Fixed in v2.105.19.**
+- The avatar menu's header is now **`RELAY v<version>`** and carries no name, badge or PIN. The top bar
+  directly behind the menu still shows all three, which is what makes the removal a de-duplication
+  rather than a loss — and a test fails if that strip ever goes away.
+- The **Profile page hero is restored byte-for-byte**: name, badge, and the digits in the owner's
+  NNN-NNN grouping. The build stamp went back to its footer line.
+- The three test pins v2.103.1 had rewritten into their own negations are restored, and one that froze
+  the v2.99.10 menu placement is rewritten to the property it was actually for.
+
+### Shipped, listed only so they are not re-raised
 | Ask | Shipped in |
 | --- | --- |
 | Profile page rebuilt as the control centre (barcode, number, badge, status, everything from one place) | v2.99.89 |
 | Icons on the Email / Mobile / social rows | v2.99.93 |
 | Guest ID expiry notice + countdown | v2.99.93 / v2.100.0 |
-| Version number visible on the profile | v2.103.1 |
+| Version number visible on the profile footer, and in the avatar menu | v2.105.19 |
 | Story-vs-status vocabulary fixed everywhere | v2.101.0 |
 | Real status picker (work / vacation / travel / free / busy, emoji + colour + note) | v2.101.1 |
 
@@ -57,7 +67,8 @@ Design already settled (from the earlier pass, so this is ready to build):
 - **the thread list must stop showing a locked group's preview**, or the lock leaks exactly what it
   is meant to cover.
 
-Size: one additive nullable column, no new dependency. **Next up when you say go.**
+Size: one additive nullable column, no new dependency. **Starting it now — this is the oldest thing on
+the list and it does not need a decision from anybody.**
 
 ### 2. Call-invite / party-line join screen  (#109)
 No dedicated screen exists (`client/src/pages/app/` has none). Was deliberately sequenced behind group

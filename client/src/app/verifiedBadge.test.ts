@@ -45,12 +45,14 @@ describe("RoleBadge — three account tiers with captions", () => {
 
 describe("role badge is wired into every primary identity surface", () => {
   const sites: Array<[string, RegExp]> = [
+    // AppShell's badge is the DESKTOP SIDEBAR account link. v2.105.19 removed the
+    // second copy that sat in the top bar's avatar-menu header, so this now names one
+    // site rather than two — and the count is asserted below, or removing the sidebar's
+    // too would leave this passing on nothing.
     ["client/src/app/AppShell.tsx", /<RoleBadge role=\{roleFromFlags\(me\.role, me\.verified\)\}/],
-    // v2.103.1 (owner): Profile.tsx is deliberately NOT in this list any more. The top
-    // bar sits directly above the Profile hero and already carries the name, the badge
-    // and the number, so the hero said the same three things twice on one screen. The
-    // AppShell entry above is the badge's surface for the signed-in user; a test below
-    // pins that the hero does not repeat it.
+    // RESTORED v2.105.19: v2.103.1 dropped this entry when it stripped the Profile
+    // hero, which was the wrong surface for the owner's ask (see profileHub.test.ts).
+    ["client/src/pages/app/Profile.tsx", /<RoleBadge role=\{roleFromFlags\(me\.role, me\.verified\)\}/],
     ["client/src/pages/app/Contacts.tsx", /<RoleBadge role=\{roleFromFlags\(c\.role, c\.verified\)\}/],
     // v2.99.37: the redesigned thread row computes the tier first, then renders a
     // caption-less mark beside the name (a stacked caption clipped a row before).
