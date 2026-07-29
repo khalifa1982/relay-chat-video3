@@ -10,6 +10,7 @@ import { useIdentity } from "./useIdentity";
 import { RoleBadge, roleFromFlags } from "./VerifiedBadge";
 import { StatusViewer, type FeedGroup } from "@/pages/app/Status";
 import { profileStatusMeta } from "@shared/profileStatus";
+import { describePeerPresence } from "@shared/profileFields";
 
 /**
  * Peer identity surfaces (v2.96, owner spec):
@@ -231,27 +232,10 @@ export function PeerAvatar({
   );
 }
 
-/** Presence line for the profile popup. */
-function presenceLine(d: {
-  isOnline: boolean;
-  /** Signed in but backgrounded (v2.99.92). */
-  idle?: boolean;
-  inCall: boolean;
-  lastSeenAt: string | Date | null;
-  presenceHidden: boolean;
-  partyLine: boolean;
-  memberCount: number;
-}): string {
-  if (d.partyLine) return `Party line · ${d.memberCount} on the line`;
-  if (d.presenceHidden) return "";
-  if (d.inCall) return "On a call right now";
-  // Backgrounded reads as away, NOT as "Online now" and not as a last-seen a few
-  // seconds ago — which is what minimising used to produce (v2.99.92).
-  if (d.isOnline && d.idle) return "Away — app is in the background";
-  if (d.isOnline) return "Online now";
-  if (d.lastSeenAt) return `Last seen ${new Date(d.lastSeenAt).toLocaleString()}`;
-  return "Offline";
-}
+/* The presence line MOVED to `shared/profileFields.ts` as `describePeerPresence`
+ * (v2.105.24). It was correct here and is unchanged; it left because the outgoing dial
+ * card became a THIRD reader, and the alternative was the engine copying the incoming
+ * ring card's older, wrong version of the same rule. */
 
 /**
  * How long before a guest identity is deleted (v2.100.0, owner: *"for the guest,
@@ -565,9 +549,9 @@ export function PeerOverlaysHost() {
               {/* Prefer the caller's full last-seen line when it has one: the
                   chat header can only fit a short "8h" style stamp, and the owner
                   asked for the date AND time to be readable somewhere. */}
-              {(chatActions?.lastSeenText || presenceLine(p)) && (
+              {(chatActions?.lastSeenText || describePeerPresence(p)) && (
                 <div className={"mt-1.5 text-xs " + (p.isOnline && !p.idle ? "text-[color:var(--relay-online,#06d6a0)]" : "text-muted-foreground")}>
-                  {p.isOnline ? presenceLine(p) : (chatActions?.lastSeenText || presenceLine(p))}
+                  {p.isOnline ? describePeerPresence(p) : (chatActions?.lastSeenText || describePeerPresence(p))}
                 </div>
               )}
               <ProfileStatusChip status={p.profileStatus} note={p.statusNote} />
@@ -716,9 +700,9 @@ export function PeerOverlaysHost() {
             <div className="mt-1 font-mono text-base text-muted-foreground" dir="ltr">
               {p.number.length === 6 ? `${p.number.slice(0, 3)}-${p.number.slice(3)}` : p.number}
             </div>
-            {presenceLine(p) && (
+            {describePeerPresence(p) && (
               <div className={"mt-2 text-sm " + (p.isOnline && !p.idle ? "text-[color:var(--relay-online,#06d6a0)]" : "text-muted-foreground")}>
-                {presenceLine(p)}
+                {describePeerPresence(p)}
               </div>
             )}
             <ProfileStatusChip status={p.profileStatus} note={p.statusNote} size="md" />

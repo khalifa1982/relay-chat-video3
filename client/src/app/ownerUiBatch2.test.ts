@@ -136,7 +136,16 @@ describe("2b — search and notifications live in the peer profile", () => {
   });
 
   it("the popup shows the full last-seen line when the caller supplies one", () => {
-    expect(OVERLAYS).toMatch(/chatActions\?\.lastSeenText \|\| presenceLine\(p\)/);
+    /* Pinned as the PROPERTY — a caller-supplied line takes PRECEDENCE over the derived
+     * one — rather than as the exact expression. It used to freeze
+     * `chatActions?.lastSeenText || presenceLine(p)`, so it broke the moment v2.105.24
+     * moved that rule into `shared/profileFields.ts` as `describePeerPresence` (a third
+     * surface, the outgoing dial card, needed the same answer) while saying nothing about
+     * whether the precedence still held. */
+    expect(OVERLAYS).toMatch(/chatActions\?\.lastSeenText \|\|\s*describePeerPresence\(p\)/);
+    // Imported, never re-implemented locally: two copies is the divergence this move fixed.
+    expect(OVERLAYS).toMatch(/import \{ describePeerPresence \} from "@shared\/profileFields"/);
+    expect(OVERLAYS).not.toMatch(/function (?:presenceLine|describePeerPresence)\(/);
   });
 });
 
