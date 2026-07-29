@@ -47,7 +47,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.19",
+  version: "1.0.20",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -64,7 +64,7 @@ const config: ExpoConfig = {
       NSMicrophoneUsageDescription:
         "RELAY uses your microphone to capture and transmit your voice to the person you are speaking with during a voice or video call. For example, when you accept an incoming call or dial a contact, your microphone activates so the other person can hear you clearly throughout the conversation.",
       // Keep the call's audio session alive while backgrounded (voice/video calls).
-      UIBackgroundModes: ["audio", "voip", "remote-notification"],
+      UIBackgroundModes: ["audio", "remote-notification"],
     },
   },
   android: {
@@ -177,13 +177,9 @@ const config: ExpoConfig = {
     ],
     // Local plugin: enable Android picture-in-picture for active calls.
     "./plugins/with-android-pip.js",
-    // Local plugin: PushKit + CallKit on iOS, so a LOCKED iPhone shows the real
-    // full-screen call screen. A VoIP push is the only thing that can do that and
-    // it needs native code — PushKit has no managed-Expo equivalent. iOS only:
-    // Android already rings through the full-screen-intent notification above,
-    // and CallKeep's Android ConnectionService would add a second, competing
-    // incoming-call UI to a platform that works.
-    "./plugins/with-ios-voip.js",
+    // VoIP plugin removed: react-native-callkeep and react-native-voip-push-notification
+    // are incompatible with RN 0.83 TurboModule system, causing fatal crash on launch.
+    // TODO: Re-add VoIP support with a compatible library in the future.
   ],
   extra: {
     eas: {
