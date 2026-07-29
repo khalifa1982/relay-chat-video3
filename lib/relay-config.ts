@@ -8,7 +8,7 @@
  * web app automatically changes what the mobile app shows.
  */
 
-const DEFAULT_BASE_URL = "https://your-chat.org";
+const DEFAULT_BASE_URL = "https://your-chat.io";
 
 /** Trim a trailing slash so we can safely append paths. */
 function normalizeBaseUrl(raw: string | undefined): string {
@@ -33,6 +33,8 @@ export function isInternalUrl(url: string): boolean {
   if (/^(about:|data:|blob:)/i.test(url)) return true;
   // Keep RELAY OAuth (manus.im app-auth) inside so sign-in completes in-app.
   if (/^https?:\/\/([a-z0-9-]+\.)*manus\.im\//i.test(url)) return true;
+  // Keep both your-chat.io and your-chat.org inside (org 301-redirects to io).
+  if (/^https?:\/\/([a-z0-9-]+\.)*(your-chat\.io|your-chat\.org)\//i.test(url)) return true;
   try {
     const target = new URL(url);
     const base = new URL(RELAY_BASE_URL);
