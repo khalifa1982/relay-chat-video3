@@ -37,12 +37,45 @@ async function alertPrefs() {
   try {
     const cache = await caches.open("relay-prefs-v1");
     const res = await cache.match("/__relay_alert_prefs");
-    if (!res) return { dnd: false, muted: [] };
+    if (!res) return { dnd: false, muted: [], locked: [] };
     const p = await res.json();
-    return { dnd: p.dnd === true, muted: Array.isArray(p.muted) ? p.muted : [] };
+    return {
+      dnd: p.dnd === true,
+      muted: Array.isArray(p.muted) ? p.muted : [],
+      // Absent for a page older than v2.105.20, which reads as "nothing locked" —
+      // i.e. exactly today's behaviour, so a mid-rollout worker cannot redact
+      // notifications for a device that has set no locks.
+      locked: Array.isArray(p.locked) ? p.locked : [],
+    };
   } catch {
-    return { dnd: false, muted: [] };
+    return { dnd: false, muted: [], locked: [] };
   }
+}
+
+/** The conversation a message push is about, from its own tag, or null. */
+function convOf(d) {
+  const m = /^relay-msg-(\d+)$/.exec((d && d.tag) || "");
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Is this push for a group locked on this device? (v2.105.20)
+ *
+ * REDACTION, NOT SUPPRESSION, and the distinction is the whole point of the lock
+ * being a privacy screen: a mute means "do not tell me", so it drops the
+ * notification; a lock means "do not show it on this screen", so the alert must
+ * still arrive and merely stop naming anybody. Suppressing would silently lose
+ * messages the user still wants to know about.
+ *
+ * Fails OPEN like everything else here: an unreadable pref list shows the ordinary
+ * notification rather than redacting the world.
+ */
+async function lockedConv(d) {
+  if (!d || d.kind !== "message") return false;
+  const c = convOf(d);
+  if (c === null) return false;
+  const prefs = await alertPrefs();
+  return prefs.locked.indexOf(c) !== -1;
 }
 
 /**
@@ -74,9 +107,9 @@ async function suppressed(d) {
   // Mute stays message-only: a per-conversation mute must not silence a missed
   // call or a voicemail from that same person.
   if (d.kind !== "message") return false;
-  const m = /^relay-msg-(\d+)$/.exec(d.tag || "");
-  if (!m) return false;
-  return prefs.muted.indexOf(Number(m[1])) !== -1;
+  const c = convOf(d);
+  if (c === null) return false;
+  return prefs.muted.indexOf(c) !== -1;
 }
 
 self.addEventListener("push", (event) => {
@@ -84,10 +117,12 @@ self.addEventListener("push", (event) => {
   try { d = event.data ? event.data.json() : {}; } catch { /* non-JSON push */ }
   const isCall = d.kind === "incoming-call";
   event.waitUntil(
-    suppressed(d).then((skip) => {
+    // Both questions are asked before anything is shown. Mute/DND decide WHETHER,
+    // the lock decides WHAT — a locked group still alerts, it just names nobody.
+    Promise.all([suppressed(d), lockedConv(d)]).then(([skip, hide]) => {
       if (skip) return undefined;
-      return self.registration.showNotification(d.title || "RELAY", {
-      body: d.body || "",
+      return self.registration.showNotification(hide ? "RELAY" : d.title || "RELAY", {
+      body: hide ? "New message in a locked chat" : d.body || "",
       tag: d.tag || (isCall ? "relay-call" : "relay"),
       icon: "/icon.svg",
       badge: "/icon.svg",

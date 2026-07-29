@@ -56,19 +56,19 @@ filename matched instead of asking which one.
 
 ## §1 — NOT DONE, and I own the delay
 
-### 1. The 4-digit group lock  (#108, last piece of the group screenshot batch)
-Confirmed absent: no `groupLock` / `lockPin` / `groupPasscode` anywhere in `server/`, `client/src/` or
-`drizzle/`. Not started.
+### 1. ~~The 4-digit group lock~~ — **DONE, v2.105.20**
+Shipped exactly to the settled design: a privacy screen and not access control, per-device, reusing
+`passcode.ts`'s hashing rather than a second copy, and the thread list redacts a locked group's preview.
+Two things the design pass had not anticipated and that the build settled:
 
-Design already settled (from the earlier pass, so this is ready to build):
-- it is a **privacy screen, not access control** — anyone with the group open in another tab still has
-  the data, so it must not pretend to be a permission;
-- per-device, reusing `client/src/app/passcode.ts`'s salted-SHA-256 hashing rather than a second copy;
-- **the thread list must stop showing a locked group's preview**, or the lock leaks exactly what it
-  is meant to cover.
+- the gate had to replace the **whole conversation view**, header included — otherwise a deep link, a
+  notification tap and a reload each needed their own check;
+- which put the group's details (where a lock is normally removed) *behind* the gate, so the **app
+  passcode had to be accepted at the gate itself**, and it removes the lock rather than unlocking for
+  one session. Setting a lock therefore requires an app passcode to exist, because that is the only
+  recovery.
 
-Size: one additive nullable column, no new dependency. **Starting it now — this is the oldest thing on
-the list and it does not need a decision from anybody.**
+No schema change was needed after all — it is localStorage, so nothing is stored server-side.
 
 ### 2. Call-invite / party-line join screen  (#109)
 No dedicated screen exists (`client/src/pages/app/` has none). Was deliberately sequenced behind group
@@ -94,6 +94,30 @@ the matcher is. Raising it is a paging change with its own cost — flagged rath
 into the search work (v2.99.96, v2.99.98).
 
 ---
+
+### 6. Agora as the primary voice/video transport, LiveKit as fallback  (asked 2026-07-29)
+**Read the premise correction first, because it changes the decision.** Calls do **not** run on LiveKit
+today. `livekitConfig()` requires `LIVEKIT_URL` + `LIVEKIT_API_KEY` + `LIVEKIT_API_SECRET`, none of which
+appear in `ecosystem.config.cjs` or any workflow — so unless all three were pasted into
+`/home/relay/.env` by hand, the fleet runs the **WebRTC mesh**, where every phone in an N-party call runs
+N-1 encoders and N-1 decoders. That is the biggest single cause of call latency and heat here (measured in
+v2.99.84), and it is almost certainly what is being felt.
+
+v2.105.20 added `media.livekit` to `/api/health` so this is now a one-command check:
+`curl -s https://your-chat.io/api/health` → `"media":{"livekit":false}` means mesh.
+
+Sequencing that follows from it:
+1. **If it reads `false`** — set the three LiveKit vars and restart pm2. Zero code, and it turns every
+   call from an N-1-encoder mesh into a single upstream. Re-judge the latency after that.
+2. **Then, if Agora is still wanted**, it is a real release, not a config change: a second transport
+   adapter beside the mesh and LiveKit paths in `relayClient.ts`, server-side token minting
+   (`mintLivekitToken`'s equivalent), a channel-name mapping off the room id, and the SDK as the first
+   npm media dependency this repo has taken. Doable; just not something to start before step 1, because
+   otherwise Agora gets compared against a mesh rather than against an SFU.
+
+**Not a coherent option, and worth saying explicitly:** "Agora on the front end, LiveKit on the back."
+Both are complete stacks — client SDK plus media server — and Agora's SDK only talks to Agora's cloud.
+There is no join between them; you would be paying for two SFUs to do one SFU's job.
 
 ## §2 — NOT DONE, and needs a decision from you first
 

@@ -42,6 +42,7 @@ import {
   CheckCheck,
   Forward,
   Info,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,6 +60,8 @@ import { trpc } from "@/lib/trpc";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { EmojiPicker } from "@/app/EmojiPicker";
 import { previewOf } from "@/app/messagePreview";
+import { isGroupHidden, useGroupLocks } from "@/app/groupLock";
+import { GroupLockGate } from "@/app/GroupLockGate";
 import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
 import { StatusStrip } from "./Status";
 import {
@@ -600,9 +603,19 @@ export default function MessagesPage() {
                           ownNumber && /^\d{6}$/.test(ownNumber)
                             ? `${ownNumber.slice(0, 3)}-${ownNumber.slice(3)}`
                             : null;
-                        const preview = t.lastMessageAt
-                          ? previewOf(t.lastMessageKind ?? "text", t.lastMessageBody)
-                          : "No messages yet";
+                        /* THE LOCKED-GROUP REDACTION (v2.105.20, #108).
+                           A lock whose row still printed "Ahmed: see you at 8" would
+                           leak the exact thing it covers — and on a group the preview
+                           names a MEMBER as well as their words, so both go.
+                           `isGroupHidden`, not `isGroupLocked`: a group unlocked for
+                           this session shows its preview normally, because you are
+                           already reading it. */
+                        const hidden = isGroup && isGroupHidden(t.conversationId);
+                        const preview = hidden
+                          ? "Locked"
+                          : t.lastMessageAt
+                            ? previewOf(t.lastMessageKind ?? "text", t.lastMessageBody)
+                            : "No messages yet";
                         return (
                           <SwipeRow
                             key={t.conversationId}
@@ -784,7 +797,19 @@ export default function MessagesPage() {
                                     <span aria-hidden="true" className="shrink-0 select-none opacity-40">·</span>
                                   </>
                                 )}
-                                {typing ? (
+                                {/* A lock glyph, so "Locked" reads as a state rather
+                                    than as somebody's message that happens to say
+                                    "Locked". */}
+                                {hidden && (
+                                  <Lock aria-hidden="true" className="size-3.5 shrink-0 opacity-70" />
+                                )}
+                                {typing && !hidden ? (
+                                  /* TYPING IS SUPPRESSED WHILE LOCKED — not as a
+                                     separate rule but because line 2 is the lock
+                                     notice now. It also happens to be right: "typing"
+                                     says somebody in there is active right now, which
+                                     is the kind of live detail a privacy screen is
+                                     for. */
                                   <span className="flex shrink-0 items-center gap-1 font-medium text-[color:var(--relay-online)]">
                                     typing
                                     <span className="flex items-end gap-[2px]" aria-hidden="true">
@@ -904,6 +929,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   );
 
   const isGroup = thread?.kind === "group";
+  // Subscribes to the per-group lock so this view re-renders when one is set,
+  // removed, unlocked or re-locked (v2.105.20). The value itself is a counter and
+  // is deliberately unused: the state that matters lives in localStorage plus an
+  // in-memory Set, so the render just re-asks `isGroupHidden` below.
+  useGroupLocks();
   // The group's status as ONE string, from the shared formatter — so the header and
   // any later surface cannot phrase the same status differently (v2.101.1).
   const groupStatusText = isGroup
@@ -1705,6 +1735,51 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   }
 
   if (!me) return null;
+
+  /* ── THE GROUP LOCK (v2.105.20, #108) ──────────────────────────────────────
+     A FULL EARLY RETURN, and that is the whole reason the lock is hard to walk
+     around. Every route into a conversation ends here — a thread-row tap, a
+     `?c=<id>` deep link, a notification tap, a reload, the swipe row's own
+     navigation — so gating the VIEW covers all of them by construction, where
+     gating each entry point would have needed a check per route and one of them
+     would have been forgotten.
+
+     It replaces the HEADER too, not just the message list, because the header
+     opens the group's details (its roster, its photo, its own lock control) and
+     leaving that reachable would hand out most of what the lock covers. The cost
+     is that the details cannot be used to remove a forgotten lock — which is why
+     `attemptOpenGroup` accepts the app passcode at the gate itself.
+
+     `useGroupLocks()` above is what makes this re-evaluate: without a subscription
+     a correct code would change the module's state and leave the gate on screen.
+     It is also the ONE mechanism — the gate has no success callback, because two
+     ways to drive one transition is how the forgotten one leaves it stuck. */
+  if (isGroup && isGroupHidden(conversationId)) {
+    return (
+      <>
+        <header className="flex items-center gap-2 border-b border-border/70 bg-card/90 px-2 py-2 md:rounded-t-2xl md:px-4">
+          <button
+            type="button"
+            aria-label="Back"
+            className="grid size-8 shrink-0 place-items-center md:hidden hover:brightness-110"
+            style={{ color: "#52e3d0" }}
+            onClick={() => setLocation("/app/messages")}
+          >
+            <ChevronLeft className="size-6" />
+          </button>
+          {/* The NAME is shown, and only the name. The thread list already shows it
+              (that is what makes a locked group findable at all), so repeating it
+              here leaks nothing the previous screen did not — while a nameless lock
+              screen would leave somebody unsure which group they had opened. */}
+          <span dir="auto" className="min-w-0 truncate text-[15px] font-semibold">
+            {thread?.title || "Group"}
+          </span>
+          <Lock aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+        </header>
+        <GroupLockGate conversationId={conversationId} title={thread?.title || "Group"} />
+      </>
+    );
+  }
 
   return (
     <>
