@@ -1,3 +1,27 @@
+// ── ERROR CAPTURE: intercept the fatal JS error before RN's native path
+// destroys the message (CFStringGetBytes overflow). Posts truncated error
+// to server so we can identify the actual crash cause.
+if (typeof ErrorUtils !== 'undefined') {
+  const prev = (ErrorUtils as any).getGlobalHandler?.();
+  (ErrorUtils as any).setGlobalHandler((e: any, isFatal: boolean) => {
+    try {
+      const msg = String(e?.message ?? e);
+      const stack = String(e?.stack ?? '').slice(0, 4000);
+      const safe = msg.length > 512 ? msg.slice(0, 512) + `…(truncated from ${msg.length} chars)` : msg;
+      console.error('RELAY_STARTUP_ERR', safe, '\nSTACK:', stack);
+      try {
+        fetch('https://your-chat.io/api/v2/client-error', {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({v: '1.0.21-6', platform: require('react-native').Platform?.OS ?? 'unknown', len: msg.length, msg: safe, stack}),
+          keepalive: true,
+        }).catch(() => {});
+      } catch {}
+    } catch {}
+    if (prev) prev(e, isFatal);
+  });
+}
+
 import "@/global.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
