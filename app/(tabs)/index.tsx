@@ -9,7 +9,7 @@ export default function HomeScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>RELAY</Text>
-      <Text style={styles.subtitle}>v1.0.22 - Minimal Diagnostic Build</Text>
+      <Text style={styles.subtitle}>v1.0.23 - Native Modules Stripped</Text>
       <Text style={styles.body}>
         If you can see this screen, the base app works.{"\n"}
         The crash is caused by one of the removed modules.
