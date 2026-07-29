@@ -73,8 +73,14 @@ describe("v2.99.37 — every element the owner listed is present", () => {
   });
   it("typing REPLACES the preview while they type", () => {
     expect(ROW).toMatch(/const typing = typingConvos\.includes\(t\.conversationId\)/);
-    expect(ROW).toMatch(/\{typing \? \(/);
+    /* REWRITTEN v2.105.20 to the PROPERTY. `{typing ? (` froze the exact condition, so
+       it broke the moment a LOCKED group started suppressing the indicator — while
+       saying nothing about what it was for. The property is that typing and the
+       preview are the two arms of ONE ternary, so they can never both render; the
+       condition itself is free to gain a conjunct. */
+    expect(ROW).toMatch(/\{typing[^?\n]*\? \(/);
     expect(ROW).toMatch(/\{preview\}/);
+    expect((ROW.match(/\{preview\}/g) || []).length).toBe(1);
   });
   it("the timestamp is right-aligned at the end of line 1 (all three judges' graft)", () => {
     // REWRITTEN in v2.103.0: a PINNED row shows a pin marker before the timestamp, and

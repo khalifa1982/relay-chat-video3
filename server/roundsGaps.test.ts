@@ -492,9 +492,18 @@ describe("v2.99.42 review findings — each fixed before merge", () => {
     expect(sw).toMatch(/async function suppressed\(d\)/);
     expect(sw).toMatch(/relay-msg-\(\\d\+\)/); // parses the conversation id off the tag
     expect(sw).toMatch(/if \(prefs\.dnd\) return true;/);
-    expect(sw).toMatch(/prefs\.muted\.indexOf\(Number\(m\[1\]\)\) !== -1/);
-    // Fails OPEN: a read problem must still show the notification.
-    expect(sw).toMatch(/return \{ dnd: false, muted: \[\] \};/);
+    /* REWRITTEN v2.105.20 to the PROPERTY. These two froze literal text — the exact
+       `Number(m[1])` expression and the exact catch-return object — so both broke
+       when v2.105.20 factored the tag parse into `convOf(d)` and added a third
+       pref, while neither said anything about the rule. The rules are: mute is
+       decided by the conversation the TAG names, and an unreadable pref store
+       yields a fully permissive default (nothing muted, DND off), i.e. it fails
+       OPEN and shows the notification. */
+    expect(sw).toMatch(/prefs\.muted\.indexOf\(c\) !== -1/);
+    expect(sw).toMatch(/function convOf\(d\)/);
+    const fallbacks = sw.match(/return \{\s*dnd: false,\s*muted: \[\],[^}]*\};/g) || [];
+    expect(fallbacks.length).toBeGreaterThanOrEqual(2); // the no-entry path and the catch
+    for (const f of fallbacks) expect(f).not.toMatch(/dnd: true/);
     // REWRITTEN in v2.99.81. This pinned the exact line
     //   if (!isMessage && d.kind !== "missed-call" && d.kind !== "voicemail") return false;
     // whose stated intent was only "a call is never suppressed by a mute" — but the

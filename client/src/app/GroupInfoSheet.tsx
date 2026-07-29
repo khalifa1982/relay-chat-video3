@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, Users, Camera, Check, Copy } from "lucide-react";
+import { X, Users, Camera, Check, Copy, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import { AvatarPicker } from "@/app/AvatarPicker";
 import { ProfileStatusPicker } from "@/app/ProfileStatusPicker";
 import { describeProfileStatus, type ProfileStatus } from "@shared/profileStatus";
+import { hasPasscode } from "@/app/passcode";
+import { isGroupLocked, removeGroupLock, setGroupLock, useGroupLocks } from "@/app/groupLock";
 
 /**
  * The group's invite link (v2.105.9, #114) — ADMIN-ONLY, and its own component so the
@@ -106,6 +108,122 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
         >
           Revoke all invite links
         </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The 4-digit lock on this group, ON THIS DEVICE (v2.105.20, the last piece of #108).
+ *
+ * NOT ADMIN-GATED, and that is a decision rather than an omission. `invite-link` above
+ * is admin-only because it admits strangers to a group everybody shares; a lock changes
+ * what appears on the ACTOR'S OWN SCREEN and grants them nothing over anybody else, so
+ * requiring adminship would be a category error — it would stop an ordinary member
+ * hiding a chat on their own phone.
+ *
+ * IT REFUSES WITHOUT AN APP PASSCODE rather than warning, because the app passcode is
+ * the only route back from a forgotten code (see `groupLock.ts`). Offering a control
+ * that strands you is worse than not offering it, so the refusal says where to go.
+ */
+function GroupLockSection({ conversationId }: { conversationId: number }) {
+  useGroupLocks();
+  const locked = isGroupLocked(conversationId);
+  const [code, setCode] = useState("");
+  const [mode, setMode] = useState<"idle" | "set" | "remove">("idle");
+  const canLock = hasPasscode();
+
+  async function apply() {
+    if (mode === "set") {
+      const r = await setGroupLock(conversationId, code);
+      if (r === "ok") {
+        toast.success("Locked. It hides on this device when you reload or leave the chat.");
+        setMode("idle");
+        setCode("");
+        return;
+      }
+      toast.error(
+        r === "bad-code"
+          ? "Use exactly four digits."
+          : r === "needs-app-passcode"
+            ? "Set an app passcode first — Profile → App lock."
+            : "This browser won't let RELAY store the lock."
+      );
+      return;
+    }
+    if (await removeGroupLock(conversationId, code)) {
+      toast.success("Lock removed on this device.");
+      setMode("idle");
+      setCode("");
+    } else {
+      toast.error("That's not the group code or your app passcode.");
+    }
+  }
+
+  return (
+    <div className="space-y-2 rounded-2xl border border-border/70 bg-card/40 p-3">
+      <div className="flex items-center gap-2">
+        <Lock className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <Label className="text-xs font-semibold">Lock this chat on this device</Label>
+      </div>
+      {/* WHAT IT IS, before what it does. Without this the control reads as a
+          permission, which it is not: every member still has these messages and this
+          account on another device still shows them. */}
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        Hides the chat and its preview behind a 4-digit code on this device. It is not a
+        permission — everyone in the group still has these messages, and your other
+        devices still show them.
+      </p>
+
+      {!canLock ? (
+        <p className="text-[11px] font-medium text-muted-foreground">
+          Set an app passcode first (Profile → App lock). It is the only way back if you
+          forget the group code.
+        </p>
+      ) : mode === "idle" ? (
+        <button
+          type="button"
+          onClick={() => {
+            setCode("");
+            setMode(locked ? "remove" : "set");
+          }}
+          className="text-[11px] text-muted-foreground underline underline-offset-2"
+        >
+          {locked ? "Remove the lock" : "Set a 4-digit code"}
+        </button>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Input
+            autoFocus
+            type="password"
+            inputMode="numeric"
+            maxLength={4}
+            dir="ltr"
+            value={code}
+            aria-label={mode === "set" ? "New group lock code" : "Group lock code or app passcode"}
+            placeholder="••••"
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            className="h-9 w-24 text-center font-mono tracking-[0.3em] tabular-nums"
+          />
+          <button
+            type="button"
+            disabled={code.length !== 4}
+            onClick={() => void apply()}
+            className="rounded-full bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-foreground disabled:opacity-40"
+          >
+            {mode === "set" ? "Lock" : "Remove"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMode("idle");
+              setCode("");
+            }}
+            className="text-[11px] text-muted-foreground underline underline-offset-2"
+          >
+            Cancel
+          </button>
+        </div>
       )}
     </div>
   );
@@ -592,6 +710,10 @@ export function GroupInfoSheet({
                 rather than disabled for everyone else: a control that always refuses is
                 worse than one that is not there (the v2.103.3 rule). */}
             {iAmAdmin && <InviteLinkSection conversationId={conversationId} />}
+            {/* Any member, admin or not — it changes only this device (see the
+                component's own note on why admin-gating it would be wrong). */}
+            <GroupLockSection conversationId={conversationId} />
+
           </div>
 
           {save.isPending && (

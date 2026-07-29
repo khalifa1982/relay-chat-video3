@@ -157,7 +157,14 @@ describe("issue 2 — iOS ring sound + notifications", () => {
 
   it("sw.js handles push + notificationclick (wake → focus/open the app)", () => {
     expect(SW).toMatch(/addEventListener\("push"/);
-    expect(SW).toMatch(/showNotification\(d\.title \|\| "RELAY"/);
+    /* REWRITTEN v2.105.20 to the PROPERTY. This froze `showNotification(d.title ||
+       "RELAY"` verbatim, so it broke the moment a locked group's push started
+       redacting the title — while saying nothing about what it was for, which is
+       that the pushed title is used and "RELAY" is the fallback when there is
+       none. Both halves are asserted instead, so the redaction is free to sit in
+       front of them. */
+    expect(SW).toMatch(/showNotification\(/);
+    expect(SW).toMatch(/d\.title \|\| "RELAY"/);
     expect(SW).toMatch(/requireInteraction: isCall/);
     expect(SW).toMatch(/addEventListener\("notificationclick"/);
     expect(SW).toMatch(/openWindow\(url\)/);

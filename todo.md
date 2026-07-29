@@ -11278,6 +11278,98 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.105.20 — a 4-digit lock on a group, and /api/health finally says which media transport you are on (2026-07-29)
+
+- [x] **THE LAST PIECE OF #108**, from the owner's group screenshot batch, and the oldest thing that had
+      been sitting on the open-items list needing no decision from anybody.
+- [x] **IT IS A PRIVACY SCREEN, NOT ACCESS CONTROL, AND EVERY DECISION FOLLOWS FROM THAT.** Membership is
+      what grants read: the server serves every message to every member, this device already holds them,
+      and the same account on a laptop shows the group unlocked. So the lock cannot be — and the copy
+      never claims to be — a permission. What it does is stop the content appearing on a screen somebody
+      else is looking at, which is the thing actually being asked for.
+- [x] **PER-DEVICE, in localStorage.** A server-side lock would be a permission model the server cannot
+      enforce, and it would lock the group on every device the account owns, including ones nobody was
+      worried about.
+- [x] **IT REQUIRES AN APP PASSCODE FIRST, and that is the load-bearing decision.** A privacy screen with
+      no recovery is a trap: forget four digits and your own group is redacted on that device forever,
+      with "clear all site data" — which destroys the guest identity and its 6-digit number (v2.99.68) —
+      as the only way back. `setGroupLock` REFUSES without one and says where to set it.
+- [x] **THE GATE REPLACES THE WHOLE CONVERSATION VIEW, AND THAT IS WHAT MAKES IT HARD TO WALK AROUND.**
+      Gating the thread row's TAP would leave a deep link, a notification tap, a reload carrying
+      `?c=<id>`, and the swipe row's own navigation each needing their own check — and one of them would
+      have been forgotten. Every route into a conversation ends at one early return.
+- [x] **WHICH EXPOSED A REAL TRAP IN MY OWN FIRST DESIGN**: the gate replaces the HEADER too, so the
+      group's details — where a lock is normally removed — sit BEHIND it. A gate taking only the group
+      code would therefore strand anybody who forgot it, which is precisely what the app-passcode
+      requirement exists to prevent. So `attemptOpenGroup` accepts the app passcode AT THE GATE, and it
+      REMOVES the lock rather than unlocking for the session: a recovery you have to perform every
+      session is not a recovery. **ORDER MATTERS** — the group code is tried FIRST, or a group whose code
+      happened to equal the app passcode would be silently unlocked-and-removed on every open.
+- [x] **THE HASHING IS IMPORTED, NEVER COPIED**: `passcode.ts` now exports `randomSaltHex`/`hashCode` and
+      `groupLock.ts` owns no crypto at all (asserted). Two implementations of "hash a 4-digit code" is
+      how two stores come to disagree about what a stored hash means, and the one that drifts silently
+      stops matching. Each group is salted separately, so two groups sharing a code do not share a hash.
+- [x] **UNLOCKING LASTS THE SESSION**, the same model as the app lock, where `locked` is in-memory and a
+      reload re-locks. A durable unlock would make the lock a one-time question rather than a screen.
+      Locking a group you are READING does not blank it under you.
+- [x] **FAILS TOWARD NOT LOCKED**, and that is consistent rather than lazy: failing the other way would
+      make every group permanently unopenable on a browser with localStorage blocked, and since the lock
+      is a screen over data the device already has, "we cannot tell" has to mean "show it". A malformed
+      entry is DROPPED rather than kept as a half-lock that would match no code at all.
+- [x] **THE THREAD ROW REDACTS THE PREVIEW** — on a group the preview names a MEMBER as well as their
+      words, so both go, replaced by a lock glyph and "Locked". **THE UNREAD COUNT STAYS**, deliberately:
+      it leaks only that activity happened, and hiding it would let a locked group accumulate messages
+      with no signal at all — the silent-no-op class this codebase keeps removing. It keys on
+      `isGroupHidden`, not `isGroupLocked`, so a group open beside it reads normally.
+- [x] **THE NOTIFICATION IS REDACTED, NOT SUPPRESSED, and the distinction IS the feature.** A mute means
+      "do not tell me" and drops the push; a lock means "do not show it on this screen", so the alert
+      still arrives and merely stops naming anybody ("New message in a locked chat"). Suppressing would
+      silently lose messages the user still wants. An older page's prefs lack the field, which reads as
+      nothing locked — today's behaviour, so a mid-rollout worker cannot redact a device with no locks.
+- [x] **ONE SUBSCRIPTION KEEPS THE WORKER CURRENT**: `swPrefs` registers `onGroupLocksChanged` at module
+      scope rather than each of `groupLock`'s writers remembering to sync — that per-call-site duty is
+      what a third writer forgets, after which a locked chat's notification names a member. The edge
+      points that way because `groupLock` importing `swPrefs` would close a cycle (the
+      `setPresenceChangeHook` pattern).
+- [x] **NOT ADMIN-GATED, deliberately.** `invite-link` is admin-only because it admits strangers to a
+      group everybody shares; a lock changes the actor's OWN screen and grants them nothing over anybody
+      else, so admin-gating it would stop an ordinary member hiding a chat on their own phone.
+- [x] **THREAD SEARCH NEEDED NO CHANGE, verified rather than assumed**: it matches names and numbers only
+      (`[peerDisplayName, peerNumber, title, groupNumber]`), never the preview — so a locked group stays
+      findable, which is what makes it reachable at all, and no content leaks through it.
+- [x] **ALSO: `/api/health` NOW REPORTS WHICH MEDIA TRANSPORT THE FLEET IS ON**, prompted by the owner
+      asking about call latency. It was NOT ANSWERABLE without opening a call: the flag only reaches a
+      client inside the `registered` signaling frame. LiveKit is gated on three env vars that appear in
+      NO workflow and NOT in `ecosystem.config.cjs`, so unless an operator pasted all three into
+      `/home/relay/.env`, calls run the WebRTC MESH — where every phone in an N-party call runs N-1
+      encoders and N-1 decoders, the single biggest lever on call CPU, heat and latency (v2.99.84
+      measured it). A BOOLEAN only, never the URL and never the key, the same discipline as
+      `redisBus: Boolean(REDIS_URL)`.
+- [x] `client/src/app/groupLock.test.ts` (46), the lock driven BEHAVIOURALLY against a stubbed
+      localStorage and the REAL `crypto.subtle`, because "does this code open that group" is the whole
+      feature and a source pin cannot answer it; **all 28 tripwires verified by MUTATION** from
+      byte-exact backups off a confirmed-GREEN baseline, sources byte-identical afterwards.
+- [x] **ONE SURVIVOR, A REAL GAP IN MY OWN TEST, and the third appearance of one class in two releases**:
+      "the gate is ahead of the header" compared INDEXES, which `if (false && isGroup &&
+      isGroupHidden(…))` satisfies untouched — the text stayed put while the gate had stopped deciding
+      anything. The condition is now pinned exactly, with a constant-false conjunct forbidden.
+- [x] **THREE MORE DEFECTS IN MY OWN TESTS, each caught and fixed rather than counted as a pass**: a bare
+      `not.toMatch(/swPrefs/)` matched `groupLock`'s own comment explaining why the edge points the other
+      way, so it would have failed on good code (the PROSE-ANCHOR TRAP, in the very file documenting it);
+      a copy assertion used literal spaces where JSX had reflowed the line; and the health-endpoint
+      secret sweep matched my own comment naming `LIVEKIT_URL` — now on stripped code, with a companion
+      assertion proving the strip is doing work rather than hiding a defect.
+- [x] **FOUR PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, all four having frozen literal text this
+      release legitimately moves: two froze the service worker's exact catch-return object (`{ dnd:
+      false, muted: [] }`) so a third pref broke them while saying nothing about failing OPEN — now
+      asserted as "every fallback is fully permissive"; one froze `showNotification(d.title || "RELAY"`
+      as one string; and one froze `{typing ? (` as an exact condition, i.e. it forbade the suppression
+      while the property is only that typing and the preview are two arms of ONE ternary.
+- [x] **NOT VERIFIED ON A DEVICE, said plainly**: nobody has locked a group on a phone, watched the row
+      redact, or seen a redacted notification arrive. The logic is behavioural-tested and the wiring
+      pinned.
+- [x] No schema change, no new dependency, no new env var. 3740 tests.
+
 ## v2.105.19 — the avatar menu shows the BUILD, and the Profile hero is restored (2026-07-29)
 
 - [x] **THE OWNER'S ASK, verbatim, with a screenshot circling the name + badge + PIN**: *"If you remember

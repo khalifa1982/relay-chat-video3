@@ -219,7 +219,13 @@ describe("F5 — Do Not Disturb applies to every kind but a ring", () => {
   });
 
   it("still fails OPEN", () => {
-    expect(SW).toMatch(/return \{ dnd: false, muted: \[\] \};/);
+    /* REWRITTEN v2.105.20 to the PROPERTY: this froze the exact catch-return object,
+       so adding a third pref (`locked`) broke it while saying nothing about failing
+       open. The rule is that every fallback is fully PERMISSIVE — DND off and no
+       suppression list — so an unreadable pref store shows the notification. */
+    const fallbacks = SW.match(/return \{\s*dnd: false,\s*muted: \[\],[^}]*\};/g) || [];
+    expect(fallbacks.length).toBeGreaterThanOrEqual(2);
+    for (const f of fallbacks) expect(f).not.toMatch(/dnd: true/);
   });
 });
 

@@ -11,7 +11,7 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./static";
-import { attachRelay } from "../relay";
+import { attachRelay, livekitConfig } from "../relay";
 import { registerV2Upload, uploadRateGate } from "../v2upload";
 import { registerV2Events, publishToIdentity, publishPresenceTo } from "../v2events";
 import { registerV2Offline } from "../v2offline";
@@ -536,6 +536,22 @@ async function startServer() {
       // calls ring + connect across instances via the elected leader — so NO ALB
       // pin is needed and the "misconfigured" banner suppresses itself.
       cluster: clusterEnabled(),
+      /**
+       * WHICH MEDIA TRANSPORT THE FLEET IS ACTUALLY USING (v2.105.20).
+       *
+       * Added because it was NOT ANSWERABLE without opening a call. `livekit` is
+       * gated on LIVEKIT_URL + LIVEKIT_API_KEY + LIVEKIT_API_SECRET, none of which
+       * appear in `ecosystem.config.cjs` or any workflow — so unless an operator
+       * pasted all three into `/home/relay/.env`, calls run the WebRTC MESH, where
+       * every phone in an N-party call runs N-1 encoders and N-1 decoders. That is
+       * the single biggest lever on call CPU, heat and latency (v2.99.84 measured
+       * it), and "is the SFU even on?" should not require a second browser to find
+       * out.
+       *
+       * A BOOLEAN, never the URL and never the key — the same discipline as
+       * `redisBus: Boolean(REDIS_URL)` above. `false` here means mesh.
+       */
+      media: { livekit: livekitConfig().enabled },
     });
   });
   // v2.0 attachment upload (multipart-friendly JSON body)

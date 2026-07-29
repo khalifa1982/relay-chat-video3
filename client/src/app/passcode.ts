@@ -21,6 +21,24 @@ async function sha256Hex(s: string): Promise<string> {
   return toHex(new Uint8Array(buf));
 }
 
+/* ── shared with the per-group lock (v2.105.20) ───────────────────────────────
+ * `groupLock.ts` stores a code the same way this file does, and it must not carry
+ * its own copy of the salting: two implementations of "hash a 4-digit code" is how
+ * two surfaces come to disagree about what a stored hash means, and the one that
+ * drifts silently stops matching. So the two primitives are exported and there is
+ * exactly ONE implementation of each.
+ *
+ * Deliberately NOT exported: the storage keys, the lock state, or anything that
+ * would let another module write THIS passcode. The group lock hashes with these;
+ * it never touches `relay_pass_*`.
+ */
+export function randomSaltHex(): string {
+  return toHex(crypto.getRandomValues(new Uint8Array(8)));
+}
+export function hashCode(salt: string, code: string): Promise<string> {
+  return sha256Hex(salt + ":" + code);
+}
+
 export function hasPasscode(): boolean {
   try {
     return !!localStorage.getItem(HASH_KEY);
@@ -30,8 +48,8 @@ export function hasPasscode(): boolean {
 }
 
 export async function setPasscode(code: string): Promise<void> {
-  const salt = toHex(crypto.getRandomValues(new Uint8Array(8)));
-  const hash = await sha256Hex(salt + ":" + code);
+  const salt = randomSaltHex();
+  const hash = await hashCode(salt, code);
   try {
     localStorage.setItem(SALT_KEY, salt);
     localStorage.setItem(HASH_KEY, hash);
@@ -46,7 +64,7 @@ export async function verifyPasscode(code: string): Promise<boolean> {
     const salt = localStorage.getItem(SALT_KEY) || "";
     const hash = localStorage.getItem(HASH_KEY) || "";
     if (!hash) return true; // none set
-    return (await sha256Hex(salt + ":" + code)) === hash;
+    return (await hashCode(salt, code)) === hash;
   } catch {
     return false;
   }
