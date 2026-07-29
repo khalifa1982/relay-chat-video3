@@ -17,11 +17,29 @@ describe("badge is off the header avatar corner (v2.99.10)", () => {
     expect(shell).not.toMatch(/absolute -left-1 -top-1[\s\S]{0,120}RoleBadge/);
     expect(shell).not.toMatch(/RoleBadge[^\n]*caption=\{false\}/);
   });
-  it("the badge shows in the dropdown label (opened by tapping the avatar) beside the name", () => {
-    const label = shell.slice(shell.indexOf('<DropdownMenuLabel className="min-w-0">'), shell.indexOf("<DropdownMenuSeparator"));
-    expect(label).toMatch(/\{me\.displayName\}/);
-    expect(label).toMatch(/<RoleBadge role=\{roleFromFlags\(me\.role, me\.verified\)\}/);
-    expect(label).toMatch(/formatNumber\(me\.number\)/); // PIN under the name
+  /**
+   * REWRITTEN TO THE PROPERTY in v2.105.19, because as written this pinned the
+   * v2.99.10 PLACEMENT — name + badge + PIN inside the dropdown label — i.e.
+   * exactly what the owner has now asked to remove from that header. Frozen
+   * that way it forbade the change while saying nothing about the thing v2.99.10
+   * was actually for, which is that the badge is not stuck on the avatar's
+   * corner overlapping the photo.
+   *
+   * The corner rule is the assertion above and it still holds. What the badge
+   * must additionally do is RENDER SOMEWHERE the signed-in user can see it, so
+   * that is what is pinned here — and the top bar is where it now lives, two
+   * elements left of the avatar (v2.99.94's three-zone strip). The menu header
+   * is the build stamp; `appShellVersionLabel.test.ts` owns that.
+   */
+  it("the badge still renders for the signed-in user — in the top bar, not on the corner", () => {
+    expect(shell).toMatch(/<IdentityStrip/);
+    const bar = read("client/src/app/TopBar.tsx");
+    expect(bar).toMatch(/<RoleBadge role=\{roleFromFlags\(role, verified\)\}/);
+    // …and the strip is handed the flags it needs to compute the tier, or the
+    // badge above would silently render nothing.
+    const strip = shell.slice(shell.indexOf("<IdentityStrip"));
+    expect(strip.slice(0, 400)).toMatch(/role=\{me\.role\}/);
+    expect(strip.slice(0, 400)).toMatch(/verified=\{me\.verified\}/);
   });
 });
 

@@ -355,37 +355,38 @@ export default function ProfilePage() {
                 />
               </div>
 
-              {/* v2.103.1 (owner): the NAME, the BADGE and the NUMBER are all already
-                  in the top bar directly above this, so repeating them here said the
-                  same three things twice on one screen. The photo identifies you, and
-                  the controls below are what this hero is for.
+              {/* RESTORED in v2.105.19 (owner: *"restore what you did in the profile
+                  page, back it as it was"*).
 
-                  The BUILD is what goes in the space instead, because the owner asked to
-                  be able to tell at a glance which version a screen is — it comes from
-                  `shared/version.ts`, the same constant the server serves at
-                  /api/version and the auto-updater compares against, so it can never
-                  disagree with what is actually deployed. */}
-              <span
-                className="font-mono text-[13px] font-semibold tracking-tight text-muted-foreground"
-                dir="ltr"
-              >
-                RELAY v{APP_VERSION}
-              </span>
+                  v2.103.1 removed the name, badge and digits from here, reading the
+                  owner's *"when you click on the profile remove this one"* as the
+                  Profile PAGE. It was the top bar's AVATAR MENU they meant — the thing
+                  you get when you click the icon on the right — and this release makes
+                  that change there instead. So the hero goes back to what it was, byte
+                  for byte, and the build stamp returns to the footer where it lived. */}
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-extrabold tracking-tight">{me.displayName || "You"}</h1>
+                {/* v2.99.6: three-tier badge (Guest/Registered/Admin) — me.verified
+                    keeps the fallback for a cached whoami without `role`. */}
+                <RoleBadge role={roleFromFlags(me.role, me.verified)} size={18} />
+              </div>
 
               {/* The number, in the owner's NNN-NNN grouping and the measured-AA green,
                   with the barcode beside it. `dir="ltr"` + bidi isolation so an Arabic
                   display name above cannot reorder the digits (v2.99.77). */}
               <div className="flex items-center gap-2">
-                {/* The digits themselves are gone with the name above — the top bar
-                    shows them. What is NOT up there is what you can DO with the
-                    number, so the actions stay: settings, QR, copy. */}
                 <button
                   type="button"
                   onClick={() => openPane("number")}
-                  className="rounded-full border border-border bg-card/60 px-3 py-1.5 text-sm font-semibold transition active:opacity-70 hover:bg-card"
+                  className="rounded-full border border-border bg-card/60 px-3 py-1.5 transition active:opacity-70 hover:bg-card"
                   aria-label={`Your RELAY number is ${formatPin(me.number)} — open number settings`}
                 >
-                  My number
+                  <span
+                    dir="ltr"
+                    className="font-mono text-base font-bold tracking-[0.06em] tabular-nums [unicode-bidi:isolate] text-[color:var(--relay-green-text)]"
+                  >
+                    {formatPin(me.number)}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -608,12 +609,13 @@ export default function ProfilePage() {
               </button>
             </section>
 
-            {/* The build stamp moved UP into the hero (v2.103.1, owner), so the footer
-                keeps only what the hero does not say. Printing the version twice on one
-                screen is exactly the repetition this release removed above. */}
+            {/* build stamp — mirrors the prototype's mono footer line. Back here in
+                v2.105.19 with the hero restored; the version the owner asked to see at
+                a glance now also sits in the top bar's avatar menu, which is reachable
+                from every tab rather than only from this page. */}
             <div className="pt-1 text-center">
               <span className="font-mono text-[11px] text-muted-foreground/70">
-                auto-updates on publish
+                RELAY v{APP_VERSION} · auto-updates on publish
               </span>
             </div>
           </>

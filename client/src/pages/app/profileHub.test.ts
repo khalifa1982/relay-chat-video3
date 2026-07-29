@@ -109,41 +109,46 @@ describe("the hero carries everything the owner listed", () => {
   });
 
   /**
-   * REVERSED in v2.103.1, at the owner's instruction: *"when you click on the profile
-   * remove this one the first name, badge and pin number because it's already repeated
-   * on the bar on the top bar so no need to mention it."*
+   * RESTORED in v2.105.19. These three pins are the ORIGINALS, back verbatim.
    *
-   * The three assertions this replaces pinned the PRESENCE of the name, badge and
-   * number on the hero — i.e. exactly what the owner asked to remove — so they are
-   * rewritten to the new rule rather than relaxed. The top bar sits directly above this
-   * hero and carries all three; `verifiedBadge.test.ts` pins the badge there.
+   * v2.103.1 replaced them with their own negations, reading the owner's *"when you
+   * click on the profile remove this one the first name, badge and pin number"* as this
+   * PAGE. They meant the top bar's AVATAR MENU — *"the profile icon … when you click on
+   * the right"* — and told me so with a screenshot of it; the rule now lives there
+   * (`appShellVersionLabel.test.ts`) and the hero is what it was.
+   *
+   * The lesson worth keeping is not about either surface: a request phrased by what you
+   * TAP ("click on the profile") does not name a screen, and I should have asked which
+   * one rather than picking the one whose name matched.
    */
-  it("the hero does NOT repeat what the top bar already shows", () => {
-    expect(codeOnly(HERO)).not.toMatch(/<RoleBadge/);
-    // The DIGITS are gone. The aria-label still names the number, which is right — a
-    // screen reader needs to know which number the button is about — so this is
-    // anchored as a rendered CHILD, the same interpolation trap the old test recorded.
-    expect(codeOnly(HERO)).not.toMatch(/>\s*\{formatPin\(me\.number\)\}\s*<\/span>/);
-    expect(codeOnly(HERO)).not.toMatch(/<h1[^>]*>\{me\.displayName/);
+  it("the badge", () => {
+    expect(HERO).toMatch(/<RoleBadge role=\{roleFromFlags\(me\.role, me\.verified\)\}/);
   });
 
-  it("what you can DO with the number stays, because the top bar cannot do it", () => {
-    // Removing the digits must not remove the controls: settings, QR and copy are the
-    // reason this block exists and none of them is anywhere else.
-    expect(HERO).toMatch(/My number/);
+  it("the number, in the owner's NNN-NNN grouping and the green token", () => {
+    // ANCHORED as a RENDERED CHILD (`>` … `</span>`), not as a bare substring. A
+    // bare `{formatPin(me.number)}` also matches inside the aria-label's
+    // `${formatPin(me.number)}`, so the loose form passed with the visible number
+    // deleted — the mutation run caught exactly that, and it is the same
+    // interpolation trap that bit v2.99.86.
+    expect(HERO).toMatch(/>\s*\{formatPin\(me\.number\)\}\s*<\/span>/);
+    expect(HERO).toMatch(/text-\[color:var\(--relay-green-text\)\]/);
+  });
+
+  it("the number is bidi-isolated so an Arabic name cannot reorder it", () => {
+    const pin = HERO.slice(HERO.indexOf("font-mono text-base"));
+    expect(pin.slice(0, 400)).toMatch(/\[unicode-bidi:isolate\]/);
+    expect(HERO).toMatch(/dir="ltr"/);
+  });
+
+  it("what you can DO with the number is still here, and only the footer stamps the build", () => {
+    // The controls are the reason this block exists and none of them is anywhere else.
     expect(HERO).toMatch(/openPane\("number"\)/);
     expect(HERO).toMatch(/aria-label=\{`Your RELAY number is \$\{formatPin\(me\.number\)\}/);
-  });
-
-  it("the build is shown in its place, from the ONE version constant", () => {
-    // Owner: *"put the current version number … whenever it's update we will understand
-    // which version we are."* Taken from `shared/version.ts` — the same constant the
-    // server serves at /api/version and the auto-updater compares against — so the
-    // stamp can never disagree with what is deployed.
-    expect(HERO).toMatch(/RELAY v\{APP_VERSION\}/);
-    expect(PROFILE).toMatch(/import \{ APP_VERSION \} from "@shared\/version"/);
-    // …and it is not printed twice on one screen: the footer keeps only what the hero
-    // does not say.
+    // The stamp is back in the FOOTER, so the hero must not carry a second copy — one
+    // screen printing the version twice is the repetition v2.103.1 was right about even
+    // though it removed the wrong thing.
+    expect(codeOnly(HERO)).not.toMatch(/APP_VERSION/);
     expect((codeOnly(PROFILE).match(/RELAY v\{APP_VERSION\}/g) || []).length).toBe(1);
   });
 

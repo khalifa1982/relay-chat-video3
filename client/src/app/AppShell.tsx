@@ -31,6 +31,7 @@ import { CallHealthBanner } from "./CallHealthBanner";
 import { PeerOverlaysHost } from "./PeerOverlays";
 import { unlockAudio } from "./notifications";
 import { requestProfilePane } from "./profilePane";
+import { APP_VERSION } from "@shared/version";
 
 /**
  * Tab keys used by the bottom-nav / sidebar. We hard-code the routes here
@@ -622,18 +623,41 @@ function Inner({ children }: { children: React.ReactNode }) {
                   dnd={dnd}
                   hasStatus={hasStatus}
                 />
-                {/* v2.99.10 (owner): the tier badge no longer crowds the header
-                    avatar corner (it overlapped the flag/photo). It now lives
-                    in the dropdown that opens on tap — beside the name, with the
-                    PIN right under it. */}
+                {/* v2.99.10 (owner) moved the tier badge OFF this avatar's corner,
+                    where it overlapped the flag/photo, and into the menu below —
+                    beside the name with the PIN under it. v2.105.19 (owner) removes
+                    that header: see the label. The badge itself still renders in the
+                    top bar, two elements to the left of this trigger. */}
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
+                {/* v2.105.19 (owner, with a screenshot circling the name + badge +
+                    PIN that used to sit here): *"I told you you remove this one, and
+                    you need to put the rely and the version number of the current
+                    built whenever it's updated."*
+
+                    THE TOP BAR IS DIRECTLY BEHIND THIS MENU AND CARRIES ALL THREE —
+                    `TopBar.tsx` renders the first name, the RoleBadge and
+                    `formatPin(number)` — so the header repeated, three inches away,
+                    exactly what the user can still see while the menu is open. That
+                    is the same argument v2.103.1 used, applied to the surface the
+                    owner actually meant (v2.103.1 stripped the Profile PAGE hero
+                    instead, which was a misread; that hero is restored in this
+                    release).
+
+                    The build goes in the space because the owner asked to be able to
+                    tell at a glance which version a screen is, and this menu is
+                    reachable from EVERY tab. It comes from `shared/version.ts` — the
+                    same constant the server serves at /api/version and the
+                    auto-updater compares against — so the stamp can never disagree
+                    with what is actually deployed. `dir="ltr"` so an RTL locale
+                    cannot reorder the dotted version. */}
                 <DropdownMenuLabel className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate font-semibold">{me.displayName}</span>
-                    <RoleBadge role={roleFromFlags(me.role, me.verified)} size={15} />
-                  </div>
-                  <div className="font-mono text-xs text-muted-foreground">{formatNumber(me.number)}</div>
+                  <span
+                    className="font-mono text-[13px] font-semibold tracking-tight text-muted-foreground"
+                    dir="ltr"
+                  >
+                    RELAY v{APP_VERSION}
+                  </span>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 {/* v2.99.86 (owner): "if there is a status, if you click on it, you'll
