@@ -165,19 +165,23 @@ relay** — one shape for both transports so they are comparable.
 on the back." Both are complete stacks — client SDK plus media server — and Agora's SDK only talks to
 Agora's cloud. Primary/fallback is the version of that idea which works.
 
-### 6. The login screen batch  (asked 2026-07-29, IN PROGRESS)
-Three items, tracked as #120–#122 and being built now:
-- **Guest** — tapping Guest asks for the FULL name, "your identity is six digits" moves up above the
-  guest area, tapping "I am a Guest" reserves the number and reveals it matrix-style, and the Back
-  button before the name field becomes flashy enough to actually see.
-- **Register** — an email that already has an account says so and REFUSES to register, pointing at log
-  in; Back button there too; and the email surfaces your number before you sign in. Two calls to flag
-  when it lands: the existence answer is already available on this surface (`loginProbe` routes
-  login-vs-register off it by design), but showing the NUMBER to anybody who types an email is a new
-  email→number link, so it will be **masked** (`777-•••`) until you are authenticated and full
-  afterwards — all the recognition value, nothing dialable.
-- **Sign-in methods** — a picker in every waiting state so you can move between email OTP, the 4-digit
-  passcode and second-device approval at will, each with a countdown and a resend/re-ask.
+### 6. ~~The login screen batch~~ — **DONE, v2.105.26**  (#120–#122)
+All three shipped, and two things are worth your eye:
+
+- **Your number appears with the email, but MASKED** (`777-•••`). Showing the whole thing would build an
+  unauthenticated email → dialable-number lookup: anybody who has your email address could then call and
+  message you on RELAY without you ever giving them your number. The leading group confirms the account
+  and is not an address. The residual, stated: three digits narrow an enumeration for somebody who also
+  knows your display name. **Say the word and it becomes the whole number, or nothing at all.**
+- **The identity section moved above the card and had to be compacted to fit.** Moved as-is it pushed the
+  access buttons BELOW THE FOLD on every phone under 390px — measured, 3/6 widths failed. The tiles are
+  clamped to one row, the explanatory note is dropped under 400px, and the two bullet cards are gone
+  because every line in them was already elsewhere on the screen. 6/6 clean afterwards.
+
+Everything else is as asked: the full-name field, the reserve-and-reveal copy over the matrix reveal that
+already worked, a Back button you cannot miss, an existing email refused with the reason named, and one
+picker on every waiting screen so you can move between the email code, the passcode and second-device
+approval at will — each with a 30-second countdown and a retry.
 
 ---
 

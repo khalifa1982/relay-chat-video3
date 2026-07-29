@@ -661,6 +661,28 @@ body.relay-app-lock {
 @keyframes relayPing   { 0% { transform: scale(1); opacity: .6; } 80%, 100% { transform: scale(2.8); opacity: 0; } }
 @keyframes relayPulse  { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 @keyframes relayFloaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+/* #120 — the Back control's breathing halo. OPACITY ONLY, on a stacked overlay
+   whose box-shadow is STATIC: this sits on the auth card's `backdrop-filter`
+   surface, the most expensive host in the app to repaint over (v2.99.86), and a
+   standing guard fails the build if any keyframe animates box-shadow. */
+@keyframes relayBackGlow { 0%, 100% { opacity: .3; } 50% { opacity: .85; } }
+
+/* #120 — SECURITY & IDENTITY moved ABOVE the auth card, so its height is now
+   charged against the card's reachability. MEASURED against this stylesheet at
+   320/360/375/390/430/1280: unconstrained it pushed the access buttons BELOW THE
+   FOLD on every phone under 390px, because six 50px tiles cannot fit a 280px
+   content box and wrapped to two rows while the note ran to five lines.
+     - the tiles are clamped so they always occupy ONE row, at any width;
+     - the explanatory note is dropped under 400px, where it is the single most
+       expensive element and the heading plus the digits already carry the idea. */
+.relay-idstrip-tile {
+  width: clamp(38px, 12.5vw, 50px);
+  height: clamp(46px, 15vw, 62px);
+  font-size: clamp(20px, 6.5vw, 27px);
+}
+@media (max-width: 399px) {
+  .relay-idstrip-note { display: none; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   [style*="relayFadeUp"] { animation: none !important; }

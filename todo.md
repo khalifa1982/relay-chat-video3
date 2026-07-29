@@ -11278,6 +11278,118 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.105.26 — the sign-in screen, to the owner's batch (2026-07-29)
+
+Three items from one message, #120-#122.
+
+**#120 — GUEST.** The step now asks for your **full name** (the owner's word; it is what a guest is
+known by everywhere and cannot be edited later on this path), the button says what it actually does —
+*"I am a guest — reserve my number"* — and the copy promises the reveal that follows. **THE REVEAL
+ITSELF ALREADY WORKED** and is CONFIRMED rather than rebuilt: `submitGuest` has handed the minted
+number to `MatrixReveal` since v2.94.6. It is now pinned, so the new copy cannot come to promise a
+reveal that no longer happens.
+
+**THE IDENTITY SECTION MOVED ABOVE THE CARD, AND THE MEASUREMENT CHANGED THE DESIGN.** The owner asked
+for *"your identity is six digits"* to be *"pushed up above the guest screen"*, and the point is that
+the six-digit idea should be on screen WHILE you enter as a guest, so the number you are handed a second
+later means something. Moved as-is it **PUSHED THE ACCESS BUTTONS BELOW THE FOLD** on every phone under
+390px — measured in headless Chromium against the real built stylesheet at 320/360/375/390/430/1280:
+six fixed 50px tiles cannot fit a 280px content box, so they wrapped to two rows, and the note ran to
+five lines. **3/6 widths FAILED.** So the tiles are clamped to occupy ONE row at any width, the note is
+dropped under 400px (where it is the single most expensive element and the heading plus the digits
+already carry the idea), and the tagline lost its trailing *"register your permanent six-digit ID"* —
+which the heading directly beneath it now says outright, so that is de-duplication rather than
+space-saving. **6/6 clean afterwards**, identity above the card at every width.
+
+**THE TWO BULLET CARDS ARE GONE RATHER THAN MOVED**, said plainly because it is content the spec
+specifies: every line in them is already on this screen — the guest ones in the note directly under the
+card, the registered ones in the tagline and in the register step's own permanent-name warning.
+
+**BACK IS NOW FINDABLE** (owner: *"always make the Back button flashy, something clearly visible that
+somebody can see"*). It was 11.5px grey mono on dark glass — technically present, effectively invisible,
+the same defect as the hover-only ⋮ in v2.99.85. Now a bordered accent control with an arrow, a label
+that says where it goes, and a breathing halo — **OPACITY ONLY on a stacked overlay whose box-shadow is
+STATIC**, because it sits on the card's `backdrop-filter` surface, the most expensive host in the app to
+repaint over (v2.99.86); the standing guard that fails the build on a box-shadow keyframe is why that is
+not a matter of taste.
+
+**#121 — AN EXISTING EMAIL CANNOT BE REGISTERED AGAIN, AND IT SAYS SO.** The `choose` step used to show
+Log in AND Register with one dimmed; it now shows **exactly one** forward action and names the refusal
+("this email already has a RELAY account, so it can't be registered again — log in instead"). A button
+that is always going to be wrong is worse than no button (the v2.103.3 rule), and offering both is what
+let somebody pick the branch that cannot work. Until the probe answers, NEITHER is asserted.
+
+**THE SERVER IS DELIBERATELY UNCHANGED HERE, and that is a decision.** CLAUDE.md records that
+`otpAuth.register` accepts an existing address on purpose, to avoid an email-existence oracle. The
+refusal the owner asked for is a UI refusal, and the UI already knows: `loginProbe` answers exactly this
+question and has routed login-vs-register off it since v2.105.0 precisely so nobody lands in a dead end.
+So nothing new is disclosed, no security decision is reversed, and a stale client that reaches `register`
+anyway still resolves onto the existing account — which is safe, because the code proves the inbox.
+
+**YOUR NUMBER APPEARS WITH THE EMAIL — MASKED, and the narrowing is stated rather than hidden.** The
+owner asked for it *"so we will know that this is your ID and your number"*: the purpose is RECOGNITION.
+`loginProbe` is reachable by anybody who knows an address, so returning the whole number would build an
+unauthenticated **email → dialable-number** lookup — somebody with your email address could then call and
+message you on RELAY without you ever giving them your number. The leading group (`777-•••`) confirms
+your own account and is not an address anybody can reach you on. **THE RESIDUAL IS NAMED**: three known
+digits narrow an enumeration for somebody who ALSO knows your display name. That is bounded and
+throttled, and it is the price of the ask — say the word and it becomes the whole number, or nothing at
+all. `maskNumber` fails to NULL for anything that is not a 6-digit number, because a wrong hint would
+tell somebody they had reached the wrong account, and the identity read fails to null too: a decoration
+must never break a sign-in.
+
+**#122 — MOVE BETWEEN THE THREE WAYS IN, FROM ANYWHERE.** All three paths already existed (v2.99.7
+shipped the passcode bypass, the email code and the approve/decline; v2.99.19 #50 added a PIN escape from
+the waiting screen). What did not exist was a way to move BETWEEN them: each state offered at most one
+exit, so somebody whose approver device was shut had to guess. One shared picker now sits on the code,
+passcode and waiting steps, and on `choose` — so somebody who knows they have a passcode does not have to
+send an email code first to be offered it.
+
+**A METHOD IS OMITTED WHEN IT CANNOT WORK, never shown disabled**: an account with no passcode has
+nothing to unlock. Second-device approval appears only once it has actually happened, because it is not a
+client choice — it is what the SERVER answers when a code verify lands on an unrecognised device.
+**CHOOSING THE CODE METHOD SENDS ONE**: a picker that walks to a code screen without mailing anything
+leaves somebody waiting for a code nobody sent. **The email code is always present**, which is the floor
+that guarantees the picker is never empty, and a single option renders NO picker — one way in is not a
+choice.
+
+**BOTH WAITS COUNT DOWN 30 SECONDS AND THEN OFFER A RETRY.** The clock is keyed on WHEN the wait started,
+so a resend RE-ARMS it rather than leaving the old one running out under a freshly-sent code; not waiting
+means no timer is created at all. The retry is **ABSENT** during the countdown rather than disabled,
+because a control that refuses for thirty seconds reads as broken while the seconds themselves say to
+wait. A DECLINED approval now says so and still offers a way in, instead of leaving the screen waiting
+for something that already failed.
+
+**DRIVEN END TO END IN A REAL BROWSER, which is the part a unit test cannot do** — v2.105.1 is the
+reason: that release measured this page, clicked only "Guest", and shipped a Registered path that refused
+every one-word name. Four branches, **27/27**: guest (full-name field, auto-focus, a Back control with
+real dimensions, the strip above the card), an existing address (masked number shown, Register absent,
+the refusal named), an unknown address (Register only, no number), and a passcode account (straight to the
+passcode, switch to the code method, countdown running, switch back) — with zero page errors throughout.
+
+`server/loginBatch.test.ts` (33); **all 30 tripwires verified by MUTATION** from byte-exact backups off a
+confirmed-GREEN baseline, no survivors and no aborts.
+
+**SEVEN PRE-EXISTING PINS REWRITTEN TO THE PROPERTY, all seven having frozen exactly what the owner asked
+to change** — three froze copy (the tagline, `GUEST ACCESS · DISPLAY NAME`, `Enter as guest`), one froze
+the section's 640px width (it now shares the card's 560, which is stricter — a second width above the
+card reads as a misalignment), one froze `width: 50, height: 62` (now the clamp's upper bound), and one
+counted `setInterval` file-wide at exactly ONE, which the sign-in countdown broke while saying nothing
+about the property — that LIVE NETWORK must not invent traffic, now scoped to that section. The spec's
+signed-off sentence *"Not your email. Not your phone. Not even your name."* was RESTORED verbatim rather
+than pinned around, since only my punctuation had changed.
+
+**A DEFECT IN MY OWN REWRITE, caught by it failing on correct code**: I anchored the LIVE NETWORK slice on
+the divider COMMENT that follows the function — in source that `code()` has stripped of comments, so
+`indexOf` returned -1 and the slice silently ran to the end of the file, swallowing the identity strip's
+own timer. The prose-anchor trap, inverted. Anchored on the next declaration, with an assertion that the
+slice really is that section — which then caught a second mistake of mine, matching `LIVE NETWORK` when
+the source says "Live network" and CSS does the uppercasing.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: no phone here, so nobody has watched the Back button pulse or
+a real code arrive. What is proven is the geometry at six widths, every branch of the flow in a real
+browser, and the masking. No schema change, no new dependency, no new env var. 3945 tests.
+
 ## v2.105.25 — a shared link lands on a screen that says what you are joining (2026-07-29)
 
 **#109, the last tracker item.** A `/i/<pin>` invite dropped you on the DIAL PAD with six anonymous

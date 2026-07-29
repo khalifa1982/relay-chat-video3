@@ -42,7 +42,8 @@
  * ────────────────────────────────────────────────────────────────────────── */
 import { forwardRef, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  User2, Users, Mail, Lock, MessageSquare, Phone, Video, ArrowRight, ShieldCheck, Circle,
+  User2, Users, Mail, Lock, MessageSquare, Phone, Video, ArrowRight, ShieldCheck,
+  ArrowLeft, KeyRound, Smartphone, RotateCw,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useIdentity } from "./useIdentity";
@@ -179,15 +180,174 @@ function Cta({
   );
 }
 
-function BackLink({ onClick }: { onClick: () => void }) {
+/**
+ * Back, made impossible to miss (owner: *"always make the Back button flashy,
+ * something clearly visible that somebody can see"*).
+ *
+ * It was 11.5px grey mono on a dark glass card — technically present and
+ * effectively invisible, which is the same defect as the hover-only ⋮ in
+ * v2.99.85. Now a real bordered control with an arrow, the accent colour, and a
+ * slow breathing glow so the eye lands on it. The glow is a STATIC box-shadow on
+ * a stacked overlay with only its OPACITY animated, never an animated
+ * box-shadow: this sits on a `backdrop-filter` card, the most expensive surface
+ * in the app to repaint over (v2.99.86), and a standing test fails the build if
+ * any keyframe animates box-shadow.
+ */
+function BackLink({ onClick, accent, label = "Back" }: { onClick: () => void; accent: string; label?: string }) {
   return (
-    <button
-      type="button" onClick={onClick}
-      className="mt-3 block w-full text-center"
-      style={{ ...mono(11.5, ".1em"), color: T.faint, background: "none", border: "none", cursor: "pointer" }}
-    >
-      ← back
-    </button>
+    <div className="mt-4 flex justify-center">
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={label}
+        className="relative inline-flex items-center gap-2"
+        style={{
+          borderRadius: 999,
+          padding: "10px 20px 10px 16px",
+          cursor: "pointer",
+          color: "#eafffb",
+          fontSize: 14,
+          fontWeight: 600,
+          background: `linear-gradient(180deg, ${accent}2e, ${accent}12)`,
+          border: `1px solid ${accent}99`,
+          transition: "border-color .5s, background .5s, transform .18s",
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-2px)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.transform = ""; }}
+      >
+        <span
+          aria-hidden
+          className="motion-safe:[animation:relayBackGlow_2.6s_ease-in-out_infinite]"
+          style={{
+            position: "absolute", inset: -1, borderRadius: 999, pointerEvents: "none",
+            boxShadow: `0 0 18px ${accent}88, 0 0 4px ${accent}cc`,
+            opacity: 0.35,
+          }}
+        />
+        <ArrowLeft size={16} style={{ color: accent, position: "relative" }} aria-hidden />
+        <span style={{ position: "relative" }}>{label}</span>
+      </button>
+    </div>
+  );
+}
+
+/**
+ * #122 — seconds left on a wait, or 0 once it has elapsed.
+ *
+ * Ticks on a 1s interval and is keyed on `startedAt`, so RE-ARMING it (a resend,
+ * a re-ask) restarts the clock rather than leaving a stale one running. A null
+ * start means "not waiting" and no timer is created at all — the picker is on
+ * screen in states that are not counting down, and a timer per render of those
+ * would be a tick nobody reads.
+ */
+function useCountdown(startedAt: number | null, seconds: number): number {
+  const [left, setLeft] = useState(() =>
+    startedAt == null ? 0 : Math.max(0, seconds - Math.floor((Date.now() - startedAt) / 1000)),
+  );
+  useEffect(() => {
+    if (startedAt == null) { setLeft(0); return; }
+    const tick = () => setLeft(Math.max(0, seconds - Math.floor((Date.now() - startedAt) / 1000)));
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [startedAt, seconds]);
+  return left;
+}
+
+/** How long before an emailed code offers a resend, and before a pending device
+ *  approval offers to be re-asked. Both are the owner's "say, 30 seconds". */
+export const OTP_RESEND_SECONDS = 30;
+export const APPROVAL_NUDGE_SECONDS = 30;
+
+export type SignInMethod = "code" | "pin" | "device";
+
+/**
+ * #122 — which ways in to OFFER, given what this account actually has.
+ *
+ * Pure and exported so the rule can be tested without a browser: the whole point
+ * is that a method is OMITTED when it cannot work rather than shown disabled (an
+ * account with no passcode has nothing to unlock), and that is a claim about a
+ * list, not about pixels.
+ *
+ * The email code is always present because every registered address can be mailed
+ * one — it is the floor that guarantees the picker is never empty.
+ */
+export function signInMethodOptions(hasPin: boolean, hasPending: boolean): SignInMethod[] {
+  return [
+    "code" as const,
+    ...(hasPin ? (["pin"] as const) : []),
+    ...(hasPending ? (["device"] as const) : []),
+  ];
+}
+
+/**
+ * #122 — the method switcher (owner: *"it will always give you an option to
+ * switch between different methods of authentication ... you can switch from
+ * device authentication to four digits or to an OTP"*).
+ *
+ * ALL THREE PATHS ALREADY EXISTED — v2.99.7 shipped the passcode bypass, the
+ * email code and the approve/decline, and v2.99.19 #50 added a PIN escape from
+ * the waiting screen. What did not exist was a way to move BETWEEN them at will:
+ * each state offered at most one exit, so somebody whose approver device was shut
+ * had to guess.
+ *
+ * A method is OMITTED rather than shown disabled when it cannot work — an account
+ * with no passcode has nothing to unlock, and offering it would be a control that
+ * always refuses (the v2.103.3 rule). Second-device approval is likewise offered
+ * only where it is real: it is not something a client can choose, it is what the
+ * SERVER answers when a code verify lands on an unrecognised device, so it
+ * appears only once that has actually happened.
+ */
+function MethodPicker({
+  accent,
+  current,
+  hasPin,
+  hasPending,
+  onPick,
+}: {
+  accent: string;
+  current: SignInMethod;
+  hasPin: boolean;
+  hasPending: boolean;
+  onPick: (m: SignInMethod) => void;
+}) {
+  const META: Record<SignInMethod, { icon: React.ReactNode; label: string }> = {
+    code: { icon: <Mail size={14} />, label: "Email code" },
+    pin: { icon: <KeyRound size={14} />, label: "4-digit passcode" },
+    device: { icon: <Smartphone size={14} />, label: "Another device" },
+  };
+  const opts = signInMethodOptions(hasPin, hasPending).map((k) => ({ k, ...META[k] }));
+  // One way in is not a choice; rendering a picker for it is noise.
+  if (opts.length < 2) return null;
+  return (
+    <div className="mt-4">
+      <div style={{ ...mono(10), color: T.faint2, marginBottom: 8 }}>OR SIGN IN WITH</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {opts.map((o) => {
+          const on = o.k === current;
+          return (
+            <button
+              key={o.k}
+              type="button"
+              onClick={() => { if (!on) onPick(o.k); }}
+              aria-pressed={on}
+              disabled={on}
+              style={{
+                borderRadius: 999, padding: "8px 13px", fontSize: 13, cursor: on ? "default" : "pointer",
+                display: "inline-flex", alignItems: "center", gap: 7,
+                transition: "background .3s, border-color .3s, color .3s",
+                ...(on
+                  ? { background: `${accent}22`, border: `1px solid ${accent}88`, color: "#eafffb" }
+                  : { background: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.14)", color: T.muted }),
+              }}
+            >
+              <span style={{ color: on ? accent : T.faint2, display: "flex" }}>{o.icon}</span>
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -326,39 +486,30 @@ function IdentitySection({ accent }: { accent: string }) {
     return () => clearInterval(t);
   }, []);
 
-  const bullets = [
-    {
-      title: "GUEST ACCESS",
-      items: [
-        "Just a display name — in one box",
-        "Temporary session, ends with the browser",
-        "This browser can restore your number & history",
-      ],
-    },
-    {
-      title: "REGISTERED ACCESS",
-      items: [
-        "Permanent six-digit Relay ID + verified badge",
-        "Private today · Business coming soon",
-        "Name locked forever at registration",
-      ],
-    },
-  ];
-
   return (
-    <section className="mt-12 w-full" style={{ maxWidth: 640 }}>
-      <div style={{ ...mono(10.5, ".28em"), color: accent }}>SECURITY &amp; IDENTITY</div>
-      <h2 style={{ fontSize: 29, fontWeight: 700, color: T.text, margin: "10px 0 18px", lineHeight: 1.2 }}>
+    <section className="w-full" style={{ maxWidth: 560, margin: "6px 0 30px" }}>
+      <div style={{ ...mono(10.5, ".28em"), color: accent, textAlign: "center" }}>SECURITY &amp; IDENTITY</div>
+      <h2
+        style={{
+          fontSize: 25, fontWeight: 700, color: T.text, margin: "9px 0 16px",
+          lineHeight: 1.2, textAlign: "center",
+        }}
+      >
         Your identity is six digits.
       </h2>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
         {digits.map((d, i) => (
           <div
             key={i}
+            // Sized by `.relay-idstrip-tile` (index.css) rather than inline, because
+            // it has to CLAMP: six fixed 50px tiles wrap to two rows on a 320px
+            // phone, and the measured cost of that was the access buttons falling
+            // below the fold.
+            className="relay-idstrip-tile"
             style={{
-              width: 50, height: 62, borderRadius: 12,
+              borderRadius: 12,
               display: "grid", placeItems: "center",
-              fontFamily: "'IBM Plex Mono', ui-monospace, monospace", fontSize: 27, color: T.bright,
+              fontFamily: "'IBM Plex Mono', ui-monospace, monospace", color: T.bright,
               border: `1px solid ${accent}59`,
               background: "linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.015))",
               boxShadow: `inset 0 1px 0 rgba(255,255,255,.12), 0 0 22px ${accent}22`,
@@ -369,27 +520,19 @@ function IdentitySection({ accent }: { accent: string }) {
           </div>
         ))}
       </div>
-      <p style={{ color: T.muted, fontSize: 14.5, lineHeight: 1.65, marginTop: 18 }}>
-        Not your email. Not your phone. Not even your name. On Relay you are a random six-digit ID
-        assigned when you register — and the display name attached to it can never be changed. Nothing
-        else about you is exposed.
+      <p
+        className="relay-idstrip-note"
+        style={{
+          color: T.muted, fontSize: 14, lineHeight: 1.6, marginTop: 15, textAlign: "center",
+        }}
+      >
+        Not your email. Not your phone. Not even your name. On RELAY you are a random six-digit ID —
+        enter as a guest and one is reserved for you on the spot; register and it is yours for good.
       </p>
-      <div className="mt-5" style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))" }}>
-        {bullets.map((b) => (
-          <div key={b.title} style={{ ...glass(), borderRadius: 16, padding: 16 }}>
-            <div style={{ ...mono(10), color: accent, marginBottom: 10 }}>{b.title}</div>
-            <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "grid", gap: 7 }}>
-              {b.items.map((it) => (
-                <li key={it} style={{ color: T.muted, fontSize: 13.5, display: "flex", gap: 8 }}>
-                  <Circle size={5} style={{ marginTop: 7, color: accent, fill: "currentColor", flexShrink: 0 }} />
-                  <span>{it}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
-      </div>
-      <div className="mt-5 flex items-center gap-2.5" style={{ color: T.faint2, fontSize: 13.5 }}>
+      <div
+        className="mt-4 flex items-center justify-center gap-2.5"
+        style={{ color: T.faint2, fontSize: 13 }}
+      >
         <Lock size={15} style={{ color: accent }} />
         All calls, video and messages are end-to-end encrypted.
       </div>
@@ -416,6 +559,18 @@ export function LoginScreen() {
   const [notice, setNotice] = useState<string | null>(null);
   const [probeUnregistered, setProbeUnregistered] = useState<boolean | null>(null);
   const [reveal, setReveal] = useState<{ name: string; number: string } | null>(null);
+  /** #121 — the masked leading group of this account's number, echoed back once the
+   *  email resolves so the person can see they reached their own ID. */
+  const [numberHint, setNumberHint] = useState<string | null>(null);
+  /** #122 — whether a passcode exists for this address, so the method picker only
+   *  ever offers a way in that can actually work. */
+  const [probeHasPin, setProbeHasPin] = useState(false);
+  /** #122 — a code verify has landed on an unrecognised device at least once, so
+   *  second-device approval is a REAL option rather than a theoretical one. */
+  const [approvalPending, setApprovalPending] = useState(false);
+  /** #122 — when the current wait started, or null when nothing is counting down.
+   *  Re-armed (not merely reset) by a resend or a re-ask, so the clock restarts. */
+  const [waitStartedAt, setWaitStartedAt] = useState<number | null>(null);
 
   const loginProbe = trpc.otpAuth.loginProbe.useMutation();
   const requestOtp = trpc.otpAuth.requestOtp.useMutation();
@@ -463,6 +618,10 @@ export function LoginScreen() {
     try {
       const p = await loginProbe.mutateAsync({ email: cleanEmail });
       setProbeUnregistered(!!p.unregistered);
+      setProbeHasPin(!!p.hasPin);
+      // #121 — masked, so it confirms the account without handing anybody a
+      // dialable number (see the server note on `numberHint`).
+      setNumberHint(p.numberHint ?? null);
       // Departure (2) in the header: the spec's free choice, but informed. A
       // PIN account skips `choose` entirely — that is the fastest real path and
       // showing "Log in / Register" in front of it would be friction for nothing.
@@ -486,10 +645,28 @@ export function LoginScreen() {
         return;
       }
       setCode("");
+      // #122 — (re-)arm the resend clock. A RESEND lands here too, and because the
+      // countdown is keyed on this timestamp it restarts rather than leaving the
+      // old one running out underneath a freshly-sent code.
+      setWaitStartedAt(Date.now());
       go("login");
     } catch (err) {
       setError(messageOf(err, "Couldn't send your code. Try again."));
     }
+  }
+
+  /**
+   * #122 — move between the three ways in, from any waiting state.
+   *
+   * `go()` clears the error and notice, which is what makes switching feel like a
+   * fresh start rather than carrying the last method's failure across. Choosing
+   * the code path SENDS one — a picker that navigates to a code screen without
+   * mailing anything would leave the person waiting for a code nobody sent.
+   */
+  function pickMethod(m: SignInMethod) {
+    if (m === "pin") { setPin(""); go("pin"); return; }
+    if (m === "device") { go("waiting"); setWaitStartedAt(Date.now()); return; }
+    void sendCode();
   }
 
   async function submitRegister(e?: FormEvent) {
@@ -519,6 +696,9 @@ export function LoginScreen() {
       const res = await verifyOtp.mutateAsync({ email: cleanEmail, code: codeStr.trim(), remember: 30 });
       if ((res as { pending?: boolean })?.pending) {
         utils.otpAuth.sessionApprovalStatus.reset();
+        // #122 — approval is now a real, re-choosable option, and the wait has a clock.
+        setApprovalPending(true);
+        setWaitStartedAt(Date.now());
         go("waiting");
         return;
       }
@@ -582,12 +762,29 @@ export function LoginScreen() {
           </span>
         </div>
 
-        {/* 2 — tagline */}
-        <p style={{ color: T.muted, fontSize: 16, margin: "14px 0 26px", textAlign: "center" }}>
-          Jump straight in as a guest — or register your permanent six-digit ID.
+        {/* 2 — tagline. SHORTENED with the section's move: it used to end "…register
+            your permanent six-digit ID", which the heading immediately below now
+            says outright, and at 320px those three wrapped lines were height charged
+            against reaching the card. */}
+        <p style={{ color: T.muted, fontSize: 16, margin: "13px 0 18px", textAlign: "center" }}>
+          Jump straight in as a guest — or register.
         </p>
 
-        {/* 3 — auth card */}
+        {/* 3 — SECURITY & IDENTITY, moved ABOVE the card (owner: "this one should be
+            pushed up above the guest screen — put it somewhere spaced out so it
+            appears there"). The point is that the six-digit idea should be on screen
+            WHILE you enter as a guest, so the number you are handed a second later
+            means something.
+
+            Compact here on purpose: the full-height version would have pushed the
+            card itself below the fold, which is the one thing this screen must not
+            do. The two bullet cards it used to carry are GONE rather than moved,
+            because every line in them is already said elsewhere on this screen — the
+            guest ones by the note directly under the card, the registered ones by the
+            tagline above and by the register step's own permanent-name warning. */}
+        <IdentitySection accent={accent} />
+
+        {/* 4 — auth card */}
         <AuthCard
           accent={accent}
           step={step}
@@ -603,6 +800,11 @@ export function LoginScreen() {
           email={email} setEmail={setEmail} emailOk={emailOk} submitEmail={submitEmail}
           probeUnregistered={probeUnregistered}
           sendCode={sendCode}
+          numberHint={numberHint}
+          probeHasPin={probeHasPin}
+          approvalPending={approvalPending}
+          pickMethod={pickMethod}
+          waitStartedAt={waitStartedAt}
           regName={regName} setRegName={setRegName} submitRegister={submitRegister}
           code={code} setCode={setCode} verifyCode={verifyCode}
           pin={pin} setPin={setPin} submitPin={submitPin}
@@ -648,9 +850,6 @@ export function LoginScreen() {
           </div>
         </div>
 
-        {/* 7 — security & identity */}
-        <IdentitySection accent={accent} />
-
         {/* 8 — footer */}
         <div style={{ ...mono(10), color: T.faint3, marginTop: 46, textAlign: "center" }}>
           © 2026 RELAY · ENCRYPTED COMMUNICATIONS
@@ -672,6 +871,13 @@ interface CardProps {
   email: string; setEmail: (v: string) => void; emailOk: boolean; submitEmail: (e?: FormEvent) => void;
   probeUnregistered: boolean | null;
   sendCode: () => void;
+  /** #121 — masked leading group of the resolved account's number, or null. */
+  numberHint: string | null;
+  /** #122 — method switching. */
+  probeHasPin: boolean;
+  approvalPending: boolean;
+  pickMethod: (m: SignInMethod) => void;
+  waitStartedAt: number | null;
   regName: string; setRegName: (v: string) => void; submitRegister: (e?: FormEvent) => void;
   code: string; setCode: (v: string) => void; verifyCode: (c: string) => void;
   pin: string; setPin: (v: string) => void; submitPin: (e?: FormEvent) => void;
@@ -724,7 +930,13 @@ function AuthCard(p: CardProps) {
 
         {p.error && <Notice tone="warn">{p.error}</Notice>}
         {p.notice && !p.error && <Notice>{p.notice}</Notice>}
-        {step !== "idle" && <BackLink onClick={() => go(step === "guest" || step === "email" ? "idle" : "email")} />}
+        {step !== "idle" && (
+          <BackLink
+            accent={accent}
+            onClick={() => go(step === "guest" || step === "email" ? "idle" : "email")}
+            label={step === "guest" || step === "email" ? "Back" : "Back to email"}
+          />
+        )}
       </div>
       <span className="sr-only" data-testid="relay-login-step">{step}</span>
       {accent === T.gold && <span className="sr-only">business accent active</span>}
@@ -785,7 +997,10 @@ function IdleStep({ accent, go }: CardProps) {
 function GuestStep(p: CardProps) {
   return (
     <form onSubmit={p.submitGuest} style={{ animation: "relayFadeUp .35s both" }}>
-      <Label>GUEST ACCESS · DISPLAY NAME</Label>
+      {/* #120 — the owner asked for the FULL name here, because the name is what a
+          guest is known by everywhere and it cannot be edited later on this path.
+          The label says so rather than leaving "display name" to be interpreted. */}
+      <Label>GUEST ACCESS · YOUR FULL NAME</Label>
       <Field
         ref={p.inputRef}
         accent={p.accent}
@@ -793,11 +1008,16 @@ function GuestStep(p: CardProps) {
         onChange={(e) => p.setGuestName(e.target.value)}
         placeholder="Full name — e.g. Alex Mercer"
         aria-label="Full name"
+        autoComplete="name"
         maxLength={40}
       />
+      <p style={{ color: T.faint, fontSize: 12.5, margin: "10px 0 0", lineHeight: 1.55 }}>
+        Tap below and a six-digit RELAY number is reserved for you on the spot — we'll show it to you
+        straight away.
+      </p>
       <div className="mt-3.5">
         <Cta accent={p.accent} disabled={!p.guestName.trim() || p.busy} type="submit">
-          {p.busy ? "Setting up…" : "Enter as guest"}
+          {p.busy ? "Reserving your number…" : "I am a guest — reserve my number"}
         </Cta>
       </div>
       {p.startGuestError && <Notice tone="warn">{p.startGuestError}</Notice>}
@@ -902,21 +1122,68 @@ function ChooseStep(p: CardProps) {
           CHANGE
         </button>
       </div>
-      <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
-        <Cta accent={unreg ? "#3b4a46" : p.accent} disabled={p.busy} onClick={() => (unreg ? p.go("register") : p.sendCode())}>
+      {/* #121 — your own number, echoed back the moment the email resolves, so you
+          can see you reached the right account (owner: "we will know that this is
+          your ID and your number"). MASKED — see the server's `numberHint` note:
+          this screen is reachable by anybody who knows an address, so the whole
+          number here would be an unauthenticated email → dialable-number lookup. */}
+      {!unreg && p.numberHint && (
+        <div
+          className="mb-3.5 flex items-center justify-center gap-2.5"
+          style={{
+            borderRadius: 14, padding: "10px 12px",
+            border: `1px solid ${p.accent}3d`, background: `${p.accent}0f`,
+          }}
+        >
+          <span style={{ ...mono(10), color: T.faint2 }}>YOUR RELAY ID</span>
+          <span
+            dir="ltr"
+            style={{
+              fontFamily: "'IBM Plex Mono', ui-monospace, monospace", fontSize: 19,
+              color: T.bright, letterSpacing: ".06em", unicodeBidi: "isolate",
+            }}
+          >
+            {p.numberHint}
+          </span>
+        </div>
+      )}
+      {/* #121 — ONE way forward, never both. The owner asked that an address which
+          already has an account say so and REFUSE to register: a Register button
+          that is always going to be wrong is worse than no Register button (the
+          v2.103.3 rule), and offering both is what let somebody pick the branch
+          that cannot work. Until the probe answers, neither is asserted. */}
+      {p.probeUnregistered === null ? (
+        <Cta accent={p.accent} disabled onClick={() => {}}>
+          Checking that address…
+        </Cta>
+      ) : unreg ? (
+        <Cta accent={p.accent} disabled={p.busy} onClick={() => p.go("register")}>
+          Register a new account
+        </Cta>
+      ) : (
+        <Cta accent={p.accent} disabled={p.busy} onClick={() => p.sendCode()}>
           Log in
         </Cta>
-        <Cta accent={unreg ? p.accent : "#3b4a46"} disabled={p.busy} onClick={() => p.go("register")}>
-          Register
-        </Cta>
-      </div>
-      <p style={{ color: T.faint, fontSize: 12.5, marginTop: 12, textAlign: "center" }}>
+      )}
+      <p style={{ color: T.faint, fontSize: 12.5, marginTop: 12, textAlign: "center", lineHeight: 1.55 }}>
         {p.probeUnregistered === null
           ? "Existing users log in · new users register a permanent six-digit ID"
           : unreg
             ? "No RELAY account for that address yet — register to claim a six-digit ID."
-            : "That address already has an account — log in and we'll email a code."}
+            : "This email already has a RELAY account, so it can't be registered again — log in instead and we'll email you a code."}
       </p>
+      {/* Switching method is available here too, not only once a wait has begun:
+          somebody who knows they have a passcode should not have to send an email
+          code first to be offered it. */}
+      {!unreg && (
+        <MethodPicker
+          accent={p.accent}
+          current="code"
+          hasPin={p.probeHasPin}
+          hasPending={p.approvalPending}
+          onPick={p.pickMethod}
+        />
+      )}
     </div>
   );
 }
@@ -947,6 +1214,7 @@ function CodeBoxes({ value, accent }: { value: string; accent: string }) {
 }
 
 function CodeStep(p: CardProps) {
+  const left = useCountdown(p.waitStartedAt, OTP_RESEND_SECONDS);
   return (
     <form
       onSubmit={(e) => { e.preventDefault(); if (p.code.length === 6) p.verifyCode(p.code); }}
@@ -977,7 +1245,63 @@ function CodeStep(p: CardProps) {
           {p.busy ? "Verifying…" : "Verify & sign in"}
         </Cta>
       </div>
+      {/* #122 — the countdown, then a real resend. Before it elapses the resend is
+          absent rather than disabled, because a control that refuses for 30 seconds
+          reads as broken; the seconds themselves say to wait. */}
+      <ResendRow
+        accent={p.accent}
+        left={left}
+        busy={p.busy}
+        waiting="You can ask for another code in"
+        action="Resend the code"
+        onAction={p.sendCode}
+      />
+      <MethodPicker
+        accent={p.accent}
+        current="code"
+        hasPin={p.probeHasPin}
+        hasPending={p.approvalPending}
+        onPick={p.pickMethod}
+      />
     </form>
+  );
+}
+
+/**
+ * #122 — "wait N seconds" followed by a retry, shared by the code and approval
+ * waits so the two cannot come to phrase or time the same idea differently.
+ */
+function ResendRow({
+  accent, left, busy, waiting, action, onAction,
+}: {
+  accent: string; left: number; busy: boolean;
+  waiting: string; action: string; onAction: () => void;
+}) {
+  if (left > 0) {
+    return (
+      <p style={{ color: T.faint, fontSize: 12.5, marginTop: 12, textAlign: "center" }}>
+        {waiting}{" "}
+        <span style={{ fontFamily: "'IBM Plex Mono', ui-monospace, monospace", color: accent }}>
+          {left}s
+        </span>
+      </p>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onAction}
+      disabled={busy}
+      className="mt-3 inline-flex w-full items-center justify-center gap-2"
+      style={{
+        borderRadius: 12, padding: "9px 12px", cursor: busy ? "default" : "pointer",
+        background: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.14)",
+        color: T.text, fontSize: 13.5,
+      }}
+    >
+      <RotateCw size={14} style={{ color: accent }} aria-hidden />
+      {action}
+    </button>
   );
 }
 
@@ -1035,35 +1359,70 @@ function PinStep(p: CardProps) {
           {p.busy ? "Checking…" : "Unlock"}
         </Cta>
       </div>
-      <button
-        type="button" onClick={p.sendCode}
-        className="mt-3 block w-full text-center"
-        style={{ ...mono(11.5, ".1em"), color: T.faint, background: "none", border: "none", cursor: "pointer" }}
-      >
-        email me a code instead
-      </button>
+      {/* The old one-way "email me a code instead" link is now one entry in the
+          shared picker, so this step offers the same choices as every other. */}
+      <MethodPicker
+        accent={p.accent}
+        current="pin"
+        hasPin
+        hasPending={p.approvalPending}
+        onPick={p.pickMethod}
+      />
     </form>
   );
 }
 
-/** Not in the spec — preserved. New-device approval (v2.99.7). */
+/**
+ * Not in the spec — preserved. New-device approval (v2.99.7), now with a clock and
+ * a way out (#122).
+ *
+ * The failure this addresses is a real one: the approver device may simply be
+ * closed, and before v2.99.19 #50 this screen had NO exit at all. It now counts
+ * down, then offers to ask again, and the picker beside it means the person is
+ * never stuck on the one method that is not working.
+ */
 function WaitingStep(p: CardProps) {
   const status = trpc.otpAuth.sessionApprovalStatus.useQuery(undefined, { refetchInterval: 2500 });
   const utils = trpc.useUtils();
+  const left = useCountdown(p.waitStartedAt, APPROVAL_NUDGE_SECONDS);
   useEffect(() => {
     if (status.data?.status === "approved") { void utils.identity.whoami.invalidate(); }
   }, [status.data?.status, utils]);
+  const declined = status.data?.status === "denied";
   return (
     <div style={{ animation: "relayFadeUp .35s both" }}>
-      <Label>WAITING FOR APPROVAL</Label>
+      <Label>{declined ? "APPROVAL DECLINED" : "WAITING FOR APPROVAL"}</Label>
       <Panel accent={p.accent}>
         <p style={{ color: T.muted, fontSize: 13.5, lineHeight: 1.6, margin: 0 }}>
-          This is a new device. Approve it from a device you're already signed in on — then you're in.
+          {declined
+            ? "That sign-in was declined on your other device. You can try another way in below."
+            : "This is a new device. Approve it from a device you're already signed in on — then you're in."}
         </p>
       </Panel>
-      <p style={{ color: T.faint, fontSize: 12.5, marginTop: 12, textAlign: "center" }}>
-        If that device is closed, use the 4-digit passcode instead — it never needs approval.
-      </p>
+      {!declined && (
+        <ResendRow
+          accent={p.accent}
+          left={left}
+          busy={p.busy}
+          waiting="Still waiting — you can ask again in"
+          action="Ask that device again"
+          // Re-sending the code re-creates the pending session, which is what makes
+          // the other device prompt a second time; there is no separate "nudge".
+          onAction={p.sendCode}
+        />
+      )}
+      <MethodPicker
+        accent={p.accent}
+        current="device"
+        hasPin={p.probeHasPin}
+        hasPending
+        onPick={p.pickMethod}
+      />
+      {!p.probeHasPin && (
+        <p style={{ color: T.faint, fontSize: 12.5, marginTop: 12, textAlign: "center" }}>
+          A 4-digit passcode never needs approval — you can set one from Profile once you're in.
+        </p>
+      )}
     </div>
   );
 }
