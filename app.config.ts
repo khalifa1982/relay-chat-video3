@@ -30,7 +30,7 @@ const schemeFromBundleId = `manus${timestamp}`;
 // compares the server manifest's buildNumber against THIS value to decide
 // whether a newer APK is available. Bump this every time you publish a new APK
 // (and set the manifest's buildNumber to match the new release).
-const ANDROID_BUILD_NUMBER = 18;
+const ANDROID_BUILD_NUMBER = 17;
 
 const env = {
   // App branding - update these values directly (do not use env vars)
@@ -47,12 +47,12 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.23",
+  version: "1.0.24",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
   userInterfaceStyle: "automatic",
-  newArchEnabled: false,
+  newArchEnabled: true,
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
@@ -60,11 +60,11 @@ const config: ExpoConfig = {
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
       NSCameraUsageDescription:
-        "RELAY uses your camera to transmit live video to the person you are calling during a video call. For example, when you tap the video-call button next to a contact's name, your front camera activates so the other person can see you in real time.",
+        "RELAY needs camera access so you can make video calls.",
       NSMicrophoneUsageDescription:
-        "RELAY uses your microphone to capture and transmit your voice to the person you are speaking with during a voice or video call. For example, when you accept an incoming call or dial a contact, your microphone activates so the other person can hear you clearly throughout the conversation.",
+        "RELAY needs microphone access so you can make voice and video calls.",
       // Keep the call's audio session alive while backgrounded (voice/video calls).
-      UIBackgroundModes: ["audio", "remote-notification"],
+      UIBackgroundModes: ["audio", "voip"],
     },
   },
   android: {
@@ -128,15 +128,10 @@ const config: ExpoConfig = {
   },
   plugins: [
     "expo-router",
-    "expo-font",
-    "expo-image",
-    "expo-secure-store",
-    "expo-web-browser",
     [
       "expo-audio",
       {
-        microphonePermission:
-          "RELAY uses your microphone to capture and transmit your voice during voice and video calls. For example, when you accept an incoming call, your microphone activates so the other person can hear you.",
+        microphonePermission: "Allow $(PRODUCT_NAME) to access your microphone.",
       },
     ],
     [
@@ -177,11 +172,8 @@ const config: ExpoConfig = {
     ],
     // Local plugin: enable Android picture-in-picture for active calls.
     "./plugins/with-android-pip.js",
-    // VoIP plugin removed: react-native-callkeep and react-native-voip-push-notification
-    // are incompatible with RN 0.83 TurboModule system, causing fatal crash on launch.
-    // TODO: Re-add VoIP support with a compatible library in the future.
   ],
-  extra: {
+    extra: {
     eas: {
       projectId: "e157c3d8-8d70-42ad-a11c-86d75c691039",
     },
@@ -192,5 +184,4 @@ const config: ExpoConfig = {
     reactCompiler: true,
   },
 };
-
 export default config;

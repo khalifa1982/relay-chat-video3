@@ -13,13 +13,13 @@ describe("parseManifest", () => {
     const m = parseManifest({
       buildNumber: 5,
       versionName: "1.2.0",
-      apkUrl: "https://your-chat.io/update/app.apk",
+      apkUrl: "https://your-chat.org/update/app.apk",
       notes: "Bug fixes",
     });
     expect(m).toEqual({
       buildNumber: 5,
       versionName: "1.2.0",
-      apkUrl: "https://your-chat.io/update/app.apk",
+      apkUrl: "https://your-chat.org/update/app.apk",
       notes: "Bug fixes",
     });
   });

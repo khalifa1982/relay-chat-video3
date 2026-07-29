@@ -24,8 +24,6 @@ import { parseRelayMessage } from "@/lib/call-messages";
 import { useCallSession } from "@/hooks/use-call-session";
 import { useCallNotifications } from "@/hooks/use-call-notifications";
 import { useBackgroundPresence } from "@/hooks/use-background-presence";
-import { usePushToken } from "@/hooks/use-push-token";
-import { useVoipCallKit } from "@/hooks/use-voip-callkit";
 
 // Palette aligned to the live RELAY web app (oklch(0.12 0.008 245) background
 // ~ #050608) so the native shell's splash/error chrome blends seamlessly with
@@ -114,11 +112,6 @@ export function RelayWebView() {
   // plus audio output routing (earpiece/speaker/Bluetooth).
   const { setCallState, applyAudioRoute } = useCallSession(reacquireCamera);
 
-  // Firebase push token: get the native device token and inject it into the
-  // WebView so the web app can register it with its server for push delivery.
-  const { onWebViewLoadEnd: sendPushToken, onWebReady: sendPushTokenOnReady } =
-    usePushToken(webViewRef);
-
   // Online presence: keep RELAY reachable in the background so calls ring even
   // when minimized. The injected script reports whether the user is signed in;
   // we treat "logged in" (past the name-entry screen) as online.
@@ -135,25 +128,6 @@ export function RelayWebView() {
         void dismissIncomingCall();
       },
     });
-
-  // PushKit + CallKit (iOS). A SECOND token, and a DIFFERENT one: only the
-  // PushKit token can be addressed on the `<bundle>.voip` topic, and only a VoIP
-  // push shows the real full-screen call screen on a LOCKED iPhone. It is posted
-  // with `kind: "apns-voip"` because both of iOS's tokens are hex and nothing
-  // downstream can tell them apart by shape. A no-op on Android, which already
-  // rings through the full-screen-intent notification above.
-  const { onWebReady: sendVoipTokenOnReady } = useVoipCallKit(webViewRef, {
-    onAnswer: () => {
-      // CallKit's Answer button. The shell deliberately does not try to join the
-      // call itself — it does not know about rooms. It brings the WebView forward
-      // and refreshes the camera; the web app's own pending-ring delivery is what
-      // connects, which keeps one implementation of "answer" rather than two.
-      reacquireCamera();
-    },
-    onEnd: () => {
-      void dismissIncomingCall();
-    },
-  });
 
   // --- Web-content version change detection ---
   const [webUpdateAvailable, setWebUpdateAvailable] = useState(false);
@@ -233,16 +207,6 @@ export function RelayWebView() {
         case "audio-route":
           applyAudioRoute(msg.route);
           break;
-        // The web app's bridge is listening now. Re-send the push token: onLoadEnd can
-        // fire before RELAY attaches its listener, in which case the token posted then
-        // was dropped and nothing anywhere said so.
-        case "web-ready":
-          sendPushTokenOnReady();
-          // The PushKit token rides the SAME handshake. It is a separate token on
-          // a separate transport, so a shell that posted only one of the two
-          // would leave either notifications or ringing broken.
-          sendVoipTokenOnReady();
-          break;
         case "online":
           setOnline(msg.online);
           break;
@@ -257,8 +221,6 @@ export function RelayWebView() {
       showIncomingCall,
       dismissIncomingCall,
       showIncomingMessage,
-      sendVoipTokenOnReady,
-      sendPushTokenOnReady,
     ],
   );
 
@@ -298,10 +260,7 @@ export function RelayWebView() {
         onLoadStart={() => {
           if (!firstLoadDoneRef.current) setLoading(true);
         }}
-        onLoadEnd={() => {
-          finishFirstLoad();
-          sendPushToken();
-        }}
+        onLoadEnd={finishFirstLoad}
         onError={handleError}
         onHttpError={() => {}}
         onNavigationStateChange={handleNavStateChange}

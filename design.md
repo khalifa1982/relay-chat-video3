@@ -3,7 +3,7 @@
 ## Concept
 
 RELAY Mobile is a **native shell (wrapper) app** for iOS/Android that loads the live
-RELAY web app (`https://your-chat.io/app`) inside a full-screen WebView. The goal is
+RELAY web app (`https://your-chat.org/app`) inside a full-screen WebView. The goal is
 **mirroring**: every update or upgrade made on the web is instantly reflected in the
 app, with no app-store re-release. The native layer only provides the chrome
 (splash, permissions, navigation gestures, offline handling), while all features
@@ -19,7 +19,7 @@ app, with no app-store re-release. The native layer only provides the chrome
 
 1. **Loading / Splash** — App icon on brand background while the WebView boots and the
    web app loads. A branded overlay spinner covers the WebView until first paint.
-2. **WebView Shell (main)** — Full-screen WebView rendering `https://your-chat.io/app`.
+2. **WebView Shell (main)** — Full-screen WebView rendering `https://your-chat.org/app`.
    Hosts the entire RELAY experience.
 3. **Connection Error** — Shown when the device is offline or the web app fails to load.
    Displays a friendly message, the RELAY mark, and a **Retry** button.
@@ -27,7 +27,7 @@ app, with no app-store re-release. The native layer only provides the chrome
 ## Primary Content & Functionality per Screen
 
 - **WebView Shell**
-  - Loads the configured RELAY URL (`EXPO_PUBLIC_RELAY_URL`, default `https://your-chat.io`).
+  - Loads the configured RELAY URL (`EXPO_PUBLIC_RELAY_URL`, default `https://your-chat.org`).
   - Camera + microphone permissions granted to the WebView for WebRTC voice/video.
   - Media playback inline (no forced fullscreen takeover), autoplay allowed.
   - Pull-to-refresh-style reload available; hardware Android back navigates web history.

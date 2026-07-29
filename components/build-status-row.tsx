@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Animated, Platform, StyleSheet, Text, View } from "react-native";
+import { Animated, StyleSheet, Text, View } from "react-native";
 
 import type { ApkUpdateStatus } from "@/hooks/use-apk-update";
 import { GlossyCheckButton } from "@/components/glossy-check-button";
@@ -9,8 +9,8 @@ interface Props {
   installedBuild: number | null;
   /** Installed human version name, e.g. "1.0.4". */
   installedVersionName?: string | null;
-  /** The version bundled into this app build (from app.config.ts). */
-  appVersionName?: string | null;
+  /** The version bundled into this app build (shown as the "Beta" line). */
+  betaVersionName?: string | null;
   /** Latest build number reported by the manifest, if known. */
   latestBuild?: number;
   /** Latest human version name reported by the manifest, if known. */
@@ -44,8 +44,8 @@ const COLORS = {
 };
 
 /**
- * A compact, professional status row that shows the user's current app version,
- * the latest available version, and — when an update exists — a live download
+ * A compact, professional status row that shows the user's current app build,
+ * the latest available build, and — when an update exists — a live download
  * progress bar. The action button adapts to the update phase:
  *
  *  - idle / up to date      -> "Check"      (re-check the manifest)
@@ -60,7 +60,7 @@ const COLORS = {
 export function BuildStatusRow({
   installedBuild,
   installedVersionName,
-  appVersionName,
+  betaVersionName,
   latestBuild,
   latestVersionName,
   reason,
@@ -72,11 +72,17 @@ export function BuildStatusRow({
   onDownload,
   onApply,
 }: Props) {
-  // On iOS, hide the entire update row since iOS updates go through the App Store.
-  if (Platform.OS === "ios") return null;
-
-  // Version label: show the installed version name and build number.
-  const versionLabel = appVersionName ?? installedVersionName ?? null;
+  // Two distinct version identities surfaced to the user:
+  //  - Beta: the version this app build ships with (from app.config.ts).
+  //  - Installed: what is actually running on this device (native versionName
+  //    + build), which differs once an OTA APK update has been applied.
+  const betaLabel = betaVersionName ?? installedVersionName ?? null;
+  const installedNameLabel =
+    installedVersionName ?? (installedBuild != null ? String(installedBuild) : "—");
+  const installedLabel =
+    installedBuild != null
+      ? `${installedNameLabel} · build ${installedBuild}`
+      : installedNameLabel;
   const latestLabel = latestVersionName ?? (latestBuild != null ? String(latestBuild) : null);
   const upToDate =
     latestBuild != null && installedBuild != null
@@ -141,8 +147,11 @@ export function BuildStatusRow({
       <View style={styles.row}>
         <View style={styles.left}>
           <View style={styles.versionRow}>
+            <View style={styles.betaBadge}>
+              <Text style={styles.betaBadgeText}>BETA</Text>
+            </View>
             <Text style={styles.build} numberOfLines={1}>
-              v{versionLabel ?? "—"}
+              {betaLabel ?? "—"}
             </Text>
             {installedBuild != null ? (
               <Text style={styles.buildMeta} numberOfLines={1}>
@@ -210,6 +219,20 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+  },
+  betaBadge: {
+    backgroundColor: "rgba(6, 182, 212, 0.16)",
+    borderColor: COLORS.accent,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  betaBadgeText: {
+    color: COLORS.accent,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1.2,
   },
   build: {
     color: COLORS.text,
