@@ -7,11 +7,15 @@ const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 
 /**
  * Call-link direct-join (owner: "paramount"). A shared invite link
- * (`/i/<pin>` → `/app/dialer?to=<pin>`) must land a not-yet-identified clicker
- * on a FOCUSED "enter your name to connect" card — not the generic marketing
- * login — then straight into the dial. These pin the URL parser + the presence
- * of the focused-join affordance so a redesign can't silently regress it back
- * to the full login wall.
+ * (`/i/<pin>` → `/app/join?to=<pin>` since #109) must land a not-yet-identified
+ * clicker on a FOCUSED "enter your name to connect" card — not the generic
+ * marketing login — then straight into the dial. These pin the URL parser + the
+ * presence of the focused-join affordance so a redesign can't silently regress it
+ * back to the full login wall.
+ *
+ * #109 replaced the card's BODY with the shared `InviteCard` (one component for
+ * this screen and the signed-in `/app/join` one) and left every property below
+ * intact, which is why they all still hold.
  */
 describe("inviteTargetFromSearch — pull the call target out of the URL", () => {
   it("extracts a 6-digit ?to= target", () => {

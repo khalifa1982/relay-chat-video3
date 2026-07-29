@@ -88,9 +88,26 @@ signature verifies, so it leaks nothing.
 (v2.105.7), add/remove member and the "all users can add" toggle (v2.105.16), the 4-digit lock
 (v2.105.20), and the audience (v2.105.23).
 
-### 2. Call-invite / party-line join screen  (#109)
-No dedicated screen exists (`client/src/pages/app/` has none). Was deliberately sequenced behind group
-roles, which are now done (v2.104.0 / v2.105.7 / v2.105.16) — so nothing blocks it any more.
+### 2. ~~Call-invite / party-line join screen~~ — **DONE, v2.105.25**  (#109)
+A shared `/i/<pin>` link now lands on its own screen — what you are joining, its creator, who is
+already inside with their badge and how long they have been there, the live count and the created
+date — instead of on the keypad with six anonymous digits prefilled.
+
+**ONE DELIBERATE DEVIATION, stated rather than buried.** The ask was "joins the call automatically".
+The screen replaces the dial pad, but its Join button is still a real tap, because a link that dials on
+arrival is the **M48/M60 hot-mic hole**: microphone permission is per-origin and persists, so one click
+would hand a live mic — and the camera, with `?video=1` — to a number the LINK'S AUTHOR chose. M60
+found that hole still open through this exact `/i/<pin>` path. One informed tap is the consent.
+
+**And one thing it will not show: another occupant's 6-digit number.** A party line may list who is on
+it — it is dial-to-enter, its owner shares it deliberately, and joining shows the same roster from the
+inside anyway — but returning everyone's number would make an enumerable endpoint into a harvesting
+one, where joining to read the same digits is a visible act. `directory.liveRoom` refuses the same
+thing for a call, and now so does this.
+
+**The line's thumbnail is generated, not uploaded.** A deterministic gradient from the line's own
+number, so every line has a stable identity with nothing to upload and nothing to moderate. An
+uploadable logo is a column plus an editor — say the word if you want it.
 
 ### 3. Thread list shows a bare emoji with no context
 A one-tap status reaction arrives in the inbox as a floating emoji with nothing saying what it was
@@ -148,39 +165,49 @@ relay** — one shape for both transports so they are comparable.
 on the back." Both are complete stacks — client SDK plus media server — and Agora's SDK only talks to
 Agora's cloud. Primary/fallback is the version of that idea which works.
 
-## §2 — NOT DONE, and needs a decision from you first
-
-### 6. Group-call tiles on the landing page: "make them look like they're talking"
-Asked twice. **Lips cannot move on a still photograph** — the ten tiles are stock stills with faces at
-different scales, so a mouth overlay lands on a houseplant in one and a keyboard in another. What v2.99.70
-and v2.105.16 DID ship is everything that can be done without new assets: a coherent rotating
-active-speaker ring, voice-shaped level meters, sub-pixel per-tile drift, and a nod — with repainting
-animations measured 4 → 0 on a phone.
-
-Real lip movement needs **short looping video per tile**, i.e. an asset decision, not code. My note
-records you later saying to drop it; say the word if you want it back on the list.
-
-### 7. The Business path on the sign-in page
-The design handoff specifies it as a "coming soon" panel, so nothing is wired behind it. Needs you to
-say what Business accounts actually do.
-
-### 8. A group admin cannot delete another member's group story
-A separate capability nobody has asked for; the story expires in 24h regardless. Named in v2.105.6 as a
-deliberate omission rather than an oversight.
-
-### 9. A group story counts against the poster's own 30-active cap
-The honest reading (the cost is per-post whoever it is addressed to), but flagged in case you disagree.
+### 6. The login screen batch  (asked 2026-07-29, IN PROGRESS)
+Three items, tracked as #120–#122 and being built now:
+- **Guest** — tapping Guest asks for the FULL name, "your identity is six digits" moves up above the
+  guest area, tapping "I am a Guest" reserves the number and reveals it matrix-style, and the Back
+  button before the name field becomes flashy enough to actually see.
+- **Register** — an email that already has an account says so and REFUSES to register, pointing at log
+  in; Back button there too; and the email surfaces your number before you sign in. Two calls to flag
+  when it lands: the existence answer is already available on this surface (`loginProbe` routes
+  login-vs-register off it by design), but showing the NUMBER to anybody who types an email is a new
+  email→number link, so it will be **masked** (`777-•••`) until you are authenticated and full
+  afterwards — all the recognition value, nothing dialable.
+- **Sign-in methods** — a picker in every waiting state so you can move between email OTP, the 4-digit
+  passcode and second-device approval at will, each with a countdown and a resend/re-ask.
 
 ---
 
-## §3 — Owner-side, nothing in this repo can do it
+## §2 — NOT DONE, and needs a decision from you first
 
-10. **iOS ring on a locked phone** — needs the TestFlight build installed, then `/app/admin` →
-    Push Doctor showing a device kind of **`apns-voip`** rather than `apns`. That single row is the proof
-    PushKit minted a token. Build #33 is uploaded and processing.
-11. **The VoIP certificate should be reissued** — the key crossed a chat channel, so it must be treated
-    as compromised once ringing is confirmed working.
-12. **Firebase/APNs credentials** live only in `/home/relay/.env`; nothing here can read or set them.
+### 7. A group admin cannot delete another member's group story — **BUILDING** (#118)
+You asked for this on 2026-07-29; it is queued behind the login batch.
+
+### 8. A group story counts against the poster's own 30-active cap — **BUILDING** (#119)
+You asked to change this. Read as: a group story should get the GROUP's own cap rather than spending
+one of the poster's thirty, so group activity cannot lock somebody out of their personal story. If you
+meant the opposite, say so and it is a one-line difference.
+
+---
+
+## §3 — Parked at your request
+
+- **Agora as the primary transport, LiveKit as fallback** — ON HOLD (your call, 2026-07-29). The
+  measurement that would settle it is unchanged and takes thirty seconds: open a call with the v2.105.21
+  Stats chip on and read whether media is going **via TURN relay** (a config problem no vendor change
+  fixes), whether RTT is over 300ms, or whether publish fps collapses as video starts. Only "all clean
+  and still slow" makes Agora the right answer.
+- **The Business path on the sign-in page** — not to be discussed for now (your call). It stays a
+  "coming soon" panel, which is what the design handoff specifies.
+- **iOS and Android app items** — dropped entirely at your request ("forget anything about the apple or
+  andriod apps"), including the TestFlight install, the Push Doctor `apns-voip` check and the VoIP
+  certificate reissue. The server-side push code stays where it is and needs nothing from anybody.
+- **Group-call tiles "looking like they're talking"** — closed. Lips cannot move on a still
+  photograph; real movement needs short looping video per tile, i.e. an asset decision. Everything
+  achievable without new assets shipped in v2.99.70 / v2.105.16.
 
 ---
 
@@ -199,6 +226,7 @@ The honest reading (the cost is per-post whoever it is addressed to), but flagge
 
 ## Never verified on a device (true of everything below, and said plainly)
 
-There is no phone, no MySQL and no Xcode in the build sandbox. So: no group has been locked, no story
-deleted by an admin, no handset has rung, and no minimised app has been called and watched to ring.
-Everything is proven by test and by reading; the device pass is yours.
+There is no phone and no MySQL in the build sandbox. So: no group has been locked, no invite link has
+been opened on a phone, nobody has watched a party-line roster fill up before joining it, and no
+minimised app has been called and watched to ring. Everything is proven by test and by reading; the
+device pass is yours.

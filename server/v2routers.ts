@@ -220,7 +220,7 @@ import { createRateLimiter, clientIpOf, trustedProxyHops } from "./rateLimit";
 // serves signaling, and the Redis mirror (`relay:busypins`/`relay:plcounts`)
 // when it's an API-tier instance behind the scale-out ALB (REDIS_URL set, no
 // local relay clients). Single-instance deploys are byte-identical.
-import { pinsInCallAsync, partyLineLiveCountsAsync, liveRoomFor, livekitConfig, iceServers } from "./relay";
+import { pinsInCallAsync, partyLineLiveCountsAsync, liveRoomFor, partyLineRosterFor, livekitConfig, iceServers } from "./relay";
 
 /**
  * Offline-message email (v2.99.13). CONTENT-FREE by design (owner: "it will
@@ -1257,6 +1257,96 @@ export const v2DirectoryRouter = router({
         // Names only (no pins) — the caller was in this call, but we still don't
         // hand back a machine-dialable roster of everyone's numbers.
         members: info.members.map((m) => ({ name: m.name, role: m.role })),
+      };
+    }),
+
+  /**
+   * #109 — the extra facts the INVITE screen needs about a PARTY LINE, and
+   * nothing else.
+   *
+   * `directory.lookup` already answers everything the screen shows for a PERSON
+   * (name, avatar, badge, presence, on-a-call), so this deliberately covers only
+   * the case it cannot: a line's title, when it was created, who created it, and
+   * who is on it right now. A number that is not a party line returns null, which
+   * is what keeps the disclosure below scoped to lines.
+   *
+   * WHY A LINE MAY LIST ITS OCCUPANTS AND A CALL MAY NOT. A party line is a
+   * deliberately-shared, dial-to-enter room: its owner created it to hand round,
+   * anybody holding the number can walk in, and the moment they do they see the
+   * same roster from the inside — the in-call tiles have shown each peer's name
+   * and digits since v2.105.24. So the only thing this adds is seeing it a second
+   * BEFORE joining instead of a second after. A private call is the opposite on
+   * every count, which is why `directory.liveRoom` stays gated on the requester
+   * having been in the room.
+   *
+   * IT STILL RETURNS NO OCCUPANT'S NUMBER, and that is not symmetry for its own
+   * sake. Numbers are enumerable (10^6, throttled but public), so this endpoint is
+   * effectively readable by anybody — and a machine-readable list of the 6-digit
+   * numbers of everybody currently on a line is a harvesting endpoint, whereas
+   * joining to read the same digits off the tiles is an ACT: the count moves and
+   * every person already there sees you arrive. Visible harvesting is a real
+   * difference from silent harvesting. The line's OWN number is returned, because
+   * it is the link the caller is already holding.
+   */
+  inviteCard: publicProcedure
+    .input(z.object({ number: NumberSchema }))
+    .query(async ({ input, ctx }) => {
+      directoryGate(ctx);
+      const line = await getPartyLineByNumber(input.number).catch(() => null);
+      if (!line) return null;
+      const owner = await getIdentityById(line.ownerIdentityId).catch(() => null);
+      // Off the signaling node this is null, and the screen then shows the line
+      // with no roster rather than asserting it is empty.
+      const live = partyLineRosterFor(line.number);
+      const pins = (live?.members ?? []).map((m) => m.pin);
+      const rows = pins.length ? await getIdentitiesByNumbers(pins).catch(() => []) : [];
+      const byNumber = new Map(rows.map((r) => [r.number, r]));
+      // One batched role read for the owner AND the occupants, so a badge is the
+      // real tier rather than a guess from `verified` alone.
+      const ids = [
+        ...(owner ? [owner.id] : []),
+        ...rows.map((r) => r.id),
+      ];
+      const roles = ids.length
+        ? await getRolesByIdentityIds(ids).catch(() => new Map<number, IdentityRole>())
+        : new Map<number, IdentityRole>();
+      // A NULL `verified` reads as a guest, which is what every other tier reader
+      // does — the stored column is nullable and only an explicit true is a claim.
+      const tierOf = (r: { id: number; verified: boolean | null }): IdentityRole =>
+        roles.get(r.id) ?? (r.verified ? "registered" : "guest");
+      return {
+        kind: "party-line" as const,
+        number: line.number,
+        title: line.title,
+        createdAt: line.createdAt,
+        liveSince: live?.startedAt ?? null,
+        liveCount: live?.members.length ?? 0,
+        rosterKnown: !!live,
+        owner: owner
+          ? {
+              // FIRST name, per the ask ("the Creator (first name + badge)"), with
+              // the display name as the fallback for a guest who has no split name.
+              firstName: owner.firstName || owner.displayName,
+              displayName: owner.displayName,
+              avatarUrl: owner.avatarUrl,
+              role: tierOf(owner),
+            }
+          : null,
+        members: (live?.members ?? []).map((m) => {
+          const id = byNumber.get(m.pin);
+          return {
+            // NO `pin` — see the note above.
+            name: id?.displayName || m.name,
+            avatarUrl: id?.avatarUrl ?? null,
+            role: id ? tierOf(id) : null,
+            // Host / co-host in THIS room, which is what "who is host and who is
+            // admin" means once a call is running. A party line has no host of
+            // its own (its owner may never dial in), so this is usually "".
+            callRole: m.role,
+            joinedAt: m.joinedAt,
+            isOwner: !!owner && !!id && id.id === owner.id,
+          };
+        }),
       };
     }),
 
