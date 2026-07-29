@@ -82,6 +82,16 @@ export interface PersistedMember {
   /** True when THIS room is the member's HELD room rather than their active one.
    *  Absent/false ⇒ active. See the derived-index note above. */
   held?: boolean;
+  /**
+   * #109 — unix ms this member joined, so a leader change does not reset every
+   * join time to "just now" on the invite screen.
+   *
+   * OPTIONAL for the same reason `groupAdminPins` is: a record written by a
+   * not-yet-updated instance mid-rollout simply has no field, and the member
+   * comes back with no stamp — which the reader reports as "unknown", not as a
+   * fabricated time.
+   */
+  joinedAt?: number;
 }
 
 export interface PersistedRoom {
@@ -131,6 +141,9 @@ export function isPersistedRoom(v: unknown): v is PersistedRoom {
     if (!isStr(mm.pin) || !/^\d{6}$/.test(mm.pin)) return false;
     if (!isStr(mm.name)) return false;
     if (mm.held !== undefined && typeof mm.held !== "boolean") return false;
+    // #109 — absent is fine (a pre-feature record). Present must be a real
+    // number, or hydration would put a NaN into a map the invite screen formats.
+    if (mm.joinedAt !== undefined && !isNum(mm.joinedAt)) return false;
   }
   if (o.hostPin !== null && !(isStr(o.hostPin) && /^\d{6}$/.test(o.hostPin))) return false;
   if (!Array.isArray(o.cohosts) || o.cohosts.some((c) => !isStr(c) || !/^\d{6}$/.test(c))) return false;

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Phone, Video, MessageSquare, ArrowRight, User2, PhoneCall, Users } from "lucide-react";
+import { InviteCard, type InvitePartyLine, type InvitePerson } from "./InviteCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
@@ -15,11 +16,6 @@ interface OnboardingGateProps {
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-/** Format a 6-digit RELAY number as `NNN-NNN`; pass anything else through. */
-function fmtNumber(n: string): string {
-  return /^\d{6}$/.test(n) ? `${n.slice(0, 3)}-${n.slice(3)}` : n;
-}
 
 /**
  * A shared call/invite link (`/i/<pin>` → `/app/dialer?to=<pin>`) carries the
@@ -68,6 +64,13 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
   const invite = trpc.directory.lookup.useQuery(
     { number: callTarget ?? "" },
     { enabled: !!callTarget && !me && !loading, retry: false, staleTime: 60_000 }
+  );
+  // #109 — the party-line half of the card (title, creator, who's on it, created
+  // date). Same public endpoint the signed-in join screen reads, so the two
+  // screens describe one line identically. Null for an ordinary number.
+  const inviteLine = trpc.directory.inviteCard.useQuery(
+    { number: callTarget ?? "" },
+    { enabled: !!callTarget && !me && !loading, retry: false, refetchInterval: 10_000 }
   );
 
   // Guest ID-reveal ("matrix" animation) state — plays after a standard guest
@@ -125,8 +128,19 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
   // Shown when a call target is in the URL and we're not in the email path.
   const showJoin = !!callTarget && !emailMode;
   const invitee = invite.data;
+  const line = (inviteLine.data ?? null) as InvitePartyLine | null;
   const isPartyLine = !!invitee?.partyLine;
   const inviteeName = invitee?.displayName?.trim() || "";
+  const invitePerson: InvitePerson | null =
+    invitee && !invitee.partyLine
+      ? {
+          displayName: invitee.displayName,
+          avatarUrl: invitee.avatarUrl,
+          role: invitee.role ?? null,
+          isOnline: invitee.isOnline,
+          inCall: invitee.inCall,
+        }
+      : null;
   // v2.99.15 — a guest may only call an ONLINE user from a call link. A guest
   // has no persistent thread to leave a message on (unlike a signed-in caller's
   // post-dial voicemail card), so an offline callee — or a number that doesn't
@@ -155,46 +169,17 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
       <div className="login-card relative w-full max-w-[400px]">
         {showJoin ? (
           <>
-            {/* ── CALL-LINK JOIN ── */}
-            <div className="mb-6 text-center">
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-[color:var(--relay-online,#06d6a0)]/30 bg-[color:var(--relay-online,#06d6a0)]/10 px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[color:var(--relay-online,#06d6a0)]">
-                {isPartyLine ? <Users className="size-3.5" /> : <PhoneCall className="size-3.5" />}
-                {isPartyLine ? "Party line" : "Incoming call link"}
-              </span>
-            </div>
-
-            <div className="rounded-3xl border border-border/60 bg-card/60 p-6 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150">
-              {/* Callee card */}
-              <div className="mb-5 flex flex-col items-center text-center">
-                <div className="relative mb-3">
-                  <div className="grid size-16 place-items-center rounded-full bg-gradient-to-br from-[#3FE0C5] to-[#6EE7FF] text-2xl font-bold text-[#04201b]">
-                    {(inviteeName || "?").slice(0, 1).toUpperCase()}
-                  </div>
-                  {invitee?.isOnline && (
-                    <span className="absolute bottom-0.5 right-0.5 size-3.5 rounded-full border-2 border-[#0b0f14] bg-[color:var(--relay-online,#06d6a0)]" />
-                  )}
-                </div>
-                <div className="text-lg font-semibold leading-tight">
-                  {isPartyLine
-                    ? inviteeName || "Party line"
-                    : inviteeName
-                      ? `Call ${inviteeName}`
-                      : "Call this number"}
-                </div>
-                <div className="mt-1 font-mono text-sm text-muted-foreground">
-                  {fmtNumber(callTarget!)}
-                  {isPartyLine
-                    ? ` · ${invitee?.memberCount ?? 0} on the line`
-                    : invitee
-                      ? invitee.isOnline
-                        ? " · online now"
-                        : " · offline — you can't call them right now"
-                      : invite.isFetched
-                        ? " · number not found"
-                        : ""}
-                </div>
-              </div>
-
+            {/* ── CALL-LINK JOIN (#109) ──
+                The card itself is the SHARED `InviteCard`, so this screen and the
+                signed-in `/app/join` screen describe one line or one person in
+                exactly the same words. Only the action below it differs: here a
+                visitor with no identity needs a name first. */}
+            <InviteCard
+              number={callTarget!}
+              line={line}
+              person={invitePerson}
+              personResolved={inviteResolved}
+            >
               {/* One field: your name, then join. */}
               <form onSubmit={onGuestSubmit}>
                 <label
@@ -250,7 +235,7 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
               >
                 Have a RELAY account? Sign in first
               </button>
-            </div>
+            </InviteCard>
             <p className="mx-auto mt-4 max-w-[19rem] text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
               No account needed — your name is just for this call. Registering later
               keeps your number and history.

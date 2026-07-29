@@ -11278,6 +11278,107 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.105.25 — a shared link lands on a screen that says what you are joining (2026-07-29)
+
+**#109, the last tracker item.** A `/i/<pin>` invite dropped you on the DIAL PAD with six anonymous
+digits prefilled and nothing saying whose they were. It now lands on its own screen: what you are
+joining, its creator with their badge, who is already inside with their badge and how long they have
+been there, the live count, and the created date.
+
+**THE ONE DELIBERATE DEVIATION, stated up front rather than buried.** The ask was "clicking the link
+joins the call automatically instead of landing on the dial pad". The screen does replace the dial pad,
+but its Join button is still a real tap — because a link that dials on ARRIVAL is the **M48/M60
+hot-mic hole**: microphone permission is granted per ORIGIN and persists, so one click would hand a live
+microphone (plus the camera, with `?video=1`) to a number the LINK'S AUTHOR chose, with the attacker's
+side free to auto-answer. M60 found that hole still open through this exact `/i/<pin>` path, because the
+client-side redirect read as an in-app tap. One informed tap on a screen that has already told you what
+you are joining IS the consent. **The dial pad's own arrival branch is left byte-identical** as belt and
+braces for anybody pasting the long `?to=` form, and a test pins that this release did not widen it.
+
+**A PARTY LINE MAY LIST ITS OCCUPANTS AND A PRIVATE CALL MAY NOT, and the difference is why this needed
+a new reader rather than a relaxed one.** `liveRoomInfo` is gated on the requester having been in the
+room before — exactly right for a call, and impossible here, since a link-holder by construction never
+has. So the gate is replaced by a NARROWER TARGET instead of being loosened: `partyLineRosterOf` reads
+the ONE room id derived from the line's own number (`pl-<number>`) and can therefore never be pointed at
+a private call, whatever number it is handed. A mutation that makes it follow the pin's ACTUAL room —
+one identifier's difference — is the private-call leak, and it bites.
+
+**IT STILL RETURNS NO OCCUPANT'S NUMBER, and that is not symmetry for its own sake.** Numbers are
+enumerable, so this endpoint is effectively readable by anybody; a machine-readable list of the 6-digit
+numbers of everybody on a line is a harvesting endpoint, whereas joining to read the same digits off the
+call tiles (which have shown them since v2.105.24) is an ACT — the count moves and everybody already
+there sees you arrive. Visible harvesting is a real difference from silent harvesting. The LINE's own
+number is returned, because it is the link the caller is already holding. A test scoped to the EMITTED
+object forbids a `pin:` key while proving the identity lookup that legitimately READS `m.pin` is still
+there, so the assertion is not vacuous.
+
+**WHY THE DISCLOSURE IS DEFENSIBLE AT ALL:** a party line is dial-to-enter, its owner created it to hand
+round, and the moment anybody walks in they see the same roster from the inside. The only thing this adds
+is seeing it a second BEFORE joining instead of a second after.
+
+**"WHEN THEY JOINED" NEEDED A NEW FACT, and it goes at the one funnel.** `roomMeta.roster` is a
+pin→name map with no times, and it is deliberately ADD-ONLY (it is the conference-history record), so
+reusing it would print a join time for somebody who left an hour ago. New optional
+`RoomMeta.joinedAt`, written inside `joinRoomMember` — the single function every route into a room
+passes through, accept / admit-after-knock / rejoin / merge, so no path can forget it, exactly as
+`seedCohostOnJoin` is — and dropped by `leaveRoom` so the map only ever names CURRENT members.
+**MEMBERSHIP IS READ BEFORE THE ADD, and that ordering is the whole correctness**: membership is a Set,
+so after `room.add(pin)` the test is always false and every reconnect would restamp the time to "just
+now". Persisted as an optional `PersistedMember.joinedAt` so a leader change does not reset everybody's
+join time, validated on the way back in (hydration feeds the live registry, so a NaN would reach a
+formatter), and **a member with no stamp is reported as UNKNOWN rather than filled in from `startedAt`**
+— `ensureDialRoom` joins its creator before it sets the room's metadata, so a 1:1 room's creator
+legitimately has none, while a party line sets metadata first, which is why every member of the one room
+this is read for does have one.
+
+**ONE CARD, TWO SCREENS, and that is the point rather than tidiness.** A shared link is opened both by
+somebody with no identity (who lands on `OnboardingGate` and types a name) and by somebody already
+signed in (who lands on `/app/join`), and the owner asked for both to be redesigned. Two copies is how
+the two come to describe one call differently — and NOTHING FAILS when they do, which is why it is
+pinned. `InviteCard` owns every word about the call; each screen supplies only its own action area.
+
+**EVERY AVATAR ON IT IS AN INERT DISC, never `PeerAvatar`** — that opens a story or profile on tap,
+which needs `PeerOverlaysHost` (mounted inside `AppShell`, i.e. absent on the guest screen) and needs
+the person's number, which the server deliberately does not send. A control that looks live and does
+nothing is worse than one that is not there (the v2.103.3 rule).
+
+**AN UNKNOWN ROSTER IS NOT RENDERED AS AN EMPTY ONE.** Off the signaling node the reader returns null,
+so the card says "open the line to see who's on it" rather than "nobody on the line" — a false statement
+about somebody else's call. `rosterKnown` carries that distinction and a mutation collapsing the two
+bites.
+
+**THE LINE'S THUMBNAIL IS GENERATED, NOT UPLOADED.** The owner asked for "a logo/thumbnail for the call
+or party line"; a party line has no image column and no upload surface, so rather than ship an empty
+frame the thumbnail is a deterministic gradient derived from the line's own number — the same line looks
+the same on every device and for every visitor, with nothing to upload and nothing to moderate. An
+uploadable logo is a schema column plus an editor, worth doing on its own rather than as a side effect
+of this screen; said plainly rather than left to be discovered.
+
+**A JOIN TIME RENDERS NOTHING WHEN UNKNOWN, and a FUTURE time renders nothing either** — a clock skew
+must not produce "joined in 3 minutes". `server/inviteJoinScreen.test.ts` (41), the stamp, the roster
+reader and the persistence round-trip driven BEHAVIOURALLY against the real registry because a source
+pin cannot tell you whether a rejoin restamps somebody's join time; **all 26 tripwires verified by
+MUTATION** from byte-exact backups off a confirmed-GREEN baseline, with the mutator aborting unless its
+target occurs exactly once.
+
+**TWO DEFECTS IN MY OWN TEST, both found by running it and both reported rather than quietly patched.**
+The occupant-pin sweep forbade the identifier across the whole map body — which the projection
+legitimately READS to resolve the identity behind each number — so it failed on correct code; it is now
+scoped to the emitted object, with a companion assertion proving the read is still present. And the
+join-time case used `now = 1_000_000`, sixteen minutes past the epoch, so "3 hours ago" was a NEGATIVE
+timestamp that `formatElapsedSince` correctly refuses: the code was right and my clock was absurd.
+
+**TWO BAD ANCHORS AND ONE BAD MUTATION OF MINE, reported rather than counted.** Two mutations named
+strings that occur TWICE (the ghost filter, and the `directoryGate` + party-line-read pair that
+`directory.lookup` has verbatim) and the harness ABORTED rather than record a result about the wrong
+occurrence — re-run against unique anchors, both bit. The third added a dead exported stub in place of
+making the card fetch anything, so its survival said nothing; re-run as a real `useQuery`, it bit.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: no MySQL and no phone here, so nobody has opened a real
+invite link or watched a party-line roster fill up before joining it. What is proven is the stamping,
+the target narrowing, the no-pin guarantee and the persistence round-trip. No schema change, no new
+dependency, no new env var. 3913 tests.
+
 ## v2.105.24 — the outgoing dial screen shows who you are calling (2026-07-29)
 Owner, with a screenshot 17s into a ring: *"when I'm dialing out why there is no image of his profile it's showing, is the status, my last call when it was, add some information."*
 - **The photo was not broken — there was nowhere for it to go.** The card had no image element at all; the incoming ring card got one in v2.97.0 and this screen never did. The image is a SIBLING of the initials disc, because `showDialCard` re-runs mid-dial (the ringing ack carries the name) and writes `textContent`, which would destroy a child image inside the owner's own 17-second window.

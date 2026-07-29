@@ -243,6 +243,23 @@ export interface RoomMeta {
    * role. Nothing in this file imports the role writer.
    */
   groupAdminPins?: Set<string>;
+  /**
+   * #109 — when each CURRENT member joined (pin → unix ms), so the invite screen
+   * can say "joined 4m ago" beside a name.
+   *
+   * Scoped to current members: written by `joinRoomMember` only for a pin that
+   * was not already in the room, and dropped by `leaveRoom`. That is what makes
+   * the field mean one thing — `roster` is deliberately add-only (it is the
+   * conference-history record), so reusing it would report a join time for
+   * somebody who left an hour ago.
+   *
+   * OPTIONAL, and a missing entry is reported as NULL rather than filled in from
+   * `startedAt`: `ensureDialRoom` joins its creator BEFORE it sets the metadata,
+   * so a 1:1 room's creator legitimately has no stamp. A party line sets its
+   * metadata first, which is why every member of the one room this is read for
+   * does have one.
+   */
+  joinedAt?: Map<string, number>;
 }
 
 /**
@@ -429,6 +446,21 @@ function roomConnectedCount(reg: RelayRegistry, roomId: string): number {
 function joinRoomMember(reg: RelayRegistry, roomId: string, pin: string) {
   let room = reg.rooms.get(roomId);
   if (!room) { room = new Set(); reg.rooms.set(roomId, room); }
+  // #109 — stamp WHEN this pin joined, for the invite screen's "joined 4m ago".
+  // Read BEFORE the add, because membership is a Set and every rejoin, merge and
+  // reconnect comes back through here: without this test a member's join time
+  // would be rewritten on every one of them and always read "just now".
+  //
+  // Here rather than at the accept / admit / rejoin sites for the same reason
+  // seedCohostOnJoin is: this is the one funnel every route into a room passes
+  // through, so no path can forget it.
+  if (!room.has(pin)) {
+    const meta = reg.roomMeta.get(roomId);
+    if (meta) {
+      if (!meta.joinedAt) meta.joinedAt = new Map();
+      meta.joinedAt.set(pin, Date.now());
+    }
+  }
   room.add(pin);
   reg.pinRoom.set(pin, roomId);
   const t = reg.roomReapT.get(roomId);
@@ -1289,6 +1321,10 @@ export function leaveRoom(reg: RelayRegistry, pin: string) {
   const room = reg.rooms.get(roomId);
   if (room) {
     room.delete(pin);
+    // #109 — the join stamp describes CURRENT members, so it goes with them.
+    // Keeping it would leave the map naming people who left, and a later reader
+    // would print a join time for somebody who is not in the room.
+    reg.roomMeta.get(roomId)?.joinedAt?.delete(pin);
     room.forEach(p => {
       const o = reg.clients.get(p);
       if (o) safeSend(o.socket, { type: "peer-left", pin });
@@ -1326,6 +1362,9 @@ export function snapshotRoom(reg: RelayRegistry, roomId: string): PersistedRoom 
     // A member is HELD here when this room is their held one. `pinRoom` is the
     // active pointer; anything else that is still a member is parked.
     held: reg.heldRoom.get(pin) === roomId,
+    // #109 — omitted when unknown, so a member with no stamp serializes exactly
+    // as before and comes back with no stamp rather than a fabricated one.
+    ...(meta.joinedAt?.has(pin) ? { joinedAt: meta.joinedAt.get(pin) } : {}),
   }));
   return {
     roomId,
@@ -1365,8 +1404,10 @@ export function applyHydratedRooms(reg: RelayRegistry, rooms: readonly Persisted
   for (const rec of rooms) {
     if (reg.rooms.has(rec.roomId)) continue;
     const set = new Set<string>();
+    const joined = new Map<string, number>();
     for (const m of rec.members) {
       set.add(m.pin);
+      if (typeof m.joinedAt === "number") joined.set(m.pin, m.joinedAt);
       // Only ONE room may be a pin's active room and only one its held room. A
       // record that disagrees with one already applied loses rather than
       // clobbering it — the invariant matters more than any single record.
@@ -1388,6 +1429,9 @@ export function applyHydratedRooms(reg: RelayRegistry, rooms: readonly Persisted
       hostPin: rec.hostPin,
       cohosts: new Set(rec.cohosts),
       ...(rec.groupAdminPins?.length ? { groupAdminPins: new Set(rec.groupAdminPins) } : {}),
+      // #109 — omitted when the record carried no stamps at all, so a pre-feature
+      // record hydrates byte-identically to before.
+      ...(joined.size ? { joinedAt: joined } : {}),
       hydratedAt: Date.now(),
     });
     // Every hydrated room starts with zero connected members, so arm the
@@ -3334,6 +3378,58 @@ export function liveRoomFor(number: string, requester: string): LiveRoomInfo | n
   const reg = activeRegistry;
   if (!reg) return null;
   return liveRoomInfo(reg, number, requester);
+}
+
+/**
+ * #109 — who is on a PARTY LINE right now, for the invite screen somebody sees
+ * before they join.
+ *
+ * DELIBERATELY NOT `liveRoomInfo`, and the difference is the whole reason this
+ * exists as its own function. That one is gated on the requester having been in
+ * the room before, which is exactly right for a private call and impossible here:
+ * a link-holder has by construction never been on the line. So the gate is
+ * replaced by a NARROWER TARGET instead of being relaxed — this reads the ONE
+ * room id derived from the line's own number (`pl-<number>`) and can therefore
+ * never be pointed at a private call, whatever number it is handed. A person's
+ * number resolves to no `pl-` room, so passing one returns an empty roster.
+ *
+ * PINS ARE RETURNED HERE and dropped by the caller. Keeping the registry reader
+ * honest about what it read means the trimming decision lives at the API
+ * boundary, where the audience is known, rather than being buried in here.
+ */
+export type PartyLineRoster = {
+  roomId: string;
+  startedAt: number | null;
+  members: Array<{ pin: string; name: string; role: string; joinedAt: number | null }>;
+};
+
+export function partyLineRosterOf(reg: RelayRegistry, number: string): PartyLineRoster | null {
+  if (!reg || !/^\d{6}$/.test(number)) return null;
+  const rid = partyLineRoomId(number);
+  const room = reg.rooms.get(rid);
+  const meta = reg.roomMeta.get(rid);
+  if (!room) return { roomId: rid, startedAt: meta?.startedAt ?? null, members: [] };
+  const members = Array.from(room)
+    // CONNECTED members only. A party-line room retains a ghost through
+    // disconnect-grace so they can auto-rejoin, and listing one would tell a
+    // joiner somebody is on the line who is not.
+    .filter(p => reg.clients.has(p))
+    .map(p => ({
+      pin: p,
+      name: reg.clients.get(p)?.name || meta?.roster.get(p) || "Guest",
+      role: roleOf(meta, p) ?? "",
+      joinedAt: meta?.joinedAt?.get(p) ?? null,
+    }));
+  return { roomId: rid, startedAt: meta?.startedAt ?? null, members };
+}
+
+/** The API-tier entry: reads the `activeRegistry` the signaling node set, so it
+ *  returns null off that node — the invite screen then shows the line with no
+ *  roster rather than claiming it is empty. */
+export function partyLineRosterFor(number: string): PartyLineRoster | null {
+  const reg = activeRegistry;
+  if (!reg) return null;
+  return partyLineRosterOf(reg, number);
 }
 
 /* ── Tiered busy-state (v2.91, Redis bus) ────────────────────────

@@ -32,6 +32,7 @@ const Messages = lazy(() => import("./pages/app/Messages"));
 const Contacts = lazy(() => import("./pages/app/Contacts"));
 const Profile = lazy(() => import("./pages/app/Profile"));
 const Admin = lazy(() => import("./pages/app/Admin"));
+const Join = lazy(() => import("./pages/app/Join"));
 const GroupInvite = lazy(() => import("./pages/GroupInvite"));
 
 /** Minimal route-loading fallback — theme-aware, no layout shift drama. */
@@ -43,13 +44,14 @@ function RouteSpinner() {
   );
 }
 
-function ShellRoute({ tab }: { tab: "dialer" | "history" | "messages" | "contacts" | "profile" | "admin" }) {
+function ShellRoute({ tab }: { tab: "dialer" | "history" | "messages" | "contacts" | "profile" | "admin" | "join" }) {
   const View =
     tab === "dialer" ? Dialer :
     tab === "history" ? History :
     tab === "messages" ? Messages :
     tab === "contacts" ? Contacts :
     tab === "admin" ? Admin :
+    tab === "join" ? Join :
     Profile;
   return (
     <AppShell>
@@ -86,12 +88,19 @@ function Router() {
             />
           )}
         </Route>
-        {/* Short, clean invite link: /i/<pin> → auto-dials that number. Keeps the
-            shareable URL terse and lands users straight in the dialer. */}
+        {/* #109 — the invite/party-line JOIN screen. A shared link now lands on a
+            screen that names what you're joining and who is already inside, rather
+            than on the keypad with six anonymous digits prefilled (owner: "clicking
+            the link joins the call automatically instead of landing on the dial
+            pad"). The Join button is still a real tap — see Join.tsx for why a
+            zero-gesture dial is the M48/M60 hot-mic hole. */}
+        <Route path={"/app/join"}>{() => <ShellRoute tab="join" />}</Route>
+        {/* Short, clean invite link: /i/<pin> → the join screen for that number.
+            Keeps the shareable URL terse. */}
         <Route path={"/i/:pin"}>
           {(params) => {
             const pin = (params.pin ?? "").replace(/\D/g, "").slice(0, 6);
-            return <Redirect to={pin ? `/app/dialer?to=${pin}` : "/app/dialer"} replace />;
+            return <Redirect to={pin ? `/app/join?to=${pin}` : "/app/dialer"} replace />;
           }}
         </Route>
         {/* A group INVITE LINK. Deliberately its own route rather than a second meaning
