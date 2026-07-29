@@ -121,12 +121,36 @@ export const RELAY_MARKUP = `
       <span class="oh-meta"><b><span id="onHoldName">They</span> put you on hold</b><span class="oh-sub">Hang tight &mdash; you&rsquo;ll hear them the moment they&rsquo;re back</span></span>
     </div>
     <div class="call-main">
+      <!-- OUTGOING dial card. v2.105.24 added the photo, the presence/status line and the
+           last-call line (owner: "when I'm dialing out why there is no image of his
+           profile ... is the status, my last call when it was"). Until then this card had
+           NO image element at all, which is why it could only ever show initials. -->
       <div id="dialCard" class="dial-card">
-        <div class="dc-av" id="dcAv">#</div>
-        <div class="dc-num" id="dcNum">&mdash;</div>
-        <div class="dc-name" id="dcName"></div>
-        <div class="dc-mode" id="dcMode">Voice call</div>
-        <div class="dc-status"><span class="dc-dot"></span><span id="dcStatusTxt">Calling&hellip;</span></div>
+        <!-- One inner body so the card can SCROLL when it has to. .dial-card centres its
+             content, and a centred flex column that overflows puts the TOP out of reach —
+             so the scroll lives here and auto margins centre it while it fits. -->
+        <div class="dc-body" id="dcBody">
+          <!-- POSITIONED wrapper: neither .dial-card nor .dc-av sets a position, so an
+               absolutely-positioned image would escape to the app root. Mirrors
+               .ring-av-wrap on the incoming card. -->
+          <div class="dc-av-wrap">
+            <div class="dc-av" id="dcAv">#</div>
+            <!-- A SIBLING of #dcAv, never a child and never a background-image on it:
+                 showDialCard() re-runs during a single dial (the ringing ack carries the
+                 callee's real name) and writes dcAv.textContent unconditionally, which
+                 would delete a child image or print "HA" on top of a background photo. -->
+            <img class="dc-av-img" id="dcAvImg" alt="" style="display:none">
+          </div>
+          <div class="dc-num" id="dcNum">&mdash;</div>
+          <div class="dc-who"><span class="dc-name" id="dcName"></span><span class="dc-role" id="dcRole"></span></div>
+          <div class="dc-presence" id="dcPresence"></div>
+          <div class="dc-last" id="dcLast"></div>
+          <div class="dc-mode" id="dcMode">Voice call</div>
+          <!-- STAYS LAST. The v2.98.3 clearance under the hang-up button is measured from
+               the bottom-most row, so the two new rows go ABOVE the mode chip rather than
+               being appended after the status. -->
+          <div class="dc-status"><span class="dc-dot"></span><span id="dcStatusTxt">Calling&hellip;</span></div>
+        </div>
       </div>
       <div class="grid" id="videoGrid"></div>
       <div class="chat" id="chatPanel">
@@ -566,9 +590,38 @@ export const RELAY_CSS = `
    no justify-items — the handset fell back to flex-start and sat pinned to
    the LEFT edge of the big red circle (owner screenshot). */
 .relay-root #call.pre-connect .ctrl-bar .ctrl.hangup{display:grid}
-.relay-root .dial-card .dc-av{width:96px;height:96px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:700;color:var(--text);background:linear-gradient(160deg,#262b36,#14171d);border:1px solid var(--border);box-shadow:0 18px 50px rgba(0,0,0,.45);margin-bottom:8px}
-.relay-root .dial-card .dc-num{font-family:"JetBrains Mono",monospace;font-size:34px;font-weight:700;letter-spacing:.08em;color:var(--text)}
-.relay-root .dial-card .dc-name{font-size:17px;color:var(--muted)}
+/* The scrollable body (v2.105.24). Auto margins centre it while it fits and let it
+   scroll from the TOP when it does not — a plain centred flex column that overflows puts
+   its first rows out of reach, and this card can now carry two more lines plus a photo.
+   The card itself is flex:1 with no overflow, so without this the extra rows would spill
+   over the control bar (the class of clipping v2.98.3 fixed on this very screen). */
+.relay-root .dial-card .dc-body{display:flex;flex-direction:column;align-items:center;gap:10px;width:100%;max-width:340px;margin:auto;overflow-y:auto;overscroll-behavior:contain}
+.relay-root .dial-card .dc-av-wrap{position:relative;width:96px;height:96px;margin-bottom:8px;flex:0 0 auto}
+.relay-root .dial-card .dc-av{width:100%;height:100%;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:700;color:var(--text);background:linear-gradient(160deg,#262b36,#14171d);border:1px solid var(--border);box-shadow:0 18px 50px rgba(0,0,0,.45)}
+/* Fills the wrapper exactly, so swapping the photo in for the initials changes NO
+   geometry — nothing below it moves when the lookup resolves. */
+.relay-root .dial-card .dc-av-img{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;object-fit:cover;border:1px solid var(--border);box-shadow:0 18px 50px rgba(0,0,0,.45)}
+/* clamp, so a 34px number cannot force a horizontal overflow at 320px */
+.relay-root .dial-card .dc-num{font-family:"JetBrains Mono",monospace;font-size:clamp(26px,8.5vw,34px);font-weight:700;letter-spacing:.08em;color:var(--text)}
+.relay-root .dial-card .dc-who{display:flex;align-items:center;justify-content:center;gap:6px;max-width:100%;min-width:0}
+/* The name may shrink and truncate; the badge beside it may not (v2.103.3's gutter rule:
+   the thing that must stay legible is the one that does not shrink). */
+.relay-root .dial-card .dc-name{font-size:17px;color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.relay-root .dial-card .dc-role{flex:0 0 auto;display:none;font-size:11px;font-weight:700;letter-spacing:.03em}
+/* Both new rows RESERVE their height even while empty, so the card does not jump when the
+   async lookup lands a beat after the dial starts. Two lines of status note are allowed
+   and the rest is clipped — a long note must never push the hang-up button. */
+.relay-root .dial-card .dc-presence{min-height:18px;font-size:13px;color:var(--muted);max-width:100%;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.relay-root .dial-card .dc-last{min-height:16px;font-size:12px;color:var(--muted);opacity:.75;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* MEASURED, not guessed: with a photo, a two-line status note and a last-call line the
+   body needs 327px, and at 320px the card gives it 318 — 9px over, so it scrolled. A
+   smaller disc and a tighter gap recover 20px and it fits without a scrollbar. Only the
+   narrowest phones are touched; 360px and up were already comfortable. */
+@media (max-width:340px){
+  .relay-root .dial-card .dc-body{gap:8px}
+  .relay-root .dial-card .dc-av-wrap{width:84px;height:84px;margin-bottom:6px}
+  .relay-root .dial-card .dc-av{font-size:30px}
+}
 .relay-root .dial-card .dc-mode{font-size:12px;font-weight:700;letter-spacing:.04em;padding:5px 14px;border-radius:999px;background:rgba(255,255,255,.07);border:1px solid var(--border);color:var(--muted)}
 .relay-root .dial-card .dc-mode.video{background:rgba(124,92,255,.16);border-color:rgba(124,92,255,.45);color:#c4b5ff}
 .relay-root .dial-card .dc-status{display:flex;align-items:center;gap:9px;margin-top:10px;font-size:15px;font-weight:600;color:var(--muted)}

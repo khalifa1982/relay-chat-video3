@@ -236,3 +236,51 @@ function formatClock(d: Date): string {
   if (h === 0) h = 12;
   return `${h}:${String(m).padStart(2, "0")} ${ampm}`;
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * "Is this person here right now?", in WORDS — ONE reader (v2.105.24).
+ *
+ * This is `presenceDot.ts`'s discipline applied to text. Three surfaces need the answer:
+ * the profile popup (where this rule was born), the incoming ring card, and now the
+ * OUTGOING dial card. Three copies is how two screens come to disagree about one person —
+ * v2.99.77 was exactly that defect, one rule with four call sites and a fifth that forgot
+ * it, and the fix was a shared reader.
+ *
+ * THE RING CARD'S OWN VERSION IS THE CAUTIONARY TALE, and is why the dial card must NOT
+ * be built by copying it: `presentRingProfile` branches on the legacy `statusOverride`
+ * alone. It predates the v2.101.1 profile-status vocabulary, so it knows nothing about
+ * `profileStatus`, `statusNote`, `idle`, `inCall`, `presenceHidden` or party lines — it
+ * would cheerfully print "Online now" about a phone line, and it spells travelling
+ * "Traveling" where `describeProfileStatus` spells it "Travelling", which would have been
+ * a THIRD spelling of one word on one screen.
+ *
+ * ORDER IS THE RULE, not a formatting preference:
+ *   - a PARTY LINE is not a person, so it never reports presence;
+ *   - SUPPRESSION outranks everything (a guest inactive over a day has presence hidden for
+ *     privacy, v2.95) — and it must return "" rather than "Offline", because saying
+ *     "Offline" is still a claim about somebody the server declined to describe;
+ *   - ON A CALL outranks plain online, since it is the more useful fact when deciding
+ *     whether to dial;
+ *   - BACKGROUNDED reads as away rather than as "Online now" or as a last-seen a few
+ *     seconds ago, which is what minimising used to produce (v2.99.92).
+ * ────────────────────────────────────────────────────────────────────────── */
+export interface PeerPresenceInput {
+  isOnline: boolean;
+  /** Signed in but backgrounded (v2.99.92). */
+  idle?: boolean;
+  inCall: boolean;
+  lastSeenAt: string | Date | null;
+  presenceHidden: boolean;
+  partyLine: boolean;
+  memberCount: number;
+}
+
+export function describePeerPresence(d: PeerPresenceInput): string {
+  if (d.partyLine) return `Party line · ${d.memberCount} on the line`;
+  if (d.presenceHidden) return "";
+  if (d.inCall) return "On a call right now";
+  if (d.isOnline && d.idle) return "Away — app is in the background";
+  if (d.isOnline) return "Online now";
+  if (d.lastSeenAt) return `Last seen ${new Date(d.lastSeenAt).toLocaleString()}`;
+  return "Offline";
+}

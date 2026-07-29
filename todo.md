@@ -11278,6 +11278,15 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.105.24 — the outgoing dial screen shows who you are calling (2026-07-29)
+Owner, with a screenshot 17s into a ring: *"when I'm dialing out why there is no image of his profile it's showing, is the status, my last call when it was, add some information."*
+- **The photo was not broken — there was nowhere for it to go.** The card had no image element at all; the incoming ring card got one in v2.97.0 and this screen never did. The image is a SIBLING of the initials disc, because `showDialCard` re-runs mid-dial (the ringing ack carries the name) and writes `textContent`, which would destroy a child image inside the owner's own 17-second window.
+- **The chosen status outranks presence**, and both come from SHARED formatters. `presenceLine` moved from `PeerOverlays` into `shared/profileFields.ts` as `describePeerPresence` — the ring card's inline version predates v2.101.1, would print "Online now" about a party line, and spells travelling differently.
+- **Ask 3 needed `calls.lastWith`** because `call_history` is a missed/declined log in production (nothing calls `logStart`, nothing writes "answered"). It unions both tables, reports whether you actually spoke, renders NOTHING when there is no row, and cannot be aimed at anyone else's history.
+- **Staleness on the pin as a VALUE** at three points including the photo's decode; the engine authenticates its own fetch (the device-id header was already imported), which removed the host hook the review assumed was needed.
+- **Measured, and it changed the CSS**: 5/5 widths clean, 320px needed a 20px tightening. **A correction: my earlier "196px pre-existing overflow" was a harness artifact** (three of them — double-nested `.relay-app`, the boot overlay left up, and `#register` still `.active`); the baseline fits at every width.
+- 45 new tests, all 24 tripwires mutation-verified. Two survivors were real gaps in my own tests. **3872 tests.**
+
 ## v2.105.23 — an invite link knows who it is for; #108 closes (2026-07-29)
 Owner's group batch, verbatim: *"invitation URL that joins the group directly (guest enters a name, registered logs in) with an admin-chosen audience of guests-only / registered-only / all"*. v2.105.9 shipped the link, the epoch, the revoke and the join watermark; **the audience clause in the same sentence was never built, and I had counted the item as done** — found by re-reading the task text against the token rather than against my own notes.
 - **The audience travels INSIDE the signed token; the epoch stays in a column.** The epoch is a property of the group ("every link is dead now") so it must sit where a signature cannot reach. The audience is a property of *this link*: an admin can have a registered-only link in one place and an open one in another, both live at once. A column would collapse them into one setting and would rewrite a link already handed out.

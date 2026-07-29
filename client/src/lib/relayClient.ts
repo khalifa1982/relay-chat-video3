@@ -24,6 +24,8 @@ import { notify } from "@/app/notifications";
 import { RINGTONE_NOTES, RINGTONE_LOOP_MS, RINGTONE_PEAK_GAIN, RINGTONE_WAVE } from "@shared/ringtone";
 import { isNativeAndroid, nativeSetSpeaker, nativeSetInCall } from "./nativeBridge";
 import { DEVICE_ID_HEADER, getDeviceId } from "./deviceId";
+import { describePeerPresence, formatElapsedSince } from "@shared/profileFields";
+import { describeProfileStatus } from "@shared/profileStatus";
 
 interface IceConfig {
   iceServers: Array<{ urls: string; username?: string; credential?: string }>;
@@ -628,9 +630,152 @@ export function startRelay(root: HTMLElement): RelayHandle {
       failDial("No answer — they'll see your missed call.", "no-answer");
     }, 65_000);
   }
+  /* ── who you are dialling (v2.105.24) ──────────────────────────────────────
+   * Owner, from a screenshot of this screen mid-ring: *"when I'm dialing out why there is
+   * no image of his profile it's showing, is the status, my last call when it was, add
+   * some information."*
+   *
+   * Until now this card could not show a photo AT ALL — its markup had no image element,
+   * only a text disc — so the grey initials were the only thing it could ever display.
+   * The incoming ring card gained a real photo in v2.97.0; this one never did.
+   *
+   * ONE FETCH PER DIAL, FROM ONE FUNNEL. `showDialCard` is the single place all three dial
+   * paths converge (ordinary dial, group dial, in-call add-person), and it also re-runs
+   * mid-dial when the `ringing` ack brings the callee's real name — so the work is keyed
+   * on the pin CHANGING rather than on the function being called, which is what stops a
+   * second fetch and a visible flicker when the name lands.
+   * ────────────────────────────────────────────────────────────────────────── */
+  /** The pin the card is currently painted for, so a re-paint is distinguishable from a
+   *  NEW dial. Cleared in `exitPreConnect`, so re-dialling the same person re-fetches. */
+  let dcPin: string | null = null;
+
+  /** A tRPC GET with this browser's device id attached. The engine's other fetches omit
+   *  it, which is survivable for the PUBLIC directory lookup but would make an
+   *  identity-gated call (the last-call figure) a permanent silent no-op for exactly the
+   *  Safari/ITP guests whose guest cookie was dropped — the case that header exists for. */
+  function trpcGet(procedure: string, input: unknown): Promise<unknown> {
+    const qs = encodeURIComponent(JSON.stringify({ json: input }));
+    const headers: Record<string, string> = {};
+    const did = getDeviceId();
+    if (did) headers[DEVICE_ID_HEADER] = did;
+    return fetch(`/api/trpc/${procedure}?input=${qs}`, { credentials: "include", headers })
+      .then((r) => (r.ok ? r.json() : null));
+  }
+
+  /** superjson wraps a null result as `{json: null}`, so the payload must be unwrapped
+   *  `.result.data.json` FIRST. Reading the wrapper on a null (`data?.json ?? data`) yields
+   *  a truthy object and reports an unknown number as a resolved user — the exact defect
+   *  v2.105.2 shipped and had to correct. */
+  function trpcJson<T>(j: unknown): T | null {
+    const d = (j as { result?: { data?: { json?: T | null } } } | null)?.result?.data?.json;
+    return d ?? null;
+  }
+
+  /** Blank every enriched row. Runs when the card starts painting a DIFFERENT pin, so a
+   *  photo, status or last-call line can never survive from the person dialled before —
+   *  including across a failed dial, whose card stays up for a beat before teardown. */
+  function resetDialIdentity() {
+    const img = $("dcAvImg") as HTMLImageElement | null;
+    if (img) { img.style.display = "none"; img.removeAttribute("src"); img.onload = null; img.onerror = null; }
+    const role = $("dcRole"); if (role) { role.style.display = "none"; role.textContent = ""; }
+    const pres = $("dcPresence"); if (pres) pres.textContent = "";
+    const last = $("dcLast"); if (last) last.textContent = "";
+  }
+
+  function enrichDialCard(pin: string) {
+    // A group dial's "pin" is a head count, and a 6-digit shape is the only thing the
+    // directory can resolve.
+    if (!/^\d{6}$/.test(pin)) return;
+
+    trpcGet("directory.lookup", { number: pin })
+      .then((j) => {
+        // STALENESS, ON THE PIN AS A VALUE. `outgoingDial` is MUTATED in place (the ringing
+        // ack writes `.name` onto it), so identity comparison would be wrong in one
+        // direction and needlessly strict in the other: re-dialling the same person makes
+        // a NEW object for whom this answer is still perfectly correct. Comparing the pin
+        // applies the answer exactly when it is about the person on screen.
+        if (!outgoingDial || outgoingDial.pin !== pin) return;
+        const d = trpcJson<{
+          avatarUrl?: string | null; verified?: boolean; role?: string | null;
+          isOnline?: boolean; idle?: boolean; inCall?: boolean;
+          lastSeenAt?: string | null; presenceHidden?: boolean;
+          partyLine?: boolean; memberCount?: number;
+          profileStatus?: string | null; statusNote?: string | null;
+        }>(j);
+        if (!d) return;
+
+        const img = $("dcAvImg") as HTMLImageElement | null;
+        const initialsEl = $("dcAv");
+        if (d.avatarUrl && img && initialsEl) {
+          // Swapped in only once it has DECODED, and re-checked then: a slow photo must
+          // never appear over the next person's card. A broken one falls back to the
+          // initials rather than the browser's broken-image glyph (the PeerAvatar rule).
+          img.onload = () => {
+            if (outgoingDial && outgoingDial.pin === pin) img.style.display = "";
+          };
+          img.onerror = () => { img.style.display = "none"; };
+          img.src = d.avatarUrl;
+        }
+
+        const role = $("dcRole");
+        const tier = d.role === "guest" || d.role === "registered" || d.role === "admin"
+          ? d.role
+          : d.verified ? "registered" : d.role === null ? null : "guest";
+        if (role && tier) {
+          const meta = { guest: ["#4c9bff", "Guest"], registered: ["#22c55e", "Registered"], admin: ["#eab308", "Admin"] }[tier];
+          role.style.display = "";
+          (role as HTMLElement).style.color = meta[0];
+          role.textContent = meta[1];
+        }
+
+        // THE STATUS THEY CHOSE outranks presence, because it is a statement they made on
+        // purpose; presence is the fallback when they have said nothing. Both come from
+        // the SHARED formatters, never a local copy — the incoming ring card's inline
+        // version predates the v2.101.1 status vocabulary and spells travelling
+        // differently, so copying it would have put two spellings in one app.
+        const pres = $("dcPresence");
+        if (pres) {
+          const chosen = describeProfileStatus(d.profileStatus ?? null, d.statusNote ?? null);
+          pres.textContent = chosen ?? describePeerPresence({
+            isOnline: !!d.isOnline,
+            idle: !!d.idle,
+            inCall: !!d.inCall,
+            lastSeenAt: d.lastSeenAt ?? null,
+            presenceHidden: !!d.presenceHidden,
+            partyLine: !!d.partyLine,
+            memberCount: d.memberCount ?? 0,
+          });
+        }
+      })
+      .catch(() => { /* one decorative row — it must never cost anybody a call */ });
+
+    trpcGet("calls.lastWith", { number: pin })
+      .then((j) => {
+        if (!outgoingDial || outgoingDial.pin !== pin) return;
+        const d = trpcJson<{ at?: string | null; answered?: boolean }>(j);
+        const at = d?.at ? new Date(d.at) : null;
+        const el = $("dcLast");
+        // NOTHING, never "first call". A cleared history and the 100-row caps make "no
+        // row" a frequent legitimate state, so claiming "never" would be a false
+        // statement about the caller's own data.
+        if (!el || !at || Number.isNaN(at.getTime())) return;
+        const ago = formatElapsedSince(at.getTime(), Date.now());
+        // The OUTCOME travels with the time: "2h ago" reads identically about a call they
+        // declined and a conversation, and those mean opposite things when you are
+        // deciding whether to dial again.
+        el.textContent = d?.answered ? `Last spoke ${ago} ago` : `Last tried ${ago} ago · no answer`;
+      })
+      .catch(() => { /* same — decoration only */ });
+  }
+
   function showDialCard() {
     $("call")?.classList.add("pre-connect");
     const d = outgoingDial; if (!d) return;
+    // A DIFFERENT person than the card currently shows ⇒ blank the enriched rows and go
+    // and fetch. The same person ⇒ this is the mid-dial re-paint carrying their real name,
+    // so leave the photo alone (re-fetching would flicker it).
+    const fresh = dcPin !== d.pin;
+    if (fresh) { dcPin = d.pin; resetDialIdentity(); }
     const av = $("dcAv"); if (av) av.textContent = d.group ? "👥" : (d.name ? initials(d.name) : "#");
     const num = $("dcNum"); if (num) num.textContent = d.group || d.pin.length !== 6 ? d.pin : d.pin.slice(0, 3) + "-" + d.pin.slice(3);
     const nm = $("dcName"); if (nm) { nm.textContent = d.name || ""; nm.style.display = d.name ? "" : "none"; }
@@ -642,9 +787,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
       md.textContent = d.video ? "Video call" : "Voice call";
       md.classList.toggle("video", d.video);
     }
+    // LAST, so the fetch is fired only after the card is fully painted for this pin — and
+    // only for a genuinely new one. A group dial has no single person to look up.
+    if (fresh && !d.group) enrichDialCard(d.pin);
   }
   function exitPreConnect() {
     outgoingDial = null;
+    // Forget which pin the card showed, so dialling the same person again re-fetches
+    // rather than trusting rows painted before this call happened — their status and the
+    // last-call figure are both stale by definition once a call has ended.
+    dcPin = null;
+    resetDialIdentity();
     $("call")?.classList.remove("pre-connect");
   }
   // The callee ANSWERED our outgoing dial (first remote party appeared):

@@ -31,6 +31,9 @@ import {
   sql,
   asc,
 } from "drizzle-orm";
+// Needed to join one table to itself: "a conference BOTH of us were in" is two rows of
+// conference_participants for the same conferenceId, so each needs its own alias.
+import { alias } from "drizzle-orm/mysql-core";
 import {
   attachments,
   callHistory,
@@ -6577,6 +6580,111 @@ export async function listConferenceHistory(identityId: number, limit = 100, sin
     )
     .orderBy(desc(conferenceHistory.id));
   return confs;
+}
+
+/**
+ * When did I last call this person, or they me? (v2.105.24)
+ *
+ * ── WHY THIS READS TWO TABLES, AND WHY THAT IS NOT OPTIONAL ────────────────
+ * `call_history.status` is NEVER written as "answered", and nothing ever UPDATEs a row.
+ * Its two writers are `recordMissedCall` ("missed"/"declined") and `recordCallStart`
+ * ("initiated") — and the latter is reachable only from `calls.logStart`, which NO client
+ * calls, so in production this table is a MISSED/DECLINED LOG and nothing else. Every call
+ * that actually connected exists solely as a `conference_history` row, 1:1 included
+ * (established in v2.99.95 / v2.99.98).
+ *
+ * So the obvious one-table implementation is not merely incomplete, it is wrong in the
+ * worst direction: for somebody you speak to daily it would report the last time you
+ * FAILED to reach them and say nothing about any real conversation. On a screen whose job
+ * is helping you decide whether to dial again, a confidently wrong figure is worse than
+ * no figure at all.
+ *
+ * ── EXACT, NOT SAMPLED ─────────────────────────────────────────────────────
+ * The alternative was filtering the existing `calls.history` / `calls.conferenceHistory`
+ * payloads on the client. Both are capped at 100 rows, so a heavy caller's last call with
+ * one person falls off the end and reads as "never" — and `conferenceHistory` additionally
+ * batch-resolves party-line titles, roster identities, guest avatars and roles for every
+ * row, which is a lot of work to make a dial screen wait on. Two indexed lookups instead:
+ * `call_history` is keyed on the pair, and `conference_participants` carries
+ * `conf_part_identity_idx` / `conf_part_conf_idx`.
+ *
+ * Honours the CALLER's own "Clear history" watermark, so a call they cleared does not
+ * reappear here — the rule `listCallHistory` and `listConferenceHistory` already apply.
+ * Nothing here reads the peer's watermark; it is not the caller's to see.
+ *
+ * Returns null when there is no such call, and FAILS to null on any DB trouble: this backs
+ * one decorative line, so a hiccup must cost the line and never the dial.
+ */
+export async function getLastCallWith(
+  meIdentityId: number,
+  peerIdentityId: number,
+  clearedAt?: Date | null,
+): Promise<{ at: Date; answered: boolean } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  if (!Number.isInteger(meIdentityId) || !Number.isInteger(peerIdentityId)) return null;
+  // Calling yourself is a supported self-thread, but not a "last call with" question.
+  if (meIdentityId === peerIdentityId) return null;
+  try {
+    // (1) ATTEMPTS — either direction, because "my last call with them" is not a question
+    // about who dialled.
+    const attemptRows = await db
+      .select({ startedAt: callHistory.startedAt })
+      .from(callHistory)
+      .where(
+        and(
+          or(
+            and(
+              eq(callHistory.callerIdentityId, meIdentityId),
+              eq(callHistory.calleeIdentityId, peerIdentityId),
+            ),
+            and(
+              eq(callHistory.callerIdentityId, peerIdentityId),
+              eq(callHistory.calleeIdentityId, meIdentityId),
+            ),
+          ),
+          clearedAt ? gt(callHistory.startedAt, clearedAt) : undefined,
+        ),
+      )
+      // By id, not startedAt: the timestamp has 1-second granularity and ties unstably —
+      // the same reason listConferenceHistory orders by id.
+      .orderBy(desc(callHistory.id))
+      .limit(1);
+
+    // (2) CONNECTED CALLS — a conference we were BOTH in, i.e. two participant rows for one
+    // conference, which needs the table joined to itself under two aliases.
+    const mine = alias(conferenceParticipants, "cp_me");
+    const theirs = alias(conferenceParticipants, "cp_peer");
+    const answeredRows = await db
+      .select({ startedAt: conferenceHistory.startedAt })
+      .from(conferenceHistory)
+      .innerJoin(mine, eq(mine.conferenceId, conferenceHistory.id))
+      .innerJoin(theirs, eq(theirs.conferenceId, conferenceHistory.id))
+      .where(
+        and(
+          eq(mine.identityId, meIdentityId),
+          eq(theirs.identityId, peerIdentityId),
+          clearedAt ? gt(conferenceHistory.startedAt, clearedAt) : undefined,
+        ),
+      )
+      .orderBy(desc(conferenceHistory.id))
+      .limit(1);
+
+    const attempt = attemptRows[0]?.startedAt ?? null;
+    const spoke = answeredRows[0]?.startedAt ?? null;
+    if (!attempt && !spoke) return null;
+    // The NEWER of the two wins and its own kind is reported, so "we spoke" and "I tried
+    // and missed them" stay distinguishable instead of flattening into a bare timestamp.
+    if (attempt && spoke) {
+      return spoke.getTime() >= attempt.getTime()
+        ? { at: spoke, answered: true }
+        : { at: attempt, answered: false };
+    }
+    return spoke ? { at: spoke, answered: true } : { at: attempt as Date, answered: false };
+  } catch (e) {
+    console.warn("[calls] getLastCallWith failed:", (e as Error)?.message || "");
+    return null;
+  }
 }
 
 

@@ -90,6 +90,7 @@ import {
   listCallHistory,
   listConferenceHistory,
   getHistoryClearedAt,
+  getLastCallWith,
   clearCallHistory,
   isNumberBlockedBy,
   listContacts,
@@ -3183,6 +3184,42 @@ export const v2AttachmentsRouter = router({
 /* ── calls router (history + start log) ───────────────────────── */
 
 export const v2CallsRouter = router({
+  /**
+   * When did I last call this person, or they me? (v2.105.24)
+   *
+   * Backs one line on the OUTGOING dial card — the owner asked for "my last call when it
+   * was" on the screen where you are deciding whether to dial again.
+   *
+   * WHY THIS EXISTS RATHER THAN FILTERING `calls.history` ON THE CLIENT, which is already
+   * cached in the Dialer and would have been free: `call_history` is a MISSED/DECLINED log
+   * in production (nothing calls `logStart`, so no "initiated" row is ever written and
+   * nothing writes "answered" at all), so filtering it would report the last time you
+   * FAILED to reach somebody and stay silent about every real conversation — a confidently
+   * wrong statement about the caller's own history. `getLastCallWith` unions both tables.
+   * The 100-row caps on both existing payloads are the second reason: a heavy caller's last
+   * call with one person falls off the end and reads as "never".
+   *
+   * SCOPED TO THE CALLER BY CONSTRUCTION: the identity is taken from the context, never
+   * from input, so this can only ever answer about a call the caller was party to. The
+   * peer is named by NUMBER and resolved server-side; an unknown number and a peer with no
+   * shared call answer IDENTICALLY (`{ at: null }`), so this is no existence oracle over
+   * the number space — and it is `directoryGate`-limited before any DB work for the same
+   * reason every other number-taking resolver is (F5).
+   */
+  lastWith: publicProcedure
+    .input(z.object({ number: NumberSchema }))
+    .query(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      await directoryGate(ctx);
+      const peer = await getIdentityByNumber(input.number);
+      // Unknown number, a party line (not a person), or self: all answer "no last call"
+      // rather than an error, so the dial card simply renders no line.
+      if (!peer || peer.id === me.id) return { at: null, answered: false };
+      const clearedAt = await getHistoryClearedAt(me.id);
+      const last = await getLastCallWith(me.id, peer.id, clearedAt);
+      return { at: last?.at ?? null, answered: last?.answered ?? false };
+    }),
+
   history: publicProcedure.query(async ({ ctx }) => {
     const me = requireIdentity(ctx);
     const clearedAt = await getHistoryClearedAt(me.id);
