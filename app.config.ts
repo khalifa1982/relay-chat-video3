@@ -35,7 +35,7 @@ const ANDROID_BUILD_NUMBER = 18;
 const env = {
   // App branding - update these values directly (do not use env vars)
   appName: "RELAY",
-  appSlug: "relay-mobile",
+  appSlug: "relay",
   // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
   // Leave empty to use the default icon from assets/images/icon.png
   logoUrl: "/manus-storage/relay-icon_08a8c101.png",
@@ -47,12 +47,12 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.18",
+  version: "1.0.19",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
   userInterfaceStyle: "automatic",
-  newArchEnabled: true,
+  newArchEnabled: false,
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
