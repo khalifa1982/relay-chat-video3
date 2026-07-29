@@ -82,14 +82,22 @@ describe("background palette + tokens match the spec", () => {
 /* ── the spec's copy, verbatim ────────────────────────────────────────────── */
 
 describe("every string the owner signed off is on the page", () => {
+  /* THREE ENTRIES REWRITTEN TO THE PROPERTY IN #120-#122, because the owner has
+     since changed the copy they froze. Each is now a rule rather than a sentence:
+       - the tagline named both paths and ENDED with "register your permanent
+         six-digit ID", which the identity heading — moved directly beneath it —
+         now says outright, so it was cut for repetition and for the three wrapped
+         lines it cost above the card at 320px;
+       - the guest label said DISPLAY NAME and the owner asked for the FULL name;
+       - the guest CTA said "Enter as guest" and now says what it actually does,
+         which is reserve a number.
+     Frozen as literals they would have forbidden exactly what was asked for while
+     saying nothing about whether the screen still offers both ways in. */
   const COPY = [
-    "Jump straight in as a guest — or register your permanent six-digit ID.",
     "CHOOSE YOUR ACCESS",
     "Just a display name",
     "Login / register with email",
-    "GUEST ACCESS · DISPLAY NAME",
     "Full name — e.g. Alex Mercer",
-    "Enter as guest",
     "REGISTERED ACCESS · EMAIL",
     "ACCOUNT TYPE",
     "COMING SOON",
@@ -113,6 +121,17 @@ describe("every string the owner signed off is on the page", () => {
     it(`has: ${c.slice(0, 52)}`, () => expect(SCREEN).toContain(c));
   }
 
+  it("the tagline still names BOTH ways in", () => {
+    // The property the frozen sentence was standing in for.
+    expect(SCREEN).toMatch(/Jump straight in as a guest — or register/);
+  });
+
+  it("the guest step asks for a name and its CTA enters as a guest", () => {
+    const guest = SCREEN.slice(SCREEN.indexOf("function GuestStep"), SCREEN.indexOf("function EmailStep"));
+    expect(guest).toMatch(/GUEST ACCESS · YOUR FULL NAME/); // #120: FULL name, per the owner
+    expect(guest).toMatch(/I am a guest/);
+  });
+
   it("labels every LIVE NETWORK tile", () => {
     for (const l of ["REGISTERED", "GUESTS SERVED", "CALL PARTIES", "MESSAGES", "ONLINE NOW"]) {
       expect(SCREEN).toContain(l);
@@ -121,9 +140,12 @@ describe("every string the owner signed off is on the page", () => {
 });
 
 describe("layout tokens (spec §2 and §5)", () => {
-  it("card + stats column is 560, the security section 640", () => {
+  it("every column on the page shares ONE width", () => {
+    // Was "the card is 560, the security section 640". #120 moved that section
+    // directly ABOVE the card, where a second width would read as a misalignment —
+    // so the property is now that they agree, which is stricter than either literal.
     expect(SCREEN).toContain("maxWidth: 560");
-    expect(SCREEN).toContain("maxWidth: 640");
+    expect(SCREEN).not.toContain("maxWidth: 640");
   });
   it("page padding, card radius and the tilt are the spec's", () => {
     expect(SCREEN).toContain('padding: "64px 20px 72px"');
@@ -138,8 +160,15 @@ describe("layout tokens (spec §2 and §5)", () => {
     expect(SCREEN).toContain("scale(1.22)");
     expect(SCREEN).toContain("cubic-bezier(.34,1.56,.64,1)");
   });
-  it("the six id tiles are 50×62 and re-roll on the spec's 2600ms", () => {
-    expect(SCREEN).toContain("width: 50, height: 62");
+  it("the six id tiles reach the spec's 50×62 and re-roll on its 2600ms", () => {
+    // Was a frozen `width: 50, height: 62`. #120 moved this section above the card,
+    // where six fixed 50px tiles wrapped to two rows on a 320px phone and MEASURABLY
+    // pushed the access buttons below the fold — so they are clamped, with the spec's
+    // size as the upper bound. The property is the maximum, plus the re-roll cadence.
+    const css = read("../index.css");
+    const rule = css.slice(css.indexOf(".relay-idstrip-tile {"));
+    expect(rule.slice(0, rule.indexOf("}"))).toMatch(/width: clamp\([^)]*50px\)/);
+    expect(rule.slice(0, rule.indexOf("}"))).toMatch(/height: clamp\([^)]*62px\)/);
     expect(SCREEN).toContain("2600");
   });
 });
@@ -231,10 +260,24 @@ describe("LIVE NETWORK reads real data", () => {
     // That must not ship — checked against the CODE, not the comments.
     const src = code(SCREEN);
     expect(src).not.toContain("2400");
-    // The only timer on this page is the id-digit re-roll (spec §4, 2600ms);
-    // no interval may fabricate a stat.
-    const intervals = src.match(/setInterval\(/g) ?? [];
-    expect(intervals).toHaveLength(1);
+    // Was a file-wide count of exactly ONE setInterval. #122 added a second (the
+    // sign-in countdown), which is not a fabricated stat — so the property is now
+    // scoped to the section that must not invent traffic: LIVE NETWORK reads the
+    // pushed hook and starts no timer of its own.
+    // Anchored on the next DECLARATION, never on the divider comment that follows
+    // it: `code()` strips comments, so a comment anchor resolves to -1 and the slice
+    // silently runs to the end of the file — swallowing IdentitySection's own timer
+    // and failing on correct code. The prose-anchor trap, inverted.
+    const live = src.slice(src.indexOf("function LiveNetwork"), src.indexOf("function IdentitySection"));
+    expect(live.length).toBeGreaterThan(400);
+    // The slice really is that section. Anchored on the STAT TILES, not on the
+    // heading: the eyebrow reads "Live network" in the source and is uppercased by
+    // CSS, so matching the rendered casing fails on correct code.
+    expect(live).toMatch(/GUESTS SERVED/);
+    expect(live).not.toMatch(/setInterval\(/);
+    expect(live).toMatch(/useLiveStats\(\)/);
+    // And the id-digit re-roll (spec §4, 2600ms) is still the only timer that
+    // touches the identity strip.
     expect(src).toContain("2600");
   });
   it("shows an em-dash, never a confident 0, before data arrives", () => {

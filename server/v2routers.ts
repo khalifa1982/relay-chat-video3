@@ -223,6 +223,27 @@ import { createRateLimiter, clientIpOf, trustedProxyHops } from "./rateLimit";
 import { pinsInCallAsync, partyLineLiveCountsAsync, liveRoomFor, partyLineRosterFor, livekitConfig, iceServers } from "./relay";
 
 /**
+ * #121 — the leading group of an account's 6-digit number, for the sign-in screen
+ * to echo back once the email is typed ("so we will know that this is your ID").
+ *
+ * MASKED, never whole: see the note at the `numberHint` field for why. Returns
+ * null for an account with no identity yet, for a malformed stored number, and on
+ * ANY read failure — a sign-in must never break because a decoration could not be
+ * resolved, and a wrong hint is worse than none.
+ */
+export function maskNumber(n: string | null | undefined): string | null {
+  return typeof n === "string" && /^\d{6}$/.test(n) ? `${n.slice(0, 3)}-•••` : null;
+}
+
+async function maskedNumberForUser(userId: number): Promise<string | null> {
+  try {
+    return maskNumber((await getIdentityByUserId(userId))?.number);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Offline-message email (v2.99.13). CONTENT-FREE by design (owner: "it will
  * tell him you received a message but NOT put the contents — log in to see
  * it"): no sender name, no body, no thread — just a nudge + an Open button.
@@ -4000,7 +4021,7 @@ export const v2OtpAuthRouter = router({
       const email = normalizeEmail(input.email);
       if (!isValidEmail(email)) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter a valid email." });
       const user = await findUserByEmailAny(email);
-      if (!user) return { unregistered: true, hasPin: false, locked: false, preferPin: false };
+      if (!user) return { unregistered: true, hasPin: false, locked: false, preferPin: false, numberHint: null };
       const u = user as typeof user & {
         loginPinHash?: string | null; loginPinAttempts?: number | null;
         loginPinLockedAt?: Date | null; preferPinLogin?: boolean | null;
@@ -4008,6 +4029,24 @@ export const v2OtpAuthRouter = router({
       return {
         unregistered: false,
         hasPin: Boolean(u.loginPinHash),
+        /**
+         * The owner asked for the number to appear as soon as the email is typed,
+         * "so we will know that this is your ID and your number" — i.e. the purpose
+         * is RECOGNITION, confirming you reached your own account.
+         *
+         * SO IT IS MASKED, and that is a deliberate narrowing of the ask rather
+         * than an oversight. This procedure is reachable by anybody who knows an
+         * address, so returning the whole number would make an unauthenticated
+         * email → dialable-number oracle: somebody who has your email address could
+         * then call and message you on RELAY without you ever giving them your
+         * number. The leading group is enough to recognise your own number and is
+         * not an address anybody can reach you on.
+         *
+         * The residual is stated rather than hidden: three known digits narrow an
+         * enumeration of the number space for somebody who ALSO knows your display
+         * name. That is bounded and throttled, and it is the price of the ask.
+         */
+        numberHint: await maskedNumberForUser(u.id),
         // v2.99.47: spent attempt slots count as locked even when the lock field
         // never latched (see pinSlotsSpent) — otherwise the probe says "not
         // locked" and AuthPanel parks the user on a pad no entry can satisfy.
