@@ -652,6 +652,7 @@ export function StatusViewer({
   const [replyOpen, setReplyOpen] = useState(false);
   const markViewed = trpc.status.markViewed.useMutation();
   const remove = trpc.status.remove.useMutation();
+  const removeAsAdmin = trpc.status.removeAsGroupAdmin.useMutation();
   const utils = trpc.useUtils();
   const rafRef = useRef<number | null>(null);
   const startRef = useRef<number>(0);
@@ -674,6 +675,28 @@ export function StatusViewer({
      (`deleteStatus` is author-scoped), i.e. one that silently does nothing.
      Falls back to the reel's own flag for a payload from an older server. */
   const isMine = item?.mine ?? !!group?.subject.isMe;
+
+  /* #118 — MAY I, AS AN ADMIN, REMOVE SOMEBODY ELSE'S SLIDE FROM MY GROUP?
+     Asked LAZILY and only where it can matter: a group reel, on a slide that is
+     not mine. Putting the flag on the FEED instead would mean an admin check per
+     group on a query every client polls, for a button almost nobody taps — and
+     the answer is only ever needed after a deliberate open. `conversationInfo` is
+     membership-gated and already backs the group sheet, so this adds no surface. */
+  const groupCid = group?.subject.kind === "group" ? group.subject.conversationId : null;
+  const groupInfo = trpc.messages.conversationInfo.useQuery(
+    { conversationId: groupCid ?? 0 },
+    { enabled: groupCid != null && !isMine, retry: false, staleTime: 60_000 },
+  );
+  /* Only ever true for a group slide somebody ELSE wrote. `isMine` already has the
+     author's own Delete, and offering both would put two buttons on one row that do
+     the same thing by different authority. Defaults to FALSE while the query is in
+     flight or has failed, so a hiccup hides a control rather than showing one the
+     server will refuse (the v2.103.3 rule). */
+  const canRemoveAsAdmin =
+    groupCid != null &&
+    !isMine &&
+    !!item &&
+    !!groupInfo.data?.members?.some((m) => m.isMe && m.isAdmin);
 
   const itemMs = useMemo(() => {
     if (!item) return DEFAULT_ITEM_MS;
@@ -924,6 +947,56 @@ export function StatusViewer({
             className="inline-flex items-center gap-1.5 text-sm text-red-400 disabled:opacity-50"
           >
             <Trash2 className="size-4" /> {remove.isPending ? "Deleting…" : "Delete"}
+          </button>
+        </div>
+      )}
+
+      {/* #118 — the admin's own row, on a fellow member's group slide. Separate
+          from the author footer above rather than a widened version of it: the
+          two have different authority and different copy, and one row branching
+          on which is which is how a tap comes to call the wrong mutation. */}
+      {canRemoveAsAdmin && item && (
+        <div className="flex items-center justify-between gap-3 px-5 py-3">
+          <span className="min-w-0 truncate text-xs text-white/55">
+            You're an admin of this group
+          </span>
+          <button
+            type="button"
+            disabled={removeAsAdmin.isPending}
+            onClick={async () => {
+              // Confirmed, because it removes something SOMEBODY ELSE posted and
+              // cannot be undone — the copy says whose and where, since "delete
+              // this?" does not distinguish it from the author's own Delete.
+              const who = item.author?.displayName || "this member";
+              if (
+                !window.confirm(
+                  `Remove ${who}'s story from ${group?.subject.displayName ?? "this group"}? It disappears for every member. This can't be undone.`,
+                )
+              ) {
+                return;
+              }
+              try {
+                await removeAsAdmin.mutateAsync({ id: item.id });
+              } catch {
+                // The server answers one message for "gone", "personal story" and
+                // "not an admin here", so there is nothing more specific to say.
+                toast.error("That story isn't there to remove — pull to refresh.");
+                return;
+              }
+              // Both reads, for the same reason the author path invalidates both:
+              // `mine` backs the pip and the strip's ring.
+              await Promise.all([
+                utils.status.feed.invalidate(),
+                utils.status.mine.invalidate(),
+              ]);
+              toast.success("Story removed");
+              // Re-clamp rather than stepping on: the array just got shorter.
+              setIi((v) => Math.max(0, Math.min(v, (group.items.length - 2) | 0)));
+            }}
+            className="inline-flex items-center gap-1.5 text-sm text-red-400 disabled:opacity-50"
+          >
+            <Trash2 className="size-4" />
+            {removeAsAdmin.isPending ? "Removing…" : "Remove as admin"}
           </button>
         </div>
       )}

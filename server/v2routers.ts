@@ -43,6 +43,7 @@ import {
   getActiveStatusesForOwners,
   getActiveStatusById,
   deleteStatus,
+  deleteStatusAsGroupAdmin,
   recordStatusView,
   getViewedStatusIds,
   getStatusViewerIds,
@@ -4710,9 +4711,19 @@ export const v2StatusRouter = router({
       // A text status has no media by definition — never persist a key for one,
       // so it can't claim a `/status_` key in the authorization table at all.
       const mediaKey = input.kind === "text" ? null : (input.mediaKey ?? null);
-      // Per-user cap so posting isn't an unbounded DB/storage cost vector.
-      if ((await countActiveStatuses(me.id)) >= STATUS_MAX_ACTIVE) {
-        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: `You can have up to ${STATUS_MAX_ACTIVE} active statuses.` });
+      // Cap so posting isn't an unbounded DB/storage cost vector — counted on the
+      // shelf being posted to (#119). A group story spends one of THAT GROUP's
+      // slots, not one of the author's personal thirty, so posting into several
+      // groups can no longer lock somebody out of their own reel. The refusal names
+      // which shelf is full, because "you can have up to 30" while a personal reel
+      // sits empty is a message somebody cannot act on.
+      if ((await countActiveStatuses(me.id, group?.id ?? null)) >= STATUS_MAX_ACTIVE) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: group
+            ? `You can have up to ${STATUS_MAX_ACTIVE} active stories in one group.`
+            : `You can have up to ${STATUS_MAX_ACTIVE} active stories.`,
+        });
       }
       const mediaUrl = mediaKey ? `/manus-storage/${mediaKey}` : null;
       // v2.99.66 — resolve the audience ONCE, here, and store it on the row. An
@@ -4966,6 +4977,46 @@ export const v2StatusRouter = router({
         ).catch(() => {});
       }
       return { ok };
+    }),
+
+  /**
+   * #118 — a group ADMIN removes a story a MEMBER posted to their group.
+   *
+   * Its own procedure rather than a branch inside `remove`, mirroring the writer
+   * split: `remove` is the author deleting their own, this is an admin acting on
+   * somebody else's, and the two have different authority, different refusals and
+   * different fan-out subjects. One procedure doing both is how a caller comes to
+   * exercise the wrong one.
+   *
+   * THE FAN-OUT NAMES THE AUTHOR, NOT THE ADMIN, and that matters: the event says
+   * whose story has gone, and every member's client keys their rings on the author.
+   * Publishing it under the admin's identity would clear a ring the admin never had
+   * and leave the real one lit for up to 24 hours.
+   */
+  removeAsGroupAdmin: publicProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      statusGate(ctx);
+      const res = await deleteStatusAsGroupAdmin(input.id, me.id);
+      if (!res.ok) {
+        // "No such story", "that is a personal story" and "you are not an admin
+        // here" answer IDENTICALLY. Status ids are small sequential integers, so a
+        // distinguishable refusal would let anybody probe which ids exist and which
+        // groups they belong to.
+        throw new TRPCError({ code: "NOT_FOUND", message: "That story isn't there to remove." });
+      }
+      const author = await getIdentityById(res.authorId).catch(() => null);
+      const [g] = await getGroupsByIds([res.conversationId]);
+      publishStatusEvent(
+        res.authorId,
+        author?.number ?? "",
+        author?.displayName ?? "",
+        true,
+        res.conversationId,
+        g?.title ?? null,
+      ).catch(() => {});
+      return { ok: true };
     }),
 
   /** Record that I viewed a status (idempotent; self-views aren't recorded). */
