@@ -3339,7 +3339,28 @@ export function startRelay(root: HTMLElement): RelayHandle {
       adaptiveStream: { pauseVideoInBackground: false },
       dynacast: true,
     };
-    if (AudioPresetsEnum?.speech) roomOpts.publishDefaults = { audioPreset: AudioPresetsEnum.speech };
+    /* v2.105.21 (owner: "slowness … when the voice and video started together", on
+       LiveKit Cloud) — `degradationPreference: "balanced"` reaches the SFU path at
+       last.
+       v2.99.84 reasoned this out and then applied it ONLY to the mesh, because that
+       release's report was a mesh conference: `applyMeshVideoCaps()` opens with
+       `if (livekitEnabled) return`, so all three of its `degradationPreference`
+       lines are unreachable here. The default for a camera track is
+       maintain-framerate, which holds fps and sheds RESOLUTION under pressure —
+       precisely backwards on a phone whose uplink tightens the moment a second
+       track starts, and the moment being described.
+       SAID PLAINLY: this is a plausible fit for the symptom, not a proven cause.
+       Two earlier hypotheses about this path (that audio was unprioritised, and
+       that the speech preset downgraded it) were both REFUTED by reading
+       livekit-client — it sets `networkPriority: 'high'` itself and the speech
+       preset carries no priority to override it. The stats readout added in the
+       same release is what will actually decide it. */
+    const pubDefaults: Record<string, unknown> = { degradationPreference: "balanced" };
+    // Audio: 24 kbps speech rather than the 48 kbps music default. Kept as a
+    // separate assignment because a preset enum absent in an older livekit-client
+    // must not take the degradationPreference down with it.
+    if (AudioPresetsEnum?.speech) pubDefaults.audioPreset = AudioPresetsEnum.speech;
+    roomOpts.publishDefaults = pubDefaults;
     // A throwing Room constructor must NEVER kill the dial path (joinLivekit is
     // retried by the watchdog, so a persistent throw = every call dies) — fall
     // back to the known-good minimal options before giving up.
@@ -4038,6 +4059,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function sampleStats() {
     if (!inCall) return;
+    // Rides the existing 2s tick (v2.105.21) rather than arming its own timer.
+    void collectCallQuality();
     // Mesh peers: inbound bitrate per remote tile.
     for (const pin in peers) {
       void sampleOneStats("in-" + pin, "tile-" + pin, peers[pin].pc, false);
@@ -4077,6 +4100,88 @@ export function startRelay(root: HTMLElement): RelayHandle {
       } catch { /* */ }
     }
   }
+  /* ── CALL QUALITY READOUT (v2.105.21) ──────────────────────────────────────
+   * Owner: "I feel slowness in the voice and video calls." There was no way to
+   * answer that — nothing reported RTT, loss, or whether media was going through a
+   * TURN relay, so "slow" could not be turned into a diagnosis and a decision to
+   * change SFU vendors would have rested on a feeling.
+   *
+   * NO SECOND POLLER, deliberately: `sampleStats` already runs every 2s while in a
+   * call, is already gated on `inCall`, and already reaches BOTH transports' stats.
+   * A parallel timer would double the getStats cost on the app's most expensive
+   * screen for data the existing one is already fetching.
+   *
+   * OFF BY DEFAULT, and that matters: v2.99.67 removed the Diagnostics panel at the
+   * owner's request because it was a permanent floater nobody had asked for. This
+   * is opt-in and remembered, so it can be left on for a diagnosing session and
+   * then forgotten about.
+   */
+  let statsShown = false;
+  try { statsShown = localStorage.getItem("relay_call_stats") === "1"; } catch { /* private mode */ }
+  let qualPrev: import("./callStats").ByteSample | null = null;
+
+  function renderCallQuality(text: string) {
+    const el = document.getElementById("callQual");
+    if (!el) return;
+    el.style.display = statsShown ? "" : "none";
+    if (statsShown) el.textContent = text;
+  }
+
+  /** Gather every leg's stats report — mesh peer connections AND LiveKit tracks —
+   *  and reduce them through the ONE shared summarizer, so the two transports
+   *  produce comparable numbers. That comparability is the whole point. */
+  async function collectCallQuality() {
+    if (!statsShown || !inCall) return;
+    const { entriesOf, summarizeStats, formatCallStats, callStatsVerdict } = await import("./callStats");
+    const reports: import("./callStats").StatEntry[][] = [];
+    for (const pin in peers) {
+      try { reports.push(entriesOf(await peers[pin].pc.getStats())); }
+      catch { /* one dead peer must not lose the rest */ }
+    }
+    if (livekitEnabled && lkRoom) {
+      // Both directions: the LOCAL publications carry the outbound picture (and the
+      // candidate pair), the remote ones the inbound. Reading only remotes would
+      // report a call with no upstream at all.
+      const tracks: Array<{ getRTCStatsReport?: () => Promise<RTCStatsReport> }> = [];
+      try {
+        const lp = (lkRoom as unknown as { localParticipant?: { getTrackPublications?: () => unknown[] } }).localParticipant;
+        if (typeof lp?.getTrackPublications === "function") {
+          for (const pub of lp.getTrackPublications() as Array<{ track?: { getRTCStatsReport?: () => Promise<RTCStatsReport> } }>) {
+            if (pub?.track?.getRTCStatsReport) tracks.push(pub.track);
+          }
+        }
+        const remotes = (lkRoom as unknown as { remoteParticipants?: Map<string, unknown> }).remoteParticipants;
+        remotes?.forEach((pp: unknown) => {
+          const p = pp as { getTrackPublications?: () => unknown[] };
+          if (typeof p.getTrackPublications !== "function") return;
+          for (const pub of p.getTrackPublications() as Array<{ track?: { getRTCStatsReport?: () => Promise<RTCStatsReport> } }>) {
+            if (pub?.track?.getRTCStatsReport) tracks.push(pub.track);
+          }
+        });
+      } catch { /* the shape varies by livekit-client version — best effort */ }
+      for (const t of tracks) {
+        try { reports.push(entriesOf(await t.getRTCStatsReport!())); }
+        catch { /* skip this track */ }
+      }
+    }
+    try {
+      const { stats, sample } = summarizeStats(reports, { prev: qualPrev, nowMs: Date.now() });
+      qualPrev = sample;
+      const v = callStatsVerdict(stats);
+      renderCallQuality((v === "relay" ? "⚠ " : v === "poor" ? "▲ " : "") + formatCallStats(stats));
+    } catch { /* the readout is decoration — never let it disturb a call */ }
+  }
+
+  function toggleCallStats() {
+    statsShown = !statsShown;
+    try { localStorage.setItem("relay_call_stats", statsShown ? "1" : "0"); } catch { /* */ }
+    // Clear the baseline so the first line after switching on is not a throughput
+    // computed against a sample from minutes ago.
+    qualPrev = null;
+    renderCallQuality("measuring…");
+    if (statsShown) void collectCallQuality();
+  }
+
   function startStatsSampler() {
     if (statsSampleT) return;
     statsSampleT = setInterval(sampleStats, 2000);
@@ -6619,6 +6724,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
     toggleRecording();
   });
   ($("qualityBtn") as HTMLElement | null)?.addEventListener("click", toggleQuality);
+  // v2.105.21 — the call-quality readout. Reflect the remembered state on mount so a
+  // session left with it ON shows the line as soon as a call opens, rather than
+  // waiting for a tap that has already happened.
+  ($("statsBtn") as HTMLElement | null)?.addEventListener("click", toggleCallStats);
+  renderCallQuality("measuring…");
   updateQualityBtn();
   // Audio output (speaker / earpiece / headset / Bluetooth).
   ($("audioBtn") as HTMLElement | null)?.addEventListener("click", () => {

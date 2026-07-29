@@ -172,6 +172,12 @@ export const RELAY_MARKUP = `
         </div>
         <div class="host-list" id="hostList"></div>
       </div>
+      <!-- v2.105.21: one line of call quality, ABOVE the control bar so it never
+           competes with a chip for width and cannot push one off-screen (that bar
+           has been measured and re-measured to fit 320px). Hidden until the Stats
+           chip is tapped. dir="ltr" because it is all numbers and units, which an
+           RTL locale would otherwise reorder. -->
+      <div id="callQual" class="call-qual" dir="ltr" style="display:none"></div>
       <div class="ctrl-bar">
         <!-- v2.99.4 (owner spec): every control is a COLORED icon chip with a
              LABEL underneath, so each button says what it does. Mic + camera
@@ -197,6 +203,16 @@ export const RELAY_MARKUP = `
         <button class="ctrl ctrl-text" id="qualityBtn" title="Video quality — switch between HD and Data saver">
           <span class="ctrl-ic"><span id="qualityTxt">HD</span></span>
           <span class="ctrl-lbl">Quality</span>
+        </button>
+        <!-- v2.105.21: the call-quality readout. OPT-IN and remembered — v2.99.67
+             removed the old always-on debug floater at the owner's request, so this
+             shows nothing until asked and then stays on across calls, which is what
+             a diagnosing session needs. (Deliberately not naming that removed panel
+             here: the v2.99.36 guard forbids its name anywhere in this markup, and a
+             stricter guard is worth more than my choice of words.) -->
+        <button class="ctrl" id="statsBtn" title="Call quality — round trip, packet loss, and whether media is going through a TURN relay">
+          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="M6 20V10"/><path d="M12 20V4"/><path d="M18 20v-7"/></svg></span>
+          <span class="ctrl-lbl">Stats</span>
         </button>
         <button class="ctrl" id="audioBtn" title="Sound output — loudspeaker, earpiece or Bluetooth" style="display:none">
           <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg></span>
@@ -755,6 +771,22 @@ export const RELAY_CSS = `
   background:rgba(20,23,29,.72);border:1px solid rgba(255,255,255,.10);border-radius:24px;
   box-shadow:0 16px 50px -18px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.06);
   backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4)}
+/* v2.105.21 — the call-quality readout.
+   ABSOLUTELY POSITIONED, and that is the load-bearing bit: .controls is a flex
+   ROW, so an in-flow sibling would become a flex ITEM competing with the control
+   bar for width — and that bar has been measured twice to fit 320px with every chip
+   visible (v2.98.3, v2.103.1). Out of flow it cannot push a chip off-screen at any
+   width, whatever the text grows to.
+   NO backdrop-filter, deliberately: this sits over live video, which is the most
+   expensive surface in the app to re-blur every frame — v2.99.84 measured 36 such
+   layers and removed all of them on phones. An opaque panel costs nothing.
+   pointer-events:none so it can never intercept a tap meant for the hang-up
+   button underneath it. */
+.relay-root .call-qual{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);
+  margin-bottom:8px;pointer-events:none;white-space:nowrap;max-width:96vw;overflow:hidden;
+  text-overflow:ellipsis;font:600 11px/1.5 'IBM Plex Mono',ui-monospace,monospace;
+  letter-spacing:.02em;color:rgba(255,255,255,.82);background:rgba(12,14,18,.92);
+  border:1px solid rgba(255,255,255,.10);border-radius:999px;padding:4px 12px}
 /* v2.99.4 (owner spec): each control is a COLUMN — a colored round icon chip
    (.ctrl-ic) with a small text LABEL underneath (.ctrl-lbl) — so every button
    says what it does. State classes (.on/.off) stay on the BUTTON (JS

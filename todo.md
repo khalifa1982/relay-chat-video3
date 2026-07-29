@@ -11278,6 +11278,85 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.105.21 — call quality, as numbers (2026-07-29)
+
+- [x] **THE OWNER'S REPORT**: *"I feel slowness in the voice and video calls"*, then the sharper form —
+      *"the slownace happing when the voice and video started together"*, on **LiveKit Cloud**.
+- [x] **MY FIRST DIAGNOSIS WAS WRONG AND I SAID SO**: I inferred the fleet was on the WebRTC mesh, because
+      `livekitConfig()` needs three env vars that appear in no workflow and not in `ecosystem.config.cjs`.
+      The owner's `/api/health` (v2.105.20's own addition) came back `"media":{"livekit":true}` — they had
+      pasted them into `/home/relay/.env`. Premise corrected before any work was built on it.
+- [x] **TWO MORE HYPOTHESES FORMED AND KILLED BY READING, not shipped**: (1) that audio was unprioritised
+      on the SFU path, since v2.99.84's `priority`/`networkPriority` marking sits INSIDE
+      `applyMeshVideoCaps()`, which opens `if (livekitEnabled) return` — REFUTED, `livekit-client` sets
+      `networkPriority: opts.audioPreset?.priority ?? 'high'` itself; and (2) that passing
+      `audioPreset: speech` overrode that downward — REFUTED, `AudioPresets.speech` is `{maxBitrate:
+      24_000}` with no `priority`, so `?? 'high'` still applies. Three wrong guesses is exactly why the
+      rest of this release is a MEASUREMENT rather than a fix.
+- [x] **WHY A READOUT AT ALL**: nothing reported RTT, loss, jitter, or whether media was going through a
+      TURN relay. v2.99.67 removed the Diagnostics panel (rightly — a permanent floater nobody asked
+      for), and the only surviving `getStats` reader samples per-tile bitrate. So "slow" could not be
+      turned into a diagnosis, and choosing a different SFU vendor on that basis would have been a guess.
+- [x] **THE NUMBER THAT MATTERS MOST IS THE MEDIA PATH.** If the selected ICE candidate pair is a RELAY
+      pair, media is going out to coturn and back instead of to the SFU — roughly doubling the round trip.
+      That is a CONFIGURATION problem no vendor change fixes, so it is reported in words ("via TURN
+      relay"), worst-case across every leg: one relayed leg in a four-way call IS a relayed call, and
+      reporting "direct" because most legs are would hide the thing being looked for.
+- [x] **PURE CORE, INJECTED COLLECTION**: `summarizeStats` touches no RTCPeerConnection, no LiveKit room
+      and no clock — it takes reports plus a `nowMs` and returns a record. That is what makes the
+      arithmetic testable without a browser, and the arithmetic is where the danger is:
+      `currentRoundTripTime` and `jitter` are **SECONDS**, so reporting them raw shows a healthy 42ms link
+      as `0.042ms` — flawless-looking, and it would send somebody hunting in the wrong place.
+- [x] **ONE SHAPE FOR BOTH TRANSPORTS, deliberately**: the mesh exposes `pc.getStats()` per peer, LiveKit
+      exposes `Track.getRTCStatsReport()` per track (public on both `LocalTrack` and `RemoteTrack` in
+      2.20). The collectors differ; the summary must not, or the two paths cannot be compared — which is
+      the entire point of measuring before switching vendors. LOCAL publications are read as well as
+      remote, or the call reports no upstream at all and the candidate pair is missed.
+- [x] **NO SECOND POLLER**: `sampleStats` already runs every 2s while in a call, is already gated on
+      `inCall`, and already fetches both transports' stats. A parallel timer would double the getStats
+      cost on the app's most expensive screen for data the existing one is already fetching. Asserted by
+      counting the interval.
+- [x] **OFF BY DEFAULT AND REMEMBERED**, because the always-on panel was removed at the owner's request:
+      the Stats chip opts in, the choice persists, and while off the collector returns before any
+      getStats call — so it costs literally nothing until asked for.
+- [x] **THE READOUT CANNOT BREAK THE CONTROL BAR IT SITS ABOVE.** `.controls` is a flex ROW, so an in-flow
+      sibling becomes a flex ITEM competing for width — and that bar has been measured twice to fit 320px
+      with every chip visible (v2.98.3, v2.103.1). It is `position:absolute; bottom:100%`, so it cannot
+      push a chip off-screen at any width however long the text grows; `pointer-events:none` so it can
+      never swallow a tap meant for hang-up underneath it; and NO `backdrop-filter`, because it sits over
+      live video and v2.99.84 measured 36 such layers and removed all of them on phones.
+- [x] **ONE REAL INCONSISTENCY FIXED, and it is NOT claimed as the cause**: `degradationPreference:
+      "balanced"` now reaches the SFU path via `publishDefaults`. v2.99.84 reasoned it out — the default
+      for a camera track is maintain-framerate, which holds fps and sheds RESOLUTION under pressure,
+      precisely backwards on a phone whose uplink tightens the moment a second track starts — and then
+      applied it ONLY inside the mesh-only function, so all three of its occurrences were unreachable on
+      the transport the fleet runs. A plausible fit for the reported moment; the readout is what will
+      decide it. The audio preset stays a SEPARATE conditional assignment, or an older `livekit-client`
+      without the enum would take `degradationPreference` down with it.
+- [x] `client/src/lib/callStats.test.ts` (42) — the arithmetic driven behaviourally against real-shaped
+      reports, the wiring pinned; **all 28 tripwires verified by MUTATION** from byte-exact backups off a
+      confirmed-GREEN baseline, sources byte-identical afterwards.
+- [x] **ONE SURVIVOR, A REAL GAP IN MY OWN TEST**: the inbound "largest frame" case listed 320×180 then
+      1280×720, so "take the last" and "take the largest" produced the SAME answer and a mutation gutting
+      the comparison survived. The sibling OUTBOUND case happened to be ordered correctly, which is
+      exactly why that one bit and this one did not — the same class as v2.99.84's padding case, where a
+      short `r` beside a full-length `s` hid a wrong offset. Reordered, then re-verified.
+- [x] **TWO PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**: `androidAudioCamera.test.ts` froze the whole
+      `publishDefaults` object as one literal, so a second default broke it while saying nothing about
+      what it guarded (that the SFU uses the 24 kbps speech preset, not the 48 kbps music default); and my
+      own new mesh assertion used a fixed `+2600` slice that missed its target — the fixed-slice
+      fragility (v2.99.78, v2.99.94, v2.105.8), now bounded by the function's own end.
+- [x] **THREE OF MY OWN DEFECTS CAUGHT BY THE GATES RATHER THAN BY REVIEW**: backticks inside the CSS and
+      markup template literals terminated them (the trap CLAUDE.md records from v2.99.16 and v2.99.82 —
+      there is even an assertion that `RELAY_CSS` holds no backtick); the ES5 `for…of`-over-Iterable trap
+      (TS2802, v2.99.72 and v2.99.98), fixed by taking ARRAYS and adding an `entriesOf` helper that reads
+      a report with its own `.forEach`, matching how the existing sampler already does it; and my own HTML
+      comment used the word the v2.99.36 guard forbids anywhere in that markup — reworded my prose rather
+      than making their guard comment-blind, because a stricter guard is worth more than my wording.
+- [x] **NOT VERIFIED ON A CALL, said plainly**: no second browser and no reachable fleet here, so nobody
+      has watched these numbers move while video comes up. The arithmetic is proven; the reading is not.
+- [x] No schema change, no new dependency, no new env var. 3782 tests.
+
 ## v2.105.20 — a 4-digit lock on a group, and /api/health finally says which media transport you are on (2026-07-29)
 
 - [x] **THE LAST PIECE OF #108**, from the owner's group screenshot batch, and the oldest thing that had
