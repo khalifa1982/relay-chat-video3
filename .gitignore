@@ -115,3 +115,6 @@ client/public/__manus__/version.json
 
 # scratch files (never commit)
 *.tmp.ts
+
+# Workflow-created git worktrees (transient, auto-cleaned). NEVER source.
+.claude/worktrees/
