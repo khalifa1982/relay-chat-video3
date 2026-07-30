@@ -151,7 +151,12 @@ export function useVoipCallKit(
       VoipPush.addEventListener("notification", ((payload: Record<string, unknown>) => {
         pendingRef.current = readVoipPayload(payload);
       }) as never);
-      VoipPush.registerVoipToken?.();
+      // DO NOT call VoipPush.registerVoipToken() here. The native
+      // RelayVoipBridge (plugins/with-ios-voip.js) already creates its own
+      // PKPushRegistry with itself as delegate from +load. The library's
+      // registerVoipToken() creates a SECOND registry that casts the AppDelegate
+      // to a PKPushRegistryDelegate — which it is NOT — causing an
+      // "unrecognized selector" crash on all devices.
 
       CallKeep.addEventListener("answerCall", (() => {
         // Bring the WebView forward, then let the app decide what to join.
