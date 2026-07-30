@@ -63,7 +63,7 @@ function ShellRoute({
     tab === "join" ? Join :
     Profile;
   return (
-    <AppShell>
+    <AppShell tab={tab}>
       <Suspense fallback={<RouteSpinner />}>
         <View {...(tab === "groups" ? { only: "groups" as const } : {})} />
       </Suspense>

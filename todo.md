@@ -11278,6 +11278,160 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.25 — "not showing": six ways the app hid something and said nothing (2026-07-30)
+
+The owner, twice: *"The main page and other pages, the contact is not showing. Many
+things is not showing there."* A 90-agent design-vs-built audit over every screen came
+back with **67 adversarially-verified findings** (25 refuted), and the ones that answer
+that report are **ONE CLASS**: something the user should see, that the app decides not to
+draw, with nothing saying why.
+
+**THE CLASS IS WHY THIS WAS HARD TO REPORT.** In every one of the six, the screen looks
+FINISHED. A failed query renders as an empty address book; a narrowed list renders as an
+empty one; a failed group read renders as an admin who has lost their adminship; an
+account-only pane renders as a blank; an unreadable label renders as a chip with no word
+in it; and a nav with nothing lit renders as a nav. None of them looks like an error, so
+none of them gets reported as one — they get reported as "things is not showing".
+
+**(1) THE OWNER'S LITERAL REPORT, AND IT IS THE SHARPEST OF THE SIX.** `Contacts.tsx` had
+**no `isError` arm anywhere in the file** and no `onError` on the query — so ANY failure
+of `contacts.list` fell through to `filtered.length === 0` and rendered **"No contacts
+yet"** with an "Add a contact" button: a confident false claim about somebody's own
+directory. **AND IT PERSISTS RATHER THAN FLASHING** — once react-query's retries are
+spent `isLoading` is false and a background refetch never flips it back. Messages has
+rendered `threads.isError` with a Retry for releases and that is pinned as *"not
+blank-forever"*; this screen simply never got it. **THE ORDER IS LOAD-BEARING**: the error
+arm goes BEFORE `isLoading`, because a background retry on an errored query would
+otherwise drop the screen back to the skeleton and hide the failure again on a loop. **AND
+THE COPY NEVER SAYS THE DIRECTORY IS EMPTY**, because that wording IS the defect — the
+contacts are still there; this device could not reach them.
+
+**(2) AN EMPTY NARROWED LIST IS NOT AN EMPTY DIRECTORY.** The empty state read `search`
+and ignored `tagFilter`, so tapping a label chip that matched nothing also said "No
+contacts yet" and offered contact creation — the same defect v2.106.2 fixed in Messages,
+where an unfiltered count made the page render `No conversations match ""`. **AND IT
+FIRES ON THE FIRST TAP FOR A TYPICAL ACCOUNT**, since every contact created before
+v2.106.14 with no category matches none of the four chips. The narrowing is already
+recoverable in one tap, so what was needed was honest copy, not a new control; the
+Add-a-contact CTA is withheld while a filter is on, because the useful action there is
+clearing the filter.
+
+**(3) `/app` LIT NO TAB AT ALL — AND THAT IS THE URL ALL FIVE LANDING-PAGE CTAs POINT
+AT.** `active = location.startsWith(tab.path)` was computed **independently in the bottom
+bar and in the desktop sidebar**, and no tab's path is a prefix of `/app`, so a visitor
+arriving from the marketing page met a navigation bar with no pill, no accent label and no
+`aria-current` — in either theme, since both branches key off the same false flag. **THE
+ROUTE ALREADY KNEW**: `App.tsx` writes `tab="dialer"` for both `/app` and `/app/dialer`,
+so the prop is the truth and the path derivation is only the fallback for a caller that
+omits it (which degrades to exactly today's behaviour rather than losing the highlight).
+Deriving it ONCE also removes the second copy of the rule — which is how the two navs
+could have come to disagree.
+
+**(4) `/app/admin` HAD NO WAY BACK.** It is a drill-in pushed from Profile, and
+`isSubPage` was gated on the single prefix `/app/profile` — so no Back arrow, and no tab
+lit either, leaving an unrelated tab as the only exit. **WORST IN AN INSTALLED PWA**,
+where there is no browser back chrome at all. It is now derived as "not one of the five
+tabs", so the NEXT drill-in route gets its Back affordance without this string being
+updated; `/app/join` gains one too, which is a deliberate consequence — `goBack` falls
+through to the dialer when there is no history to pop.
+
+**(5) A FAILED GROUP READ LOOKED LIKE LOSING YOUR ADMINSHIP.** `GroupInfoSheet` read only
+`info.data` and **never** `isError`/`isPending`, and `iAmAdmin` derives from that same
+value — so a failed `conversationInfo` showed an unexplained empty Members card AND
+silently removed the add-by-number row, the "all members can add" switch and the
+invite-link section **from a real admin**, who would reasonably conclude they had been
+demoted rather than that a query failed. Nothing else on screen says a read failed:
+`main.tsx` only `console.error`s. It now says so, says **"your controls are hidden until
+this loads — nothing has changed"**, and distinguishes in-flight from failed, because an
+empty roster is a claim about a group and "loading" is not.
+
+**(6) TWO PROFILE ROWS WERE GUEST DEAD ENDS**, against this repo's own shipped rule (*"NO
+ROW IS A DEAD END"*, v2.99.89, restated in that very file). **Sign-in PIN** and
+**Devices** are drawn for everyone while their sections returned bare `null` for anyone
+with no `users` row — every guest, permanently — so tapping either landed on a pane with a
+back arrow, a title, and nothing under it. **HIDING THE ROWS WOULD SATISFY THE LETTER OF
+THE RULE AND BE WORSE**: a guest would never learn the feature exists, and the reason they
+cannot use it is the one thing they can act on. So the pane explains and offers the step,
+from **ONE** shared component — two copies of that sentence is how the two panes come to
+describe one requirement differently — with the register action INJECTED by the pane
+switch, because that sheet is the page's own state. App lock and Story privacy are
+deliberately NOT gated: the first is device-local and the second reads through
+`requireIdentity`, which a guest satisfies.
+
+**(7) A STARRED CONTACT COULD VANISH FROM THE NEW-CONVERSATION PICKER ENTIRELY.** The
+server emits `favourite` and so does the schema column; `contactSuggest.ts` read
+**`favorite`** — so `!!c.favorite` was false for every real contact and the favourite
+tiebreak was a **permanent no-op**. With `.slice(0, limit)` at 6 that is not a mis-rank,
+it is a **DROP**: a starred contact who is offline and late alphabetically was absent from
+the picker. **TYPESCRIPT COULD NOT SEE IT** — the caller passes whole contact objects, and
+excess-property checks do not apply to a variable. **AND THE TEST THAT PINNED THE ORDERING
+WAS VACUOUS**: its fixture seeded `{ favorite: true }`, the same wrong spelling, so the
+suite reported this as working. **Fixing the source turned that test RED, which is the
+proof**; it is now seeded correctly AND joined by a case that bites where the old one
+could not — a favourite that is offline and alphabetically last must survive a limit of
+ONE, so a mis-rank shows up as a disappearance rather than as a lower position.
+
+**(8) THE SELECTED FILTER CHIP'S OWN WORD WAS UNREADABLE IN LIGHT THEME.**
+`.rchip-accent` set `color: var(--rb)` for **both** themes with no light override — while
+its sibling accent recipes `.rkey` and `.rstoryring` both branch on theme, and the tab bar
+keeps a per-tab `shade` for exactly this reason. `<html>` carries `relay-v2`
+unconditionally, the app **defaults to light**, and the accent engine is dark-gated, so
+`--rb` there is the static `#35e0b4`. **MEASURED, NOT ESTIMATED: 1.55:1 → 5.44:1** against
+the chip's own tinted fill (AA needs 4.5) — so the SELECTED chip's label was the one word
+on the row you could not read while its unselected neighbours were fine. The tint and
+hairline still carry the selection, so nothing about *you are here* is lost; only the TEXT
+moves, to the AA-measured token v2.99.86 exists for. Dark is untouched by scope. **THE
+ARITHMETIC IS IN THE SUITE RATHER THAN IN A MESSAGE**, because `oklch()` cannot be read
+numerically out of a browser (Chromium hands the string back verbatim — the trap that
+produced a whole table of nonsense in v2.106.4), and **the converter is validated against
+a figure this repo measured in a real browser**: it must reproduce v2.99.86's 5.92:1
+before any other number it produces is worth believing. It does, at 5.91.
+
+**FOUR DEFECTS IN MY OWN TESTS, all caught by them failing on CORRECT code**: a bare
+`/empty/i` sweep matched the shadcn primitives, which are themselves named `Empty*`; an
+`<EmptyTitle>` match landed on the error arm's, since that arm is now the first in the
+file; a `--rb` lookup scoped to `:root` read nothing, because that block contains nested
+rules that end a naive brace slice early; and **the prose-anchor trap, twice** — a
+`\bfavorite\b` sweep matched the comment recording the misspelling, and a PRE-EXISTING
+pin in another file anchored on `filtered.length === 0`, which my own new comment quotes,
+so it read the wrong `EmptyTitle`. Both now run on comment-stripped source.
+
+**TWO PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, both having frozen a literal this
+release legitimately moves: one froze the exact two-way `{search ? "No matches" : "No
+contacts yet"}` expression, i.e. it forbade telling a THIRD kind of empty apart — the very
+defect in (2); and one matched `<PasscodeGate>[\s\S]*<Inner>`, which broke the moment
+`Inner` took a prop, while the property is only that the canvas-owning component is nested
+inside the gate, not that it is propless.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: the contrast is computed against the real
+stylesheet's own tokens and every gate is pinned, but nobody has watched a failed contacts
+read on a phone, and the audit's remaining findings are enumerated rather than fixed.
+
+- [x] Contacts: an error arm ahead of loading, with Retry and copy that never claims the
+      directory is empty
+- [x] Contacts: the empty state distinguishes searched / labelled / genuinely empty
+- [x] `/app` lights the Calls tab; both navs read ONE derived value; drill-ins derived
+- [x] `/app/admin` gets a Back affordance
+- [x] `GroupInfoSheet` reports a failed read instead of silently stripping the roster and
+      every admin control
+- [x] Both guest panes explain themselves from one shared component
+- [x] `favourite` spelling fixed; the vacuous fixture corrected and joined by a case that
+      bites
+- [x] `.rchip-accent` gets the light-theme override every sibling recipe already had
+- [x] `client/src/app/notShowing.test.ts` (20); **all 17 tripwires verified by MUTATION**
+      off a confirmed-GREEN baseline, sources byte-identical afterwards, one re-run after
+      the mutator correctly ABORTED on a needle I had written with an HTML entity the
+      source does not use
+- [x] **STILL OPEN, enumerated rather than implied**: 59 further audited findings, of
+      which 8 are `broken` — the register sheet still requires a surname the server
+      declares optional; the admin push doctor reports a healthy PushKit token as
+      misfiled; `GroupInvite`'s avatar `onError` hides the image with no fallback beneath
+      it; the story composer has no keyboard-accessible trigger once a story exists; the
+      voicemail bar's only labelled control sends; and `listContacts` returns `[]` rather
+      than throwing on a dead DB, so a dead database is still indistinguishable from an
+      empty list even with (1) in place
+- [x] No schema change, no new dependency, no new env var. 4559 tests
+
 ## v2.106.24 — presence stops blocking calls; reachability decides (2026-07-30)
 
 The owner's brief, verbatim: *"Allow the call if the callee has a live socket OR any

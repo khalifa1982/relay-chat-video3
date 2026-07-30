@@ -389,7 +389,41 @@ export default function ContactsPage() {
         })}
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto md:rounded-2xl md:glass-surface-md">
-        {contacts.isLoading ? (
+        {/* A FAILED READ SAYS SO — IT IS NOT AN EMPTY ADDRESS BOOK.
+         *
+         * This is the owner's report ("the contact is not showing") and the mechanism
+         * was that there was no error arm at all: any failure of `contacts.list`
+         * fell through to `filtered.length === 0` and rendered "No contacts yet"
+         * with an "Add a contact" button — a confident false claim about somebody's
+         * own directory, and a persistent one, because once react-query's retries
+         * are spent `isLoading` is false and a background refetch never flips it
+         * back. Messages has rendered `threads.isError` first with a Retry since
+         * v2.99.x and that behaviour is pinned ("not blank-forever"); this screen
+         * simply never got it.
+         *
+         * THE ORDER IS LOAD-BEARING: the error arm comes BEFORE `isLoading`, because
+         * a background retry on an errored query sets `isFetching` and would
+         * otherwise drop the screen back to the skeleton, hiding the failure again
+         * on a loop. And the copy must never say the directory is empty — that
+         * wording is the whole defect. */}
+        {contacts.isError ? (
+          <Empty className="border-none p-10">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <AlertCircle />
+              </EmptyMedia>
+              <EmptyTitle>Couldn't load your contacts</EmptyTitle>
+              <EmptyDescription>
+                Your saved contacts are still there — this device just couldn't reach them.
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button size="sm" onClick={() => void contacts.refetch()}>
+                Retry
+              </Button>
+            </EmptyContent>
+          </Empty>
+        ) : contacts.isLoading ? (
           <ul>
             {Array.from({ length: 5 }).map((_, i) => (
               <li
@@ -410,14 +444,25 @@ export default function ContactsPage() {
               <EmptyMedia variant="icon">
                 <UserPlus />
               </EmptyMedia>
-              <EmptyTitle>{search ? "No matches" : "No contacts yet"}</EmptyTitle>
+              {/* THE EMPTY STATE HAS TO SAY WHICH KIND OF EMPTY IT IS. A narrowed
+                  list is not an empty directory, and saying "No contacts yet" when a
+                  filter chip is lit is a false statement about somebody's own address
+                  book — the same defect v2.106.2 fixed in Messages, where an unfiltered
+                  count made the page render `No conversations match ""`. The narrowing
+                  is recoverable in one tap (All, or the lit chip again), so what is
+                  needed is honest copy rather than a new control. */}
+              <EmptyTitle>
+                {search ? "No matches" : tagFilter ? "Nothing in this label" : "No contacts yet"}
+              </EmptyTitle>
               <EmptyDescription>
                 {search
                   ? `Nobody matches "${search}".`
-                  : "Save someone's number to call or message them in one tap."}
+                  : tagFilter
+                    ? `None of your contacts are labelled ${TAG_LABEL[tagFilter]}. Tap All to see everyone.`
+                    : "Save someone's number to call or message them in one tap."}
               </EmptyDescription>
             </EmptyHeader>
-            {!search && (
+            {!search && !tagFilter && (
               <EmptyContent>
                 <Button
                   onClick={() =>

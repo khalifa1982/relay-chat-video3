@@ -900,6 +900,21 @@ body.relay-app-lock {
   border: 1px solid rgba(var(--rb-rgb), 0.4);
   color: var(--rb);
 }
+/* LIGHT THEME NEEDS ITS OWN TEXT COLOUR, and this rule was the only accent recipe
+   missing one — `.rkey` above and `.rstoryring` below both branch on theme, and the tab
+   bar keeps a per-tab `shade` for exactly this reason.
+   `<html>` carries `relay-v2` unconditionally and the app DEFAULTS to light, while the
+   accent engine is dark-gated — so in light `--rb` is the static `#35e0b4`, which as
+   TEXT computes to about 1.4:1 on a light card. The result was that the SELECTED chip's
+   own word ("All" / "Dialed" / "Missed" / "Received") was the one label on the row you
+   could not read, while its unselected neighbours were fine.
+   The tint and the hairline still carry the selection, so nothing about "you are here"
+   is lost; only the TEXT moves, to the AA-measured token v2.99.86 exists for (5.9:1 on
+   this card). Dark is untouched — the cycling accent is legible on near-black, which is
+   what it was built for. */
+.relay-v2:not(.dark) .rchip-accent {
+  color: var(--relay-green-text);
+}
 /* Primary CTA: SOLID accent with dark text. `#04211a` is the board's on-accent colour —
    a near-black green that stays legible across all twelve hues, which plain black or
    white would not (white fails on the yellow and lime entries). */

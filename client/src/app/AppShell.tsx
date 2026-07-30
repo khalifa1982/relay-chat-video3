@@ -123,7 +123,28 @@ function formatNumber(n: string): string {
   return `${n.slice(0, 3)}-${n.slice(3)}`;
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+/** Which shell route this is. The ROUTE knows — `App.tsx` already names it when it
+ *  picks the view — so both navs read this ONE value rather than each re-deriving it
+ *  from the path (see `useActiveTab`). */
+export type ShellTab =
+  | "dialer"
+  | "history"
+  | "messages"
+  | "groups"
+  | "contacts"
+  | "profile"
+  | "admin"
+  | "join";
+
+export function AppShell({
+  children,
+  tab: routeTab,
+}: {
+  children: React.ReactNode;
+  /** Optional so any caller that predates it degrades to path derivation, i.e. to
+   *  exactly today's behaviour, rather than losing its highlight entirely. */
+  tab?: ShellTab;
+}) {
   // Apply the relay-v2 accent palette to <html>. We deliberately do
   // NOT toggle `.dark` here — ThemeProvider owns light/dark and the
   // user can flip from Profile.
@@ -149,13 +170,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <PasscodeGate>
       <OnboardingGate>
-        <Inner>{children}</Inner>
+        <Inner tab={routeTab}>{children}</Inner>
       </OnboardingGate>
     </PasscodeGate>
   );
 }
 
-function Inner({ children }: { children: React.ReactNode }) {
+function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: ShellTab }) {
   const { me } = useIdentity();
   // Shared sign-out flow (v2.88): AlertDialog confirm + full session/device
   // teardown, branching guest/member correctly (the old inline handler called
@@ -264,7 +285,33 @@ function Inner({ children }: { children: React.ReactNode }) {
   // Universal Back: Profile is the one drill-in route off the tab bar (message
   // threads handle their own in-page back). Go back in history, or fall back to
   // the dialer if there's nowhere to go.
-  const isSubPage = location.startsWith("/app/profile");
+  /* WHICH TAB AM I ON — ONE ANSWER, READ BY BOTH NAVS.
+   *
+   * It was `location.startsWith(tab.path)`, computed independently in the bottom bar
+   * and in the desktop sidebar, and NO tab's path is a prefix of `/app` — so on `/app`
+   * and `/app/` nothing was lit in either nav: no accent label, no pill, no
+   * `aria-current`. That is the URL all five landing-page CTAs point at, so a visitor
+   * arriving from the marketing page met a navigation bar with nothing marked, which is
+   * squarely the owner's "many things is not showing".
+   *
+   * The route already knows — `App.tsx` writes `<ShellRoute tab="dialer" />` for both
+   * `/app` and `/app/dialer` — so the prop is the truth and the path derivation is only
+   * the fallback for a caller that does not pass it. Deriving it ONCE also removes the
+   * second copy of the rule, which is how the two navs could have come to disagree. */
+  const activeTab: ShellTab | null =
+    routeTab ??
+    (TABS.find((t) => location.startsWith(t.path))?.key as ShellTab | undefined) ??
+    (location === "/app" || location === "/app/" ? "dialer" : null);
+
+  /* A DRILL-IN IS ANY ROUTE THAT IS NOT ONE OF THE FIVE TABS, rather than a hardcoded
+   * `/app/profile` prefix. `/app/admin` is pushed from Profile and was rendering with
+   * NO Back arrow and no lit tab — reachable, but with no way to RETURN and an
+   * unrelated tab as its only exit, worst of all in an installed PWA where there is no
+   * browser back chrome. Deriving it means the next drill-in route gets its Back
+   * affordance for free instead of needing this string updated; `/app/join` gains one
+   * too, which is a deliberate consequence — `goBack` falls through to the dialer when
+   * there is no history to pop, so arriving cold on an invite link still has an exit. */
+  const isSubPage = activeTab != null && !TABS.some((t) => t.key === activeTab);
   const goBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) window.history.back();
     else navigate("/app/dialer");
@@ -555,7 +602,7 @@ function Inner({ children }: { children: React.ReactNode }) {
         </div>
         <nav className="px-3 flex-1">
           {TABS.map((tab) => {
-            const active = location.startsWith(tab.path);
+            const active = tab.key === activeTab;
             const Icon = tab.icon;
             return (
               <Link
@@ -914,7 +961,7 @@ function Inner({ children }: { children: React.ReactNode }) {
         >
           <div className="grid grid-cols-5">
             {TABS.map((tab) => {
-              const active = location.startsWith(tab.path);
+              const active = tab.key === activeTab;
               const Icon = tab.icon;
               return (
                 <Link

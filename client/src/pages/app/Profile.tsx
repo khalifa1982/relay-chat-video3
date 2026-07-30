@@ -726,9 +726,9 @@ export default function ProfilePage() {
                 <SocialLinksSection me={me} onSaved={refresh} />
               </>
             )}
-            {pane === "pin" && <LoginPinSection />}
+            {pane === "pin" && <LoginPinSection onRegister={() => setShowAuth(true)} />}
             {pane === "lock" && <PasscodeSection displayName={me.displayName} />}
-            {pane === "devices" && <DevicesSection />}
+            {pane === "devices" && <DevicesSection onRegister={() => setShowAuth(true)} />}
             {pane === "privacy" && <StatusPrivacySection />}
             {pane === "notifs" && (
               <>
@@ -1160,17 +1160,53 @@ function ThemeToggleSection() {
    permission. We show a clear three-state pill (Enable / Granted /
    Blocked) so the user always knows where they stand.
    ============================================================ */
+/**
+ * WHY A PANE IS EMPTY, WHEN IT IS EMPTY FOR A REASON.
+ *
+ * The repo's own rule since v2.99.89 is that NO ROW IS A DEAD END, and two rows in
+ * Privacy & security were: `Sign-in PIN` and `Devices` are both drawn unconditionally
+ * while their sections returned `null` for anyone without a `users` row — which is
+ * every guest, permanently. Tapping either landed on a pane containing a back arrow, a
+ * title and nothing else, with nothing saying why.
+ *
+ * HIDING THE ROWS WOULD SATISFY THE RULE AND BE WORSE: a guest would never learn the
+ * feature exists, and the reason they cannot use it is the one thing they can act on.
+ * So the pane explains and offers the step — which is also the honest reading, since
+ * both features are account-scoped by construction rather than by policy.
+ *
+ * ONE COMPONENT, TWO CALLERS: two copies of this sentence is how the two panes come to
+ * describe one requirement differently.
+ */
+function AccountOnlyNote({ what, onRegister }: { what: string; onRegister?: () => void }) {
+  return (
+    <section className="rounded-2xl border border-border bg-card/70 p-4">
+      <p className="text-sm text-muted-foreground">
+        {what} needs a registered account. Your 6-digit number, contacts and history all
+        carry over when you register — nothing is lost.
+      </p>
+      {/* The register sheet is ProfilePage's own state, so the action is INJECTED by
+          the pane switch rather than reached from here; without it the note is still
+          honest, it just does not offer the shortcut. */}
+      {onRegister && (
+        <Button size="sm" className="mt-3" onClick={onRegister}>
+          Register this number
+        </Button>
+      )}
+    </section>
+  );
+}
+
 /** v2.87 — the 4-digit sign-in PIN: set/change/remove + the login preference.
  *  Verified accounts only (guests have no email login to shortcut). Three
  *  wrong entries at sign-in warn; the fourth locks until an email code. */
-function LoginPinSection() {
+function LoginPinSection({ onRegister }: { onRegister?: () => void }) {
   const status = trpc.otpAuth.pinStatus.useQuery(undefined, { refetchOnWindowFocus: false });
   const save = trpc.otpAuth.setLoginPin.useMutation();
   const [pin1, setPin1] = useState("");
   const [pin2, setPin2] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  if (!status.data?.signedIn) return null;
+  if (!status.data?.signedIn) return <AccountOnlyNote what="A sign-in PIN" onRegister={onRegister} />;
   const hasPin = status.data.hasPin;
   const digits = (v: string) => v.replace(/\D/g, "").slice(0, 4);
   const submit = async () => {
@@ -1236,7 +1272,7 @@ function LoginPinSection() {
 
 /** Signed-in devices + remote logout (v2.99.1). Each login records a session in
  *  the server ledger; deleting one logs that device out. Registered users only. */
-function DevicesSection() {
+function DevicesSection({ onRegister }: { onRegister?: () => void }) {
   const utils = trpc.useUtils();
   const list = trpc.otpAuth.listSessions.useQuery(undefined, { refetchOnWindowFocus: false });
   const revoke = trpc.otpAuth.revokeSession.useMutation();
@@ -1250,7 +1286,8 @@ function DevicesSection() {
   const approve = trpc.otpAuth.approveSession.useMutation();
   const [confirm, setConfirm] = useState<{ sid: string; label: string; current: boolean } | null>(null);
 
-  if (!list.data?.signedIn) return null; // guests have no account sessions
+  // A guest has no account sessions — say so rather than rendering an empty pane.
+  if (!list.data?.signedIn) return <AccountOnlyNote what="The device list" onRegister={onRegister} />;
 
   const pendingList = pending.data?.pending ?? [];
   const refreshDeviceLists = () => {

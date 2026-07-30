@@ -26,7 +26,15 @@ export interface SuggestableContact {
   displayName?: string | null;
   /** Contacts YOU blocked are withheld — see below. */
   blocked?: boolean | null;
-  favorite?: boolean | null;
+  /* THE SERVER SPELLS THIS `favourite` (British), and so does the schema column.
+     Reading `favorite` here made the tiebreak a permanent no-op: `!!c.favorite` was
+     `false` for every contact on the wire, so with `.slice(0, limit)` at 6 a starred
+     contact who is offline and late alphabetically was dropped from the suggestion
+     list ENTIRELY rather than merely ranked low — the owner's own starred people
+     could be absent from the picker. TypeScript could not catch it, because the
+     caller passes whole contact objects and excess-property checks do not apply to a
+     variable. One spelling, matching the wire. */
+  favourite?: boolean | null;
   isOnline?: boolean | null;
   avatarUrl?: string | null;
 }
@@ -60,7 +68,7 @@ export function suggestContacts(
     return [...list]
       .sort(
         (a, b) =>
-          Number(!!b.favorite) - Number(!!a.favorite) ||
+          Number(!!b.favourite) - Number(!!a.favourite) ||
           Number(!!b.isOnline) - Number(!!a.isOnline) ||
           foldName(a.displayName || a.number).localeCompare(foldName(b.displayName || b.number))
       )
@@ -95,7 +103,7 @@ export function suggestContacts(
     .sort(
       (a, b) =>
         a.rank - b.rank ||
-        Number(!!b.c.favorite) - Number(!!a.c.favorite) ||
+        Number(!!b.c.favourite) - Number(!!a.c.favourite) ||
         foldName(a.c.displayName || "").localeCompare(foldName(b.c.displayName || ""))
     )
     .map((s) => s.c)
