@@ -18,6 +18,14 @@ Paste this into Claude Design. It lists only what is **not yet built to its own 
 > table below, which follows the README, still lists it under 2g. Voicemail is the one
 > genuinely outstanding.
 >
+> **AND THE TOTAL IS 40, NOT 42.** The README says *"42 frames (badge ids 1a…5h)"*, but
+> counting the ids that are actually SPECIFIED anywhere in the handoff gives 40: 1a-1j (10),
+> 2a-2i (9), 3a-3d (4), 4a-4k (11), and 5a-5e + 5h (6). **`5f` and `5g` appear nowhere** — no
+> frame, no row in the table below, no mention in the README beyond the range itself. So
+> either two frames were dropped before handoff or the count was rounded. Recorded here
+> rather than corrected in the README, because that is the owner's document and the answer
+> is theirs: if 5f/5g exist in Claude Design they should be sent over and built.
+>
 > Still outstanding: **voicemail** · plus the 5a–5h state frames (5a party lines,
 > 5b rejoin-live + knock, 5c call-quality readout, 5d sign-in switcher — 5e and 5h are
 > already built). All five are in flight.
