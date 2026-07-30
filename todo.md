@@ -11278,6 +11278,92 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.22 — boards 2h, 2i, 4j, and one row's timestamp taking down the address book (2026-07-30)
+
+Three more frames applied serially, plus the closest thing yet to an answer on the
+owner's "the contact is not showing".
+
+**THE OWNER'S REPORT, INVESTIGATED BY DRIVING THE APP RATHER THAN READING IT.** Four
+theories had already been ruled out by test — section membership (exhaustively: all 64
+combinations of tags x favourite x online land in at least one section), collapse state,
+section metadata, and the v2.78 `h-full` collapse trap. So the REAL built bundle was
+served and driven in a real browser with a stubbed tRPC layer, at 390px, across all six
+tabs. **Every tab mounts, nothing crashes, no horizontal overflow, and all eight test
+contacts render** — including the vip-only row (the shape that vanished in v2.106.14),
+the untagged row, a row whose `category` mirror disagrees with its `tags`, and a row
+carrying a tag this build does not know. **So the report is NOT reproducible in the
+current bundle with well-formed data**, which narrows it to a stale cached bundle, the
+owner's own data, or something server-side — and a screenshot distinguishes those three
+in seconds, because they look different: a blank screen, headers with no rows, or an
+empty list with no headers.
+
+**WHAT THE PROBE DID FIND, AND IT IS REAL: ONE ROW'S BAD TIMESTAMP TOOK DOWN THE WHOLE
+SCREEN.** `relativeTime` took `Date | string | null` and called `.getTime()` on whatever
+was not a string, and it is called from INSIDE a row — so a single malformed `lastSeenAt`
+threw out of the render, React unwound the entire page, and the error boundary replaced
+the whole address book with "An unexpected error occurred." Measured, not theorised: the
+first probe run produced exactly that, with zero contacts.
+
+**SAID PLAINLY — THAT FIRST RUN WAS MY HARNESS, NOT PRODUCTION**, and reporting it as a
+production bug would have been a false finding. `presence.lastSeenAt` is a Drizzle
+`timestamp`, so the server sends a real Date and superjson revives it as one; my stub
+sent a raw number with no superjson meta. The throwing path is not reachable through the
+ordinary wire today and this release does not claim it is. What is fixed is the BLAST
+RADIUS, which was absurd either way: a whole screen resting on one field's runtime type.
+One row losing its "last seen" line is cosmetic; an empty address book is what somebody
+reports as broken.
+
+**AND FIXING IT PROPERLY TOOK TWO GOES, because my own test caught the first one being
+incomplete.** Guarding `Number.isFinite` alone still let `0` and `true` through — `new
+Date(0)` is the epoch and `new Date(true)` is one millisecond after it, both finite, both
+rendering "1/1/1970" about somebody nobody has a time for. The sibling formatter in
+`shared/profileFields.ts` has always rejected `<= 0`, so the divergence I claimed to be
+closing was not closed until the bound and a type check went in. It now also accepts
+epoch MILLISECONDS, because that is what the sibling takes — two functions answering one
+question with different input types is how a future caller passes the wrong one.
+
+**BOARD 2h (admin console), 2i (group info), 4j (video message).** All three arrived
+without tests, so the tests are this release's own work, written around the properties a
+restyle can silently drop rather than around how anything looks: the admin panel's tRPC
+surface is pinned as an EXACT set of ten (the guard that must go red when a capability is
+added), the typed-number delete confirmation still DECIDES rather than merely existing,
+no push token is rendered in full, the invite link is still minted only on an explicit
+tap, the audience the admin picked still reaches the mint, and the video sheet still
+releases the camera on every exit.
+
+**A REAL GAP IN MY OWN TEST, FOUND BY MUTATION, AND IT WAS THE SECURITY-RELEVANT ONE:**
+the invite-link gate was pinned as "`iAmAdmin &&` appears somewhere", and there are FOUR
+such expressions in that file — the three per-member controls satisfied it while the gate
+on the invite section itself was deleted, so the pin stayed green with a bearer capability
+that admits strangers on screen for every ordinary member. It is now pinned on the mount,
+with a constant-true gate forbidden, and it bites in both directions.
+
+**TWO OF MY ASSERTIONS WERE WRONG ABOUT THE CODE and the second is worth recording:** the
+delete gate normalizes the typed value before comparing (right, not lax — the app
+DISPLAYS `114-212`, so refusing the form it just showed you would be the panel arguing
+with itself); and the creator's tag deliberately says **"Creator", not the frame's
+"OWNER"**, because v2.104.0 settled that word. A frame's label must not silently rename a
+role the app already has a word for, so the board item is declined and the test now pins
+the app's vocabulary.
+
+**A TOOL DELIBERATELY NOT COMMITTED, with its reason:** the multi-tab render probe is a
+genuinely useful smoke test, and it imports `playwright`, which is not a dependency of
+this repo — committing it would ship a tool nobody can run. This codebase has refused a
+dependency for a one-off consistently (the SMTP client, the S3 SigV4 signer, the FCM and
+Expo senders and the GIF encoder are all hand-written for exactly that reason), so the
+harness stays in scratch and the durable artifact is the unit test.
+
+`client/src/pages/app/contactsRowResilience.test.ts` (11, driven — whether a value throws
+is exactly what a source pin cannot answer) + `client/src/app/adminGroupFrames.test.ts`
+(18). **All 5 resilience tripwires and 9 of 9 re-anchored frame tripwires verified by
+MUTATION** off confirmed-green baselines, sources byte-identical afterwards, including
+the original throwing shape and the camera-release paths gutted.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: nobody has opened the admin console, a group
+sheet or the video recorder on a phone.
+
+No schema change, no new dependency, no new env var. 4429 tests.
+
 ## v2.106.21 — board 2e (register sheet) + the passcode lock, and two defects in my own tests (2026-07-30)
 
 Two frames from the parallel build, applied serially and each verified on its own.
