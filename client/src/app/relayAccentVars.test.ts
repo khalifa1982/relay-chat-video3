@@ -213,11 +213,18 @@ describe("the glass token layer", () => {
   });
 
   it("EVERY rule is scoped, so the landing page and docs are untouched", () => {
-    // The property is that no rule targets a bare `.r*` class at the top level — not
-    // "no line starts with a dot", which `.relay-v2 .rglass` obviously does.
+    /* The property is that no rule targets a bare `.r*` class at the top level — not
+       "no line starts with a dot", which `.relay-v2 .rglass` obviously does.
+
+       REWRITTEN (v2.106.3): this required the prefix to be EXACTLY `.relay-v2`, so the
+       theme-scoped `.relay-v2:not(.dark) .rkey` — which is MORE scoped, not less — failed
+       it on correct code. What actually matters is that every rule begins inside the app's
+       own root class, however it is further qualified. */
     const selectors = layer.match(/^\.[^\s{]+/gm) ?? [];
     expect(selectors.length).toBeGreaterThan(5);
-    for (const sel of selectors) expect(sel).toBe(".relay-v2");
+    for (const sel of selectors) {
+      expect(sel, sel).toMatch(/^\.relay-v2(?![\w-])/);
+    }
   });
 });
 

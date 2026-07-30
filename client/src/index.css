@@ -769,6 +769,56 @@ body.relay-app-lock {
   box-shadow: 0 0 16px rgba(var(--rb-rgb), 0.25);
   color: var(--rb);
 }
+/* A circular glass keypad key (board 1a/1i). The hover tint is the cycling accent, so the
+   pad breathes with the background exactly as the board specifies, and the press is a
+   transform — never a box-shadow, which would repaint the whole key every frame. */
+.relay-v2 .rkey {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+.relay-v2 .rkey:hover {
+  background: rgba(var(--rb-rgb), 0.12);
+  border-color: rgba(var(--rb-rgb), 0.35);
+}
+/* Light theme: the accent is built for a near-black card, so the tint would wash out and
+   the hairline would vanish. Keep the measured neutral surfaces there. */
+.relay-v2:not(.dark) .rkey {
+  background: var(--secondary);
+  border-color: var(--border);
+}
+.relay-v2:not(.dark) .rkey:hover {
+  background: color-mix(in oklab, var(--secondary) 80%, var(--foreground) 8%);
+}
+/* SHORT SCREENS. The Dialer card deliberately does not scroll, and the board designed its
+   frames at 812px tall. On a 568-640px phone the MY NUMBER card + readout + 4-row keypad +
+   action row genuinely do not all fit, so the DECORATION yields before the geometry does:
+   the T9 letters go (they label nothing on a numeric-only field) and the MY NUMBER card
+   tightens. Measured: this recovers ~55px of the 88px a 320x568 phone was over, and what
+   remains falls to the card's existing `overflow-y-auto` rather than shrinking the keys
+   below a tappable size. */
+@media (max-height: 700px) {
+  .relay-v2 .rkey-sub {
+    display: none;
+  }
+  .relay-v2 .rmynum {
+    padding-top: 0.4rem;
+    padding-bottom: 0.4rem;
+  }
+}
+/* Below ~660px of viewport the Dialer card genuinely cannot hold a MY NUMBER row, a
+   readout, a FOUR-ROW ROUND keypad and a three-button action row at a tappable key size —
+   measured: a 320x568 phone is 76px over even with the letters gone. So the CONVENIENCE
+   yields, not the function: the card disappears (your number is still in the top bar and on
+   Profile, and the QR/share lives there too) while the keypad keeps its size.
+   NOT chosen: shrinking the keys, which measured at 38px — below the 44px anyone can
+   reliably hit — or letting the card scroll, which it did not do before this release and
+   must not start doing because of it. */
+@media (max-height: 660px) {
+  .relay-v2 .rmynum-dialer {
+    display: none;
+  }
+}
 /* A count badge on the accent. Same fill as `.rcta` and the same on-accent text, but no
    glow: a 16px badge with a 30px shadow reads as a smudge, and it sits ON a nav glyph
    rather than on a dark card, so there is nothing for the glow to fall on. */

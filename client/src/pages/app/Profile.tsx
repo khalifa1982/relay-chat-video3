@@ -35,6 +35,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { QrGlyph, ShareNumberSheet } from "@/app/ShareNumber";
 import { useIdentity } from "@/app/useIdentity";
 import { useSignOut } from "@/app/useSignOut";
 import { AvatarPicker } from "@/app/AvatarPicker";
@@ -47,7 +48,6 @@ import { CountryFlag } from "@/app/CountryFlag";
 // Two copies of a display rule is how the two surfaces end up disagreeing about
 // the same number — the class this codebase keeps re-learning.
 import { formatPin } from "@/app/TopBar";
-import { QRCodeSVG } from "qrcode.react";
 import {
   Drawer,
   DrawerClose,
@@ -856,113 +856,6 @@ function selfStatus(override: string | null | undefined): { label: string; color
   if (override === "away") return { label: "Away", color: "#f5a623" };
   if (override === "travel") return { label: "Travelling", color: "#38bdf8" };
   return { label: "Available", color: "#06d6a0" };
-}
-
-/* ============================================================
-   QrGlyph — a REAL, scannable QR code (qrcode.react, bundled — no
-   third-party service) encoding `value` (the /i/<number> invite
-   link). Dark modules on a light plate in BOTH themes — that's how
-   a code stays scannable — so the two colours are FIXED graphic
-   values, not theme surfaces. `level="M"` tolerates ~15% occlusion.
-   ============================================================ */
-function QrGlyph({ value, className }: { value: string; className?: string }) {
-  return (
-    <QRCodeSVG
-      value={value}
-      level="M"
-      marginSize={2}
-      bgColor="#eff2f5"
-      fgColor="#12161b"
-      className={className}
-      style={{ width: "100%", height: "100%" }}
-    />
-  );
-}
-
-/* ============================================================
-   ShareNumberSheet — the QR-share bottom sheet (prototype 423–433):
-   a rounded-top sheet that slides up with the QR artwork, the
-   RELAY number + flag, and real Copy / Share actions (the invite
-   link reuses the app-wide /i/<pin> pattern). Uses the shared vaul
-   Drawer so surfaces stay theme-aware.
-   ============================================================ */
-function ShareNumberSheet({
-  open,
-  onOpenChange,
-  number,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  number: string;
-}) {
-  const geo = trpc.directory.geoSelf.useQuery(undefined, {
-    staleTime: 60 * 60 * 1000,
-    retry: false,
-  });
-  const pretty = `${number.slice(0, 3)} ${number.slice(3)}`;
-  const inviteUrl =
-    typeof window !== "undefined" ? `${window.location.origin}/i/${number}` : `/i/${number}`;
-
-  const copyNumber = () => {
-    navigator.clipboard
-      ?.writeText(number)
-      .then(() => toast.success("Number copied"))
-      .catch(() => toast.error("Couldn't copy the number"));
-  };
-  const share = () => {
-    const title = "Reach me on RELAY";
-    if (typeof navigator !== "undefined" && navigator.share) {
-      navigator.share({ title, text: `${title} — ${pretty}`, url: inviteUrl }).catch(() => {});
-    } else {
-      navigator.clipboard
-        ?.writeText(`${title}\n${inviteUrl}`)
-        .then(() => toast.success("Invite link copied"))
-        .catch(() => toast.error("Couldn't copy the link"));
-    }
-  };
-
-  return (
-    <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className="border-border">
-        <div className="mx-auto flex w-full max-w-md flex-col items-center gap-4 px-6 pb-8 pt-3">
-          <DrawerTitle className="text-base font-extrabold">Share your RELAY number</DrawerTitle>
-          {/* QR plate: fixed light plate + dark modules (legibility), themed frame */}
-          <div className="grid size-44 place-items-center rounded-2xl border border-border bg-[#eff2f5] p-3.5">
-            <QrGlyph value={inviteUrl} className="size-full" />
-          </div>
-          <div className="flex items-center gap-2">
-            <CountryFlag
-              code={geo.data?.country}
-              title={geo.data?.countryName ?? geo.data?.country ?? ""}
-              className="text-lg"
-            />
-            <span className="font-mono text-lg font-bold tracking-[0.12em]">{pretty}</span>
-          </div>
-          <DrawerDescription className="text-center text-xs">
-            Share your number so friends can call or message you on RELAY.
-          </DrawerDescription>
-          <div className="grid w-full grid-cols-2 gap-2 pt-1">
-            <Button type="button" variant="secondary" onClick={copyNumber} className="gap-2">
-              <Copy className="size-4" /> Copy number
-            </Button>
-            <Button
-              type="button"
-              onClick={share}
-              className="gap-2 border-0 text-[#08211d] hover:brightness-95"
-              style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)" }}
-            >
-              <Share2 className="size-4" /> Share
-            </Button>
-          </div>
-          <DrawerClose asChild>
-            <Button type="button" variant="ghost" className="w-full">
-              Done
-            </Button>
-          </DrawerClose>
-        </div>
-      </DrawerContent>
-    </Drawer>
-  );
 }
 
 /* ============================================================

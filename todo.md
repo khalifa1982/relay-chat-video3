@@ -11278,6 +11278,53 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.3 — redesign phase 2b (1/6): the Dialer (2026-07-30)
+
+Owner: *"Have you integrated the design? I see so many pages not integrated, not completed."*
+**They were right.** Of the ten utilities phase 1 shipped, SEVEN were unused, and not one of
+the six screens read the accent. This is the first screen actually integrated.
+
+- [x] **MY NUMBER glass card** (board 1a) with copy / QR / share, above the readout.
+- [x] **Extracted, not duplicated** — `QrGlyph` + `ShareNumberSheet` moved out of Profile into
+      `client/src/app/ShareNumber.tsx` (4,171 chars of would-be duplication removed). One QR
+      renderer, one `qrcode.react` import, one `inviteUrlFor` so the QR and Share can never
+      point at different links. The card owns the sheet it opens.
+- [x] **Circular glass keypad with the letters back** — the board asks for both; the letters
+      were dropped citing the OLD prototype and `KEYS.sub` has been carried unused ever since.
+      `aria-hidden`, since they label nothing on a numeric-only field.
+- [x] **Pad capped at the board's 310px**, and also by viewport height so the new row cannot
+      push the card into a scroll.
+- [x] **Action row re-ranked to the board**: Call is the 66px accent primary (`.rcta`), Video
+      and Group are 50px glass. **Nothing removed** — all three actions survive, and the
+      owner's sky/violet hue language moves onto the secondary glyphs.
+- [x] **New `.rkey` utility** whose hover is the cycling accent; press on a transform, never a
+      box-shadow (v2.99.84). Light theme keeps its measured neutral surface.
+- [x] **Measured, 35/35** at 320/360/375/390/430 against the real built stylesheet.
+
+**Three defects of my own, all caught by measuring:**
+- keys were **ovals by 18px** (99×80) — `gridAutoRows` sized rows independently of the column
+  width; `aspect-square` makes the cell square by construction (0.0px deviation after).
+- **I regressed short phones** — the reconstructed pre-redesign card fitted all five widths;
+  mine overflowed 375×667 by 121px. Fixed by having the convenience yield: letters go below
+  700px, MY NUMBER card withheld below 660px. NOT by shrinking keys (measured 38px, under the
+  44px tappable minimum) and NOT by letting the card scroll.
+- the erase key's gloss overlay kept the squircle radius inside a circular button.
+
+**And the harness aborted twice on its OWN bugs first:** Tailwind 4's `rounded-full` computes
+to `3.35544e+07px`, which my circle check read as not-a-circle; and `dark` on `<body>` with
+`relay-v2` on an inner div made `.relay-v2:not(.dark)` match, so it measured the LIGHT key
+surface while reporting dark.
+
+`client/src/pages/app/dialerRedesign.test.ts` (19). Two pre-existing pins rewritten to the
+property (the phase-1 scoping pin required the prefix to be exactly `.relay-v2`, so a MORE
+scoped rule failed it; `topBarSpec` froze the erase key's class string). One defect in my own
+test: I asserted the `/i/` path is built once, and `inviteUrlFor` legitimately builds it twice.
+
+**Remaining in 2b:** 1b History, 1c Messages, 1d Conversation, 1e Contacts, 1f Profile.
+**Phase 3 unblocked by a decision rather than a question:** the board's "6-control bar, NEVER
+REDUCED" contradicts v2.99.39 (owner asked for controls to be removed), so the bar gets
+RESTYLED and the control set does not change.
+
 ## v2.106.2 — redesign phase 2a: the five-tab shell + a Groups tab (2026-07-30)
 
 Owner: `do the best` — implementing `design_handoff_relay_app`. Phase 1 (v2.106.0) laid the
