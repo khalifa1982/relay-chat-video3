@@ -11278,6 +11278,119 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.4 — redesign phase 2b (6/6): the other five screens, and the accent app-wide (2026-07-30)
+
+Owner: *"why you didnt fit all designs into the app"* — a fair question. I had been phasing
+the work for my own reviewability rather than for them seeing the design land, which was
+the wrong call. This closes the six screens.
+
+**THE LOAD-BEARING CHANGE IS ONE DECLARATION.** The handoff's last interaction rule is
+"all accent UI follows the `--rb` vars automatically", and the honest way to satisfy that
+is to repoint **`--primary` at the accent** inside `.dark.relay-v2` rather than to edit
+several hundred class strings across six files. `--primary` is already what every active
+state, focus ring, tick, section letter, filter chip and CTA in this app resolves to, so
+one line converts all of them at once — and converts the ones added LATER for free, which
+no per-class sweep can do. Phase 1 published those variables and nothing read them.
+
+- `--primary-foreground` MOVES WITH IT, to the board's `#04211a`. Getting that wrong is
+  not one button, it is every primary control in the app simultaneously: the old primary
+  was a dark cyan carrying near-white text, the accent is a BRIGHT hue, so white-on-accent
+  is the unreadable direction. `--ring` and the sidebar's own pair follow for the same
+  reason (a focus ring in the old cyan beside an accent control reads as two accents).
+- DARK ONLY, deliberately. The palette is built against a near-black background; its
+  default teal computes to about 1.7:1 on a light card — the measurement that forced
+  `--relay-green-text` to exist in v2.99.86 — so the light theme keeps its own tokens.
+
+**MEASURED — AND THAT MEASUREMENT CORRECTS A CLAIM I MADE TO THE OWNER.** I reported
+"accent text fails AA at 2.96:1 on the periwinkle" as a real finding. It was not a
+finding, it was my own harness. Re-measured against the real built stylesheet across all
+twelve palette hues plus the business gold: **78/78, worst on-accent text 5.63:1, worst
+accent-text-on-a-card 6.23:1**, unseen ring 9–10:1 brighter than seen. Nothing needed
+lightening.
+
+**Three harness bugs of my own produced three confident wrong numbers first**, each a trap
+that will recur:
+1. A bare hex sweep of `relayBackground.ts` picked up `#04070a` — the BACKGROUND token —
+   as a palette hue and reported three failures for a colour the accent never takes.
+2. **Chromium returns `oklch()` VERBATIM from `getComputedStyle`**, so parsing digits out
+   of `oklch(0.18 0.007 248)` reads 0.18/0.007/248 as 0–255 channels. That produced the
+   whole false table. Colours are now resolved by PAINTING them into a 1×1 canvas.
+3. An **alpha colour filled onto a TRANSPARENT canvas reads back fully opaque**, so
+   `--border` (white at 6%) measured as `#ffffff` and the unseen-vs-seen ring comparison
+   came out at 1.63:1 — a plausible near-miss that was pure artifact. Every colour is now
+   composited over the surface it actually sits on.
+
+**THE UNSEEN-STORY RING IS ONE CLASS FOR EVERY SURFACE.** `.rstoryring` replaces a
+hardcoded three-hue gradient inside `PeerAvatar`, which draws on thread rows, contacts,
+History discs, the chat header and the story strip — a ring that means "unseen" in one
+place and something else in another is worse than no ring, so the theme split lives in CSS
+(dark = accent, light = the measured gradient) rather than as a runtime read.
+
+- **The board's "flashing" is deliberately NOT taken**: that ring renders once per ROW, so
+  animating it is one animation per row on the app's densest scrolling list — the cost
+  class v2.99.84 measured and removed — and the board shows it at rest in every shot.
+
+**THE OUTGOING BUBBLE STAYS ORANGE — the one place the board is overruled.** It draws the
+outgoing bubble as a translucent accent tint, but the owner asked for orange own-bubbles in
+their own words in v2.99.85 ("when he post mind bubble is orange"), and an explicit request
+is not something a later visual spec overrides. It is also what makes the accent tick
+readable: a bright accent tick on an orange fill is high contrast; on an accent bubble it
+would not be.
+
+**The five screens, item by item:**
+- **1b History** — the selected filter is the accent chip rather than a neutral raised tile
+  (the same "you are here" language as the tab bar's pill, so one idea of selection covers
+  the app); day headers take the board's mono/.26em.
+- **1c/1d Messages** — a READ receipt takes the accent and delivered stays grey ("accent =
+  read, grey = delivered"); the day divider is mono/.26em while staying OPAQUE and z-10
+  (the v2.105.3 sticky rule: bubbles pass BEHIND it, so a translucent fill makes text
+  slide through unreadably); both send buttons — the composer's and the voice-note bar's —
+  become the accent CTA.
+- **1e Contacts** — the A–Z letter takes the accent at .26em; Add-by-PIN becomes the accent
+  chip; of the three quick actions **call** is the accent while chat and video keep their
+  hues, the same primary/secondary split the Dialer's action row uses.
+- **1f Profile** — hub rows become the board's 34px accent TILES with each glyph keeping
+  its own tint, so the per-row wayfinding colour is moved rather than discarded; Sign out
+  becomes a red glass row.
+
+**ONE REDUNDANCY REMOVED BECAUSE THE MUTATION RUN EXPOSED IT.** My first receipt set a grey
+CLASS and then overrode it with an inline accent for the read case — and deleting the class
+changed nothing visible, because an inline `style` beats it. Two individually-removable
+mechanisms are dead weight that reads as load-bearing (the v2.105.17 rule), so the colour
+is decided in exactly one expression, after which the tripwire bites.
+
+`client/src/app/accentEverywhere.test.ts` (20); **all 25 tripwires verified by MUTATION**
+from byte-exact copies off a confirmed-GREEN baseline, sources byte-identical afterwards,
+no survivors and no aborts.
+
+**Two defects in my own test, both failing on CORRECT code:**
+- I anchored the light-theme assertion on the bare `.relay-v2 {` block, which holds only
+  the tokens SHARED by both themes and legitimately declares no `--primary` at all (the
+  light tokens live in `.relay-v2:not(.dark)`).
+- `HubRow`'s body was taken as the first `\n}` after the name, which for
+  `function HubRow({ icon, … })` is the **destructured PARAMETER object** — the
+  v2.105.9/v2.105.27 trap in a third position. Fixed by requiring parens closed before the
+  body brace.
+
+**Six pre-existing pins rewritten to the property**, every one having frozen a literal this
+release legitimately moves:
+- `peerIdentityBatch` froze the exact three-hue ring gradient — i.e. it forbade the ring
+  ever becoming the accent while saying nothing about unseen and seen being DIFFERENT,
+  which is the whole signal.
+- `deliveryReceipts` froze `text-[#4db6ff]`.
+- `messagingColors` required `BRAND_GRADIENT` to be imported and to occur exactly three
+  times, describing one arrangement rather than the property. The colour-literal ban is
+  kept and strengthened — the file now holds fewer colour decisions than before.
+- `profileHub` froze the tile's `size-9` when the property is only that it cannot shrink.
+- `relayAccentVars`' scoping sweep needed widening a second time, now for a root class
+  qualified on its LEFT (`.dark.relay-v2 .rstoryring`), still strictly narrower than
+  `.relay-v2`.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: the contrast and the ring are measured against
+the real built stylesheet, but nobody has looked at these five screens on a phone.
+
+No schema change, no new dependency, no new env var. **4140 tests — and the v2.106.3 entry's "4149" was overstated**: the suite at that commit measures 4120, so the figure was wrong by 29 rather than this release removing anything.
+
 ## v2.106.3 — redesign phase 2b (1/6): the Dialer (2026-07-30)
 
 Owner: *"Have you integrated the design? I see so many pages not integrated, not completed."*

@@ -233,10 +233,20 @@ describe("the receipt reaches the sender live", () => {
 describe("what the sender sees on the bubble", () => {
   const fn = MSG.slice(MSG.indexOf("function Receipt("), MSG.indexOf("/** Three-dot context menu"));
 
-  it("one tick sent, two ticks delivered, two BLUE ticks read", () => {
+  it("one tick sent, two ticks delivered, two ACCENT ticks read", () => {
     expect(fn).toMatch(/const read = status === "read";/);
     expect(fn).toMatch(/const twoTicks = read \|\| status === "delivered";/);
-    expect(fn).toMatch(/const cls = read \? "text-\[#4db6ff\]" : "text-white\/70";/);
+    /* REWRITTEN (v2.106.4): this froze the literal `text-[#4db6ff]`, i.e. it forbade the
+       read tick ever following the app's own accent while saying nothing about the
+       property — that READ is visually distinct from DELIVERED, which is the state change
+       the owner asked to see at a glance. The board's rule is "accent = read, grey =
+       delivered", so read now takes `var(--rb)`. BOTH arms come from ONE expression, which
+       is what makes this bite: an earlier cut set a grey class and overrode it inline for
+       read, and the mutation run showed the class could be deleted with no visible change
+       at all, because an inline style beats it. */
+    expect(fn).toMatch(
+      /const tickStyle = \{ color: read \? "var\(--rb\)" : "rgba\(255, ?255, ?255, ?0\.7\)" \}/
+    );
     expect(fn).toMatch(/<CheckCheck /);
     expect(fn).toMatch(/<Check /);
     // `read` must imply two ticks — a blue single tick is a state that does not exist.

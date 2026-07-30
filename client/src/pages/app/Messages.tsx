@@ -89,7 +89,7 @@ import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useThreadMuted, isThreadMuted, setThreadMuted, onMutedChange } from "@/app/mutedThreads";
 import { useTypers, useTypingConversations } from "@/app/typingStore";
-import { BRAND_GRADIENT, bubbleStyleFor, nameColorFor } from "@/app/peerColors";
+import { bubbleStyleFor, nameColorFor } from "@/app/peerColors";
 import { TypingLine } from "@/app/TypingLine";
 import { useDraft } from "@/app/draftStore";
 
@@ -2148,7 +2148,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   through it, which is invisible while the pill is in the flow and
                   obvious the moment it starts overlapping content. */}
               <div className="sticky top-0 z-10 flex justify-center py-1.5">
-                <span className="px-3 py-1 rounded-full bg-muted text-[11px] font-medium text-muted-foreground shadow-sm ring-1 ring-border/60">
+                {/* Board 1d: "day headers (mono, .26em)". Uppercased and tracked out,
+                    which is what makes it read as a divider rather than as content.
+                    Still OPAQUE and still z-10 — see the note above. */}
+                <span
+                  className="rounded-full bg-muted px-3 py-1 font-mono text-[10px] font-semibold uppercase text-muted-foreground shadow-sm ring-1 ring-border/60"
+                  style={{ letterSpacing: ".26em" }}
+                >
                   {day.label}
                 </span>
               </div>
@@ -2701,8 +2707,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               onClick={send}
               disabled={sendMutation.isPending || uploading}
               size="icon"
-              className="h-11 w-11 rounded-full border-0"
-              style={{ background: BRAND_GRADIENT, color: "#fff" }}
+              /* Board 1d: the composer's primary is the ACCENT circle. The orange stays
+                 where the owner asked for it in v2.99.85 — on their own message BUBBLES —
+                 which is a different thing from the send button. `.rcta` carries the
+                 board's on-accent `#04211a`, so no hardcoded white. */
+              className="rcta h-11 w-11 rounded-full border-0"
               aria-label="Send"
             >
               <Send className="size-4" />
@@ -3002,10 +3011,23 @@ function Receipt({ status, mine }: { status?: string | null; mine: boolean }) {
   const read = status === "read";
   const twoTicks = read || status === "delivered";
   const failed = status === "failed";
-  // Only ever rendered on our OWN bubbles (see the guard above), which are the
-  // accent colour — so sent/delivered is a muted white and READ goes blue, which is
-  // the state change the owner asked to be able to see at a glance.
-  const cls = read ? "text-[#4db6ff]" : "text-white/70";
+  /* Only ever rendered on our OWN bubbles (see the guard above). Board 1c: "accent =
+     read, grey = delivered", so READ now takes the cycling accent rather than a fixed
+     blue — the state change the owner asked to see at a glance, in the app's one accent.
+
+     THE OWN BUBBLE STAYS ORANGE, deliberately, which is why the accent works here: the
+     board draws the outgoing bubble as a translucent accent tint, but the owner asked for
+     orange own-bubbles in their own words in v2.99.85 ("when he post mind bubble is
+     orange"), and an explicit request is not something a later visual spec overrides. A
+     bright accent tick on the orange fill is high contrast; an accent tick on an accent
+     bubble would not be.
+
+     ONE mechanism, deliberately. The first cut set a grey CLASS and then overrode it with
+     an inline accent for the read case — and the mutation run showed the class could be
+     deleted with no visible change at all, because an inline `style` beats it. Two
+     individually-removable mechanisms are dead weight that reads as load-bearing
+     (v2.105.17), so the colour is decided in exactly one expression. */
+  const tickStyle = { color: read ? "var(--rb)" : "rgba(255,255,255,0.7)" };
   const label = failed
     ? "Not sent"
     : read
@@ -3015,7 +3037,8 @@ function Receipt({ status, mine }: { status?: string | null; mine: boolean }) {
         : "Sent";
   return (
     <span
-      className={"ml-1 inline-flex items-center " + cls}
+      className="ml-1 inline-flex items-center"
+      style={tickStyle}
       title={label}
       aria-label={label}
       role="img"
@@ -3643,8 +3666,7 @@ function RecordingBar({
         disabled={busy}
         aria-label="Send voice note"
         title="Send"
-        className="grid size-9 shrink-0 place-items-center rounded-full text-white transition active:scale-95 disabled:opacity-50"
-        style={{ background: BRAND_GRADIENT }}
+        className="rcta grid size-9 shrink-0 place-items-center rounded-full transition active:scale-95 disabled:opacity-50"
       >
         <Send className="size-4" />
       </button>

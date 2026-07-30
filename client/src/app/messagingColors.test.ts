@@ -155,12 +155,17 @@ describe("the bubbles use the shared rule, not their own copy", () => {
     // things (the v2.99.55 lesson).
     const code = codeOnly(MESSAGES);
     expect(code).not.toMatch(/const OWN_BUBBLE_STYLE/);
-    // The brand orange also serves the two SEND BUTTONS, legitimately — so the
-    // property is that the LITERAL appears nowhere, not that the colour is unused.
-    // It had been written out three times; all three now come from BRAND_GRADIENT.
+    /* The property is that the colour LITERAL appears nowhere in this file, so the two
+       surfaces cannot come to promise different things.
+       REWRITTEN (v2.106.4): it also required `BRAND_GRADIENT` to be IMPORTED here and to
+       occur exactly three times — which described one particular arrangement (the import
+       plus the two send buttons) rather than the property. Both send buttons are now the
+       accent `.rcta` per board 1d, so the import is legitimately gone and the file holds
+       even fewer colour decisions than before. The literal ban is unchanged and the
+       accent CTA is asserted, so a hardcoded fill coming back on either button fails. */
     expect(code).not.toMatch(/linear-gradient\(135deg,#fb923c/);
-    expect(MESSAGES).toMatch(/import \{ BRAND_GRADIENT, bubbleStyleFor, nameColorFor \}/);
-    expect((MESSAGES.match(/BRAND_GRADIENT/g) ?? []).length, "import + two buttons").toBe(3);
+    expect(code).not.toMatch(/BRAND_GRADIENT/);
+    expect((code.match(/\brcta\b/g) ?? []).length, "both send buttons").toBeGreaterThanOrEqual(2);
   });
 
   it("the dead dark-text-on-grey branches are gone", () => {

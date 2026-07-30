@@ -90,9 +90,14 @@ describe("avatars everywhere (v2.96)", () => {
     expect(V2ROUTERS).toMatch(/avatarUrl: live\?\.avatarUrl \?\?/);
     expect(V2ROUTERS).toMatch(/avatarByNumber\.get\(frozenNumber\)/);
   });
-  it("PeerAvatar rings: gradient for unseen, subtle for seen, click opens status/profile", () => {
-    expect(PEER_OVERLAYS).toMatch(/from-\[#06d6a0\] via-\[#0ea5e9\] to-\[#8b5cf6\]/);
-    expect(PEER_OVERLAYS).toMatch(/st\.hasUnseen[\s\S]*?:\s*"bg-border"/);
+  it("PeerAvatar rings: bright for unseen, subtle for seen, click opens status/profile", () => {
+    /* REWRITTEN (v2.106.4): this froze the exact three-hue gradient CLASS STRING, so it
+       forbade the ring ever becoming the cycling accent while saying nothing about the
+       property it exists for — that unseen and seen are visibly DIFFERENT, which is the
+       whole signal. The bright state is now the shared `.rstoryring` utility (whose own
+       light/dark forms are pinned in accentEverywhere.test.ts), and the seen state is
+       still the subtle border. */
+    expect(PEER_OVERLAYS).toMatch(/st\.hasUnseen\s*\?\s*"rstoryring"\s*:\s*"bg-border"/);
     expect(PEER_OVERLAYS).toMatch(/if \(st\?\.hasAny\) openPeerStatus\(number\);\s*\n\s*else openPeerProfile\(number\);/);
   });
   it("the host is mounted once in the AppShell", () => {

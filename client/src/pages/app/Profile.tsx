@@ -603,7 +603,17 @@ export default function ProfilePage() {
                 type="button"
                 disabled={signOutPending}
                 onClick={requestSignOut}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm font-semibold text-destructive transition hover:bg-destructive/10 disabled:opacity-60"
+                /* Board 1f: "red glass Sign out row" — the same translucent-gradient +
+                   hairline recipe as `.rglass`, tinted red. NOT `.rglass` itself, which
+                   is deliberately neutral: a red row is the one place on this page where
+                   the surface colour is carrying meaning rather than depth. */
+                className="flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold text-destructive transition hover:brightness-110 disabled:opacity-60"
+                style={{
+                  background:
+                    "linear-gradient(180deg, rgba(244,63,94,.13), rgba(244,63,94,.05))",
+                  border: "1px solid rgba(244,63,94,.30)",
+                  boxShadow: "inset 0 1px 0 rgba(255,255,255,.07)",
+                }}
               >
                 <LogOut className="size-4" /> Sign out
               </button>
@@ -829,10 +839,18 @@ function HubRow({
       onClick={onClick}
       className="flex w-full min-h-[60px] items-center gap-3 px-3.5 py-3 text-left transition active:bg-foreground/5 hover:bg-foreground/[0.03] outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:ring-inset"
     >
+      {/* Board 1f: "hub rows (34px accent icon TILES)" — a rounded tile on the cycling
+          accent, not a per-row coloured circle. The GLYPH keeps its own tint, so the
+          wayfinding colour these rows already had survives rather than being discarded
+          (the same split the Dialer's secondary actions use). */}
       <span
         aria-hidden="true"
-        className="grid size-9 shrink-0 place-items-center rounded-full"
-        style={{ background: `${tint}24`, color: tint }}
+        className="grid size-[34px] shrink-0 place-items-center rounded-xl"
+        style={{
+          background: "rgba(var(--rb-rgb),0.14)",
+          border: "1px solid rgba(var(--rb-rgb),0.34)",
+          color: tint,
+        }}
       >
         {icon}
       </span>

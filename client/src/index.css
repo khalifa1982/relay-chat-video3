@@ -251,6 +251,36 @@
   --sidebar-accent-foreground: oklch(0.12 0.008 245);
   --sidebar-border: oklch(1 0 0 / 6%);
   --sidebar-ring: oklch(0.76 0.14 192);
+
+  /* ── THE CYCLING ACCENT, APPLIED APP-WIDE (design_handoff_relay_app) ──────────
+     The handoff's last interaction rule is "all accent UI follows `--rb` vars
+     automatically", and the honest way to satisfy that is HERE rather than by editing
+     several hundred class strings across six screens: `--primary` is already what every
+     active state, tick, focus ring, filter chip, section letter and CTA in this app
+     resolves to, so pointing it at the accent converts all of them at once — and, more
+     importantly, converts the ones added LATER for free. Phase 1 published the variables
+     and then nothing read them; this is what makes them load-bearing.
+
+     `--primary-foreground` MUST move with it. The old primary was a dark cyan carrying
+     near-white text; the accent is a BRIGHT hue, so white-on-accent is the unreadable
+     direction and the board's own on-accent value is a near-black green (`#04211a`),
+     chosen because it stays legible across all twelve hues where plain white fails on the
+     yellow and lime entries. Changing one without the other is how you get an accent
+     button nobody can read.
+
+     DARK ONLY, and deliberately: `.dark.relay-v2` is the selector, so the light theme
+     keeps its measured tokens. The palette is built against a near-black background — its
+     default teal computes to about 1.7:1 on a light card, which fails AA for anything
+     small (the same measurement that forced `--relay-green-text` to exist in v2.99.86).
+
+     The `--ring` follows too, because a focus ring in the old cyan beside an accent
+     control reads as two accents rather than one. */
+  --primary: var(--rb);
+  --primary-foreground: #04211a;
+  --ring: var(--rb);
+  --sidebar-primary: var(--rb);
+  --sidebar-primary-foreground: #04211a;
+  --sidebar-ring: var(--rb);
   --relay-online: oklch(0.76 0.16 145);
   --relay-offline: oklch(0.54 0.008 250);
   --relay-danger: oklch(0.62 0.22 28);
@@ -825,6 +855,23 @@ body.relay-app-lock {
 .relay-v2 .rbadge-accent {
   background: var(--rb);
   color: #04211a;
+}
+/* The UNSEEN-story ring (board 1c/1e/1f: "unseen = accent ring, seen = grey").
+ *
+ * ONE class for every surface that draws it — thread rows, contacts, History discs, the
+ * chat header, the story strip — because a ring that means "unseen" in one place and
+ * something else in another is worse than having no ring at all.
+ *
+ * The DEFAULT is the measured three-hue gradient this app has drawn since v2.96, and the
+ * accent applies only in DARK: the palette is built against a near-black background and
+ * its lighter hues wash out to nothing as a 2.5px ring on a light card, which would make
+ * "unseen" invisible in exactly the theme this app still defaults to. Handling that here
+ * rather than with a theme read in the component is what keeps the two in step. */
+.relay-v2 .rstoryring {
+  background: linear-gradient(to top right, #06d6a0, #0ea5e9, #8b5cf6);
+}
+.dark.relay-v2 .rstoryring {
+  background: linear-gradient(140deg, var(--rb), rgba(var(--rb-rgb), 0.45));
 }
 /* Accent chip: a tinted fill that follows the cycling hue. */
 .relay-v2 .rchip-accent {

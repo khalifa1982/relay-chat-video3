@@ -219,11 +219,16 @@ describe("the glass token layer", () => {
        REWRITTEN (v2.106.3): this required the prefix to be EXACTLY `.relay-v2`, so the
        theme-scoped `.relay-v2:not(.dark) .rkey` — which is MORE scoped, not less — failed
        it on correct code. What actually matters is that every rule begins inside the app's
-       own root class, however it is further qualified. */
+       own root class, however it is further qualified.
+
+       WIDENED AGAIN (v2.106.4) for the same reason in the other direction: a dark-only
+       rule is written `.dark.relay-v2 .rstoryring`, where the root class is qualified on
+       its LEFT rather than its right. That is still strictly narrower than `.relay-v2`,
+       and the landing page and docs carry neither class. */
     const selectors = layer.match(/^\.[^\s{]+/gm) ?? [];
     expect(selectors.length).toBeGreaterThan(5);
     for (const sel of selectors) {
-      expect(sel, sel).toMatch(/^\.relay-v2(?![\w-])/);
+      expect(sel, sel).toMatch(/^(?:\.dark)?\.relay-v2(?![\w-])/);
     }
   });
 });
