@@ -177,6 +177,17 @@ export const IDENTITY_REFERENCING_COLUMNS = [
       "idempotent and a retried sweep would drive it negative (the v2.99.74 lesson).",
   },
   {
+    table: "message_reactions",
+    column: "identityId",
+    strategy: "cascade",
+    note:
+      "This person's reactions on other people's messages (board 4c). Purely an " +
+      "expression of theirs, and it goes with them — unlike an attachments row, " +
+      "deleting it cannot make anything MORE readable, and unlike a block it takes " +
+      "nothing away from anybody else. Leaving them would render a chip attributed " +
+      "to a pin that no longer resolves, i.e. a count nobody can account for.",
+  },
+  {
     table: "message_hides",
     column: "identityId",
     strategy: "cascade",

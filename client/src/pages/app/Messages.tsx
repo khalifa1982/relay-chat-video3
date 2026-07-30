@@ -28,6 +28,7 @@ import {
   Archive,
   ArchiveRestore,
   Reply,
+  SmilePlus,
   Bell,
   BellOff,
   MoreVertical,
@@ -59,6 +60,13 @@ import {
 import { trpc } from "@/lib/trpc";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { EmojiPicker } from "@/app/EmojiPicker";
+import {
+  QUICK_REACTIONS,
+  myReaction,
+  reactionChips,
+  reactionOpFor,
+  type MessageReactions,
+} from "@shared/reactions";
 import { previewOf, previewOfStoryReply } from "@/app/messagePreview";
 import { statusReplyOf, storyKindLabel } from "@shared/statusReply";
 import { isGroupHidden, useGroupLocks } from "@/app/groupLock";
@@ -1333,6 +1341,35 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const [hidingId, setHidingId] = useState<number | null>(null);
   /** v2.104.0 — the message a group admin is about to remove for everyone. */
   const [adminDeleting, setAdminDeleting] = useState<Msg | null>(null);
+  /* Board 4c — reactions. `reactingTo` is which message's quick row is open (one at
+     a time: two open rows is two things claiming to be "the focused bubble"), and
+     `pickerFor` is the message whose `+` opened the full catalogue. */
+  const [reactingTo, setReactingTo] = useState<number | null>(null);
+  const [pickerFor, setPickerFor] = useState<number | null>(null);
+  const reactMutation = trpc.messages.react.useMutation({
+    /* NOT invalidated on success. The SSE `reaction` event fans to every member
+       INCLUDING this device, and that refetch is the one that lands — invalidating
+       here as well would fire a second identical request for every tap. A failure
+       still needs saying, because the chip has already been drawn optimistically by
+       the refetch that the event triggers, and a silent one leaves a reaction that
+       looks recorded and is not. */
+    onError: () => toast.error("Couldn't save that reaction — try again."),
+  });
+  /**
+   * One tap, from EITHER entry point — the quick row or an existing chip.
+   *
+   * The op comes from the shared `reactionOpFor` rather than being decided at each
+   * site, so the row and the chips cannot come to mean different things by a tap on
+   * the same emoji. Closing the row is unconditional: a reaction is a single act, and
+   * leaving the row open invites a second tap that would silently undo the first.
+   */
+  const toggleReaction = (m: Msg, emoji: string) => {
+    const mine = myReaction((m as { reactions?: MessageReactions }).reactions, me?.number ?? "");
+    const { op } = reactionOpFor(mine, emoji);
+    reactMutation.mutate({ messageId: m.id, emoji, op });
+    setReactingTo(null);
+    setPickerFor(null);
+  };
   // v2.99.74 — message Info (sent/delivered/read) and Forward-to-another-thread.
   const [infoOf, setInfoOf] = useState<Msg | null>(null);
   const [forwarding, setForwarding] = useState<Msg | null>(null);
@@ -2208,6 +2245,24 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             const tail = mine ? (lastOfGroup ? "rounded-br-sm" : "") : (lastOfGroup ? "rounded-bl-sm" : "");
             return (
               <div key={m.id}>
+                {/* Board 4c — the quick row, ABOVE the bubble it is about. In flow
+                    rather than floating, so it cannot clip off either edge of a
+                    phone (see QuickReact). */}
+                {reactingTo === m.id && (
+                  <QuickReact
+                    mine={!!mine}
+                    current={myReaction(
+                      (m as { reactions?: MessageReactions }).reactions,
+                      me?.number ?? ""
+                    )}
+                    onPick={(e) => toggleReaction(m, e)}
+                    onMore={() => {
+                      setPickerFor(m.id);
+                      setReactingTo(null);
+                    }}
+                    onClose={() => setReactingTo(null)}
+                  />
+                )}
                 <div
                   className={
                     "group flex items-end gap-1.5 " + (mine ? "justify-end" : "justify-start") +
@@ -2234,6 +2289,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         .then(() => toast.success("Copied"))
                         .catch(() => toast.error("Failed to copy"));
                     } : undefined}
+                    onReact={() => setReactingTo(m.id)}
                     onForward={isExpiringMsg(m.meta) ? undefined : () => setForwarding(m)}
                     onInfo={() => setInfoOf(m)}
                     onHide={() => setHidingId(m.id)}
@@ -2496,6 +2552,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         .then(() => toast.success("Copied"))
                         .catch(() => toast.error("Failed to copy"));
                     } : undefined}
+                    onReact={() => setReactingTo(m.id)}
                     onForward={isExpiring ? undefined : () => setForwarding(m)}
                     onInfo={() => setInfoOf(m)}
                     onHide={() => setHidingId(m.id)}
@@ -2508,6 +2565,29 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   );
                 })()}
                 </div>
+                {/* Board 4c — the chips, on the bubble's bottom edge. ONE insertion
+                    in the per-message wrapper rather than inside a bubble branch, so
+                    it covers the emoji-only shape and the attachment shapes too (the
+                    v2.103.3 gutter argument). */}
+                <ReactionChips
+                  reactions={(m as { reactions?: MessageReactions }).reactions}
+                  myPin={me?.number ?? ""}
+                  mine={!!mine}
+                  onToggle={(e) => toggleReaction(m, e)}
+                />
+                {/* The full catalogue, opened by the row's `+`. It reuses the SAME
+                    picker the composer uses rather than a second one, because two
+                    emoji lists is how they come to hold different glyphs (v2.99.80
+                    consolidated three into one for exactly that reason). */}
+                {pickerFor === m.id && (
+                  <div className={"flex " + (mine ? "justify-end" : "justify-start") + " mt-1"}>
+                    <EmojiPicker
+                      className="w-full max-w-sm"
+                      onPick={(e) => toggleReaction(m, e)}
+                      onClose={() => setPickerFor(null)}
+                    />
+                  </div>
+                )}
               </div>
             );
               })}
@@ -3083,9 +3163,150 @@ function Receipt({ status, mine }: { status?: string | null; mine: boolean }) {
 
 /** Three-dot context menu for a message (Reply / Forward / Copy / Info / Delete).
  *  Always tappable on mobile (the old hover-only buttons were invisible on touch). */
+/**
+ * The quick-react row (board 4c) — five shortcuts plus `+` for the full picker.
+ *
+ * RENDERED INLINE ABOVE THE ROW RATHER THAN AS A FLOATING POPOVER. The board draws
+ * it "above the focused bubble", and an absolutely-positioned bar over a bubble that
+ * can sit at either edge of a phone needs measuring and then clamping — which is
+ * exactly the class of bug this file has already paid for twice (the ⋮ menu clipped
+ * off the left edge in v2.99.0, and the video-consent card ran off the right in
+ * v2.99.54). In flow it is above the bubble by construction and cannot leave the
+ * viewport at any width.
+ *
+ * MY CURRENT REACTION IS LIT, so the row doubles as the "remove" control: the
+ * contract's toggle needs no second affordance and tapping the lit one takes it back.
+ */
+function QuickReact({
+  mine,
+  current,
+  onPick,
+  onMore,
+  onClose,
+}: {
+  mine?: boolean;
+  current: string | null;
+  onPick: (emoji: string) => void;
+  onMore: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className={"flex " + (mine ? "justify-end" : "justify-start") + " mb-1"}
+      role="group"
+      aria-label="React to this message"
+    >
+      <div className="rsheet flex items-center gap-0.5 rounded-full border border-border/60 px-1 py-1 shadow-lg">
+        {QUICK_REACTIONS.map((e) => {
+          const on = current === e;
+          return (
+            <button
+              key={e}
+              type="button"
+              aria-label={on ? `Remove ${e} reaction` : `React with ${e}`}
+              aria-pressed={on}
+              onClick={() => onPick(e)}
+              className={
+                "grid size-8 place-items-center rounded-full text-lg leading-none transition active:scale-90 motion-reduce:transition-none " +
+                (on ? "" : "hover:bg-foreground/10")
+              }
+              style={on ? { background: "rgba(var(--rb-rgb), 0.22)" } : undefined}
+            >
+              {e}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          aria-label="More reactions"
+          onClick={onMore}
+          className="grid size-8 place-items-center rounded-full text-muted-foreground transition hover:bg-foreground/10 active:scale-90 motion-reduce:transition-none"
+        >
+          <Plus className="size-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="Close reactions"
+          onClick={onClose}
+          className="grid size-8 place-items-center rounded-full text-muted-foreground transition hover:bg-foreground/10 active:scale-90 motion-reduce:transition-none"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The chips under a bubble (board 4c): emoji + count when above 1, MY reaction
+ * accent-tinted and everybody else's neutral glass.
+ *
+ * ONE INSERTION FOR EVERY MESSAGE SHAPE. It hangs off the per-message wrapper rather
+ * than off the bubble, so it covers the emoji-only branch, the attachment shapes and
+ * the ordinary bubble alike — the argument v2.103.3 made for the sender gutter, and
+ * the reason three copies of the sender label once had to be kept in step by hand.
+ *
+ * TAPPING A CHIP TOGGLES, which is the same rule as the quick row and goes through
+ * the same shared `reactionOpFor`, so the two entry points cannot come to disagree
+ * about what a tap on one emoji means.
+ */
+function ReactionChips({
+  reactions,
+  myPin,
+  mine,
+  onToggle,
+}: {
+  reactions: MessageReactions | null | undefined;
+  myPin: string;
+  mine?: boolean;
+  onToggle: (emoji: string) => void;
+}) {
+  const chips = reactionChips(reactions, myPin);
+  if (!chips.length) return null;
+  return (
+    <div className={"flex flex-wrap gap-1 " + (mine ? "justify-end pr-1" : "justify-start pl-1") + " -mt-1"}>
+      {chips.map((c) => (
+        <button
+          key={c.emoji}
+          type="button"
+          onClick={() => onToggle(c.emoji)}
+          aria-pressed={c.mine}
+          aria-label={
+            (c.mine ? `Remove your ${c.emoji} reaction` : `React with ${c.emoji}`) +
+            (c.count > 1 ? `, ${c.count} reactions` : "")
+          }
+          className={
+            "flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[11px] leading-none transition active:scale-95 motion-reduce:transition-none " +
+            (c.mine ? "" : "border-border/60 bg-card/70 hover:bg-muted/60")
+          }
+          style={
+            c.mine
+              ? {
+                  /* Literal fallbacks, never `var(--rb, var(--rb))`: a custom property
+                     that references itself is a CYCLE, which resolves to the
+                     guaranteed-invalid value and makes the browser DROP the whole
+                     declaration — a chip with no fill and no border at all. That trap
+                     bit v2.106.7 and is forbidden by test. */
+                  background: "rgba(var(--rb-rgb, 63, 224, 197), 0.18)",
+                  borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.45)",
+                }
+              : undefined
+          }
+        >
+          <span>{c.emoji}</span>
+          {/* The count is withheld at 1, per the contract: "1" beside a single emoji
+              is a number that tells you nothing the chip does not already say. */}
+          {c.count > 1 && <span className="tabular-nums opacity-80">{c.count}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function MessageMenu({
   mine,
   onReply,
+  onReact,
   onCopy,
   onForward,
   onInfo,
@@ -3095,6 +3316,10 @@ function MessageMenu({
 }: {
   mine?: boolean;
   onReply: () => void;
+  /** Board 4c — open the quick-react row for this message. Offered on ANYBODY'S
+   *  message including my own, because reacting to your own is a normal thing to do
+   *  and there is no rule against it anywhere in the store. */
+  onReact?: () => void;
   onCopy?: () => void;
   /** v2.99.74 — send this message's content on to another conversation. */
   onForward?: () => void;
@@ -3156,6 +3381,15 @@ function MessageMenu({
             >
               <Reply className="size-4" /> Reply
             </button>
+            {onReact && (
+              <button
+                type="button"
+                onClick={() => { onReact(); setOpen(false); }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+              >
+                <SmilePlus className="size-4" /> React
+              </button>
+            )}
             {onCopy && (
               <button
                 type="button"

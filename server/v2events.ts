@@ -41,6 +41,12 @@ export type V2Event =
   /** Delivery receipt (v2.99.74): the second tick. The recipient's app has the
    *  message but nobody has opened it, so the sender's single tick becomes two. */
   | { kind: "delivered"; conversationId: number; by: number }
+  /** A reaction landed on a message in this conversation (board 4c). Carries the
+   *  message id ONLY — never the emoji — so an open thread refetches the page it is
+   *  already showing rather than each client applying its own delta. That keeps one
+   *  authority for what the reactions ARE, which matters here because the wire op is
+   *  a toggle: a client that mis-applies one delta stays wrong until it reloads. */
+  | { kind: "reaction"; conversationId: number; messageId: number }
   | { kind: "presence"; number: string; online: boolean; lastSeenAt: string }
   | { kind: "contact"; from: number }
   | {
@@ -84,7 +90,7 @@ export type V2Event =
  * handler unfiltered.
  */
 const KNOWN_V2_EVENT_KINDS = new Set<V2Event["kind"]>([
-  "message", "typing", "read", "delivered", "presence", "contact", "call_offer", "watched_online", "status", "device_pending", "number", "ping",
+  "message", "typing", "read", "delivered", "reaction", "presence", "contact", "call_offer", "watched_online", "status", "device_pending", "number", "ping",
 ]);
 
 function writeEvent(client: SseClient, ev: V2Event) {
