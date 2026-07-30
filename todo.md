@@ -11278,6 +11278,53 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.7 — the whole call UI breathes with the accent (2026-07-30)
+
+The call surfaces carry their own private theme (`.relay-root` declares `--accent:#3FE0C5`),
+so phase 2b's `--primary` repoint never reached them: every ring card, dial card, tile chip,
+badge and glow stayed on a fixed cyan while the six screens cycled.
+
+**`--accent` now points at `--rb`, and 59 `var(--accent)` sites follow it** — including any
+added later, which is exactly what a per-rule sweep can never do.
+
+**But a half-converted accent is worse than none**, because a rule still painting the old
+cyan sits beside one cycling through twelve hues and the two visibly disagree. So the **40
+hardcoded literals** (`#3FE0C5` ×5, `#6EE7FF` ×3, `63,224,197` ×31, `110,231,255` ×4) were
+converted too, and a test holds the remaining count at zero rather than trusting that I
+found them all.
+
+**`--accent2` is the same hue at lower alpha, not a second colour.** The board has ONE
+accent; `rgba(var(--accent-rgb),.55)` keeps every two-tone gradient two-tone without
+introducing a rival hue — the same recipe `.rstoryring` uses.
+
+**THE DEFECT WORTH RECORDING IS MINE, AND IT WOULD HAVE MADE EVERY ACCENT IN THE CALL UI
+DISAPPEAR.** The literal sweep ran over the two new token declarations as well, rewriting
+their own fallbacks into `var(--rb,var(--accent))` — a **custom-property CYCLE**, which
+resolves to the guaranteed-invalid value, so *both declarations are dropped*. Caught by
+RESOLVING the value in a browser rather than reading the file; the file looked perfectly
+reasonable.
+
+**And the fallback is not decoration, which is why the cycle mattered**: an unset custom
+property is not a missing default, it is an invalid declaration the browser DROPS — so a
+call surface reached before the engine has published a hue, or on the no-2D-context path,
+would render with **no accent at all** rather than a plain one.
+
+**Measured, 15/15**: four palette hues plus the no-engine case, resolving `--accent`,
+`--accent2` and `rgba(var(--accent-rgb),…)` through a canvas pixel (Chromium hands `oklch()`
+back verbatim, which is how v2.106.4 produced a whole table of nonsense), and checking a REAL
+consumer — the ring card's PIN — rather than only a synthetic probe.
+
+`client/src/lib/callBarRedesign.test.ts` → 15; **all 6 tripwires verified by MUTATION**,
+including the self-reference cycle and a single rule left on the old cyan.
+
+**NOT VERIFIED ON A CALL, said plainly**: measured against the real exported stylesheet, but
+nobody has watched a ring card cycle mid-call.
+
+**Still to come in phase 3**: the per-frame layouts — 1g's two staggered ping rings, 2b's
+live waveform, 3a's matrix digits, 2a's 2×4 conference grid.
+
+No schema change, no new dependency, no new env var. 4160 tests.
+
 ## v2.106.6 — redesign phase 3: the standard call bar (2026-07-30)
 
 The board's rule is one material across every call surface — glass circles, ACTIVE on the

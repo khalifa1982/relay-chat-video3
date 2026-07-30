@@ -363,8 +363,18 @@ export const RELAY_CSS = `
   --bg:#08090C; --bg2:#0E1014; --surface:#14171D; --surface2:#1B1F27;
   --border:rgba(255,255,255,0.08); --border2:rgba(255,255,255,0.14);
   --text:#EAEEF2; --muted:#8A93A2; --faint:#5A6271;
-  --accent:#3FE0C5; --accent2:#6EE7FF; --danger:#FF5C72; --warn:#FFB454;
-  --grad:linear-gradient(135deg,#3FE0C5,#6EE7FF);
+  /* THE CALL UI'S ACCENT IS THE APP'S CYCLING ACCENT (design_handoff_relay_app phase 3).
+     One declaration, and 59 var(--accent) sites follow it — including any added later,
+     which is what a per-rule sweep can never do. --rb / --rb-rgb are published on :root by
+     relayBackground.ts every frame, with a static fallback in index.css for the case where
+     the engine never runs, so this always resolves to a real colour: an UNSET custom
+     property is not a missing default, it is an invalid declaration the browser DROPS.
+     --accent-rgb exists because 31 rules needed rgba() rather than a solid, and --accent2
+     is the same hue at lower alpha rather than a second colour, so every two-tone gradient
+     stays two-tone while the board's ONE accent is the only hue on screen. */
+  --accent:var(--rb,#3FE0C5); --accent-rgb:var(--rb-rgb,63,224,197);
+  --accent2:rgba(var(--accent-rgb),.55); --danger:#FF5C72; --warn:#FFB454;
+  --grad:linear-gradient(135deg,var(--accent),var(--accent2));
   position:fixed; inset:0; z-index:1; background:var(--bg); color:var(--text);
   font-family:"Hanken Grotesk",sans-serif; -webkit-font-smoothing:antialiased;
   overflow:hidden;
@@ -374,8 +384,8 @@ export const RELAY_CSS = `
 .relay-root .relay-bg-fx{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
 .relay-root .relay-bg-fx::before{content:"";position:absolute;inset:-20%;
   background:
-    radial-gradient(50% 40% at 18% 12%, rgba(63,224,197,0.10), transparent 60%),
-    radial-gradient(45% 40% at 85% 88%, rgba(110,231,255,0.08), transparent 60%);
+    radial-gradient(50% 40% at 18% 12%, rgba(var(--accent-rgb),0.10), transparent 60%),
+    radial-gradient(45% 40% at 85% 88%, rgba(var(--accent-rgb),0.08), transparent 60%);
   animation:relayDrift 24s ease-in-out infinite alternate;}
 .relay-root .relay-bg-fx .grid{position:absolute;inset:0;opacity:.5;
   background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);
@@ -390,7 +400,7 @@ export const RELAY_CSS = `
 @keyframes relayFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 
 .relay-root .relay-brand{display:flex;align-items:center;gap:11px;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;letter-spacing:-.02em}
-.relay-root .relay-brand .dot{width:13px;height:13px;border-radius:50%;background:var(--grad);box-shadow:0 0 18px rgba(63,224,197,.7);position:relative}
+.relay-root .relay-brand .dot{width:13px;height:13px;border-radius:50%;background:var(--grad);box-shadow:0 0 18px rgba(var(--accent-rgb),.7);position:relative}
 .relay-root .relay-brand .dot::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--accent);animation:relayPulse 2.4s ease-out infinite}
 @keyframes relayPulse{0%{transform:scale(1);opacity:.7}100%{transform:scale(3.4);opacity:0}}
 
@@ -402,11 +412,11 @@ export const RELAY_CSS = `
 .relay-root .relay-field label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.14em;color:var(--faint);margin:0 0 9px 3px}
 .relay-root .relay-field input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:14px;
   padding:17px 18px;color:var(--text);font-size:17px;font-family:inherit;outline:none;transition:.2s}
-.relay-root .relay-field input:focus{border-color:var(--accent);box-shadow:0 0 0 4px rgba(63,224,197,.12)}
+.relay-root .relay-field input:focus{border-color:var(--accent);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.12)}
 .relay-root .relay-btn{width:100%;border:none;border-radius:14px;padding:17px;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;
   font-size:16px;cursor:pointer;transition:.18s;letter-spacing:-.01em}
-.relay-root .relay-btn-primary{background:var(--grad);color:#04201B;box-shadow:0 10px 30px -10px rgba(63,224,197,.55)}
-.relay-root .relay-btn-primary:hover{transform:translateY(-2px);box-shadow:0 16px 40px -12px rgba(63,224,197,.7)}
+.relay-root .relay-btn-primary{background:var(--grad);color:#04201B;box-shadow:0 10px 30px -10px rgba(var(--accent-rgb),.55)}
+.relay-root .relay-btn-primary:hover{transform:translateY(-2px);box-shadow:0 16px 40px -12px rgba(var(--accent-rgb),.7)}
 .relay-root .relay-btn-primary:active{transform:translateY(0)}
 .relay-root .relay-btn:disabled{opacity:.5;cursor:not-allowed;transform:none!important}
 .relay-root .hint{margin-top:18px;font-size:13px;color:var(--faint);line-height:1.6}
@@ -445,7 +455,7 @@ export const RELAY_CSS = `
 .relay-root .dial-actions{display:flex;gap:13px;width:min(320px,80vw)}
 .relay-root .call-btn{flex:1;border:none;border-radius:16px;padding:16px;background:var(--grad);color:#04201B;
   font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:16px;cursor:pointer;display:flex;
-  align-items:center;justify-content:center;gap:9px;transition:.15s;box-shadow:0 10px 26px -12px rgba(63,224,197,.6)}
+  align-items:center;justify-content:center;gap:9px;transition:.15s;box-shadow:0 10px 26px -12px rgba(var(--accent-rgb),.6)}
 .relay-root .call-btn:hover{transform:translateY(-2px)}
 .relay-root .call-btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
 .relay-root .back-key{width:58px;background:var(--surface);border:1px solid var(--border);border-radius:16px;color:var(--muted);
@@ -479,7 +489,7 @@ export const RELAY_CSS = `
 .relay-root .ring-card{width:min(390px,92vw);border-radius:28px;padding:30px 26px 24px;text-align:center;position:relative;
   background:linear-gradient(175deg,rgba(34,40,52,.96),rgba(14,17,23,.98));
   border:1px solid rgba(255,255,255,.12);
-  box-shadow:0 40px 110px -24px rgba(0,0,0,.85),0 0 0 1px rgba(63,224,197,.08),inset 0 1px 0 rgba(255,255,255,.12)}
+  box-shadow:0 40px 110px -24px rgba(0,0,0,.85),0 0 0 1px rgba(var(--accent-rgb),.08),inset 0 1px 0 rgba(255,255,255,.12)}
 .relay-root .ring-av-wrap{position:relative;width:126px;height:126px;margin:0 auto 14px}
 .relay-root .ring-av-wrap .av,.relay-root .ring-av-img{position:absolute;inset:13px;width:100px;height:100px;border-radius:50%;
   display:grid;place-items:center;color:#04201B;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:36px;
@@ -487,18 +497,18 @@ export const RELAY_CSS = `
 .relay-root .ring-av-img{object-fit:cover;background:#10131a;border:1px solid rgba(255,255,255,.14)}
 /* The rotating gradient ORBIT ("a ring line keeps going round and round"). */
 .relay-root .ring-orbit{position:absolute;inset:0;border-radius:50%;
-  background:conic-gradient(from 0deg,transparent 0deg,transparent 30deg,#3FE0C5 110deg,#6EE7FF 170deg,rgba(110,231,255,.15) 220deg,transparent 300deg);
+  background:conic-gradient(from 0deg,transparent 0deg,transparent 30deg,var(--accent) 110deg,var(--accent2) 170deg,rgba(var(--accent-rgb),.15) 220deg,transparent 300deg);
   -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 5px),#000 calc(100% - 4px));
   mask:radial-gradient(farthest-side,transparent calc(100% - 5px),#000 calc(100% - 4px))}
 /* Radiating halo pulses behind the avatar. */
-.relay-root .ring-halo{position:absolute;inset:8px;border-radius:50%;border:2px solid rgba(63,224,197,.5);opacity:0}
-.relay-root .ring-halo.h2{border-color:rgba(110,231,255,.4)}
+.relay-root .ring-halo{position:absolute;inset:8px;border-radius:50%;border:2px solid rgba(var(--accent-rgb),.5);opacity:0}
+.relay-root .ring-halo.h2{border-color:rgba(var(--accent-rgb),.4)}
 .relay-root .ring-card .who{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:27px;margin-bottom:2px;
   display:flex;align-items:center;justify-content:center;gap:8px}
 /* v2.99.6: the caller's badge is TIERED (blue Guest / green Registered /
    yellow Admin — color set inline by presentRingProfile) with the tier name
    in tiny type right under the mark (owner spec). */
-.relay-root .ring-verified{display:inline-flex;flex-direction:column;align-items:center;color:#3FE0C5}
+.relay-root .ring-verified{display:inline-flex;flex-direction:column;align-items:center;color:var(--accent)}
 .relay-root .ring-verified svg{width:19px;height:19px}
 .relay-root .ring-role-txt{font-style:normal;font-size:7.5px;font-weight:800;line-height:1;margin-top:1px;letter-spacing:.02em}
 .relay-root .ring-role-txt:empty{display:none}
@@ -520,19 +530,19 @@ export const RELAY_CSS = `
 .relay-root .rc:hover{transform:translateY(-2px) scale(1.04)}
 .relay-root .rc:active{transform:scale(.94)}
 .relay-root .rc-voice{background:linear-gradient(145deg,#34d399,#059669);box-shadow:0 12px 30px -8px rgba(16,185,129,.65),inset 0 1px 0 rgba(255,255,255,.3)}
-.relay-root .rc-video{background:linear-gradient(145deg,#3FE0C5,#0e7490);box-shadow:0 12px 30px -8px rgba(63,224,197,.6),inset 0 1px 0 rgba(255,255,255,.3)}
+.relay-root .rc-video{background:linear-gradient(145deg,var(--accent),#0e7490);box-shadow:0 12px 30px -8px rgba(var(--accent-rgb),.6),inset 0 1px 0 rgba(255,255,255,.3)}
 .relay-root .rc-decline{background:linear-gradient(145deg,#FF5C72,#E62E4D);box-shadow:0 12px 30px -8px rgba(255,59,92,.65),inset 0 1px 0 rgba(255,255,255,.3)}
 /* Answer-side ripple ring that keeps pulsing outward. */
 .relay-root .rc-voice::after,.relay-root .rc-video::after{content:"";position:absolute;inset:-4px;border-radius:50%;
   border:2px solid rgba(52,211,153,.55);opacity:0;pointer-events:none}
-.relay-root .rc-video::after{border-color:rgba(63,224,197,.55)}
+.relay-root .rc-video::after{border-color:rgba(var(--accent-rgb),.55)}
 /* Voicemail + Message row. */
 .relay-root .ring-extra{display:flex;gap:9px;margin-top:20px}
 .relay-root .rx{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;border-radius:13px;padding:11px 8px;
   background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);color:var(--text);
   font-size:12.5px;font-weight:600;font-family:inherit;cursor:pointer;transition:.15s}
 .relay-root .rx svg{width:16px;height:16px;flex-shrink:0;color:var(--accent)}
-.relay-root .rx:hover{background:rgba(255,255,255,.1);border-color:rgba(63,224,197,.4)}
+.relay-root .rx:hover{background:rgba(255,255,255,.1);border-color:rgba(var(--accent-rgb),.4)}
 .relay-root .quick-replies{display:none;margin-top:12px;gap:8px;flex-direction:column}
 .relay-root .quick-replies.open{display:flex;animation:relayFade .2s ease both}
 .relay-root .qr-opt{border:1px solid var(--border2);background:var(--surface2);color:var(--text);border-radius:12px;
@@ -740,7 +750,7 @@ export const RELAY_CSS = `
 /* On a thumbnail there is no room — hide the digits rather than let them clip. */
 .relay-root #videoGrid.spotlight .relay-tile.is-thumb .nm .nm-pin,
 .relay-root #videoGrid.compact .relay-tile .nm .nm-pin{display:none}
-.relay-root .relay-tile.you .nm{background:rgba(63,224,197,.2);color:var(--accent)}
+.relay-root .relay-tile.you .nm{background:rgba(var(--accent-rgb),.2);color:var(--accent)}
 /* "connecting…" sits TOP-LEFT now (the info chip owns the top-right corner). */
 .relay-root .connecting{position:absolute;top:11px;left:12px;font-size:11px;color:var(--warn);background:rgba(255,180,84,.14);
   padding:3px 9px;border-radius:7px;letter-spacing:.04em}
@@ -786,7 +796,7 @@ export const RELAY_CSS = `
 .relay-root .relay-msg{max-width:100%;padding:9px 13px;border-radius:13px;font-size:14px;line-height:1.4;word-break:break-word}
 .relay-root .relay-msg .au{font-size:11px;color:var(--accent);font-weight:600;margin-bottom:2px}
 .relay-root .relay-msg.them{background:var(--surface);border:1px solid var(--border);align-self:flex-start;border-bottom-left-radius:4px}
-.relay-root .relay-msg.me{background:rgba(63,224,197,.16);align-self:flex-end;border-bottom-right-radius:4px}
+.relay-root .relay-msg.me{background:rgba(var(--accent-rgb),.16);align-self:flex-end;border-bottom-right-radius:4px}
 .relay-root .relay-msg.sys{align-self:center;color:var(--faint);font-size:12px;background:none}
 .relay-root .chat-input{padding:13px;border-top:1px solid var(--border);display:flex;gap:9px}
 .relay-root .chat-input input{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:11px 14px;
@@ -810,7 +820,7 @@ export const RELAY_CSS = `
 .relay-root .mident{display:flex;align-items:center;gap:7px;padding:4px 10px 4px 5px;border-radius:999px;margin:0 2px 4px;
   width:max-content;max-width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);
   backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:inset 0 1px 0 rgba(255,255,255,.07)}
-.relay-root .mrow.me .mident{margin-left:auto;background:rgba(63,224,197,.10);border-color:rgba(63,224,197,.22)}
+.relay-root .mrow.me .mident{margin-left:auto;background:rgba(var(--accent-rgb),.10);border-color:rgba(var(--accent-rgb),.22)}
 .relay-root .mident .mav{width:22px;height:22px;font-size:9px;overflow:hidden;background-size:cover;background-position:center;border-radius:50%}
 .relay-root .mident .mwho{display:flex;align-items:baseline;gap:6px;min-width:0}
 .relay-root .mident .mwho b{font-size:11.5px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
@@ -970,8 +980,8 @@ export const RELAY_CSS = `
    in full (letterboxed) rather than cropped like a camera tile. */
 .relay-root .relay-tile.you.screen video{-webkit-transform:none;transform:none;object-fit:contain;background:#000}
 /* Active control state (e.g. screen-share on) — accent-tinted like .off is red. */
-.relay-root .ctrl.on .ctrl-ic{background:rgba(63,224,197,.2);border-color:rgba(63,224,197,.48);color:var(--accent);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 0 12px -2px rgba(63,224,197,.45)}
+.relay-root .ctrl.on .ctrl-ic{background:rgba(var(--accent-rgb),.2);border-color:rgba(var(--accent-rgb),.48);color:var(--accent);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 0 12px -2px rgba(var(--accent-rgb),.45)}
 .relay-root .ctrl.on .ctrl-lbl{color:var(--accent)}
 /* Mic VU feedback: a soft accent ring pulses on #micBtn while YOUR mic is picking
    up sound (live AnalyserNode on the local track) — so a forgotten mute (or a
@@ -979,8 +989,8 @@ export const RELAY_CSS = `
    Never applied while .off (muted). transform/opacity-friendly box-shadow ring,
    matching the existing speaking-pulse / call-waiting-pulse pattern. */
 .relay-root .ctrl.voiced:not(.off) .ctrl-ic{animation:relayMicVoiced 1.1s ease-out infinite}
-@keyframes relayMicVoiced{0%{box-shadow:0 0 0 0 rgba(63,224,197,.45)}100%{box-shadow:0 0 0 7px rgba(63,224,197,0)}}
-@media (prefers-reduced-motion: reduce){.relay-root .ctrl.voiced:not(.off) .ctrl-ic{animation:none;box-shadow:0 0 0 3px rgba(63,224,197,.35)}}
+@keyframes relayMicVoiced{0%{box-shadow:0 0 0 0 rgba(var(--accent-rgb),.45)}100%{box-shadow:0 0 0 7px rgba(var(--accent-rgb),0)}}
+@media (prefers-reduced-motion: reduce){.relay-root .ctrl.voiced:not(.off) .ctrl-ic{animation:none;box-shadow:0 0 0 3px rgba(var(--accent-rgb),.35)}}
 /* Record row (now inside the ⋯ More menu), when armed, glows red. */
 .relay-root #recordBtn .ctrl-ic{color:#ff5d5d;background:rgba(255,76,76,.12);border-color:rgba(255,76,76,.3)}
 .relay-root #recordBtn.on .ctrl-ic{background:rgba(255,76,76,.26);border-color:#ff5d5d}
@@ -1027,7 +1037,7 @@ export const RELAY_CSS = `
   font-family:inherit;transition:transform .15s cubic-bezier(0.23,1,0.32,1),background .15s,border-color .15s;scroll-snap-align:center}
 .relay-root .relay-filter:hover{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.14);transform:translateY(-2px)}
 .relay-root .relay-filter:active{transform:scale(.96)}
-.relay-root .relay-filter.active{background:linear-gradient(135deg,rgba(63,224,197,.22),rgba(110,231,255,.22));border-color:var(--accent);box-shadow:0 0 0 2px rgba(63,224,197,.18)}
+.relay-root .relay-filter.active{background:linear-gradient(135deg,rgba(var(--accent-rgb),.22),rgba(var(--accent-rgb),.22));border-color:var(--accent);box-shadow:0 0 0 2px rgba(var(--accent-rgb),.18)}
 .relay-root .relay-filter .emoji{font-size:26px;line-height:1}
 .relay-root .relay-filter .lbl{font-size:11px;color:var(--muted);letter-spacing:.04em;font-weight:500}
 .relay-root .relay-filter.active .lbl{color:var(--accent)}
@@ -1105,8 +1115,8 @@ export const RELAY_CSS = `
 .relay-root .hl-acts button[data-act="pin"]:hover{border-color:#38bdf8;background:rgba(56,189,248,.12)}
 .relay-root .hl-acts button[data-act="cohost"]{color:#a78bfa;border-color:rgba(167,139,250,.28)}
 .relay-root .hl-acts button[data-act="cohost"]:hover{border-color:#a78bfa;background:rgba(167,139,250,.12)}
-.relay-root .hl-acts button[data-act="makehost"]{color:var(--accent);border-color:rgba(63,224,197,.28)}
-.relay-root .hl-acts button[data-act="makehost"]:hover{border-color:var(--accent);background:rgba(63,224,197,.12)}
+.relay-root .hl-acts button[data-act="makehost"]{color:var(--accent);border-color:rgba(var(--accent-rgb),.28)}
+.relay-root .hl-acts button[data-act="makehost"]:hover{border-color:var(--accent);background:rgba(var(--accent-rgb),.12)}
 .relay-root .hl-acts button.hl-danger{color:var(--danger);border-color:rgba(255,92,114,.3)}
 .relay-root .hl-acts button.hl-danger:hover{border-color:var(--danger);color:var(--danger);background:rgba(255,92,114,.12)}
 .relay-root .hl-empty{padding:18px;text-align:center;font-size:12px;color:var(--text2,#9aa)}
@@ -1132,7 +1142,7 @@ export const RELAY_CSS = `
    place. Under the name of each user"). The bottom offset clears the .nm band,
    whose own box is 11px offset + ~27px tall; keep the two in step. */
 .relay-root .relay-tile .tile-addc{position:absolute;left:12px;bottom:44px;z-index:4;display:inline-flex;align-items:center;gap:5px;
-  border:1px solid rgba(63,224,197,.5);background:rgba(8,9,12,.62);backdrop-filter:blur(6px);color:var(--accent);
+  border:1px solid rgba(var(--accent-rgb),.5);background:rgba(8,9,12,.62);backdrop-filter:blur(6px);color:var(--accent);
   border-radius:999px;padding:4px 10px 4px 8px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;line-height:1}
 .relay-root .relay-tile .tile-addc svg{width:13px;height:13px}
 .relay-root .relay-tile .tile-addc:hover{background:var(--accent);color:#04201B;border-color:var(--accent)}
@@ -1207,7 +1217,7 @@ export const RELAY_CSS = `
 .relay-root .conn-step.active{color:var(--text);opacity:1;transform:none}
 .relay-root .conn-step.done{color:var(--accent);opacity:1;transform:none}
 .relay-root .conn-tick{width:24px;height:24px;border-radius:50%;border:2px solid var(--border2);display:grid;place-items:center;flex:0 0 auto;transition:.3s}
-.relay-root .conn-step.active .conn-tick{border-color:var(--accent);box-shadow:0 0 0 4px rgba(63,224,197,.14)}
+.relay-root .conn-step.active .conn-tick{border-color:var(--accent);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.14)}
 .relay-root .conn-step.active .conn-tick::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);animation:relayPulse2 1s ease-in-out infinite}
 .relay-root .conn-step.done .conn-tick{border-color:var(--accent);background:var(--accent)}
 .relay-root .conn-step.done .conn-tick::after{content:"✓";color:#04201B;font-size:13px;font-weight:800;line-height:1}
@@ -1275,7 +1285,7 @@ export const RELAY_CSS = `
   background:rgba(245,158,11,.92);color:#0b0c10;font-size:10px;font-weight:800;padding:3px 8px;border-radius:7px;letter-spacing:.02em}
 .relay-root .relay-tile.on-hold video{filter:grayscale(.7) brightness(.6)}
 .relay-root .call-waiting .cw-pulse{width:9px;height:9px;border-radius:50%;background:var(--accent);animation:cwPulse 1.3s ease-out infinite;flex:0 0 auto}
-@keyframes cwPulse{0%{box-shadow:0 0 0 0 rgba(63,224,197,.5)}100%{box-shadow:0 0 0 9px rgba(63,224,197,0)}}
+@keyframes cwPulse{0%{box-shadow:0 0 0 0 rgba(var(--accent-rgb),.5)}100%{box-shadow:0 0 0 9px rgba(var(--accent-rgb),0)}}
 .relay-root .call-waiting .cw-actions{display:flex;gap:8px}
 .relay-root .call-waiting .cw-btn{border:none;border-radius:11px;padding:8px 14px;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:13px;cursor:pointer;transition:.14s}
 .relay-root .call-waiting .cw-decline{background:rgba(255,92,114,.16);color:var(--danger);border:1px solid rgba(255,92,114,.3)}
@@ -1302,8 +1312,8 @@ export const RELAY_CSS = `
 .relay-root .held-bar .held-end:hover{background:rgba(255,92,114,.26)}
 /* Being HELD (v2.97.1): the parked party's banner — visible, calm, unmissable. */
 .relay-root .onhold-bar{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:35;display:none;align-items:center;gap:12px;
-  background:rgba(16,26,32,.94);border:1px solid rgba(63,224,197,.4);border-radius:16px;padding:11px 18px;
-  box-shadow:0 18px 50px -18px rgba(0,0,0,.7),0 0 24px -8px rgba(63,224,197,.35);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
+  background:rgba(16,26,32,.94);border:1px solid rgba(var(--accent-rgb),.4);border-radius:16px;padding:11px 18px;
+  box-shadow:0 18px 50px -18px rgba(0,0,0,.7),0 0 24px -8px rgba(var(--accent-rgb),.35);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
 .relay-root .onhold-bar.show{display:flex}
 .relay-root .onhold-bar .oh-pulse{width:11px;height:11px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent);flex-shrink:0}
 @media (prefers-reduced-motion:no-preference){.relay-root .onhold-bar .oh-pulse{animation:relayPulse2 1.4s ease-in-out infinite}}

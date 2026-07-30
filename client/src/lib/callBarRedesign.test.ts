@@ -189,3 +189,43 @@ describe("the template literals are intact", () => {
     }
   });
 });
+
+describe("the whole call UI follows the ONE accent", () => {
+  it("the call surfaces' accent token points at the cycling accent", () => {
+    /* One declaration, and 59 var(--accent) sites follow it — including any added later,
+       which is what a per-rule sweep can never do. This is the same leverage as repointing
+       --primary for the six screens. */
+    expect(CSS_CODE).toMatch(/--accent:var\(--rb,#3FE0C5\)/);
+    expect(CSS_CODE).toMatch(/--accent-rgb:var\(--rb-rgb,63,224,197\)/);
+  });
+
+  it("the fallbacks are LITERALS, never self-references", () => {
+    /* MY OWN SWEEP GOT THIS WRONG AND IT WOULD HAVE ERASED EVERY ACCENT IN THE CALL UI.
+       Converting the hardcoded literals rewrote these two declarations' own fallbacks into
+       var(--accent) / var(--accent-rgb), i.e. a custom-property CYCLE — which resolves to
+       the guaranteed-invalid value, so both declarations are dropped. Caught by resolving
+       the value in a browser rather than reading the file. And the fallback is not
+       decoration: an UNSET custom property is an invalid declaration the browser DROPS, so
+       without it a call surface with no engine has NO accent rather than a plain one. */
+    expect(CSS_CODE).not.toMatch(/--accent:var\(--rb,var\(--accent\)\)/);
+    expect(CSS_CODE).not.toMatch(/--accent-rgb:var\(--rb-rgb,var\(--accent-rgb\)\)/);
+  });
+
+  it("--accent2 is the same hue at lower alpha, not a second colour", () => {
+    // The board has ONE accent. Two-tone gradients stay two-tone without a second hue.
+    expect(CSS_CODE).toMatch(/--accent2:rgba\(var\(--accent-rgb\),\.55\)/);
+    expect(CSS_CODE).toMatch(/--grad:linear-gradient\(135deg,var\(--accent\),var\(--accent2\)\)/);
+  });
+
+  it("no hardcoded accent literal is left to disagree with the variable", () => {
+    /* A HALF-CONVERTED ACCENT IS WORSE THAN NONE: a rule still painting the old cyan sits
+       beside one cycling through twelve hues, and the two visibly disagree. 40 literals
+       were converted; this is what keeps the count at zero. */
+    for (const lit of ["#3FE0C5", "#6EE7FF", "63,224,197", "110,231,255"]) {
+      const hits = CSS_CODE.split(lit).length - 1;
+      // The two token fallbacks are the ONLY legitimate occurrences.
+      const allowed = lit === "#3FE0C5" || lit === "63,224,197" ? 1 : 0;
+      expect(hits, lit).toBe(allowed);
+    }
+  });
+});
