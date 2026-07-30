@@ -236,6 +236,8 @@ export function NotificationBell({
   onOpenHistory,
   onOpenMessages,
   onOpenDevices,
+  onApproveDevice,
+  onDeclineDevice,
   dnd,
   onDndChange,
 }: {
@@ -249,10 +251,23 @@ export function NotificationBell({
    * rather than only a count. Optional, so a caller that has not fetched them —
    * or a pre-release client — degrades to the count line it showed before.
    */
-  pendingDetail?: { label: string; detail: string | null; createdAt: number } | null;
+  pendingDetail?: { sid: string; label: string; detail: string | null; createdAt: number } | null;
   onOpenHistory: () => void;
   onOpenMessages: () => void;
   onOpenDevices?: () => void;
+  /**
+   * Board 2d/5h draw Approve and Decline INSIDE the panel, and that is a real
+   * change rather than a restyle: v2.99.7 shipped the approval flow with Profile →
+   * Devices as the only place to act on it, so the notification told you something
+   * was waiting and then made you go and find it. The mutations live in the caller,
+   * which already owns the query and its invalidation — passing them down keeps this
+   * component presentational and stops a second copy of the refresh rule appearing.
+   *
+   * Offered ONLY when exactly one sign-in is waiting: with two, a pair of buttons
+   * would act on one of them while describing both.
+   */
+  onApproveDevice?: (sid: string) => void;
+  onDeclineDevice?: (sid: string) => void;
   dnd: boolean;
   onDndChange: (value: boolean) => void;
 }) {
@@ -263,6 +278,15 @@ export function NotificationBell({
   // for messages/calls so a routine device prompt doesn't strobe the header.
   // `.relay-blink*` are inert under prefers-reduced-motion (see index.css).
   const blink = missedCount + unreadCount > 0;
+  /* Acting on the sign-in HERE is only offered when there is exactly one waiting AND
+     the caller supplied both handlers. Derived once, so the two branches below can
+     never disagree about which one renders — without this the fallback row would
+     disappear for a caller that passes no handlers, losing the notification rather
+     than degrading it. */
+  const inlineApprove =
+    pendingDevices === 1 && pendingDetail && onApproveDevice && onDeclineDevice
+      ? { detail: pendingDetail, approve: onApproveDevice, decline: onDeclineDevice }
+      : null;
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -336,8 +360,11 @@ export function NotificationBell({
            absolute panel ran past the LEFT screen edge on phones — pin it to
            the viewport instead (fixed, 12px side margins, under the sticky
            header). Desktop keeps the classic right-aligned dropdown. */
-        <div className="max-md:fixed max-md:inset-x-3 max-md:top-16 md:absolute md:left-0 md:mt-2 md:w-64 rounded-2xl border border-border bg-card shadow-2xl overflow-hidden z-[80]">
-          <div className="px-4 py-2.5 border-b border-border text-xs font-semibold text-muted-foreground">
+        <div className="rsheet max-md:fixed max-md:inset-x-3 max-md:top-16 md:absolute md:left-0 md:mt-2 md:w-72 rounded-2xl border border-border bg-card shadow-2xl overflow-hidden z-[80]">
+          <div
+            className="px-4 py-2.5 border-b border-border font-mono text-[10px] font-bold uppercase text-muted-foreground"
+            style={{ letterSpacing: ".26em" }}
+          >
             Notifications
           </div>
           {/* Do Not Disturb lives here — the toggle stays in the panel rather
@@ -350,16 +377,87 @@ export function NotificationBell({
             <span className="flex-1 min-w-0">
               <span className="block text-sm font-medium">Do Not Disturb</span>
               <span className="block text-xs text-muted-foreground">
-                {dnd ? "Incoming calls are silenced" : "Calls ring normally"}
+                {dnd ? "Rings and chimes are silenced" : "Calls ring normally"}
               </span>
             </span>
             <Switch checked={dnd} onCheckedChange={onDndChange} aria-label="Toggle Do Not Disturb" />
           </label>
           {total === 0 ? (
-            <div className="px-4 py-6 text-center text-sm text-muted-foreground">You're all caught up 🎉</div>
+            /* Board 5h's empty state. It names what LANDS here rather than only
+               saying there is nothing — an empty panel that does not say what it is
+               for reads as broken the first time somebody opens it. */
+            <div className="px-4 py-7 text-center">
+              <div className="text-sm font-semibold">All caught up</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Missed calls, messages and sign-ins land here
+              </div>
+            </div>
           ) : (
             <ul>
-              {pendingDevices > 0 && (
+              {/* Board 2d/5h: a single waiting sign-in is acted on HERE. With more
+                  than one the row still routes to Devices, because two rows' worth
+                  of detail does not fit a dropdown and a single Approve pair would
+                  act on one while describing both. */}
+              {inlineApprove && (
+                <li>
+                  {/* A div, not a button: the two actions are buttons, and nesting a
+                      button inside a button is invalid HTML (the rule this repo
+                      already follows on thread rows and call tiles). */}
+                  <div className="px-4 py-3">
+                    <div className="flex items-start gap-3">
+                      <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-amber-400/15 text-amber-500">
+                        <ShieldQuestion className="size-4" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium">New device sign-in</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {inlineApprove.detail.label}
+                        </span>
+                        {inlineApprove.detail.detail && (
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {inlineApprove.detail.detail}
+                          </span>
+                        )}
+                        <span className="block text-[11px] text-muted-foreground">
+                          {new Date(inlineApprove.detail.createdAt).toLocaleString()}
+                        </span>
+                      </span>
+                    </div>
+                    <div className="mt-2.5 flex items-center gap-2 pl-12">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpen(false);
+                          inlineApprove.approve(inlineApprove.detail.sid);
+                        }}
+                        className="rcta rounded-full px-3.5 py-1.5 text-xs font-semibold"
+                      >
+                        Approve
+                      </button>
+                      {/* Declining REVOKES the pending session, which cannot be taken
+                          back — the other device has to start again — so it carries
+                          the destructive colour for the same reason the confirm
+                          dialogs do. */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpen(false);
+                          inlineApprove.decline(inlineApprove.detail.sid);
+                        }}
+                        className="rounded-full border border-destructive/40 px-3.5 py-1.5 text-xs font-semibold text-destructive hover:bg-destructive/10"
+                      >
+                        Decline
+                      </button>
+                    </div>
+                    {/* Said out loud, because the details above are exactly what makes
+                        this answerable: if it was not you, Decline is the action. */}
+                    <p className="mt-2 pl-12 text-[11px] leading-snug text-muted-foreground">
+                      If this wasn&apos;t you, decline it.
+                    </p>
+                  </div>
+                </li>
+              )}
+              {pendingDevices > 0 && !inlineApprove && (
                 <li>
                   <button
                     type="button"

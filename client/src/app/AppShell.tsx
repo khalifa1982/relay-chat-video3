@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Link, useLocation } from "wouter";
 import { Phone, MessageCircle, UsersRound, History, LogOut, Sparkles, Sun, Moon, Smartphone, Monitor, ArrowLeft, UserRound, BadgeCheck } from "lucide-react";
 import {
@@ -326,6 +327,44 @@ function Inner({ children }: { children: React.ReactNode }) {
   // The waiting sign-in's own details, ONLY when there is exactly one (v2.100.1).
   // With two waiting, naming the newest would describe one and imply both.
   const pendingDetail = pendingDevices === 1 ? pendingList[0] : null;
+  /* Board 2d/5h — acting on a waiting sign-in from the notification panel itself.
+     The mutations live HERE rather than in the bell because this is where the query
+     and its invalidation already are: a second copy of the refresh rule is how the
+     panel and the Devices list come to disagree about what is still pending.
+     Declining REVOKES the pending session, which is the same call Profile's Devices
+     list makes, so the two cannot mean different things. */
+  const approveSession = trpc.otpAuth.approveSession.useMutation();
+  const revokeSession = trpc.otpAuth.revokeSession.useMutation();
+  const refreshPending = () => {
+    void utils.otpAuth.pendingSessions.invalidate();
+    void utils.otpAuth.listSessions.invalidate();
+  };
+  const approveDevice = (sid: string) => {
+    approveSession.mutate(
+      { sid },
+      {
+        onSuccess: () => {
+          refreshPending();
+          toast.success("Device approved — it can sign in now.");
+        },
+        // Named, not swallowed: a silent failure here leaves somebody waiting on a
+        // device that will never be let in, with nothing saying why.
+        onError: (e) => toast.error(e.message || "Couldn't approve that device."),
+      }
+    );
+  };
+  const declineDevice = (sid: string) => {
+    revokeSession.mutate(
+      { sid },
+      {
+        onSuccess: () => {
+          refreshPending();
+          toast.success("Sign-in declined.");
+        },
+        onError: (e) => toast.error(e.message || "Couldn't decline that sign-in."),
+      }
+    );
+  };
   const markSeen = trpc.calls.markMissedSeen.useMutation({
     onSuccess: () => utils.calls.missedSummary.invalidate(),
   });
@@ -459,6 +498,8 @@ function Inner({ children }: { children: React.ReactNode }) {
               onOpenHistory={() => navigate("/app/history?filter=missed")}
               onOpenMessages={() => navigate("/app/messages")}
               onOpenDevices={() => navigate("/app/profile#devices")}
+              onApproveDevice={approveDevice}
+              onDeclineDevice={declineDevice}
               dnd={dnd}
               onDndChange={setDnd}
             />
@@ -693,6 +734,8 @@ function Inner({ children }: { children: React.ReactNode }) {
               onOpenHistory={() => navigate("/app/history?filter=missed")}
               onOpenMessages={() => navigate("/app/messages")}
               onOpenDevices={() => navigate("/app/profile#devices")}
+              onApproveDevice={approveDevice}
+              onDeclineDevice={declineDevice}
               dnd={dnd}
               onDndChange={setDnd}
             />

@@ -313,7 +313,19 @@ describe("what the owner actually sees", () => {
   });
 
   it("the detail prop is OPTIONAL, so a caller that has not fetched it degrades", () => {
-    expect(BELL).toMatch(/pendingDetail\?: \{ label: string; detail: string \| null; createdAt: number \} \| null;/);
+    // REWRITTEN TO THE PROPERTY (v2.106.12). This froze the prop's exact type
+    // literal, so adding `sid` for board 2d's inline Approve/Decline broke it while
+    // saying nothing about the property it stands for — that the prop is OPTIONAL,
+    // so a caller (or an older client) that has not fetched the detail degrades to
+    // the count line rather than rendering blanks.
+    const decl = BELL.slice(BELL.indexOf("pendingDetail?:"));
+    expect(decl.slice(0, 200)).toMatch(/^pendingDetail\?:/); // optional, not required
+    for (const f of ["label", "detail", "createdAt"]) {
+      expect(decl.slice(0, 200), `detail field ${f}`).toMatch(new RegExp(`\\b${f}:`));
+    }
+    // Nullable as well as optional: AppShell passes null outright when more than one
+    // sign-in is waiting, and a non-nullable type would have forced a placeholder.
+    expect(decl.slice(0, 200)).toMatch(/\|\s*null;/);
   });
 
   it("AppShell derives it from the SAME query the count comes from", () => {

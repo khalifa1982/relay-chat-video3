@@ -19,9 +19,19 @@ const RELAY_ASSETS = read("client/src/lib/relayAssets.ts");
 
 describe("notification panel fits the screen (v2.96.3)", () => {
   it("mobile: fixed + viewport-clamped; desktop sidebar: opens rightward (left-anchored)", () => {
-    expect(MISSED).toMatch(/max-md:fixed max-md:inset-x-3 max-md:top-16 md:absolute md:left-0 md:mt-2 md:w-64/);
+    // REWRITTEN TO THE PROPERTY (v2.106.12). This froze the exact class string
+    // including `md:w-64`, so it broke the moment the panel legitimately widened for
+    // board 2d's inline Approve/Decline — while saying nothing about what it exists
+    // to prevent, which is a panel that runs off the edge of a phone.
+    //
+    // The rule the bug had: the bell sits mid-bar, so a RIGHT-anchored absolute panel
+    // ran past the LEFT screen edge. Mobile must therefore be pinned to the VIEWPORT,
+    // and desktop must open rightward from a LEFT anchor.
+    expect(MISSED).toMatch(/max-md:fixed/);
+    expect(MISSED).toMatch(/max-md:inset-x-\d/); // clamped to the viewport, both sides
+    expect(MISSED).toMatch(/md:absolute md:left-0/); // desktop opens rightward
     // The old right-anchored absolute panel (ran off-screen) must be gone.
-    expect(MISSED).not.toMatch(/"absolute right-0 mt-2 w-64/);
+    expect(MISSED).not.toMatch(/absolute right-0 mt-2 w-64/);
   });
 });
 

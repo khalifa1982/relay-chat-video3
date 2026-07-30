@@ -11278,6 +11278,65 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.12 — board 2d + 4g: act on a sign-in from the panel it was announced in (2026-07-30)
+
+**Board 2d / 5h — the notification center.** v2.99.7 shipped new-device approval with
+Profile → Devices as the only place to act, so the bell announced somebody was waiting and
+then made you go and find it. Approve and Decline are now in the panel.
+
+- **The handlers live in AppShell, not the bell** — that is where the query and its
+  invalidation already are. A second copy of the refresh rule is how the panel and the
+  Devices list come to disagree about what is still pending.
+- **Decline is the same `revokeSession` the Devices list calls**, so the two cannot come to
+  mean different things by one word.
+- **Only for exactly one waiting sign-in.** With two, a single Approve pair would act on one
+  while describing both, so the count keeps its routing row.
+- **A defect I wrote and caught.** Gating the inline block on the handlers while the fallback
+  was gated on `pendingDevices > 1` meant one pending sign-in with *no* handlers rendered
+  **nothing** — the notification lost rather than degraded. Both branches now read one
+  derived flag; a mutation restoring the old pair bites.
+- The row is a div because it contains buttons (nested buttons are invalid HTML). Approve is
+  the accent; **Decline is destructive**, since revoking a pending session can't be undone.
+- **The empty state names what lands here** (5h) rather than only saying there's nothing — a
+  panel that doesn't say what it's for reads as broken the first time it's opened.
+
+**Board 4g — guest restore.** The card was green end to end, and **green means ONLINE** in
+this app. Same vocabulary fix as v2.106.11's push banner, one release later in a second
+place — which is what makes it a habit rather than an accident.
+
+- **The accent fallbacks are literals.** `var(--rb, var(--rb))` is a custom-property cycle,
+  which resolves to the guaranteed-invalid value and *drops* the declaration — the card would
+  render with no border at all. That trap bit v2.106.7; it's forbidden here by test.
+- **My own test caught a real miss**: I restyled the card and left the Restore *button* on the
+  presence green. The assertion failed and it became `.rcta`.
+- **"2 DAYS AGO" is renderable honestly** from the browser's own `savedAt` (the server returns
+  no timestamp), said as **"Saved"** because that's what it measures. Reuses
+  `formatElapsedSince`; renders nothing for a record predating the field or a backwards clock.
+- **The guest badge is a fact**, not a guess: a stranded recovery record can only ever name an
+  unclaimed identity, because the server refuses anything a user row has taken.
+- **`forgetGuestRecovery` still has exactly one call site** and is still not on a failure path.
+  The stored key is the only copy in existence (v2.99.68), and a restyle is exactly the kind
+  of change that adds a second one by accident.
+
+**Two defects in my own test, both failing on correct code**: a `<li>` shape pattern that
+couldn't match because `codeOnly` collapses a JSX `{/* … */}` to a bare `{}` (rewritten to the
+property — the first *tag* after the `<li>` is a div, i.e. not a button); and an
+over-specified whitespace pattern.
+
+`client/src/app/notifCenterRestore.test.ts` (17). **All 8 tripwires verified by mutation** from
+byte-exact backups off a confirmed-green baseline; sources byte-identical afterwards.
+
+**Two pre-existing pins rewritten to the property**, both having frozen a literal this release
+legitimately moves: `pendingDetail`'s exact type string (adding `sid` broke it while saying
+nothing about the property — the prop is optional *and* nullable, so a caller that hasn't
+fetched the detail degrades to the count line); and the panel's exact class string including
+`md:w-64` (now: mobile pinned to the viewport, desktop opens rightward — what it exists to
+prevent).
+
+**Not verified on a device**: nobody has approved a sign-in from the panel on a phone.
+
+No schema change, no new dependency, no new env var. 4209 tests.
+
 ## v2.106.11 — board 4k system alerts; every destructive confirmation was wearing a safe colour (2026-07-30)
 
 **The finding.** `AlertDialogAction` defaults to `bg-primary`, and v2.106.4 repointed
