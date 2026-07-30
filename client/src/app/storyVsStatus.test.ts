@@ -21,6 +21,9 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+// #115 — the story vocabulary now lives in one shared place, so assert it there.
+import { STORY_KIND_LABEL } from "@shared/statusReply";
+import { previewOfStoryReply } from "@/app/messagePreview";
 
 const ROOT = path.resolve(__dirname, "../../..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -107,10 +110,25 @@ describe("the ephemeral post is called a STORY", () => {
     // v2.99.80 put a "replied to your status" chip on the message. It is a reply to
     // a STORY, and the chip is the only thing telling the recipient what it was about.
     expect(MESSAGES).toMatch(/"Replied to their story" : "Replied to your story"/);
-    expect(MESSAGES).toMatch(/text: "Story",/);
-    expect(MESSAGES).toMatch(/image: "📷 Photo story",/);
-    expect(MESSAGES).toMatch(/video: "🎬 Video story",/);
-    expect(MESSAGES).toMatch(/audio: "🎤 Audio story",/);
+    /* #115 — the four kind labels MOVED to `shared/statusReply.ts` (the server's thread
+       projection needs the same vocabulary), so they are asserted at their new home.
+       Strictly stronger than before: this now walks EVERY label and requires the word,
+       so a fifth story kind added later cannot arrive saying "status". */
+    for (const label of Object.values(STORY_KIND_LABEL)) {
+      expect(label.toLowerCase()).toContain("story");
+      expect(label.toLowerCase()).not.toContain("status");
+    }
+    expect(STORY_KIND_LABEL.text).toBe("Story");
+    expect(STORY_KIND_LABEL.image).toBe("📷 Photo story");
+    expect(STORY_KIND_LABEL.video).toBe("🎬 Video story");
+    expect(STORY_KIND_LABEL.audio).toBe("🎤 Audio story");
+  });
+
+  it("and the thread list says story too, not status", () => {
+    // #115 — the row used to show a bare reaction emoji with no context at all, so
+    // there was no wording here to get wrong. Now there is.
+    expect(previewOfStoryReply({ mine: false, kind: "text", body: "😂" })).toContain("story");
+    expect(previewOfStoryReply({ mine: true, kind: "text", body: "😂" }).toLowerCase()).not.toContain("status");
   });
 
   it("the audience control is about STORIES, and says so", () => {

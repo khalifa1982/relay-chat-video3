@@ -60,6 +60,9 @@ import { normalizeEmail } from "./authCrypto";
 // (see inviteGuestRegistration). `authOtp` imports no v2db, so this is cycle-free.
 import { findUserByEmailAny } from "./authOtp";
 import { hashRecoveryKey, newRecoveryKey } from "./guestRecovery";
+// #115 — ONE parser for the story-reply marker, shared with the client's bubble chip so
+// a thread row and the conversation it opens cannot disagree about the same message.
+import { isStatusReply } from "@shared/statusReply";
 import {
   normalizeProfileStatus,
   normalizeStatusNote,
@@ -4251,6 +4254,21 @@ export interface ThreadSummary {
   unreadCount: number;
   lastMessagePreview: string | null;
   lastMessageKind: string;
+  /**
+   * #115 — the newest message is a reply to a STORY, so the list can say what a bare
+   * emoji was about instead of showing a floating ❤️ attached to nothing.
+   *
+   * A BOOLEAN, not the marker: the marker carries the story's own text excerpt, and a
+   * one-line row has no room for it (see `previewOfStoryReply`). Narrow on purpose —
+   * this is a projection, and shipping the whole blob is how a field added to `meta`
+   * later reaches the browser with nobody deciding it should.
+   */
+  lastMessageStatusReply: boolean;
+  /**
+   * Whether the newest message is OURS. What makes "your story" vs "their story"
+   * answerable, and correct because a story reply is always a DM to the story's author.
+   */
+  lastMessageMine: boolean;
 }
 
 /**
@@ -4297,7 +4315,13 @@ export function composeThreadSummaries(input: {
   }>;
   latestMessageByConvo: Map<
     number,
-    { body: string | null; kind: string } | null
+    {
+      body: string | null;
+      kind: string;
+      /** #115 — derived by the caller from the `meta` it already holds. */
+      statusReply?: boolean;
+      mine?: boolean;
+    } | null
   >;
 }): ThreadSummary[] {
   const otherById = new Map(input.otherIdentities.map((i) => [i.id, i]));
@@ -4338,6 +4362,10 @@ export function composeThreadSummaries(input: {
       unreadCount: unreadByConvo.get(p.conversationId) ?? 0,
       lastMessagePreview: latest?.body ?? null,
       lastMessageKind: latest?.kind ?? "text",
+      // #115 — both default to FALSE for a thread with no visible message, so a row
+      // with no preview can never claim to be a story reply.
+      lastMessageStatusReply: latest?.statusReply === true,
+      lastMessageMine: latest?.mine === true,
       // Null by default and set only in the group branch, so a DM can never carry a
       // group's id by accident.
       groupNumber: null as string | null,
@@ -4620,6 +4648,14 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
                   ? null
                   : (m.body ?? null),
               kind: m.kind,
+              /* #115 — FREE, and the deferral note was wrong about why it wasn't.
+                 It said adding `meta` "touches the groupwise-max query every client
+                 polls". It does not: that aggregate (`MAX(id) GROUP BY`) selects two
+                 integer columns and is a separate query, untouched. The row here comes
+                 from a bare `.select()` over at most a few dozen PRIMARY KEYS, so
+                 `m.meta` is already loaded — the line directly above reads it. */
+              statusReply: isStatusReply(m.meta),
+              mine: m.senderIdentityId === identityId,
             }
           : null,
       ])
