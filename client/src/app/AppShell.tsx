@@ -31,6 +31,7 @@ import { CallHealthBanner } from "./CallHealthBanner";
 import { PeerOverlaysHost } from "./PeerOverlays";
 import { unlockAudio } from "./notifications";
 import { requestProfilePane } from "./profilePane";
+import { RelayBackground } from "./RelayBackground";
 import { APP_VERSION } from "@shared/version";
 
 /**
@@ -210,6 +211,11 @@ function Inner({ children }: { children: React.ReactNode }) {
     refetchOnWindowFocus: false,
   });
   const { theme, setTheme } = useTheme();
+  /* The live canvas runs in DARK ONLY — see the mount below for why. Derived here so the
+     shell's own background and the mount cannot disagree: two separate reads of the
+     theme is how you get an opaque shell over a running canvas, i.e. all of the cost and
+     none of the effect. */
+  const liveBackground = theme === "dark";
   // Universal Back: Profile is the one drill-in route off the tab bar (message
   // threads handle their own in-page back). Go back in history, or fall back to
   // the dialer if there's nowhere to go.
@@ -342,7 +348,37 @@ function Inner({ children }: { children: React.ReactNode }) {
   if (!me) return null;
 
   return (
-    <div className="min-h-svh bg-background text-foreground flex flex-col md:flex-row">
+    <div
+      className={
+        "min-h-svh text-foreground flex flex-col md:flex-row " +
+        // TRANSPARENT ONLY WHERE THE CANVAS IS LIVE. `bg-background` is opaque, so
+        // leaving it would hide the canvas completely — a loop costing frames and
+        // showing nothing, which is worse than not mounting it at all.
+        (liveBackground ? "bg-transparent" : "bg-background")
+      }
+    >
+      {/* THE LIVE BACKGROUND, APP-WIDE (design_handoff_relay_app §"Background engine").
+          The handoff is explicit that production wants ONE fixed fullscreen canvas
+          behind the app shell rather than a canvas per screen, and that is also the only
+          affordable shape: the engine runs its own rAF per canvas, so a mount per route
+          would multiply the cost by the number of live screens — the class of mistake
+          v2.99.67 measured when the landing page cooked a phone.
+
+          EXACTLY ONE IS EVER LIVE. `LoginScreen` mounts its own, and this shell renders
+          only for a signed-in identity, so the two are mutually exclusive branches of
+          `OnboardingGate` — never both at once.
+
+          DARK ONLY, and that is a decision rather than an omission. The board is a dark
+          design throughout ("dark glass"), while this app's DEFAULT theme is light and
+          the desktop sidebar offers a Dark/Light control the handoff itself keeps (1i).
+          Near-black text on a live near-black canvas is unreadable, so light mode keeps
+          today's opaque surfaces until a light variant is designed rather than shipping
+          a screen nobody can read.
+
+          The accent vars are published either way: the engine publishes them when it is
+          mounted, and `index.css` carries a static fallback for when it is not — so a
+          light-mode user still gets a coherent accent, just not a moving one. */}
+      {liveBackground && <RelayBackground />}
       {/* The "while you were away" banner is GONE from the main screen
           (v2.99.67, owner: "the missed call notification, the way how it works,
           it's not nice. Don't show it on the main screen as a side banner from up
