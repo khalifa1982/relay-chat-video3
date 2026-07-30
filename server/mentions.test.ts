@@ -289,3 +289,56 @@ describe("the composer autocomplete", () => {
     expect(body).toMatch(/setSelectionRange\(applied\.caret, applied\.caret\)/);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+   Board 4d / 2f — and the standing guard the repeated violation earned.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+describe("green means ONLINE, and only online", () => {
+  const UI = codeOnly(read("client/src/pages/app/Messages.tsx"));
+
+  it("the recording waveform is the ACCENT, not the presence green", () => {
+    // A green waveform is a fourth meaning for the one colour that has to carry
+    // exactly one — the same fix v2.99.86 made for DND, v2.106.9 for the speaking
+    // tile and v2.106.11 for the push banner. Recording is ACTIVE, which is what
+    // the accent means after v2.106.6.
+    const at = UI.indexOf("const BARS = 30;");
+    expect(at).toBeGreaterThan(0);
+    const bar = UI.slice(at, UI.indexOf("\nfunction ", at));
+    expect(bar).toMatch(/var\(--rb, #3FE0C5\)/);
+    expect(bar).not.toMatch(/relay-online/);
+  });
+
+  it("the voice-note play button is the accent (board 2f)", () => {
+    const at = UI.indexOf('aria-label={playing ? "Pause" : "Play voice note"}');
+    expect(at).toBeGreaterThan(0);
+    const btn = UI.slice(at, at + 900);
+    expect(btn).toMatch(/rgba\(var\(--rb-rgb, 63, 224, 197\), 0\.16\)/);
+    expect(btn).not.toMatch(/relay-online/);
+  });
+
+  it("every REMAINING use of the presence green is about presence", () => {
+    /* THE STANDING GUARD. This exact violation has now been found four times in
+       four releases, always by measuring rather than by reading — so it gets a
+       sweep rather than a fourth one-off fix.
+       `typing…` is DELIBERATELY allowed: typing implies online (you cannot type
+       from an offline client), it occupies the presence slot in the same header,
+       and it is a STRONGER presence statement rather than a different kind of
+       fact. So green is carrying its one meaning there. */
+    const ALLOWED = [/typing…/, /\bonline\b/, /online now/];
+    const lines = UI.split("\n").filter((l) => l.includes("relay-online"));
+    for (const l of lines) {
+      expect(
+        ALLOWED.some((re) => re.test(l)),
+        `presence green used for something that is not presence:\n  ${l.trim()}`
+      ).toBe(true);
+    }
+  });
+
+  it("the recording DOT stays red, because red-means-recording does not collide", () => {
+    // The only destructive control in the bar is the discard button, which is a
+    // filled chip rather than a hairline — so the two cannot be mistaken.
+    const at = UI.indexOf("const BARS = 30;");
+    expect(UI.slice(at, UI.indexOf("\nfunction ", at))).toMatch(/bg-destructive motion-safe:animate-pulse/);
+  });
+});

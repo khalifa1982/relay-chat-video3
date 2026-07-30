@@ -3903,9 +3903,21 @@ function VoiceNotePlayer({
         aria-label={playing ? "Pause" : "Play voice note"}
         className={
           "grid size-9 shrink-0 place-items-center rounded-full active:scale-95 transition-transform " +
-          (mine
-            ? "bg-white/20 text-white"
-            : "bg-[color:var(--relay-online,#06d6a0)]/15 text-[color:var(--relay-online,#06d6a0)]")
+          (mine ? "bg-white/20 text-white" : "")
+        }
+        /* Board 2f asks for an ACCENT play button, and the same vocabulary argument
+           as the waveform above applies: this was `--relay-online`, and a play
+           control is not a presence statement. Green means ONLINE in this app and
+           that is the only thing it may mean. Literal fallbacks, never a
+           self-referencing `var(--rb, var(--rb))`, which is a cycle the browser
+           drops (v2.106.7). */
+        style={
+          mine
+            ? undefined
+            : {
+                background: "rgba(var(--rb-rgb, 63, 224, 197), 0.16)",
+                color: "var(--rb, #3FE0C5)",
+              }
         }
       >
         {playing ? <Pause className="size-4" /> : <Play className="size-4 translate-x-[1px]" />}
@@ -4059,11 +4071,28 @@ function RecordingBar({
               ref={(el) => {
                 barsRef.current[i] = el;
               }}
-              className={
-                "h-6 w-full min-w-[2px] origin-center rounded-full " +
-                (paused ? "bg-muted-foreground/40" : "bg-[color:var(--relay-online,#06d6a0)]")
-              }
-              style={{ transform: "scaleY(0.12)" }}
+              className="h-6 w-full min-w-[2px] origin-center rounded-full"
+              style={{
+                transform: "scaleY(0.12)",
+                /* Board 4d, and this is a VOCABULARY fix rather than a restyle.
+                   These bars were painted with `--relay-online` — the presence
+                   green, which in this app means ONLINE and nothing else: it is
+                   what every LED is drawn with, which is why v2.99.86 moved DND
+                   off it, v2.106.9 moved the speaking tile off it and v2.106.11
+                   moved the push banner off it. A green waveform is a fourth
+                   meaning for the one colour that has to carry exactly one.
+                   Recording is ACTIVE, which is what the accent means after
+                   v2.106.6 — and the literal fallback is deliberate, because
+                   `var(--rb, var(--rb))` is a custom-property cycle the browser
+                   drops entirely (v2.106.7).
+                   The DOT stays red: red-means-recording is a convention older
+                   than this app and does not collide with destructive here,
+                   since the only destructive control in the bar is the discard
+                   button, which is a filled chip rather than a hairline. */
+                background: paused
+                  ? "rgba(var(--rb-rgb, 63, 224, 197), 0.28)"
+                  : "var(--rb, #3FE0C5)",
+              }}
             />
           ))}
         </span>
