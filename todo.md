@@ -11278,6 +11278,122 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.24 — presence stops blocking calls; reachability decides (2026-07-30)
+
+The owner's brief, verbatim: *"Allow the call if the callee has a live socket OR any
+registered push subscription. Fall back to messaging only when they have neither."*
+
+**THE THREE THINGS THEY ASKED ME TO CONFIRM BEFORE CHANGING ANYTHING, ANSWERED FIRST.**
+
+1. **Where the gate actually is:** in exactly TWO files, both halves of the
+   `/i/<pin>` invite-join card — `OnboardingGate.tsx` (a visitor with no identity) and
+   `Join.tsx` (somebody signed in). Nowhere else. The Dialer's own guard is a
+   *nonexistent-number* check (v2.99.17), not a presence check, and the signaling path
+   never consulted presence at all.
+2. **Whether `apns-voip` is already reachable from call initiation:** YES, and it
+   shipped in v2.105.12 — `onPageCallee` sends `kind:"incoming-call"` through
+   `sendPushToIdentity` and `relay.ts` pages the dial when `pushed > 0`. So the server
+   half of the ask already existed; what was wrong was a CLIENT gate refusing to offer
+   the call in the first place. Pinned here rather than rebuilt.
+3. **A genuinely unreachable user:** already correct — the fast honest `offline` reply
+   plus the leave-a-message card (v2.99.11). That is the one guard kept.
+
+**THE DIAGNOSIS IS A CATEGORY ERROR, NOT A BUG IN ANY ONE LINE.** `presence` is bound to
+a live socket session (`presence.socketSessionId`), so backgrounding the app, locking the
+phone or closing the tab drops it and `isOnline` goes 0 — which is the *normal* state for
+a phone. Presence answers **"is a socket open"**; a call needs to know **"can anything be
+woken"**. Those were the same boolean, so the join card refused calls to most of the user
+base most of the time.
+
+**AND IT WAS GUARDING A LIMITATION THAT NO LONGER EXISTS**, which is what makes this
+safe rather than a relaxation: the owner verified a VoIP push end to end on a physical
+device — APNs HTTP 200 (`apns-id 7BD950D7-6926-4D0F-AA94-2934786819A2`) and the handset
+rendered full-screen CallKit with the app not in the foreground. A backgrounded phone is
+exactly what that wakes.
+
+**THE SHARPEST FINDING IS THE ONE THAT WOULD HAVE BROKEN THE OWNER'S OWN VERIFIED
+DEVICE.** The obvious implementation is to reuse `hasPushSubscription` — it already asks
+"does this identity have a push row". **It would have reported the CallKit iPhone as
+UNREACHABLE**, because it filters to `('webpush','fcm','expo')` and EXCLUDES both APNs
+kinds *deliberately* (v2.105.11/12): its only consumer asks *"did they already get a
+NOTIFICATION, so is an email redundant"*, and a VoIP push carries no `aps.alert`, so it
+is not a notification. Counting APNs there would leave a recipient with **neither a push
+nor an email**. Two different questions, so two predicates — new `canRingIdentity`
+accepts every kind that can ring (`webpush`, `fcm`, `expo`, `apns`, `apns-voip`), and a
+test forbids either from being collapsed into the other in EITHER direction.
+
+**IT FAILS OPEN, and that direction is the whole point of the release**: this decides
+whether to OFFER a call, so a DB hiccup must not hide the call button — that is the bug
+being removed. `if (!db) return true` and `catch { return true }`, both mutation-verified.
+
+**THE SOCKET PATH IS UNTOUCHED AND IS STILL PREFERRED**, per the owner's constraint:
+`reachable = (pres?.isOnline ?? false) || (await canRingIdentity(id.id))`, so for
+somebody with the app open the `||` short-circuits and **no query is spent** — the
+ordering is pinned by index comparison, not by reading it.
+
+**PRESENCE TRACKING IS NOT REMOVED** (their constraint, and it is right): it still
+decides the socket-vs-push route, still drives every LED, and its v2.95 guest-privacy
+suppression is byte-identical. **REACHABILITY IS DELIBERATELY *NOT* SUPPRESSED WITH IT**,
+because the privacy rule hides whether somebody is online *right now* while reachability
+says only that a device exists — withholding it would refuse calls to exactly the
+long-inactive guests the suppression protects, i.e. re-create the bug in the name of
+privacy. Nothing new is disclosed: that endpoint already returns their name, avatar,
+badge and tier for any number.
+
+**A PARTY LINE IS ALWAYS REACHABLE**, stated as a decision: joining a line rings nobody
+— you land on the room — so deriving it from occupancy would make an EMPTY line
+uncallable, which is the opposite of what a party line is for.
+
+**BOTH CLIENT GATES FAIL OPEN ON A MISSING FIELD** (`reachable ?? true`), because a
+rolling deploy serves both bundles for ~60s and refusing on an absent field would turn
+that window into a calling outage. **THE COPY CHANGED WITH THE RULE**: "They're offline —
+can't call" became "Can't be reached", and *"once they're back online"* had to go —
+coming online is not what would fix the state that remains, since there is no device to
+come online.
+
+**NO `claimHash` OR OWNERSHIP CHECK IS WEAKENED** (their constraint): the lookup selects
+`pushSubscriptions.id` ONLY, scoped by `identityId`, and a test forbids `endpoint`,
+`p256dh`, `auth` and `claimHash` from appearing in it. No env var, key path or APNs
+config is touched.
+
+**ON THE LONGER RING TIMEOUT THEY ASKED ME TO CONSIDER — the numbers are already
+push-aware, and I am leaving them alone rather than changing them quietly.** The callee's
+60s auto-decline is armed when their ring card is **PRESENTED**, including on the
+push-delivered path where `deliverPendingRing` hands the ring over as the app opens — so
+a phone woken from a locked screen gets its full 60s from when the person *sees* the
+call, not from when the caller dialled. What the caller's 65s bounds is how long *they*
+stare at the card, which is an ordinary ring length rather than a limitation of the push
+path; raising it is a decision about the caller's patience. The **LADDER** is pinned
+instead, because the ordering is what makes all three honest: callee 60s < caller 65s <
+server `PENDING_RING_TTL_MS` 70s — the callee gives up first so the caller is *told*
+"declined" rather than timing out on nothing, and the caller resolves before the server
+forgets the pending ring. A mutation raising the backstop past the TTL bites, and so does
+one arming the callee's clock at dial time.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: no phone here, so nobody has backgrounded the
+app and watched a call arrive as CallKit. What is proven is the predicate, the wire field,
+both gates, the fail-open direction and the timeout ladder.
+
+- [x] `canRingIdentity` in `server/v2db.ts` — accepts every ringable kind, fails open,
+      reads only `id`, never consults the push switch (that is enforced once, inside
+      `sendPushToIdentity`)
+- [x] `hasPushSubscription` left byte-identical, with the difference pinned as deliberate
+- [x] `reachable` on `directory.lookup`, socket-first, `true` for a party line
+- [x] Both halves of the invite-join card gate on reachability, fail open, keep the
+      honest nothing-to-ring guard, and no longer promise "back online"
+- [x] `server/callReachability.test.ts` (28); **all 16 tripwires verified by MUTATION**
+      off a confirmed-GREEN baseline, sources byte-identical afterwards — with two
+      re-anchored after the mutator correctly ABORTED on a needle shared verbatim with
+      `hasPushSubscription`
+- [x] Three pre-existing pins rewritten to the property (they had frozen the presence
+      gate itself): two in `client/src/app/callLinkJoin.test.ts`, one in
+      `server/inviteJoinScreen.test.ts`
+- [x] A defect in my own first draft, caught by it failing on CORRECT code: the
+      honest-guard pin anchored on `blocked = `, and the identifier is `joinBlocked` —
+      capital B, so the substring never matched. Now the identifiers are NAMED per screen
+      and the assertion reads the flag's own initialiser
+- [x] No schema change, no new dependency, no new env var. 4537 tests
+
 ## v2.106.23 — 2g voicemail, 5a party lines, 5c quality readout (2026-07-30)
 
 Three frames, and the first three patches in this build that **arrived with their own

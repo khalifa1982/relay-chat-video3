@@ -89,8 +89,14 @@ export default function JoinPage() {
   const personResolved = person.isFetched && !person.isError;
   const isLine = !!line;
   const notFound = personResolved && !isLine && !p;
-  const offline = personResolved && !isLine && !!p && !p.isOnline;
-  const blocked = notFound || offline;
+  /* REACHABILITY, NOT PRESENCE. Same change and same reason as the guest half of this
+     card in `OnboardingGate.tsx` — one card, two screens (v2.105.25), so a fix applied
+     to one and not the other is exactly how they come to disagree about the same call.
+     Presence is bound to a live socket, so a backgrounded or locked phone reads offline
+     while being the very thing a VoIP push wakes. `?? true` keeps the fail-open rule for
+     a server that predates the field. */
+  const unreachable = personResolved && !isLine && !!p && !(p.reachable ?? true);
+  const blocked = notFound || unreachable;
 
   // A dial is one tap and one tap only: the guard is a ref, so a double-tap or a
   // re-render cannot place two calls.
@@ -156,9 +162,9 @@ export default function JoinPage() {
               >
                 {notFound ? (
                   "Number not found"
-                ) : offline ? (
+                ) : unreachable ? (
                   <>
-                    <PhoneCall className="size-4" /> They're offline — can't call
+                    <PhoneCall className="size-4" /> Can't be reached
                   </>
                 ) : !engineReady ? (
                   "Connecting…"
@@ -188,9 +194,13 @@ export default function JoinPage() {
                   <Video className="size-4" /> Join with video instead
                 </Button>
               )}
-              {offline && (
+              {/* Not "offline" any more: an offline-but-installed phone rings now, so
+                  what is left in this branch is somebody with no device at all — and
+                  "once they're back online" would promise something nothing can keep. */}
+              {unreachable && (
                 <p className="mt-2.5 text-center text-xs text-muted-foreground">
-                  You can reach {invitePerson?.displayName || "them"} once they're back online.
+                  There's no device we can ring for {invitePerson?.displayName || "them"} yet.
+                  Once they open RELAY on a phone, calls will reach them.
                 </p>
               )}
             </>

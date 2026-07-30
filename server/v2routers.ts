@@ -143,6 +143,7 @@ import {
   pushReachable,
   type PresenceLite,
 
+  canRingIdentity,
 } from "./v2db";
 import { adminPurgeIdentity, guestDaysLeft } from "./purgeIdentity";
 import {
@@ -1202,12 +1203,33 @@ export const v2DirectoryRouter = router({
           role: null as IdentityRole | null, // a line is not a person — no badge
           inCall: false,
           partyLine: true,
+          // A line is always reachable: joining rings nobody, you just land on the
+          // room — so an empty line must stay joinable, which is the point of a line.
+          reachable: true,
           memberCount,
         };
       }
       const id = await getIdentityByNumber(input.number);
       if (!id) return null;
       const [pres] = await getPresenceForIds([id.id]);
+      /* CAN A CALL TO THEM RING ANYTHING? Presence answers "is a socket open", which
+         is NOT the same question and is the wrong one to gate a call on: presence is
+         bound to a live socket session, so backgrounding the app or locking the phone
+         drops it — and a backgrounded phone is precisely what a VoIP push wakes.
+         Reachability is therefore `a live socket OR a device we can push a ring to`.
+
+         Emitted ALONGSIDE `isOnline`, never instead of it — an older client ignores
+         the field and keeps today's behaviour, and presence stays what it always was
+         for showing status.
+
+         REPORTED HONESTLY EVEN WHEN PRESENCE IS SUPPRESSED, deliberately. The v2.95
+         privacy rule hides whether somebody is online RIGHT NOW; this says only that
+         a call could reach a device. Withholding it would refuse calls to exactly the
+         long-inactive guests the suppression protects, which is the bug rather than
+         the privacy. Nothing new is disclosed either: this endpoint already returns
+         their name, avatar, badge and tier for any number, so "has the app" is
+         already implied — and it stays behind `directoryGate`'s throttle. */
+      const reachable = (pres?.isOnline ?? false) || (await canRingIdentity(id.id));
       // Privacy: a guest inactive >24h shows NO status at all.
       const hidden = isGuestPresenceHidden({
         isGuest: id.isGuest,
@@ -1238,6 +1260,7 @@ export const v2DirectoryRouter = router({
         profileStatus: hidden ? null : normalizeProfileStatus(id.profileStatus),
         statusNote: hidden ? null : normalizeStatusNote(id.statusNote),
         presenceHidden: hidden,
+        reachable,
         verified: id.verified,
         // Three-tier badge (v2.99.6): guest / registered / admin.
         role: ((await getRolesByIdentityIds([id.id])).get(id.id) ??

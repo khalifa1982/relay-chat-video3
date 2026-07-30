@@ -403,9 +403,34 @@ describe("ONE card, TWO screens", () => {
     expect(codeOnly(CARD)).not.toMatch(/PeerAvatar/);
   });
 
-  it("the guest screen keeps its own single field and its offline block", () => {
+  it("the guest screen keeps its own single field and its reachability block", () => {
     expect(GATE).toMatch(/Enter your name to connect/);
-    expect(GATE).toMatch(/const joinBlocked = numberNotFound \|\| calleeOffline/);
+    expect(GATE).toMatch(/const joinBlocked = numberNotFound \|\| calleeUnreachable/);
+  });
+
+  it("BOTH halves of the card gate on REACHABILITY, and neither on presence", () => {
+    /* This is the assertion that makes the pair a pair, and it is the one worth the
+       most in this file. `OnboardingGate` (guest) and `Join` (signed in) render the
+       same card for the same call — v2.105.25's "ONE card, TWO screens" — so a rule
+       applied to one and not the other is exactly how they come to disagree about
+       whether a given person is callable. The presence gate was in BOTH, and fixing
+       one would have left the other refusing the call.
+
+       Presence may still be DISPLAYED on either screen; it must not DECIDE. */
+    expect(GATE).toMatch(/invitee\.reachable \?\? true/);
+    expect(JOIN).toMatch(/p\.reachable \?\? true/);
+    for (const [name, src] of [["OnboardingGate", GATE], ["Join", JOIN]] as const) {
+      const code = src
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .split("\n")
+        .filter((l) => !l.trim().startsWith("//"))
+        .join("\n");
+      // The blocking flag must be derived from `reachable`, never from `isOnline`.
+      const m = code.match(/const (?:calleeUnreachable|unreachable) =[^;]*/);
+      expect(m, `${name}: no reachability flag`).toBeTruthy();
+      expect(m![0], `${name}: still gates on presence`).not.toMatch(/isOnline/);
+      expect(m![0], `${name}: not derived from reachable`).toMatch(/reachable/);
+    }
   });
 
   it("both screens read the same public endpoint for the line", () => {
