@@ -56,6 +56,56 @@ export const RELAY_PALETTE = [
 export const RELAY_ACCENT = "#35e0b4";
 export const RELAY_BUSINESS_GOLD = "#f0b45a";
 
+/**
+ * How long one accent hue lasts before the loop eases toward the next.
+ *
+ * The app handoff's figure (9.5s), raised from the login handoff's 6.2s because the
+ * accent is no longer confined to one screen: it now tints every surface in the app, and
+ * the whole point is that a viewer must never CATCH the switch. Exported so the engine
+ * and its test read one value rather than a literal in each.
+ */
+export const RELAY_ACCENT_CYCLE_MS = 9_500;
+
+/** The custom properties every accent-coloured surface in the app reads. */
+export const ACCENT_VAR = "--rb";
+export const ACCENT_RGB_VAR = "--rb-rgb";
+
+/**
+ * PUBLISH THE ACCENT AS CSS CUSTOM PROPERTIES ON `<html>`.
+ *
+ * This is the load-bearing half of the whole design system: every accent chip, ring,
+ * tab pill and CTA is written as `var(--rb)` / `rgba(var(--rb-rgb),α)`, so the canvas
+ * loop is what makes the entire app breathe together.
+ *
+ * IT MUST BE CALLED EVEN WHEN NOTHING IS ANIMATING, and that is the trap worth naming:
+ * an UNSET custom property makes `rgba(var(--rb-rgb),.14)` an invalid declaration, which
+ * the browser DROPS — so a missing publish does not fall back to a default colour, it
+ * renders accent chips with no background at all. Hence a one-shot publish at init, a
+ * publish under reduced motion, a publish from the no-2D-context branch, and a static
+ * fallback in `index.css` for the case where this module never runs.
+ */
+export function publishAccentVars(
+  rgb: readonly number[],
+  /** Test seam: this suite is node-environment with no jsdom, so the WRITE is proven
+   *  against a recording stub rather than pinned as a source string. */
+  target?: { setProperty(k: string, v: string): void },
+): void {
+  const s = target ?? (typeof document === "undefined" ? null : document.documentElement.style);
+  if (!s) return;
+  // TRUNCATED TO INTEGERS, and that is not tidiness: the loop EASES between hues, so
+  // these channels are fractional almost every frame, and `rgb(52.7,…)` is not a valid
+  // colour — the declaration would be dropped and the accent would vanish mid-crossfade.
+  const r = rgb[0] | 0, g = rgb[1] | 0, b = rgb[2] | 0;
+  s.setProperty(ACCENT_VAR, `rgb(${r},${g},${b})`);
+  s.setProperty(ACCENT_RGB_VAR, `${r},${g},${b}`);
+}
+
+/** `#rrggbb` → `[r,g,b]`. Exported so the fallback publish and the loop agree. */
+export function hexToRgb(hex: string): number[] {
+  const s = hex.replace("#", "");
+  return [0, 2, 4].map((i) => parseInt(s.slice(i, i + 2), 16));
+}
+
 /** Same signals the landing page uses (v2.99.67). Narrow viewport OR few cores
  *  OR Data Saver ⇒ the cheap tier. */
 export function isLowPowerDevice(): boolean {
@@ -91,6 +141,10 @@ export function initRelayBackground(
   // No 2D context (a very old browser, or a jsdom test double): hand back an
   // inert handle rather than throwing on the login screen.
   if (!ctx) {
+    // But PUBLISH THE ACCENT FIRST. Without a 2D context there is no loop to do it, and
+    // an unset `--rb` drops every accent declaration in the app — so the one browser
+    // that cannot draw the background would also be the one with invisible chips.
+    publishAccentVars(hexToRgb(opts.accent ?? RELAY_ACCENT));
     return { setBusiness: () => {}, setAccent: () => {}, setIntensity: () => {}, destroy: () => {} };
   }
 
@@ -148,6 +202,11 @@ export function initRelayBackground(
   addEventListener("scroll", onScroll, { passive: true });
   addEventListener("resize", onResize);
   onResize();
+  /* Publish ONCE before the first frame. The loop publishes every frame, but the first
+     rAF callback is a frame away and `document.hidden` can defer it indefinitely — so
+     without this the app's very first paint would have no accent at all, on the one
+     screen most likely to be looked at while loading. */
+  publishAccentVars(cur);
 
   function draw(t: number, dt: number) {
     const w = innerWidth, h = innerHeight;
@@ -155,8 +214,12 @@ export function initRelayBackground(
 
     // ---- colour cycling ----------------------------------------------------
     if (business) colTgt = hex2(RELAY_BUSINESS_GOLD);
-    else if (!cycle) colTgt = hex2(accent);
-    else if ((colT += dt) > 6200) {
+    // REDUCED MOTION HOLDS THE ACCENT STILL. Now that the accent tints every surface in
+    // the app rather than one screen, a hue that keeps changing IS animation — however
+    // slow — so `prefers-reduced-motion` freezes it. The vars are still published below,
+    // because the request is "stop moving", not "render my chips without a colour".
+    else if (!cycle || calm) colTgt = hex2(calm && cycle ? RELAY_ACCENT : accent);
+    else if ((colT += dt) > RELAY_ACCENT_CYCLE_MS) {
       colT = 0;
       let i: number;
       do { i = Math.floor(R() * RELAY_PALETTE.length); } while (i === colIdx);
@@ -166,6 +229,10 @@ export function initRelayBackground(
     const rate = 1 - Math.pow(1 - (business ? 0.05 : 0.011), dt / 16.7);
     cur = cur.map((c, i) => c + (colTgt[i] - c) * rate);
     const [cr, cg, cb] = cur;
+    // Every frame, so the whole app's accent tracks the background exactly. Cheap: two
+    // custom-property writes, and the style recalc they trigger is what makes the app
+    // breathe with the canvas rather than beside it.
+    publishAccentVars(cur);
     const A = (a: number) => `rgba(${cr | 0},${cg | 0},${cb | 0},${a})`;
 
     px += (tx - px) * 0.04; py += (ty - py) * 0.04; sy += (syT - sy) * 0.06;

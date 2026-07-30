@@ -11278,6 +11278,98 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.0 — app-wide redesign, phase 1: the cycling accent (2026-07-30)
+
+Owner: *"Implement design_handoff_relay_app/README.md — recreate the designs in client/src using our
+existing patterns"*, with a 34-frame board, 18 reference screenshots and a screen-to-repo map.
+
+**SAID PLAINLY FIRST: THIS IS ONE PHASE OF FOUR.** The handoff is a complete visual rebuild of every
+in-app surface — five tabs, six call screens, twenty overlays. Shipping it as one commit would be a diff
+nobody could review against a spec nobody could check. What ships here is the FOUNDATION, chosen because
+every one of the other 33 frames consumes it and none of them can be built without it.
+
+**THE LOAD-BEARING FINDING: THE ONE THING THE WHOLE DESIGN SYSTEM HANGS ON DID NOT EXIST.** The board
+writes every accent chip, ring, tab pill and CTA as `var(--rb)` / `rgba(var(--rb-rgb),α)`, fed by the
+canvas loop, so the app breathes with its background instead of beside it — and **nothing in this
+codebase published those custom properties**. `relayBackground.ts` already had the 12-hue palette and the
+crossfade (v2.105.0, for the login page) and simply never told the DOM.
+
+**AN UNSET CUSTOM PROPERTY IS NOT A MISSING DEFAULT, IT IS AN INVALID DECLARATION**, which the browser
+DROPS. So a missing publish does not render a plain chip — it renders a chip with no background at all.
+That single fact shaped every decision here: a publish at init (the first rAF is a frame away and
+`document.hidden` can defer it indefinitely), a publish every frame, a publish on the **no-2D-context**
+path (the one browser that cannot draw the background would otherwise be the one with invisible chips),
+and a static `:root` fallback in `index.css` for when the module never runs at all.
+
+**THE CHANNELS ARE TRUNCATED TO INTEGERS, and that is not tidiness**: the loop EASES between hues, so the
+values are fractional almost every frame, and `rgb(52.7,…)` is not a colour — the accent would vanish
+mid-crossfade. Proven by walking a real fade between all twelve adjacent pairs at four points each and
+asserting every published value is CSS-legal.
+
+**REDUCED MOTION HOLDS THE ACCENT STILL**, which is a deliberate change to shipped behaviour: a hue that
+keeps changing IS animation, and now that it tints every surface rather than one screen,
+`prefers-reduced-motion` freezes it — while still publishing, because the request is "stop moving", not
+"render my chips without a colour".
+
+**ONE CANVAS, DARK ONLY, AND THE SECOND HALF IS THE DECISION.** The handoff asks for one fixed fullscreen
+canvas behind the shell rather than one per screen — the engine runs its own rAF per canvas, so a mount
+per route multiplies the cost by the number of live screens (the v2.99.67 class). It is gated on the DARK
+theme because the board is a dark design while this app DEFAULTS TO LIGHT and the handoff itself keeps a
+Dark/Light control (frame 1i): near-black text on a live near-black canvas is unreadable, so light mode
+keeps today's opaque surfaces until a light variant is designed. Both the mount and the shell's own
+`bg-transparent` read ONE derived flag, because two theme reads is how you get an opaque shell over a
+running canvas — all of the cost, none of the effect.
+
+**THE GLASS LAYER IS UTILITIES, NOT INLINE STYLES REPEATED 34 TIMES**: `.rglass` / `.rsheet` / `.rbar` /
+`.rbar-flat` / `.rchip-accent` / `.rcta` / `.rscrim`, scoped to `.relay-v2` so the landing page and docs
+are untouched, and NAMED classes rather than Tailwind arbitrary values because a runtime-composed class
+is invisible to the JIT and comes out unstyled (the trap recorded for the tab-bar accents).
+**`.rbar-flat` exists so the blur cannot creep back over live video** — v2.99.84 measured 36
+`backdrop-filter` layers over a call grid and removed all of them on phones, and a single blurred bar
+class with no alternative is how they return one screen at a time. On-accent text is the board's
+`#04211a` rather than white, which fails on the palette's yellow and lime entries.
+
+**VERIFIED IN A REAL BROWSER against the real engine, 6/6**: the CSS fallback alone makes a tint resolve
+with the engine never run; the init publish lands before any frame; the loop is LIVE — **12 distinct
+values across 15s**, easing `53,224,180` → `61,221,175` → `114,202,146` → `152,189,125`; a live tint
+resolves (`rgba(240,159,77,.14)` mid-cycle); reduced motion publishes once and holds; no page errors.
+
+**A DEFECT IN MY OWN VERIFICATION, caught by reading the numbers rather than the verdict**: my first
+harness loaded `/app` from a static server with no API, so the app never booted — 0 canvases, empty body
+— yet it reported PASS on four checks. It was measuring the CSS fallback and calling it the loop. Re-done
+by bundling the real engine and driving it directly, which is the claim I can actually support.
+
+**FIVE DEFECTS IN MY OWN TESTS, and three were the same trap**: assertions satisfied by my own comments
+(`.relay-v2` and `--rb:` in the prose above the fallback; `.rbar-flat` named inside `.rbar`'s comment, so
+the slice swallowed the real `backdrop-filter`); one slice bounded on comment text in comment-STRIPPED
+source, so `indexOf` returned −1 and it ran to end-of-file (the INVERTED prose trap, second time —
+v2.105.26); one assertion simply wrong about the code (an "unscoped rule" sweep whose pattern matches
+`.relay-v2 .rglass`); and one asserting `theme === "dark"` occurs once in the FILE when the sidebar's own
+Dark/Light toggle legitimately reads it too.
+
+**THE WRITER GAINED A TEST SEAM rather than a source pin**: this suite is node-environment with no jsdom,
+so `publishAccentVars` takes an optional target and the assertions drive the REAL function against a
+recording stub — a source pin cannot tell you whether a mid-crossfade value comes out as valid CSS.
+
+**WHAT IS NOT DONE, named rather than implied**: every frame's own layout. Phases 2–4 are the five tabs,
+the call surfaces and the overlays. One conflict is flagged now rather than resolved silently — the
+handoff's "standard call bar, NEVER REDUCED" (six controls) contradicts v2.99.39, which REMOVED controls
+from that bar at the owner's explicit request.
+
+- [x] `client/src/lib/relayBackground.ts` — `publishAccentVars` (with a target seam), `hexToRgb`,
+      `RELAY_ACCENT_CYCLE_MS = 9500`, `ACCENT_VAR`/`ACCENT_RGB_VAR`; publishes at init, every frame, and
+      on the no-2D-context path; reduced motion pins the hue.
+- [x] `client/src/index.css` — the `:root` fallback (so an unset var can never drop a declaration) and
+      the seven-class glass token layer, scoped to `.relay-v2`.
+- [x] `client/src/app/AppShell.tsx` — one `<RelayBackground />` behind the signed-in shell, gated on the
+      dark theme via a single derived flag that also drives the shell's own transparency.
+- [x] `design_handoff_relay_app/` — the handoff checked in (README, board, 18 screenshots, screen map) so
+      later phases read the spec rather than my summary of it. The prototype's `support.js` is dropped.
+- [x] `client/src/app/relayAccentVars.test.ts` — 23 tests.
+- [ ] Phase 2 — the five tabs (1a–1f) on the token layer, incl. the 5th "Groups" tab.
+- [ ] Phase 3 — call surfaces (1g, 1h, 2a, 2b, 3a) + the call-bar conflict above.
+- [ ] Phase 4 — overlays, sheets and system alerts (2c–2i, 3b–3d, 4a–4k).
+
 ## v2.105.29 — a story reply in the inbox says what it was about (2026-07-30)
 
 #115, the last of the three items I owed. A one-tap story reaction IS an emoji-only message, so it

@@ -120,6 +120,28 @@
   --sidebar-ring: oklch(0.488 0.243 264.376);
 }
 
+/* ==========================================================================
+   THE CYCLING ACCENT (design_handoff_relay_app, "Global Design System")
+   ==========================================================================
+
+   `relayBackground.ts` rewrites `--rb` / `--rb-rgb` on `<html>` every frame, and every
+   accent-coloured surface in the app reads them — chips, rings, tab pills, CTAs — so the
+   whole app breathes with the canvas instead of beside it.
+
+   THESE DECLARATIONS ARE THE FALLBACK, AND THEY ARE NOT DECORATION. An UNSET custom
+   property makes `rgba(var(--rb-rgb),.14)` an INVALID declaration, which the browser
+   DROPS — so without a static default, any path where the engine never runs (JS disabled,
+   the canvas failing to get a 2D context, a crash before mount, a server-rendered first
+   paint) would render every accent chip with no background rather than with a plain one.
+   The value is the palette's first hue, so the untinted app still looks deliberate.
+
+   Declared on :root rather than inside `.relay-v2`, because the engine writes to
+   `<html>` and the two must resolve at the same level or the fallback would win. */
+:root {
+  --rb: #35e0b4;
+  --rb-rgb: 53, 224, 180;
+}
+
 /* ----- v2.0 phone-app theme overrides ----- */
 
 /* Tokens that exist in BOTH light and dark phone-app themes — used
@@ -686,4 +708,63 @@ body.relay-app-lock {
 
 @media (prefers-reduced-motion: reduce) {
   [style*="relayFadeUp"] { animation: none !important; }
+}
+
+/* ==========================================================================
+   GLASS SURFACES (design_handoff_relay_app, "Glass surface recipe")
+   ==========================================================================
+
+   The board's four surface tiers, as utilities rather than repeated inline styles.
+   34 frames share these, so a copy per screen is how two sheets come to sit at
+   different elevations — and the accent tiers read `--rb`, so they follow the cycle
+   with no JS per element.
+
+   WHY UTILITIES AND NOT A TAILWIND ARBITRARY VALUE: a runtime-composed class name
+   (`border-[${c}]`) is invisible to the JIT compiler and comes out unstyled — the trap
+   recorded for the tab-bar accents and the status picker. A named class whose value is a
+   CSS var is compiled once and still changes colour every frame.
+
+   Scoped to `.relay-v2` so the marketing landing page and the docs are untouched. */
+.relay-v2 .rglass {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+/* Sheets and dialogs sit ABOVE the glass tier: nearly opaque, because they cover
+   content that must stop competing for attention, plus a real drop shadow. */
+.relay-v2 .rsheet {
+  background: linear-gradient(180deg, rgba(15, 21, 25, 0.96), rgba(8, 12, 15, 0.98));
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+/* Bars (top / bottom / composer). The blur is what makes them read as glass, and it is
+   the most expensive thing here — so it is NOT applied over live video: v2.99.84
+   measured 36 backdrop-filter layers over a call grid and removed all of them on
+   phones. Anything inside a call surface must use `.rbar-flat` instead. */
+.relay-v2 .rbar {
+  background: rgba(8, 12, 14, 0.48);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.relay-v2 .rbar-flat {
+  background: rgba(8, 12, 14, 0.92);
+}
+/* Accent chip: a tinted fill that follows the cycling hue. */
+.relay-v2 .rchip-accent {
+  background: rgba(var(--rb-rgb), 0.14);
+  border: 1px solid rgba(var(--rb-rgb), 0.4);
+  color: var(--rb);
+}
+/* Primary CTA: SOLID accent with dark text. `#04211a` is the board's on-accent colour —
+   a near-black green that stays legible across all twelve hues, which plain black or
+   white would not (white fails on the yellow and lime entries). */
+.relay-v2 .rcta {
+  background: var(--rb);
+  color: #04211a;
+  box-shadow: 0 10px 30px rgba(var(--rb-rgb), 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+/* The per-screen scrim between the canvas and the content, so text keeps its contrast
+   over whatever the background happens to be doing underneath. */
+.relay-v2 .rscrim {
+  background: radial-gradient(closest-side at 50% 40%, rgba(4, 7, 10, 0) 50%, rgba(3, 6, 8, 0.58));
 }
