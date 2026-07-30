@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { codeOnly } from "./testing/codeOnly";
+import { contactUpdateKeys } from "./v2db";
 import {
   CONTACT_TAGS,
   SECTION_TAGS,
@@ -381,5 +382,76 @@ describe("board 4a — the profile chips are the only multi-tag editor", () => {
   it("says out loud that the labels are private", () => {
     // Nobody should assign "VIP" believing the other person is told.
     expect(UI).toMatch(/Only you see these/);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   v2.106.19 — the mirror must move WITH the tags.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+describe("tags and category move together on a partial update", () => {
+  it("a tags-only write also updates the category mirror", () => {
+    // A REAL BUG IN v2.106.14. `values` computes both columns from one writer, which
+    // is what stops them disagreeing on an INSERT — but `contactUpdateKeys` kept only
+    // the keys the caller literally passed, so on an UPDATE a tags-only write moved
+    // `tags` and left `category` behind. `category` is exactly the column a client on
+    // the previous bundle reads during a rolling deploy, which is the whole reason
+    // the mirror exists. Latent until 4a's editable chips started sending a tags
+    // array.
+    const k = contactUpdateKeys({ number: "777777", tags: "vip,family" });
+    expect(k).toContain("tags");
+    expect(k).toContain("category");
+  });
+
+  it("a category-only write (an older client) also updates tags", () => {
+    // The same defect in reverse: a new client would read a stale `tags`.
+    const k = contactUpdateKeys({ number: "777777", category: "family" });
+    expect(k).toContain("tags");
+    expect(k).toContain("category");
+  });
+
+  it("a write naming NEITHER pulls in neither", () => {
+    // The coupling must not smuggle a tag rewrite into an unrelated partial update —
+    // a favourite toggle that also blanked somebody's labels would be worse than the
+    // bug it fixes.
+    const k = contactUpdateKeys({ number: "777777", favourite: true });
+    expect(k).toEqual(["favourite"]);
+  });
+
+  it("a write naming BOTH is unchanged", () => {
+    const k = contactUpdateKeys({ number: "777777", tags: "vip", category: "vip" });
+    expect(k.filter((x) => x === "tags")).toHaveLength(1);
+    expect(k.filter((x) => x === "category")).toHaveLength(1);
+  });
+});
+
+describe("board 1a — the dialer action row sits on ONE line", () => {
+  const UI = codeOnly(readFileSync(resolve(process.cwd(), "client/src/pages/app/Dialer.tsx"), "utf8"));
+
+  it("every button sits in an equal-height SLOT", () => {
+    /* OWNER REPORT: "under the dial up pad the b[u]ttons is not on one line".
+       MEASURED at 320/360/375/390/430 against the real built stylesheet: it was
+       `items-start` with buttons of different heights (Call 66px primary, Video and
+       Group 50px secondaries), so the three label tops sat 9.7-14.5px apart and the
+       button centres 4.9-7.3px apart. Fixed BY CONSTRUCTION — three slots of the
+       tallest button's own clamp, each centring its button — so the centres and the
+       label tops align at any width without either value being restated. */
+    const slots = UI.match(/height: "clamp\(58px, 15vw, 66px\)"/g) ?? [];
+    // One per button (3) plus the primary button's own width/height pair.
+    expect(slots.length).toBeGreaterThanOrEqual(4);
+    expect(UI).toMatch(/className="grid place-items-center"\s*\n?\s*style=\{\{ height: "clamp\(58px, 15vw, 66px\)" \}\}/);
+  });
+
+  it("the row is a 3-column grid, NOT a flex row sized by its own labels", () => {
+    // "Group Call" is 4.6px wider than "Voice Call", so a flex row let the label
+    // widths set the column widths and the gaps read as uneven.
+    expect(UI).toMatch(/grid grid-cols-3 justify-items-center/);
+  });
+
+  it("`items-start` is gone from the action row", () => {
+    // The mechanism of the defect. A mutation restoring it must bite.
+    const at = UI.indexOf("grid grid-cols-3 justify-items-center");
+    expect(at).toBeGreaterThan(0);
+    expect(UI.slice(at - 400, at)).not.toMatch(/items-start justify-center/);
   });
 });

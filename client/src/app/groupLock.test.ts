@@ -185,10 +185,28 @@ describe("verifying a code", () => {
     // The whole point of hashing four digits is small, but storing them in the clear
     // would put them next to the app passcode's own hash and invite a reader to
     // assume both are safe.
-    const raw = store.getItem("relay_glock_v1") || "";
-    expect(raw).not.toContain("1234");
-    expect(raw).toMatch(/"hash":"[0-9a-f]{64}"/);
-    expect(raw).toMatch(/"salt":"[0-9a-f]{16}"/);
+    //
+    // ASSERTED ON THE PARSED STRUCTURE, NOT AS A SUBSTRING SWEEP OF THE BLOB. The
+    // first version was `expect(raw).not.toContain("1234")`, and it FLAKED on
+    // perfectly correct code: a record is an 80-character hex string (16 salt + 64
+    // hash), which gives ~74 four-character windows each with a 1-in-65536 chance of
+    // being exactly "1234" — about one run in 900, and it fired with the salt
+    // `9e12349bf1e6a7ca`. Searching a hex blob for a 4-digit needle is a
+    // false-positive generator; the real property is that no FIELD holds the code and
+    // no field beyond salt+hash exists to hide it in.
+    const rec = JSON.parse(store.getItem("relay_glock_v1") || "{}") as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const entries = Object.values(rec);
+    expect(entries.length).toBeGreaterThan(0);
+    for (const e of entries) {
+      expect(Object.keys(e).sort()).toEqual(["hash", "salt"]);
+      expect(e.salt).not.toBe("1234");
+      expect(e.hash).not.toBe("1234");
+      expect(String(e.hash)).toMatch(/^[0-9a-f]{64}$/);
+      expect(String(e.salt)).toMatch(/^[0-9a-f]{16}$/);
+    }
   });
 
   it("two groups with the SAME code get different hashes, because each is salted", async () => {

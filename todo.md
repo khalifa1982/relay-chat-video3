@@ -11278,6 +11278,54 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.19 — the reported dialer row, plus a real bug in v2.106.14 (2026-07-30)
+- [x] **OWNER REPORT: "in the main page under the dial up pad. The bottoms is not on one
+      line."** CONFIRMED BY MEASUREMENT at 320/360/375/390/430 against the real built
+      stylesheet — and the mechanism is not what the phrase first suggests. The row is
+      `flex` with no wrap, so the buttons could never move to a second LINE; they were
+      STEPPED. `items-start` with controls of different heights (Call 66px primary,
+      Video and Group 50px secondaries) put the three label tops **9.7–14.5px apart**
+      and the button centres **4.9–7.3px apart**. It read as a staircase.
+- [x] **Fixed by CONSTRUCTION**: each button sits in a slot of the tallest button's own
+      clamp, centred inside it, so centres and label tops align at any width with
+      neither value restated. Re-measured **5/5 clean**, all identical.
+- [x] **`items-center` would have been the wrong fix** — it centres the whole COLUMNS,
+      which lines the buttons up and offsets the labels the other way, because the
+      columns have different total heights.
+- [x] **The row became a 3-column grid**: a flex row let each column be sized by its own
+      label, and "Group Call" is 4.6px wider than "Voice Call", which is what made the
+      gaps read as uneven.
+- [x] **The wrap theory is REFUTED and said so**: every label is one line at 58–63px.
+- [x] **A REAL BUG I SHIPPED IN v2.106.14**, found by a frame-planning agent reading the
+      code rather than by any test. `contactUpdateKeys` filters the on-conflict SET to
+      the keys the caller literally passed, with no tags↔category coupling — so on an
+      UPDATE a tags-only write moved `tags` and left `category` behind. `category` is
+      exactly the column a client on the previous bundle reads during a rolling deploy,
+      which is the entire reason the mirror exists: the defect defeated the thing it was
+      built for. A category-only write had it in reverse.
+- [x] **Latent only because the UI could send exactly one of the two.** 4a's editable
+      chips send a tags array, which makes it live. Naming either now updates both, and
+      the coupling is bounded so it cannot over-fire — a write naming neither pulls in
+      neither, because a favourite toggle that blanked somebody's labels would be worse
+      than the bug.
+- [x] **A flaky test, pre-existing**: `groupLock.test.ts` swept the stored record for the
+      literal "1234", and the record is 80 hex characters — ~74 four-character windows,
+      each 1-in-65536, i.e. **about one run in 900**. It fired during this release's
+      verify with the salt `9e12349bf1e6a7ca` and passed 3/3 on re-run. Now asserted on
+      the PARSED structure (no field holds the code; the key set is exactly
+      {salt, hash}), which is stable 5/5 and STRICTER — mutation-proven to bite when the
+      code really is stored.
+- [x] `server/contactTags.test.ts` → 52. **All 5 tripwires verified by MUTATION** off a
+      confirmed-green baseline, sources byte-identical, including the original stepped
+      row and the uncoupled mirror reinstated verbatim.
+- [x] **Not verified on a device**: measured against the real stylesheet, but nobody has
+      looked at the dialer on the owner's phone.
+- [x] **Still open**: the owner also reports "the contact is not showing" and "many
+      things is not showing". A 14-cluster design-vs-built audit against the board frames
+      is running; its findings are the next release. Contacts reads correct on every path
+      traced by hand, so guessing would waste their time.
+- [x] No schema change, no new dependency, no new env var. 4356 tests.
+
 ## v2.106.18 — boards 4d + 2f: the presence green stops meaning three things (2026-07-30)
 - [x] **Mostly a FINDING, not a build, and saying so is the point.** The voice-note
       recording bar already had the pulsing red dot, mono timer, live waveform, discard
