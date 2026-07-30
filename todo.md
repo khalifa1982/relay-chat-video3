@@ -11278,6 +11278,57 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.17 — board 3c: @mentions + the group header's online count (2026-07-30)
+- [x] **A mention must RESOLVE against the roster, not match any `@word`.** The tempting
+      rule `/@(\w+)/` is wrong twice over: it lights up "email me @ 5pm" and "@here",
+      which are mentions of nobody; and it renders `@Dana` in accent bold whether or not
+      Dana is in the group, which SAYS she was addressed and implies she was told.
+- [x] **Longest name first**, because display names contain spaces: with both "Ali" and
+      "Ali Hassan" in the group, `@Ali Hassan` is one mention of the second person rather
+      than a mention of the first plus a stray surname.
+- [x] **Nothing is stored.** The body carries what somebody typed; it resolves at render
+      time against the CURRENT roster, so a member who leaves stops being highlighted —
+      honest, where a stored mention list would go on asserting a ping to somebody gone.
+- [x] **The `@` boundary stops an email address resolving** — `ali@dana.com` would
+      otherwise have its domain read as a mention.
+- [x] **`members` is optional on `linkify`**, so every pre-3c caller and every DM is
+      byte-identical. A DM has one other person in it: there is nobody to disambiguate.
+- [x] **My own message gets weight but not the accent** — the outgoing bubble is orange
+      and a bright accent span on it is the one combination that does not read. The
+      fallback is a literal; `var(--rb, var(--rb))` is a cycle the browser drops entirely.
+- [x] **Mentions resolve inside the non-URL runs only**, or a name inside a link's path
+      becomes a mention span inside an anchor.
+- [x] **The composer picker is anchored at the CARET**, not scanning the draft — scanning
+      would re-open a completed mention earlier in the line on every keystroke after it.
+- [x] **It commits on mouseDown, not click**: click fires after blur, and blur closes the
+      picker, so the row would unmount from under the tap.
+- [x] **Enter completes the top match rather than sending**, or typing "@da" and pressing
+      Enter sends a fragment to a group. Escape closes without clearing the draft.
+- [x] **The caret is restored imperatively after the state write**, because React
+      re-renders a controlled input with the caret at the END — completing mid-sentence
+      would otherwise jump past everything already written.
+- [x] **The picker is in flow, not floating** — same decision as v2.106.16's reaction row.
+- [x] **A real defect of mine, written as a test first and therefore caught**: completion
+      always appended a space, so mid-sentence gave "hey @Dana  can". It now adds one only
+      when the text at the caret does not already begin with one.
+- [x] **"3 online" reads through `directory.presenceMany`**, the one reader every other
+      surface uses — re-deriving is how a header comes to disagree with the LEDs on the
+      same people (v2.99.95). Myself excluded (counting yourself makes an empty group read
+      "1 online"); withheld at zero and while the query is in flight; the AA-measured green
+      text token rather than the LED hue, which fails contrast at this size (v2.99.86).
+- [x] `server/mentions.test.ts` (37), driven behaviourally. **All 19 tripwires verified by
+      MUTATION** off a confirmed-green baseline; sources byte-identical afterwards.
+- [x] **Three survivors, all real gaps in my own tests**, each fixed and re-verified: the
+      prefix-rank case used Ali/Salim, where the alphabetical tiebreak gives the same
+      answer as the rank; the "is bounded" case passed an empty query and took the early
+      return, never reaching the scored path; and the roster pin asserted an `isGroup ?`
+      ternary EXISTS while saying nothing about its else branch, so filling the DM side
+      stayed green while `@777777` would start highlighting in a 1:1.
+- [x] **One mutation aborted on a non-unique anchor** rather than recording a result about
+      the wrong occurrence.
+- [x] **Not verified on a device**: nobody has typed an @ in a group on a phone.
+- [x] No schema change, no new dependency, no new env var. 4345 tests.
+
 ## v2.106.16 — board 4c: reactions (2026-07-30)
 - [x] **The contract's central rule is a UNIQUE KEY, not an application check.**
       `DATA-CONTRACTS.md` §2 asks for `reactions: MessageReactions` stored on the message
