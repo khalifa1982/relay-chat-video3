@@ -879,9 +879,33 @@ export default function DialerPage() {
               className="relative mx-auto w-full"
               style={{ maxWidth: "min(100%, 380px)" }}
             >
-              <div className="flex items-start justify-center gap-6">
+              {/* OWNER REPORT: "under the dial up pad the b[u]ttons is not on one line".
+                  MEASURED and confirmed at 320/360/375/390/430: it was `items-start`
+                  with buttons of DIFFERENT heights — Call is the board's 66px primary,
+                  Video and Group are 50px secondaries — so aligning their TOPS pushed
+                  Call's label 9.7-14.5px below the other two and left the three button
+                  centres 4.9-7.3px apart. The row read as stepped rather than as a row.
+
+                  FIXED BY CONSTRUCTION rather than by nudging a margin: every column
+                  gets a button SLOT of the same height (the tallest button's own clamp)
+                  with the button centred inside it, so the centres AND the label tops
+                  line up at any width without either value being restated. A
+                  `items-center` on the flex row would have centred the whole COLUMNS,
+                  which lines the buttons up and then offsets the labels the other way,
+                  because the columns have different total heights.
+
+                  A 3-column grid with `justify-items-center` also stops the columns
+                  being sized by their own labels, which is what made the gaps look
+                  uneven ("Group Call" is 4.6px wider than "Voice Call"). */}
+              <div className="grid grid-cols-3 justify-items-center gap-2">
                 {/* Voice call (blue) — starts with the camera off (audio-only). */}
                 <div className="flex flex-col items-center gap-1.5">
+                  <span
+                    className="grid place-items-center"
+                    /* The slot, matching the PRIMARY button's clamp exactly so the
+                       tallest control defines the row's button band. */
+                    style={{ height: "clamp(58px, 15vw, 66px)" }}
+                  >
                   <button
                     type="button"
                     disabled={!callable}
@@ -906,12 +930,14 @@ export default function DialerPage() {
                   >
                     <PhoneCall className="size-6" strokeWidth={2.2} />
                   </button>
+                  </span>
                   <span className="text-xs font-medium text-muted-foreground">
                     {previewIsLine ? "Join" : "Voice Call"}
                   </span>
                 </div>
                 {/* Video call (green). */}
                 <div className="flex flex-col items-center gap-1.5">
+                  <span className="grid place-items-center" style={{ height: "clamp(58px, 15vw, 66px)" }}>
                   <button
                     type="button"
                     disabled={!callable}
@@ -935,10 +961,12 @@ export default function DialerPage() {
                   >
                     <Video className="size-5" strokeWidth={2.2} />
                   </button>
+                  </span>
                   <span className="text-xs font-medium text-muted-foreground">Video Call</span>
                 </div>
                 {/* Group call (purple) — opens the participant picker. */}
                 <div className="flex flex-col items-center gap-1.5">
+                  <span className="grid place-items-center" style={{ height: "clamp(58px, 15vw, 66px)" }}>
                   <button
                     type="button"
                     disabled={nonexistent}
@@ -960,6 +988,7 @@ export default function DialerPage() {
                   >
                     <Users className="size-5" strokeWidth={2.2} />
                   </button>
+                  </span>
                   <span className="text-xs font-medium text-muted-foreground">Group Call</span>
                 </div>
               </div>

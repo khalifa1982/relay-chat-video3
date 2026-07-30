@@ -3269,9 +3269,28 @@ const CONTACT_UPDATABLE = [
  * unit-tested without a DB.
  */
 export function contactUpdateKeys(input: Record<string, unknown>): string[] {
-  const keys = CONTACT_UPDATABLE.filter((k) =>
+  const keys: string[] = CONTACT_UPDATABLE.filter((k) =>
     Object.prototype.hasOwnProperty.call(input, k)
   );
+  /**
+   * `tags` AND `category` MOVE TOGETHER OR NOT AT ALL — a real bug in my own
+   * v2.106.14, found while planning 4a.
+   *
+   * `values` already computes BOTH from one writer (`contactTagColumns`), which is
+   * what stops them disagreeing on an INSERT. But this filter keeps only the keys
+   * the caller literally passed, so on an UPDATE of an existing row a tags-only
+   * write moved `tags` and left `category` behind — and `category` is the column a
+   * client on the previous bundle is still reading during a rolling deploy, which
+   * is the entire reason the mirror exists. A category-only write (an older client)
+   * had the same problem in reverse, leaving `tags` stale for a new client.
+   *
+   * Latent until now only because the UI could send exactly one of the two; 4a's
+   * editable chips send a tags ARRAY, which makes it live. They are ONE fact, so
+   * naming either one updates both.
+   */
+  const hasTags = keys.includes("tags");
+  const hasCategory = keys.includes("category");
+  if (hasTags !== hasCategory) keys.push(hasTags ? "category" : "tags");
   return keys.length > 0 ? keys : ["number"];
 }
 
