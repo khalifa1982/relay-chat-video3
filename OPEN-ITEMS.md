@@ -135,10 +135,20 @@ flag carried on the room from dial to teardown, and the row now says it.
 a media type nobody recorded, about the reader's own call history — which is the guess this column exists
 to replace. An unknown channel renders as **nothing**, and that is the property every test here protects.
 
-### 5. History search/grouping only covers the most recent 100 calls
-Both call payloads are capped at 100 rows server-side, so an older call cannot be found however good
-the matcher is. Raising it is a paging change with its own cost — flagged rather than quietly bundled
-into the search work (v2.99.96, v2.99.98).
+### 5. ~~History search/grouping only covers the most recent 100 calls~~ — **DONE, v2.106.1**
+The note was right that this is a paging change with its own cost, so the cost is where the design went:
+**the polled page size is unchanged at 100.** Both queries refetch every 30s for every open History tab,
+so raising the default would multiply that traffic for everybody to serve a search almost nobody runs —
+the same trade v2.102.2 refused for the thread list's aggregate.
+
+Older pages are fetched only when asked for and then KEPT in component state, deliberately outside the
+query cache, so the 30s poll never re-fetches them: paging stays O(1) on the polling cost however far back
+somebody goes. Search, the filter counts and per-person grouping all derive from the merged window, so one
+change gives all three the longer reach, and a "Load older calls" control says how many are loaded.
+
+**The cursor is an ID, never an offset**, and that is not a preference: this table grows at the TOP, so an
+offset silently SKIPS a row whenever a call ends between two pages — precisely the row somebody was paging
+to find.
 
 ---
 

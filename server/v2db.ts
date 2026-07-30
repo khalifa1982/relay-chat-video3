@@ -6524,7 +6524,20 @@ export async function recordCallStart(input: {
   return rows[0];
 }
 
-export async function listCallHistory(identityId: number, limit = 100, since?: Date | null) {
+export async function listCallHistory(
+  identityId: number,
+  limit = 100,
+  since?: Date | null,
+  /**
+   * #117 — CURSOR, not an offset. Return only rows OLDER than this id.
+   *
+   * An offset would be wrong on this table rather than merely slower: it grows at the
+   * TOP, so a call that ends between page 1 and page 2 shifts every later row down by
+   * one and the reader silently SKIPS one and never sees it. An id cursor is stable
+   * under insertion, and it costs nothing extra because the ordering index is the id.
+   */
+  before?: number | null
+) {
   const db = await getDb();
   if (!db) return [];
   const rows = await db
@@ -6538,7 +6551,9 @@ export async function listCallHistory(identityId: number, limit = 100, since?: D
         ),
         // "Clear history": rows at/before the identity's cleared mark stay in
         // the DB (the OTHER party keeps their log) but are hidden from us.
-        since ? gt(callHistory.startedAt, since) : undefined
+        since ? gt(callHistory.startedAt, since) : undefined,
+        // Strictly LESS THAN, so the cursor row itself is never served twice.
+        before ? lt(callHistory.id, before) : undefined
       )
     )
     .orderBy(desc(callHistory.id))
@@ -6691,13 +6706,35 @@ export async function recordConferenceEnd(input: {
 }
 
 /** Conferences `identityId` participated in, most recent first. */
-export async function listConferenceHistory(identityId: number, limit = 100, since?: Date | null) {
+export async function listConferenceHistory(
+  identityId: number,
+  limit = 100,
+  since?: Date | null,
+  /**
+   * #117 — the cursor is a CONFERENCE id, and it is applied to the PARTICIPANT query.
+   *
+   * That placement is the whole subtlety here. The LIMIT applies to my participant
+   * rows, not to conferences, so filtering the second query would page nothing: the
+   * first query would still hand back the newest `limit` participants every time and
+   * the second would just show fewer of them. Filtering here is also what the client
+   * can express — it only ever sees conference ids, never my participant row ids.
+   *
+   * `conferenceParticipants.conferenceId` is indexed (`conf_part_conf_idx`), and the
+   * identity index narrows to one person's rows first either way.
+   */
+  before?: number | null
+) {
   const db = await getDb();
   if (!db) return [];
   const parts = await db
     .select()
     .from(conferenceParticipants)
-    .where(eq(conferenceParticipants.identityId, identityId))
+    .where(
+      and(
+        eq(conferenceParticipants.identityId, identityId),
+        before ? lt(conferenceParticipants.conferenceId, before) : undefined
+      )
+    )
     .orderBy(desc(conferenceParticipants.id))
     .limit(limit);
   const confIds = Array.from(new Set(parts.map((p) => p.conferenceId)));
