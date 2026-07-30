@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { getDeviceId } from "@/lib/deviceId";
 import { forgetGuestRecovery, readGuestRecovery } from "@/lib/guestRecovery";
+import { RoleBadge } from "./VerifiedBadge";
+import { formatElapsedSince } from "@shared/profileFields";
 
 /**
  * ADOPT-AND-RETIRE, the affordance (v2.99.68).
@@ -64,6 +66,16 @@ export function GuestRestore({
     ? `${p.number.slice(0, 3)}-${p.number.slice(3)}`
     : p.number;
 
+  /* Board 4g's "2 DAYS AGO". `formatElapsedSince` is the app's one duration
+     formatter (v2.99.90) — reused rather than re-rolled, so this card and the
+     dialer's preview cannot come to describe the same span differently. A record
+     written before `savedAt` existed carries 0, and a clock that has gone backwards
+     would give a negative span, so both render nothing rather than an absurdity. */
+  const savedAgo =
+    record.savedAt > 0 && record.savedAt <= Date.now()
+      ? formatElapsedSince(record.savedAt, Date.now())
+      : "";
+
   // Only mention counts we actually have. A restore prompt that overstates what it
   // is returning is worse than one that stays vague.
   const bits: string[] = [];
@@ -98,8 +110,24 @@ export function GuestRestore({
           {heading}
         </div>
       )}
-      <div className="rounded-3xl border border-[color:var(--relay-online,#06d6a0)]/35 bg-[color:var(--relay-online,#06d6a0)]/[0.07] p-5">
-      <div className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[color:var(--relay-online,#06d6a0)]">
+      {/* Board 4g. THE COLOUR IS THE CHANGE: this card was green end to end, and
+          green in this app means ONLINE — it is what every presence LED is painted
+          with. "Welcome back" is not a presence claim, so it takes the accent, the
+          same vocabulary fix the push banner needed. The fallbacks are literals, not
+          `var(--rb)` again: an unset custom property is an INVALID declaration the
+          browser drops, so a self-referencing fallback would render no border at
+          all (the cycle that bit v2.106.7). */}
+      <div
+        className="rglass rounded-3xl p-5"
+        style={{
+          borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.32)",
+          background: "rgba(var(--rb-rgb, 63, 224, 197), 0.07)",
+        }}
+      >
+      <div
+        className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase tracking-[0.16em]"
+        style={{ color: "var(--rb, #3FE0C5)" }}
+      >
         <ShieldCheck className="size-3.5" />
         Welcome back
       </div>
@@ -117,15 +145,37 @@ export function GuestRestore({
           </div>
         )}
         <div className="min-w-0">
-          <div className="truncate text-[0.95rem] font-semibold leading-tight" dir="auto">
-            {p.displayName || "Your RELAY number"}
+          {/* The board draws the blue GUEST badge here, and it is the useful part:
+              it says what kind of thing is being restored, which is exactly the
+              question somebody has on this screen. A stranded recovery record can
+              only ever name an UNCLAIMED identity — the server refuses anything a
+              user row has taken — so "guest" is a fact rather than a guess. */}
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-[0.95rem] font-semibold leading-tight" dir="auto">
+              {p.displayName || "Your RELAY number"}
+            </span>
+            <RoleBadge role="guest" />
           </div>
-          <div
-            className="mt-0.5 font-mono text-sm text-muted-foreground [unicode-bidi:isolate]"
-            dir="ltr"
-          >
-            {pretty}
+          <div className="mt-0.5 flex items-center gap-1.5 text-sm text-muted-foreground">
+            <span className="font-mono [unicode-bidi:isolate]" dir="ltr">
+              {pretty}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>guest</span>
           </div>
+          {/* "2 DAYS AGO" on the board. Read from THIS BROWSER's own note rather
+              than the server, which returns no timestamp — and said as "saved",
+              because that is what the number actually measures: when this browser
+              wrote the key down, not when the identity was last used. A record
+              predating the field has savedAt 0, which renders nothing. */}
+          {savedAgo && (
+            <div
+              className="mt-1 font-mono text-[0.62rem] font-semibold uppercase text-muted-foreground"
+              style={{ letterSpacing: ".2em" }}
+            >
+              Saved {savedAgo}
+            </div>
+          )}
         </div>
       </div>
 
@@ -141,7 +191,10 @@ export function GuestRestore({
         type="button"
         onClick={() => void run()}
         disabled={adopt.isPending}
-        className="mt-4 h-11 w-full gap-2 rounded-xl text-[0.95rem] font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))]"
+        // The CTA goes with the card: it was the same presence green, which is the
+        // colour that has to keep meaning "online" and nothing else. `.rcta` carries
+        // the board's on-accent text, so it stays legible across all twelve hues.
+        className="rcta mt-4 h-11 w-full gap-2 rounded-xl text-[0.95rem] font-semibold"
       >
         {adopt.isPending ? (
           "Restoring…"
