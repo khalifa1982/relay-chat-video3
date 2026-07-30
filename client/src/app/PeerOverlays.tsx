@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { CONTACT_TAGS, TAG_COLOR, TAG_LABEL, contactTagsOf, toggleContactTag } from "@shared/contactTags";
 import { useLocation } from "wouter";
 import { Phone, Video, MessageSquare, UserPlus, Check, CircleUserRound, ArrowLeft, X, Search, Bell, BellOff } from "lucide-react";
 import { toast } from "sonner";
@@ -411,13 +412,33 @@ export function PeerOverlaysHost() {
     enabled: !!profileNumber,
     staleTime: 15_000,
   });
-  const saved = !!profileNumber && (contactsQ.data ?? []).some((c) => c.number === profileNumber);
+  const savedContact = profileNumber
+    ? (contactsQ.data ?? []).find((c) => c.number === profileNumber) ?? null
+    : null;
+  const saved = !!savedContact;
+  /* BOARD 4a — the category chips, and this is what makes multi-tag ASSIGNABLE at
+     all: the row menu and the edit dialog are single-select pickers, so before
+     this there was no surface that could put two tags on one person.
+     Resolved through the ONE shared reader so a pre-v2.106.14 contact (legacy
+     `category` only) shows its chip lit rather than looking untagged. */
+  const myTags = contactTagsOf({
+    tags: (savedContact as { tags?: string[] } | null)?.tags?.join(",") ?? null,
+    category: savedContact?.category ?? null,
+  });
   const upsert = trpc.contacts.upsert.useMutation({
     onSuccess: () => {
       utils.contacts.list.invalidate();
       toast.success("Added to your contacts.");
     },
     onError: () => toast.error("Couldn't add the contact — try again."),
+  });
+  /* Its own mutation rather than reusing `upsert` above: that one reports "Added
+     to your contacts", which is the wrong sentence for a tag edit — and a toast
+     that describes the wrong act is worse than none. Silent on success, because
+     the chip itself lighting up IS the feedback; only a failure needs words. */
+  const tagWrite = trpc.contacts.upsert.useMutation({
+    onSuccess: () => utils.contacts.list.invalidate(),
+    onError: () => toast.error("Couldn't save that label — try again."),
   });
   const openThread = trpc.messages.openThread.useMutation({
     onSuccess: (res) => {
@@ -620,6 +641,74 @@ export function PeerOverlaysHost() {
                   </button>
                 )}
               </div>
+
+              {/* BOARD 4a — the category chips, EDITABLE.
+                  This is the only surface in the app that can assign more than one
+                  tag: the Contacts row menu and the edit dialog are single-select
+                  pickers, so without this the multi-tag store could never hold two.
+
+                  OFFERED ONLY FOR A SAVED CONTACT, and that is a property of the
+                  data rather than a UI choice: tags live on the OWNER's contact
+                  row, so there is nowhere to put them for somebody you have not
+                  saved. Showing the chips anyway would be a control that silently
+                  does nothing — the class this repo keeps removing.
+
+                  THEY ARE **MY** LABELS, NEVER THEIRS. The contract is explicit
+                  that tags are not synced to the peer, and the copy says so, so
+                  nobody assigns "VIP" believing the other person is told. */}
+              {saved && (
+                <div className="mt-3 w-full">
+                  <div
+                    className="mb-1.5 font-mono text-[9.5px] font-bold uppercase text-muted-foreground"
+                    style={{ letterSpacing: ".22em" }}
+                  >
+                    Your labels
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CONTACT_TAGS.map((t) => {
+                      const on = myTags.includes(t);
+                      return (
+                        <button
+                          key={t}
+                          type="button"
+                          disabled={tagWrite.isPending}
+                          aria-pressed={on}
+                          onClick={() => {
+                            if (!profileNumber) return;
+                            /* Toggle, so tapping an assigned chip REMOVES it —
+                               otherwise there is no way to unassign without a
+                               second control the frame does not draw. */
+                            tagWrite.mutate({
+                              number: profileNumber,
+                              tags: toggleContactTag(myTags, t),
+                            });
+                          }}
+                          style={
+                            on
+                              ? {
+                                  background: TAG_COLOR[t] + "21",
+                                  border: "1px solid " + TAG_COLOR[t] + "73",
+                                  color: TAG_COLOR[t],
+                                }
+                              : undefined
+                          }
+                          className={
+                            "rounded-full px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 " +
+                            (on ? "" : "border border-border bg-muted/40 text-muted-foreground hover:text-foreground")
+                          }
+                        >
+                          {on && <Check className="mr-1 inline size-3" />}
+                          {TAG_LABEL[t]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+                    Only you see these — they are never shared with{" "}
+                    {p.displayName || "them"}.
+                  </p>
+                </div>
+              )}
 
               {/* The two actions that used to sit permanently in the chat header.
                   Present ONLY when opened from inside a conversation. */}

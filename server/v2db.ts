@@ -13,6 +13,7 @@
    All times are UTC Date objects. Numbers are 6-digit strings.
    ============================================================ */
 
+import { contactTagsOf, serializeContactTags, categoryMirror } from "../shared/contactTags";
 import crypto from "crypto";
 import {
   and,
@@ -2520,6 +2521,7 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "identities", column: "historyClearedAt", ddl: "ADD COLUMN `historyClearedAt` timestamp NULL" },
     // Contact categories + per-contact block (v2.82).
     { table: "contacts", column: "category", ddl: "ADD COLUMN `category` varchar(16)" },
+    { table: "contacts", column: "tags", ddl: "ADD COLUMN `tags` varchar(64)" },
     { table: "contacts", column: "blocked", ddl: "ADD COLUMN `blocked` boolean" },
     // Self-hosted email/password auth (v2.54).
     { table: "users", column: "passwordHash", ddl: "ADD COLUMN `passwordHash` text" },
@@ -3208,10 +3210,34 @@ export async function reapStaleSessions(
 
 /** Columns that may be updated on a contact (everything except ownerId/number,
  *  which form the unique key). */
+/**
+ * The two tag columns an upsert writes, derived from ONE input.
+ *
+ * EXPORTED AS A TEST SEAM (v2.106.14). A source pin can tell you this function is
+ * called; it cannot tell you the object it returns actually carries the mirror —
+ * a mutation setting `category: null` here left every assertion green while the
+ * column silently stopped tracking the first tag. Driving the real function is the
+ * only thing that catches that.
+ *
+ * `contacts.category` is a derived mirror of `tags[0]` since v2.106.14 — it stays
+ * on the wire for a client still on the previous bundle mid-deploy, and computing
+ * it anywhere else is how the column and the tag list come to disagree.
+ *
+ * A caller that passes only `category` (an older client) is not broken by this:
+ * its value becomes the single tag, which is exactly what one category meant.
+ */
+export function contactTagColumns(input: { tags?: string | null; category?: string | null }): {
+  tags: string | null;
+  category: string | null;
+} {
+  const tags = contactTagsOf({ tags: input.tags ?? null, category: input.category ?? null });
+  return { tags: serializeContactTags(tags), category: categoryMirror(tags) };
+}
+
 const CONTACT_UPDATABLE = [
   "displayName", "avatarUrl", "favourite", "notes",
   "email", "phone", "company", "jobTitle", "website", "birthday",
-  "category", "blocked",
+  "category", "tags", "blocked",
 ] as const;
 
 /**
@@ -3242,6 +3268,7 @@ export async function upsertContact(input: {
   website?: string | null;
   birthday?: string | null;
   category?: string | null;
+  tags?: string | null;
   blocked?: boolean;
 }) {
   const db = await getDb();
@@ -3259,7 +3286,13 @@ export async function upsertContact(input: {
     jobTitle: input.jobTitle ?? null,
     website: input.website ?? null,
     birthday: input.birthday ?? null,
-    category: input.category ?? null,
+    /* ONE WRITER FOR BOTH (v2.106.14). `category` is a derived mirror of the
+       first tag, so it is computed here from the same input rather than accepted
+       separately — two writers is exactly how the column and the list come to
+       disagree about what somebody is filed under. A caller that passes only
+       `category` (an older client, mid-deploy) still works: its value becomes the
+       single tag. */
+    ...contactTagColumns(input),
     blocked: input.blocked ?? false,
   };
   // Only overwrite columns the caller explicitly provided, so a partial update

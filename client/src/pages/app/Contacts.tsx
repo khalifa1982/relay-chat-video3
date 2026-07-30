@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { contactTagsOf, sectionsFor, CONTACT_TAGS, TAG_COLOR, TAG_LABEL, type ContactTag } from "@shared/contactTags";
 import { useLocation } from "wouter";
 import {
   Phone,
@@ -130,6 +131,12 @@ export default function ContactsPage() {
   });
 
   const [search, setSearch] = useState("");
+  /* Board 3b's top filter chips: All · VIP · Family · Friend · Team, SINGLE-SELECT.
+     `null` is All. Single-select because the board draws one chip lit and a
+     multi-select would need an "and/or" the frame does not express — and because
+     the sections below already give you every tag at once, so a multi-filter would
+     be a second way to do the thing the page does by default. */
+  const [tagFilter, setTagFilter] = useState<ContactTag | null>(null);
   // Collapsible section state (the prototype's chevron headers). Presentational
   // only — a set of collapsed section keys; every section is expanded by default.
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -188,11 +195,18 @@ export default function ContactsPage() {
         // somebody saved as "Dad" is also findable by their real name.
         matchQuery(search, [c.displayName, c.liveName, c.number])
       )
+      /* The chip narrows the INPUT, so every section, count and empty state below
+         asks the already-narrowed list. Filtering per-section instead is how a
+         header comes to say a number its own rows do not add up to. */
+      .filter((c) =>
+        !tagFilter ||
+        contactTagsOf({ tags: (c as { tags?: string[] }).tags?.join(",") ?? null, category: c.category ?? null }).includes(tagFilter)
+      )
       .sort((a, b) => {
         if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
         return (a.displayName || a.number).localeCompare(b.displayName || b.number);
       });
-  }, [contacts.data, search]);
+  }, [contacts.data, search, tagFilter]);
 
   /** True while the user is actively searching. */
   const searching = search.trim().length > 0;
@@ -221,12 +235,38 @@ export default function ContactsPage() {
       out.push({ key: "online", label: "Online", icon: Radio, tint: "text-[color:var(--relay-online,#06d6a0)]", rows: online, allActive: true });
     const favorites = filtered.filter((c) => c.favourite);
     if (favorites.length) out.push({ key: "fav", label: "Favorites", icon: Star, tint: "text-amber-400", rows: favorites });
-    for (const cat of CATEGORY_ORDER) {
-      const rows = filtered.filter((c) => c.category === cat && !c.favourite);
-      if (rows.length) out.push({ key: cat, ...CATEGORY_META[cat], rows });
+    /* DATA-CONTRACTS §1 (board 3b), and it changes TWO real behaviours rather
+       than restyling anything.
+       (1) VIP IS A CHIP, NOT A SECTION. It used to have its own heading; the
+           contract makes it a gold chip on whichever row already appears, so
+           `SECTION_TAGS` excludes it.
+       (2) A CONTACT APPEARS IN EVERY SECTION IT QUALIFIES FOR. The old rule was
+           `c.category === cat && !c.favourite`, which HID a favourited contact
+           from their own category — you starred somebody and they left Family.
+           Membership, not a partition, which is what already made ONLINE
+           cross-cutting (v2.99.97).
+       The derivation itself lives in `shared/contactTags.ts` so the section list,
+       its counts and 4a's chips cannot come to disagree about who is in what. */
+    for (const { key, contacts: rows } of sectionsFor(
+      filtered.map((c) => ({
+        number: c.number,
+        tags: contactTagsOf({ tags: (c as { tags?: string[] }).tags?.join(",") ?? null, category: c.category ?? null }),
+        favourite: c.favourite,
+        online: isActiveContact(c),
+      }))
+    )) {
+      // ONLINE and FAVORITES are already pushed above with their own icons and
+      // tints; taking them from here too would render each section twice.
+      if (key === "online" || key === "favorites") continue;
+      const rowsByNumber = new Set(rows.map((r) => r.number));
+      const real = filtered.filter((c) => rowsByNumber.has(c.number));
+      if (!real.length) continue;
+      if (key === "other") {
+        out.push({ key: "other", label: "All contacts", icon: UsersIcon, tint: "text-muted-foreground", rows: real });
+      } else {
+        out.push({ key, ...CATEGORY_META[key as Category], rows: real });
+      }
     }
-    const other = filtered.filter((c) => !c.favourite && !c.category);
-    if (other.length) out.push({ key: "other", label: "All contacts", icon: UsersIcon, tint: "text-muted-foreground", rows: other });
     return out;
   }, [filtered]);
 
@@ -259,6 +299,58 @@ export default function ContactsPage() {
         >
           <UserPlus className="size-[19px]" />
         </button>
+      </div>
+      {/* BOARD 3b — the filter chips. Single-select, `null` is All.
+          It scrolls horizontally rather than wrapping: five chips plus their
+          labels do not fit 320px on one line, and a second row would push the
+          list itself further down the screen on the phone that can least afford
+          it. `shrink-0` on each chip is what stops flex squeezing them into
+          unreadable slivers instead of scrolling. */}
+      <div className="px-4 md:px-0 -mt-1 flex gap-2 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <button
+          type="button"
+          onClick={() => setTagFilter(null)}
+          aria-pressed={tagFilter === null}
+          className={
+            "shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold transition " +
+            (tagFilter === null ? "rchip-accent" : "bg-secondary/60 text-muted-foreground hover:text-foreground")
+          }
+        >
+          All
+        </button>
+        {CONTACT_TAGS.map((t) => {
+          const on = tagFilter === t;
+          return (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTagFilter(on ? null : t)}
+              aria-pressed={on}
+              /* The lit chip wears the TAG'S OWN colour rather than the accent —
+                 unlike every other selection in the app. These four are fixed
+                 identities (the board gives each its own hue and the row chips
+                 use it), so lighting them all in one cycling accent would throw
+                 away the thing that makes a tag readable at a glance. Inline,
+                 because a runtime-composed Tailwind class is invisible to the
+                 JIT and comes out unstyled. */
+              style={
+                on
+                  ? {
+                      background: TAG_COLOR[t] + "22",
+                      border: "1px solid " + TAG_COLOR[t] + "73",
+                      color: TAG_COLOR[t],
+                    }
+                  : undefined
+              }
+              className={
+                "shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold transition " +
+                (on ? "" : "bg-secondary/60 text-muted-foreground hover:text-foreground")
+              }
+            >
+              {TAG_LABEL[t]}
+            </button>
+          );
+        })}
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto md:rounded-2xl md:glass-surface-md">
         {contacts.isLoading ? (
@@ -491,6 +583,9 @@ function ContactRow({
     company: string | null;
     jobTitle: string | null;
     category: Category | null;
+    /** Resolved by the caller through the ONE shared reader, so a pre-v2.106.14
+     *  contact (category only) still shows its chip. */
+    tags?: string[];
     blocked: boolean;
   };
   onVoice: () => void;
@@ -548,6 +643,25 @@ function ContactRow({
             {c.favourite && <Star className="size-3 shrink-0 text-amber-400 fill-amber-400" />}
             <RoleBadge role={roleFromFlags(c.role, c.verified)} size={14} />
             {c.blocked && <Ban className="size-3.5 shrink-0 text-[#ff8d84]" />}
+            {/* BOARD 3b — the tag chips, VIP gold at the board's 13% fill / 45%
+                border. Rendered beside the name rather than on their own line
+                because the row already carries three lines and a fourth would
+                make the list scroll for information that is one glance wide.
+                `shrink-0` so the NAME truncates rather than the chips: the chip
+                is the thing that stops being readable first. */}
+            {contactTagsOf({ tags: c.tags?.join(",") ?? null, category: c.category ?? null }).map((t) => (
+              <span
+                key={t}
+                className="shrink-0 rounded-md px-1.5 py-px text-[9.5px] font-bold uppercase tracking-wider"
+                style={{
+                  background: TAG_COLOR[t] + "21",
+                  border: "1px solid " + TAG_COLOR[t] + "73",
+                  color: TAG_COLOR[t],
+                }}
+              >
+                {TAG_LABEL[t]}
+              </span>
+            ))}
           </div>
           {/* PIN on its own line, presence UNDER it (v2.99.66, owner screenshot).
               They shared a line before, and with a 6-digit PIN plus "last seen

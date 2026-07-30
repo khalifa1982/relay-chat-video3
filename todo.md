@@ -11278,6 +11278,103 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.15 — board 3b + 4a: the tags store becomes visible (2026-07-30)
+- [x] **The model shipped last release had no reader and no writer in the app.** v2.106.14 added
+      `contacts.tags`, the parser, the section derivation and the mirror — and not one screen read
+      or wrote it, so a tag could only be set by an API caller. This is the UI half.
+- [x] **3b — the filter chips (All · VIP · Family · Friend · Team), single-select.** The narrowing is
+      applied to the **INPUT** of the sections memo, never per-section: the headers carry counts, so
+      filtering inside each section is exactly how a header comes to state a number its own rows do
+      not add up to. Tapping the lit chip clears it, so All is reachable without aiming at it.
+- [x] **The chip wears the tag's own colour as an INLINE style.** A runtime-composed Tailwind class
+      (`bg-[${TAG_COLOR[t]}]`) is invisible to the JIT and renders unstyled — the trap recorded for
+      the old tab accents and the status picker. Forbidden by test. The four hues are fixed
+      identities rather than theme tokens, which is why the cycling accent is deliberately not one
+      of them: a tag whose colour drifts under the reader stops being a label.
+- [x] **Rows carry their tag chips**, resolved through the shared `contactTagsOf` so a v2.82 contact
+      with only a `category` still shows its chip.
+- [x] **4a — the profile chips are the only MULTI-tag editor, and that is stated rather than implied.**
+      The Contacts row menu and the edit dialog are still single-select `category` pickers, so these
+      chips are what actually deliver 0..n. Toggling goes through the shared `toggleContactTag`
+      rather than re-deriving "is it on".
+- [x] **Offered ONLY for a saved contact.** Tags live on the owner's contact row; for an unsaved
+      number there is nowhere to put them, so the chips would be a control that silently does
+      nothing (the v2.103.3 rule).
+- [x] **Its own mutation, not the add-to-contacts one.** Pointing the chips at `upsert` fires
+      "Added to your contacts." on every tag toggle — a toast describing the wrong act, which is
+      worse than none. Silent on success (the chip lighting up IS the feedback), loud on failure (a
+      silent failure leaves a label that looks saved and is not).
+- [x] **It says the labels are private.** "Only you see these — they are never shared with X":
+      the contract's "never synced to the peer" is free structurally (`ownerId` already scopes the
+      row) and worth nothing if the screen does not say so.
+- [x] `server/contactTags.test.ts` → 45. **All 9 tripwires verified by MUTATION** from byte-exact
+      backups off a confirmed-GREEN baseline, the mutator aborting unless its target occurs exactly
+      once; sources byte-identical afterwards.
+- [x] **One of my own mutations was weak and is reported rather than counted**: the first pass at the
+      separate-mutation pin merely RENAMED `tagWrite`, which breaks the identifier the pin names
+      without creating the defect. Re-run as a genuine alias of `upsert`, it bit.
+- [x] **Not verified on a device, said plainly**: nobody has tapped a filter chip or labelled a
+      contact on a phone.
+- [x] No schema change, no new dependency, no new env var. 4264 tests.
+
+## v2.106.14 — `contact.tags` from the owner's data contract (2026-07-30)
+
+`design_handoff_relay_app/DATA-CONTRACTS.md` §1, the store behind board 3b and 4a.
+
+**It's a widening, not a new field — which is why there's no backfill.** `contacts.category`
+has existed since v2.82 as one of vip/family/friend/team or NULL. The contract asks for
+`tags: ContactTag[]`, 0..n. The store already had the idea; what changes is the arity. So a
+row with a category and no tags reads as `[category]` — exactly what it always meant — and
+every pre-release contact lands in the right section on first render with nothing run against
+the database.
+
+- **`category` is kept as a derived mirror of `tags[0]`.** It's on the wire, so a client on
+  the previous bundle is still reading it mid-deploy. **One writer computes both columns**
+  (`contactTagColumns`) — two writers is how the column and the list come to disagree.
+- The parser **fails to empty** and **drops unknowns** rather than rejecting, so a row from a
+  future build carrying a fifth tag still shows the four this build understands. Order is the
+  user's, because the contract makes the first tag the row chip.
+
+**A real bug I wrote, caught by the test written for exactly it.** VIP is a chip, not a
+section — and I keyed "Other" on `tags.length === 0`, so a contact tagged **only** `vip`
+qualified for nothing and **vanished from the contacts screen**. "Other" means *in no
+section*, not untagged.
+
+**Wiring the derivation fixed a second, older behaviour.** The section rule was
+`c.category === cat && !c.favourite`, which **hid a favourited contact from their own
+category** — star somebody and they left Family. The contract says a contact appears in every
+section it qualifies for: membership, not a partition, which is what already made ONLINE
+cross-cutting (v2.99.97).
+
+**Two mutation survivors, both real gaps in my own tests**, reported rather than patched over:
+- Setting `category: null` inside the writer left every assertion green — they pinned that the
+  function is *called* and that the values object doesn't assign the column separately, neither
+  of which says what it *returns*. Fixed by exporting it as a test seam and driving it.
+- The Contacts wiring had **no client-side pin at all**, so dropping the duplicate-section
+  guard rendered Favorites twice with nothing failing.
+
+Both re-run; both now bite.
+
+**A harness bug of mine**, reported rather than counted: a bad `sed` left the mutator pointing
+at a path vitest couldn't match, so the first four mutations reported SURVIVED with **empty
+output** — not a result at all. The mutator now aborts when the suite produces no result line.
+
+**Two defects in my own test, both failing on correct code**: a file-wide needle for
+`category: input.category` matched the legitimate *read* inside the writer; and a sweep for the
+old partition matched the row menu and the edit dialog, which are single-select **pickers**
+rather than the section logic.
+
+**The limit that follows from that, said plainly: the pickers are still single-select, so the
+UI can only assign ONE tag today.** Multi-tag assignment is 4a's editable chips — next.
+
+`server/contactTags.test.ts` (37), driven behaviourally because every claim is about what a row
+*resolves* to. **All 10 tripwires verified by mutation** off a confirmed-green baseline.
+
+**Not verified against a database**: no MySQL here, so the column and the migrator entry are
+proven by reading and pinned, but nobody has tagged a contact and watched the sections change.
+
+One additive nullable column, no new dependency, no new env var. 4256 tests.
+
 ## v2.106.13 — board 4e + 2c: the fullscreen viewer keeps the context the bubble had (2026-07-30)
 
 **The media viewer was bytes on black.** A close button, a download, nothing else — so a

@@ -6,6 +6,7 @@
    final composition.
    ============================================================ */
 
+import { contactTagsOf, serializeContactTags } from "../shared/contactTags";
 import { TRPCError } from "@trpc/server";
 import { s3Config } from "./s3";
 import { storageGetSignedUrl } from "./storage";
@@ -1618,6 +1619,11 @@ export const v2ContactsRouter = router({
         website: r.website ?? null,
         birthday: r.birthday ?? null,
         category: (r.category as "vip" | "family" | "friend" | "team" | null) ?? null,
+        /* THE READ GOES THROUGH ONE RESOLVER (v2.106.14), so no surface can show a
+           pre-tags contact as untagged: a row with only the legacy `category`
+           resolves to that single tag. `category` is still emitted because a
+           client on the previous bundle is reading it mid-deploy. */
+        tags: contactTagsOf({ tags: r.tags ?? null, category: r.category ?? null }),
         blocked: r.blocked === true,
         identityId: ident ?? null,
         isOnline: hidden ? false : (pres?.isOnline ?? false),
@@ -1670,8 +1676,14 @@ export const v2ContactsRouter = router({
           .optional()
           .refine(v => !v || /^https?:\/\//i.test(v), { message: "Must start with http:// or https://" }),
         birthday: z.string().trim().max(32).nullable().optional(),
-        /** Contact group for the categorized list (v2.82). */
+        /** Contact group for the categorized list (v2.82). Since v2.106.14 this is
+         *  a DERIVED MIRROR of the first tag — still accepted so an older client
+         *  keeps working, where it lands as the single tag. */
         category: z.enum(["vip", "family", "friend", "team"]).nullable().optional(),
+        /** Contact tags, ordered — the first is the row chip (DATA-CONTRACTS §1).
+         *  A CLOSED enum, so a client cannot invent a fifth tag that every reader
+         *  would then have to drop; bounded at 4 because that is how many exist. */
+        tags: z.array(z.enum(["vip", "family", "friend", "team"])).max(4).optional(),
         /** Block this number: their calls auto-decline, their 1:1 messages are rejected. */
         blocked: z.boolean().optional(),
       })
@@ -1684,7 +1696,15 @@ export const v2ContactsRouter = router({
           message: "You can't add yourself as a contact",
         });
       }
-      const row = await upsertContact({ ownerId: me.id, ...input });
+      /* The array arrives from the client; the store keeps the serialized form.
+         Converted HERE rather than widening `upsertContact`'s signature, so the
+         writer has exactly one representation to reason about. */
+      const { tags, ...rest } = input;
+      const row = await upsertContact({
+        ownerId: me.id,
+        ...rest,
+        ...(tags ? { tags: serializeContactTags(tags) } : {}),
+      });
       return row;
     }),
 
