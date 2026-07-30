@@ -123,8 +123,18 @@ describe("status privacy hardening (review §3/§4/§5)", () => {
     expect(router).toMatch(/statusGate\(ctx\)/);
   });
 
-  it("post is capped per user + rate-limited", () => {
-    expect(router).toMatch(/countActiveStatuses\(me\.id\)\) >= STATUS_MAX_ACTIVE/);
+  it("post is capped, on the SHELF being posted to (#119), and rate-limited", () => {
+    // Was a frozen one-argument `countActiveStatuses(me.id)`. #119 scopes the count
+    // to the shelf — a group story spends one of THAT GROUP's slots, not one of the
+    // author's personal thirty — so the property is that the cap is checked against
+    // the group being posted to, which is stricter than the old literal.
+    expect(router).toMatch(/countActiveStatuses\(me\.id, group\?\.id \?\? null\)\) >= STATUS_MAX_ACTIVE/);
+    // And the counter really does separate the two shelves rather than accepting the
+    // argument and ignoring it.
+    const fn = db.slice(db.indexOf("export async function countActiveStatuses"));
+    const body = fn.slice(0, fn.indexOf("\n}"));
+    expect(body).toMatch(/isNull\(statuses\.conversationId\)/);
+    expect(body).toMatch(/eq\(statuses\.conversationId, conversationId\)/);
   });
 
   it("expired rows are reaped", () => {

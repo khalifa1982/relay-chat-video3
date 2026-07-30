@@ -11278,6 +11278,83 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.105.27 — a group admin can remove a member's story, and a group story stops spending a personal slot (2026-07-29)
+
+The two group items from the owner's 2026-07-29 message, #118 and #119.
+
+**#118 — A GROUP ADMIN MAY REMOVE A STORY A MEMBER POSTED TO THEIR GROUP.** v2.105.6 named this as a
+deliberate omission; the owner has now asked for it. **A SEPARATE NAMED WRITER, never a flag on the
+author-scoped one** — `deleteStatusAsGroupAdmin` sits beside `deleteStatus` exactly as
+`deleteMessageAsGroupAdmin` sits beside `deleteMessage` (v2.104.0), because a boolean in that position is
+something a caller can pass by mistake and a name is not. `deleteStatus` is left BYTE-IDENTICAL, its
+author clause on the DELETE being a mutation-verified tripwire from v2.105.6 — an unscoped one there
+would let anybody remove anybody's story.
+
+**A PERSONAL STORY IS REFUSED BEFORE ANY PERMISSION IS READ.** A row with no `conversationId` was
+addressed to the author's own contacts and is nobody's group business, so the group capability grants
+nothing over it — and checking it FIRST means the answer cannot depend on which groups the caller happens
+to administer. **THE DELETE IS SCOPED BY THE CONVERSATION, NEVER BY THE CALLER**: by the caller it would
+delete nothing (that is what `deleteStatus` is for), and without the conversation clause an admin of one
+group could remove a story posted to another.
+
+**THE CAPABILITY GETS ITS OWN NAME, `delete-any-story`, rather than a second meaning for
+`delete-any-message`** — a story and a message are different objects with different lifetimes, and a later
+reader must not have to guess whether restricting one restricts the other. It is admin-only by its
+ABSENCE from `MEMBER_CAPABILITIES`, which is where that decision is visible; a test forbids that
+module-level set from ever being mutated, because `.add` for one group would grant the capability in
+EVERY group for the life of the process (the v2.105.16 hazard).
+
+**EVERY REFUSAL ANSWERS IDENTICALLY** — gone, personal, and not-an-admin-here are one message, because
+status ids are small sequential integers and a distinguishable refusal would let anybody map which ids
+exist and which groups they belong to. **THE FAN-OUT NAMES THE AUTHOR, NOT THE ADMIN**, and that is the
+subtle part: clients key their story rings on the author, so publishing the removal under the admin's
+identity would clear a ring they never had and leave the real one lit for up to 24 hours.
+
+**THE VIEWER ASKS WHETHER I AM AN ADMIN LAZILY**, and only where it can matter — a group reel, on a slide
+that is not mine. Putting the flag on the FEED would mean an admin check per group on a query every client
+polls, for a button almost nobody taps, and the answer is only ever needed after a deliberate open;
+`conversationInfo` is membership-gated and already backs the group sheet, so this adds no surface. It
+defaults to FALSE while the query is in flight or has failed, because hiding a control beats showing one
+the server will refuse (the v2.103.3 rule), and it never appears beside the author's own Delete — two
+buttons doing the same thing by different authority on one row is how a tap calls the wrong mutation.
+Confirmed, with copy that names whose story and which group.
+
+**#119 — A GROUP STORY NO LONGER SPENDS ONE OF THE AUTHOR'S THIRTY.** `countActiveStatuses` counted every
+active story the author had, so posting into three groups cost three of their personal slots. It now
+counts the SHELF being posted to: personal stories only when no group is named, and this author's stories
+in THAT group when one is. **PER (AUTHOR, GROUP) RATHER THAN PER GROUP, deliberately**: a group-wide total
+would let one member fill the shelf and lock every other member out, which is a worse failure than the
+storage it would save — and the group's total stays bounded by members × the cap, with membership itself
+bounded and admin-gated. The refusal names WHICH shelf is full, because "you can have up to 30" while a
+personal reel sits empty is a message somebody cannot act on. **THE ASSUMPTION IS STATED**: the owner
+asked to "add" this point and keeping current behaviour would have been no action, so the intent is read
+as decoupling the two caps.
+
+`server/groupStoryAdmin.test.ts` (26); **all 21 tripwires verified by MUTATION** from byte-exact backups
+off a confirmed-GREEN baseline.
+
+**TWO SURVIVORS, BOTH REAL GAPS IN MY OWN TESTS, each fixed and re-verified.** (1) `groupCid` derived as
+`group?.subject.conversationId ?? 1` still satisfies `groupCid != null`, so the admin control could
+surface on a PERSONAL reel for anybody who happens to administer conversation 1 — every assertion stayed
+green; the derivation from the subject's KIND is now pinned exactly. (2) `if (false && !window.confirm(…))`
+left the confirmation text in place while removing somebody else's story with no prompt at all — the same
+class as the v2.105.16 survivor, where asserting a guard APPEARS says nothing about whether it DECIDES
+anything; the condition is now pinned exactly with a constant-false conjunct forbidden.
+
+**ONE PRE-EXISTING PIN REWRITTEN TO THE PROPERTY**: it froze the one-argument `countActiveStatuses(me.id)`
+call, i.e. it forbade exactly this change; it now asserts the cap is checked against the group being
+posted to AND that the counter really separates the two shelves rather than accepting the argument and
+ignoring it — stricter than the literal it replaced.
+
+**A DEFECT IN MY OWN TEST HELPER, caught by it failing on correct code**: `fnAt` took the first `{` after
+the function name, which for `function f(): Promise<{…}>` is the RETURN TYPE — so it returned the type
+annotation and every assertion about the body failed. That is the v2.105.9 trap in a new position (there
+it was a destructured parameter); the scan now takes the first `{` reached with parens closed and angle
+brackets at zero.
+
+**NOT VERIFIED AGAINST A DATABASE, said plainly**: no MySQL here, so no admin has removed a member's story
+and no cap has been hit. No schema change, no new dependency, no new env var. 3970 tests.
+
 ## v2.105.26 — the sign-in screen, to the owner's batch (2026-07-29)
 
 Three items from one message, #120-#122.

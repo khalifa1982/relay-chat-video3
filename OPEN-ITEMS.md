@@ -187,13 +187,16 @@ approval at will — each with a 30-second countdown and a retry.
 
 ## §2 — NOT DONE, and needs a decision from you first
 
-### 7. A group admin cannot delete another member's group story — **BUILDING** (#118)
-You asked for this on 2026-07-29; it is queued behind the login batch.
+### 7. ~~A group admin cannot delete another member's group story~~ — **DONE, v2.105.27**  (#118)
+An admin viewing a group reel now gets a "Remove as admin" row on a member's slide, confirmed, with copy
+naming whose story and which group. Its own capability (`delete-any-story`) rather than a second meaning
+for message deletion, and the author's own Delete path is untouched.
 
-### 8. A group story counts against the poster's own 30-active cap — **BUILDING** (#119)
-You asked to change this. Read as: a group story should get the GROUP's own cap rather than spending
-one of the poster's thirty, so group activity cannot lock somebody out of their personal story. If you
-meant the opposite, say so and it is a one-line difference.
+### 8. ~~A group story counts against the poster's own 30-active cap~~ — **DONE, v2.105.27**  (#119)
+A group story now spends one of THAT GROUP's slots, not one of your personal thirty. Counted per
+(author, group) rather than per group, so one member cannot fill the shelf and lock the others out.
+**The assumption, stated:** you asked to "add" this point and keeping current behaviour would have been
+no action, so I read it as decoupling the caps. If you meant the opposite it is a one-line difference.
 
 ---
 

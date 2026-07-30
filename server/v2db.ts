@@ -3525,6 +3525,16 @@ export type GroupCapability =
   | "start-call"
   /** Requires a stored admin or the derived creator, with NO fallback. */
   | "delete-any-message"
+  /**
+   * #118 — removing a story somebody else posted TO the group.
+   *
+   * ITS OWN NAME rather than a second meaning for `delete-any-message`, because a
+   * story and a message are different objects with different lifetimes, and a later
+   * reader must not have to guess whether restricting one restricts the other. Its
+   * ABSENCE from MEMBER_CAPABILITIES is what makes it admin-only — the set is
+   * where that decision is visible.
+   */
+  | "delete-any-story"
   | "manage-roles"
   /** Minting or revoking an invite link (v2.105.9). Admin-only DELIBERATELY: a link
    *  admits a stranger, and letting every member hand one out is a decision nobody
@@ -5937,6 +5947,50 @@ export async function deleteStatus(id: number, ownerId: number): Promise<boolean
   return true;
 }
 
+/**
+ * #118 — a group ADMIN removes a story somebody else posted TO THEIR GROUP.
+ *
+ * A SEPARATE NAMED FUNCTION beside `deleteStatus`, never an `isAdmin` boolean on
+ * it — the same house rule that put `deleteMessageAsGroupAdmin` beside
+ * `deleteMessage` (v2.104.0). A flag in that position is something a caller can
+ * pass by mistake; a name is not, and the author-scoped clause on `deleteStatus`
+ * is a mutation-verified tripwire that must stay exactly as it is.
+ *
+ * REFUSES A PERSONAL STORY OUTRIGHT. A row with no `conversationId` was addressed
+ * to the author's own contacts and is nobody's group business, so the group
+ * capability grants nothing over it — checked BEFORE the permission read, so the
+ * answer cannot depend on which groups the caller happens to administer.
+ *
+ * The DELETE is scoped by id AND `conversationId`, never by author: scoping it to
+ * the caller would make it delete nothing (that is what `deleteStatus` is for),
+ * and leaving the conversation clause off would let an admin of one group remove a
+ * story posted to another.
+ *
+ * Returns the removed row's author and group so the caller can fan the removal out
+ * — without it, members keep a lit ring for up to 24h pointing at nothing.
+ */
+export async function deleteStatusAsGroupAdmin(
+  statusId: number,
+  adminIdentityId: number,
+): Promise<{ ok: true; conversationId: number; authorId: number } | { ok: false; reason: "not-found" | "not-a-group-story" | "forbidden" }> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "not-found" };
+  const [row] = await db
+    .select({ id: statuses.id, identityId: statuses.identityId, conversationId: statuses.conversationId })
+    .from(statuses)
+    .where(eq(statuses.id, statusId))
+    .limit(1);
+  if (!row) return { ok: false, reason: "not-found" };
+  if (row.conversationId == null) return { ok: false, reason: "not-a-group-story" };
+  const perm = await checkGroupPermission(row.conversationId, adminIdentityId, "delete-any-story");
+  if (!perm.ok) return { ok: false, reason: "forbidden" };
+  await db
+    .delete(statuses)
+    .where(and(eq(statuses.id, statusId), eq(statuses.conversationId, row.conversationId)));
+  await db.delete(statusViews).where(eq(statusViews.statusId, statusId)).catch(() => {});
+  return { ok: true, conversationId: row.conversationId, authorId: row.identityId };
+}
+
 /** Record that `viewerId` saw `statusId` (idempotent on the unique pair). */
 export async function recordStatusView(statusId: number, viewerId: number): Promise<void> {
   const db = await getDb();
@@ -6221,13 +6275,41 @@ export async function getViewableStatusesOfOwner(
 }
 
 /** Count of a user's currently-active statuses (for the per-user cap). */
-export async function countActiveStatuses(ownerId: number): Promise<number> {
+export async function countActiveStatuses(
+  ownerId: number,
+  /**
+   * #119 — WHICH shelf to count (owner asked that a group story stop spending the
+   * poster's own thirty).
+   *
+   *   null  → the author's PERSONAL stories only. A group story no longer costs
+   *           them a personal slot, so posting into three groups cannot lock
+   *           somebody out of their own reel.
+   *   id    → this author's stories IN THAT GROUP. Per (author, group) rather
+   *           than per group, deliberately: a group-wide total would let one
+   *           member fill the shelf and lock every other member out, which is a
+   *           worse failure than the storage it would save. The group's total is
+   *           still bounded, by members × the cap, and membership is itself
+   *           bounded and admin-gated.
+   *
+   * The cap exists to stop posting being an unbounded storage cost, and both
+   * shelves keep that true.
+   */
+  conversationId: number | null = null,
+): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
   const [row] = await db
     .select({ c: sql<number>`count(*)` })
     .from(statuses)
-    .where(and(eq(statuses.identityId, ownerId), gt(statuses.expiresAt, new Date())));
+    .where(
+      and(
+        eq(statuses.identityId, ownerId),
+        gt(statuses.expiresAt, new Date()),
+        conversationId == null
+          ? isNull(statuses.conversationId)
+          : eq(statuses.conversationId, conversationId),
+      ),
+    );
   return Number(row?.c ?? 0);
 }
 
