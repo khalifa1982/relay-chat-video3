@@ -437,6 +437,7 @@ export default function ContactsPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              destructive
               onClick={() => {
                 if (deleteId !== null) remove.mutate({ id: deleteId });
                 setDeleteId(null);

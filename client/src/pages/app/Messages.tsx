@@ -934,6 +934,13 @@ export default function MessagesPage({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
+            {/* DELIBERATELY NOT `destructive`, and this is the one worth arguing.
+                Every other confirmation in this file destroys something for good; this
+                one does not — the thread comes back by itself the moment anybody
+                messages you again (v2.103.0 built it that way, and the description
+                right above says so). Painting it red would make the warning colour mean
+                "a dialog" rather than "you cannot undo this", which is exactly what it
+                is here to stop. */}
             <AlertDialogAction
               onClick={() => {
                 if (clearingThread) {
@@ -2878,6 +2885,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              destructive
               onClick={() => {
                 if (hidingId !== null) hideMutation.mutate({ messageId: hidingId });
                 setHidingId(null);
@@ -2907,6 +2915,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              destructive
               onClick={() => {
                 if (adminDeleting) {
                   adminDeleteMutation.mutate({ conversationId, messageId: adminDeleting.id });
@@ -2932,6 +2941,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              destructive
               onClick={() => {
                 if (unsendId !== null) removeMutation.mutate({ messageId: unsendId });
                 setUnsendId(null);

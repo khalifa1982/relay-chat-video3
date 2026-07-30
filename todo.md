@@ -11278,6 +11278,79 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.11 — board 4k system alerts; every destructive confirmation was wearing a safe colour (2026-07-30)
+
+**The finding.** `AlertDialogAction` defaults to `bg-primary`, and v2.106.4 repointed
+`--primary` at the cycling accent — so every confirm button in the app renders in the same
+colour whether it saves a display name or destroys a guest's only copy of their number.
+Affected: sign-out-and-forget, unsend, remove-for-everyone, clear-call-history,
+delete-message-for-me, remove-contact (which also silently unblocks).
+
+Said plainly, this is **pre-existing rather than introduced by the redesign** — primary was
+a dark cyan before, equally not-red. What the accent changed is that the most dangerous
+button in the app got brighter.
+
+- `AlertDialogAction` gains a `destructive` prop that DECIDES the variant, in one place, and
+  exposes `data-destructive` so intent is visible in devtools and testable against markup.
+  A per-site class string was the alternative and is the thing to avoid: the rule would then
+  live in seven places and the eighth would forget it.
+- Applied to the six irreversible confirmations. `destructive={isGuest}` on sign-out, because
+  a registered sign-out is undone by signing back in and reddening both would spend the
+  warning colour on the harmless one.
+- **"Delete this chat for you" deliberately stays accent.** v2.103.0 built the thread to come
+  back by itself the moment anybody messages again, and the copy says so. A mutation that
+  reddens it bites.
+
+**The sweep is the load-bearing test.** It reads every `<AlertDialogContent>` in the client
+and requires that one whose own copy claims the action cannot be undone confirms in red — a
+property, so it covers the dialog added next. A list of today's seven would go stale on the
+eighth.
+
+**Push banner (4k).** Emerald → accent, end to end. Green means ONLINE in this app (every
+presence LED), which is why v2.99.86 moved DND off it and v2.106.9 moved the speaking tile
+off it; a green "enable notifications" chip is a third meaning for a colour that has to carry
+one. No emerald survives anywhere in the banner — a green border around an accent CTA reads
+as a rendering fault. The **iOS install note stays sky**: it carries no action (the install
+happens in Safari's own share menu), so the accent would promise a tap that isn't there.
+
+**Update dialog (4k).** It fetched `/api/version`, compared it, and then told the user only
+that "a fresh version is ready" — about a version it knew the number of. Both numbers now
+render, **neither a literal** (a hardcoded `v2.106.0` satisfies a source pin and then lies
+about what is deployed), `dir="ltr"` so an RTL paragraph can't reorder the parts, with a
+fallback to the old wording while `serverVersion` is empty.
+
+**Message toast (4k).** Gets the sender's avatar + story ring by reusing `PeerAvatar`.
+Decorative (`clickable={false}`) and gated on a peer number, so a group keeps the glyph.
+
+**A defect in my own test, failing on correct code — the `fnAt` trap in a fourth file.** I
+sliced the function body to the first `\n}`, which for `function f({ … })` closes the
+destructured PARAMETER object, so the assertion never reached the code it named. Fixed as the
+class: a shared `fnBody` requiring parens and angles closed, plus a guard that the slice
+contains `return (`.
+
+`client/src/app/systemAlerts.test.ts` (19). **All 8 tripwires verified by mutation** from
+byte-exact backups off a confirmed-green baseline, the mutator aborting unless its target
+occurs exactly once; sources byte-identical afterwards.
+
+**Not verified on a device**: nobody has seen a red Sign out or an accent Enable on a phone.
+
+### Board — the owner delivered the 42-frame version
+34 + `5a` party lines, `5b` rejoin-a-live-call + host knock, `5c` quality readout, `5d`
+sign-in switcher (the four screens that existed with no frame), plus `5e`–`5h` collecting the
+requested states. The README's call-bar section now **defers to `relayAssets.ts`**, retiring
+the "6 controls, NEVER REDUCED" line that contradicted v2.99.39.
+
+Two collisions recorded rather than silently resolved:
+- The README's Screens list reads *2f Voicemail / 2g Passcode lock*; the board's own frame
+  labels read the **opposite**. The board wins — it is what gets built from.
+- `5a`–`5h` have no Screens entry, so their spec is read off the frames directly.
+
+`design_handoff_relay_app/MISSING-FRAMES.md` enumerates what is built per-frame (12 of 42)
+versus what carries only the design system. `support.js` is restored — v2.106.0 dropped it as
+prototype cruft, but the `.dc.html` references it.
+
+No schema change, no new dependency, no new env var. 4192 tests.
+
 ## v2.106.10 — phase 4 opens; three AA failures found in the DEFAULT theme (2026-07-30)
 
 Phase 1 shipped ten design utilities. After phases 2 and 3, **four were still completely

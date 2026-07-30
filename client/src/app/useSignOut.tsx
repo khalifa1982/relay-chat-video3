@@ -104,7 +104,13 @@ export function useSignOut(me: { isGuest: boolean } | null | undefined): {
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
+          {/* RED FOR A GUEST, ACCENT FOR AN ACCOUNT — the two are not the same act.
+              A guest's number, contacts and messages do not come back (the description
+              above says so); a registered sign-out is reversible by signing back in.
+              Painting both red would spend the warning colour on the harmless one and
+              leave it meaning nothing on the other. Board 4k draws this one red. */}
           <AlertDialogAction
+            destructive={isGuest}
             onClick={() => {
               setConfirming(false);
               void performSignOut();

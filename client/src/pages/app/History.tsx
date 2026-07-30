@@ -863,6 +863,7 @@ export default function HistoryPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              destructive
               onClick={() => {
                 setConfirmClear(false);
                 clearHistory.mutate();
