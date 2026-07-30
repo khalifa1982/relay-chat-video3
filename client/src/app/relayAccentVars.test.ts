@@ -194,12 +194,21 @@ describe("the glass token layer", () => {
        back one screen at a time. The slice is comment-stripped: `.rbar`'s own comment
        names `.rbar-flat`, so an unstripped `indexOf` found the PROSE and the slice then
        swallowed `.rbar`'s real backdrop-filter. */
-    const flat = layer.slice(layer.indexOf(".relay-v2 .rbar-flat"), layer.indexOf(".relay-v2 .rchip-accent"));
+    /* BOUNDED BY THE RULE'S OWN CLOSING BRACE, not by whichever rule happened to sit
+       next: the original ran to `.rchip-accent`, so v2.106.2's `.rtabbar` — which
+       legitimately DOES blur — landed inside the window and this pin failed on correct
+       code. Anchoring on a neighbour makes a pin break every time one is inserted, while
+       saying nothing about the property. */
+    const flatAt = layer.indexOf(".relay-v2 .rbar-flat");
+    expect(flatAt).toBeGreaterThan(0);
+    const flat = layer.slice(flatAt, layer.indexOf("}", flatAt) + 1);
     expect(flat.length).toBeGreaterThan(40);
     expect(flat).toMatch(/background: rgba\(8, 12, 14, 0\.92\)/);
     expect(flat).not.toMatch(/backdrop-filter/);
     // And the blurred one really does blur, so the pair is a genuine choice.
-    const bar = layer.slice(layer.indexOf(".relay-v2 .rbar {"), layer.indexOf(".relay-v2 .rbar-flat"));
+    const barAt = layer.indexOf(".relay-v2 .rbar {");
+    expect(barAt).toBeGreaterThan(0);
+    const bar = layer.slice(barAt, layer.indexOf("}", barAt) + 1);
     expect(bar).toMatch(/backdrop-filter: blur\(16px\)/);
   });
 

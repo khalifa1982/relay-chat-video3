@@ -220,6 +220,42 @@ A group story now spends one of THAT GROUP's slots, not one of your personal thi
 **The assumption, stated:** you asked to "add" this point and keeping current behaviour would have been
 no action, so I read it as decoupling the caps. If you meant the opposite it is a one-line difference.
 
+### 9. The 34-frame redesign — IN PROGRESS, and ONE frame needs your call
+
+`design_handoff_relay_app` is being built in phases so each one ships tested rather than all
+of it landing half-done.
+
+| Phase | What | State |
+| --- | --- | --- |
+| 1 | The foundation: the live canvas behind every screen, the cycling accent published as `--rb` / `--rb-rgb`, the glass token layer | **DONE, v2.106.0** |
+| 2a | The navigation layer: five tabs (`Calls · History · Messages · Groups · Contacts`), the accent pill, and `/app/groups` as the Messages list narrowed to group threads | **DONE, v2.106.2** |
+| 2b | The six screens themselves — 1a Dialer, 1b History, 1c Messages, 1d Conversation, 1e Contacts, 1f Profile | next |
+| 3 | The call surfaces — 1g Incoming, 1h In-call video, 2a Group call, 2b Voice call, 3a Calling/matrix digits | **blocked on the decision below** |
+| 4 | Overlays, sheets and system alerts — 2c–2i, 3b–3d, 4a–4k | after 3 |
+
+**THE DECISION I NEED FROM YOU, and I am not guessing at it.** The handoff says, in bold:
+*"Standard call bar — NEVER REDUCED. Every call surface shows the same 6 controls: mute ·
+camera · flip · speaker · chat · end."*
+
+**That contradicts something you asked for directly.** In v2.99.39 you told me to REMOVE the
+in-call `⋯ More` button and the Diagnostics panel, and Record was folded into the bar as a
+labelled chip. So the current bar is deliberately NOT the handoff's six.
+
+Two readings, and they lead to different code:
+- **The handoff wins** — the bar becomes exactly those six, and Record moves somewhere else
+  (or goes). Speaker and flip already exist; chat already exists.
+- **Your removal wins** — I keep today's controls and only restyle them to the board's glass
+  circles + red end pill, i.e. the LOOK changes and the SET does not.
+
+I have assumed nothing and built neither. Phase 3 starts the moment you say which.
+
+Two smaller notes on phase 4, so they are not a surprise: **4b contact categories** needs a
+`contact.tags` field that does not exist yet, and **4i locked group** needs the group lock to
+expose its PIN state to a gate screen — both are additive, both are real work, and I will flag
+them again when I reach them.
+
+---
+
 ---
 
 ## §3 — Parked at your request

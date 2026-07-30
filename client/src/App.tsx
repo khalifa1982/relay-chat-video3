@@ -44,11 +44,20 @@ function RouteSpinner() {
   );
 }
 
-function ShellRoute({ tab }: { tab: "dialer" | "history" | "messages" | "contacts" | "profile" | "admin" | "join" }) {
+function ShellRoute({
+  tab,
+}: {
+  tab: "dialer" | "history" | "messages" | "groups" | "contacts" | "profile" | "admin" | "join";
+}) {
   const View =
     tab === "dialer" ? Dialer :
     tab === "history" ? History :
-    tab === "messages" ? Messages :
+    // GROUPS IS THE SAME PAGE, FILTERED (design_handoff_relay_app, 5-tab bar).
+    // The board's own Messages frame still lists group threads, so this is a second
+    // ENTRY POINT rather than a move — and rendering the same component means the
+    // rows, swipe actions, search, presence and story rings are shared rather than
+    // reimplemented. A separate page would be a second thread list to keep in step.
+    tab === "messages" || tab === "groups" ? Messages :
     tab === "contacts" ? Contacts :
     tab === "admin" ? Admin :
     tab === "join" ? Join :
@@ -56,7 +65,7 @@ function ShellRoute({ tab }: { tab: "dialer" | "history" | "messages" | "contact
   return (
     <AppShell>
       <Suspense fallback={<RouteSpinner />}>
-        <View />
+        <View {...(tab === "groups" ? { only: "groups" as const } : {})} />
       </Suspense>
     </AppShell>
   );
@@ -73,6 +82,8 @@ function Router() {
         <Route path={"/app/dialer"}>{() => <ShellRoute tab="dialer" />}</Route>
         <Route path={"/app/history"}>{() => <ShellRoute tab="history" />}</Route>
         <Route path={"/app/messages"}>{() => <ShellRoute tab="messages" />}</Route>
+        {/* The board's 5th tab, between Messages and Contacts. */}
+        <Route path={"/app/groups"}>{() => <ShellRoute tab="groups" />}</Route>
         <Route path={"/app/contacts"}>{() => <ShellRoute tab="contacts" />}</Route>
         <Route path={"/app/profile"}>{() => <ShellRoute tab="profile" />}</Route>
         <Route path={"/app/admin"}>{() => <ShellRoute tab="admin" />}</Route>

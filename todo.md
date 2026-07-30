@@ -11278,6 +11278,56 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.2 — redesign phase 2a: the five-tab shell + a Groups tab (2026-07-30)
+
+Owner: `do the best` — implementing `design_handoff_relay_app`. Phase 1 (v2.106.0) laid the
+token foundation; this is the NAVIGATION layer on top of it.
+
+- [x] **Five tabs, in the board's order** — `Calls · History · Messages · Groups · Contacts`,
+      Groups between Messages and Contacts, glyph = the board's four dots (written out, not
+      substituted from lucide, whose nearest neighbours are squares) taking `currentColor` so
+      the pill's `var(--rb)` drives it.
+- [x] **The active tab is the board's 40×25 accent pill** — `rgba(var(--rb-rgb),.17)` + a 16px
+      glow, label 9px/700 in `var(--rb)`. The pill and the WEIGHT are what say "you are here";
+      the hue cannot, because it cycles and every tab shares it at any instant.
+- [x] **Dark-only, and that is a contrast decision.** The accent palette is built against a
+      near-black background — its default teal is ~1.7:1 on a light card, unreadable at 9px
+      (the v2.99.86 trap). Light theme keeps the per-tab `shade`. `accentNav` is derived from
+      `liveBackground`, never a second theme read.
+- [x] **Three CSS utilities** — `.rtabbar` (the board's gradient + 18px blur + hairline;
+      deliberately NOT `.rbar`, which is a flat fill for the top bar and composer),
+      `.rnav-pill` (SHARED by the bottom bar and the desktop sidebar's active row, board 1i)
+      and `.rbadge-accent` (`#04211a` on accent, no glow). No accent value is a
+      runtime-composed Tailwind class.
+- [x] **`/app/groups` renders the SAME `MessagesPage`, filtered** — a second entry point, not
+      a second list. The board's own Messages frame still lists group threads and there is no
+      separate Groups frame in the 34.
+- [x] **The narrowing is applied to the INPUT** — selecting the groups + archived CATEGORIES
+      would leak archived DIRECT threads into a tab called Groups, because `Archived` is
+      `t.archived` regardless of kind.
+- [x] **The empty state and the search box ask the SCOPED list** — `threads.data.length` counts
+      DMs, so on the Groups tab of an account with DMs and no groups it reads non-zero and the
+      page renders `No conversations match “”`.
+- [x] **Every in-page navigation returns to its own tab** — `useTabBasePath` replaces seven
+      hardcoded `/app/messages` targets across three components. Read from the location, not
+      threaded as a prop, because the conversation view and the sheet are separate components.
+- [x] **The + opens the side the tab is about** — `defaultMode`, and `resetAll` returns to it
+      rather than a hardcoded `"dm"`. Both modes stay reachable.
+- [x] **Measured, not assumed** (the bar broke in v2.103.1 and v2.99.94): headless Chromium
+      against the real built stylesheet at 320/360/375/390/430, worst case — 50/50 clean,
+      tightest slack 10.8px, bar 47.5px against ~68px. All three harness gates proven to abort.
+- [x] **The board's 18px bottom padding NOT taken** — it is its stand-in for the home
+      indicator, which we compute; a floor would undo the owner's v2.99.94 request.
+- [x] `client/src/app/fiveTabShell.test.ts` (30); **41/41 tripwires mutation-verified**.
+      One survivor was a real gap in my own test (a bare `toMatch` the sidebar's copy
+      satisfied while the bottom bar's was gutted) — fixed and re-verified both ways.
+- [x] Five pre-existing pins rewritten to the property, plus one unbounded slice bounded.
+
+**Not in this release, said plainly:** the six SCREENS the board redesigns (1a Dialer,
+1b History, 1c Messages, 1d Conversation, 1e Contacts, 1f Profile) are phase 2b. The call
+surfaces' "standard 6-control bar — NEVER REDUCED" needs the owner's decision first, because
+v2.99.39 REMOVED in-call controls at their explicit request.
+
 ## v2.106.1 — the call log reaches past its newest page (2026-07-30)
 
 #117, the last of the three items I owed. Both call payloads were hard-capped at 100 rows with no way past

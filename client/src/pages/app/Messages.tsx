@@ -249,9 +249,35 @@ function SenderThumb({
   );
 }
 
-export default function MessagesPage() {
+/**
+ * Which tab this page is mounted under, as a path.
+ *
+ * The Groups tab is this SAME component served at `/app/groups`, so every in-page
+ * navigation — opening a thread, the mobile Back arrow, leaving a thread that was just
+ * cleared — has to return to the path it came from. Hardcoding `/app/messages` would
+ * move the user to the Messages tab the instant they opened a group, so the bottom
+ * bar's active tab would change under a tap that only meant "open this conversation".
+ *
+ * Read from the LOCATION rather than threaded down as a prop, because the conversation
+ * view and the new-message sheet are separate components and a prop would have to be
+ * passed through each of them — which is how one of them comes to be forgotten.
+ */
+function useTabBasePath(): string {
+  const [loc] = useLocation();
+  return loc.startsWith("/app/groups") ? "/app/groups" : "/app/messages";
+}
+
+export default function MessagesPage({
+  /**
+   * The board's 5th tab (design_handoff_relay_app) renders THIS page filtered to group
+   * threads, rather than a second thread list to keep in step. Optional, so
+   * `/app/messages` is byte-identical to before.
+   */
+  only,
+}: { only?: "groups" } = {}) {
   const { me } = useIdentity();
   const [location, setLocation] = useLocation();
+  const basePath = useTabBasePath();
   // Re-render the thread list when any conversation's mute state changes so the
   // muted icons stay live (the per-item read is otherwise unsubscribed).
   const [, forceMuteTick] = useState(0);
@@ -282,18 +308,32 @@ export default function MessagesPage() {
   // Thread-list search (v2.95): filter conversations by peer name/number. Pure
   // client filter over the already-loaded list — instant, no new request.
   const [threadSearch, setThreadSearch] = useState("");
-  const threadCategories = useMemo(() => {
+  // The GROUPS tab is this same page narrowed to group threads. The narrowing is a memo
+  // of its OWN, ahead of the categories, for two reasons. (1) Narrowing by picking
+  // categories below would leak archived DIRECT threads into a tab that says Groups,
+  // because "Archived" is defined as `t.archived` regardless of kind — so the INPUT is
+  // what has to be filtered, after which every section (Archived included) is correctly
+  // group-only and no section needs to know the tab exists. (2) The empty state and the
+  // search box both ask "is there anything here at all", and they have to ask it of the
+  // SCOPED list: `threads.data.length` counts DMs, so on the Groups tab of an account
+  // with DMs and no groups it reads non-zero and the page falls through to the
+  // no-search-matches branch, rendering `No conversations match “”`.
+  const scopedThreads = useMemo(() => {
     const all = threads.data ?? [];
+    return only === "groups" ? all.filter((t) => t.kind === "group") : all;
+  }, [threads.data, only]);
+  const threadCategories = useMemo(() => {
+    const scoped = scopedThreads;
     // v2.99.96: the shared rule, and the GROUP TITLE is searched too — a group was
     // previously findable only if the query happened to appear in the composed peer
     // name, so searching a group by its own title matched nothing.
     const list = threadSearch.trim()
-      ? all.filter((t) =>
+      ? scoped.filter((t) =>
           // v2.102.0: a group is findable by its OWN 6-digit id too, not only its
           // title — which is the point of giving it one.
           matchQuery(threadSearch, [t.peerDisplayName, t.peerNumber, t.title, t.groupNumber]),
         )
-      : all;
+      : scoped;
     const meId = me?.id;
     const isNotes = (t: (typeof list)[number]) =>
       meId != null && t.kind !== "group" && t.peerIdentityId === meId;
@@ -346,7 +386,7 @@ export default function MessagesPage() {
     // was missing here — so typing in the search box re-rendered yet returned the
     // cached unfiltered list (threads.data is stable via structural sharing), and
     // search silently did nothing.
-  }, [threads.data, me, threadSearch]);
+  }, [scopedThreads, me, threadSearch]);
 
   /**
    * The swipe actions (v2.103.0). Every one is a TOGGLE reading the row's own state, so
@@ -452,13 +492,15 @@ export default function MessagesPage() {
         }
       >
         <header className="flex items-center justify-between px-4 md:px-5 py-4 border-b border-border">
-          <h2 className="text-base font-extrabold tracking-tight">Messages</h2>
+          <h2 className="text-base font-extrabold tracking-tight">
+            {only === "groups" ? "Groups" : "Messages"}
+          </h2>
           <div className="flex items-center gap-1">
             <AutoReplyToggle />
-            <NewMessageDialog />
+            <NewMessageDialog defaultMode={only === "groups" ? "group" : "dm"} />
           </div>
         </header>
-        {(threads.data?.length ?? 0) > 0 && (
+        {scopedThreads.length > 0 && (
           <div className="px-3 py-2 border-b border-border/60">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
@@ -488,11 +530,21 @@ export default function MessagesPage() {
             </div>
           ) : threads.isLoading ? (
             <div className="p-6 text-sm text-muted-foreground">Loading…</div>
-          ) : (threads.data?.length ?? 0) === 0 ? (
+          ) : scopedThreads.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
-              <MessageSquarePlus className="size-8 mx-auto mb-2 opacity-50" />
-              <p>No messages yet.</p>
-              <p className="mt-1">Tap the + above to start a conversation.</p>
+              {only === "groups" ? (
+                <>
+                  <Users className="size-8 mx-auto mb-2 opacity-50" />
+                  <p>No groups yet.</p>
+                  <p className="mt-1">Tap the + above to start one.</p>
+                </>
+              ) : (
+                <>
+                  <MessageSquarePlus className="size-8 mx-auto mb-2 opacity-50" />
+                  <p>No messages yet.</p>
+                  <p className="mt-1">Tap the + above to start a conversation.</p>
+                </>
+              )}
             </div>
           ) : threadCategories.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
@@ -718,7 +770,7 @@ export default function MessagesPage() {
                                 instead of the label plus the same content again. */}
                             <button
                               type="button"
-                              onClick={() => setLocation(`/app/messages?c=${t.conversationId}`)}
+                              onClick={() => setLocation(`${basePath}?c=${t.conversationId}`)}
                               aria-current={isActive ? "true" : undefined}
                               aria-label={
                                 `Open conversation with ${displayName}` +
@@ -888,7 +940,7 @@ export default function MessagesPage() {
                   threadState.mutate({ conversationId: clearingThread.conversationId, clear: true });
                   // Leaving the deleted thread open would show an empty conversation
                   // nobody can get out of except by tapping Back.
-                  if (activeConvoId === clearingThread.conversationId) setLocation("/app/messages");
+                  if (activeConvoId === clearingThread.conversationId) setLocation(basePath);
                 }
                 setClearingThread(null);
               }}
@@ -907,6 +959,7 @@ export default function MessagesPage() {
 function ConversationView({ conversationId }: { conversationId: number }) {
   const { me } = useIdentity();
   const [, setLocation] = useLocation();
+  const basePath = useTabBasePath();
   const utils = trpc.useUtils();
 
   const threadsQuery = trpc.messages.threads.useQuery(undefined, { enabled: !!me });
@@ -1756,7 +1809,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             aria-label="Back"
             className="grid size-8 shrink-0 place-items-center md:hidden hover:brightness-110"
             style={{ color: "#52e3d0" }}
-            onClick={() => setLocation("/app/messages")}
+            onClick={() => setLocation(basePath)}
           >
             <ChevronLeft className="size-6" />
           </button>
@@ -1785,7 +1838,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           aria-label="Back"
           className="md:hidden grid place-items-center size-8 shrink-0 hover:brightness-110"
           style={{ color: "#52e3d0" }}
-          onClick={() => setLocation("/app/messages")}
+          onClick={() => setLocation(basePath)}
         >
           <ChevronLeft className="size-6" />
         </button>
@@ -3771,11 +3824,16 @@ function AutoReplyToggle() {
   );
 }
 
-function NewMessageDialog() {
+function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group" } = {}) {
   const [, setLocation] = useLocation();
+  const basePath = useTabBasePath();
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<"dm" | "group">("dm");
+  // The Groups tab opens this on the GROUP side, because a + on a screen that lists
+  // only groups meaning "new DM" is a control that does the wrong thing by default.
+  // Both modes stay reachable from the toggle either way — this picks the landing
+  // side, it does not remove a mode.
+  const [mode, setMode] = useState<"dm" | "group">(defaultMode);
   /**
    * What has been typed — a NUMBER OR A NAME (v2.99.93).
    *
@@ -3794,7 +3852,9 @@ function NewMessageDialog() {
 
   function resetAll() {
     setOpen(false);
-    setMode("dm");
+    // Back to the tab's OWN default, not a hardcoded "dm" — otherwise closing the
+    // sheet on the Groups tab silently leaves it on the DM side for the next open.
+    setMode(defaultMode);
     setNumber("");
     setGroupTitle("");
     setGroupNumbers([]);
@@ -3805,14 +3865,14 @@ function NewMessageDialog() {
     onSuccess: (res) => {
       setOpen(false);
       setNumber("");
-      setLocation(`/app/messages?c=${res.conversationId}`);
+      setLocation(`${basePath}?c=${res.conversationId}`);
     },
   });
   const createGroup = trpc.messages.createGroup.useMutation({
     onSuccess: (res) => {
       utils.messages.threads.invalidate();
       resetAll();
-      setLocation(`/app/messages?c=${res.conversationId}`);
+      setLocation(`${basePath}?c=${res.conversationId}`);
     },
   });
   /** Add by the typed number, or by a number a suggestion supplied. */
@@ -3827,7 +3887,7 @@ function NewMessageDialog() {
     onSuccess: (res) => {
       setOpen(false);
       setNumber("");
-      setLocation(`/app/messages?c=${res.conversationId}`);
+      setLocation(`${basePath}?c=${res.conversationId}`);
     },
   });
   const pending = openThread.isPending || openSelfThread.isPending || createGroup.isPending;

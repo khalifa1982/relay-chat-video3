@@ -35,19 +35,57 @@ import { RelayBackground } from "./RelayBackground";
 import { APP_VERSION } from "@shared/version";
 
 /**
+ * The GROUPS tab's glyph — four dots in a 2×2, traced from the design board
+ * (design_handoff_relay_app, "icon = 2×2 dots"). Written out rather than taken from
+ * lucide because lucide's nearest neighbours are SQUARES (`Grid2x2`, `LayoutGrid`) and
+ * the board is explicit about dots; four `<circle>`s is smaller than the argument for
+ * substituting something else. The signature matches a lucide icon (`className`,
+ * `strokeWidth`) so it drops straight into the TABS array and both nav renderers.
+ */
+function GroupsDots({ className, strokeWidth = 2 }: { className?: string; strokeWidth?: number }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      aria-hidden="true"
+    >
+      <circle cx="7.5" cy="7.5" r="2.7" />
+      <circle cx="16.5" cy="7.5" r="2.7" />
+      <circle cx="7.5" cy="16.5" r="2.7" />
+      <circle cx="16.5" cy="16.5" r="2.7" />
+    </svg>
+  );
+}
+
+/**
  * Tab keys used by the bottom-nav / sidebar. We hard-code the routes here
  * so the bottom-nav matches across pages.
  *
- * Each tab carries its OWN accent (`color`, plus a darker `shade` for the
- * active gradient + light-theme text) so tapping a section lights it up in a
- * distinct hue — Calls green, History sky, Messages orange, Contacts purple.
- * These are applied via inline styles, NOT template-composed Tailwind classes:
- * the JIT compiler can't see class names assembled at runtime.
+ * FIVE tabs since the redesign — Calls · History · Messages · Groups · Contacts, with
+ * Groups between Messages and Contacts exactly as the board places it. Groups is the
+ * Messages page filtered to group threads (see `MessagesPage`'s `only` prop), not a
+ * second thread list.
+ *
+ * Each tab still carries its OWN hue (`color` + darker `shade`). That is no longer what
+ * the DARK theme uses — there the active tab is the cycling accent (`--rb`), per the
+ * board — but it is what LIGHT theme uses, and deliberately so: the accent palette is
+ * built for a near-black background, and its default teal `#35e0b4` computes to about
+ * 1.7:1 on a light card, which is unreadable for a 9px label (the same trap v2.99.86
+ * measured, where the LED green failed AA as small text and got its own darker token).
+ * So the redesign's accent applies where the redesign lives, and the light theme keeps
+ * the per-tab shade that was already measured to work there.
+ *
+ * Applied via inline styles, NOT template-composed Tailwind classes: the JIT compiler
+ * can't see class names assembled at runtime.
  */
 const TABS = [
   { key: "dialer", path: "/app/dialer", label: "Calls", icon: Phone, color: "#22c55e", shade: "#15803d" },
   { key: "history", path: "/app/history", label: "History", icon: History, color: "#38bdf8", shade: "#0369a1" },
   { key: "messages", path: "/app/messages", label: "Messages", icon: MessageCircle, color: "#fb923c", shade: "#c2410c" },
+  { key: "groups", path: "/app/groups", label: "Groups", icon: GroupsDots, color: "#22d3ee", shade: "#0e7490" },
   { key: "contacts", path: "/app/contacts", label: "Contacts", icon: UsersRound, color: "#a78bfa", shade: "#7c3aed" },
 ] as const;
 
@@ -216,6 +254,12 @@ function Inner({ children }: { children: React.ReactNode }) {
      theme is how you get an opaque shell over a running canvas, i.e. all of the cost and
      none of the effect. */
   const liveBackground = theme === "dark";
+  /* The redesigned nav — one CYCLING accent pill instead of five fixed hues — is
+     dark-only for the same reason the canvas is, and for one more: the accent palette is
+     built against a near-black background, so on a light card its default teal is about
+     1.7:1, i.e. an unreadable 9px label. See the TABS comment. Derived from the same
+     read as `liveBackground` so the two can never disagree about which design is live. */
+  const accentNav = liveBackground;
   // Universal Back: Profile is the one drill-in route off the tab bar (message
   // threads handle their own in-page back). Go back in history, or fall back to
   // the dialer if there's nowhere to go.
@@ -479,10 +523,16 @@ function Inner({ children }: { children: React.ReactNode }) {
                 className={
                   "group flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1 transition-colors " +
                   "outline-none focus-visible:ring-sidebar-ring focus-visible:ring-[3px] " +
-                  (active ? "font-semibold" : "hover:bg-sidebar-accent/15 text-sidebar-foreground")
+                  (active
+                    ? "font-semibold" + (accentNav ? " rnav-pill" : "")
+                    : "hover:bg-sidebar-accent/15 text-sidebar-foreground")
                 }
+                /* Board 1i: the desktop sidebar's active row is the SAME accent treatment
+                   as the bottom bar's pill, which is why both take `.rnav-pill` rather
+                   than each describing it. Light theme keeps the per-tab hue for the
+                   contrast reason recorded on TABS. */
                 style={
-                  active
+                  active && !accentNav
                     ? {
                         background: `color-mix(in oklab, ${tab.color} 16%, transparent)`,
                         color: theme === "light" ? tab.shade : tab.color,
@@ -499,7 +549,12 @@ function Inner({ children }: { children: React.ReactNode }) {
                   />
                 )}
                 {tab.key === "messages" && unreadTotal > 0 && (
-                  <span className="relay-blink inline-flex min-w-5 h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-xs items-center justify-center font-bold">
+                  <span
+                    className={
+                      "relay-blink inline-flex min-w-5 h-5 px-1.5 rounded-full text-xs items-center justify-center font-bold " +
+                      (accentNav ? "rbadge-accent" : "bg-primary text-primary-foreground")
+                    }
+                  >
                     {unreadTotal > 99 ? "99+" : unreadTotal}
                   </span>
                 )}
@@ -781,16 +836,21 @@ function Inner({ children }: { children: React.ReactNode }) {
             to the very bottom — the scrolling happens in the sibling above, so
             the bar can never scroll away and nothing can slide under it.
             (During a call, body.relay-call-active hides all .relay-appshell-chrome,
-            which also returns this bar's row to the call UI.) Each tab lights up
-            in its own accent — green / sky / orange / purple — as a gradient
-            squircle with a soft matching glow. */}
+            which also returns this bar's row to the call UI.)
+
+            FIVE tabs since the redesign. In dark theme the active one is the board's
+            40×25 accent pill on the cycling `--rb`; in light theme it keeps the
+            per-tab gradient squircle, because the accent palette is unreadable as
+            small text on a light card (see TABS). */}
         <nav
           className={
             "relay-appshell-chrome md:hidden shrink-0 z-30 " +
-            "border-t border-white/10 " +
-            "bg-card/80 " +
-            "shadow-[0_-8px_24px_rgba(0,0,0,0.18)] " +
-            "supports-[backdrop-filter]:bg-card/60 supports-[backdrop-filter]:backdrop-blur-2xl supports-[backdrop-filter]:backdrop-saturate-150"
+            (accentNav
+              ? "rtabbar "
+              : "border-t border-white/10 " +
+                "bg-card/80 " +
+                "shadow-[0_-8px_24px_rgba(0,0,0,0.18)] " +
+                "supports-[backdrop-filter]:bg-card/60 supports-[backdrop-filter]:backdrop-blur-2xl supports-[backdrop-filter]:backdrop-saturate-150")
           }
           style={{
             // v2.99.94 (owner): "at the bottom after the bottom bar there's a still
@@ -800,10 +860,16 @@ function Inner({ children }: { children: React.ReactNode }) {
             // the viewport edge and the scroll area above it gains those ~9px.
             // The safe-area inset ITSELF stays: on an iPhone it is not decoration —
             // without it the home indicator sits on top of the tab icons.
+            //
+            // The board writes `padding:6px 4px 18px`. The 6px and the 4px are taken;
+            // its 18px is NOT, because that figure is the board's stand-in for the home
+            // indicator and we compute the real inset — re-adding it as a floor would
+            // undo the owner's own request above on every phone that has no indicator.
             paddingBottom: "env(safe-area-inset-bottom)",
+            ...(accentNav ? { paddingTop: 6, paddingLeft: 4, paddingRight: 4 } : null),
           }}
         >
-          <div className="grid grid-cols-4">
+          <div className="grid grid-cols-5">
             {TABS.map((tab) => {
               const active = location.startsWith(tab.path);
               const Icon = tab.icon;
@@ -812,16 +878,27 @@ function Inner({ children }: { children: React.ReactNode }) {
                   key={tab.key}
                   href={tab.path}
                   aria-current={active ? "page" : undefined}
-                  className="flex flex-col items-center gap-1 pt-1.5 pb-0.5 transition-transform duration-150 active:scale-[0.94] outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-xl"
+                  className={
+                    "flex flex-col items-center transition-transform duration-150 active:scale-[0.94] outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-xl " +
+                    (accentNav ? "gap-0.5 py-0" : "gap-1 pt-1.5 pb-0.5")
+                  }
                   style={{ transitionTimingFunction: "cubic-bezier(0.23,1,0.32,1)" }}
                 >
+                  {/* The pill. Board: 40×25, radius 11, `rgba(var(--rb-rgb),.17)` with a
+                      16px glow — a WIDE SHORT pill, not the square squircle it replaces,
+                      which also gives the bar back ~10px of height on top of what
+                      v2.99.94 reclaimed. `--rb-rgb` is the channel triple rather than a
+                      colour so the alpha can be composed here; an unset custom property
+                      is an INVALID declaration the browser drops, which is why
+                      `index.css` carries a `:root` fallback for both vars. */}
                   <span
                     className={
-                      "relative inline-flex items-center justify-center rounded-[14px] size-10 transition-all duration-200 " +
-                      (active ? "" : "text-muted-foreground")
+                      "relative inline-flex items-center justify-center transition-all duration-200 " +
+                      (accentNav ? "w-10 h-[25px] rounded-[11px] " : "rounded-[14px] size-10 ") +
+                      (active ? (accentNav ? "rnav-pill" : "") : "text-muted-foreground")
                     }
                     style={
-                      active
+                      active && !accentNav
                         ? {
                             color: "#fff",
                             background: `linear-gradient(135deg, ${tab.color} 0%, ${tab.shade} 100%)`,
@@ -830,15 +907,31 @@ function Inner({ children }: { children: React.ReactNode }) {
                         : undefined
                     }
                   >
-                    <Icon className="size-[19px]" strokeWidth={active ? 2.4 : 2} />
+                    <Icon
+                      className={accentNav ? "size-[18px]" : "size-[19px]"}
+                      strokeWidth={active ? (accentNav ? 2.2 : 2.4) : 2}
+                    />
                     {tab.key === "messages" && hasUnseenStatus && (
                       <span
                         className="absolute -top-0.5 -left-0.5 size-2.5 rounded-full bg-gradient-to-tr from-[#06d6a0] to-[#0ea5e9] ring-2 ring-card"
                         title="New stories"
                       />
                     )}
+                    {/* Board: "Badges: History = red count (missed), Messages = accent
+                        count (unread)". History is already red; this is the one that
+                        moves. On-accent text is the board's `#04211a`, not white — the
+                        accent hues are bright, so white-on-accent is the unreadable
+                        direction. There is deliberately NO badge on Groups: the Messages
+                        list still contains every group thread (the board's own 1c does),
+                        so its count is the complete one and a second partial count beside
+                        it would be two numbers for one fact. */}
                     {tab.key === "messages" && unreadTotal > 0 && (
-                      <span className="relay-blink absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] items-center justify-center font-bold ring-2 ring-card">
+                      <span
+                        className={
+                          "relay-blink absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full text-[10px] items-center justify-center font-bold ring-2 ring-card " +
+                          (accentNav ? "rbadge-accent" : "bg-primary text-primary-foreground")
+                        }
+                      >
                         {unreadTotal > 99 ? "99+" : unreadTotal}
                       </span>
                     )}
@@ -848,12 +941,24 @@ function Inner({ children }: { children: React.ReactNode }) {
                       </span>
                     )}
                   </span>
+                  {/* Board: 9px, weight 700 active / 600 idle, colour `var(--rb)` active.
+                      The WEIGHT and the pill are what say "you are here" — the hue cannot,
+                      because it cycles, so every tab shares it at any instant. */}
                   <span
                     className={
-                      "text-[10px] font-semibold tracking-wide transition-colors " +
-                      (active ? "" : "text-muted-foreground")
+                      "tracking-wide transition-colors " +
+                      (accentNav
+                        ? "text-[9px] " + (active ? "font-bold" : "font-semibold")
+                        : "text-[10px] font-semibold ") +
+                      (active ? "" : accentNav ? " text-[#76878f]" : " text-muted-foreground")
                     }
-                    style={active ? { color: theme === "light" ? tab.shade : tab.color } : undefined}
+                    style={
+                      !active
+                        ? undefined
+                        : accentNav
+                          ? { color: "var(--rb)" }
+                          : { color: theme === "light" ? tab.shade : tab.color }
+                    }
                   >
                     {tab.label}
                   </span>

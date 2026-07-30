@@ -749,6 +749,33 @@ body.relay-app-lock {
 .relay-v2 .rbar-flat {
   background: rgba(8, 12, 14, 0.92);
 }
+/* The bottom TAB BAR specifically. Deliberately not `.rbar`: the board gives this one
+   surface a vertical gradient that darkens toward the bottom edge (so the bar grounds
+   itself against the screen edge rather than floating) and a slightly deeper blur, which
+   `.rbar` — a flat translucent fill for the top bar and the composer — does not. Two
+   different recipes, so two names, rather than one name that is right in one place. */
+.relay-v2 .rtabbar {
+  background: linear-gradient(180deg, rgba(10, 14, 16, 0.55), rgba(5, 8, 10, 0.85));
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+/* The ACTIVE nav pill — bottom tab bar and the desktop sidebar's active row. A tint of
+   the cycling accent plus a soft glow of the same hue, with the glyph and label taking
+   the accent itself. Shared because the two navs must not drift into two ideas of what
+   "you are here" looks like. */
+.relay-v2 .rnav-pill {
+  background: rgba(var(--rb-rgb), 0.17);
+  box-shadow: 0 0 16px rgba(var(--rb-rgb), 0.25);
+  color: var(--rb);
+}
+/* A count badge on the accent. Same fill as `.rcta` and the same on-accent text, but no
+   glow: a 16px badge with a 30px shadow reads as a smudge, and it sits ON a nav glyph
+   rather than on a dark card, so there is nothing for the glow to fall on. */
+.relay-v2 .rbadge-accent {
+  background: var(--rb);
+  color: #04211a;
+}
 /* Accent chip: a tinted fill that follows the cycling hue. */
 .relay-v2 .rchip-accent {
   background: rgba(var(--rb-rgb), 0.14);

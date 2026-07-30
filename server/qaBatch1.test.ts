@@ -96,8 +96,28 @@ describe("v2.99.22 QA source pins — H7/H8/M1, H3, M8", () => {
   });
 
   it("H3: the thread-search memo depends on threadSearch (search actually filters)", () => {
+    /* REWRITTEN TO THE PROPERTY (v2.106.2). This froze the exact dep list
+       `[threads.data, me, threadSearch]`, so it broke the moment the source list became
+       its own memo (`scopedThreads`, for the Groups tab) while saying nothing about what
+       it exists for: that typing in the box really re-runs the filter. The original H3
+       bug was `threadSearch` MISSING from the deps — react-query's structural sharing
+       keeps `threads.data` referentially stable, so the memo returned its cached
+       unfiltered list and search silently did nothing.
+
+       So: `threadSearch` must be a dep of the categories memo, and the list it filters
+       must itself be memoized on `threads.data`, which is what makes new messages appear
+       at all. Both halves asserted, neither frozen as a literal argument list. */
     const msgs = read("../client/src/pages/app/Messages.tsx");
-    expect(msgs).toMatch(/\}, \[threads\.data, me, threadSearch\]\);/);
+    const catAt = msgs.indexOf("const threadCategories = useMemo(");
+    expect(catAt).toBeGreaterThan(0);
+    const catDeps = msgs.slice(catAt, msgs.indexOf("]);", catAt) + 3);
+    expect(catDeps).toMatch(/\}, \[[^\]]*\bthreadSearch\b[^\]]*\]\);/);
+    // …and the list it reads is refreshed by new data.
+    const scopedAt = msgs.indexOf("const scopedThreads = useMemo(");
+    expect(scopedAt).toBeGreaterThan(0);
+    expect(scopedAt).toBeLessThan(catAt);
+    const scopedDeps = msgs.slice(scopedAt, msgs.indexOf("]);", scopedAt) + 3);
+    expect(scopedDeps).toMatch(/\}, \[[^\]]*\bthreads\.data\b[^\]]*\]\);/);
   });
 
   it("M8: the session reaper's idle cutoff outlives the 365-day cookie TTL", () => {

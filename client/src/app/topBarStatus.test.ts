@@ -465,9 +465,22 @@ describe("the bottom bar sticks to the bottom", () => {
   });
 
   it("tightens the tab row's own padding", () => {
+    /* REWRITTEN TO THE PROPERTY (v2.106.2). This froze the tab link's exact class string,
+       so the redesign's shorter row broke it while saying nothing about what v2.99.94 was
+       for: that the row is TIGHTER than the `pt-2 pb-1` it replaced, so the bar gives
+       height back to the scroll area above it. The redesign takes that further — the
+       board's 40×25 pill replaced a 40×40 squircle and the bar measured 47.5px against
+       ~68px — so the property is asserted as a bound on the padding classes actually
+       used, in whichever branch is live. */
     const nav = SHELL.slice(SHELL.indexOf("Docked glass tab bar"));
-    expect(nav).toMatch(/flex flex-col items-center gap-1 pt-1\.5 pb-0\.5/);
-    expect(codeOnly(nav)).not.toMatch(/items-center gap-1 pt-2 pb-1/);
+    const navCode = codeOnly(nav);
+    // The loose original is gone…
+    expect(navCode).not.toMatch(/items-center gap-1 pt-2 pb-1/);
+    // …and every padding the row can take is at most the v2.99.94 figure. The dark path
+    // has none at all (`py-0`), the light path keeps 1.5/0.5.
+    expect(navCode).toMatch(/gap-0\.5 py-0/);
+    expect(navCode).toMatch(/gap-1 pt-1\.5 pb-0\.5/);
+    expect(navCode).not.toMatch(/\bpt-(2|2\.5|3|4)\b/);
   });
 
   it("stays IN FLOW — it is not a floating overlay", () => {
