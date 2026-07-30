@@ -11278,6 +11278,100 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.105.29 — a story reply in the inbox says what it was about (2026-07-30)
+
+#115, the last of the three items I owed. A one-tap story reaction IS an emoji-only message, so it
+arrived in the thread list as a floating ❤️ with nothing saying what it was about. The conversation
+bubble has said so since v2.99.80; the thread list and the reply-quote line did not.
+
+**THE DEFERRAL WAS MADE AGAINST A COST THAT DOES NOT EXIST, and that is the finding.** `OPEN-ITEMS.md`
+recorded this as a deliberate performance decision — *"adding `meta` touches the groupwise-max query every
+client polls"*. It does not. That aggregate (`MAX(id) GROUP BY conversationId`) selects **two integer
+columns** and is a SEPARATE query, untouched by this. The row the projection reads comes from a bare
+`.select()` over at most a few dozen **PRIMARY KEYS**, and `meta` was already in it — the
+disappearing-message guard reads it on the adjacent line. So this adds **zero** database work: two
+booleans derived from data already in hand, and a test pins that the aggregate still mentions no `meta`.
+
+**TWO NARROW BOOLEANS, NOT THE `meta` BLOB.** `lastMessageStatusReply` and `lastMessageMine`, threaded
+explicitly like every other field in that projection, whose standing rule is that a new column cannot
+reach the browser without a decision. The marker itself carries the replied-to story's own text excerpt,
+and a one-line row has neither room for it nor reason to hold it.
+
+**`mine` IS WHAT MAKES "your story" ANSWERABLE, and it is provably sufficient**: a story reply is always
+a DM to the story's AUTHOR (`status.reply` resolves the thread with `getOrCreateDmConversation`), so
+whoever did not send the reply owns the story. Both flags require an EXPLICIT `true`, so a future caller
+passing a truthy non-boolean cannot turn every row into a story reply.
+
+**THE PARSER MOVED TO `shared/`, BECAUSE IT NOW HAS THREE READERS ON BOTH SIDES OF THE WIRE**: the
+bubble's chip (client), this projection (server), and the reply-quote line (client). Two copies of "is
+this a story reply" is how a thread row and the conversation it opens come to disagree about the same
+message. New `shared/statusReply.ts` also owns the four story labels, so the vocabulary v2.101.0 fixed
+lives in one place.
+
+**DELIBERATELY SHORTER THAN THE BUBBLE'S CHIP, AND MEASURED RATHER THAN ESTIMATED.** Same vocabulary —
+story, your/their — but a one-line glance has a hard budget the bubble does not. Against the REAL built
+stylesheet at 320/360/375/390/430, with the harness ABORTING unless the emulated width took, the
+stylesheet is genuinely in force and the avatar box is the real 64px: the preview span is **141px at
+320px** and **181px at 360px**, the chip's wording (`↩ Replied to your story · 😂`) needs **193px** and
+CLIPS on both — and what clips is the END of the line, i.e. exactly the reaction that varies. The shipped
+form (`↩ your story · 😂`) needs **118px** and fits everywhere. The story's KIND and EXCERPT are dropped
+for the same reason. A long typed reply still truncates, as any long preview does, but the context
+survives, which is what was missing.
+
+**THE LOCK IS CHECKED FIRST**, or a locked group would gain a line naming an activity the lock exists to
+cover — pinned by index, and a mutation that makes the row stop redacting bites.
+
+**NO BIDI CEREMONY IS NEEDED, and that is stated rather than added**: the prefix is Latin and comes
+FIRST, so `dir="auto"` resolves the row to LTR and an Arabic body renders RTL *within* it in logical
+order — exactly as "📷 Photo" already does.
+
+`server/threadStoryReply.test.ts` (27), the parser driven behaviourally over twelve malformed shapes and
+the projection through the real `composeThreadSummaries`; **all 18 tripwires verified by MUTATION** from
+byte-exact backups off a confirmed-GREEN baseline, sources byte-identical afterwards.
+
+**THREE SURVIVORS ON THE FIRST RUN, TWO OF THEM REAL GAPS IN MY OWN TESTS AND BOTH THE SAME CLASS** —
+pinning a rule's PRESENCE rather than its USE, which this repo keeps re-learning. Replacing the row's
+condition with `false` left `previewOfStoryReply({` in the file, so every assertion stayed green while
+the row went back to showing a bare emoji; and `mine: false` survived because nothing asserted the row
+READS the flag, which would have said "your story" about a reply we sent ourselves. Both now pin the
+condition exactly and forbid a constant. **The third was my own needle being too narrow**: the
+"no DOM in the shared module" sweep matched `document\.`, and a mutation adding a BARE `document`
+reference slipped past — now the bare identifiers, on comment-stripped source so the prose explaining the
+rule cannot satisfy it.
+
+**A DEFECT IN MY OWN HARNESS, caught by reading the numbers**: the first measurement reported `needs
+<avail>px` for every fitting candidate, identical for a 17-char string and a 12-char control.
+`scrollWidth` returns `max(clientWidth, content)`, so for a string that FITS it reports the BOX. The
+clipped verdicts were real, the widths were not; measured with an off-flow `max-content` clone instead,
+after which the intrinsic widths stop varying with the viewport.
+
+**AND `fnAt` HIT ITS TRAP IN A THIRD POSITION**: the anchor `function previewOf(msg:` already contains an
+open paren, so the paren counter started at 0 and the parameter object's own `{` was taken as the body.
+The depths are now SEEDED FROM THE ANCHOR, which fixes the whole class rather than this instance.
+
+**THREE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, all three having frozen the LOCATION of a rule
+this release legitimately moves: one froze the exact expression `STATUS_KIND_LABEL[sr.kind]` (so it
+forbade the extraction while saying nothing about the property — that the chip's label comes from the
+marker's own kind rather than from a fetch of a story unreachable after 24h); one asserted the parser is
+DEFINED in `Messages.tsx`; and one froze the four labels as literals in that file. The label pin came
+back STRONGER — it now walks every label and requires the word, so a fifth story kind cannot arrive
+saying "status".
+
+**NOT VERIFIED AGAINST A DATABASE, said plainly**: no MySQL here, so the derivation is proven through the
+real projection function and pinned, but nobody has reacted to a story on one phone and watched the row
+change on another. No schema change, no new dependency, no new env var. 4020 tests.
+
+- [x] `shared/statusReply.ts` — new. `statusReplyOf` / `isStatusReply` / `STORY_KIND_LABEL` /
+      `storyKindLabel`, moved out of `Messages.tsx` because the server needs the same rule.
+- [x] `client/src/app/messagePreview.ts` — `previewOfStoryReply`, with the measured widths recorded in
+      the comment so a later reader can check the claim rather than trust it.
+- [x] `server/v2db.ts` — `ThreadSummary` gains the two booleans; `composeThreadSummaries` requires an
+      explicit `true`; `listThreads` derives them from the row it already holds.
+- [x] `server/v2routers.ts` — both threaded explicitly onto the wire; the raw `meta` still never is.
+- [x] `client/src/pages/app/Messages.tsx` — the thread row uses the shared formatter with the lock check
+      first; the reply-quote line describes a quoted story reply; the local parser and labels deleted.
+- [x] `server/threadStoryReply.test.ts` — 27 tests. 18 tripwires mutation-verified.
+
 ## v2.105.28 — an answered group call says Voice or Video (2026-07-30)
 
 #116, the second of the three items I owed the owner. A solo History row has named its media type since

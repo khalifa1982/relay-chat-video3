@@ -109,14 +109,20 @@ thing for a call, and now so does this.
 number, so every line has a stable identity with nothing to upload and nothing to moderate. An
 uploadable logo is a column plus an editor — say the word if you want it.
 
-### 3. Thread list shows a bare emoji with no context
-A one-tap status reaction arrives in the inbox as a floating emoji with nothing saying what it was
-about. `statusReplyOf` exists and the CONVERSATION renders the chip correctly (v2.99.80); the **thread
-list** does not, because `listThreads` projects `{lastMessageBody, lastMessageKind}` and no `meta`.
-Confirmed today at `server/v2routers.ts:1613`.
+### 3. ~~Thread list shows a bare emoji with no context~~ — **DONE, v2.105.29**
+**And the reason it was deferred was wrong, which is the finding.** This note said *"adding `meta`
+touches the groupwise-max query every client polls"* — it does not. That aggregate
+(`MAX(id) GROUP BY conversationId`) selects **two integer columns** and is a separate query, untouched.
+The row the projection reads comes from a bare `.select()` over at most a few dozen **primary keys**, and
+`meta` was already in it: the disappearing-message guard reads it on the adjacent line. So the deferral
+was a performance decision made against a cost that does not exist, and the fix adds **zero** database
+work — two booleans derived from data already in hand.
 
-Not free: adding `meta` touches the groupwise-max query every client polls. Deliberately deferred as a
-performance decision, not forgotten.
+The row now reads `↩ your story · 😂` (or `their`). Deliberately shorter than the bubble's chip, and
+**measured** rather than guessed: the preview span is 141px at 320px and 181px at 360px, the chip's own
+wording needs 193px — so it would clip the end of the line, i.e. exactly the reaction that varies. This
+form needs 118px and fits at every width. The reply-quote line inside a conversation got the same
+treatment, since it had the identical gap.
 
 ### 4. ~~Voice/video marker on an ANSWERED GROUP call~~ — **DONE, v2.105.28**
 The note was right about the cause: `conference_history` had no channel column, so the media type was

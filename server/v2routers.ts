@@ -1759,6 +1759,12 @@ export const v2MessagesRouter = router({
         lastMessageAt: b.lastMessageAt,
         lastMessageBody: b.lastMessagePreview,
         lastMessageKind: b.lastMessageKind,
+        /* #115 — two narrow booleans, so the row can say what a bare reaction emoji
+           was about. Threaded EXPLICITLY, like every other field here: the raw `meta`
+           deliberately never reaches the browser, because it carries the replied-to
+           story's own text excerpt and a one-line row has no room for it. */
+        lastMessageStatusReply: b.lastMessageStatusReply,
+        lastMessageMine: b.lastMessageMine,
         unreadCount: b.unreadCount,
       };
     });

@@ -59,7 +59,8 @@ import {
 import { trpc } from "@/lib/trpc";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { EmojiPicker } from "@/app/EmojiPicker";
-import { previewOf } from "@/app/messagePreview";
+import { previewOf, previewOfStoryReply } from "@/app/messagePreview";
+import { statusReplyOf, storyKindLabel } from "@shared/statusReply";
 import { isGroupHidden, useGroupLocks } from "@/app/groupLock";
 import { GroupLockGate } from "@/app/GroupLockGate";
 import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
@@ -174,37 +175,11 @@ function isExpiringMsg(meta: unknown): boolean {
   return (meta as { expire?: unknown } | null)?.expire != null;
 }
 
-/**
- * The status-reply marker (v2.99.80), if this message carries one.
- *
- * Stamped SERVER-SIDE by `status.reply` and deliberately absent from
- * `messages.send`'s meta schema — it is a claim about provenance ("replied to your
- * status"), so a client-settable version would let anyone label any message as a
- * reply to any status, including one they never had access to.
- *
- * Read defensively: this comes off a JSON column, so it may be anything.
- */
-function statusReplyOf(
-  meta: unknown
-): { id: number; kind: string; excerpt?: string } | null {
-  const sr = (meta as { statusReply?: unknown } | null)?.statusReply;
-  if (!sr || typeof sr !== "object") return null;
-  const o = sr as { id?: unknown; kind?: unknown; excerpt?: unknown };
-  if (typeof o.id !== "number" || typeof o.kind !== "string") return null;
-  return {
-    id: o.id,
-    kind: o.kind,
-    excerpt: typeof o.excerpt === "string" ? o.excerpt.slice(0, 80) : undefined,
-  };
-}
-
-/** How a replied-to status reads in the chip. The glyphs match `previewOf`'s. */
-const STATUS_KIND_LABEL: Record<string, string> = {
-  text: "Story",
-  image: "📷 Photo story",
-  video: "🎬 Video story",
-  audio: "🎤 Audio story",
-};
+/* The story-reply marker (v2.99.80) and its labels live in `shared/statusReply.ts`.
+   MOVED there in #115, because the rule now has three readers on both sides of the
+   wire: this file's bubble chip, the thread-list projection (server), and the
+   reply-quote line below. Two copies of "is this a story reply" is how a thread row and
+   the conversation it opens come to disagree about the same message. */
 
 /** True when a message body is ONLY emoji (1-8 glyphs) — rendered big without a
  *  bubble, iMessage-style. Conservative: any non-emoji character disqualifies. */
@@ -611,11 +586,23 @@ export default function MessagesPage() {
                            this session shows its preview normally, because you are
                            already reading it. */
                         const hidden = isGroup && isGroupHidden(t.conversationId);
+                        /* #115 — A STORY REPLY GETS ITS CONTEXT.
+                           A one-tap reaction IS an emoji-only message, so this row used
+                           to show a floating ❤️ with nothing saying what it was about.
+                           The lock check stays FIRST: a locked group must not gain a
+                           story-reply line, since that would name an activity the lock
+                           exists to cover. */
                         const preview = hidden
                           ? "Locked"
-                          : t.lastMessageAt
-                            ? previewOf(t.lastMessageKind ?? "text", t.lastMessageBody)
-                            : "No messages yet";
+                          : !t.lastMessageAt
+                            ? "No messages yet"
+                            : t.lastMessageStatusReply
+                              ? previewOfStoryReply({
+                                  mine: !!t.lastMessageMine,
+                                  kind: t.lastMessageKind ?? "text",
+                                  body: t.lastMessageBody,
+                                })
+                              : previewOf(t.lastMessageKind ?? "text", t.lastMessageBody);
                         return (
                           <SwipeRow
                             key={t.conversationId}
@@ -1391,6 +1378,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     if (!msg) return "Message";
     // Never quote a self-destructing message's content (v2.96).
     if ((msg.meta as { expire?: unknown } | null)?.expire != null) return "⏱ Disappearing message";
+    /* #115 — quoting a story reply used to show a bare emoji here too, so the SECOND
+       surface with the gap gets the same shared rule rather than its own wording.
+       The expire guard stays AHEAD of it: a locked message must never be described,
+       whatever else it happens to be. */
+    const sr = statusReplyOf(msg.meta);
+    if (sr) return `↩ ${storyKindLabel(sr.kind)}${msg.body ? ` · ${msg.body.slice(0, 60)}` : ""}`;
     if (msg.body) return msg.body.length > 80 ? msg.body.slice(0, 80) + "…" : msg.body;
     return msg.kind === "image" ? "📷 Photo"
       : msg.kind === "video" ? "🎬 Video"
@@ -2245,7 +2238,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       </span>
                       <span className="opacity-80 [unicode-bidi:isolate]" dir="ltr">
                         {" · "}
-                        {STATUS_KIND_LABEL[sr.kind] ?? "Story"}
+                        {storyKindLabel(sr.kind)}
                       </span>
                       {sr.excerpt && (
                         <span className="opacity-70" dir="auto">

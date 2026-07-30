@@ -28,6 +28,8 @@ const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
 const ROUTERS = read("server/v2routers.ts");
 const STATUS = read("client/src/pages/app/Status.tsx");
 const MESSAGES = read("client/src/pages/app/Messages.tsx");
+/** #115 — the marker's parser and labels moved here, shared with the server. */
+const SHARED_STATUS_REPLY = read("shared/statusReply.ts");
 const PICKER = read("client/src/app/EmojiPicker.tsx");
 const CATALOG = read("client/src/lib/emojiCatalog.ts");
 
@@ -346,14 +348,24 @@ describe("the recipient sees WHAT the reply was about", () => {
     // v2.101.0 renamed the ephemeral post to STORY in every user-facing string.
     expect(MESSAGES).toMatch(/Replied to your story/);
     expect(MESSAGES).toMatch(/Replied to their story/);
-    expect(MESSAGES).toMatch(/STATUS_KIND_LABEL\[sr\.kind\]/);
-    // No fetch of the status: it is unreachable after 24h by design.
+    /* REWRITTEN in #115 to the PROPERTY. This froze the exact expression
+       `STATUS_KIND_LABEL[sr.kind]`, so it forbade moving the labels into `shared/`
+       while saying nothing about what it is actually for — that the chip's label comes
+       from the MARKER's own kind rather than from a fetch of a story that is
+       unreachable after 24h by design. */
+    expect(MESSAGES).toMatch(/storyKindLabel\(sr\.kind\)/);
     expect(codeOnly(MESSAGES)).not.toMatch(/status\.byId|status\.get\b/);
   });
 
   it("reads the marker defensively — it comes off a JSON column", () => {
-    expect(MESSAGES).toMatch(/function statusReplyOf\(/);
-    expect(MESSAGES).toMatch(/typeof o\.id !== "number" \|\| typeof o\.kind !== "string"/);
+    /* REWRITTEN in #115: this asserted the parser is DEFINED in `Messages.tsx`, i.e. it
+       pinned a location. The rule now lives in `shared/statusReply.ts` because the
+       server's thread projection needs the same answer, and it is tested
+       BEHAVIOURALLY over twelve malformed shapes in `server/threadStoryReply.test.ts`.
+       What matters here is that this file does not keep a second copy. */
+    expect(MESSAGES).toMatch(/import \{ statusReplyOf, storyKindLabel \} from "@shared\/statusReply"/);
+    expect(codeOnly(MESSAGES)).not.toMatch(/function statusReplyOf\(/);
+    expect(SHARED_STATUS_REPLY).toMatch(/typeof o\.id !== "number" \|\| typeof o\.kind !== "string"/);
   });
 
   it("withholds the chip while a self-destructing message is still LOCKED", () => {
