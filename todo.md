@@ -11278,6 +11278,72 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.21 — board 2e (register sheet) + the passcode lock, and two defects in my own tests (2026-07-30)
+
+Two frames from the parallel build, applied serially and each verified on its own.
+
+**THE PASSCODE LOCK (board 2f; the README's table calls it 2g — the board wins).** The
+frame's keypad, dot row, accent lock puck and Face ID row, plus 5e's wrong-passcode and
+locked-out states. **The vocabulary finding:** this screen was painted end to end in
+`--relay-online`, the PRESENCE GREEN — the fifth place that has happened (v2.99.86 DND,
+v2.106.9 the speaking tile, v2.106.11 the push banner, v2.106.12 the guest-restore card,
+v2.106.18 the voice waveform). "Locked" is not a presence statement; it takes the accent,
+and GOLD means locked because gold already means admin/owner/locked.
+
+**THE COOLDOWN IS NEW BEHAVIOUR, so every assertion about it is really about the owner
+still getting in.** Four wrong tries then a five-minute hold — and it is PERSISTED,
+because a cooldown held in component state is undone by a reload, which is the first thing
+anybody trying codes does. A clock that has gone BACKWARDS reads as expired rather than
+holding somebody out for what could be years; a refused biometric spends NO try (the OS
+gate cannot be guessed, so counting a cancel would strand only the owner); both unlock
+paths forgive the attempts through ONE exit; and the expiry clears the error as well as
+the code, because `error` is what disables Unlock. Storage failures all fail toward NOT
+locked out — this is friction rather than a security boundary, since anyone who can clear
+storage clears the hash too.
+
+**ONE CANVAS, and that is a structural claim rather than a comment.** The screen mounts
+its own `RelayBackground`, which is only free of the v2.99.67 cost class because the
+shell's canvas lives in `Inner`, BELOW this gate — so when locked it never renders. Pinned
+both ends, including that `PasscodeGate` returns the lock INSTEAD of its children.
+
+**BOARD 2e — THE REGISTER SHEET.** The frame's bottom sheet, Private/Business segmented
+control, benefits list and accent CTA, with its own scoped `<style>` block. **The
+load-bearing test is a SWEEP rather than a list**, because of the specific way this could
+fail silently: a class named in the JSX that the block never defines renders unstyled with
+every test green, and a rule that escapes the `.relay-auth` scope leaks out and restyles
+anything else using that name. The sweep reads every class the JSX references and requires
+each to be defined, so it covers the class added next. Keyframe names are namespaced
+rather than scoped, because a keyframe name in a component-local block is global by
+construction.
+
+**TWO DEFECTS IN MY OWN TESTS, both failing on CORRECT code, both fixed:** the class sweep
+matched `id="rauth-acct-label"` — an `aria-labelledby` relationship, not a style hook — and
+reported it as undefined, so it now reads `className` attributes specifically, which is
+stricter in the right direction; and the keyframe rule demanded an `auth` prefix when
+`rauthUp` is equally namespaced.
+
+**A THIRD DEFECT WAS A REAL GAP, found by mutation:** the stage pin was a file-wide match
+for `"waiting"`, which the stage union and a `stage === "waiting"` comparison both satisfy
+— so re-pointing the only `setStage("waiting")` left it green while the stage had become
+UNREACHABLE. It now requires each stage to be both enterable and rendered, and both halves
+bite.
+
+`client/src/app/passcodeLockFrame.test.ts` (21) + `client/src/app/registerSheetFrame.test.ts`
+(10). **All 13 passcode tripwires and all 11 register tripwires verified by MUTATION** off
+confirmed-green baselines, sources byte-identical afterwards. **Two bad mutations of my own
+are reported rather than counted:** a `void 0;` insertion that changed nothing at all and
+therefore never created the two-canvas bug it claimed to test, and a `grep -Fc` count that
+is LINE-based and cannot count a multi-line needle (it reported a target as occurring "117
+times"). Both re-run correctly, and both bit.
+
+**NOT VERIFIED ON A DEVICE, said plainly:** nobody has entered a passcode or registered on
+a phone. `AuthPanel` is reached through an identity and a dozen tRPC queries, and its
+styles live in an inline block rather than the built stylesheet, so there is no
+`index-*.css` to measure against and a hand-written replica would prove nothing about the
+real component.
+
+No schema change, no new dependency, no new env var. 4400 tests.
+
 ## v2.106.20 — board 3d: the New group sheet (2026-07-30)
 - [x] **The segmented Direct/Group control** becomes the board's inset well
       (rgba(0,0,0,.32), radius 13, padding 5) whose SELECTED half is the cycling accent

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { X, Mail, ShieldCheck, ArrowLeft, Lock, LockKeyhole, Check, Camera, Loader2 } from "lucide-react";
+import { X, Mail, ArrowLeft, Lock, LockKeyhole, Check, Camera, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,8 +18,28 @@ function fmtNumber(n: string): string {
  * engaging" animation on PIN entry, and a "keep me signed in" (30/60/90-day)
  * control wired to the server's session-cookie lifetime (remember param).
  *
+ * ── BOARD 2e "REGISTER SHEET" (design_handoff_relay_app) ────────────────────
+ * The board draws this surface as a BOTTOM SHEET — 28px top corners, the
+ * `.rsheet` near-opaque gradient, a grab handle, a 19px headline, a "YOUR
+ * NUMBER · RESERVED" accent row, mono section eyebrows, a Private/Business
+ * account-type row and a solid-accent CTA over a "no password" footer. That is
+ * what this panel now is, at every stage, because one material for one surface
+ * is the point: a sheet that becomes a centred dialog three steps in reads as
+ * two different screens.
+ *
+ * IT IS THE SAME COMPONENT FOR TWO JOBS, AND THE COPY HAS TO SAY WHICH.
+ * The board's frame is labelled "in-app upsell / guest → verified upgrade", and
+ * this panel is opened both that way (Profile → "Register with email", where the
+ * caller is a guest holding a number they want to keep) and as the plain SIGN-IN
+ * from the onboarding gate and the app shell, where there is no number to keep
+ * and "Register — keep this number" would be a false promise. So the board's
+ * headline, its explainer, its YOUR NUMBER row and its ACCOUNT TYPE row render
+ * for the UPSELL reading only — one derived boolean, no second component.
+ *
  *   email  → probe: unknown → registration; PIN account → PIN pad (email code
- *            one tap away); otherwise → email a code.
+ *            one tap away); otherwise → email a code. An address that ALREADY
+ *            has an account now says so on the step it lands on (see
+ *            `existingAccount`) instead of silently becoming a log-in.
  *   register (first/last/email) → sends a code, then → code stage.
  *   code   → 6-digit entry, "Resend" (60s cooldown), inline errors → verified.
  *   pin    → 4-digit entry. Three wrong entries warn; the FOURTH locks the
@@ -34,7 +54,16 @@ type Remember = 0 | 30 | 60 | 90;
 type LockState = "idle" | "engaging" | "ok" | "err";
 
 /** "Keep me signed in" — a toggle + 30/60/90-day segmented picker. `value` 0
- *  means session-only (this browser session). */
+ *  means session-only (this browser session).
+ *
+ *  A VOCABULARY FIX RATHER THAN A RESTYLE, and it is the finding this pass turned
+ *  up: the switch and the selected day chip were painted with `--relay-online`,
+ *  the PRESENCE LED colour. Green in this app means ONLINE and nothing else — it
+ *  is what every presence dot is drawn with, which is why v2.99.86 moved DND off
+ *  it, v2.106.9 the speaking tile, v2.106.11 the push banner and v2.106.18 the
+ *  voice waveform. A green "this toggle is enabled" is one more meaning for the
+ *  one colour that has to carry exactly one, so ON takes the cycling ACCENT,
+ *  which is what "active" already means everywhere else after v2.106.6. */
 function RememberControl({
   value,
   onChange,
@@ -45,7 +74,7 @@ function RememberControl({
   const on = value !== 0;
   const days: Remember[] = [30, 60, 90];
   return (
-    <div className="rounded-2xl border border-border/60 bg-background/40 p-3">
+    <div className="rauth-tile rounded-[13px] p-3">
       <label className="flex cursor-pointer items-center justify-between gap-3">
         <span className="text-sm font-medium">Keep me signed in</span>
         <button
@@ -54,7 +83,7 @@ function RememberControl({
           aria-checked={on}
           onClick={() => onChange(on ? 0 : 30)}
           className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-            on ? "bg-[color:var(--relay-online,#06d6a0)]" : "bg-muted"
+            on ? "rauth-switch-on" : "bg-muted"
           }`}
         >
           <span
@@ -72,9 +101,9 @@ function RememberControl({
             key={d}
             type="button"
             onClick={() => onChange(d)}
-            className={`rounded-xl border py-1.5 text-xs font-semibold transition-colors ${
+            className={`min-h-11 rounded-[9px] border text-xs font-semibold transition-colors ${
               value === d
-                ? "border-[color:var(--relay-online,#06d6a0)] bg-[color:var(--relay-online,#06d6a0)]/15 text-foreground"
+                ? "rauth-daysel text-foreground"
                 : "border-border/60 text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -91,10 +120,28 @@ function RememberControl({
   );
 }
 
-/** The animated "secure lock" badge shown on the PIN stage. */
+/**
+ * The animated "secure lock" badge shown on the PIN stage.
+ *
+ * IDLE / ENGAGING TAKE THE CYCLING ACCENT, not the presence green they used to:
+ * "the lock is working" is an ACTIVE state, and green here was a second meaning
+ * for the presence LED colour (see RememberControl above).
+ *
+ * OK STAYS GREEN, and that is deliberate rather than an exception squeezed
+ * through: it is a momentary SUCCESS confirmation — not a claim that anybody is
+ * online — and the repo already tokenizes that separately as `--relay-success`.
+ * Naming the token is the whole point; the hue is the same, the meaning is not.
+ * The fallbacks are LITERALS: `var(--rb, var(--rb))` is a custom-property CYCLE,
+ * which resolves to the guaranteed-invalid value and makes the browser DROP the
+ * declaration — a lock badge with no colour at all (the v2.106.7 trap).
+ */
 function LockBadge({ state }: { state: LockState }) {
   const color =
-    state === "ok" ? "#06d6a0" : state === "err" ? "#f0526a" : "var(--relay-online,#3FE0C5)";
+    state === "ok"
+      ? "var(--relay-success, #06d6a0)"
+      : state === "err"
+        ? "var(--destructive, #f0526a)"
+        : "var(--rb, #3FE0C5)";
   return (
     <div
       className={`lockbadge relative mx-auto grid size-16 place-items-center rounded-2xl ${
@@ -123,6 +170,103 @@ function LockBadge({ state }: { state: LockState }) {
           <Lock className="size-7 lockbadge-clank" />
         )}
       </span>
+    </div>
+  );
+}
+
+/**
+ * BOARD 2e's "YOUR NUMBER · RESERVED" row — the number you are registering to
+ * KEEP, so it is the caller's OWN live number from whoami, never the masked hint
+ * `loginProbe` returns for whatever account the typed address belongs to. Those
+ * are two different numbers and showing the wrong one here would be a claim
+ * about somebody else's account.
+ *
+ * `dir="ltr"` + bidi isolation because a grouped six-digit number can have its
+ * parts reordered inside an RTL paragraph (the standing rule since v2.99.77).
+ */
+function NumberRow({ number }: { number: string }) {
+  return (
+    <div className="rauth-numrow flex items-center gap-2.5 px-3.5 py-2.5">
+      <span aria-hidden className="rauth-numtile grid size-[34px] shrink-0 place-items-center rounded-[11px]">
+        <Lock className="size-[15px]" />
+      </span>
+      <div className="min-w-0">
+        <div className="rauth-cap font-mono">Your number</div>
+        <div dir="ltr" className="rauth-num font-mono" style={{ unicodeBidi: "isolate" }}>
+          {fmtNumber(number)}
+        </div>
+      </div>
+      {/* `.rchip-accent` is the shared accent-chip recipe (tint + hairline + the
+          cycling hue), so this chip cannot drift from every other one. */}
+      <span className="rchip-accent rauth-chip ms-auto shrink-0 rounded-[14px] px-2.5 py-1 font-mono">
+        Reserved
+      </span>
+    </div>
+  );
+}
+
+/**
+ * BOARD 2e's ACCOUNT TYPE row. Business is "coming soon" behind a gold SOON chip
+ * — the owner's standing decision, so it stays.
+ *
+ * NEITHER HALF IS A BUTTON, and that is rule 9 rather than laziness: a control
+ * that can only ever refuse is worse than no control, so this is an
+ * INFORMATIONAL row stating which type the account will be, not a picker with
+ * one dead option. The board draws both as spans for the same reason.
+ *
+ * THE SOON CHIP USES THE BOARD'S OWN AMBER (#f0b45a), NOT the `#e8c94a` role
+ * gold: that literal is reserved for admin / owner / locked, and spending it on
+ * "coming soon" is how a colour stops carrying information.
+ */
+function AccountTypeRow() {
+  return (
+    <div className="space-y-2">
+      <div id="rauth-acct-label" className="rauth-eyebrow font-mono">
+        Account type
+      </div>
+      <div
+        role="group"
+        aria-labelledby="rauth-acct-label"
+        className="rauth-seg flex items-stretch gap-1.5 p-1.5"
+      >
+        <span className="rauth-seg-on flex flex-1 items-center justify-center rounded-[9px] px-2 py-2.5 text-[13px] font-bold">
+          Private
+        </span>
+        <span className="rauth-seg-off flex flex-1 items-center justify-center gap-1.5 rounded-[9px] px-2 py-2.5 text-[13px] font-semibold">
+          Business <span className="rauth-soon font-mono">Soon</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The "this email already has an account" state (board 2e + the ask). NOTHING IS
+ * REBUILT HERE: `loginProbe` has decided this since v2.105.26 and
+ * `routeAfterProbe` already routes such an address to the PIN pad or an email
+ * code. What was missing is that the sheet never SAID so — and this panel is
+ * opened from Profile as a REGISTER upsell, so somebody who came to register
+ * landed on "Enter your PIN" with no explanation for the change of subject.
+ *
+ * IT ALSO NAMES THE CONSEQUENCE, which is the part that actually matters and is
+ * not obvious: signing in to an existing account does NOT carry the guest number
+ * over — `ensureUserIdentity` returns that account's own identity (v2.99.49) —
+ * so the sheet's own promise ("keep this number") does not hold on this branch,
+ * and saying nothing would leave the promise standing.
+ *
+ * Nothing new is disclosed: the probe already told THIS caller this address is
+ * taken, so the words reveal only what the request they just made returned.
+ */
+function ExistingAccountNote() {
+  return (
+    <div className="rauth-note space-y-1 px-3.5 py-3 text-start">
+      <p className="text-[12.5px] font-semibold" style={{ color: "var(--rb, #3FE0C5)" }}>
+        That email already has a RELAY account
+      </p>
+      <p className="rauth-sub">
+        So it can&rsquo;t be registered again — we&rsquo;re signing you in to it instead. You&rsquo;ll
+        use that account&rsquo;s number, not this guest one.
+      </p>
     </div>
   );
 }
@@ -162,6 +306,13 @@ export function AuthPanel({
   const [resendIn, setResendIn] = useState(0);
   const [remember, setRemember] = useState<Remember>(30); // "keep me signed in" default
   const [lock, setLock] = useState<LockState>("idle");
+  /**
+   * The typed address already has an account (board 2e's "→ Log in" state). Set
+   * from the probe's own answer in `routeAfterProbe` — a projection of a decision
+   * that already existed, not a second one. Shown on whichever step the probe
+   * routes to, so the change of subject is explained rather than silent.
+   */
+  const [existingAccount, setExistingAccount] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
 
   // 1Hz resend countdown.
@@ -183,10 +334,15 @@ export function AuthPanel({
   const updateProfile = trpc.identity.updateProfile.useMutation();
 
   // The setup step shows the just-minted account: its 6-digit RELAY number and
-  // its avatar. We only need it once we're signed in (setup stage), so it's a
-  // cheap idle query the rest of the time.
+  // its avatar. Board 2e needs the SAME row up front (the number you register to
+  // keep), so this is no longer gated on the setup stage.
+  //
+  // That costs no extra request in the app: `useIdentity` already holds this
+  // query, and react-query keys on the procedure + input — so enabling it here
+  // subscribes to the SAME cache entry rather than issuing a second fetch. From
+  // the onboarding gate, where nobody has an identity yet, `whoami` answers null
+  // and every consumer below degrades to hiding its row.
   const whoami = trpc.identity.whoami.useQuery(undefined, {
-    enabled: stage === "setup",
     refetchOnWindowFocus: false,
   });
 
@@ -302,7 +458,12 @@ export function AuthPanel({
     // resetting here is safe and re-set true only on a real registration.
     setWasRegistration(false);
     const p = await loginProbe.mutateAsync({ email });
-    if (p.unregistered) { setStage("register"); return; }
+    if (p.unregistered) { setExistingAccount(false); setStage("register"); return; }
+    // BOARD 2e's "already has an account → log in" state. The probe decided this;
+    // all that happens here is that the answer is REMEMBERED so the step it routes
+    // to can say why registering turned into signing in. Set before the branches
+    // below, because both of them are that state.
+    setExistingAccount(true);
     if (p.hasPin && !p.locked) {
       setPin("");
       setLock("idle");
@@ -467,44 +628,107 @@ export function AuthPanel({
     }
   }
 
+  /**
+   * THE UPSELL READING (board 2e): a guest holding a number is the one caller for
+   * whom "Register — keep this number" is true, and the one the board's frame is
+   * drawn for. Everybody else opened this to SIGN IN — from the onboarding gate
+   * there is not even an identity yet — so they get honest sign-in copy and none
+   * of the register-specific rows. One boolean, so the two readings cannot drift.
+   */
+  const me = whoami.data ?? null;
+  const upsell = me?.isGuest === true && Boolean(me.number);
+
   const title =
     stage === "code" ? "Enter your code"
     : stage === "register" ? "Create your account"
     : stage === "pin" ? "Enter your PIN"
     : stage === "setup" ? "Finish setting up"
     : stage === "waiting" ? "Waiting for approval"
+    : upsell ? "Register — keep this number"
     : "Sign in";
 
   return (
-    <div className="dark relay-auth fixed inset-0 z-[110] grid place-items-center p-4 text-foreground" role="dialog" aria-modal="true">
+    /* `relay-v2` is carried HERE as well as the local `dark`, and both are needed:
+       the design utilities this sheet is built from are scoped `.dark.relay-v2 …`,
+       and while <html> holds `relay-v2` it only holds `dark` in the dark theme — so
+       without this the sheet would lose its material for every light-theme user. */
+    <div className="dark relay-v2 relay-auth fixed inset-0 z-[110] flex items-end justify-center text-foreground" role="dialog" aria-modal="true">
+      {/* The scrim is deliberately left as `glass-overlay` rather than repainted to
+          the board's rgba(2,4,6,.6)+blur(3px): that utility already carries a
+          measured no-backdrop-filter fallback AND a phone rule that DROPS the blur
+          (the v2.99.84 cost rule). Forcing a blur back on would undo a measurement
+          to match a colour nobody can tell apart behind a near-opaque sheet. */}
       <div aria-hidden className="glass-overlay absolute inset-0" onClick={onClose} />
-      <div className="relative w-[min(94vw,420px)] rounded-3xl border border-border/60 bg-card/70 p-6 shadow-2xl shadow-black/50 backdrop-blur-2xl backdrop-saturate-150">
-        <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+      <div
+        className="rsheet rauth-sheet relative flex max-h-[92dvh] w-full max-w-[460px] flex-col rounded-t-[28px] px-5 pt-2.5"
+        /* Two INLINE overrides on top of `.rsheet`, which ships the board's sheet
+           gradient and hairline but a DOWNWARD shadow (it was written for centred
+           dialogs). A sheet docked to the bottom edge casts upward — the board's
+           own `0 -30px 80px`. Inline rather than a rule, because `.dark.relay-v2
+           .rsheet` is three classes and an override would otherwise be a
+           specificity argument that a later edit could quietly lose. */
+        style={{
+          boxShadow: "0 -30px 80px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.14)",
+          borderBottom: "none",
+        }}
+      >
+        {/* The board's grab handle. Decorative: the scrim is the dismiss target and
+            the Close button below is the real control, so this is aria-hidden
+            rather than a second, undiscoverable way out. */}
+        <div aria-hidden className="rauth-grip" />
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
             {stage !== "email" && (
               <button
                 type="button"
-                onClick={() => { setStage("email"); setError(null); setNotice(null); setLock("idle"); }}
+                onClick={() => { setStage("email"); setError(null); setNotice(null); setLock("idle"); setExistingAccount(false); }}
                 aria-label="Back"
-                className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
+                className="-ms-1.5 grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted"
               >
                 <ArrowLeft className="size-4" />
               </button>
             )}
-            <h2 className="text-lg font-bold">{title}</h2>
+            {/* The board gives the sheet ONE headline, so the stage title IS it —
+                a dialog title plus a separate 19px heading would be the same
+                sentence twice. */}
+            <h2 className="rauth-title min-w-0">{title}</h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="rounded-full p-1.5 text-muted-foreground hover:bg-muted">
+          <button type="button" onClick={onClose} aria-label="Close" className="-me-1.5 grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted">
             <X className="size-5" />
           </button>
         </div>
+        {/* The body scrolls, the handle and header do not: the setup step (number +
+            avatar + two passcode fields + CTA) is taller than a short phone with a
+            keyboard up, and a sheet that pushes its CTA off-screen is worse than
+            one that scrolls.
+            `min-h-0` IS LOAD-BEARING, not tidiness: a flex item defaults to
+            `min-height:auto`, so without it this child cannot shrink below its
+            content, `overflow-y:auto` never engages and the SHEET overflows the
+            viewport instead — the same flex-sizing trap v2.78 recorded when the app
+            shell grew past its own end. */}
+        <div className="rauth-body -mx-5 min-h-0 overscroll-contain px-5">
 
         {stage === "email" && (
-          <form onSubmit={submitEmail} className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Enter your email and we'll send you a one-time code. No password needed.
+          <form onSubmit={submitEmail} className="space-y-4">
+            <p className="rauth-sub">
+              {upsell
+                ? /* NOT the board's literal "Your guest number ends with this browser
+                     session": that claim is FALSE here and it is false for a recorded
+                     reason — v2.99.68 gave every guest a recovery key precisely so a
+                     browser close no longer strands the number, and v2.99.69 corrected
+                     this copy once already. Signing out still forgets it, which is what
+                     "only held for this browser" says accurately. */
+                  "Your guest number is only held for this browser. Registering locks it to your account for good — and adds a verified badge."
+                : "Enter your email and we'll send you a one-time code. No password needed."}
             </p>
-            <div className="space-y-1.5">
-              <Label htmlFor="auth-email">Email</Label>
+            {/* Board 2e's YOUR NUMBER row. Withheld when there is no number to keep
+                rather than rendered empty — a row reserving space for a value that is
+                never coming reads as something failing to load. */}
+            {upsell && me?.number && <NumberRow number={me.number} />}
+            <div className="space-y-2">
+              <Label htmlFor="auth-email" className="rauth-eyebrow font-mono">
+                Registered access · Email
+              </Label>
               <Input
                 id="auth-email"
                 type="email"
@@ -515,52 +739,68 @@ export function AuthPanel({
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="h-12 rounded-xl"
+                className="rauth-field h-12 rounded-[13px]"
               />
             </div>
+            {upsell && <AccountTypeRow />}
             {error && <p className="text-sm text-destructive">{error}</p>}
-            <Button type="submit" className="h-12 w-full rounded-xl" disabled={busy || !cleanEmail}>
-              {requestOtp.isPending ? "Sending…" : "Send code"}
+            <Button type="submit" className="rcta h-12 w-full rounded-[13px] text-[15px] font-bold" disabled={busy || !cleanEmail}>
+              {/* The probe runs BEFORE anything is emailed, so "Sending…" would be a
+                  claim about a mail nobody has asked for yet. */}
+              {loginProbe.isPending ? "Checking…" : requestOtp.isPending ? "Sending…" : upsell ? "Send verification code" : "Send code"}
             </Button>
-            <div className="flex items-center justify-center gap-1 pt-1 text-xs text-muted-foreground">
-              <ShieldCheck className="size-3.5" /> Passwordless — a fresh code every time, only to your inbox.
-            </div>
+            <p className="rauth-foot flex items-center justify-center gap-1.5">
+              <Lock aria-hidden className="size-[11px] shrink-0" /> No password — a 6-digit code checks your email
+            </p>
           </form>
         )}
 
         {stage === "register" && (
-          <form onSubmit={submitRegister} className="space-y-3">
-            <p className="text-sm text-muted-foreground">
+          <form onSubmit={submitRegister} className="space-y-3.5">
+            <p className="rauth-sub">
               Just your name to finish — we already have your email.
             </p>
+            {/* The number carries over on THIS branch (the address is unclaimed, so
+                `ensureUserIdentity` claims this browser's guest identity — v2.99.49),
+                which is exactly what the row is promising. */}
+            {upsell && me?.number && <NumberRow number={me.number} />}
             <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="auth-first">First name</Label>
-                <Input id="auth-first" required autoFocus value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="Alex" maxLength={64} className="h-12 rounded-xl" />
+              <div className="space-y-2">
+                <Label htmlFor="auth-first" className="rauth-eyebrow font-mono">First name</Label>
+                <Input id="auth-first" required autoFocus value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="Alex" maxLength={64} className="rauth-field h-12 rounded-[13px]" />
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="auth-last">Last name</Label>
-                <Input id="auth-last" required value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Rivera" maxLength={64} className="h-12 rounded-xl" />
+              <div className="space-y-2">
+                <Label htmlFor="auth-last" className="rauth-eyebrow font-mono">Last name</Label>
+                <Input id="auth-last" required value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Rivera" maxLength={64} className="rauth-field h-12 rounded-[13px]" />
               </div>
             </div>
             {/* Email is already known from the previous step — shown read-only so
                 the user never retypes it (owner directive). "Back" changes it. */}
-            <div className="space-y-1.5">
-              <Label>Email</Label>
-              <div className="flex h-12 items-center gap-2 rounded-xl border border-border/60 bg-background/40 px-3 text-sm">
+            <div className="space-y-2">
+              <Label className="rauth-eyebrow font-mono">Registered access · Email</Label>
+              <div className="rauth-field flex h-12 items-center gap-2 rounded-[13px] border px-3 text-sm">
                 <Mail className="size-4 shrink-0 text-muted-foreground" />
                 <span className="truncate font-medium">{cleanEmail}</span>
               </div>
             </div>
+            {upsell && <AccountTypeRow />}
             {error && <p className="text-sm text-destructive">{error}</p>}
-            <Button type="submit" className="h-12 w-full rounded-xl" disabled={busy || !firstName.trim() || !lastName.trim() || !cleanEmail}>
-              {register.isPending ? "Creating…" : "Continue"}
+            <Button type="submit" className="rcta h-12 w-full rounded-[13px] text-[15px] font-bold" disabled={busy || !firstName.trim() || !lastName.trim() || !cleanEmail}>
+              {register.isPending ? "Creating…" : "Send verification code"}
             </Button>
+            <p className="rauth-foot flex items-center justify-center gap-1.5">
+              <Lock aria-hidden className="size-[11px] shrink-0" /> No password — a 6-digit code checks your email
+            </p>
           </form>
         )}
 
         {stage === "pin" && (
           <form onSubmit={submitPin} className="space-y-4">
+            {/* Board 2e's "→ Log in" state, on the step the probe actually routed to.
+                Shown for the UPSELL only: somebody who opened this to sign in asked
+                for exactly this, so telling them their address has an account is
+                noise — it is only news to somebody who came to register. */}
+            {upsell && existingAccount && <ExistingAccountNote />}
             <LockBadge state={lock} />
             <p className="text-center text-sm">
               Enter the 4-digit PIN for <span className="font-semibold break-all">{cleanEmail}</span>.
@@ -575,17 +815,17 @@ export function AuthPanel({
               onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
               placeholder="••••"
               disabled={lock === "engaging" || lock === "ok"}
-              className="text-center text-2xl tracking-[0.6em] font-mono h-14 rounded-xl"
+              className="rauth-field text-center text-2xl tracking-[0.6em] font-mono h-14 rounded-[13px]"
             />
             {error && <p className="text-sm text-destructive text-center">{error}</p>}
             <RememberControl value={remember} onChange={setRemember} />
-            <Button type="submit" className="h-12 w-full rounded-xl" disabled={busy || pin.length !== 4}>
+            <Button type="submit" className="rcta h-12 w-full rounded-[13px] text-[15px] font-bold" disabled={busy || pin.length !== 4}>
               {lock === "ok" ? "Unlocked ✓" : loginWithPin.isPending ? "Unlocking…" : "Sign in"}
             </Button>
-            <Button type="button" variant="secondary" className="h-11 w-full rounded-xl" onClick={pinToEmailCode} disabled={busy}>
+            <Button type="button" variant="secondary" className="h-12 w-full rounded-[13px]" onClick={pinToEmailCode} disabled={busy}>
               Email me a code instead
             </Button>
-            <p className="text-center text-xs text-muted-foreground">
+            <p className="rauth-foot text-center">
               Three wrong tries are forgiven — a fourth locks the account until you sign in by email code.
             </p>
           </form>
@@ -609,7 +849,7 @@ export function AuthPanel({
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             {waitStalled && (
-              <div className="rounded-xl bg-muted/40 p-3 text-xs text-muted-foreground">
+              <div className="rauth-tile rounded-[13px] p-3 text-xs text-muted-foreground">
                 No response yet — your other device may be offline or closed. You
                 can sign in with your 4-digit PIN instead (no approval needed).
               </div>
@@ -617,7 +857,7 @@ export function AuthPanel({
             <Button
               type="button"
               variant="secondary"
-              className="h-11 w-full rounded-xl"
+              className="h-12 w-full rounded-[13px]"
               onClick={() => { setPin(""); setLock("idle"); setError(null); setNotice(null); setStage("pin"); }}
               disabled={busy}
             >
@@ -636,17 +876,24 @@ export function AuthPanel({
 
         {stage === "setup" && (
           <form onSubmit={submitSetup} className="space-y-4">
-            <p className="text-sm text-muted-foreground">
+            <p className="rauth-sub">
               You're in ✅ — here's your number. Add a photo and pick a 4-digit
               passcode to finish. You'll use this passcode to sign in on any device.
             </p>
 
-            {/* The freshly-minted 6-digit RELAY number (LTR island). */}
-            <div className="rounded-2xl border border-border/60 bg-background/40 p-4 text-center">
-              <div className="text-[0.7rem] font-medium uppercase tracking-[0.22em] text-muted-foreground">
+            {/* The freshly-minted 6-digit RELAY number (LTR island). Deliberately
+                NOT the compact `NumberRow`: this is the confirmation the whole flow
+                was for, so it keeps its own full-width plate — and the number is now
+                the caller's for good, so "RESERVED" would be the wrong word. */}
+            <div className="rauth-numrow p-4 text-center">
+              <div className="rauth-eyebrow font-mono">
                 Your RELAY number
               </div>
-              <div dir="ltr" className="mt-1 font-mono text-2xl font-bold tracking-[0.15em]">
+              <div
+                dir="ltr"
+                className="mt-1.5 font-mono text-2xl font-bold tracking-[0.15em]"
+                style={{ color: "var(--rb, #3FE0C5)", unicodeBidi: "isolate" }}
+              >
                 {whoami.data?.number ? fmtNumber(whoami.data.number) : "······"}
               </div>
             </div>
@@ -689,23 +936,23 @@ export function AuthPanel({
             </div>
 
             <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="pin-1">4-digit passcode</Label>
+              <div className="space-y-2">
+                <Label htmlFor="pin-1" className="rauth-eyebrow font-mono">4-digit passcode</Label>
                 <Input id="pin-1" type="password" inputMode="numeric" maxLength={4} value={setupPin}
                   onChange={(e) => setSetupPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                  placeholder="••••" className="text-center font-mono tracking-[0.4em] h-12 rounded-xl" />
+                  placeholder="••••" className="rauth-field text-center font-mono tracking-[0.4em] h-12 rounded-[13px]" />
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="pin-2">Repeat it</Label>
+              <div className="space-y-2">
+                <Label htmlFor="pin-2" className="rauth-eyebrow font-mono">Repeat it</Label>
                 <Input id="pin-2" type="password" inputMode="numeric" maxLength={4} value={setupPin2}
                   onChange={(e) => setSetupPin2(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                  placeholder="••••" className="text-center font-mono tracking-[0.4em] h-12 rounded-xl" />
+                  placeholder="••••" className="rauth-field text-center font-mono tracking-[0.4em] h-12 rounded-[13px]" />
               </div>
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button
               type="submit"
-              className="h-12 w-full rounded-xl"
+              className="rcta h-12 w-full rounded-[13px] text-[15px] font-bold"
               disabled={busy || avatarUploading || !shownAvatar || setupPin.length !== 4 || setupPin2.length !== 4}
             >
               {setLoginPin.isPending ? "Finishing…" : "Finish"}
@@ -721,7 +968,9 @@ export function AuthPanel({
             }}
             className="space-y-4"
           >
-            <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-primary/15 text-primary">
+            {/* Board 2e's "→ Log in" state — the other step the probe can route to. */}
+            {upsell && existingAccount && <ExistingAccountNote />}
+            <div className="rauth-numtile mx-auto grid size-14 place-items-center rounded-2xl">
               <Mail className="size-7" />
             </div>
             <p className="text-center text-sm">
@@ -741,21 +990,24 @@ export function AuthPanel({
                 if (v.length === 6) void verifyCode(v);
               }}
               placeholder="••••••"
-              className="text-center text-2xl tracking-[0.5em] font-mono h-14 rounded-xl"
+              className="rauth-field text-center text-2xl tracking-[0.5em] font-mono h-14 rounded-[13px]"
             />
             {error && <p className="text-sm text-destructive text-center">{error}</p>}
-            {notice && !error && <p className="text-sm text-muted-foreground text-center">{notice}</p>}
+            {notice && !error && <p className="rauth-sub text-center">{notice}</p>}
             <RememberControl value={remember} onChange={setRemember} />
-            <Button type="submit" className="h-12 w-full rounded-xl" disabled={busy || code.length !== 6}>
+            <Button type="submit" className="rcta h-12 w-full rounded-[13px] text-[15px] font-bold" disabled={busy || code.length !== 6}>
               {verifyOtp.isPending ? "Verifying…" : "Verify & continue"}
             </Button>
-            <div className="flex flex-col items-center gap-2">
-              <Button type="button" variant="secondary" onClick={resend} disabled={resendIn > 0} className="h-11 w-full rounded-xl">
-                {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
-              </Button>
-            </div>
+            {/* ABSENT rather than disabled during the cooldown would lose the one thing
+                a waiting person wants (how long) — so this control keeps its label and
+                counts down in place, which is what the v2.103.3 rule is actually
+                about: never a control whose refusal is unexplained. */}
+            <Button type="button" variant="secondary" onClick={resend} disabled={resendIn > 0} className="h-12 w-full rounded-[13px]">
+              {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
+            </Button>
           </form>
         )}
+        </div>
       </div>
 
       <AvatarPicker
@@ -765,13 +1017,109 @@ export function AuthPanel({
         onSaved={(url) => setAvatarUrl(url)}
       />
 
+      {/* Scoped to `.relay-auth`, and every accent value here carries a LITERAL
+          fallback: `var(--rb, var(--rb))` is a custom-property CYCLE, which resolves
+          to the guaranteed-invalid value and makes the browser DROP the whole
+          declaration — a sheet with no accent at all rather than a plain one (the
+          v2.106.7 trap). No backticks anywhere inside this literal: one in a comment
+          terminates it and the syntax error is reported hundreds of lines away (the
+          trap recorded four times, most recently v2.106.6). */}
       <style>{`
+        /* ── BOARD 2e sheet material ─────────────────────────────────────── */
+        .relay-auth .rauth-grip {
+          width: 38px; height: 4px; border-radius: 3px;
+          background: rgba(255,255,255,.2); margin: 4px auto 14px;
+        }
+        .relay-auth .rauth-title { font-size: 19px; font-weight: 700; color: #eafff6; }
+        .relay-auth .rauth-sub { font-size: 12.5px; line-height: 1.55; color: #8ea09b; }
+        .relay-auth .rauth-foot { font-size: 10.5px; line-height: 1.5; color: #68797c; }
+        /* The board's mono section eyebrows. Natural case in the SOURCE with the
+           uppercasing done in CSS, so the accessible name a screen reader reads is
+           "Account type" rather than shouted letters — and so a later test pins the
+           property instead of a literal that CSS produced (the v2.105.26 lesson). */
+        .relay-auth .rauth-eyebrow {
+          display: block; font-size: 10px; letter-spacing: .2em;
+          text-transform: uppercase; color: #8fa39d; font-weight: 400;
+        }
+        .relay-auth .rauth-cap {
+          font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: #7d8f8a;
+        }
+        /* The board's field: a white 5% fill on a 13% hairline. Reached through the
+           primitive's own data-slot so this outranks the Input's own dark:bg-input/30
+           (two classes) without an !important.
+           NOTE: no backticks anywhere in this literal — one inside a CSS comment
+           terminates the template and the syntax error surfaces a hundred lines
+           away. It bit again while writing this block, for the fifth recorded time. */
+        .relay-auth [data-slot="input"].rauth-field,
+        .relay-auth .rauth-field {
+          background: rgba(255,255,255,.05);
+          border-color: rgba(255,255,255,.13);
+        }
+        .relay-auth .rauth-tile {
+          background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.13);
+        }
+        /* YOUR NUMBER row + the accent tile inside it. */
+        .relay-auth .rauth-numrow {
+          border-radius: 14px;
+          background: rgba(var(--rb-rgb, 63, 224, 197), .09);
+          border: 1px solid rgba(var(--rb-rgb, 63, 224, 197), .32);
+        }
+        .relay-auth .rauth-numtile {
+          background: rgba(var(--rb-rgb, 63, 224, 197), .15);
+          color: var(--rb, #3FE0C5);
+        }
+        .relay-auth .rauth-num {
+          font-size: 18px; font-weight: 600; letter-spacing: .04em;
+          color: var(--rb, #3FE0C5);
+        }
+        .relay-auth .rauth-chip { font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+        .relay-auth .rauth-note {
+          background: rgba(var(--rb-rgb, 63, 224, 197), .09);
+          border: 1px solid rgba(var(--rb-rgb, 63, 224, 197), .3);
+          border-radius: 13px;
+        }
+        /* ACCOUNT TYPE. The SOON chip is the board's own amber (#f0b45a) — NOT the
+           #e8c94a role gold, which means admin / owner / locked and must not be spent
+           on "coming soon". */
+        .relay-auth .rauth-seg {
+          background: rgba(0,0,0,.32); border: 1px solid rgba(255,255,255,.08); border-radius: 13px;
+        }
+        .relay-auth .rauth-seg-on {
+          background: rgba(var(--rb-rgb, 63, 224, 197), .2);
+          border: 1px solid rgba(var(--rb-rgb, 63, 224, 197), .5);
+          color: #f2fffa;
+        }
+        .relay-auth .rauth-seg-off { color: #93a5a0; }
+        .relay-auth .rauth-soon {
+          font-size: 8px; letter-spacing: .1em; text-transform: uppercase;
+          padding: 2px 6px; border-radius: 16px; background: rgba(240,180,90,.16);
+          border: 1px solid rgba(240,180,90,.45); color: #f0b45a; white-space: nowrap;
+        }
+        /* ON = the cycling accent, never the presence green (see RememberControl). */
+        .relay-auth .rauth-switch-on { background: var(--rb, #3FE0C5); }
+        .relay-auth .rauth-daysel {
+          border-color: rgba(var(--rb-rgb, 63, 224, 197), .55);
+          background: rgba(var(--rb-rgb, 63, 224, 197), .18);
+        }
+        /* The scrolling half of the sheet. The board's 34px bottom padding, plus the
+           real home-indicator inset rather than a guessed floor. */
+        .relay-auth .rauth-body {
+          overflow-y: auto; -webkit-overflow-scrolling: touch;
+          padding-bottom: calc(34px + env(safe-area-inset-bottom, 0px));
+        }
         .relay-auth .lockbadge-ring { animation: authSpin .8s linear infinite; }
         @keyframes authSpin { to { transform: rotate(360deg); } }
         @media (prefers-reduced-motion: no-preference) {
           .relay-auth .lockbadge-shake { animation: authShake .42s cubic-bezier(.36,.07,.19,.97) both; }
           .relay-auth .lockbadge-clank { animation: authClank .28s ease-out both; }
+          /* The board's sheet presentation: slide up ~300ms. TRANSFORM AND OPACITY
+             ONLY, and it is safe to transform this element because nothing
+             position:fixed lives inside it — the avatar picker is mounted as a
+             SIBLING, not a child, so this cannot become the v2.99.54 containing-block
+             bug where an animated ancestor mis-centred a fixed descendant. */
+          .relay-auth .rauth-sheet { animation: rauthUp .3s cubic-bezier(.23,1,.32,1) both; }
         }
+        @keyframes rauthUp { from { transform: translateY(16px); opacity: 0; } }
         @keyframes authShake {
           10%,90% { transform: translateX(-1px); } 20%,80% { transform: translateX(2px); }
           30%,50%,70% { transform: translateX(-4px); } 40%,60% { transform: translateX(4px); }
