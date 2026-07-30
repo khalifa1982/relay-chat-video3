@@ -4,11 +4,11 @@ Paste this into Claude Design. It lists only what is **not yet built to its own 
 
 ## Status (34 frames)
 
-> **Updated 2026-07-30 (v2.106.21).** Twelve more frames are now built: 2c story viewer ·
+> **Updated 2026-07-30 (v2.106.22).** Fifteen more frames are now built: 2c story viewer ·
 > 2d notification center · **2e register sheet** · **the passcode lock** · 3b contact
 > categories · 3c group conversation · **3d new group** · 4a peer profile tags ·
-> 4c message actions/reactions · 4d voice-note recording · 4e media viewer ·
-> 4g guest restore. The two blocked data models from `DATA-CONTRACTS.md` are both built
+> **2h admin console** · **2i group info** · 4c message actions/reactions ·
+> 4d voice-note recording · 4e media viewer · 4g guest restore · **4j video message**. The two blocked data models from `DATA-CONTRACTS.md` are both built
 > (`shared/contactTags.ts`, `shared/reactions.ts` + the `message_reactions` table).
 >
 > **A NUMBERING COLLISION, named rather than left to be tripped over:** the board's own
@@ -18,8 +18,9 @@ Paste this into Claude Design. It lists only what is **not yet built to its own 
 > table below, which follows the README, still lists it under 2g. Voicemail is the one
 > genuinely outstanding.
 >
-> Still outstanding: **voicemail** · **2h** admin console · **2i** group info ·
-> **4j** video message · plus the 5a–5h state frames.
+> Still outstanding: **voicemail** · plus the 5a–5h state frames (5a party lines,
+> 5b rejoin-live + knock, 5c call-quality readout, 5d sign-in switcher — 5e and 5h are
+> already built). All five are in flight.
 
 - **Built to the frame (12):** 1a Dialer · 1b History · 1c Messages · 1d Conversation · 1e Contacts · 1f Profile · 1g Incoming call · 1i Desktop dialer · 2a Group call · 2b Voice call · 3a Matrix calling · 4f Share my number
 - **Partial (1):** 1h In-call video

@@ -97,10 +97,46 @@ const CATEGORY_META: Record<Category, { label: string; icon: typeof Crown; tint:
 };
 const CATEGORY_ORDER: Category[] = ["vip", "family", "friend", "team"];
 
-function relativeTime(d: Date | string | null): string {
-  if (!d) return "never";
-  const date = typeof d === "string" ? new Date(d) : d;
-  const diff = (Date.now() - date.getTime()) / 1000;
+/**
+ * "last seen …" for one row.
+ *
+ * TOTAL BY CONSTRUCTION, and that is not defensiveness for its own sake — it is a
+ * blast-radius fix with a demonstrated failure mode. The previous shape took
+ * `Date | string | null` and called `.getTime()` on whatever was not a string, so a
+ * value of any OTHER type threw a TypeError out of the render — and because this is
+ * called from a row inside the list, React unwound the whole page and the error
+ * boundary replaced the entire Contacts screen with "An unexpected error occurred."
+ * Measured, not theorised: driving the real bundle with one numeric `lastSeenAt`
+ * rendered ZERO contacts and that message.
+ *
+ * Today the server sends a Drizzle `timestamp`, i.e. a real Date that superjson
+ * revives as a Date, so the throwing path is not reachable through the ordinary
+ * wire — this is about the cost when it is wrong, not a claim that it is. One row
+ * losing its "last seen" line is a cosmetic degradation; the entire address book
+ * disappearing is the failure the owner would report as "the contact is not
+ * showing". A whole screen must not rest on one field's runtime type.
+ *
+ * It also accepts a NUMBER now, because that is what the sibling formatter in
+ * `shared/profileFields.ts` takes (`formatLastSeen(lastSeenMs)`) — two functions
+ * answering one question with different input types is how a future caller passes
+ * the wrong one, and that formatter is likewise total (`!Number.isFinite` → "").
+ */
+export function relativeTime(d: Date | string | number | null | undefined): string {
+  if (d === null || d === undefined || d === "") return "never";
+  // Only three shapes can be a time. Everything else is coerced by `new Date()` into
+  // something that looks plausible and is not: `new Date(true)` is one millisecond
+  // after the epoch, so a boolean would render as "1/1/1970" — no crash, and still a
+  // date printed about somebody nobody has a time for. Caught by this file's own test.
+  if (!(d instanceof Date) && typeof d !== "string" && typeof d !== "number") return "never";
+  const date = d instanceof Date ? d : new Date(d);
+  const ms = date.getTime();
+  // An unparseable date yields NaN, which would make every comparison below false and
+  // fall through to `toLocaleDateString()` → the literal text "Invalid Date" in the row.
+  // `<= 0` matches `formatLastSeen`'s own rule in `shared/profileFields.ts`, which is
+  // the whole point of touching this: 0 is what a null column becomes on plenty of
+  // paths, and the two formatters disagreeing about it is the divergence being closed.
+  if (!Number.isFinite(ms) || ms <= 0) return "never";
+  const diff = (Date.now() - ms) / 1000;
   if (diff < 60) return "just now";
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
