@@ -11278,6 +11278,94 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.27 — the app was painting its own background over its own content (2026-07-30)
+
+The owner, twice: *"there's a problem with the profile section when you click at
+disappear"*, then the detail that solved it — *"when you open the profile page its shows
+all areas for 2 seconds than it disapper"*.
+
+**THE TIMING IS WHAT IDENTIFIED IT.** A page that renders FULLY and is then removed is not
+an empty state and not a missing gate. Driven in a real browser at 390px against the built
+bundle: **at 400ms the element at the page centre was a real Profile row; by ~900ms it was
+the background CANVAS** — opaque, and hiding it changed the painted pixel. The DOM was
+intact throughout (90+ buttons, all the text). Nothing threw: the error boundary is loud,
+a full-screen "An unexpected error occurred." with a stack trace, so a throw would not
+have been described as things disappearing. **The content was still there, painted
+underneath.**
+
+**TWO PRE-EXISTING BUGS COMPOUNDED, and each is separately sufficient.**
+
+**(1) A SECOND, NESTED `ThemeProvider` — the root cause.** `main.tsx` wraps `<App />` in
+the real one (`defaultTheme="dark" switchable`); `App.tsx` then nested ANOTHER that was
+**not** `switchable`, so it ignored localStorage and its `theme` was permanently `"dark"`.
+Everything below it — including `AppShell` — read that one, so
+`liveBackground = theme === "dark"` was **TRUE for a LIGHT-theme user**: the near-black
+live canvas mounted and the shell was given `bg-transparent`. **And both providers ran the
+effect that toggles `.dark` on `<html>`**, with React flushing child effects before parent
+ones — so the inner added the class and the outer removed it. **CSS said LIGHT while JS
+said DARK.** Measured: `html="relay-v2 relay-app-lock"` with no `.dark`, a canvas mounted,
+and the shell computing to `rgba(0,0,0,0)`. This is precisely the divergence v2.106.0's own
+comment warned about — *"two theme reads is how you get an opaque shell over a running
+canvas"* — except the two reads **agreed with each other** and were both wrong, because the
+context they read was not the user's. A single-derivation rule cannot save you from a
+provider that lies.
+
+**(2) THE CANVAS PAINTS ABOVE UNPOSITIONED CONTENT.** It is `position: fixed; z-index: 0`,
+and per CSS painting order a POSITIONED element with `z-index: 0` paints in the
+positioned-descendants step — **after** in-flow, non-positioned content. So any page whose
+content sits inside no positioned ancestor is painted UNDER it. Measured per tab:
+**Profile, Messages and Contacts were covered**; **Dialer survived only because its keypad
+happens to live inside `relative` wrappers**. Three of the five tabs were broken by
+accident and two worked by accident — which is why it looked like a Profile bug.
+
+**AND THAT IS ALMOST CERTAINLY THE REAL CAUSE OF "THE CONTACT IS NOT SHOWING" TOO**, which
+is worth saying plainly rather than leaving v2.106.25 looking like the whole answer:
+Contacts was one of the three covered tabs. The missing error state that release added is a
+genuine and separate defect — a failed read still must not read as an empty address book —
+but it was not what the owner was looking at.
+
+**THE FIXES ARE ONE ROOT-CAUSE REMOVAL AND ONE CLASS FIX.** The redundant provider is
+deleted, so `useTheme()` returns the user's actual choice everywhere and the `.dark` class
+has exactly one writer. And the shell's content wrapper plus the desktop sidebar are lifted
+to `relative z-10`, **at the shell rather than per page**, so a page added later cannot
+inherit the bug — a per-page fix would have repeated the accident that made two tabs work.
+
+**RE-MEASURED AFTER THE FIX, and both halves show:** in **LIGHT** theme there is now **no
+canvas at all** (correct — the redesign's background is a dark-theme surface), and in
+**DARK** the canvas is present and visible as the intended background while **real content
+is the topmost element on all five tabs**, each inside a `div[pos=relative z=10]`.
+
+**THE RELATIONSHIP IS PINNED, NOT THE NUMBERS.** The test reads the canvas's declared
+z-index and the content's and asserts content **>** canvas — freezing either literal alone
+would let a change to the other side silently reopen it.
+
+- [x] `App.tsx`'s nested `ThemeProvider` removed; a sweep asserts exactly ONE mount in the
+      whole client and that it is the `switchable` one
+- [x] The scroll container and the desktop sidebar lifted above the canvas, at the shell
+- [x] `client/src/app/backgroundOverContent.test.ts` (8); **8 of 8 tripwires verified by
+      MUTATION**, one after a fix — *"the canvas is still fixed"* was satisfied by the
+      SECOND fixed layer (a vignette sits over the canvas), so making the canvas
+      `absolute` survived; now counted, and it bites
+- [x] **A DISCIPLINE NOTE ON MY OWN WORK**: my first pass ran `prettier` over `App.tsx`,
+      which reformatted 88 lines for a change needing a handful and broke an unrelated pin
+      by rewrapping a ternary. Reverted and redone by de-indenting exactly the block that
+      lost a level — the diff is now the change plus its comment
+- [x] **TWO OF MY OWN ASSERTIONS WERE WRONG ABOUT THE CODE**, each caught by failing on
+      correct source: `{children}` occurs TWICE (`AppShell` passes it to `Inner` before
+      `Inner` renders it) so an `indexOf` ordering check read the wrong one; and counting
+      `theme === "dark"` file-wide reads 3, because the sidebar's own Dark/Light toggle
+      legitimately reads it for `aria-pressed` and its label — **a mistake CLAUDE.md
+      already records being made once before in this same file**, so it is now asserted as
+      one DERIVATION rather than one mention
+- [x] **ONE PRE-EXISTING PIN REWRITTEN TO THE PROPERTY**: `appShellNav.test.ts` froze the
+      scroll container's exact class string, so a `relative z-10` prefix broke it while
+      saying nothing about what it guards (no clearance padding; a flex column so pages
+      fill it with `flex-1`) — now asserted on the class list whatever else joins it
+- [x] **NOT VERIFIED ON THE OWNER'S PHONE, said plainly**: measured headlessly at 390px in
+      both themes across all five tabs, before and after, against the real built bundle —
+      but nobody has opened Profile on their handset
+- [x] No schema change, no new dependency, no new env var. 4570 tests
+
 ## v2.106.26 — two defects I shipped in v2.106.23, found by reviewing my own work (2026-07-30)
 
 An independent adversarial review of the 2g voicemail patch — the one that shipped three

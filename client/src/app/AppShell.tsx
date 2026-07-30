@@ -522,7 +522,10 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
       {/* ── desktop / tablet sidebar ───────────────────────────── */}
       <aside
         className={
-          "relay-appshell-chrome hidden md:flex md:flex-col md:w-64 lg:w-72 shrink-0 " +
+          // `relative z-10` for the same reason as the scroll container below: this is
+          // unpositioned content, and the fixed background canvas at `z-index: 0`
+          // paints above unpositioned content.
+          "relay-appshell-chrome relative z-10 hidden md:flex md:flex-col md:w-64 lg:w-72 shrink-0 " +
           "border-r border-border/70 bg-sidebar/65 " +
           "supports-[backdrop-filter]:bg-sidebar/45 supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150"
         }
@@ -910,7 +913,20 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
             whereas height:100% against a flex-derived (non-explicit) height
             silently falls back to content height in Chrome and collapses
             short pages upward. */}
-        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">
+        {/* `relative z-10` PUTS CONTENT ABOVE THE BACKGROUND CANVAS, and that is a
+            correctness rule rather than styling. `RelayBackground`'s canvas is
+            `position: fixed; z-index: 0`, and per CSS painting order a POSITIONED
+            element with `z-index: 0` paints in the positioned-descendants step —
+            AFTER in-flow, non-positioned content. So any page whose content is not
+            inside a positioned ancestor is painted UNDER an opaque near-black canvas.
+            Measured in a real browser at 390px: Profile, Messages and Contacts were
+            covered (the canvas was the topmost element at the page centre, and hiding
+            it changed the painted pixel), while Dialer survived only because its keypad
+            happens to sit inside `relative` wrappers — i.e. three of five tabs were
+            broken by accident and two worked by accident.
+            Fixed HERE rather than per page, so a page added later cannot inherit the
+            bug: one wrapper above `{children}` settles it for every screen. */}
+        <div className="relative z-10 flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">
           {/* One-time "get call alerts" opt-in (Web Push) + iOS install tip.
               Renders nothing once granted / denied / dismissed. */}
           <PushBanner />

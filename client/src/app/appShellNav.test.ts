@@ -32,7 +32,18 @@ describe("AppShell — docked in-flow bottom nav (no gap above, nothing hidden u
     // v2.83: the scroll container also hosts the one-time PushBanner ABOVE
     // {children} (v2.93.2 adds the CallHealthBanner beside it); the layout
     // contract (flex column, no clearance padding) is unchanged.
-    expect(SHELL).toMatch(/className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">/);
+    /* REWRITTEN TO THE PROPERTY (v2.106.27). This froze the container's EXACT class
+       string, so it broke the moment `relative z-10` was prefixed — a change that has
+       nothing to do with what this case is about. The properties are: no clearance
+       padding (the tab bar is an in-flow sibling), and it is a flex COLUMN so a page can
+       fill it with `flex-1` (height:100% does not resolve against a flex-derived
+       height). Both are asserted on the container's own class list, whatever else joins
+       it; the z-index relationship has its own test in backgroundOverContent.test.ts. */
+    const cls = SHELL.match(/className="([^"]*\bflex-1 min-h-0 overflow-y-auto[^"]*)"/);
+    expect(cls, "the scroll container must exist").toBeTruthy();
+    expect(cls![1]).toMatch(/\boverscroll-contain\b/);
+    expect(cls![1]).toMatch(/\bflex flex-col\b/);
+    expect(cls![1]).not.toMatch(/\bp[bty]?-\d/);
     expect(SHELL).toMatch(/<PushBanner \/>\s*\n(?:\s*(?:\{\/\*[\s\S]*?\*\/\}|<CallHealthBanner \/>)\s*\n)*\s*\{children\}/);
     // MEASURED height (NOT a bare CSS viewport unit): dvh (v2.76) reported
     // the toolbar-collapsed height on a real iPhone while the scroll lock
