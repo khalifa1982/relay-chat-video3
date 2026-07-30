@@ -52,7 +52,7 @@ function AlertDialogContent({
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
         className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg",
+          "rsheet bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg",
           className
         )}
         {...props}
@@ -116,13 +116,39 @@ function AlertDialogDescription({
   );
 }
 
+/**
+ * The confirm button of an alert dialog.
+ *
+ * `destructive` IS THE POINT OF THIS COMPONENT HAVING A PROP AT ALL. The default
+ * is `bg-primary`, and v2.106.4 repointed `--primary` at the cycling accent — so
+ * every confirm button in the app now wears the same colour, whether it is saving
+ * a name or destroying a guest's only copy of their number. That was true before
+ * the accent too (primary was a dark cyan, equally not-red), so this is a
+ * pre-existing flatness rather than something the redesign introduced; what the
+ * accent changed is that the most dangerous button in the app got BRIGHTER.
+ *
+ * The colour is therefore decided by the ACTION rather than by the component's
+ * default, and the call site says which it is by name. A per-site class string
+ * would have worked and is the thing to avoid: the rule would then live in seven
+ * places and the eighth would forget it.
+ */
 function AlertDialogAction({
   className,
+  destructive,
   ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Action>) {
+}: React.ComponentProps<typeof AlertDialogPrimitive.Action> & {
+  /** Set when confirming DESTROYS something the same gesture cannot bring back. */
+  destructive?: boolean;
+}) {
   return (
     <AlertDialogPrimitive.Action
-      className={cn(buttonVariants(), className)}
+      // Exposed on the element so the intent is visible in devtools and testable
+      // against rendered markup rather than against a class string.
+      data-destructive={destructive ? "" : undefined}
+      className={cn(
+        buttonVariants({ variant: destructive ? "destructive" : "default" }),
+        className
+      )}
       {...props}
     />
   );

@@ -50,8 +50,11 @@ export function PushBanner() {
     return (
       <div className="mx-3 mt-2 flex items-start gap-2.5 rounded-2xl border border-sky-400/25 bg-sky-500/10 px-3.5 py-3 text-[13px] leading-snug text-sky-100/90 backdrop-blur">
         <Share className="mt-0.5 size-4 shrink-0 text-sky-300" />
+        {/* Sky rather than the accent, deliberately: this one carries NO action —
+            the install happens in Safari's own menu, which no button here can open.
+            Painting it in the accent would promise a tap that does not exist. */}
         <div className="min-w-0 flex-1">
-          <span className="font-semibold text-sky-200">Get call alerts on this iPhone:</span>{" "}
+          <span className="font-semibold text-sky-200">Install RELAY (iOS):</span>{" "}
           tap Safari&apos;s Share button → <span className="font-medium">Add to Home Screen</span>, then open
           RELAY from the icon. iOS only rings installed web apps.
         </div>
@@ -64,12 +67,30 @@ export function PushBanner() {
 
   if (!pushSupported() || !pubKey.data?.key) return null;
 
+  /* Board 4k: "Get call alerts / Ring even when this tab is closed / Enable".
+     ---------------------------------------------------------------------------
+     THE COLOUR IS THE CHANGE, and it is a vocabulary fix rather than a restyle.
+     This banner was emerald end to end — but green in this app means ONLINE: it is
+     what every presence LED is painted with, and it is why v2.99.86 moved Do Not
+     Disturb off green and v2.106.9 moved the speaking tile off it. A green chip
+     that means "enable notifications" is a third meaning for the one colour that
+     has to keep carrying exactly one. The accent is what "the thing to tap" means
+     everywhere else in the app, so the banner takes the accent and green is left
+     alone. */
   return (
-    <div className="mx-3 mt-2 flex items-center gap-2.5 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2.5 text-[13px] text-emerald-100/90 backdrop-blur">
-      <BellRing className="size-4 shrink-0 text-emerald-300" />
+    <div
+      className="mx-3 mt-2 flex items-center gap-2.5 rounded-2xl px-3.5 py-2.5 text-[13px] backdrop-blur"
+      style={{
+        background: "rgba(var(--rb-rgb), 0.10)",
+        border: "1px solid rgba(var(--rb-rgb), 0.28)",
+      }}
+    >
+      <BellRing className="size-4 shrink-0" style={{ color: "var(--rb)" }} />
       <div className="min-w-0 flex-1">
-        <span className="font-semibold text-emerald-200">Never miss a call</span> — get rung even when RELAY
-        is closed.
+        <span className="font-semibold" style={{ color: "var(--rb)" }}>
+          Get call alerts
+        </span>{" "}
+        — ring even when this tab is closed.
       </div>
       <button
         type="button"
@@ -84,11 +105,16 @@ export function PushBanner() {
             if (p !== "default") dismiss();
           });
         }}
-        className="shrink-0 rounded-full bg-emerald-500/90 px-3.5 py-1.5 text-xs font-semibold text-emerald-950 hover:bg-emerald-400"
+        className="rcta shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold"
       >
         Enable
       </button>
-      <button type="button" onClick={dismiss} aria-label="Dismiss" className="rounded-full p-1 text-emerald-200/70 hover:bg-white/10">
+      <button
+        type="button"
+        onClick={dismiss}
+        aria-label="Dismiss"
+        className="rounded-full p-1 text-foreground/60 hover:bg-white/10"
+      >
         <X className="size-4" />
       </button>
     </div>

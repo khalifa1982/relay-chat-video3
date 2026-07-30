@@ -22,6 +22,7 @@ import { RoleBadge, roleFromFlags, roleLabel } from "@/app/VerifiedBadge";
 import { openPeerProfile } from "@/app/PeerOverlays";
 import { playDtmf, disposeDtmf } from "@/lib/dtmf";
 import { useIdentity } from "@/app/useIdentity";
+import { MyNumberCard } from "@/app/ShareNumber";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { GroupCallScreen } from "./GroupCallScreen";
@@ -554,6 +555,17 @@ export default function DialerPage() {
               gap: "clamp(8px, 2.2vw, 18px)",
             }}
           >
+            {/* Board 1a: the "MY NUMBER" glass card with copy / QR / share, above the
+                readout. It renders nothing without a number (a guest mid-mint has none, and
+                a card headed MY NUMBER over an em-dash asserts something false), and it
+                mounts the SHARED sheet extracted out of Profile rather than a second QR
+                renderer — see client/src/app/ShareNumber.tsx.
+
+                It is `shrink-0` because the card is a no-scroll flex column: an auto-height
+                row here would be the first thing squeezed on a short phone, which is how
+                v2.99.36's save-pill came to be clipped. */}
+            <MyNumberCard number={me?.number} className="rmynum-dialer shrink-0" />
+
             {/* Number area: ghost or typed */}
             <div className="text-center select-none">
               <div
@@ -731,10 +743,25 @@ export default function DialerPage() {
               className="grid grid-cols-3 mx-auto w-full"
               style={{
                 // Cap so we never look comically large on desktop.
-                maxWidth: "min(100%, 360px)",
+                /* Board 1a: "3x4 circular glass keypad (aspect 1) ... max-width 310px
+                   centered". MEASURED, and the first cut got both halves wrong:
+
+                   1. `gridAutoRows` set the row height INDEPENDENTLY of the column width,
+                      so at 390px the cells came out 99x80 and every "circle" was an oval
+                      by 18px. Rows are `auto` now and each KEY is `aspect-square`, which
+                      makes the cell square by construction at any width — that is what
+                      the board's "aspect 1" actually requires.
+
+                   2. A 310px pad is ~413px tall, and with the new MY NUMBER row above it
+                      the card overflowed a 667px phone by 121px. So the cap is also a
+                      function of the viewport HEIGHT — the third `min()` term — with a
+                      210px FLOOR so a very short phone gets a scroll (the card's existing
+                      `overflow-y-auto` safety valve) rather than 29px keys nobody can hit.
+                      The 422px subtrahend is the card's other rows measured at 390px:
+                      top bar 48 + tab bar 47 + card padding 44 + MY NUMBER 69 + readout
+                      and preview ~80 + action row ~80 + inter-row gaps ~54. */
+                maxWidth: "min(100%, 310px, max(190px, calc((100dvh - 422px) * 0.75)))",
                 gap: "clamp(6px, 1.8vw, 12px)",
-                // Keep each row a sensible size relative to the available height.
-                gridAutoRows: "clamp(48px, 9.5vh, 72px)",
               }}
             >
               {KEYS.map((k) =>
@@ -753,33 +780,36 @@ export default function DialerPage() {
                   type="button"
                   onClick={() => tap(k.d)}
                   className="
-                    relay-key relative rounded-[22px]
-                    bg-secondary/70 dark:bg-secondary/40
-                    backdrop-blur-md
+                    relay-key rkey relative rounded-full aspect-square
                     text-secondary-foreground
-                    border border-border/40
-                    flex items-center justify-center
+                    flex flex-col items-center justify-center
                     select-none
                     transition-[transform,background-color] duration-150
                     active:scale-[0.94]
-                    hover:bg-secondary/90 dark:hover:bg-secondary/60
                   "
-                  style={{
-                    transitionTimingFunction: "var(--ease-out)",
-                    // Prototype's raised-glass key: a hairline top-light + soft
-                    // drop for depth. Theme-safe (white inset reads on both).
-                    boxShadow:
-                      "inset 0 1px 0 rgba(255,255,255,.14), 0 4px 12px rgba(0,0,0,.22)",
-                  }}
+                  style={{ transitionTimingFunction: "var(--ease-out)" }}
                 >
-                  {/* RELAY numbers are 6-digit numeric — the prototype drops the
-                      T9 letter sublabels for a cleaner, number-first keypad. */}
+                  {/* CIRCULAR, per the design board (1a: "3x4 circular glass keypad,
+                      aspect 1, letters under digits"). The squircle it replaces and the
+                      missing sublabels both came from the OLD prototype — `KEYS` has
+                      carried `sub` unused ever since. The letters are decoration on a
+                      numeric-only field, so they are aria-hidden: a screen reader
+                      announcing "two A B C" for a digit key is noise. */}
                   <span
                     className="font-mono font-medium leading-none"
-                    style={{ fontSize: "clamp(1.3rem, 5vw, 1.85rem)" }}
+                    style={{ fontSize: "clamp(1.25rem, 4.8vw, 1.75rem)" }}
                   >
                     {k.d}
                   </span>
+                  {k.sub.trim() && (
+                    <span
+                      aria-hidden="true"
+                      className="rkey-sub font-mono leading-none text-muted-foreground"
+                      style={{ fontSize: "clamp(7px, 1.7vw, 9px)", letterSpacing: ".14em", marginTop: 2 }}
+                    >
+                      {k.sub}
+                    </span>
+                  )}
                 </button>
                 )
               )}
@@ -801,7 +831,7 @@ export default function DialerPage() {
                 onClick={backspace}
                 disabled={dialed.length === 0}
                 className="
-                  relay-key relative rounded-[22px] overflow-hidden
+                  relay-key relative rounded-full aspect-square overflow-hidden
                   flex items-center justify-center select-none text-white
                   transition-[transform,opacity] duration-150
                   active:scale-[0.94] disabled:opacity-30 disabled:active:scale-100
@@ -822,7 +852,10 @@ export default function DialerPage() {
                 {dialed.length > 0 && (
                   <span
                     aria-hidden="true"
-                    className="absolute inset-0 rounded-[22px] pointer-events-none relay-gloss-pulse"
+                    /* Follows the button's own radius: the key became a CIRCLE this
+                       release and a squircle overlay inside it shows its corners through
+                       the fill. Caught by this release's own test. */
+                    className="absolute inset-0 rounded-full pointer-events-none relay-gloss-pulse"
                     style={{ boxShadow: "0 0 16px 3px rgba(220,38,38,.6)" }}
                   />
                 )}
@@ -846,7 +879,7 @@ export default function DialerPage() {
               className="relative mx-auto w-full"
               style={{ maxWidth: "min(100%, 380px)" }}
             >
-              <div className="flex items-start justify-center gap-7">
+              <div className="flex items-start justify-center gap-6">
                 {/* Voice call (blue) — starts with the camera off (audio-only). */}
                 <div className="flex flex-col items-center gap-1.5">
                   <button
@@ -854,17 +887,18 @@ export default function DialerPage() {
                     disabled={!callable}
                     onClick={() => startCallNow({ voice: true })}
                     className="
-                      rounded-full text-white grid place-items-center
+                      rcta rounded-full grid place-items-center
                       disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none
                       active:scale-[0.94] transition-transform duration-150
                     "
+                    /* Board 1a: "Video 50px / Call 66px solid accent / Group 50px" — Call
+                       is the PRIMARY and wears the cycling accent, which is what makes the
+                       hierarchy read at a glance. `.rcta` carries the board's on-accent
+                       `#04211a` text, not white: white fails on the palette's yellow and
+                       lime entries. */
                     style={{
-                      width: "clamp(56px, 14vw, 66px)",
-                      height: "clamp(56px, 14vw, 66px)",
-                      // Prototype convention: voice/call = green (primary action).
-                      background: "linear-gradient(135deg,#22c55e,#15803d)",
-                      boxShadow:
-                        "0 10px 26px -8px color-mix(in oklab, #22c55e 65%, transparent), inset 0 2px 0 rgba(255,255,255,.3)",
+                      width: "clamp(58px, 15vw, 66px)",
+                      height: "clamp(58px, 15vw, 66px)",
                       transitionTimingFunction: "var(--ease-out)",
                     }}
                     aria-label={previewIsLine ? "Join the party line" : "Voice call"}
@@ -883,23 +917,23 @@ export default function DialerPage() {
                     disabled={!callable}
                     onClick={() => startCallNow()}
                     className="
-                      rounded-full text-white grid place-items-center
+                      rkey rounded-full grid place-items-center
                       disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none
                       active:scale-[0.94] transition-transform duration-150
                     "
+                    /* SECONDARY at the board's 50px: a glass circle whose GLYPH keeps the
+                       app's own sky-for-video convention, so the colour language the owner
+                       established survives while Call takes the accent. */
                     style={{
-                      width: "clamp(56px, 14vw, 66px)",
-                      height: "clamp(56px, 14vw, 66px)",
-                      // Prototype convention: video = blue/sky.
-                      background: "linear-gradient(135deg,#38bdf8,#0369a1)",
-                      boxShadow:
-                        "0 10px 26px -8px color-mix(in oklab, #38bdf8 60%, transparent), inset 0 2px 0 rgba(255,255,255,.3)",
+                      width: "clamp(46px, 12.5vw, 50px)",
+                      height: "clamp(46px, 12.5vw, 50px)",
+                      color: "#7dd3fc",
                       transitionTimingFunction: "var(--ease-out)",
                     }}
                     aria-label="Video call"
                     title="Video call"
                   >
-                    <Video className="size-6" strokeWidth={2.2} />
+                    <Video className="size-5" strokeWidth={2.2} />
                   </button>
                   <span className="text-xs font-medium text-muted-foreground">Video Call</span>
                 </div>
@@ -910,23 +944,21 @@ export default function DialerPage() {
                     disabled={nonexistent}
                     onClick={() => setShowGroup(true)}
                     className="
-                      rounded-full text-white grid place-items-center
+                      rkey rounded-full grid place-items-center
                       disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none
                       active:scale-[0.94] transition-transform duration-150
                     "
+                    /* SECONDARY, 50px, violet glyph — same reasoning as Video. */
                     style={{
-                      width: "clamp(56px, 14vw, 66px)",
-                      height: "clamp(56px, 14vw, 66px)",
-                      // Prototype convention: group/contacts = violet.
-                      background: "linear-gradient(135deg,#a78bfa,#7c3aed)",
-                      boxShadow:
-                        "0 10px 26px -8px color-mix(in oklab, #7c3aed 60%, transparent), inset 0 2px 0 rgba(255,255,255,.3)",
+                      width: "clamp(46px, 12.5vw, 50px)",
+                      height: "clamp(46px, 12.5vw, 50px)",
+                      color: "#c4b5fd",
                       transitionTimingFunction: "var(--ease-out)",
                     }}
                     aria-label="Group call"
                     title={nonexistent ? "That number isn't on RELAY" : "Group call — ring up to 10 people into one room"}
                   >
-                    <Users className="size-6" strokeWidth={2.2} />
+                    <Users className="size-5" strokeWidth={2.2} />
                   </button>
                   <span className="text-xs font-medium text-muted-foreground">Group Call</span>
                 </div>

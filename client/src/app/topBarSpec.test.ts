@@ -384,7 +384,16 @@ describe("the dialer erase key", () => {
     // at 320px with no overlap of any key or call button.
     expect(codeOnly(DIALER)).not.toMatch(/absolute right-0 top-0 size-12/);
     expect(codeOnly(DIALER)).not.toMatch(/absolute right-0 top-1\.5 size-10/);
-    expect(DIALER).toMatch(/relay-key relative rounded-\[22px\] overflow-hidden/);
+    /* REWRITTEN TO THE PROPERTY (v2.106.3): this froze the erase key's exact class string,
+       including the `rounded-[22px]` squircle that the design board's circular keypad
+       legitimately replaces. The property is that the key IS a keypad cell — it carries
+       `relay-key` like its eleven siblings and is not absolutely positioned — which the
+       two `not.toMatch`es above already half-express. */
+    expect(DIALER).toMatch(/relay-key relative rounded-\S+ aspect-square overflow-hidden/);
+    // …and it is a real grid cell, not a floater laid over one.
+    const at = DIALER.indexOf("aria-label=\"Erase last digit\"");
+    expect(at).toBeGreaterThan(0);
+    expect(DIALER.slice(at - 1200, at)).not.toMatch(/position: "absolute"/);
     // `#` gave up its cell — on a 6-digit numeric pad it was pure decoration, the
     // same trade v2.99.36 made on the landing pad.
     expect(codeOnly(DIALER)).not.toMatch(/\{ d: "#", sub: "" \}/);

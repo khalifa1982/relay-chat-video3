@@ -188,15 +188,24 @@ export function PeerAvatar({
     </span>
   );
 
-  // Status ring: gradient when there's an UNSEEN status, subtle when seen.
+  /* Status ring: bright when there's an UNSEEN status, subtle when seen.
+   *
+   * Board 1c/1e/1f: "unseen = accent ring, seen = grey". The bright state is now
+   * `.rstoryring`, whose DARK form is the cycling accent — one class, so the ring
+   * around a thread row, a contact, a History disc, the chat header and the story
+   * strip can never disagree, and the theme is handled in CSS rather than by a
+   * runtime read here (the light theme keeps the measured three-hue gradient,
+   * because the accent palette is built against a near-black background).
+   *
+   * The board's "flashing" is deliberately NOT taken: this ring is drawn once per
+   * ROW, so animating it means one animation per row on the app's densest scrolling
+   * list — the cost class v2.99.84 measured and removed. The accent is the part that
+   * carries the design; the flash is decoration the board itself shows at rest. */
   const ring = st?.hasAny ? (
     <span
       style={{ padding: 2.5 }}
       className={
-        `inline-grid place-items-center ${rounded} ` +
-        (st.hasUnseen
-          ? "bg-gradient-to-tr from-[#06d6a0] via-[#0ea5e9] to-[#8b5cf6]"
-          : "bg-border")
+        `inline-grid place-items-center ${rounded} ` + (st.hasUnseen ? "rstoryring" : "bg-border")
       }
     >
       <span className={`${rounded} bg-background p-[1.5px] grid place-items-center`}>{disc}</span>

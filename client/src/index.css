@@ -189,15 +189,25 @@
   --secondary-foreground: oklch(0.3 0.012 220);
   --muted: oklch(0.95 0.005 220);
   --muted-foreground: oklch(0.5 0.015 220);
-  --accent: oklch(0.58 0.16 192);
+  /* AA FIX (v2.106.10), and it is a PRE-EXISTING defect found by measuring the sheet
+     material rather than something the redesign introduced — the dark theme's tokens were
+     repointed in v2.106.4 and these were left exactly as they shipped. All three of these
+     fills carry NEAR-WHITE text, and all three failed AA for normal text on the app's
+     DEFAULT theme: primary 4.00:1, accent 3.58:1, destructive 4.30:1. That is every primary
+     button, every accent surface and every destructive confirmation in light mode.
+     Each is the LIGHTEST value clearing 4.5:1 with a real margin (>=4.7), so the hue moves
+     as little as possible from what shipped rather than sitting one rounding error from
+     failing again: primary 4.73:1, accent 4.85:1, destructive 4.87:1.
+     `--ring` follows `--primary`, or a focus ring stops matching the control it rings. */
+  --accent: oklch(0.5 0.16 192);
   --accent-foreground: oklch(0.99 0 0);
-  --primary: oklch(0.54 0.18 192);
+  --primary: oklch(0.5 0.18 192);
   --primary-foreground: oklch(0.99 0 0);
-  --destructive: oklch(0.6 0.22 27);
+  --destructive: oklch(0.57 0.22 27);
   --destructive-foreground: oklch(0.99 0 0);
   --border: oklch(0.18 0.012 220 / 12%);
   --input: oklch(0.18 0.012 220 / 16%);
-  --ring: oklch(0.54 0.18 192);
+  --ring: oklch(0.5 0.18 192);
   --sidebar: oklch(0.99 0.005 220);
   --sidebar-foreground: oklch(0.18 0.012 220);
   --sidebar-accent: oklch(0.58 0.16 192);
@@ -251,6 +261,36 @@
   --sidebar-accent-foreground: oklch(0.12 0.008 245);
   --sidebar-border: oklch(1 0 0 / 6%);
   --sidebar-ring: oklch(0.76 0.14 192);
+
+  /* ── THE CYCLING ACCENT, APPLIED APP-WIDE (design_handoff_relay_app) ──────────
+     The handoff's last interaction rule is "all accent UI follows `--rb` vars
+     automatically", and the honest way to satisfy that is HERE rather than by editing
+     several hundred class strings across six screens: `--primary` is already what every
+     active state, tick, focus ring, filter chip, section letter and CTA in this app
+     resolves to, so pointing it at the accent converts all of them at once — and, more
+     importantly, converts the ones added LATER for free. Phase 1 published the variables
+     and then nothing read them; this is what makes them load-bearing.
+
+     `--primary-foreground` MUST move with it. The old primary was a dark cyan carrying
+     near-white text; the accent is a BRIGHT hue, so white-on-accent is the unreadable
+     direction and the board's own on-accent value is a near-black green (`#04211a`),
+     chosen because it stays legible across all twelve hues where plain white fails on the
+     yellow and lime entries. Changing one without the other is how you get an accent
+     button nobody can read.
+
+     DARK ONLY, and deliberately: `.dark.relay-v2` is the selector, so the light theme
+     keeps its measured tokens. The palette is built against a near-black background — its
+     default teal computes to about 1.7:1 on a light card, which fails AA for anything
+     small (the same measurement that forced `--relay-green-text` to exist in v2.99.86).
+
+     The `--ring` follows too, because a focus ring in the old cyan beside an accent
+     control reads as two accents rather than one. */
+  --primary: var(--rb);
+  --primary-foreground: #04211a;
+  --ring: var(--rb);
+  --sidebar-primary: var(--rb);
+  --sidebar-primary-foreground: #04211a;
+  --sidebar-ring: var(--rb);
   --relay-online: oklch(0.76 0.16 145);
   --relay-offline: oklch(0.54 0.008 250);
   --relay-danger: oklch(0.62 0.22 28);
@@ -731,8 +771,19 @@ body.relay-app-lock {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 /* Sheets and dialogs sit ABOVE the glass tier: nearly opaque, because they cover
-   content that must stop competing for attention, plus a real drop shadow. */
-.relay-v2 .rsheet {
+   content that must stop competing for attention, plus a real drop shadow.
+   ---------------------------------------------------------------------------
+   DARK ONLY, and that scoping is what makes it safe to put on a SHARED primitive. This is
+   applied by `DialogContent` / `SheetContent` / `DrawerContent` / `AlertDialogContent`, so
+   it reaches every overlay in the app from four lines instead of seventeen components —
+   but the recipe is a near-black gradient, and in the light theme that would be a dark
+   sheet carrying near-black text. Declaring nothing in light lets the primitives' own
+   `bg-background` show through unchanged, so the light theme is byte-identical.
+   NEARLY opaque rather than translucent, deliberately: an overlay sits over content the
+   user is meant to stop reading, and a see-through sheet keeps that content competing. It
+   also means no `backdrop-filter` is needed here at all — the cheapest way to satisfy a
+   glass look is not to blur anything (the v2.99.84 rule). */
+.dark.relay-v2 .rsheet {
   background: linear-gradient(180deg, rgba(15, 21, 25, 0.96), rgba(8, 12, 15, 0.98));
   border: 1px solid rgba(255, 255, 255, 0.13);
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.14);
@@ -748,6 +799,100 @@ body.relay-app-lock {
 }
 .relay-v2 .rbar-flat {
   background: rgba(8, 12, 14, 0.92);
+}
+/* The bottom TAB BAR specifically. Deliberately not `.rbar`: the board gives this one
+   surface a vertical gradient that darkens toward the bottom edge (so the bar grounds
+   itself against the screen edge rather than floating) and a slightly deeper blur, which
+   `.rbar` — a flat translucent fill for the top bar and the composer — does not. Two
+   different recipes, so two names, rather than one name that is right in one place. */
+.relay-v2 .rtabbar {
+  background: linear-gradient(180deg, rgba(10, 14, 16, 0.55), rgba(5, 8, 10, 0.85));
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+/* The ACTIVE nav pill — bottom tab bar and the desktop sidebar's active row. A tint of
+   the cycling accent plus a soft glow of the same hue, with the glyph and label taking
+   the accent itself. Shared because the two navs must not drift into two ideas of what
+   "you are here" looks like. */
+.relay-v2 .rnav-pill {
+  background: rgba(var(--rb-rgb), 0.17);
+  box-shadow: 0 0 16px rgba(var(--rb-rgb), 0.25);
+  color: var(--rb);
+}
+/* A circular glass keypad key (board 1a/1i). The hover tint is the cycling accent, so the
+   pad breathes with the background exactly as the board specifies, and the press is a
+   transform — never a box-shadow, which would repaint the whole key every frame. */
+.relay-v2 .rkey {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+.relay-v2 .rkey:hover {
+  background: rgba(var(--rb-rgb), 0.12);
+  border-color: rgba(var(--rb-rgb), 0.35);
+}
+/* Light theme: the accent is built for a near-black card, so the tint would wash out and
+   the hairline would vanish. Keep the measured neutral surfaces there. */
+.relay-v2:not(.dark) .rkey {
+  background: var(--secondary);
+  border-color: var(--border);
+}
+.relay-v2:not(.dark) .rkey:hover {
+  background: color-mix(in oklab, var(--secondary) 80%, var(--foreground) 8%);
+}
+/* SHORT SCREENS. The Dialer card deliberately does not scroll, and the board designed its
+   frames at 812px tall. On a 568-640px phone the MY NUMBER card + readout + 4-row keypad +
+   action row genuinely do not all fit, so the DECORATION yields before the geometry does:
+   the T9 letters go (they label nothing on a numeric-only field) and the MY NUMBER card
+   tightens. Measured: this recovers ~55px of the 88px a 320x568 phone was over, and what
+   remains falls to the card's existing `overflow-y-auto` rather than shrinking the keys
+   below a tappable size. */
+@media (max-height: 700px) {
+  .relay-v2 .rkey-sub {
+    display: none;
+  }
+  .relay-v2 .rmynum {
+    padding-top: 0.4rem;
+    padding-bottom: 0.4rem;
+  }
+}
+/* Below ~660px of viewport the Dialer card genuinely cannot hold a MY NUMBER row, a
+   readout, a FOUR-ROW ROUND keypad and a three-button action row at a tappable key size —
+   measured: a 320x568 phone is 76px over even with the letters gone. So the CONVENIENCE
+   yields, not the function: the card disappears (your number is still in the top bar and on
+   Profile, and the QR/share lives there too) while the keypad keeps its size.
+   NOT chosen: shrinking the keys, which measured at 38px — below the 44px anyone can
+   reliably hit — or letting the card scroll, which it did not do before this release and
+   must not start doing because of it. */
+@media (max-height: 660px) {
+  .relay-v2 .rmynum-dialer {
+    display: none;
+  }
+}
+/* A count badge on the accent. Same fill as `.rcta` and the same on-accent text, but no
+   glow: a 16px badge with a 30px shadow reads as a smudge, and it sits ON a nav glyph
+   rather than on a dark card, so there is nothing for the glow to fall on. */
+.relay-v2 .rbadge-accent {
+  background: var(--rb);
+  color: #04211a;
+}
+/* The UNSEEN-story ring (board 1c/1e/1f: "unseen = accent ring, seen = grey").
+ *
+ * ONE class for every surface that draws it — thread rows, contacts, History discs, the
+ * chat header, the story strip — because a ring that means "unseen" in one place and
+ * something else in another is worse than having no ring at all.
+ *
+ * The DEFAULT is the measured three-hue gradient this app has drawn since v2.96, and the
+ * accent applies only in DARK: the palette is built against a near-black background and
+ * its lighter hues wash out to nothing as a 2.5px ring on a light card, which would make
+ * "unseen" invisible in exactly the theme this app still defaults to. Handling that here
+ * rather than with a theme read in the component is what keeps the two in step. */
+.relay-v2 .rstoryring {
+  background: linear-gradient(to top right, #06d6a0, #0ea5e9, #8b5cf6);
+}
+.dark.relay-v2 .rstoryring {
+  background: linear-gradient(140deg, var(--rb), rgba(var(--rb-rgb), 0.45));
 }
 /* Accent chip: a tinted fill that follows the cycling hue. */
 .relay-v2 .rchip-accent {

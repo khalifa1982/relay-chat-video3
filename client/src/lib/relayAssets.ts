@@ -363,8 +363,18 @@ export const RELAY_CSS = `
   --bg:#08090C; --bg2:#0E1014; --surface:#14171D; --surface2:#1B1F27;
   --border:rgba(255,255,255,0.08); --border2:rgba(255,255,255,0.14);
   --text:#EAEEF2; --muted:#8A93A2; --faint:#5A6271;
-  --accent:#3FE0C5; --accent2:#6EE7FF; --danger:#FF5C72; --warn:#FFB454;
-  --grad:linear-gradient(135deg,#3FE0C5,#6EE7FF);
+  /* THE CALL UI'S ACCENT IS THE APP'S CYCLING ACCENT (design_handoff_relay_app phase 3).
+     One declaration, and 59 var(--accent) sites follow it — including any added later,
+     which is what a per-rule sweep can never do. --rb / --rb-rgb are published on :root by
+     relayBackground.ts every frame, with a static fallback in index.css for the case where
+     the engine never runs, so this always resolves to a real colour: an UNSET custom
+     property is not a missing default, it is an invalid declaration the browser DROPS.
+     --accent-rgb exists because 31 rules needed rgba() rather than a solid, and --accent2
+     is the same hue at lower alpha rather than a second colour, so every two-tone gradient
+     stays two-tone while the board's ONE accent is the only hue on screen. */
+  --accent:var(--rb,#3FE0C5); --accent-rgb:var(--rb-rgb,63,224,197);
+  --accent2:rgba(var(--accent-rgb),.55); --danger:#FF5C72; --warn:#FFB454;
+  --grad:linear-gradient(135deg,var(--accent),var(--accent2));
   position:fixed; inset:0; z-index:1; background:var(--bg); color:var(--text);
   font-family:"Hanken Grotesk",sans-serif; -webkit-font-smoothing:antialiased;
   overflow:hidden;
@@ -374,8 +384,8 @@ export const RELAY_CSS = `
 .relay-root .relay-bg-fx{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
 .relay-root .relay-bg-fx::before{content:"";position:absolute;inset:-20%;
   background:
-    radial-gradient(50% 40% at 18% 12%, rgba(63,224,197,0.10), transparent 60%),
-    radial-gradient(45% 40% at 85% 88%, rgba(110,231,255,0.08), transparent 60%);
+    radial-gradient(50% 40% at 18% 12%, rgba(var(--accent-rgb),0.10), transparent 60%),
+    radial-gradient(45% 40% at 85% 88%, rgba(var(--accent-rgb),0.08), transparent 60%);
   animation:relayDrift 24s ease-in-out infinite alternate;}
 .relay-root .relay-bg-fx .grid{position:absolute;inset:0;opacity:.5;
   background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);
@@ -390,7 +400,7 @@ export const RELAY_CSS = `
 @keyframes relayFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 
 .relay-root .relay-brand{display:flex;align-items:center;gap:11px;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;letter-spacing:-.02em}
-.relay-root .relay-brand .dot{width:13px;height:13px;border-radius:50%;background:var(--grad);box-shadow:0 0 18px rgba(63,224,197,.7);position:relative}
+.relay-root .relay-brand .dot{width:13px;height:13px;border-radius:50%;background:var(--grad);box-shadow:0 0 18px rgba(var(--accent-rgb),.7);position:relative}
 .relay-root .relay-brand .dot::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--accent);animation:relayPulse 2.4s ease-out infinite}
 @keyframes relayPulse{0%{transform:scale(1);opacity:.7}100%{transform:scale(3.4);opacity:0}}
 
@@ -402,11 +412,11 @@ export const RELAY_CSS = `
 .relay-root .relay-field label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.14em;color:var(--faint);margin:0 0 9px 3px}
 .relay-root .relay-field input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:14px;
   padding:17px 18px;color:var(--text);font-size:17px;font-family:inherit;outline:none;transition:.2s}
-.relay-root .relay-field input:focus{border-color:var(--accent);box-shadow:0 0 0 4px rgba(63,224,197,.12)}
+.relay-root .relay-field input:focus{border-color:var(--accent);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.12)}
 .relay-root .relay-btn{width:100%;border:none;border-radius:14px;padding:17px;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;
   font-size:16px;cursor:pointer;transition:.18s;letter-spacing:-.01em}
-.relay-root .relay-btn-primary{background:var(--grad);color:#04201B;box-shadow:0 10px 30px -10px rgba(63,224,197,.55)}
-.relay-root .relay-btn-primary:hover{transform:translateY(-2px);box-shadow:0 16px 40px -12px rgba(63,224,197,.7)}
+.relay-root .relay-btn-primary{background:var(--grad);color:#04201B;box-shadow:0 10px 30px -10px rgba(var(--accent-rgb),.55)}
+.relay-root .relay-btn-primary:hover{transform:translateY(-2px);box-shadow:0 16px 40px -12px rgba(var(--accent-rgb),.7)}
 .relay-root .relay-btn-primary:active{transform:translateY(0)}
 .relay-root .relay-btn:disabled{opacity:.5;cursor:not-allowed;transform:none!important}
 .relay-root .hint{margin-top:18px;font-size:13px;color:var(--faint);line-height:1.6}
@@ -445,7 +455,7 @@ export const RELAY_CSS = `
 .relay-root .dial-actions{display:flex;gap:13px;width:min(320px,80vw)}
 .relay-root .call-btn{flex:1;border:none;border-radius:16px;padding:16px;background:var(--grad);color:#04201B;
   font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:16px;cursor:pointer;display:flex;
-  align-items:center;justify-content:center;gap:9px;transition:.15s;box-shadow:0 10px 26px -12px rgba(63,224,197,.6)}
+  align-items:center;justify-content:center;gap:9px;transition:.15s;box-shadow:0 10px 26px -12px rgba(var(--accent-rgb),.6)}
 .relay-root .call-btn:hover{transform:translateY(-2px)}
 .relay-root .call-btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
 .relay-root .back-key{width:58px;background:var(--surface);border:1px solid var(--border);border-radius:16px;color:var(--muted);
@@ -479,7 +489,7 @@ export const RELAY_CSS = `
 .relay-root .ring-card{width:min(390px,92vw);border-radius:28px;padding:30px 26px 24px;text-align:center;position:relative;
   background:linear-gradient(175deg,rgba(34,40,52,.96),rgba(14,17,23,.98));
   border:1px solid rgba(255,255,255,.12);
-  box-shadow:0 40px 110px -24px rgba(0,0,0,.85),0 0 0 1px rgba(63,224,197,.08),inset 0 1px 0 rgba(255,255,255,.12)}
+  box-shadow:0 40px 110px -24px rgba(0,0,0,.85),0 0 0 1px rgba(var(--accent-rgb),.08),inset 0 1px 0 rgba(255,255,255,.12)}
 .relay-root .ring-av-wrap{position:relative;width:126px;height:126px;margin:0 auto 14px}
 .relay-root .ring-av-wrap .av,.relay-root .ring-av-img{position:absolute;inset:13px;width:100px;height:100px;border-radius:50%;
   display:grid;place-items:center;color:#04201B;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:36px;
@@ -487,18 +497,18 @@ export const RELAY_CSS = `
 .relay-root .ring-av-img{object-fit:cover;background:#10131a;border:1px solid rgba(255,255,255,.14)}
 /* The rotating gradient ORBIT ("a ring line keeps going round and round"). */
 .relay-root .ring-orbit{position:absolute;inset:0;border-radius:50%;
-  background:conic-gradient(from 0deg,transparent 0deg,transparent 30deg,#3FE0C5 110deg,#6EE7FF 170deg,rgba(110,231,255,.15) 220deg,transparent 300deg);
+  background:conic-gradient(from 0deg,transparent 0deg,transparent 30deg,var(--accent) 110deg,var(--accent2) 170deg,rgba(var(--accent-rgb),.15) 220deg,transparent 300deg);
   -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 5px),#000 calc(100% - 4px));
   mask:radial-gradient(farthest-side,transparent calc(100% - 5px),#000 calc(100% - 4px))}
 /* Radiating halo pulses behind the avatar. */
-.relay-root .ring-halo{position:absolute;inset:8px;border-radius:50%;border:2px solid rgba(63,224,197,.5);opacity:0}
-.relay-root .ring-halo.h2{border-color:rgba(110,231,255,.4)}
+.relay-root .ring-halo{position:absolute;inset:8px;border-radius:50%;border:2px solid rgba(var(--accent-rgb),.5);opacity:0}
+.relay-root .ring-halo.h2{border-color:rgba(var(--accent-rgb),.4)}
 .relay-root .ring-card .who{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:27px;margin-bottom:2px;
   display:flex;align-items:center;justify-content:center;gap:8px}
 /* v2.99.6: the caller's badge is TIERED (blue Guest / green Registered /
    yellow Admin — color set inline by presentRingProfile) with the tier name
    in tiny type right under the mark (owner spec). */
-.relay-root .ring-verified{display:inline-flex;flex-direction:column;align-items:center;color:#3FE0C5}
+.relay-root .ring-verified{display:inline-flex;flex-direction:column;align-items:center;color:var(--accent)}
 .relay-root .ring-verified svg{width:19px;height:19px}
 .relay-root .ring-role-txt{font-style:normal;font-size:7.5px;font-weight:800;line-height:1;margin-top:1px;letter-spacing:.02em}
 .relay-root .ring-role-txt:empty{display:none}
@@ -520,19 +530,19 @@ export const RELAY_CSS = `
 .relay-root .rc:hover{transform:translateY(-2px) scale(1.04)}
 .relay-root .rc:active{transform:scale(.94)}
 .relay-root .rc-voice{background:linear-gradient(145deg,#34d399,#059669);box-shadow:0 12px 30px -8px rgba(16,185,129,.65),inset 0 1px 0 rgba(255,255,255,.3)}
-.relay-root .rc-video{background:linear-gradient(145deg,#3FE0C5,#0e7490);box-shadow:0 12px 30px -8px rgba(63,224,197,.6),inset 0 1px 0 rgba(255,255,255,.3)}
+.relay-root .rc-video{background:linear-gradient(145deg,var(--accent),#0e7490);box-shadow:0 12px 30px -8px rgba(var(--accent-rgb),.6),inset 0 1px 0 rgba(255,255,255,.3)}
 .relay-root .rc-decline{background:linear-gradient(145deg,#FF5C72,#E62E4D);box-shadow:0 12px 30px -8px rgba(255,59,92,.65),inset 0 1px 0 rgba(255,255,255,.3)}
 /* Answer-side ripple ring that keeps pulsing outward. */
 .relay-root .rc-voice::after,.relay-root .rc-video::after{content:"";position:absolute;inset:-4px;border-radius:50%;
   border:2px solid rgba(52,211,153,.55);opacity:0;pointer-events:none}
-.relay-root .rc-video::after{border-color:rgba(63,224,197,.55)}
+.relay-root .rc-video::after{border-color:rgba(var(--accent-rgb),.55)}
 /* Voicemail + Message row. */
 .relay-root .ring-extra{display:flex;gap:9px;margin-top:20px}
 .relay-root .rx{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;border-radius:13px;padding:11px 8px;
   background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);color:var(--text);
   font-size:12.5px;font-weight:600;font-family:inherit;cursor:pointer;transition:.15s}
 .relay-root .rx svg{width:16px;height:16px;flex-shrink:0;color:var(--accent)}
-.relay-root .rx:hover{background:rgba(255,255,255,.1);border-color:rgba(63,224,197,.4)}
+.relay-root .rx:hover{background:rgba(255,255,255,.1);border-color:rgba(var(--accent-rgb),.4)}
 .relay-root .quick-replies{display:none;margin-top:12px;gap:8px;flex-direction:column}
 .relay-root .quick-replies.open{display:flex;animation:relayFade .2s ease both}
 .relay-root .qr-opt{border:1px solid var(--border2);background:var(--surface2);color:var(--text);border-radius:12px;
@@ -555,11 +565,16 @@ export const RELAY_CSS = `
   .relay-root .rc-voice::after,.relay-root .rc-video::after{animation:relayRipple 1.6s ease-out infinite}
   .relay-root .rc-video::after{animation-delay:.4s}
   .relay-root .rc-decline{animation:relayNudge 2.6s ease-in-out infinite}
+  /* Board 3a: the number row heartbeats while the call is being placed. TRANSFORM only,
+     so it is compositor-work rather than a repaint (the v2.99.84 rule), and it rides the
+     ROW rather than each cell — one animation instead of seven. */
+  .relay-root .dial-card .dc-num{animation:relayDialBeat 1.9s ease-in-out infinite}
 }
 @keyframes relayOrbit{to{transform:rotate(360deg)}}
 @keyframes relayHalo{0%{transform:scale(1);opacity:.85}100%{transform:scale(1.5);opacity:0}}
 @keyframes relayBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
 @keyframes relayRipple{0%{transform:scale(1);opacity:.8}100%{transform:scale(1.45);opacity:0}}
+@keyframes relayDialBeat{0%,100%{transform:scale(1)}12%{transform:scale(1.16)}26%{transform:scale(1.02)}40%{transform:scale(1.09)}56%{transform:scale(1)}}
 @keyframes relayNudge{0%,86%,100%{transform:rotate(0)}90%{transform:rotate(-7deg)}94%{transform:rotate(7deg)}98%{transform:rotate(-4deg)}}
 
 .relay-root #call{flex-direction:column}
@@ -602,7 +617,20 @@ export const RELAY_CSS = `
    geometry — nothing below it moves when the lookup resolves. */
 .relay-root .dial-card .dc-av-img{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;object-fit:cover;border:1px solid var(--border);box-shadow:0 18px 50px rgba(0,0,0,.45)}
 /* clamp, so a 34px number cannot force a horizontal overflow at 320px */
-.relay-root .dial-card .dc-num{font-family:"JetBrains Mono",monospace;font-size:clamp(26px,8.5vw,34px);font-weight:700;letter-spacing:.08em;color:var(--text)}
+/* Board 3a: the dialled number as MONO TILES, scrambling matrix-style and settling onto
+   the real digit with an accent glow, the whole row heartbeating.
+   The row is a FLEX line of fixed-width cells rather than one text node, because a
+   proportional glyph would make the row jitter as each digit lands on a different width —
+   the number would appear to breathe sideways while it resolves.
+   BOTH animations are inside the reduced-motion gate below (house rule), and the settled
+   state is a plain declaration, so a reduced-motion viewer sees the resolved number with
+   its glow and no movement at all. */
+.relay-root .dial-card .dc-num{font-family:"JetBrains Mono",monospace;font-size:clamp(26px,8.5vw,34px);font-weight:700;letter-spacing:.08em;color:var(--text);
+  display:flex;align-items:baseline;justify-content:center;gap:2px}
+.relay-root .dial-card .dc-dig{display:inline-block;min-width:.62em;text-align:center;color:var(--muted);
+  transition:color .18s,text-shadow .18s}
+.relay-root .dial-card .dc-dig.sep{min-width:auto;color:var(--faint)}
+.relay-root .dial-card .dc-dig.set{color:var(--text);text-shadow:0 0 14px rgba(var(--accent-rgb),.75)}
 .relay-root .dial-card .dc-who{display:flex;align-items:center;justify-content:center;gap:6px;max-width:100%;min-width:0}
 /* The name may shrink and truncate; the badge beside it may not (v2.103.3's gutter rule:
    the thing that must stay legible is the one that does not shrink). */
@@ -649,7 +677,13 @@ export const RELAY_CSS = `
    template inline; these rules just style those states. */
 .relay-root .relay-tile{cursor:pointer}
 .relay-root .relay-tile.is-spotlight{box-shadow:inset 0 0 0 2px var(--accent)}
-.relay-root .relay-tile.speaking{outline:2px solid var(--relay-online,#22c55e);outline-offset:-2px}
+/* Board 2a: "speaking tile = accent border + inner glow".
+   THE HUE MOVE IS A VOCABULARY FIX, not decoration. Green currently means BOTH "online"
+   (the presence LEDs, via --relay-online) and "speaking" — one colour carrying two facts on
+   a screen where both are visible at once. Speaking moves to the ACCENT, which is what
+   "active" already means on the control bar's .on state after v2.106.6, so green is left
+   meaning exactly one thing. Same argument v2.99.86 used to move DND off green. */
+.relay-root .relay-tile.speaking{outline:2px solid var(--accent);outline-offset:-2px}
 .relay-root .relay-tile.screen video{object-fit:contain;background:#000}
 /* Colourful "I'm talking" sound-wave under the avatar/name (cam-off speakers):
    five rainbow bars that bounce like an equaliser. Hidden unless .speaking. */
@@ -692,7 +726,7 @@ export const RELAY_CSS = `
    The glow is edge-only, but painting it over the menu/maximize buttons would
    tint them green in the corner where they live. */
 .relay-root .relay-tile .spk-glow{position:absolute;inset:0;z-index:3;pointer-events:none;
-  border-radius:inherit;opacity:0;box-shadow:inset 0 0 22px 0 rgba(34,197,94,.30)}
+  border-radius:inherit;opacity:0;box-shadow:inset 0 0 22px 0 rgba(var(--accent-rgb),.30)}
 .relay-root .relay-tile.speaking .spk-glow{opacity:1}
 @media (prefers-reduced-motion: no-preference){
   .relay-root .relay-tile.speaking .spk-glow{animation:relaySpeakPulse 1.4s ease-in-out infinite}
@@ -740,7 +774,7 @@ export const RELAY_CSS = `
 /* On a thumbnail there is no room — hide the digits rather than let them clip. */
 .relay-root #videoGrid.spotlight .relay-tile.is-thumb .nm .nm-pin,
 .relay-root #videoGrid.compact .relay-tile .nm .nm-pin{display:none}
-.relay-root .relay-tile.you .nm{background:rgba(63,224,197,.2);color:var(--accent)}
+.relay-root .relay-tile.you .nm{background:rgba(var(--accent-rgb),.2);color:var(--accent)}
 /* "connecting…" sits TOP-LEFT now (the info chip owns the top-right corner). */
 .relay-root .connecting{position:absolute;top:11px;left:12px;font-size:11px;color:var(--warn);background:rgba(255,180,84,.14);
   padding:3px 9px;border-radius:7px;letter-spacing:.04em}
@@ -786,7 +820,7 @@ export const RELAY_CSS = `
 .relay-root .relay-msg{max-width:100%;padding:9px 13px;border-radius:13px;font-size:14px;line-height:1.4;word-break:break-word}
 .relay-root .relay-msg .au{font-size:11px;color:var(--accent);font-weight:600;margin-bottom:2px}
 .relay-root .relay-msg.them{background:var(--surface);border:1px solid var(--border);align-self:flex-start;border-bottom-left-radius:4px}
-.relay-root .relay-msg.me{background:rgba(63,224,197,.16);align-self:flex-end;border-bottom-right-radius:4px}
+.relay-root .relay-msg.me{background:rgba(var(--accent-rgb),.16);align-self:flex-end;border-bottom-right-radius:4px}
 .relay-root .relay-msg.sys{align-self:center;color:var(--faint);font-size:12px;background:none}
 .relay-root .chat-input{padding:13px;border-top:1px solid var(--border);display:flex;gap:9px}
 .relay-root .chat-input input{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:11px 14px;
@@ -810,7 +844,7 @@ export const RELAY_CSS = `
 .relay-root .mident{display:flex;align-items:center;gap:7px;padding:4px 10px 4px 5px;border-radius:999px;margin:0 2px 4px;
   width:max-content;max-width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);
   backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:inset 0 1px 0 rgba(255,255,255,.07)}
-.relay-root .mrow.me .mident{margin-left:auto;background:rgba(63,224,197,.10);border-color:rgba(63,224,197,.22)}
+.relay-root .mrow.me .mident{margin-left:auto;background:rgba(var(--accent-rgb),.10);border-color:rgba(var(--accent-rgb),.22)}
 .relay-root .mident .mav{width:22px;height:22px;font-size:9px;overflow:hidden;background-size:cover;background-position:center;border-radius:50%}
 .relay-root .mident .mwho{display:flex;align-items:baseline;gap:6px;min-width:0}
 .relay-root .mident .mwho b{font-size:11.5px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
@@ -848,7 +882,7 @@ export const RELAY_CSS = `
 .relay-root .ctrl{width:auto;height:auto;min-width:52px;border-radius:14px;background:none;border:none;
   color:var(--text);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px;padding:0;
   transition:transform .16s cubic-bezier(0.23,1,0.32,1);position:relative;font-family:inherit}
-.relay-root .ctrl .ctrl-ic{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;position:relative;
+.relay-root .ctrl .ctrl-ic{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;position:relative;color:var(--ctrl-hue,var(--text));
   background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);
   transition:background .16s,border-color .16s,box-shadow .16s;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
@@ -857,19 +891,40 @@ export const RELAY_CSS = `
 .relay-root .ctrl:active{transform:scale(.94)}
 .relay-root .ctrl-lbl{font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--text2,#9aa);line-height:1;white-space:nowrap}
 /* Distinct color identity per control (owner: "all these icons different
-   colors with a very nice shape"). Chip tint + icon + label share the hue. */
-.relay-root #micBtn .ctrl-ic{color:#34d399;background:rgba(52,211,153,.13);border-color:rgba(52,211,153,.3)}
-.relay-root #camBtn .ctrl-ic{color:#38bdf8;background:rgba(56,189,248,.13);border-color:rgba(56,189,248,.3)}
-.relay-root #flipCamBtn .ctrl-ic{color:#a78bfa;background:rgba(167,139,250,.13);border-color:rgba(167,139,250,.3)}
-.relay-root #screenBtn .ctrl-ic{color:#fbbf24;background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.3)}
-.relay-root #qualityBtn .ctrl-ic{color:#f472b6;background:rgba(244,114,182,.12);border-color:rgba(244,114,182,.3)}
-.relay-root #audioBtn .ctrl-ic{color:#fb923c;background:rgba(251,146,60,.13);border-color:rgba(251,146,60,.3)}
-.relay-root #pipBtn .ctrl-ic{color:#818cf8;background:rgba(129,140,248,.13);border-color:rgba(129,140,248,.3)}
-.relay-root #filterBtn .ctrl-ic{color:#e879f9;background:rgba(232,121,249,.12);border-color:rgba(232,121,249,.3)}
-.relay-root #addBtn .ctrl-ic{color:var(--accent);background:rgba(63,224,197,.13);border-color:rgba(63,224,197,.3)}
-.relay-root #hostBtn .ctrl-ic{color:#facc15;background:rgba(250,204,21,.12);border-color:rgba(250,204,21,.3)}
-.relay-root #chatBtn .ctrl-ic{color:#a3e635;background:rgba(163,230,53,.12);border-color:rgba(163,230,53,.3)}
-/* State overrides win over the per-button tints. */
+   colors with a very nice shape"). The hue is on the GLYPH ONLY.
+   ---------------------------------------------------------------------------
+   THESE RULES USED TO SET THE CHIP'S FILL TOO, AND THAT WAS A REAL BUG — found by
+   measuring rather than reading, and it had been live since v2.99.4. An ID is
+   compared BEFORE any number of classes, so #micBtn .ctrl-ic (0,1,2) outranks
+   .ctrl.off .ctrl-ic (0,0,4) whatever the order: the MUTED-mic red chip never
+   rendered. A muted mic showed a slashed glyph and a red LABEL over a chip still
+   filled cheerful green — the chip saying "fine" while the icon said "muted", on
+   the one control where being wrong matters most. The comment that used to sit
+   here claimed "state overrides win over the per-button tints"; it was false.
+   Confirmed directly in a browser before changing anything: with both rules
+   present the ID one wins.
+   The chip fill now lives in exactly ONE place (.ctrl .ctrl-ic plus the state
+   classes), so state can reach it and the board's uniform glass applies.
+
+   AND THE HUE IS A CUSTOM PROPERTY RATHER THAN A COLOR, for the same reason one level
+   down: an ID rule setting color blocks the ACTIVE state's dark-on-accent glyph
+   exactly as it blocked the red chip, and a mid-tone hue on a bright accent fill is
+   unreadable. Declaring --ctrl-hue here and reading it in the base rule means color
+   is only ever set by class-level rules, so state wins by ORDER and the trap is gone
+   by construction rather than by being worked around. */
+.relay-root #micBtn{--ctrl-hue:#34d399}
+.relay-root #camBtn{--ctrl-hue:#38bdf8}
+.relay-root #flipCamBtn{--ctrl-hue:#a78bfa}
+.relay-root #screenBtn{--ctrl-hue:#fbbf24}
+.relay-root #qualityBtn{--ctrl-hue:#f472b6}
+.relay-root #audioBtn{--ctrl-hue:#fb923c}
+.relay-root #pipBtn{--ctrl-hue:#818cf8}
+.relay-root #filterBtn{--ctrl-hue:#e879f9}
+.relay-root #addBtn{--ctrl-hue:var(--accent)}
+.relay-root #hostBtn{--ctrl-hue:#facc15}
+.relay-root #chatBtn{--ctrl-hue:#a3e635}
+/* State overrides — which NOW actually win, since the ID rules above no longer
+   claim the chip's fill. */
 .relay-root .ctrl.off .ctrl-ic{background:rgba(255,92,114,.18);border-color:rgba(255,92,114,.4);color:var(--danger)}
 .relay-root .ctrl.off .ctrl-lbl{color:var(--danger)}
 .relay-root .ctrl-text .ctrl-ic{font-family:"JetBrains Mono",monospace;font-weight:800;font-size:13px;letter-spacing:.04em}
@@ -949,8 +1004,8 @@ export const RELAY_CSS = `
    in full (letterboxed) rather than cropped like a camera tile. */
 .relay-root .relay-tile.you.screen video{-webkit-transform:none;transform:none;object-fit:contain;background:#000}
 /* Active control state (e.g. screen-share on) — accent-tinted like .off is red. */
-.relay-root .ctrl.on .ctrl-ic{background:rgba(63,224,197,.2);border-color:rgba(63,224,197,.48);color:var(--accent);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 0 12px -2px rgba(63,224,197,.45)}
+.relay-root .ctrl.on .ctrl-ic{background:rgba(var(--accent-rgb),.2);border-color:rgba(var(--accent-rgb),.48);color:var(--accent);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 0 12px -2px rgba(var(--accent-rgb),.45)}
 .relay-root .ctrl.on .ctrl-lbl{color:var(--accent)}
 /* Mic VU feedback: a soft accent ring pulses on #micBtn while YOUR mic is picking
    up sound (live AnalyserNode on the local track) — so a forgotten mute (or a
@@ -958,8 +1013,8 @@ export const RELAY_CSS = `
    Never applied while .off (muted). transform/opacity-friendly box-shadow ring,
    matching the existing speaking-pulse / call-waiting-pulse pattern. */
 .relay-root .ctrl.voiced:not(.off) .ctrl-ic{animation:relayMicVoiced 1.1s ease-out infinite}
-@keyframes relayMicVoiced{0%{box-shadow:0 0 0 0 rgba(63,224,197,.45)}100%{box-shadow:0 0 0 7px rgba(63,224,197,0)}}
-@media (prefers-reduced-motion: reduce){.relay-root .ctrl.voiced:not(.off) .ctrl-ic{animation:none;box-shadow:0 0 0 3px rgba(63,224,197,.35)}}
+@keyframes relayMicVoiced{0%{box-shadow:0 0 0 0 rgba(var(--accent-rgb),.45)}100%{box-shadow:0 0 0 7px rgba(var(--accent-rgb),0)}}
+@media (prefers-reduced-motion: reduce){.relay-root .ctrl.voiced:not(.off) .ctrl-ic{animation:none;box-shadow:0 0 0 3px rgba(var(--accent-rgb),.35)}}
 /* Record row (now inside the ⋯ More menu), when armed, glows red. */
 .relay-root #recordBtn .ctrl-ic{color:#ff5d5d;background:rgba(255,76,76,.12);border-color:rgba(255,76,76,.3)}
 .relay-root #recordBtn.on .ctrl-ic{background:rgba(255,76,76,.26);border-color:#ff5d5d}
@@ -1006,7 +1061,7 @@ export const RELAY_CSS = `
   font-family:inherit;transition:transform .15s cubic-bezier(0.23,1,0.32,1),background .15s,border-color .15s;scroll-snap-align:center}
 .relay-root .relay-filter:hover{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.14);transform:translateY(-2px)}
 .relay-root .relay-filter:active{transform:scale(.96)}
-.relay-root .relay-filter.active{background:linear-gradient(135deg,rgba(63,224,197,.22),rgba(110,231,255,.22));border-color:var(--accent);box-shadow:0 0 0 2px rgba(63,224,197,.18)}
+.relay-root .relay-filter.active{background:linear-gradient(135deg,rgba(var(--accent-rgb),.22),rgba(var(--accent-rgb),.22));border-color:var(--accent);box-shadow:0 0 0 2px rgba(var(--accent-rgb),.18)}
 .relay-root .relay-filter .emoji{font-size:26px;line-height:1}
 .relay-root .relay-filter .lbl{font-size:11px;color:var(--muted);letter-spacing:.04em;font-weight:500}
 .relay-root .relay-filter.active .lbl{color:var(--accent)}
@@ -1084,8 +1139,8 @@ export const RELAY_CSS = `
 .relay-root .hl-acts button[data-act="pin"]:hover{border-color:#38bdf8;background:rgba(56,189,248,.12)}
 .relay-root .hl-acts button[data-act="cohost"]{color:#a78bfa;border-color:rgba(167,139,250,.28)}
 .relay-root .hl-acts button[data-act="cohost"]:hover{border-color:#a78bfa;background:rgba(167,139,250,.12)}
-.relay-root .hl-acts button[data-act="makehost"]{color:var(--accent);border-color:rgba(63,224,197,.28)}
-.relay-root .hl-acts button[data-act="makehost"]:hover{border-color:var(--accent);background:rgba(63,224,197,.12)}
+.relay-root .hl-acts button[data-act="makehost"]{color:var(--accent);border-color:rgba(var(--accent-rgb),.28)}
+.relay-root .hl-acts button[data-act="makehost"]:hover{border-color:var(--accent);background:rgba(var(--accent-rgb),.12)}
 .relay-root .hl-acts button.hl-danger{color:var(--danger);border-color:rgba(255,92,114,.3)}
 .relay-root .hl-acts button.hl-danger:hover{border-color:var(--danger);color:var(--danger);background:rgba(255,92,114,.12)}
 .relay-root .hl-empty{padding:18px;text-align:center;font-size:12px;color:var(--text2,#9aa)}
@@ -1111,7 +1166,7 @@ export const RELAY_CSS = `
    place. Under the name of each user"). The bottom offset clears the .nm band,
    whose own box is 11px offset + ~27px tall; keep the two in step. */
 .relay-root .relay-tile .tile-addc{position:absolute;left:12px;bottom:44px;z-index:4;display:inline-flex;align-items:center;gap:5px;
-  border:1px solid rgba(63,224,197,.5);background:rgba(8,9,12,.62);backdrop-filter:blur(6px);color:var(--accent);
+  border:1px solid rgba(var(--accent-rgb),.5);background:rgba(8,9,12,.62);backdrop-filter:blur(6px);color:var(--accent);
   border-radius:999px;padding:4px 10px 4px 8px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;line-height:1}
 .relay-root .relay-tile .tile-addc svg{width:13px;height:13px}
 .relay-root .relay-tile .tile-addc:hover{background:var(--accent);color:#04201B;border-color:var(--accent)}
@@ -1186,7 +1241,7 @@ export const RELAY_CSS = `
 .relay-root .conn-step.active{color:var(--text);opacity:1;transform:none}
 .relay-root .conn-step.done{color:var(--accent);opacity:1;transform:none}
 .relay-root .conn-tick{width:24px;height:24px;border-radius:50%;border:2px solid var(--border2);display:grid;place-items:center;flex:0 0 auto;transition:.3s}
-.relay-root .conn-step.active .conn-tick{border-color:var(--accent);box-shadow:0 0 0 4px rgba(63,224,197,.14)}
+.relay-root .conn-step.active .conn-tick{border-color:var(--accent);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.14)}
 .relay-root .conn-step.active .conn-tick::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);animation:relayPulse2 1s ease-in-out infinite}
 .relay-root .conn-step.done .conn-tick{border-color:var(--accent);background:var(--accent)}
 .relay-root .conn-step.done .conn-tick::after{content:"✓";color:#04201B;font-size:13px;font-weight:800;line-height:1}
@@ -1254,7 +1309,7 @@ export const RELAY_CSS = `
   background:rgba(245,158,11,.92);color:#0b0c10;font-size:10px;font-weight:800;padding:3px 8px;border-radius:7px;letter-spacing:.02em}
 .relay-root .relay-tile.on-hold video{filter:grayscale(.7) brightness(.6)}
 .relay-root .call-waiting .cw-pulse{width:9px;height:9px;border-radius:50%;background:var(--accent);animation:cwPulse 1.3s ease-out infinite;flex:0 0 auto}
-@keyframes cwPulse{0%{box-shadow:0 0 0 0 rgba(63,224,197,.5)}100%{box-shadow:0 0 0 9px rgba(63,224,197,0)}}
+@keyframes cwPulse{0%{box-shadow:0 0 0 0 rgba(var(--accent-rgb),.5)}100%{box-shadow:0 0 0 9px rgba(var(--accent-rgb),0)}}
 .relay-root .call-waiting .cw-actions{display:flex;gap:8px}
 .relay-root .call-waiting .cw-btn{border:none;border-radius:11px;padding:8px 14px;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:13px;cursor:pointer;transition:.14s}
 .relay-root .call-waiting .cw-decline{background:rgba(255,92,114,.16);color:var(--danger);border:1px solid rgba(255,92,114,.3)}
@@ -1281,8 +1336,8 @@ export const RELAY_CSS = `
 .relay-root .held-bar .held-end:hover{background:rgba(255,92,114,.26)}
 /* Being HELD (v2.97.1): the parked party's banner — visible, calm, unmissable. */
 .relay-root .onhold-bar{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:35;display:none;align-items:center;gap:12px;
-  background:rgba(16,26,32,.94);border:1px solid rgba(63,224,197,.4);border-radius:16px;padding:11px 18px;
-  box-shadow:0 18px 50px -18px rgba(0,0,0,.7),0 0 24px -8px rgba(63,224,197,.35);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
+  background:rgba(16,26,32,.94);border:1px solid rgba(var(--accent-rgb),.4);border-radius:16px;padding:11px 18px;
+  box-shadow:0 18px 50px -18px rgba(0,0,0,.7),0 0 24px -8px rgba(var(--accent-rgb),.35);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);max-width:94vw}
 .relay-root .onhold-bar.show{display:flex}
 .relay-root .onhold-bar .oh-pulse{width:11px;height:11px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent);flex-shrink:0}
 @media (prefers-reduced-motion:no-preference){.relay-root .onhold-bar .oh-pulse{animation:relayPulse2 1.4s ease-in-out infinite}}
@@ -1355,5 +1410,50 @@ export const RELAY_CSS = `
   .relay-root .relay-tile .tile-menu-btn,
   .relay-root .relay-tile .tile-max-btn,
   .relay-root .relay-tile .tile-addc{backdrop-filter:none;-webkit-backdrop-filter:none;background:rgba(8,9,12,.90)}}
+
+/* ── THE STANDARD CALL BAR, design_handoff_relay_app (phase 3) ───────────────────────
+   The board's rule is a "standard call bar, NEVER REDUCED": one material across every
+   call surface, glass circles with the ACTIVE state on the cycling accent.
+
+   TWO THINGS THE BOARD ASKS FOR ARE DELIBERATELY NOT TAKEN, and both are cases where it
+   contradicts something the owner asked for IN THEIR OWN WORDS. A visual decision of mine
+   is superseded by the board; an explicit request is not.
+
+     1. THE CONTROL SET DOES NOT CHANGE. The board lists six controls and says never
+        reduce them; v2.99.39 REMOVED controls from this bar at the owner's explicit
+        request. Restyling satisfies the board's intent (one consistent bar) without
+        taking back anything they asked to be rid of — the reading that cannot cost them
+        something. The set is whatever the markup declares; this block only restyles.
+     2. THE LABELS STAY, and so do the per-control hues — on the GLYPH. v2.99.4 is the
+        owner asking for exactly that ("all these icons different colors with a very nice
+        shape", every button saying what it does), and a label is also the only thing a
+        screen reader can use here. So the CHIP becomes the board's uniform glass and the
+        glyph keeps its hue: the same primary/secondary split the Dialer's action row and
+        Profile's hub tiles use. The end button stays a CIRCLE rather than the board's
+        56x50 pill, because v2.96.3 made it round after the owner reported the pill
+        "read as a blob".
+
+   THE BLUR IS DESKTOP-ONLY, and that is measured rather than cautious: this bar sits over
+   LIVE VIDEO, where v2.99.84 counted 36 backdrop-filter layers over a call grid and
+   removed all of them on phones (nothing behind a blur can ever be cached when the
+   backdrop changes every frame). Phones get an opaque chip of the same tone, so the look
+   survives and the cost does not.
+
+   Declared LAST on purpose. These overrides carry the same specificity as the per-button
+   tints above, so order decides — and v2.99.84 measured its own override doing NOTHING
+   for exactly this reason while reading as correct. */
+.relay-root .ctrl .ctrl-ic{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.16)}
+@media (min-width:769px){
+  .relay-root .ctrl .ctrl-ic{backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}}
+@media (max-width:768px){
+  .relay-root .ctrl .ctrl-ic{background:rgba(46,50,58,.92)}}
+/* ACTIVE = solid accent with dark text. #04211a is the board's on-accent value, a
+   near-black green measured legible across all twelve palette hues where plain white
+   fails on the yellow and lime entries. .on is set by the same JS as before. */
+.relay-root .ctrl.on .ctrl-ic{background:rgba(var(--rb-rgb),.85);border-color:var(--rb);color:#04211a}
+.relay-root .ctrl.on .ctrl-lbl{color:var(--rb)}
+/* OFF stays red and outranks the accent — a muted mic reporting "active" would be the
+   single most dangerous thing this bar could say. */
+.relay-root .ctrl.off .ctrl-ic{background:rgba(255,92,114,.20);border-color:rgba(255,92,114,.45);color:var(--danger)}
 
 `;

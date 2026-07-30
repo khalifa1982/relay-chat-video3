@@ -250,11 +250,12 @@ export default function ContactsPage() {
           onClick={() =>
             setEditing({ id: undefined, number: "", displayName: "", notes: "" })
           }
-          className="grid place-items-center size-11 shrink-0 rounded-xl text-white transition hover:brightness-110"
-          style={{
-            background: "linear-gradient(135deg, #a78bfa, #7c3aed)",
-            boxShadow: "0 6px 16px -6px rgba(124,58,237,.6)",
-          }}
+          /* Board 1e: "Add by PIN accent chip". The violet was this tab's own
+             wayfinding hue, and it still is — it lives on the tab bar's glyph and on
+             this page's section icons; what the board asks for is that the one PRIMARY
+             action on the screen reads as the app's accent rather than as a fourth
+             colour beside three coloured row actions. */
+          className="rchip-accent grid place-items-center size-11 shrink-0 rounded-xl transition hover:brightness-110"
         >
           <UserPlus className="size-[19px]" />
         </button>
@@ -332,7 +333,13 @@ export default function ContactsPage() {
                       <ChevronDown className="size-3 shrink-0" strokeWidth={2.4} />
                     )}
                     <SIcon className={"size-3.5 shrink-0 " + section.tint} />
-                    <span className="flex-1 text-left text-[11px] font-semibold uppercase tracking-widest">
+                    {/* Board 1e: the section letter/label takes the ACCENT, and the
+                        board's .26em mono tracking — it is the strongest wayfinding cue
+                        on a long alphabetical list. */}
+                    <span
+                      className="flex-1 text-left font-mono text-[11px] font-semibold uppercase"
+                      style={{ color: "var(--rb)", letterSpacing: ".26em" }}
+                    >
                       {section.label}
                     </span>
                     {/* The counts. The Online section's total IS its online count,
@@ -430,6 +437,7 @@ export default function ContactsPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              destructive
               onClick={() => {
                 if (deleteId !== null) remove.mutate({ id: deleteId });
                 setDeleteId(null);
@@ -610,12 +618,10 @@ function ContactRow({
           title="Voice call"
           onClick={onVoice}
           disabled={c.blocked}
-          className="grid place-items-center size-[34px] rounded-full shrink-0 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
-          style={{
-            background: "linear-gradient(160deg, rgba(34,197,94,.26), rgba(34,197,94,.08))",
-            color: "#22c55e",
-            boxShadow: "inset 0 1px 0 rgba(255,255,255,.15)",
-          }}
+          /* Board 1e: of the three quick actions, "call = accent chip" — so the row's
+             own primary is the accent while chat and video keep their hues, which is
+             the same primary/secondary split the Dialer's action row uses. */
+          className="rchip-accent grid place-items-center size-[34px] rounded-full shrink-0 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <PhoneCall className="size-[15px]" />
         </button>

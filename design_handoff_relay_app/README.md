@@ -1,7 +1,7 @@
 # Handoff: Relay App Redesign — Full Screen System
 
 ## Overview
-Complete visual redesign of the Relay web app (`your-chat.io/app`, repo `khalifa1982/relay-chat-video3`, branch `main`, app code under `client/src`). It extends the already-shipped login redesign (see sibling `design_handoff_relay_login/`) across **every** in-app surface: 34 frames covering tabs, call screens, overlays, dialogs, and system alerts. Theme: dark glass ("smaller than Apple" density), one **cycling accent color**, and the live 3D canvas background running behind every screen.
+Complete visual redesign of the Relay web app (`your-chat.io/app`, repo `khalifa1982/relay-chat-video3`, branch `main`, app code under `client/src`). It extends the already-shipped login redesign (see sibling `design_handoff_relay_login/`) across **every** in-app surface: 42 frames (badge ids 1a…5h) covering tabs, call screens, overlays, dialogs, system alerts, and — per `design_handoff_relay_app/MISSING-FRAMES.md` on branch `claude/connected-ready-glsdab` — all its requested states, the four uncovered screens (party lines 5a, rejoin-live + knock 5b, call-quality readout 5c, sign-in switcher 5d), and its shipped-app rules: **orange outgoing bubbles**, **static story rings**, **no backdrop-filter over live video**, **green only for presence/role badges**, the **real labeled-chip call bar** from `relayAssets.ts` (pre-connect = End Call only), and desktop unified on the **280px labelled sidebar** (Groups tab added). Theme: dark glass, one **cycling accent color**, live 3D canvas background behind every screen.
 
 ## About the Design Files
 The files in this bundle are **design references created in HTML** — prototypes showing intended look and behavior, NOT production code to copy directly. The task is to **recreate these designs inside the existing codebase** (React 18 + Vite + Tailwind + wouter, `client/src`) using its established patterns: keep existing routes, state, RelayEngine call logic, and data flow; change only presentation and add the small bits of UI state described below. The repo already renders a `RelayBackground` canvas on the login screen — this handoff extends it app-wide.
@@ -44,8 +44,8 @@ Starburst badge (path in every frame; 9–15px depending on context) next to **e
 - Presence dot (bottom-right of avatar, 9–11px, 2px `#060a0c` border): online `#3ddc84`, busy/on-call `#e8c94a`.
 - User status text (separate from story): short free text + colored dot, e.g. "Free — back at 3pm", shown in profile chip, peer profile, contact rows (`st`/dot), chat header ("online · Free · 219-406").
 
-### Standard call bar — NEVER REDUCED
-Every call surface (voice, video, group, outgoing/ringing) shows the same 6 controls, in order: **mute · camera · flip · speaker · chat · end** (end = red pill 56×50, others 50px glass circles `rgba(255,255,255,.14)` + `backdrop-filter:blur(14px)`; active-accent state = solid `rgba(var(--rb-rgb),.85)` with dark icon).
+### Standard call bar — grounded in `relayAssets.ts` (supersedes any older 6-button spec)
+Labeled icon chips, order per source: **Mute · Cam · Flip · [Share] · Quality(HD) · Stats · [Sound] · [PiP] · Filters · Add · [Host] · Chat · [Record] · End Call** (bracketed = conditional/hidden by default). Chip = 33×28 icon box + 7.5px label; opaque fill `rgba(40,48,53,.92)` (never blur over video); active = accent tint; End = red gradient chip. Pre-connect outgoing shows **End Call only** (see 3a). One-line quality readout sits ABOVE the bar when Stats is on (see 5c).
 
 ### Bottom tab bar (mobile)
 5 tabs: **Calls · History · Messages · Groups · Contacts** (Groups sits between Messages and Contacts; icon = 2×2 dots). Active tab: 40×25 pill `rgba(var(--rb-rgb),.17)` + glow, label `var(--rb)` 700. Badges: History = red count (missed), Messages = accent count (unread). Bar: hairline top border, `linear-gradient(180deg,rgba(10,14,16,.55),rgba(5,8,10,.85))`, blur 18px, padding 6px 4px 18px.

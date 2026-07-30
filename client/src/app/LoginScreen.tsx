@@ -1107,29 +1107,44 @@ function EmailStep(p: CardProps) {
   );
 }
 
-function ChooseStep(p: CardProps) {
-  const unreg = p.probeUnregistered === true;
+/**
+ * #121 — YOUR NUMBER, echoed back the moment the email resolves (owner: "Once you put
+ * your email ID, your number will automatically show up, even before you click log in.
+ * So, we will know that this is your ID and your number").
+ *
+ * THIS IS ITS OWN COMPONENT BECAUSE IT HAS TO APPEAR ON EVERY POST-EMAIL STEP, AND THAT
+ * IS WHERE THE ORIGINAL MISS WAS. It only ever rendered inside `choose` — and
+ * `submitEmail` deliberately SKIPS `choose` for an account that has a passcode, going
+ * straight to `pin` because that is the fastest real path. So the one group of people the
+ * owner most obviously meant — a returning user with a passcode — never saw their number
+ * at all. One component, rendered from each step, is what makes that impossible to
+ * forget again; a copy per step is how one of them comes to be left out.
+ *
+ * MASKED, and the narrowing is stated rather than left to be discovered: `loginProbe` is
+ * reachable by anybody who knows an address, so printing all six digits here would build
+ * an unauthenticated email → dialable-number lookup — somebody with your email could then
+ * call you without ever having been given your number. The leading group confirms the
+ * account, which is what recognition needs, and is not an address.
+ */
+function IdentityHint(p: { accent: string; email: string; numberHint: string | null; onChange?: () => void }) {
   return (
-    <div style={{ animation: "relayFadeUp .35s both" }}>
-      <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+    <div style={{ marginBottom: 14 }}>
+      <div className="flex items-center justify-between" style={{ marginBottom: p.numberHint ? 10 : 0 }}>
         <span style={{ color: T.text, fontSize: 14.5 }}>
           <span style={{ color: p.accent }}>✓</span> {p.email.trim().toLowerCase()}
         </span>
-        <button
-          type="button" onClick={() => p.go("email")}
-          style={{ ...mono(10.5, ".18em"), color: T.faint2, background: "none", border: "none", cursor: "pointer" }}
-        >
-          CHANGE
-        </button>
+        {p.onChange && (
+          <button
+            type="button" onClick={p.onChange}
+            style={{ ...mono(10.5, ".18em"), color: T.faint2, background: "none", border: "none", cursor: "pointer" }}
+          >
+            CHANGE
+          </button>
+        )}
       </div>
-      {/* #121 — your own number, echoed back the moment the email resolves, so you
-          can see you reached the right account (owner: "we will know that this is
-          your ID and your number"). MASKED — see the server's `numberHint` note:
-          this screen is reachable by anybody who knows an address, so the whole
-          number here would be an unauthenticated email → dialable-number lookup. */}
-      {!unreg && p.numberHint && (
+      {p.numberHint && (
         <div
-          className="mb-3.5 flex items-center justify-center gap-2.5"
+          className="flex items-center justify-center gap-2.5"
           style={{
             borderRadius: 14, padding: "10px 12px",
             border: `1px solid ${p.accent}3d`, background: `${p.accent}0f`,
@@ -1147,6 +1162,23 @@ function ChooseStep(p: CardProps) {
           </span>
         </div>
       )}
+    </div>
+  );
+}
+
+function ChooseStep(p: CardProps) {
+  const unreg = p.probeUnregistered === true;
+  return (
+    <div style={{ animation: "relayFadeUp .35s both" }}>
+      {/* An UNREGISTERED address has no number to show, and the probe deliberately
+          returns none — so the row degrades to the confirmed email alone rather than
+          reserving space for a value that is never coming. */}
+      <IdentityHint
+        accent={p.accent}
+        email={p.email}
+        numberHint={unreg ? null : p.numberHint}
+        onChange={() => p.go("email")}
+      />
       {/* #121 — ONE way forward, never both. The owner asked that an address which
           already has an account say so and REFUSE to register: a Register button
           that is always going to be wrong is worse than no Register button (the
@@ -1221,8 +1253,10 @@ function CodeStep(p: CardProps) {
       style={{ animation: "relayFadeUp .35s both" }}
     >
       <Label>SIGN-IN CODE</Label>
+      {/* The row names the address, so the sentence below it does not have to repeat it. */}
+      <IdentityHint accent={p.accent} email={p.email} numberHint={p.numberHint} />
       <p style={{ color: T.muted, fontSize: 13.5, marginTop: -4, marginBottom: 14 }}>
-        We sent a 6-digit code to {p.email.trim().toLowerCase()}
+        We sent you a 6-digit code.
       </p>
       <div style={{ position: "relative" }}>
         <CodeBoxes value={p.code} accent={p.accent} />
@@ -1340,8 +1374,17 @@ function PinStep(p: CardProps) {
   return (
     <form onSubmit={p.submitPin} style={{ animation: "relayFadeUp .35s both" }}>
       <Label>PASSCODE</Label>
+      {/* This is the step the owner's ask was really about: a passcode account skips
+          `choose` entirely, so before this the one group of people most likely to be
+          returning never saw their own number. */}
+      <IdentityHint
+        accent={p.accent}
+        email={p.email}
+        numberHint={p.numberHint}
+        onChange={() => p.go("email")}
+      />
       <p style={{ color: T.muted, fontSize: 13.5, marginTop: -4, marginBottom: 14 }}>
-        Enter the 4-digit passcode for {p.email.trim().toLowerCase()}
+        Enter your 4-digit passcode
       </p>
       <Field
         ref={p.inputRef}
@@ -1392,6 +1435,7 @@ function WaitingStep(p: CardProps) {
   return (
     <div style={{ animation: "relayFadeUp .35s both" }}>
       <Label>{declined ? "APPROVAL DECLINED" : "WAITING FOR APPROVAL"}</Label>
+      <IdentityHint accent={p.accent} email={p.email} numberHint={p.numberHint} />
       <Panel accent={p.accent}>
         <p style={{ color: T.muted, fontSize: 13.5, lineHeight: 1.6, margin: 0 }}>
           {declined

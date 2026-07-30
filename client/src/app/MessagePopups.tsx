@@ -8,6 +8,7 @@ import {
   type MessagePopup,
 } from "./messagePopups";
 import { previewOf } from "./messagePreview";
+import { PeerAvatar } from "./PeerOverlays";
 
 /**
  * Non-intrusive incoming-message popups. When a message arrives while the user
@@ -87,9 +88,29 @@ function PopupCard({ popup }: { popup: MessagePopup }) {
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+    <div className="rsheet overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
       <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-2">
-        <MessageSquare className="size-4 shrink-0 text-primary" />
+        {/* Board 4k draws the toast with the sender's avatar and story ring rather
+            than a generic message glyph — it is what tells you WHO at a glance,
+            which is the whole job of a toast you see for two seconds.
+            `PeerAvatar` is reused rather than rebuilt (it owns the photo, the
+            initials fallback when a photo 403s, and the ring), and it is
+            DECORATIVE here: `clickable` would open a story or profile from a
+            floating card whose only job is to get you into the conversation, and
+            it needs a number, which a GROUP thread does not have. Groups keep the
+            glyph for the same reason. */}
+        {peerNumber ? (
+          <PeerAvatar
+            number={peerNumber}
+            name={name}
+            avatarUrl={thread?.peerAvatarUrl}
+            size={30}
+            clickable={false}
+            className="shrink-0"
+          />
+        ) : (
+          <MessageSquare className="size-4 shrink-0 text-primary" />
+        )}
         <button
           type="button"
           onClick={open}

@@ -11278,6 +11278,651 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.11 — board 4k system alerts; every destructive confirmation was wearing a safe colour (2026-07-30)
+
+**The finding.** `AlertDialogAction` defaults to `bg-primary`, and v2.106.4 repointed
+`--primary` at the cycling accent — so every confirm button in the app renders in the same
+colour whether it saves a display name or destroys a guest's only copy of their number.
+Affected: sign-out-and-forget, unsend, remove-for-everyone, clear-call-history,
+delete-message-for-me, remove-contact (which also silently unblocks).
+
+Said plainly, this is **pre-existing rather than introduced by the redesign** — primary was
+a dark cyan before, equally not-red. What the accent changed is that the most dangerous
+button in the app got brighter.
+
+- `AlertDialogAction` gains a `destructive` prop that DECIDES the variant, in one place, and
+  exposes `data-destructive` so intent is visible in devtools and testable against markup.
+  A per-site class string was the alternative and is the thing to avoid: the rule would then
+  live in seven places and the eighth would forget it.
+- Applied to the six irreversible confirmations. `destructive={isGuest}` on sign-out, because
+  a registered sign-out is undone by signing back in and reddening both would spend the
+  warning colour on the harmless one.
+- **"Delete this chat for you" deliberately stays accent.** v2.103.0 built the thread to come
+  back by itself the moment anybody messages again, and the copy says so. A mutation that
+  reddens it bites.
+
+**The sweep is the load-bearing test.** It reads every `<AlertDialogContent>` in the client
+and requires that one whose own copy claims the action cannot be undone confirms in red — a
+property, so it covers the dialog added next. A list of today's seven would go stale on the
+eighth.
+
+**Push banner (4k).** Emerald → accent, end to end. Green means ONLINE in this app (every
+presence LED), which is why v2.99.86 moved DND off it and v2.106.9 moved the speaking tile
+off it; a green "enable notifications" chip is a third meaning for a colour that has to carry
+one. No emerald survives anywhere in the banner — a green border around an accent CTA reads
+as a rendering fault. The **iOS install note stays sky**: it carries no action (the install
+happens in Safari's own share menu), so the accent would promise a tap that isn't there.
+
+**Update dialog (4k).** It fetched `/api/version`, compared it, and then told the user only
+that "a fresh version is ready" — about a version it knew the number of. Both numbers now
+render, **neither a literal** (a hardcoded `v2.106.0` satisfies a source pin and then lies
+about what is deployed), `dir="ltr"` so an RTL paragraph can't reorder the parts, with a
+fallback to the old wording while `serverVersion` is empty.
+
+**Message toast (4k).** Gets the sender's avatar + story ring by reusing `PeerAvatar`.
+Decorative (`clickable={false}`) and gated on a peer number, so a group keeps the glyph.
+
+**A defect in my own test, failing on correct code — the `fnAt` trap in a fourth file.** I
+sliced the function body to the first `\n}`, which for `function f({ … })` closes the
+destructured PARAMETER object, so the assertion never reached the code it named. Fixed as the
+class: a shared `fnBody` requiring parens and angles closed, plus a guard that the slice
+contains `return (`.
+
+`client/src/app/systemAlerts.test.ts` (19). **All 8 tripwires verified by mutation** from
+byte-exact backups off a confirmed-green baseline, the mutator aborting unless its target
+occurs exactly once; sources byte-identical afterwards.
+
+**Not verified on a device**: nobody has seen a red Sign out or an accent Enable on a phone.
+
+### Board — the owner delivered the 42-frame version
+34 + `5a` party lines, `5b` rejoin-a-live-call + host knock, `5c` quality readout, `5d`
+sign-in switcher (the four screens that existed with no frame), plus `5e`–`5h` collecting the
+requested states. The README's call-bar section now **defers to `relayAssets.ts`**, retiring
+the "6 controls, NEVER REDUCED" line that contradicted v2.99.39.
+
+Two collisions recorded rather than silently resolved:
+- The README's Screens list reads *2f Voicemail / 2g Passcode lock*; the board's own frame
+  labels read the **opposite**. The board wins — it is what gets built from.
+- `5a`–`5h` have no Screens entry, so their spec is read off the frames directly.
+
+`design_handoff_relay_app/MISSING-FRAMES.md` enumerates what is built per-frame (12 of 42)
+versus what carries only the design system. `support.js` is restored — v2.106.0 dropped it as
+prototype cruft, but the `.dc.html` references it.
+
+No schema change, no new dependency, no new env var. 4192 tests.
+
+## v2.106.10 — phase 4 opens; three AA failures found in the DEFAULT theme (2026-07-30)
+
+Phase 1 shipped ten design utilities. After phases 2 and 3, **four were still completely
+unused** — `.rsheet`, `.rscrim`, `.rbar`, `.rbar-flat`.
+
+The board's phase-4 frames are seventeen overlays, sheets and alerts, and the honest way to
+give them one material is not to edit seventeen components: `.rsheet` now sits on the four
+shared shadcn primitives (`DialogContent`, `AlertDialogContent`, `SheetContent`,
+`DrawerContent`) — **13 overlay consumers reached from four lines**, and the ones added later
+for free.
+
+**It is DARK-scoped, and that is what makes it safe on a shared primitive at all.** The
+recipe is a near-black gradient, so in light it must declare NOTHING and let the primitives'
+own `bg-background` decide — otherwise one class puts a dark sheet under near-black text in
+every dialog in the app. The light theme is byte-identical, asserted.
+
+**THE FINDING WORTH FAR MORE THAN THE MATERIAL IS PRE-EXISTING, AND IT IS IN THE THEME MOST
+PEOPLE SEE.** Measuring the sheet's text pairings across both themes turned up that all three
+LIGHT-theme fills carrying near-white text fail AA for normal text:
+
+| token | was | now |
+| --- | --- | --- |
+| `--primary` | 4.00:1 | **4.73:1** |
+| `--accent` | 3.58:1 | **4.85:1** |
+| `--destructive` | 4.30:1 | **4.87:1** |
+
+That is every primary button, every accent surface and every destructive confirmation in the
+app's DEFAULT theme, and it has been true since those tokens were written. **v2.106.4
+deliberately scoped its accent repoint to `.dark.relay-v2`, so this is not something the
+redesign introduced** — established by diffing the light block against `main` before claiming
+it.
+
+Each value is the **LIGHTEST** lightness clearing 4.5:1 with a real margin, solved in a
+browser rather than guessed, so the hue moves as little as possible from what shipped while
+not sitting one rounding error from failing again. `--ring` follows `--primary`, or a focus
+ring stops matching the control it rings. **Pinned as an upper BOUND on lightness** rather
+than as exact literals, so the palette can still be retuned but never back above the failing
+threshold.
+
+**Two utilities are deliberately left unused, and that is a finding rather than an
+omission**: `.rbar` and `.rbar-flat` describe material the app ALREADY has — the top bar
+carries its blur behind `supports-[backdrop-filter]` guards, the composer is already an
+opaque flat fill — and applying `.rbar` naively would **REMOVE the no-backdrop-filter
+fallback**, which is a regression dressed as progress. `.rscrim` is genuinely absent and
+genuinely useful (content now sits over a live canvas), but its value is a contrast claim I
+have not measured yet, so it is named as next rather than added on faith.
+
+**Measured, 8/8**: the sheet's own surface resolved through a canvas pixel in both themes
+(Chromium returns `oklch()` verbatim, which is how v2.106.4 produced a table of nonsense),
+title / body / on-accent CTA contrast on each.
+
+**A defect in my own test, caught by it failing**: a pattern written through a shell heredoc
+had its backslashes doubled, producing `Invalid regular expression: Unterminated group` —
+replaced with an index-and-slice that needs no escaping.
+
+`client/src/app/accentEverywhere.test.ts` → 23; **all 7 tripwires verified by MUTATION**,
+sources byte-identical afterwards.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: the contrast is measured against the real built
+stylesheet, but nobody has opened a dialog on a phone.
+
+No schema change, no new dependency, no new env var. 4174 tests.
+
+## v2.106.9 — board 2a: the speaking tile takes the accent; PHASE 3 CLOSED (2026-07-30)
+
+**The hue move is a vocabulary fix rather than a restyle.** Green meant BOTH *online* (the
+presence LEDs, via `--relay-online`) and *speaking* — two different facts on one colour, on a
+screen where both are visible at once. Speaking is now the ACCENT, which is what "active"
+already means on the control bar's `.on` state after v2.106.6, so green is left meaning
+exactly one thing. The same argument v2.99.86 used to move DND off green.
+
+The inner glow moves with the border, because a tile outlined in one hue and lit in another
+reads as a rendering fault.
+
+**The glow's SHAPE is untouched, deliberately**: it stays a static `box-shadow` on an overlay
+with only its OPACITY animated. v2.99.84 measured 14 repainting animations over a live call
+grid and removed all of them, and a tile's backdrop is live video, so nothing behind it can
+ever be cached.
+
+**Two board frames are CONFIRMED rather than rebuilt, and saying which is the point:**
+- **2b's "live waveform bars"** are the speaking tile's own sound-wave, shipped long ago and
+  made compositor-only in v2.99.84 (`scaleY` off a bottom origin, where it used to animate
+  `height`). Pinned, not rewritten — and the bars stay a RAINBOW, because that is a
+  deliberate earlier choice and the board says only "live waveform bars", so there is
+  nothing here it actually overrules.
+- **2a's "2×4 grid fits up to 8" is deliberately not taken as a literal.** The mesh caps a
+  call at 6 and the SFU at 10, so a hard four-column grid would break a 10-way call — that
+  number describes the frame's own mock, not this app's caps. The columns stay derived from
+  the live participant count, and a mutation hardcoding 4 bites.
+
+**One pre-existing pin rewritten to the property**: v2.99.84's own guard froze the glow's
+exact GREEN literal, so it went red the moment the accent arrived — while saying nothing about
+what it exists for, which is that the glow is a static box-shadow whose opacity is the only
+thing that moves. The colour is free to change; the shape is not.
+
+`client/src/lib/callBarRedesign.test.ts` → 26; **all 6 tripwires verified by MUTATION**,
+sources byte-identical afterwards.
+
+**PHASE 3 IS CLOSED**: the standard bar (v2.106.6), the accent across every call surface
+(v2.106.7), the matrix dial (v2.106.8) and the conference/voice tiles (here) — with 1g and 2b
+confirmed as already-shipped rather than churned.
+
+**NOT VERIFIED ON A CALL, said plainly, and it applies to all four releases**: everything is
+measured against the real exported stylesheet and markup, but nobody has been in a call and
+watched a speaking tile light up.
+
+No schema change, no new dependency, no new env var. 4171 tests.
+
+## v2.106.8 — board 3a: the outgoing number resolves matrix-style (2026-07-30)
+
+Board 3a draws the dialled number as six mono TILES that scramble and settle onto the real
+digit with an accent glow, the whole row heartbeating. `#dcNum` is now a flex row of cells
+written by `paintDialDigits` rather than one text node.
+
+- **The cells are fixed-width by construction**, which is a layout decision rather than a
+  style one: a proportional glyph makes each digit land on a different width, so the row
+  would visibly breathe SIDEWAYS while it resolved. Measured at 0.0px variance across six.
+- **The one thing that would read as a glitch rather than an effect is gated on a flag.**
+  `showDialCard` re-runs DURING a single dial — the `ringing` ack carries the callee's real
+  name — so scrambling unconditionally would re-scramble a number that had already settled a
+  second into the call. The paint takes `fresh`; a repaint writes the settled state directly.
+- **A separator is never scrambled** — it is punctuation, not a digit being resolved.
+- **The timers are tracked and cleared by `exitPreConnect`**, or an interval writes into
+  detached nodes for the rest of the session.
+- **The heartbeat rides the ROW on a TRANSFORM** — one animation instead of seven,
+  compositor work rather than a repaint (the v2.99.84 rule) — inside the existing
+  reduced-motion gate, so a viewer who asked for less motion still sees the resolved number
+  with its glow and no movement.
+
+**Board 1g is CONFIRMED, not rebuilt, and saying so is the point.** It asks for "two
+staggered ping rings (2.2s)" and v2.97.0 already shipped exactly that shape — two
+`.ring-halo` elements on `relayHalo`, the second delayed by half the cycle. Pinned (two
+rings, staggered, the halo keyframe) rather than churned for a 0.3s difference in duration.
+
+**Driven, not asserted — 12/12.** The real painter is lifted verbatim out of
+`relayClient.ts` into a page carrying the real stylesheet and run on a clock, because a
+source pin can tell you the function exists and cannot tell you whether the number ever
+ARRIVES at the digits that were dialled — the only thing that matters, since a scramble that
+never settles is a number nobody can read.
+
+**A vacuous measurement of my own, caught by reading the number rather than the verdict**:
+the equal-width check first reported "0.0px" and PASSED — the dial card lives inside `#call`,
+which the app hides until a call starts, so every cell measured zero and "all equal" was true
+of all-zeros. The harness now forces the surface visible and ABORTS unless the cells have a
+real width; re-measured, 25.5px each.
+
+**The ES5 iteration trap bit again** (TS2802, recorded in v2.99.72 and v2.99.98): spreading a
+STRING needs `downlevelIteration`, so `[...text]` became `split("")` — which would break a
+surrogate pair, stated rather than assumed, because this only ever receives six digits and
+one dash.
+
+**Three defects in my own test, all failing on CORRECT code:**
+- `rule(".dc-num{")` matched the reduced-motion COPY of that selector, which sits EARLIER in
+  the file than the base rule.
+- A `[^)]*` argument pattern could not span the call's own parens — the argument is a ternary
+  full of `.slice(...)`.
+- A reduced-motion gate assertion looked only for the SPACED spelling, when both
+  `prefers-reduced-motion:no-preference` and the spaced form are in this file.
+
+**Two mutations aborted on my own needles rather than recording a false result** — `, fresh);`
+also occurs at the `enrichDialCard` call, and the painter's declaration carries its
+TypeScript annotations — and both bit once re-anchored.
+
+`client/src/lib/callBarRedesign.test.ts` → 22; **all 12 tripwires verified by MUTATION**,
+sources byte-identical afterwards.
+
+**NOT VERIFIED ON A CALL, said plainly**: the scramble is driven on a real clock in a real
+browser, but nobody has dialled a number on a phone and watched it resolve.
+
+**Still to come in phase 3**: 2b's live waveform and 2a's 2×4 conference grid.
+
+No schema change, no new dependency, no new env var. 4167 tests.
+
+## v2.106.7 — the whole call UI breathes with the accent (2026-07-30)
+
+The call surfaces carry their own private theme (`.relay-root` declares `--accent:#3FE0C5`),
+so phase 2b's `--primary` repoint never reached them: every ring card, dial card, tile chip,
+badge and glow stayed on a fixed cyan while the six screens cycled.
+
+**`--accent` now points at `--rb`, and 59 `var(--accent)` sites follow it** — including any
+added later, which is exactly what a per-rule sweep can never do.
+
+**But a half-converted accent is worse than none**, because a rule still painting the old
+cyan sits beside one cycling through twelve hues and the two visibly disagree. So the **40
+hardcoded literals** (`#3FE0C5` ×5, `#6EE7FF` ×3, `63,224,197` ×31, `110,231,255` ×4) were
+converted too, and a test holds the remaining count at zero rather than trusting that I
+found them all.
+
+**`--accent2` is the same hue at lower alpha, not a second colour.** The board has ONE
+accent; `rgba(var(--accent-rgb),.55)` keeps every two-tone gradient two-tone without
+introducing a rival hue — the same recipe `.rstoryring` uses.
+
+**THE DEFECT WORTH RECORDING IS MINE, AND IT WOULD HAVE MADE EVERY ACCENT IN THE CALL UI
+DISAPPEAR.** The literal sweep ran over the two new token declarations as well, rewriting
+their own fallbacks into `var(--rb,var(--accent))` — a **custom-property CYCLE**, which
+resolves to the guaranteed-invalid value, so *both declarations are dropped*. Caught by
+RESOLVING the value in a browser rather than reading the file; the file looked perfectly
+reasonable.
+
+**And the fallback is not decoration, which is why the cycle mattered**: an unset custom
+property is not a missing default, it is an invalid declaration the browser DROPS — so a
+call surface reached before the engine has published a hue, or on the no-2D-context path,
+would render with **no accent at all** rather than a plain one.
+
+**Measured, 15/15**: four palette hues plus the no-engine case, resolving `--accent`,
+`--accent2` and `rgba(var(--accent-rgb),…)` through a canvas pixel (Chromium hands `oklch()`
+back verbatim, which is how v2.106.4 produced a whole table of nonsense), and checking a REAL
+consumer — the ring card's PIN — rather than only a synthetic probe.
+
+`client/src/lib/callBarRedesign.test.ts` → 15; **all 6 tripwires verified by MUTATION**,
+including the self-reference cycle and a single rule left on the old cyan.
+
+**NOT VERIFIED ON A CALL, said plainly**: measured against the real exported stylesheet, but
+nobody has watched a ring card cycle mid-call.
+
+**Still to come in phase 3**: the per-frame layouts — 1g's two staggered ping rings, 2b's
+live waveform, 3a's matrix digits, 2a's 2×4 conference grid.
+
+No schema change, no new dependency, no new env var. 4160 tests.
+
+## v2.106.6 — redesign phase 3: the standard call bar (2026-07-30)
+
+The board's rule is one material across every call surface — glass circles, ACTIVE on the
+cycling accent — so this is a single block that reaches the incoming ring, the outgoing
+dial, 1:1 video, voice and the conference grid at once.
+
+**THE FINDING WORTH FAR MORE THAN THE RESTYLE IS A PRE-EXISTING DEFECT, LIVE SINCE v2.99.4,
+THAT ONLY MEASURING COULD SURFACE.** The per-control tints were ID-scoped, and **an ID is
+compared before ANY number of classes** — so `#micBtn .ctrl-ic` (0,1,2) outranked
+`.ctrl.off .ctrl-ic` (0,0,4) whatever the declaration order, and **the muted-mic red chip
+never rendered**. A muted mic showed a slashed glyph and a red LABEL over a chip still
+filled cheerful green: the chip saying *fine* while the icon said *muted*, on the one
+control where being wrong is dangerous rather than ugly. The comment above those rules
+claimed "state overrides win over the per-button tints" and was false. Confirmed in a
+browser before anything was changed — two rival rules, one ID, one class: the ID won.
+
+**The fix is structural rather than an override.** The chip's fill now lives in exactly ONE
+place, and the per-control hue moved from `color` to a `--ctrl-hue` custom property the base
+rule reads — so `color` is only ever declared by class-level rules and state wins by ORDER.
+The same trap bites one level down (an ID rule setting `color` blocks the ACTIVE state's
+dark-on-accent glyph, and a mid-tone hue on a bright fill is unreadable) and is closed by
+the same change.
+
+**Nothing the owner asked for is taken back, and two board items are declined for that
+reason:**
+- The board says "standard 6-button call bar — NEVER REDUCED", and **v2.99.39 REMOVED
+  controls at the owner's explicit request**. The bar is RESTYLED; the control SET is
+  untouched — the only reading that cannot cost them something they asked for. The set is
+  enumerated in a test against the MARKUP, so a 12th control cannot arrive by reading "six"
+  as a licence.
+- The **labels and per-control hues STAY** (v2.99.4, in the owner's own words), and a label
+  is the only thing a screen reader has here. The CHIP takes the board's uniform glass; the
+  GLYPH keeps its hue — the same split the Dialer's action row and Profile's hub tiles use.
+- The end button stays a **CIRCLE** rather than the board's 56×50 pill, because v2.96.3 made
+  it round after the owner reported the pill "read as a blob".
+
+**The blur is desktop-only, measured rather than cautious**: this bar sits over LIVE VIDEO,
+where v2.99.84 counted 36 `backdrop-filter` layers over a call grid and removed all of them
+on phones. Phones get an opaque chip of the same tone.
+
+**Measured, 8/8**, because none of it is answerable from source — the override's effect
+depends on the cascade (v2.99.84 measured its own override doing NOTHING while reading as
+correct), the phone rule depends on a media query matching, and "does `.off` still beat
+`.on`" is now about rule order. Headless Chromium against the real exported stylesheet and
+markup at 390 and 1280.
+
+**The backtick trap bit for the fourth time** (v2.99.16, v2.99.82, v2.105.24): backticks in
+my own CSS comments terminated the template literal. **And the guard that exists for it
+cannot report it**, which is recorded plainly rather than left as false comfort:
+`relayAssets.test.ts` asserts against the IMPORTED `RELAY_CSS`, and a terminated literal
+ends EARLY — the parsed value can never contain a backtick, so that assertion passed cleanly
+on a file that would not compile, all four times. A source-read guard cannot live in that
+file either, because it imports the module: when the trap fires the file fails to parse and
+vitest reports "no tests" rather than a failure (verified). The real guard now lives in
+`callBarRedesign.test.ts`, which reads the file as TEXT and imports nothing from it.
+
+**Four defects in my own work, all caught by something failing rather than by reading:**
+- A harness passing a two-parameter function as a STRING to `page.evaluate`, which treats a
+  string as an expression and drops the argument (`undefined.bg`, twice).
+- An assertion demanding a SOLID accent fill when the board specifies `rgba(...,.85)`.
+- The **prose-anchor trap INVERTED for the third recorded time**: a pin anchored on the
+  comment text "THE STANDARD CALL BAR" in comment-STRIPPED source, so `indexOf` returned −1
+  and the slice ran the whole stylesheet. It failed on correct code, which is why it was
+  caught.
+- My enumeration was incomplete — `statsBtn` (the v2.105.21 quality readout) is a real
+  control I had not listed, so the set assertion failed on correct markup. Enumerated now,
+  which makes that list the ACTUAL control set rather than my recollection of it.
+
+`client/src/lib/callBarRedesign.test.ts` (11); **all 13 tripwires verified by MUTATION** from
+byte-exact copies off a confirmed-GREEN baseline, sources byte-identical afterwards.
+
+**One survivor was a bad mutation of mine, reported rather than counted**: it ADDED a copy of
+`.off` above `.on` while leaving the original below, so the last declaration still won and
+the change was behaviourally equivalent. Re-run as a genuine MOVE, it bit.
+
+**Two pre-existing pins rewritten to the property**: one froze the hue as a `color`
+declaration inside an ID rule — i.e. it froze the very shape that was the bug — and one froze
+the ACTIVE fill as the fixed cyan this release replaces with the cycling accent.
+
+**NOT VERIFIED ON A CALL, said plainly**: no second browser here, so the cascade, the states
+and the blur are measured against the real stylesheet, but nobody has muted a mic mid-call
+and watched the chip go red.
+
+**Still to come in phase 3**: the per-frame call layouts (1g's two staggered ping rings, 2b's
+live waveform, 3a's matrix digits, 2a's 2×4 conference grid). This release is the shared bar
+they all sit on.
+
+No schema change, no new dependency, no new env var. 4156 tests.
+
+## v2.106.5 — your number appears on EVERY sign-in step (2026-07-30)
+
+Owner, twice in one message: *"Once you put your email ID, your number will automatically
+show up, even before you click log in. So, we will know that this is your ID and your
+number."*
+
+v2.105.26 built that row and it worked — inside `choose`, and **only** inside `choose`.
+`submitEmail` deliberately routes an account that has a 4-digit passcode straight to `pin`,
+because that is the fastest real path. So **the group most likely to be returning — people
+with a passcode set — never saw their number at all.** The ask held for accounts without a
+passcode and silently failed for the ones with one.
+
+**A SOURCE PIN COULD NOT HAVE FOUND THIS, and the pin that existed proves it**: it asserted
+the row's markup where the row happened to live, so it stayed green while a whole branch
+had no row. What finds it is driving the page per branch — **9/9** in headless Chromium
+against the real built bundle (pin / choose / code, plus an unregistered address), with each
+branch asserting the STEP'S OWN LABEL first so a check cannot claim a step it never reached.
+
+- **ONE COMPONENT, NOT A COPY PER STEP.** `IdentityHint` renders on `choose`, `pin`, the
+  code entry and the device wait. A copy per step is precisely how one comes to be left
+  out — in the direction that already happened.
+- An **UNREGISTERED** address passes NO number rather than reserving space for a value that
+  is never coming; the probe correctly returns none.
+- Two sentences stop repeating the address the row above them already shows.
+
+**THE NUMBER STAYS MASKED (`777-•••`)**, restated rather than quietly widened to "fully
+satisfy" the ask: `loginProbe` is reachable by anybody who knows an address, so printing all
+six digits would build an unauthenticated **email → dialable-number lookup** — somebody with
+your email could then call you without ever having been given your number. The leading group
+is what recognition needs and is not an address. The residual (three digits narrow an
+enumeration for somebody who also knows your display name) is bounded, throttled, and
+reversible on request.
+
+**THE MUTATION RUN FOUND A REAL PRIVACY GAP IN THE EXISTING SUITE — the finding worth the
+most here.** Every assertion about masking was satisfied by the CALL SITE naming
+`maskedNumberForUser`, so replacing that function's body with the raw number **SURVIVED**:
+the probe would have handed out dialable numbers with the suite green. Naming a masker is
+not masking. The reader is now pinned to route through `maskNumber` and forbidden from
+returning the bare number.
+
+**One pre-existing pin rewritten to the property**: it froze the row's markup inside
+`ChooseStep`, i.e. it pinned the one location that was the defect. It now asserts the shared
+component plus the rule that `choose` passes no number for an unregistered address.
+
+`server/loginBatch.test.ts` → 38; **all 7 tripwires verified by MUTATION** from byte-exact
+copies, sources byte-identical afterwards, no survivors and no aborts.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: the four branches are driven in a real browser
+against the real bundle, but nobody has signed in on a phone and watched their own number
+appear.
+
+No schema change, no new dependency, no new env var. 4145 tests.
+
+## v2.106.4 — redesign phase 2b (6/6): the other five screens, and the accent app-wide (2026-07-30)
+
+Owner: *"why you didnt fit all designs into the app"* — a fair question. I had been phasing
+the work for my own reviewability rather than for them seeing the design land, which was
+the wrong call. This closes the six screens.
+
+**THE LOAD-BEARING CHANGE IS ONE DECLARATION.** The handoff's last interaction rule is
+"all accent UI follows the `--rb` vars automatically", and the honest way to satisfy that
+is to repoint **`--primary` at the accent** inside `.dark.relay-v2` rather than to edit
+several hundred class strings across six files. `--primary` is already what every active
+state, focus ring, tick, section letter, filter chip and CTA in this app resolves to, so
+one line converts all of them at once — and converts the ones added LATER for free, which
+no per-class sweep can do. Phase 1 published those variables and nothing read them.
+
+- `--primary-foreground` MOVES WITH IT, to the board's `#04211a`. Getting that wrong is
+  not one button, it is every primary control in the app simultaneously: the old primary
+  was a dark cyan carrying near-white text, the accent is a BRIGHT hue, so white-on-accent
+  is the unreadable direction. `--ring` and the sidebar's own pair follow for the same
+  reason (a focus ring in the old cyan beside an accent control reads as two accents).
+- DARK ONLY, deliberately. The palette is built against a near-black background; its
+  default teal computes to about 1.7:1 on a light card — the measurement that forced
+  `--relay-green-text` to exist in v2.99.86 — so the light theme keeps its own tokens.
+
+**MEASURED — AND THAT MEASUREMENT CORRECTS A CLAIM I MADE TO THE OWNER.** I reported
+"accent text fails AA at 2.96:1 on the periwinkle" as a real finding. It was not a
+finding, it was my own harness. Re-measured against the real built stylesheet across all
+twelve palette hues plus the business gold: **78/78, worst on-accent text 5.63:1, worst
+accent-text-on-a-card 6.23:1**, unseen ring 9–10:1 brighter than seen. Nothing needed
+lightening.
+
+**Three harness bugs of my own produced three confident wrong numbers first**, each a trap
+that will recur:
+1. A bare hex sweep of `relayBackground.ts` picked up `#04070a` — the BACKGROUND token —
+   as a palette hue and reported three failures for a colour the accent never takes.
+2. **Chromium returns `oklch()` VERBATIM from `getComputedStyle`**, so parsing digits out
+   of `oklch(0.18 0.007 248)` reads 0.18/0.007/248 as 0–255 channels. That produced the
+   whole false table. Colours are now resolved by PAINTING them into a 1×1 canvas.
+3. An **alpha colour filled onto a TRANSPARENT canvas reads back fully opaque**, so
+   `--border` (white at 6%) measured as `#ffffff` and the unseen-vs-seen ring comparison
+   came out at 1.63:1 — a plausible near-miss that was pure artifact. Every colour is now
+   composited over the surface it actually sits on.
+
+**THE UNSEEN-STORY RING IS ONE CLASS FOR EVERY SURFACE.** `.rstoryring` replaces a
+hardcoded three-hue gradient inside `PeerAvatar`, which draws on thread rows, contacts,
+History discs, the chat header and the story strip — a ring that means "unseen" in one
+place and something else in another is worse than no ring, so the theme split lives in CSS
+(dark = accent, light = the measured gradient) rather than as a runtime read.
+
+- **The board's "flashing" is deliberately NOT taken**: that ring renders once per ROW, so
+  animating it is one animation per row on the app's densest scrolling list — the cost
+  class v2.99.84 measured and removed — and the board shows it at rest in every shot.
+
+**THE OUTGOING BUBBLE STAYS ORANGE — the one place the board is overruled.** It draws the
+outgoing bubble as a translucent accent tint, but the owner asked for orange own-bubbles in
+their own words in v2.99.85 ("when he post mind bubble is orange"), and an explicit request
+is not something a later visual spec overrides. It is also what makes the accent tick
+readable: a bright accent tick on an orange fill is high contrast; on an accent bubble it
+would not be.
+
+**The five screens, item by item:**
+- **1b History** — the selected filter is the accent chip rather than a neutral raised tile
+  (the same "you are here" language as the tab bar's pill, so one idea of selection covers
+  the app); day headers take the board's mono/.26em.
+- **1c/1d Messages** — a READ receipt takes the accent and delivered stays grey ("accent =
+  read, grey = delivered"); the day divider is mono/.26em while staying OPAQUE and z-10
+  (the v2.105.3 sticky rule: bubbles pass BEHIND it, so a translucent fill makes text
+  slide through unreadably); both send buttons — the composer's and the voice-note bar's —
+  become the accent CTA.
+- **1e Contacts** — the A–Z letter takes the accent at .26em; Add-by-PIN becomes the accent
+  chip; of the three quick actions **call** is the accent while chat and video keep their
+  hues, the same primary/secondary split the Dialer's action row uses.
+- **1f Profile** — hub rows become the board's 34px accent TILES with each glyph keeping
+  its own tint, so the per-row wayfinding colour is moved rather than discarded; Sign out
+  becomes a red glass row.
+
+**ONE REDUNDANCY REMOVED BECAUSE THE MUTATION RUN EXPOSED IT.** My first receipt set a grey
+CLASS and then overrode it with an inline accent for the read case — and deleting the class
+changed nothing visible, because an inline `style` beats it. Two individually-removable
+mechanisms are dead weight that reads as load-bearing (the v2.105.17 rule), so the colour
+is decided in exactly one expression, after which the tripwire bites.
+
+`client/src/app/accentEverywhere.test.ts` (20); **all 25 tripwires verified by MUTATION**
+from byte-exact copies off a confirmed-GREEN baseline, sources byte-identical afterwards,
+no survivors and no aborts.
+
+**Two defects in my own test, both failing on CORRECT code:**
+- I anchored the light-theme assertion on the bare `.relay-v2 {` block, which holds only
+  the tokens SHARED by both themes and legitimately declares no `--primary` at all (the
+  light tokens live in `.relay-v2:not(.dark)`).
+- `HubRow`'s body was taken as the first `\n}` after the name, which for
+  `function HubRow({ icon, … })` is the **destructured PARAMETER object** — the
+  v2.105.9/v2.105.27 trap in a third position. Fixed by requiring parens closed before the
+  body brace.
+
+**Six pre-existing pins rewritten to the property**, every one having frozen a literal this
+release legitimately moves:
+- `peerIdentityBatch` froze the exact three-hue ring gradient — i.e. it forbade the ring
+  ever becoming the accent while saying nothing about unseen and seen being DIFFERENT,
+  which is the whole signal.
+- `deliveryReceipts` froze `text-[#4db6ff]`.
+- `messagingColors` required `BRAND_GRADIENT` to be imported and to occur exactly three
+  times, describing one arrangement rather than the property. The colour-literal ban is
+  kept and strengthened — the file now holds fewer colour decisions than before.
+- `profileHub` froze the tile's `size-9` when the property is only that it cannot shrink.
+- `relayAccentVars`' scoping sweep needed widening a second time, now for a root class
+  qualified on its LEFT (`.dark.relay-v2 .rstoryring`), still strictly narrower than
+  `.relay-v2`.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: the contrast and the ring are measured against
+the real built stylesheet, but nobody has looked at these five screens on a phone.
+
+No schema change, no new dependency, no new env var. **4140 tests — and the v2.106.3 entry's "4149" was overstated**: the suite at that commit measures 4120, so the figure was wrong by 29 rather than this release removing anything.
+
+## v2.106.3 — redesign phase 2b (1/6): the Dialer (2026-07-30)
+
+Owner: *"Have you integrated the design? I see so many pages not integrated, not completed."*
+**They were right.** Of the ten utilities phase 1 shipped, SEVEN were unused, and not one of
+the six screens read the accent. This is the first screen actually integrated.
+
+- [x] **MY NUMBER glass card** (board 1a) with copy / QR / share, above the readout.
+- [x] **Extracted, not duplicated** — `QrGlyph` + `ShareNumberSheet` moved out of Profile into
+      `client/src/app/ShareNumber.tsx` (4,171 chars of would-be duplication removed). One QR
+      renderer, one `qrcode.react` import, one `inviteUrlFor` so the QR and Share can never
+      point at different links. The card owns the sheet it opens.
+- [x] **Circular glass keypad with the letters back** — the board asks for both; the letters
+      were dropped citing the OLD prototype and `KEYS.sub` has been carried unused ever since.
+      `aria-hidden`, since they label nothing on a numeric-only field.
+- [x] **Pad capped at the board's 310px**, and also by viewport height so the new row cannot
+      push the card into a scroll.
+- [x] **Action row re-ranked to the board**: Call is the 66px accent primary (`.rcta`), Video
+      and Group are 50px glass. **Nothing removed** — all three actions survive, and the
+      owner's sky/violet hue language moves onto the secondary glyphs.
+- [x] **New `.rkey` utility** whose hover is the cycling accent; press on a transform, never a
+      box-shadow (v2.99.84). Light theme keeps its measured neutral surface.
+- [x] **Measured, 35/35** at 320/360/375/390/430 against the real built stylesheet.
+
+**Three defects of my own, all caught by measuring:**
+- keys were **ovals by 18px** (99×80) — `gridAutoRows` sized rows independently of the column
+  width; `aspect-square` makes the cell square by construction (0.0px deviation after).
+- **I regressed short phones** — the reconstructed pre-redesign card fitted all five widths;
+  mine overflowed 375×667 by 121px. Fixed by having the convenience yield: letters go below
+  700px, MY NUMBER card withheld below 660px. NOT by shrinking keys (measured 38px, under the
+  44px tappable minimum) and NOT by letting the card scroll.
+- the erase key's gloss overlay kept the squircle radius inside a circular button.
+
+**And the harness aborted twice on its OWN bugs first:** Tailwind 4's `rounded-full` computes
+to `3.35544e+07px`, which my circle check read as not-a-circle; and `dark` on `<body>` with
+`relay-v2` on an inner div made `.relay-v2:not(.dark)` match, so it measured the LIGHT key
+surface while reporting dark.
+
+`client/src/pages/app/dialerRedesign.test.ts` (19). Two pre-existing pins rewritten to the
+property (the phase-1 scoping pin required the prefix to be exactly `.relay-v2`, so a MORE
+scoped rule failed it; `topBarSpec` froze the erase key's class string). One defect in my own
+test: I asserted the `/i/` path is built once, and `inviteUrlFor` legitimately builds it twice.
+
+**Remaining in 2b:** 1b History, 1c Messages, 1d Conversation, 1e Contacts, 1f Profile.
+**Phase 3 unblocked by a decision rather than a question:** the board's "6-control bar, NEVER
+REDUCED" contradicts v2.99.39 (owner asked for controls to be removed), so the bar gets
+RESTYLED and the control set does not change.
+
+## v2.106.2 — redesign phase 2a: the five-tab shell + a Groups tab (2026-07-30)
+
+Owner: `do the best` — implementing `design_handoff_relay_app`. Phase 1 (v2.106.0) laid the
+token foundation; this is the NAVIGATION layer on top of it.
+
+- [x] **Five tabs, in the board's order** — `Calls · History · Messages · Groups · Contacts`,
+      Groups between Messages and Contacts, glyph = the board's four dots (written out, not
+      substituted from lucide, whose nearest neighbours are squares) taking `currentColor` so
+      the pill's `var(--rb)` drives it.
+- [x] **The active tab is the board's 40×25 accent pill** — `rgba(var(--rb-rgb),.17)` + a 16px
+      glow, label 9px/700 in `var(--rb)`. The pill and the WEIGHT are what say "you are here";
+      the hue cannot, because it cycles and every tab shares it at any instant.
+- [x] **Dark-only, and that is a contrast decision.** The accent palette is built against a
+      near-black background — its default teal is ~1.7:1 on a light card, unreadable at 9px
+      (the v2.99.86 trap). Light theme keeps the per-tab `shade`. `accentNav` is derived from
+      `liveBackground`, never a second theme read.
+- [x] **Three CSS utilities** — `.rtabbar` (the board's gradient + 18px blur + hairline;
+      deliberately NOT `.rbar`, which is a flat fill for the top bar and composer),
+      `.rnav-pill` (SHARED by the bottom bar and the desktop sidebar's active row, board 1i)
+      and `.rbadge-accent` (`#04211a` on accent, no glow). No accent value is a
+      runtime-composed Tailwind class.
+- [x] **`/app/groups` renders the SAME `MessagesPage`, filtered** — a second entry point, not
+      a second list. The board's own Messages frame still lists group threads and there is no
+      separate Groups frame in the 34.
+- [x] **The narrowing is applied to the INPUT** — selecting the groups + archived CATEGORIES
+      would leak archived DIRECT threads into a tab called Groups, because `Archived` is
+      `t.archived` regardless of kind.
+- [x] **The empty state and the search box ask the SCOPED list** — `threads.data.length` counts
+      DMs, so on the Groups tab of an account with DMs and no groups it reads non-zero and the
+      page renders `No conversations match “”`.
+- [x] **Every in-page navigation returns to its own tab** — `useTabBasePath` replaces seven
+      hardcoded `/app/messages` targets across three components. Read from the location, not
+      threaded as a prop, because the conversation view and the sheet are separate components.
+- [x] **The + opens the side the tab is about** — `defaultMode`, and `resetAll` returns to it
+      rather than a hardcoded `"dm"`. Both modes stay reachable.
+- [x] **Measured, not assumed** (the bar broke in v2.103.1 and v2.99.94): headless Chromium
+      against the real built stylesheet at 320/360/375/390/430, worst case — 50/50 clean,
+      tightest slack 10.8px, bar 47.5px against ~68px. All three harness gates proven to abort.
+- [x] **The board's 18px bottom padding NOT taken** — it is its stand-in for the home
+      indicator, which we compute; a floor would undo the owner's v2.99.94 request.
+- [x] `client/src/app/fiveTabShell.test.ts` (30); **41/41 tripwires mutation-verified**.
+      One survivor was a real gap in my own test (a bare `toMatch` the sidebar's copy
+      satisfied while the bottom bar's was gutted) — fixed and re-verified both ways.
+- [x] Five pre-existing pins rewritten to the property, plus one unbounded slice bounded.
+
+**Not in this release, said plainly:** the six SCREENS the board redesigns (1a Dialer,
+1b History, 1c Messages, 1d Conversation, 1e Contacts, 1f Profile) are phase 2b. The call
+surfaces' "standard 6-control bar — NEVER REDUCED" needs the owner's decision first, because
+v2.99.39 REMOVED in-call controls at their explicit request.
+
 ## v2.106.1 — the call log reaches past its newest page (2026-07-30)
 
 #117, the last of the three items I owed. Both call payloads were hard-capped at 100 rows with no way past

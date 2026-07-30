@@ -370,9 +370,13 @@ describe("the rows themselves", () => {
   it("truncate rather than overflow, and the text is the only shrinker", () => {
     expect(ROW).toMatch(/min-w-0 flex-1/);
     expect(ROW).toMatch(/block truncate/);
-    // The icon chip and the chevron are atomic; if either could shrink the row would
-    // degrade into an unreadable smear instead of an ellipsis.
-    expect(ROW).toMatch(/size-9 shrink-0/);
+    /* The icon chip and the chevron are atomic; if either could shrink the row would
+       degrade into an unreadable smear instead of an ellipsis.
+       REWRITTEN (v2.106.4): this froze `size-9`, the tile's exact SIZE, which board 1f
+       legitimately changes to 34px — while the property is only that the tile cannot
+       shrink. Now asserted as "the icon tile declares a size AND shrink-0", so a tile
+       that starts competing with the label for width still fails. */
+    expect(ROW).toMatch(/size-\[?\d+(?:px\])? shrink-0/);
     expect(ROW).toMatch(/<ChevronRight className="size-4 shrink-0/);
   });
 

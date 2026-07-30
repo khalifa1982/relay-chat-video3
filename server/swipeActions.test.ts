@@ -300,8 +300,18 @@ describe("deleting a thread is recoverable, and says so", () => {
     expect(MESSAGES).toMatch(/comes back here if they\s*\n?\s*message you again/);
     // The other four are undone by the same gesture, so a dialog on them would be noise.
     expect(MESSAGES).toMatch(/onSelect: \(\) =>\s*\n\s*setClearingThread\(/);
-    // …and deleting the OPEN thread navigates away, rather than leaving an empty
-    // conversation nobody can escape except with Back.
-    expect(MESSAGES).toMatch(/if \(activeConvoId === clearingThread\.conversationId\) setLocation\("\/app\/messages"\)/);
+    /* …and deleting the OPEN thread navigates away, rather than leaving an empty
+       conversation nobody can escape except with Back.
+
+       REWRITTEN TO THE PROPERTY (v2.106.2): this froze the literal `/app/messages`, which
+       the Groups tab made wrong — that tab is the same page at `/app/groups`, so a
+       hardcoded target would move the user to Messages mid-delete. The property is that
+       the guard fires and navigates to the tab's OWN base path, not that the path is
+       spelled one particular way. */
+    expect(MESSAGES).toMatch(
+      /if \(activeConvoId === clearingThread\.conversationId\) setLocation\(basePath\)/,
+    );
+    // `basePath` really is the current tab, not a constant that happens to be named that.
+    expect(MESSAGES).toMatch(/loc\.startsWith\("\/app\/groups"\) \? "\/app\/groups" : "\/app\/messages"/);
   });
 });

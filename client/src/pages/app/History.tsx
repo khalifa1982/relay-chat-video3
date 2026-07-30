@@ -757,8 +757,11 @@ export default function HistoryPage() {
                   // tab's full width.
                   "flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1 text-[11px] font-semibold transition-colors " +
                   "outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] " +
+                  /* Board 1b: the selected filter chip is the accent, not a neutral
+                     raised tile — the same "you are here" language as the tab bar's
+                     pill, so one idea of selection covers the whole app. */
                   (active
-                    ? "bg-background text-foreground shadow-sm"
+                    ? "rchip-accent shadow-sm"
                     : "text-muted-foreground hover:text-foreground")
                 }
               >
@@ -860,6 +863,7 @@ export default function HistoryPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              destructive
               onClick={() => {
                 setConfirmClear(false);
                 clearHistory.mutate();
@@ -1000,7 +1004,12 @@ export default function HistoryPage() {
                       ) : (
                         <ChevronDown className="size-3 shrink-0" strokeWidth={2.4} />
                       )}
-                      <span className="flex-1 text-left text-[11px] font-bold uppercase tracking-[0.12em]">
+                      {/* Board 1b: "day headers (mono, .26em)" — the wide mono tracking
+                          is what makes a day read as a divider rather than as a row. */}
+                      <span
+                        className="flex-1 text-left font-mono text-[10px] font-bold uppercase"
+                        style={{ letterSpacing: ".26em" }}
+                      >
                         {sec.label}
                       </span>
                       <span className="text-[11px] text-muted-foreground/70">{sec.items.length}</span>

@@ -109,7 +109,11 @@ describe("v2.99.37 — the per-row call/message buttons are GONE (owner)", () =>
     expect(M).toMatch(/dialer\?to=\$\{encodeURIComponent\(thread\.peerNumber\)\}&video=1/);
   });
   it("the whole text column is ONE tap that opens the thread", () => {
-    expect(ROW).toMatch(/onClick=\{\(\) => setLocation\(`\/app\/messages\?c=\$\{t\.conversationId\}`\)\}/);
+    /* REWRITTEN TO THE PROPERTY (v2.106.2): this froze the literal `/app/messages?c=`,
+       which the Groups tab made wrong — that tab is this same page at `/app/groups`, so
+       a hardcoded target would jump the user to the Messages tab on opening a group. The
+       property is that the row's tap opens THIS thread on the CURRENT tab. */
+    expect(ROW).toMatch(/onClick=\{\(\) => setLocation\(`\$\{basePath\}\?c=\$\{t\.conversationId\}`\)\}/);
   });
 });
 
@@ -125,9 +129,14 @@ describe("v2.99.37 — robustness the earlier rows got wrong", () => {
     expect(ROW).toMatch(/flex-wrap items-center gap-x-1\.5 gap-y-1/);
   });
   it("the avatar button stays OUTSIDE the row button (nested buttons are invalid)", () => {
+    // Anchored on the row-open HANDLER rather than on the URL it navigates to, for the
+    // same reason as above: the path moved with the Groups tab, and an anchor that names
+    // it silently returns -1, which is LESS than any index and would have made this
+    // comparison pass vacuously in the other direction.
     const avatarAt = ROW.indexOf("<PeerAvatar");
-    const rowBtnAt = ROW.indexOf("onClick={() => setLocation(`/app/messages?c=");
+    const rowBtnAt = ROW.indexOf("onClick={() => setLocation(`${basePath}?c=");
     expect(avatarAt).toBeGreaterThan(0);
+    expect(rowBtnAt).toBeGreaterThan(0);
     expect(rowBtnAt).toBeGreaterThan(avatarAt); // avatar is rendered first, as a sibling
   });
   it("group / notes-to-self / muted variants are all still handled", () => {

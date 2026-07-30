@@ -194,21 +194,42 @@ describe("the glass token layer", () => {
        back one screen at a time. The slice is comment-stripped: `.rbar`'s own comment
        names `.rbar-flat`, so an unstripped `indexOf` found the PROSE and the slice then
        swallowed `.rbar`'s real backdrop-filter. */
-    const flat = layer.slice(layer.indexOf(".relay-v2 .rbar-flat"), layer.indexOf(".relay-v2 .rchip-accent"));
+    /* BOUNDED BY THE RULE'S OWN CLOSING BRACE, not by whichever rule happened to sit
+       next: the original ran to `.rchip-accent`, so v2.106.2's `.rtabbar` — which
+       legitimately DOES blur — landed inside the window and this pin failed on correct
+       code. Anchoring on a neighbour makes a pin break every time one is inserted, while
+       saying nothing about the property. */
+    const flatAt = layer.indexOf(".relay-v2 .rbar-flat");
+    expect(flatAt).toBeGreaterThan(0);
+    const flat = layer.slice(flatAt, layer.indexOf("}", flatAt) + 1);
     expect(flat.length).toBeGreaterThan(40);
     expect(flat).toMatch(/background: rgba\(8, 12, 14, 0\.92\)/);
     expect(flat).not.toMatch(/backdrop-filter/);
     // And the blurred one really does blur, so the pair is a genuine choice.
-    const bar = layer.slice(layer.indexOf(".relay-v2 .rbar {"), layer.indexOf(".relay-v2 .rbar-flat"));
+    const barAt = layer.indexOf(".relay-v2 .rbar {");
+    expect(barAt).toBeGreaterThan(0);
+    const bar = layer.slice(barAt, layer.indexOf("}", barAt) + 1);
     expect(bar).toMatch(/backdrop-filter: blur\(16px\)/);
   });
 
   it("EVERY rule is scoped, so the landing page and docs are untouched", () => {
-    // The property is that no rule targets a bare `.r*` class at the top level — not
-    // "no line starts with a dot", which `.relay-v2 .rglass` obviously does.
+    /* The property is that no rule targets a bare `.r*` class at the top level — not
+       "no line starts with a dot", which `.relay-v2 .rglass` obviously does.
+
+       REWRITTEN (v2.106.3): this required the prefix to be EXACTLY `.relay-v2`, so the
+       theme-scoped `.relay-v2:not(.dark) .rkey` — which is MORE scoped, not less — failed
+       it on correct code. What actually matters is that every rule begins inside the app's
+       own root class, however it is further qualified.
+
+       WIDENED AGAIN (v2.106.4) for the same reason in the other direction: a dark-only
+       rule is written `.dark.relay-v2 .rstoryring`, where the root class is qualified on
+       its LEFT rather than its right. That is still strictly narrower than `.relay-v2`,
+       and the landing page and docs carry neither class. */
     const selectors = layer.match(/^\.[^\s{]+/gm) ?? [];
     expect(selectors.length).toBeGreaterThan(5);
-    for (const sel of selectors) expect(sel).toBe(".relay-v2");
+    for (const sel of selectors) {
+      expect(sel, sel).toMatch(/^(?:\.dark)?\.relay-v2(?![\w-])/);
+    }
   });
 });
 
