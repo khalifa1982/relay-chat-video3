@@ -405,6 +405,9 @@ async function startServer() {
           startedAt: info.startedAt,
           answeredAt: info.answeredAt,
           endedAt: info.endedAt,
+          // #116 — how it was dialled, so History can say Voice or Video for an
+          // ANSWERED group call. Null means unknown and stays null in the column.
+          video: info.video,
           participants: info.participants.map((p) => ({ number: p.pin, name: p.name })),
         });
       } catch (err) {

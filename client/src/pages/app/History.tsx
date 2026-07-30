@@ -91,6 +91,13 @@ type ConfRow = {
   startedAt: string | Date;
   endedAt: string | Date;
   durationSec: number;
+  /**
+   * #116 — how the call was DIALLED, or null/absent when it was never recorded
+   * (every conference logged before the column existed, and a party line, which is
+   * joined rather than dialled). Optional so an older server's payload simply omits
+   * it and the row prints nothing, which is the same as null.
+   */
+  channel?: "voice" | "video" | null;
   /** Party line (v2.89): this room was a dialable line (`pl-<number>`). */
   partyLine?: boolean;
   /** The line's title (null when the line has since been deleted). */
@@ -1172,9 +1179,11 @@ function ConferenceItem({
           )}
           <div className="truncate text-xs text-muted-foreground">
             {/* Group first, so "Group" reads as the KIND of call before its
-                direction, then direction, then the duration. A group's media type
-                is deliberately absent: `conference_history` stores no channel, so
-                claiming Voice or Video here would be a guess. */}
+                direction, then direction, then the duration, then the media type.
+                #116: `conference_history.channel` now records how the call was
+                DIALLED, so this no longer has to guess — and a row from before that
+                column existed carries NULL and prints nothing rather than a
+                confident "Voice" nobody recorded. */}
             {isGroup ? (
               <>
                 <span className="font-semibold text-foreground">
@@ -1188,6 +1197,8 @@ function ConferenceItem({
               {direction === "out" ? "Outgoing" : "Incoming"}
             </span>
             {" "}· {formatDuration(conf.durationSec)}
+            {/* #116 — nothing at all when the channel was never recorded. */}
+            {conf.channel === "voice" ? " · Voice" : conf.channel === "video" ? " · Video" : ""}
           </div>
           <div className="mt-0.5 text-[11px] text-muted-foreground/80">
             {formatFullWhen(conf.startedAt)}

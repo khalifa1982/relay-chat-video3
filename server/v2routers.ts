@@ -3490,6 +3490,15 @@ export const v2CallsRouter = router({
         startedAt: r.startedAt,
         endedAt: r.endedAt,
         durationSec: r.durationSec,
+        /**
+         * #116 — how the call was DIALLED, or null when we never recorded it.
+         *
+         * NULL is the honest answer for every conference logged before the column
+         * existed and for a party line (which is joined, not dialled), and the row
+         * renders nothing for it rather than defaulting to "Voice" — which would be
+         * a confident claim about somebody's own call history that nobody recorded.
+         */
+        channel: (r.channel ?? null) as "voice" | "video" | null,
         partyLine: isPartyLine,
         // Null when the line has since been deleted (row keeps its number).
         // Looked up on the STORED number: a line's number never moves.

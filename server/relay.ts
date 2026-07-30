@@ -260,6 +260,16 @@ export interface RoomMeta {
    * does have one.
    */
   joinedAt?: Map<string, number>;
+  /**
+   * #116 — how this room was DIALLED, so an answered group call can report Voice or
+   * Video in History the way a solo row does.
+   *
+   * OPTIONAL, and absent means UNKNOWN rather than voice: a party line is joined
+   * rather than dialled, and a room hydrated from a record written before this field
+   * existed carries none. Both must report nothing instead of asserting a media type
+   * nobody recorded.
+   */
+  video?: boolean;
 }
 
 /**
@@ -288,6 +298,9 @@ export type ConferenceEndHook = (info: {
   answeredAt: number | null;
   endedAt: number;
   dialedNumber: string | null;
+  /** #116 — how it was DIALLED, or null when unknown (a party line is joined, and
+   *  a room hydrated from a pre-feature record carries no flag). */
+  video: boolean | null;
   participants: Array<{ pin: string; name: string }>;
 }) => void;
 
@@ -536,6 +549,9 @@ function reapRoom(reg: RelayRegistry, roomId: string) {
         answeredAt: meta.answeredAt,
         endedAt,
         dialedNumber: meta.dialedNumber,
+        // #116 — `?? null` rather than `?? false`: absent means we never recorded
+        // it, which History must render as nothing rather than as "Voice".
+        video: meta.video ?? null,
         participants: Array.from(meta.roster.entries()).map(([pin, name]) => ({ pin, name })),
       });
     } catch { /* never let history logging break teardown */ }
@@ -1379,6 +1395,9 @@ export function snapshotRoom(reg: RelayRegistry, roomId: string): PersistedRoom 
     lastActiveAt: meta.lastActiveAt,
     dialedNumber: meta.dialedNumber,
     accepted: meta.accepted,
+    // #116 — omitted when unknown, so a party line and a pre-feature room
+    // serialize exactly as before.
+    ...(typeof meta.video === "boolean" ? { video: meta.video } : {}),
     roster: Array.from(meta.roster.entries()),
   };
 }
@@ -1432,6 +1451,7 @@ export function applyHydratedRooms(reg: RelayRegistry, rooms: readonly Persisted
       // #109 — omitted when the record carried no stamps at all, so a pre-feature
       // record hydrates byte-identically to before.
       ...(joined.size ? { joinedAt: joined } : {}),
+      ...(typeof rec.video === "boolean" ? { video: rec.video } : {}),
       hydratedAt: Date.now(),
     });
     // Every hydrated room starts with zero connected members, so arm the
@@ -2086,6 +2106,10 @@ export function handleMessage(
                  expired or unsigned seed yields undefined and the call proceeds
                  exactly as it did before this feature existed. */
               groupAdminPins: seededGroupAdmins(callerPin, (msg as { seed?: unknown }).seed),
+              // #116 — the DIAL channel, from the same flag the ring card and the
+              // VoIP push already read. Recorded here because the room is the only
+              // thing that survives to the end of the call.
+              video: wantVideo,
             });
             safeSend(callerSocket, { type: "room", roomId: rid, selfRole: "host", hostPin: callerPin, cap: mintRoomCap(rid, callerPin, "host") });
             // On the LiveKit path, the caller joins the SFU room immediately (alone)
