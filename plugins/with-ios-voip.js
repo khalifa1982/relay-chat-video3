@@ -111,6 +111,7 @@ const IMPL_SRC = `//
 //
 #import "${CLASS_NAME}.h"
 
+#import <TargetConditionals.h>
 #import <PushKit/PushKit.h>
 
 // ObjC → ObjC, so these need no Swift module and no bridging header. The angle
@@ -148,6 +149,19 @@ const IMPL_SRC = `//
 
 - (void)start {
   if (self.registry != nil) return; // idempotent
+#if TARGET_OS_MACCATALYST
+  // PushKit VoIP is not available on Mac Catalyst — skip entirely.
+  return;
+#endif
+  // Runtime guard for "Designed for iPad" apps running on macOS, where the
+  // compile-time check above does not fire but PushKit still crashes.
+  if (@available(iOS 13.0, *)) {
+    if ([NSProcessInfo processInfo].isMacCatalystApp ||
+        [NSProcessInfo processInfo].isiOSAppOnMac) {
+      NSLog(@"[RELAY] Skipping VoIP PushKit registration (running on macOS)");
+      return;
+    }
+  }
   PKPushRegistry *registry = [[PKPushRegistry alloc] initWithQueue:dispatch_get_main_queue()];
   registry.delegate = self;
   registry.desiredPushTypes = [NSSet setWithObject:PKPushTypeVoIP];
