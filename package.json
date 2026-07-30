@@ -16,7 +16,8 @@
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "qr": "node scripts/generate_qr.mjs"
+    "qr": "node scripts/generate_qr.mjs",
+    "postinstall": "node scripts/postinstall.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -95,5 +96,10 @@
     "typescript": "~5.9.3",
     "vitest": "^2.1.9"
   },
-  "packageManager": "pnpm@9.12.0"
+  "packageManager": "pnpm@9.12.0",
+  "pnpm": {
+    "patchedDependencies": {
+      "react-native-callkeep@4.3.16": "patches/react-native-callkeep@4.3.16.patch"
+    }
+  }
 }
