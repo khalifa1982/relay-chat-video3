@@ -357,3 +357,42 @@ describe("the phase-1 rules still hold across everything added here", () => {
     }
   });
 });
+
+describe("phase 4 — the overlay material, and a light-theme AA fix it uncovered", () => {
+  it("the sheet material is applied at the FOUR shared primitives, not per overlay", () => {
+    /* 13 overlay consumers reached from four lines. Editing seventeen components instead is
+       how one of them comes to look different from the rest — and how the next one added
+       gets nothing at all. */
+    for (const f of ["dialog", "alert-dialog", "sheet", "drawer"]) {
+      const src = read(`client/src/components/ui/${f}.tsx`);
+      expect(src, f).toMatch(/"[^"]*\brsheet\b/);
+    }
+  });
+
+  it("`.rsheet` is DARK-scoped, which is what makes it safe on a shared primitive", () => {
+    /* The recipe is a near-black gradient. In light it must declare nothing, so the
+       primitives' own `bg-background` still decides and the light theme is byte-identical —
+       otherwise this one class would put a dark sheet under near-black text everywhere. */
+    expect(CSS_CODE).toMatch(/\.dark\.relay-v2 \.rsheet \{/);
+    expect(CSS_CODE).not.toMatch(/(?<!\.dark)\.relay-v2 \.rsheet \{/);
+  });
+
+  it("the LIGHT theme's white-on-colour fills clear AA", () => {
+    /* A PRE-EXISTING defect, found by measuring the sheet rather than introduced by the
+       redesign: all three of these carry near-white text and all three failed AA on the
+       app's DEFAULT theme — primary 4.00:1, accent 3.58:1, destructive 4.30:1. That is every
+       primary button, accent surface and destructive confirmation in light mode. Each value
+       is now the LIGHTEST clearing 4.5:1 with a real margin, measured in a browser: 4.73,
+       4.85 and 4.87:1. Pinned as an upper BOUND on lightness rather than as exact literals,
+       so the hue can be retuned but never back above the failing threshold. */
+    const light = block(".relay-v2:not(.dark) {");
+    for (const [name, max] of [["primary", 0.51], ["accent", 0.51], ["destructive", 0.58]] as const) {
+      const at = light.indexOf(`--${name}: oklch(`);
+      expect(at, name).toBeGreaterThan(0);
+      const lightness = Number(light.slice(at).match(/oklch\(([\d.]+)/)![1]);
+      expect(lightness, `${name} must stay dark enough for white text`).toBeLessThanOrEqual(max);
+    }
+    // The focus ring follows the primary, or it stops matching the control it rings.
+    expect(light).toMatch(/--ring: oklch\(0\.5 0\.18 192\)/);
+  });
+});

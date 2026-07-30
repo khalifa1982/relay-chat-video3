@@ -189,15 +189,25 @@
   --secondary-foreground: oklch(0.3 0.012 220);
   --muted: oklch(0.95 0.005 220);
   --muted-foreground: oklch(0.5 0.015 220);
-  --accent: oklch(0.58 0.16 192);
+  /* AA FIX (v2.106.10), and it is a PRE-EXISTING defect found by measuring the sheet
+     material rather than something the redesign introduced — the dark theme's tokens were
+     repointed in v2.106.4 and these were left exactly as they shipped. All three of these
+     fills carry NEAR-WHITE text, and all three failed AA for normal text on the app's
+     DEFAULT theme: primary 4.00:1, accent 3.58:1, destructive 4.30:1. That is every primary
+     button, every accent surface and every destructive confirmation in light mode.
+     Each is the LIGHTEST value clearing 4.5:1 with a real margin (>=4.7), so the hue moves
+     as little as possible from what shipped rather than sitting one rounding error from
+     failing again: primary 4.73:1, accent 4.85:1, destructive 4.87:1.
+     `--ring` follows `--primary`, or a focus ring stops matching the control it rings. */
+  --accent: oklch(0.5 0.16 192);
   --accent-foreground: oklch(0.99 0 0);
-  --primary: oklch(0.54 0.18 192);
+  --primary: oklch(0.5 0.18 192);
   --primary-foreground: oklch(0.99 0 0);
-  --destructive: oklch(0.6 0.22 27);
+  --destructive: oklch(0.57 0.22 27);
   --destructive-foreground: oklch(0.99 0 0);
   --border: oklch(0.18 0.012 220 / 12%);
   --input: oklch(0.18 0.012 220 / 16%);
-  --ring: oklch(0.54 0.18 192);
+  --ring: oklch(0.5 0.18 192);
   --sidebar: oklch(0.99 0.005 220);
   --sidebar-foreground: oklch(0.18 0.012 220);
   --sidebar-accent: oklch(0.58 0.16 192);
@@ -761,8 +771,19 @@ body.relay-app-lock {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 /* Sheets and dialogs sit ABOVE the glass tier: nearly opaque, because they cover
-   content that must stop competing for attention, plus a real drop shadow. */
-.relay-v2 .rsheet {
+   content that must stop competing for attention, plus a real drop shadow.
+   ---------------------------------------------------------------------------
+   DARK ONLY, and that scoping is what makes it safe to put on a SHARED primitive. This is
+   applied by `DialogContent` / `SheetContent` / `DrawerContent` / `AlertDialogContent`, so
+   it reaches every overlay in the app from four lines instead of seventeen components —
+   but the recipe is a near-black gradient, and in the light theme that would be a dark
+   sheet carrying near-black text. Declaring nothing in light lets the primitives' own
+   `bg-background` show through unchanged, so the light theme is byte-identical.
+   NEARLY opaque rather than translucent, deliberately: an overlay sits over content the
+   user is meant to stop reading, and a see-through sheet keeps that content competing. It
+   also means no `backdrop-filter` is needed here at all — the cheapest way to satisfy a
+   glass look is not to blur anything (the v2.99.84 rule). */
+.dark.relay-v2 .rsheet {
   background: linear-gradient(180deg, rgba(15, 21, 25, 0.96), rgba(8, 12, 15, 0.98));
   border: 1px solid rgba(255, 255, 255, 0.13);
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.14);

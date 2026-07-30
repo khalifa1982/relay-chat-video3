@@ -11278,6 +11278,69 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.10 — phase 4 opens; three AA failures found in the DEFAULT theme (2026-07-30)
+
+Phase 1 shipped ten design utilities. After phases 2 and 3, **four were still completely
+unused** — `.rsheet`, `.rscrim`, `.rbar`, `.rbar-flat`.
+
+The board's phase-4 frames are seventeen overlays, sheets and alerts, and the honest way to
+give them one material is not to edit seventeen components: `.rsheet` now sits on the four
+shared shadcn primitives (`DialogContent`, `AlertDialogContent`, `SheetContent`,
+`DrawerContent`) — **13 overlay consumers reached from four lines**, and the ones added later
+for free.
+
+**It is DARK-scoped, and that is what makes it safe on a shared primitive at all.** The
+recipe is a near-black gradient, so in light it must declare NOTHING and let the primitives'
+own `bg-background` decide — otherwise one class puts a dark sheet under near-black text in
+every dialog in the app. The light theme is byte-identical, asserted.
+
+**THE FINDING WORTH FAR MORE THAN THE MATERIAL IS PRE-EXISTING, AND IT IS IN THE THEME MOST
+PEOPLE SEE.** Measuring the sheet's text pairings across both themes turned up that all three
+LIGHT-theme fills carrying near-white text fail AA for normal text:
+
+| token | was | now |
+| --- | --- | --- |
+| `--primary` | 4.00:1 | **4.73:1** |
+| `--accent` | 3.58:1 | **4.85:1** |
+| `--destructive` | 4.30:1 | **4.87:1** |
+
+That is every primary button, every accent surface and every destructive confirmation in the
+app's DEFAULT theme, and it has been true since those tokens were written. **v2.106.4
+deliberately scoped its accent repoint to `.dark.relay-v2`, so this is not something the
+redesign introduced** — established by diffing the light block against `main` before claiming
+it.
+
+Each value is the **LIGHTEST** lightness clearing 4.5:1 with a real margin, solved in a
+browser rather than guessed, so the hue moves as little as possible from what shipped while
+not sitting one rounding error from failing again. `--ring` follows `--primary`, or a focus
+ring stops matching the control it rings. **Pinned as an upper BOUND on lightness** rather
+than as exact literals, so the palette can still be retuned but never back above the failing
+threshold.
+
+**Two utilities are deliberately left unused, and that is a finding rather than an
+omission**: `.rbar` and `.rbar-flat` describe material the app ALREADY has — the top bar
+carries its blur behind `supports-[backdrop-filter]` guards, the composer is already an
+opaque flat fill — and applying `.rbar` naively would **REMOVE the no-backdrop-filter
+fallback**, which is a regression dressed as progress. `.rscrim` is genuinely absent and
+genuinely useful (content now sits over a live canvas), but its value is a contrast claim I
+have not measured yet, so it is named as next rather than added on faith.
+
+**Measured, 8/8**: the sheet's own surface resolved through a canvas pixel in both themes
+(Chromium returns `oklch()` verbatim, which is how v2.106.4 produced a table of nonsense),
+title / body / on-accent CTA contrast on each.
+
+**A defect in my own test, caught by it failing**: a pattern written through a shell heredoc
+had its backslashes doubled, producing `Invalid regular expression: Unterminated group` —
+replaced with an index-and-slice that needs no escaping.
+
+`client/src/app/accentEverywhere.test.ts` → 23; **all 7 tripwires verified by MUTATION**,
+sources byte-identical afterwards.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: the contrast is measured against the real built
+stylesheet, but nobody has opened a dialog on a phone.
+
+No schema change, no new dependency, no new env var. 4174 tests.
+
 ## v2.106.9 — board 2a: the speaking tile takes the accent; PHASE 3 CLOSED (2026-07-30)
 
 **The hue move is a vocabulary fix rather than a restyle.** Green meant BOTH *online* (the
