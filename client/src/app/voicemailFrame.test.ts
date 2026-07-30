@@ -53,7 +53,9 @@ describe("board 2g — this frame is the leave-a-message card, not a voicemail i
     // this card, and the board wins (MISSING-FRAMES.md / v2.106.11). There is no
     // voicemail list query, route or read model to build rows from, so nothing
     // here may pretend to enumerate them.
-    expect(VM).not.toMatch(/voicemails/i);
+    // (`/voicemails/i` was here and is vacuous by construction — no such plural
+    //  identifier could exist in this file, so it passed on any implementation.)
+    expect(VM).not.toMatch(/useQuery\([^)]*voicemail/i);
     expect(VM).not.toMatch(/\bvoicemail\.list\b/);
   });
 
@@ -61,7 +63,10 @@ describe("board 2g — this frame is the leave-a-message card, not a voicemail i
     // The refusal is RECORDED in the file's own prose, which is exactly why the
     // assertion has to run on stripped CODE — matching the comment that explains
     // an absence is how this repo has passed sixteen tests on English.
-    expect(VM_RAW).toMatch(/transcript/i); // the recorded refusal
+    // NOT `VM_RAW.toMatch(/transcript/i)` any more: that pinned COMMENT PROSE, so
+    // tidying the file's own header turned it red on correct code — the fragility
+    // this repo has recorded many times, inverted into a dependency ON prose. What
+    // matters is only that no CODE renders one, asserted on the next line.
     expect(VM).not.toMatch(/transcript/i); // …and no code that renders one
   });
 
@@ -114,8 +119,22 @@ describe("the readout is DERIVED from the cap, never a literal", () => {
   });
 
   it("states no no-answer duration the app does not implement", () => {
-    // Board 2g says "No answer after 30 seconds"; the real backstop is 65_000ms.
-    expect(VM).not.toMatch(/\d+\s*seconds?/);
+    /* NARROWED (v2.106.26). This forbade EVERY second-duration in the file, honest
+       ones included — which is what forced the deletion of the TRUE sentence
+       "Recording stops automatically at 60 seconds.", the only place the app said
+       that hitting the cap also SENDS the take. The board's claim is specifically a
+       NO-ANSWER duration the app does not implement (it says 30s; the real backstop
+       is 65_000ms), so that is what is banned; a duration the recorder really
+       enforces is allowed, and is asserted to agree with `MAX_MS` below. */
+    expect(VM).not.toMatch(/no answer[^.]{0,40}\d+\s*seconds?/i);
+    expect(VM).not.toMatch(/\b(?:15|20|25|30|45|90)\s*seconds?\b/);
+    /* AND THE HONEST ONE IS REQUIRED TO BE PRESENT AND DERIVED. Send is now the only
+       control that stops the recorder (Pause and Discard are separate), so the copy
+       saying so is load-bearing, and it must come from the constant — a literal
+       could promise a ceiling `VOICEMAIL_MAX_MS` does not enforce. */
+    expect(VM).toMatch(/Sending stops the recording/);
+    expect(VM).toMatch(/\{Math\.round\(VOICEMAIL_MAX_MS \/ 1000\)\} seconds/);
+    expect(VM).not.toMatch(/\b60\s*seconds\b/);
     // Nor the board's other unbuilt claims: no greeting feature exists, nothing
     // is end-to-end encrypted here, and this card cannot decline a live call.
     expect(VM).not.toMatch(/greeting/i);
@@ -242,8 +261,61 @@ describe("colour vocabulary", () => {
     for (const [name, src] of [["voicemail", PANEL], ["composer", MSG]] as const) {
       expect(src, name).toMatch(/bg-destructive motion-safe:animate-pulse/);
     }
-    expect(PANEL).toMatch(/className="rcta grid size-\[54px\]/);
-    expect(MSG).toMatch(/className="rcta grid size-9 shrink-0 place-items-center rounded-full/);
+    /* THE PROPERTY IS "both send controls are the accent CTA", not their exact class
+       strings — freezing `Messages.tsx`'s from a voicemail test turns this frame red
+       on a legitimate composer restyle while saying nothing about the agreement. */
+    for (const [name, src] of [["voicemail", PANEL], ["composer", MSG]] as const) {
+      expect(src, name).toMatch(/className="rcta grid size-/);
+    }
+  });
+});
+
+describe("an overlay cannot swallow a tap, and accent text cannot fail AA", () => {
+  /* BOTH OF THESE ARE STANDING GUARDS RATHER THAN INSTANCE PINS, because both bugs
+     were SHIPPED in v2.106.23 and found by an adversarial review afterwards — and my
+     own first attempt at pinning the fixes left them unguarded, which the mutation run
+     caught. A rule beats a literal here: the next overlay and the next accent label
+     are covered too. */
+
+  it("every relayPing halo is pointer-events-none", () => {
+    /* MEASURED GEOMETRY, not a preference: `@keyframes relayPing` scales to 2.8, so a
+       66px indicator paints and HIT-TESTS out to ~185px — ±59px past its own edge —
+       while Discard and Send sit 32px away in the same `gap-8` row, covering the inner
+       ~27px of BOTH 54px buttons. It is positioned while they are static, so it
+       hit-tests above them whatever the DOM order, hit-testing ignores opacity, and
+       the easing holds the grown state for most of every cycle. Shipped, that made the
+       ONLY two exits from a recording half-untappable. v2.105.21 and v2.106.13 both
+       paid for this class already. */
+    const halos = VM.match(/className="[^"]*\[animation:relayPing[^"]*"/g) ?? [];
+    expect(halos.length, "the recording halo must exist").toBeGreaterThan(0);
+    for (const h of halos) {
+      expect(h, "a relayPing halo without pointer-events-none steals taps").toContain(
+        "pointer-events-none",
+      );
+    }
+  });
+
+  it("the raw accent variable is never used as TEXT colour", () => {
+    /* `--rb` is built for a near-black card and computes to 1.68:1 on the WHITE light
+       card — index.css says so in as many words, and it is the measurement that forced
+       `--relay-green-text` to exist. v2.106.4 repointed `--primary` at `--rb` inside
+       `.dark.relay-v2` PRECISELY so accent UI follows the hue automatically while light
+       keeps a measured value (4.84:1). Reaching for the variable directly routes around
+       that indirection. Three text sites here did, and shipped at 1.68:1 — worse than
+       the presence green they replaced. FILLS are fine and stay. */
+    expect(VM).not.toMatch(/color:\s*ACCENT/);
+    expect(VM).not.toMatch(/color:\s*["'`]var\(--rb/);
+    expect(VM).not.toMatch(/color:\s*["'`]rgba\(var\(--rb-rgb/);
+    // And the sanctioned token is what the accent text actually uses.
+    expect(VM).toMatch(/text-primary/);
+  });
+
+  it("ACCENT is only ever a background", () => {
+    // Every use must be a fill; a future `color:` use is caught by the rule above, and
+    // this asserts the constant still has a real consumer rather than being dead code.
+    const uses = VM.match(/\bACCENT(?:_DIM)?\b/g) ?? [];
+    expect(uses.length, "ACCENT must not be dead code").toBeGreaterThan(1);
+    expect(VM).toMatch(/background: paused \? ACCENT_DIM : ACCENT/);
   });
 });
 
@@ -251,13 +323,23 @@ describe("motion", () => {
   it("every animation here is motion-safe gated and namespaced", () => {
     const anims = VM.match(/\[animation:[^\]]+\]/g) ?? [];
     expect(anims.length).toBeGreaterThan(0);
+    /* COUNTED, NOT MERELY PRESENT. The review proved both loops weak by mutation:
+       adding a SECOND, UNGATED copy of an animation passed, because `toContain`
+       only asks whether a gated copy exists somewhere in the file. They bit only
+       because there happened to be exactly one occurrence of each. */
     for (const a of anims) {
       expect(VM, a).toContain(`motion-safe:${a}`);
       expect(a, a).toMatch(/\[animation:relay[A-Z]/);
+      const total = VM.split(a).length - 1;
+      const gated = VM.split(`motion-safe:${a}`).length - 1;
+      expect(gated, `every occurrence of ${a} must be motion-safe gated`).toBe(total);
     }
     // Tailwind's own animate-* utilities likewise.
     for (const m of VM.match(/(?<![:\w-])animate-[a-z]+/g) ?? []) {
       expect(VM, m).toContain(`motion-safe:${m}`);
+      // Same counting rule: an ungated SECOND copy used to slip through.
+      const bare = (VM.match(new RegExp(`(?<![:\\w-])${m}\\b`, "g")) ?? []).length;
+      expect(bare, `every ${m} must be motion-safe gated`).toBe(0);
     }
   });
 
@@ -302,6 +384,14 @@ describe("the avatar is decorative and degrades to nothing", () => {
     // Nothing gates the card on the query: a directoryGate refusal or an
     // in-flight read must not be the reason somebody cannot leave a voicemail.
     expect(CARD).not.toMatch(/peer\.(isLoading|isPending|isError)/);
+    /* AND THE SPELLING THAT ACTUALLY BLANKS IT, which the review proved this test
+       could not see: `if (!peer.data) return null;` above the render made a
+       throttled or in-flight DECORATION query render the WHOLE card as nothing —
+       costing the caller all three ways to reach the person, which is the exact
+       property this case exists to protect. The avatar is a decoration; it must
+       never be able to withhold the card. */
+    expect(CARD).not.toMatch(/if \(!peer\.data\)[^\n]*return null/);
+    expect(CARD).not.toMatch(/if \(peer\.(?:isLoading|isPending|isError|error)\)[^\n]*return/);
     expect(CARD).toMatch(/peer\.data\?\.avatarUrl \?\? null/);
     expect(CARD).toMatch(/peer\.data\?\.role \?\? null/);
   });
@@ -332,6 +422,14 @@ describe("shipped behaviour survives the reskin", () => {
     expect(CARD).toMatch(/onClick=\{sendText\}/);
     expect(CARD).toMatch(/onClick=\{beginRecording\}/);
     expect(CARD).toMatch(/onClick=\{requestWatch\}/);
+    /* AND THE GATE THAT ACTUALLY WORKS IN JSX. An adversarial review PROVED this
+       test weak by mutation: wrapping the record button in `{false && ( … )}` left
+       every assertion here green, because the handler is still written and
+       `{false &&` is not `if (false`. Inside a return expression `{false && …}` is
+       the ONLY way to gate an element, i.e. it is the realistic spelling of the
+       defect this test claims to defend against. */
+    expect(CARD).not.toMatch(/\{\s*false\s*&&/);
+    expect(CARD).not.toMatch(/\{\s*(?:0|null|undefined)\s*&&/);
     expect(CARD).toMatch(/Leave a voice message/);
     expect(CARD).not.toMatch(/if \(false/);
   });

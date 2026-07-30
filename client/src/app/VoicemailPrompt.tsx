@@ -88,10 +88,17 @@ export interface FailedDialInfo {
 /** Voicemail cap — carrier-style 60 seconds. */
 export const VOICEMAIL_MAX_MS = 60_000;
 
-/** The cycling accent, with a LITERAL fallback. `var(--rb, var(--rb))` is a
- *  custom-property CYCLE: it resolves to the guaranteed-invalid value and the
- *  browser DROPS the whole declaration, leaving no colour at all (v2.106.7). */
+/** The cycling accent AS A FILL, with a LITERAL fallback. `var(--rb, var(--rb))`
+ *  is a custom-property CYCLE: it resolves to the guaranteed-invalid value and the
+ *  browser DROPS the whole declaration, leaving no colour at all (v2.106.7).
+ *
+ *  FILLS ONLY. For accent TEXT use `text-primary`, which v2.106.4 repointed at
+ *  `--rb` inside `.dark.relay-v2` and left a measured value in light — the raw
+ *  variable as text is 1.68:1 on the white light card. This file used it for three
+ *  text sites and that was a real AA failure, fixed in v2.106.26. */
 const ACCENT = "var(--rb, #3FE0C5)";
+/** The same hue at low alpha, for the paused waveform — one colour, not two. */
+const ACCENT_DIM = "rgba(var(--rb-rgb, 63, 224, 197), 0.28)";
 
 /* Exported as TEST SEAMS. A source pin cannot tell you whether the readout the
    recipient's sender sees actually counts up to the cap, or whether the three
@@ -295,9 +302,7 @@ function RecordPanel({
                    app's two recording surfaces cannot come to disagree about
                    which colour "active" is. Never `--relay-online`: green means
                    ONLINE and nothing else (v2.106.18). */
-                background: paused
-                  ? "rgba(var(--rb-rgb, 63, 224, 197), 0.28)"
-                  : "var(--rb, #3FE0C5)",
+                background: paused ? ACCENT_DIM : ACCENT,
               }}
             />
           ))}
@@ -350,8 +355,20 @@ function RecordPanel({
         <div className="flex flex-col items-center gap-1.5">
           <span aria-hidden className="relative grid size-[66px] place-items-center">
             {!paused && (
+              /* `pointer-events-none` IS LOAD-BEARING, not tidiness. `relayPing`
+                 scales to 2.8, so this 66px box paints and HIT-TESTS out to
+                 ~185px — ±59px past its own edge — while Discard and Send sit
+                 32px away in the same `gap-8` row. Without the guard the halo
+                 covers the inner ~27px of BOTH 54px buttons, and because it is
+                 positioned while they are static it hit-tests ABOVE them
+                 whatever the DOM order; hit-testing ignores opacity, and the
+                 easing holds the grown state for most of every 1.8s cycle. The
+                 result was that the two ONLY exits from a recording were
+                 half-untappable. This repo has paid for this class twice
+                 (v2.105.21's readout over the hang-up, v2.106.13's footer over
+                 the lightbox backdrop) — a mutation removing it bites. */
               <span
-                className="absolute inset-0 rounded-full bg-destructive motion-safe:[animation:relayPing_1.8s_cubic-bezier(0,0,.2,1)_infinite]"
+                className="pointer-events-none absolute inset-0 rounded-full bg-destructive motion-safe:[animation:relayPing_1.8s_cubic-bezier(0,0,.2,1)_infinite]"
               />
             )}
             <span className="absolute inset-0 grid place-items-center rounded-full bg-destructive text-destructive-foreground">
@@ -373,11 +390,22 @@ function RecordPanel({
           <span className="rcta grid size-[54px] place-items-center rounded-full">
             <Send className="size-5" />
           </span>
-          <span className="text-[10.5px] font-semibold" style={{ color: ACCENT }}>
-            Send
-          </span>
+          <span className="text-[10.5px] font-semibold text-primary">Send</span>
         </button>
       </div>
+
+      {/* RESTORED (v2.106.26). The reskin deleted "Recording stops automatically at
+          60 seconds." — the only place the app said that hitting the cap also SENDS
+          the take — and it was deleted not by choice but because this frame's own
+          test banned every second-duration in the file, honest ones included. It
+          matters more now than before: the panel gained a separate Pause and a
+          separate Discard, so Send is the ONLY remaining stop and nothing else on
+          screen says so. Derived from the constant, never written as a literal, so
+          the copy cannot promise a ceiling the recorder does not enforce. */}
+      <p className="text-center text-[11px] text-muted-foreground">
+        Sending stops the recording. It stops and sends on its own at{" "}
+        {Math.round(VOICEMAIL_MAX_MS / 1000)} seconds.
+      </p>
     </div>
   );
 }
@@ -580,13 +608,19 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
         ) : recState === "sending" ? (
           <div className="py-3 text-center text-sm text-muted-foreground">Sending voicemail…</div>
         ) : recState === "sent" ? (
-          /* The ACCENT, not `--relay-online`: green means ONLINE and nothing
-             else in this app, and a "sent" tick is not a presence statement
-             (the v2.106.18 call, one surface later). */
-          <div
-            className="flex items-center justify-center gap-2 py-3 text-sm"
-            style={{ color: ACCENT }}
-          >
+          /* The ACCENT, not `--relay-online`: green means ONLINE and nothing else in
+             this app, and a "sent" tick is not a presence statement (v2.106.18).
+             BUT VIA `text-primary`, NOT the raw `var(--rb)`. v2.106.4 repointed
+             `--primary` at `--rb` inside `.dark.relay-v2` PRECISELY so accent UI
+             follows the cycling hue automatically, and left light theme its own
+             measured value — because the accent is built for a near-black card and
+             its default teal is 1.68:1 on the white light card, which fails AA for
+             anything small (index.css says so in as many words, and it is the
+             measurement that forced `--relay-green-text` to exist in v2.99.86).
+             Reaching for `var(--rb)` directly routes around that indirection and
+             lands at 1.68:1; `text-primary` is 4.84:1 in light and IS the cycling
+             accent in dark, where it measures 11.17:1. One token, both themes. */
+          <div className="flex items-center justify-center gap-2 py-3 text-sm text-primary">
             <Check className="size-4" /> Voicemail sent
           </div>
         ) : (
@@ -628,7 +662,7 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
             >
               {watched ? (
                 <>
-                  <Check className="size-4" style={{ color: ACCENT }} /> You'll be alerted when they're online
+                  <Check className="size-4 text-primary" /> You'll be alerted when they're online
                 </>
               ) : (
                 <>

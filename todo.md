@@ -11278,6 +11278,87 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.26 — two defects I shipped in v2.106.23, found by reviewing my own work (2026-07-30)
+
+An independent adversarial review of the 2g voicemail patch — the one that shipped three
+releases ago — came back **SHIP_WITH_FIXES** with two real production defects and four
+tests it disproved BY MUTATION. Recording it as its own release rather than folding it in
+quietly, because the interesting part is that both defects are classes this repo had
+already paid for and written down.
+
+**(1) THE RECORDING HALO WAS SWALLOWING TAPS ON THE ONLY TWO EXITS.** The 66px indicator's
+ping overlay had no `pointer-events-none`, and `@keyframes relayPing` scales to **2.8** —
+so a 66px box paints and **HIT-TESTS** out to ~185px, ±59px past its own edge, while
+Discard and Send sit 32px away in the same `gap-8` row. It covered the **inner ~27px of
+BOTH 54px buttons**; it is positioned while they are static, so it hit-tests ABOVE them
+whatever the DOM order; hit-testing ignores opacity; and the `cubic-bezier(0,0,.2,1)`
+easing holds the grown state for most of every 1.8s cycle. **So while a voicemail was
+recording, the two only ways out of it were half-untappable.** The geometry is arithmetic,
+not opinion, and it matches the reviewer's independent figure exactly. **THE REPO HAD PAID
+FOR THIS TWICE** — v2.105.21 (*"`pointer-events:none` so it cannot swallow a tap meant for
+hang-up"*) and v2.106.13 (*"a full-width overlay on top of it becomes a DEAD ZONE"*) — and
+the two precedent uses of this very class are 10px brand dots with no adjacent controls, so
+the precedent never needed the guard and did not carry it.
+
+**(2) THE ACCENT AS SMALL TEXT FAILED AA IN LIGHT — WORSE THAN WHAT IT REPLACED.** Three
+sites used `style={{ color: "var(--rb, #3FE0C5)" }}`: the 10.5px Send label, the "Voicemail
+sent" line and its tick. **MEASURED: 1.68:1 on the white light card** (AA needs 4.5), and
+the presence green it replaced was 4.46:1 — so the v2.106.18 vocabulary fix, correct in
+principle, made the contrast **~2.7× worse** in the theme the app defaults to. `index.css`
+says this in as many words in its own comment (*"its default teal computes to about 1.7:1
+on a light card"*), and it is the measurement that forced `--relay-green-text` to exist in
+v2.99.86. **THE FIX IS THE INDIRECTION THAT ALREADY EXISTED**: v2.106.4 repointed
+`--primary` at `--rb` inside `.dark.relay-v2` PRECISELY so accent UI follows the cycling
+hue automatically while light keeps a measured value — so `text-primary` is the cycling
+accent in dark (**11.17:1**) and a measured cyan in light (**4.84:1**). Reaching for the
+raw variable routes around that on purpose-built infrastructure. **The FILLS are untouched
+and correct** (dark glyph on the accent measures 10.1:1) — this was only ever about text,
+and `ACCENT` now says so in its own doc comment and is used for fills only.
+
+**FOUR OF MY OWN TESTS WERE DISPROVED BY MUTATION, and two of them were the load-bearing
+ones.** (a) `not.toMatch(/if \(false/)` — the sweep guarding *"a control that stops doing
+anything while its copy stays"* — **does not cover `{false && …}`, which is the ONLY way to
+gate an element inside a JSX return**, i.e. the realistic spelling of the exact defect it
+claims to defend against; wrapping the record button in it left all 28 tests green.
+(b) *"the peer lookup never blocks the card"* was satisfied while `if (!peer.data) return
+null;` blanked the WHOLE card — so a throttled or in-flight **decoration** query would cost
+the caller all three ways to reach the person, the precise property that case exists to
+protect. (c) Both motion loops asked whether *a gated copy exists somewhere*, not whether
+**every** occurrence is gated, so a second ungated animation passed; they bit only because
+there happened to be exactly one of each. (d) An assertion **depended on comment prose**
+(`toMatch(/transcript/i)` against raw source), so tidying the file's own header would turn
+it red on correct code — the prose-anchor trap inverted.
+
+**AND A TRUE SENTENCE HAD BEEN DELETED BY AN OVER-BROAD TEST OF MY OWN.**
+`not.toMatch(/\d+\s*seconds?/)` was written to forbid the board's unbuilt *"No answer
+after 30 seconds"* and forbade **every** second-duration in the file, honest ones included
+— which is what removed *"Recording stops automatically at 60 seconds."*, the only place
+the app said that hitting the cap also SENDS the take. **That matters more after the reskin,
+not less**, because the panel gained a separate Pause and a separate Discard, so Send is now
+the only remaining stop and nothing on screen said so. The sentence is back, derived from
+`VOICEMAIL_MAX_MS` rather than written as a literal, and the ban is narrowed to the
+no-answer claim it was actually for.
+
+**THE GUARDS ARE RULES, NOT LITERALS, and my first attempt at them was itself inadequate**
+— the mutation run showed I had fixed both production defects and pinned NEITHER, which is
+the worst combination. Now: every `relayPing` halo in the file must carry
+`pointer-events-none`, the raw accent variable may never appear in a `color:` position, and
+`ACCENT` must still have a real fill consumer so it cannot rot into dead code.
+
+- [x] `pointer-events-none` on the recording halo
+- [x] Three accent-text sites moved to `text-primary`; `ACCENT` documented as fills-only
+      and given its `ACCENT_DIM` sibling so the paused waveform is one colour, not two
+- [x] The stop-and-send sentence restored, derived from the constant
+- [x] Four disproved assertions strengthened; three standing guards added
+- [x] `client/src/app/voicemailFrame.test.ts` → 31; **9 of 9 tripwires verified by
+      MUTATION**, in two runs — the first found **two real gaps in my own new pins** (both
+      production fixes unguarded) and one bad needle of mine that correctly ABORTED at 0
+      occurrences; all re-run and all bite
+- [x] **NOT VERIFIED ON A DEVICE, said plainly**: the halo geometry is arithmetic against
+      the real keyframe and the contrast is computed from the real tokens, but nobody has
+      tried to tap Discard mid-recording on a phone
+- [x] No schema change, no new dependency, no new env var. 4562 tests
+
 ## v2.106.25 — "not showing": six ways the app hid something and said nothing (2026-07-30)
 
 The owner, twice: *"The main page and other pages, the contact is not showing. Many
