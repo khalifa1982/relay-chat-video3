@@ -24,6 +24,8 @@ import { parseRelayMessage } from "@/lib/call-messages";
 import { useCallSession } from "@/hooks/use-call-session";
 import { useCallNotifications } from "@/hooks/use-call-notifications";
 import { useBackgroundPresence } from "@/hooks/use-background-presence";
+import { usePushToken } from "@/hooks/use-push-token";
+import { useVoipCallKit } from "@/hooks/use-voip-callkit";
 
 // Palette aligned to the live RELAY web app (oklch(0.12 0.008 245) background
 // ~ #050608) so the native shell's splash/error chrome blends seamlessly with
@@ -111,7 +113,10 @@ export function RelayWebView() {
   // Call lifecycle: background audio, keep-awake, PiP, camera re-acquire,
   // plus audio output routing (earpiece/speaker/Bluetooth).
   const { setCallState, applyAudioRoute } = useCallSession(reacquireCamera);
-
+  // Firebase push token: get the native device token and inject it into the
+  // WebView so the web app can register it with its server for push delivery.
+  const { onWebViewLoadEnd: sendPushToken, onWebReady: sendPushTokenOnReady } =
+    usePushToken(webViewRef);
   // Online presence: keep RELAY reachable in the background so calls ring even
   // when minimized. The injected script reports whether the user is signed in;
   // we treat "logged in" (past the name-entry screen) as online.
@@ -128,6 +133,20 @@ export function RelayWebView() {
         void dismissIncomingCall();
       },
     });
+  // PushKit + CallKit (iOS). A SECOND token, and a DIFFERENT one: only the
+  // PushKit token can be addressed on the `<bundle>.voip` topic, and only a VoIP
+  // push shows the real full-screen call screen on a LOCKED iPhone. It is posted
+  // with `kind: "apns-voip"` because both of iOS's tokens are hex and nothing
+  // downstream can tell them apart by shape. A no-op on Android, which already
+  // rings through the full-screen-intent notification above.
+  const { onWebReady: sendVoipTokenOnReady } = useVoipCallKit(webViewRef, {
+    onAnswer: () => {
+      reacquireCamera();
+    },
+    onEnd: () => {
+      void dismissIncomingCall();
+    },
+  });
 
   // --- Web-content version change detection ---
   const [webUpdateAvailable, setWebUpdateAvailable] = useState(false);
@@ -207,6 +226,10 @@ export function RelayWebView() {
         case "audio-route":
           applyAudioRoute(msg.route);
           break;
+        case "web-ready":
+          sendPushTokenOnReady();
+          sendVoipTokenOnReady();
+          break;
         case "online":
           setOnline(msg.online);
           break;
@@ -221,6 +244,8 @@ export function RelayWebView() {
       showIncomingCall,
       dismissIncomingCall,
       showIncomingMessage,
+      sendVoipTokenOnReady,
+      sendPushTokenOnReady,
     ],
   );
 
@@ -260,7 +285,10 @@ export function RelayWebView() {
         onLoadStart={() => {
           if (!firstLoadDoneRef.current) setLoading(true);
         }}
-        onLoadEnd={finishFirstLoad}
+        onLoadEnd={() => {
+          finishFirstLoad();
+          sendPushToken();
+        }}
         onError={handleError}
         onHttpError={() => {}}
         onNavigationStateChange={handleNavStateChange}

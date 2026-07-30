@@ -10,6 +10,7 @@ export type RelayMessage =
   | { type: "message"; count: number }
   | { type: "audio-route"; route: "earpiece" | "speaker" | "bluetooth" }
   | { type: "online"; online: boolean }
+  | { type: "web-ready" }
   | { type: "unknown" };
 
 /**
@@ -59,6 +60,9 @@ export function parseRelayMessage(raw: unknown): RelayMessage {
     }
     case "relay-online":
       return { type: "online", online: Boolean(data.online) };
+    case "relay-ready":
+    case "web-ready":
+      return { type: "web-ready" };
     default:
       return { type: "unknown" };
   }
