@@ -2584,6 +2584,15 @@ export async function ensureSchemaExtensions(): Promise<void> {
       column: "joinedAtMessageId",
       ddl: "ADD COLUMN `joinedAtMessageId` int",
     },
+    // #116 — how an answered GROUP call was dialled, so History can say Voice or
+    // Video for it the way a solo row does. NULLABLE WITH NO DEFAULT: every row
+    // written before this column has no recorded channel, and a default would make
+    // each of them assert a media type nobody recorded.
+    {
+      table: "conference_history",
+      column: "channel",
+      ddl: "ADD COLUMN `channel` enum('voice','video')",
+    },
     { table: "conversations", column: "number", ddl: "ADD COLUMN `number` varchar(6)" },
     { table: "conversations", column: "avatarUrl", ddl: "ADD COLUMN `avatarUrl` text" },
     { table: "conversations", column: "profileStatus", ddl: "ADD COLUMN `profileStatus` varchar(16)" },
@@ -6598,6 +6607,14 @@ export async function recordConferenceEnd(input: {
   startedAt: number; // unix ms — when the room was created (the "when")
   answeredAt?: number | null; // unix ms — first answer; duration counts from here
   endedAt: number; // unix ms — last member active
+  /**
+   * #116 — how the call was DIALLED. NULL/omitted means we never recorded it (a
+   * party line is joined rather than dialled, and a mid-call leader change on a
+   * pre-feature record loses the flag), and the column stays NULL rather than
+   * defaulting — History renders nothing for a null instead of asserting a media
+   * type nobody recorded.
+   */
+  video?: boolean | null;
   participants: Array<{ number: string; name: string }>;
 }) {
   const db = await getDb();
@@ -6626,6 +6643,7 @@ export async function recordConferenceEnd(input: {
     startedAt: new Date(input.startedAt),
     endedAt: new Date(input.endedAt),
     durationSec,
+    channel: input.video == null ? null : input.video ? "video" : "voice",
     participants: roster,
   });
   const conferenceId = Number((ins as unknown as Array<{ insertId?: number }>)[0]?.insertId);

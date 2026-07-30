@@ -118,10 +118,16 @@ Confirmed today at `server/v2routers.ts:1613`.
 Not free: adding `meta` touches the groupwise-max query every client polls. Deliberately deferred as a
 performance decision, not forgotten.
 
-### 4. Voice/video marker on an ANSWERED GROUP call
-Confirmed: `conference_history` has **no channel column** (checked `drizzle/schema.ts` today), so for a
-group call the media type is genuinely unknown and printing either would be a guess. Solo rows show it
-because `call_history.channel` exists. Needs one additive column plus a writer.
+### 4. ~~Voice/video marker on an ANSWERED GROUP call~~ — **DONE, v2.105.28**
+The note was right about the cause: `conference_history` had no channel column, so the media type was
+genuinely unknown and printing either would have been a guess. One additive nullable enum, plus the dial
+flag carried on the room from dial to teardown, and the row now says it.
+
+**Nullable with NO default, deliberately** — unlike `call_history.channel`, which is notNull default
+`"video"`. Every conference logged before the column existed has no recorded channel, and a party line is
+**joined rather than dialled**, so it never had one either. A default would make each of those rows assert
+a media type nobody recorded, about the reader's own call history — which is the guess this column exists
+to replace. An unknown channel renders as **nothing**, and that is the property every test here protects.
 
 ### 5. History search/grouping only covers the most recent 100 calls
 Both call payloads are capped at 100 rows server-side, so an older call cannot be found however good

@@ -119,6 +119,16 @@ export interface PersistedRoom {
    * change would make every older instance drop every record during a deploy.
    */
   groupAdminPins?: string[];
+  /**
+   * #116 — how the call was DIALLED, so an answered group call can report Voice or
+   * Video in History even if a leader change happened mid-call.
+   *
+   * OPTIONAL for the same reason `groupAdminPins` is: a record written by a
+   * not-yet-updated instance mid-rollout simply has no field, and the room comes
+   * back with the channel UNKNOWN — which History renders as nothing, not as a
+   * fabricated media type.
+   */
+  video?: boolean;
 }
 
 const isStr = (v: unknown): v is string => typeof v === "string";
@@ -159,6 +169,9 @@ export function isPersistedRoom(v: unknown): v is PersistedRoom {
   if (o.answeredAt !== null && !isNum(o.answeredAt)) return false;
   if (o.dialedNumber !== null && !isStr(o.dialedNumber)) return false;
   if (typeof o.accepted !== "boolean") return false;
+  // #116 — absent is fine (a party line, or a pre-feature record). Present must be
+  // a real boolean, since hydration feeds this into the live registry.
+  if (o.video !== undefined && typeof o.video !== "boolean") return false;
   if (!Array.isArray(o.roster) || o.roster.length > 128) return false;
   for (const r of o.roster) {
     if (!Array.isArray(r) || r.length !== 2 || !isStr(r[0]) || !isStr(r[1])) return false;

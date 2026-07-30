@@ -11278,6 +11278,90 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.105.28 — an answered group call says Voice or Video (2026-07-30)
+
+#116, the second of the three items I owed the owner. A solo History row has named its media type since
+v2.75; a group row could not, and v2.99.77 recorded that absence as deliberate — *"`conference_history`
+stores no channel, so claiming Voice or Video here would be a guess"*. This adds the fact rather than the
+guess.
+
+**THE HARD PART IS NOT THE COLUMN, IT IS THAT THE ANSWER MUST SURVIVE A WHOLE CALL.** The dial channel is
+known for one instant, in the `invite` handler, as `wantVideo` — the same flag the ring card and the VoIP
+push already read. The history row is written at the OTHER end, in `reapRoom`, when the last member
+leaves. Nothing in between carried it, so the flag is now recorded on `RoomMeta` at dial-room creation and
+read off it at teardown: the room is the only thing that exists across both moments.
+
+**NULLABLE WITH NO DEFAULT, AND THAT IS THE WHOLE DESIGN.** `call_history.channel` is `notNull` default
+`"video"`, and copying that here would have been wrong twice over. Every conference logged before this
+column existed has no recorded channel, and **a party line is JOINED rather than dialled** — nobody chose
+voice or video to get into one, so `joinPartyLine` deliberately writes no flag and the row must report
+nothing. A default would make each of those rows assert a media type nobody recorded, about the reader's
+own call history. **An unknown channel renders as an empty string**, and every test in the file protects
+that one property.
+
+**`?? null`, NEVER `?? false`, AND THE DISTINCTION IS THE FEATURE.** A voice call is `false` — a RECORDED
+fact — while absent is `undefined`, which is not. A truthiness check anywhere in the chain collapses the
+two and turns every voice group call into an unmeasured one, so the reap reports `meta.video ?? null`, the
+writer branches on `input.video == null` rather than on falsiness, and the snapshot spreads the field
+CONDITIONALLY so a party line serializes exactly as it did before this release.
+
+**IT SURVIVES A LEADER CHANGE**, because a mid-call leader loss would otherwise silently downgrade an
+answered video call to unknown: `PersistedRoom.video` is OPTIONAL for the same reason `groupAdminPins` is
+— a record written by a not-yet-updated instance mid-rollout simply has no field and hydrates with the
+channel unknown, which is today's behaviour rather than a broken room — and it is VALIDATED on the way in,
+since hydration feeds the live registry. A garbage value drops the whole record.
+
+**THE DIAL CHANNEL, NOT "WAS VIDEO EVER LIVE"**, stated in the schema comment because the two are
+different questions: under the mutual-consent protocol somebody may turn their camera on mid-call, and
+answering the second question here would make the two History row kinds mean different things by the same
+word. Parity is the point — both now say Voice or Video, and the solo one has meant "how it was dialled"
+since v2.75.
+
+`server/groupCallChannel.test.ts` (21), the end-to-end cases driving the REAL registry through
+register → invite → accept → leave → reap, because a source pin cannot tell you whether a voice call
+survives a teardown as voice. **All 13 tripwires verified by MUTATION** from byte-exact backups off a
+confirmed-GREEN baseline, sources byte-identical afterwards.
+
+**A DEFECT IN MY OWN TESTS, and it is the pass-for-the-wrong-reason class.** My first draft passed the
+collector as `handleMessage`'s 4th positional argument — which is **`onInvite`, not `onConferenceEnd`**.
+The conference hook is only ever assigned on the REGISTRY (`attachRelay` does `reg.onConferenceEnd = …`),
+and the invite hook's own payload ALSO carries a `video` field (v2.105.18), so both "end to end" cases read
+the INVITE flag and went green **without this release existing at all**. Caught because the party-line
+case — the one whose answer is `null` — failed, and chasing it showed the hook had never been wired.
+Now assigned on the registry, with each case also asserting the row it received really is the dialled call.
+
+**TWO NON-UNIQUE ANCHORS, reported rather than counted**: `video: wantVideo,` occurs 5× in `relay.ts`
+(the ring frames and the `pendingRings` entries legitimately carry it) and `video: info.video,` twice in
+`_core/index.ts` (the history write and the VoIP ring payload). The harness ABORTED both rather than record
+a survivor for an unrelated reason; re-run against anchors that occur once, both bit.
+
+**THREE MORE OF MY OWN, each caught by a failure on CORRECT code**: a `+1200`-character slice that did not
+reach the snapshot spread (now bounded by the next declaration, the recurring v2.99.78 fragility); a
+`channel[^,]*notNull` sweep whose `[^,]*` spans newlines and so matched `startedAt: timestamp(…).notNull()`
+further down the table (now scoped to the channel's own line); and a migrator anchor on
+`table: "conference_history"`, which occurs FIRST in `NUMBER_BEARING_COLUMNS`' registry entry, so the slice
+read a declaration about `dialedNumber` (now anchored on the DDL string itself).
+
+**NOT VERIFIED AGAINST A DATABASE, said plainly**: no MySQL here, so the column, the migrator entry and
+the writer are proven by reading and pinned, but nobody has ended a real group call and watched History
+name its media type. One additive nullable column, no new dependency, no new env var. 3992 tests.
+
+- [x] `drizzle/schema.ts` — `conference_history.channel` as a nullable `mysqlEnum(["voice","video"])`
+      with **no default**, and the reason recorded in the column's own comment.
+- [x] `server/v2db.ts` — boot-migrator entry (`ADD COLUMN \`channel\` enum('voice','video')`, nullable);
+      `recordConferenceEnd` takes `video?: boolean | null` and writes
+      `input.video == null ? null : input.video ? "video" : "voice"`.
+- [x] `server/relay.ts` — `RoomMeta.video?: boolean` set from `wantVideo` when the dial room is created;
+      `ConferenceEndHook` gains `video: boolean | null`; the reap reports `meta.video ?? null`;
+      `snapshotRoom` spreads it only when it is a real boolean and `applyHydratedRooms` restores it.
+- [x] `server/roomStore.ts` — `PersistedRoom.video?: boolean` plus a validator line, so a present-but-
+      garbage value drops the record instead of reaching the live registry.
+- [x] `server/_core/index.ts` — the one hook caller threads `info.video` into `recordConferenceEnd`.
+- [x] `server/v2routers.ts` — `channel: (r.channel ?? null)` on the `calls.conferenceHistory` payload.
+- [x] `client/src/pages/app/History.tsx` — `ConfRow.channel?` (optional, so an older server's payload is
+      fine) and the row prints ` · Voice` / ` · Video` / **nothing**.
+- [x] `server/groupCallChannel.test.ts` — 21 tests. 13 tripwires mutation-verified.
+
 ## v2.105.27 — a group admin can remove a member's story, and a group story stops spending a personal slot (2026-07-29)
 
 The two group items from the owner's 2026-07-29 message, #118 and #119.

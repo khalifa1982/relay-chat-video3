@@ -831,6 +831,22 @@ export const conferenceHistory = mysqlTable(
     startedAt: timestamp("startedAt").notNull(),
     endedAt: timestamp("endedAt").notNull(),
     durationSec: int("durationSec").notNull().default(0),
+    /**
+     * #116 — how the call was DIALLED, so an answered group call can say Voice or
+     * Video in History the way a solo row already does.
+     *
+     * NULLABLE WITH NO DEFAULT, unlike `call_history.channel` (which is notNull
+     * default "video"). Every row written before this column existed has no
+     * recorded channel, and a default would make each of them ASSERT a media type
+     * nobody recorded — which is the guess this column exists to replace. The UI
+     * renders nothing for a null.
+     *
+     * The DIAL channel, matching what the solo column stores: mid-call somebody may
+     * turn their camera on under the mutual-consent protocol, so "was video ever
+     * live" is a different question, and answering it would make the two History
+     * row kinds mean different things by the same word.
+     */
+    channel: mysqlEnum("channel", ["voice", "video"]),
     /** Full roster JSON: [{ number, name, identityId | null }]. */
     participants: json("participants"),
   },
