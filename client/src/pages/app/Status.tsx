@@ -812,6 +812,18 @@ export function StatusViewer({
               legitimately mixes authors, so without it a slide would be attributed
               to the group and there would be no way to tell who wrote it. */}
           <div className="truncate text-[11px] text-white/60" title={new Date(item.createdAt).toLocaleString()}>
+            {/* Board 2c draws "2 of 3 · 18m ago". The progress bars already encode the
+                position, but reading it off them means counting hairlines — the
+                number answers "how much of this reel is left" directly, which is the
+                question somebody holding a finger on the screen actually has.
+                WITHHELD FOR A SINGLE-SLIDE REEL: "1 of 1" is noise, and the bar above
+                already says there is only one. */}
+            {group.items.length > 1 && (
+              <span className="font-mono" dir="ltr">
+                {ii + 1} of {group.items.length}
+                {" · "}
+              </span>
+            )}
             {group.subject.kind === "group" && item.author
               ? `${item.mine ? "You" : item.author.displayName} · ${timeAgo(item.createdAt)}`
               : timeAgo(item.createdAt)}

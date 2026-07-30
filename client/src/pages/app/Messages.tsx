@@ -1395,7 +1395,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [emojiOpen]);
   // Fullscreen media preview (image/video lightbox).
-  const [lightbox, setLightbox] = useState<{ url: string; type: "image" | "video"; name?: string } | null>(null);
+  const [lightbox, setLightbox] = useState<LightboxMedia | null>(null);
   const [replyingTo, setReplyingToState] = useState<{
     id: number;
     senderIdentityId: number;
@@ -1433,6 +1433,23 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   function senderLabel(identityId: number): string {
     if (me && identityId === me.id) return "You";
     return nameById.get(identityId) || thread?.peerDisplayName || "Them";
+  }
+
+  /* Board 4e wants the fullscreen viewer to say WHOSE media this is and WHEN — the
+     bubble it was opened from carries both, and the viewer was throwing them away.
+     A wrapper rather than new props on `AttachmentView`: that component renders the
+     same media inside a bubble that already shows the sender, so teaching it about
+     message identity would be giving it a fact it has no use for.
+     The caption is the message's own body, which is exactly what sits under the
+     image in the thread — an image with a caption should not lose it fullscreen. */
+  function openMedia(m: { senderIdentityId: number; createdAt: string | Date; body: string | null }) {
+    return (media: { url: string; type: "image" | "video"; name?: string }) =>
+      setLightbox({
+        ...media,
+        sender: senderLabel(m.senderIdentityId),
+        at: m.createdAt,
+        caption: m.body ?? "",
+      });
   }
   function previewOf(msg: { body: string | null; kind: string; meta?: unknown } | undefined): string {
     if (!msg) return "Message";
@@ -2098,7 +2115,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             height={m.attachment.height ?? null}
                             durationMs={m.attachment.durationMs ?? null}
                             mine={mine}
-                            onOpen={setLightbox}
+                            onOpen={openMedia(m)}
                           />
                         )}
                         {m.body && (
@@ -2383,7 +2400,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                               (att as { durationMs?: number | null }).durationMs ?? null
                             }
                             mine={mine}
-                            onOpen={setLightbox}
+                            onOpen={openMedia(m)}
                           />
                         )}
                         {body && <div className="whitespace-pre-wrap leading-relaxed">{linkify(body)}</div>}
@@ -3717,11 +3734,31 @@ function FileCard({ url, filename, mine }: { url: string; filename?: string; min
 }
 
 /** Fullscreen media preview with a close (X). Closes on backdrop click + Escape. */
+/** What the fullscreen viewer needs beyond the bytes: whose it is, when, and its caption. */
+type LightboxMedia = {
+  url: string;
+  type: "image" | "video";
+  name?: string;
+  /** Already resolved to a label ("You" / a name) by the thread that opened it. */
+  sender?: string;
+  at?: string | Date;
+  caption?: string;
+};
+
+/**
+ * Board 4e. The viewer used to be bytes on black with a close and a download and
+ * nothing else — no sender, no time, no caption, so a photo opened fullscreen lost
+ * every piece of context the bubble around it had.
+ *
+ * The end-to-end line is the board's, and it is worth saying HERE specifically:
+ * fullscreen is where somebody is most likely to screenshot or share, and this is
+ * the app's one chance to say what the file's handling actually is.
+ */
 function MediaLightbox({
   media,
   onClose,
 }: {
-  media: { url: string; type: "image" | "video"; name?: string };
+  media: LightboxMedia;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -3754,12 +3791,46 @@ function MediaLightbox({
       >
         <Download className="size-5" />
       </a>
-      <div className="max-h-[90vh] max-w-[92vw]" onClick={(e) => e.stopPropagation()}>
+      {/* Sender + when, top-left, clear of the two controls top-right. Rendered only
+          when the opener supplied them, so a caller that has not (or an older one)
+          gets exactly the previous chrome rather than an empty row. */}
+      {(media.sender || media.at) && (
+        <div className="absolute left-4 top-4 max-w-[55vw] text-white" onClick={(e) => e.stopPropagation()}>
+          {media.sender && <div className="truncate text-sm font-semibold" dir="auto">{media.sender}</div>}
+          {media.at && (
+            <div className="mt-0.5 font-mono text-[11px] text-white/70" dir="ltr">
+              {new Date(media.at).toLocaleString([], {
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+            </div>
+          )}
+        </div>
+      )}
+      <div
+        className="flex max-h-[90vh] max-w-[92vw] flex-col items-center gap-3"
+        onClick={(e) => e.stopPropagation()}
+      >
         {media.type === "image" ? (
-          <img src={media.url} alt={media.name || "image"} className="max-h-[90vh] max-w-[92vw] rounded-lg object-contain" />
+          <img src={media.url} alt={media.name || "image"} className="max-h-[78vh] max-w-[92vw] rounded-lg object-contain" />
         ) : (
-          <video src={media.url} controls autoPlay className="max-h-[90vh] max-w-[92vw] rounded-lg" />
+          <video src={media.url} controls autoPlay className="max-h-[78vh] max-w-[92vw] rounded-lg" />
         )}
+        {media.caption && (
+          <p className="max-w-[92vw] text-center text-sm text-white/90" dir="auto">
+            {media.caption}
+          </p>
+        )}
+      </div>
+      {/* The board's footer. `pointer-events-none` so it can never swallow the tap
+          that closes the viewer — the whole backdrop is the close target. */}
+      <div
+        className="pointer-events-none absolute inset-x-0 bottom-5 text-center font-mono text-[10px] font-semibold uppercase text-white/45"
+        style={{ letterSpacing: ".22em" }}
+      >
+        Media is end-to-end encrypted
       </div>
     </div>
   );

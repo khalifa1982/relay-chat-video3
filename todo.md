@@ -11278,6 +11278,46 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.13 — board 4e + 2c: the fullscreen viewer keeps the context the bubble had (2026-07-30)
+
+**The media viewer was bytes on black.** A close button, a download, nothing else — so a
+photo opened from a thread arrived with no sender, no time and **no caption**. The caption is
+the one people notice: it sits under the image in the thread and then simply disappears.
+
+**The context was one call away the whole time.** `senderLabel` already resolves "You", the
+group roster and the DM peer fallback — so this was a gap, not a design decision.
+
+- **A wrapper, not new props on `AttachmentView`.** That component renders the same media
+  inside a bubble that *already* shows the sender; teaching it about message identity would
+  hand it a fact it has no use for. The opener wraps `setLightbox` at the two call sites, and
+  a test counts **both** — one keeping the bare setter is the half-shipped shape v2.99.85's
+  sender-label count caught.
+- **The chrome renders only when the opener supplied it**, so a caller passing none gets
+  exactly the previous viewer rather than an empty row where a name would be.
+- **The encryption footer is `pointer-events-none`, and that's load-bearing.** The whole
+  backdrop is the close target, so a full-width overlay on top of it becomes a dead zone at
+  the bottom of the screen. A mutation removing it bites.
+- **Media shrank 90vh → 78vh**: the board stacks photo over caption over footer, and at the
+  old height the caption would have been pushed off the bottom.
+
+**Board 2c — the slide counter.** The progress bars encode the position, but reading it off
+them means counting hairlines; "2 of 3" answers *how much of this reel is left* directly.
+**Withheld for a single-slide reel** — "1 of 1" is noise the one bar above already conveys.
+
+**One pre-existing pin rewritten — the fixed-slice fragility (v2.99.78) for the sixth time.**
+`groupStories.test.ts` sliced **1600 characters** from the `{/* header */}` anchor and
+asserted the group-author expression inside it, so adding the counter above that line pushed
+it past the window: the pin failed on *correct* code while saying nothing about the property.
+Now bounded by the region's own end, with an assertion that the window is real rather than an
+accidental `""`.
+
+`client/src/app/mediaViewerStory.test.ts` (10). **All 7 tripwires verified by mutation** from
+byte-exact backups off a confirmed-green baseline; sources byte-identical afterwards.
+
+**Not verified on a device**: nobody has opened a photo fullscreen on a phone.
+
+No schema change, no new dependency, no new env var. 4219 tests.
+
 ## v2.106.12 — board 2d + 4g: act on a sign-in from the panel it was announced in (2026-07-30)
 
 **Board 2d / 5h — the notification center.** v2.99.7 shipped new-device approval with
