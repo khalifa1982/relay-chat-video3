@@ -14,6 +14,7 @@
    ============================================================ */
 
 import { contactTagsOf, serializeContactTags, categoryMirror } from "../shared/contactTags";
+import { normalizeReactionEmoji, type ReactionRow } from "../shared/reactions";
 import crypto from "crypto";
 import {
   and,
@@ -43,6 +44,7 @@ import {
   contacts,
   conversationParticipants,
   messageHides,
+  messageReactions,
   conversations,
   identities,
   messages,
@@ -2899,6 +2901,25 @@ export async function ensureSchemaExtensions(): Promise<void> {
       )`,
     },
     {
+      // Message reactions (DATA-CONTRACTS §2, board 4c). The UNIQUE key IS the
+      // contract's "one reaction per user per message" rule, which is why a move
+      // is one atomic upsert instead of a delete-then-insert that can fail in
+      // between. Held as a JSON map on `messages` instead, that rule would be an
+      // application check around a read-modify-write and a concurrent reaction
+      // would be silently lost.
+      name: "message_reactions",
+      ddl: `CREATE TABLE IF NOT EXISTS \`message_reactions\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`messageId\` int NOT NULL,
+        \`identityId\` int NOT NULL,
+        \`emoji\` varchar(32) NOT NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        UNIQUE KEY \`message_reactions_one_each\` (\`messageId\`, \`identityId\`),
+        KEY \`message_reactions_message_idx\` (\`messageId\`)
+      )`,
+    },
+    {
       // Device/session ledger (v2.99.1). One row per login; the cookie's sid
       // maps here so a device can be logged out by deleting its row.
       name: "sessions",
@@ -4755,6 +4776,138 @@ export function visibleFloorFor(part: {
  * would let anybody write a row naming any message in the database. Hiding is
  * one-directional and there is no unhide, which the confirmation says out loud.
  */
+/**
+ * React to a message, or take a reaction back (DATA-CONTRACTS §2, board 4c).
+ *
+ * ONE STATEMENT FOR THE WRITE, WHICH IS WHERE THE ONE-PER-USER RULE ACTUALLY LIVES.
+ * The unique key is `(messageId, identityId)`, so picking a second emoji is an
+ * UPSERT — the row moves — rather than a delete followed by an insert that can fail
+ * in between and leave somebody's reaction simply gone. Two people reacting in the
+ * same instant touch different rows; the same person twice touches one row twice,
+ * and the second write wins deterministically.
+ *
+ * BOTH OPS ARE IDEMPOTENT. `add` of the emoji already there rewrites the same value;
+ * `remove` of nothing deletes nothing. So a double-tap on a slow connection, or a
+ * retried request, cannot land somewhere the user did not choose.
+ *
+ * THE DELETE IS SCOPED TO THE CALLER'S OWN ROW — by `identityId` as well as by
+ * `messageId` — or removing a reaction would mean removing anybody's.
+ *
+ * IT DELIBERATELY TOUCHES NOTHING ELSE ON THE THREAD. No `lastMessageAt`, no
+ * `unreadCount`: the contract says reacting never changes unread state, and it is
+ * right, because a reaction that bumped a thread to the top of the list would make
+ * the list re-order under everybody every time somebody tapped a heart.
+ */
+export async function setMessageReaction(input: {
+  messageId: number;
+  identityId: number;
+  emoji: string;
+  op: "add" | "remove";
+}): Promise<{
+  ok: boolean;
+  conversationId?: number;
+  reason?: "not-found" | "not-a-member" | "bad-emoji" | "unavailable";
+}> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  // Shape-checked BEFORE anything is read, so a malformed reaction costs no query
+  // and cannot reach the column (where it would render as text on somebody's
+  // message — see the note on normalizeReactionEmoji).
+  const emoji = normalizeReactionEmoji(input.emoji);
+  if (!emoji) return { ok: false, reason: "bad-emoji" };
+  try {
+    const [row] = await db
+      .select({
+        id: messages.id,
+        conversationId: messages.conversationId,
+        deletedAt: messages.deletedAt,
+      })
+      .from(messages)
+      .where(eq(messages.id, input.messageId))
+      .limit(1);
+    // An unsent message answers exactly like one that never existed, so the endpoint
+    // is no oracle for which ids have been used — they are small sequential integers.
+    if (!row || row.deletedAt) return { ok: false, reason: "not-found" };
+    const members = await getConversationParticipantIds(row.conversationId);
+    if (!members.includes(input.identityId)) return { ok: false, reason: "not-a-member" };
+
+    if (input.op === "remove") {
+      await db
+        .delete(messageReactions)
+        .where(
+          and(
+            eq(messageReactions.messageId, input.messageId),
+            eq(messageReactions.identityId, input.identityId)
+          )
+        );
+      return { ok: true, conversationId: row.conversationId };
+    }
+
+    await db
+      .insert(messageReactions)
+      .values({ messageId: input.messageId, identityId: input.identityId, emoji })
+      .onDuplicateKeyUpdate({ set: { emoji } });
+    return { ok: true, conversationId: row.conversationId };
+  } catch {
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
+/**
+ * Every reaction on a page of messages, keyed by message id.
+ *
+ * ONE INDEXED RANGE over ids the caller already holds, plus one batched identity
+ * read to turn identity ids into the PINS the contract keys by. That second read is
+ * skipped entirely when nothing reacted, which is the overwhelmingly common case, so
+ * an ordinary thread page pays one lookup that returns no rows.
+ *
+ * ORDERED BY ID so the projection's insertion order is the order people actually
+ * reacted in — the chip row would otherwise reshuffle on every poll.
+ *
+ * FAILS TO EMPTY. Reactions are decoration on a message; a failed read must cost the
+ * chips, never the conversation.
+ */
+export async function reactionsForMessages(
+  messageIds: readonly number[]
+): Promise<Map<number, ReactionRow[]>> {
+  const out = new Map<number, ReactionRow[]>();
+  if (!messageIds.length) return out;
+  const db = await getDb();
+  if (!db) return out;
+  try {
+    const rows = await db
+      .select({
+        messageId: messageReactions.messageId,
+        identityId: messageReactions.identityId,
+        emoji: messageReactions.emoji,
+      })
+      .from(messageReactions)
+      .where(inArray(messageReactions.messageId, messageIds as number[]))
+      .orderBy(asc(messageReactions.id));
+    if (!rows.length) return out;
+    const pinById = new Map<number, string>();
+    const ids = Array.from(new Set(rows.map((r) => r.identityId)));
+    const idents = await db
+      .select({ id: identities.id, number: identities.number })
+      .from(identities)
+      .where(inArray(identities.id, ids));
+    for (const i of idents) pinById.set(i.id, i.number);
+    for (const r of rows) {
+      const pin = pinById.get(r.identityId);
+      // A reaction whose author no longer resolves is DROPPED rather than rendered
+      // under a blank name: the purge registry cascades these away, so this is the
+      // mid-purge window rather than a state anybody should see.
+      if (!pin) continue;
+      const list = out.get(r.messageId) ?? [];
+      list.push({ emoji: r.emoji, pin });
+      out.set(r.messageId, list);
+    }
+    return out;
+  } catch {
+    return out;
+  }
+}
+
 export async function hideMessageForIdentity(input: {
   messageId: number;
   identityId: number;

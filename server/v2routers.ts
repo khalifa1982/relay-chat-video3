@@ -80,6 +80,8 @@ import {
   revokeGroupInvites,
   joinGroupByInvite,
   hideMessageForIdentity,
+  setMessageReaction,
+  reactionsForMessages,
   setThreadState,
   deleteMessage,
   consumeExpiringMessage,
@@ -157,6 +159,7 @@ import { classifyNativeToken, isVoipDeclaration, type NativeTokenKind } from "./
 import { fcmConfig } from "./fcm";
 import { apnsVoipConfigured, apnsVoipConfig, apnsCredentialExpiry } from "./apnsVoip";
 import { publishToIdentity, publishPresenceTo } from "./v2events";
+import { projectReactions, REACTION_MAX_LENGTH } from "@shared/reactions";
 import { ensureUserIdentity, markIdentityVerified, getIdentityByUserId } from "./v2db";
 import { setIdentityAutoReply, autoReplyEnabledFor } from "./v2db";
 import { recordSession, listSessionsForUser, revokeSession } from "./v2db";
@@ -2649,6 +2652,12 @@ export const v2MessagesRouter = router({
         .map((r) => r.attachmentId)
         .filter((x): x is number => typeof x === "number");
       const attById = new Map((await getAttachmentsByIds(attIds)).map((a) => [a.id, a]));
+      // Reactions for this page (board 4c) — ONE indexed range over ids already in
+      // hand, and it returns nothing at all for a thread nobody has reacted in,
+      // which is almost every thread. The map is projected into the contract's
+      // `{emoji: pins[]}` shape here rather than in the DB layer, because that shape
+      // is the WIRE contract and `listMessages` returns rows.
+      const reactionRows = await reactionsForMessages(rows.map((r) => r.id));
       return rows.map((r) => {
         // M11: WITHHOLD the content of a locked expiring message — a recipient
         // must reveal it via `revealExpiring` (which burns it), so the secret is
@@ -2678,8 +2687,68 @@ export const v2MessagesRouter = router({
           attachment: locked ? null : r.attachmentId ? (attById.get(r.attachmentId) ?? null) : null,
           replyToId: r.replyToId ?? null,
           locked,
+          // Sent for a LOCKED message too, deliberately: a reaction is not the
+          // message's content, and withholding it would make a view-once bubble the
+          // one place chips vanish — which is itself a signal about what it holds.
+          reactions: projectReactions(reactionRows.get(r.id) ?? []),
         };
       });
+    }),
+
+  /**
+   * React to a message, or take it back (DATA-CONTRACTS §2, board 4c).
+   *
+   * The wire format is the contract's — `{messageId, emoji, op}` — with the TOGGLE
+   * decided client-side by `reactionOpFor`, which is why both ops must be (and are)
+   * idempotent: the client is toggling its OWN reaction, so the only race is with
+   * itself, and a retried request must not undo the thing it just did.
+   *
+   * EVERY REFUSAL ANSWERS THE SAME WAY except a malformed emoji, which is the
+   * caller's own bug rather than a fact about somebody else's data: message ids are
+   * small sequential integers, so a distinguishable "not a member" would map which
+   * conversations exist and who is in them.
+   */
+  react: publicProcedure
+    .input(
+      z.object({
+        messageId: z.number().int().positive(),
+        emoji: z.string().min(1).max(REACTION_MAX_LENGTH),
+        op: z.enum(["add", "remove"]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const res = await setMessageReaction({
+        messageId: input.messageId,
+        identityId: me.id,
+        emoji: input.emoji,
+        op: input.op,
+      });
+      if (!res.ok) {
+        if (res.reason === "bad-emoji") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "That isn't a reaction." });
+        }
+        throw new TRPCError({ code: "NOT_FOUND", message: "That message isn't available." });
+      }
+      // Tell the whole thread, INCLUDING the reactor's other devices — the chips are
+      // shared state, so a phone and a laptop showing different counts for the same
+      // message is exactly the divergence this codebase keeps paying for.
+      if (res.conversationId != null) {
+        const members = await getConversationParticipantIds(res.conversationId);
+        for (const pid of members) {
+          // NOT `if (pid !== me.id)`, which is what the message fan-out just above
+          // does and is right for a message: nobody needs telling about their own
+          // send. Here my other devices DO need it — the chips are shared state, and
+          // a phone and a laptop showing different counts for one message is exactly
+          // the divergence this codebase keeps paying for.
+          publishToIdentity(pid, {
+            kind: "reaction",
+            conversationId: res.conversationId,
+            messageId: input.messageId,
+          });
+        }
+      }
+      return { ok: true };
     }),
 
   /** Search message bodies within one conversation. */

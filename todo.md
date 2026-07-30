@@ -11278,6 +11278,82 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.16 — board 4c: reactions (2026-07-30)
+- [x] **The contract's central rule is a UNIQUE KEY, not an application check.**
+      `DATA-CONTRACTS.md` §2 asks for `reactions: MessageReactions` stored on the message
+      record with "one reaction per user per message". Held as that blob, the rule is a
+      check around a read-modify-write and a concurrent reaction is silently lost — the
+      store cannot hold the invariant the contract is built on. A `message_reactions`
+      table with `UNIQUE (messageId, identityId)` holds it by construction, after which
+      picking a second emoji is ONE atomic upsert rather than a delete-then-insert that
+      can fail in between and leave the reaction gone.
+- [x] **The contract's wire shape is unchanged**: `{emoji: pins[]}` is a projection built
+      at read time. Honouring a contract means keeping its shape, not copying a store
+      that cannot keep its promise.
+- [x] **Both ops are idempotent**, so a double-tap on a slow connection or a retried
+      request cannot land somewhere nobody chose.
+- [x] **The validation is load-bearing, not ceremony.** Without it the emoji field is a
+      free-text channel that renders on somebody else's message, under their own words:
+      `react({emoji: "you are an idiot"})`. `normalizeReactionEmoji` is a SHAPE rule
+      (bounded, no ASCII letters/digits, no whitespace, no control or bidi characters)
+      rather than an allowlist of glyphs — the `+` picker offers ~1,124 and the set grows
+      with every Unicode release, so an allowlist would refuse legitimate reactions
+      forever after. ZWJ and the variation selectors are permitted, or the rule would
+      refuse "👩‍🚀" and even the plain "❤️".
+- [x] **A trap I wrote and then hit one level out.** My first draft spelled the bidi guard
+      as a literal character class, putting a raw U+202E in the source — invisible in
+      every editor, reordering the line it sits on: a guard against bidi written in bidi.
+      `grep` reporting the file as BINARY is how it was caught; it is tested numerically
+      by code point now. The same trap then aborted a mutation, because the failing test
+      PRINTS those characters and grep read the vitest stream as binary — the harness
+      refused to record a result it could not read, which is what that check is for.
+      Re-run binary-safe, it bit.
+- [x] **The SSE kind is declared in both places.** An undeclared kind is delivered locally
+      and silently DROPPED whenever the recipient is on the other instance (the v2.99.74
+      trap, invisible in single-instance dev).
+- [x] **The event carries the message id and never the emoji**, so there is one authority
+      for what the reactions ARE — the wire op is a toggle, and a client that mis-applies
+      one delta stays wrong until it reloads.
+- [x] **It fans to every member INCLUDING the reactor's own other devices** — the opposite
+      of the message fan-out directly above it, deliberately: chips are shared state, and
+      a phone and a laptop showing different counts for one message is the divergence this
+      codebase keeps paying for.
+- [x] **It touches no thread state** — no `unreadCount`, no `lastMessageAt`. The contract
+      says reacting never changes unread and it is right: a heart that bumped a thread
+      would re-order everybody's inbox on every tap.
+- [x] **The quick row is IN FLOW rather than floating.** An absolutely-positioned bar over
+      a bubble that can sit at either edge of a phone needs measuring then clamping — the
+      class that clipped the ⋮ menu (v2.99.0) and ran the video-consent card off the right
+      (v2.99.54). In flow it cannot leave the viewport at any width.
+- [x] **The chips are ONE insertion in the per-message wrapper**, so they cover the
+      emoji-only branch and the attachment shapes (the v2.103.3 gutter argument).
+- [x] **My own chip's accent fallbacks are literals.** `var(--rb, var(--rb))` is a
+      custom-property cycle: it resolves to the guaranteed-invalid value and the browser
+      DROPS the declaration, leaving a chip with no fill and no border (v2.106.7).
+- [x] **The `+` reuses the composer's picker** rather than a second catalogue — two emoji
+      lists is how they come to hold different glyphs (v2.99.80 consolidated three).
+- [x] **Sent for a LOCKED message too**: a reaction is not the message's content, and
+      withholding chips would make a view-once bubble the one place they vanish, which is
+      itself a signal about what it holds.
+- [x] `server/reactions.test.ts` (44), driven behaviourally. **All 23 tripwires verified by
+      MUTATION** off a confirmed-green baseline, mutator aborting unless its target occurs
+      exactly once; sources byte-identical afterwards.
+- [x] **One survivor, a real gap in my own test and the recurring class**: the membership
+      assertion checked that `getConversationParticipantIds` and `not-a-member` APPEAR, and
+      `if (false)` leaves both strings in the file — so it stayed green while anybody could
+      react to any message by guessing a sequential integer id, their pin then rendering on
+      a stranger's message. Now pinned as the condition; re-verified.
+- [x] **One mutation aborted on a non-unique anchor** rather than recording a result about
+      the wrong occurrence: the membership line is shared verbatim with
+      `hideMessageForIdentity`.
+- [x] **A defect in my own test, failing on correct code**: `indexOf("]")` for the end of
+      `KNOWN_V2_EVENT_KINDS` found the bracket inside `V2Event["kind"]` on the declaration
+      line, so the window was 34 characters and never reached the list.
+- [x] **Not verified against a database, said plainly**: no MySQL here, so the unique key
+      and migrator entry are proven by reading and pinned, but nobody has reacted to a
+      message and watched a chip appear on a second device.
+- [x] One additive table, no new dependency, no new env var. 4308 tests.
+
 ## v2.106.15 — board 3b + 4a: the tags store becomes visible (2026-07-30)
 - [x] **The model shipped last release had no reader and no writer in the app.** v2.106.14 added
       `contacts.tags`, the parser, the section derivation and the mirror — and not one screen read

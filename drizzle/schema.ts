@@ -598,6 +598,44 @@ export const messageHides = mysqlTable(
   }),
 );
 
+/**
+ * Message reactions — `DATA-CONTRACTS.md` §2, board 4c.
+ *
+ * A TABLE RATHER THAN THE CONTRACT'S JSON MAP, AND THE REASON IS THE CONTRACT'S
+ * OWN CENTRAL RULE. It asks for `reactions: MessageReactions` — `{emoji: pins[]}`
+ * — stored on the message record, with "one reaction per user per message". Held
+ * as a blob that rule is an application check around a read-modify-write: two
+ * people reacting in the same instant both read the old map and the second write
+ * silently discards the first. Here it is `UNIQUE (messageId, identityId)`, so
+ * one-per-user holds BY CONSTRUCTION and a move is one atomic upsert.
+ *
+ * The contract's wire shape is unchanged — `{emoji: pins[]}` is a PROJECTION over
+ * these rows, built at read time. Honouring a contract means keeping its shape,
+ * not copying a store that cannot hold its own invariant.
+ *
+ * `emoji` is varchar(32) because a single reaction can be a ZWJ sequence with skin
+ * tone modifiers — "👩🏽‍🚀" is 7 code units, and a family emoji more. It is bounded
+ * and shape-checked on the way in (`normalizeReactionEmoji`): without that, this
+ * column is a free-text channel that renders on somebody else's message.
+ */
+export const messageReactions = mysqlTable(
+  "message_reactions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    messageId: int("messageId").notNull(),
+    identityId: int("identityId").notNull(),
+    emoji: varchar("emoji", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    /* THE ONE-PER-USER RULE. Not a convenience index — it is the rule itself, which
+       is why picking a second emoji can be an upsert rather than a delete+insert. */
+    oneEach: uniqueIndex("message_reactions_one_each").on(t.messageId, t.identityId),
+    /* The read direction: every reaction on a page of messages, one index range. */
+    messageIdx: index("message_reactions_message_idx").on(t.messageId),
+  }),
+);
+
 export const messages = mysqlTable(
   "messages",
   {

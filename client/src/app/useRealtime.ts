@@ -17,6 +17,10 @@ type V2Event =
   | { kind: "read"; conversationId: number; reader: number }
   /** Delivery receipt (v2.99.74): the second tick — they have it, unopened. */
   | { kind: "delivered"; conversationId: number; by: number }
+  /** A reaction landed on a message here (board 4c). Carries the message id only —
+   *  the chips come from a refetch, so there is exactly one authority for what the
+   *  reactions ARE and a client cannot drift by mis-applying a toggle delta. */
+  | { kind: "reaction"; conversationId: number; messageId: number }
   | { kind: "presence"; number: string; online: boolean; lastSeenAt: string }
   | { kind: "contact"; from: number }
   | {
@@ -242,6 +246,16 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
             // fresh (the badge otherwise only refreshes on its own 20s poll).
             utils.calls.history.invalidate().catch(() => {});
             utils.calls.missedSummary.invalidate().catch(() => {});
+            break;
+          case "reaction":
+            // Board 4c. The MESSAGE list only — never `threads`: reacting must not
+            // change unread state or bump the thread (the contract says so, and a
+            // heart that re-ordered everybody's inbox would be worse than no
+            // feature). Silent: the chip appearing is the whole notification, and a
+            // sound per reaction in a busy group is unusable.
+            utils.messages.list
+              .invalidate({ conversationId: payload.conversationId })
+              .catch(() => {});
             break;
           case "read":
           case "delivered":
