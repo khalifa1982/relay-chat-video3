@@ -21,8 +21,47 @@ import { codeOnly } from "./testing/codeOnly";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const LOGIN = read("client/src/app/LoginScreen.tsx");
+const LOGIN_CODE = codeOnly(LOGIN);
 const ROUTERS = read("server/v2routers.ts");
 const CSS = read("client/src/index.css");
+
+/** A component's own body, brace-matched from the first `{` whose preceding text has
+ *  balanced parens — never the first `{` after the name, which for a destructured
+ *  parameter list is the PARAMETER object rather than the body (the v2.105.9 trap). */
+function fnBodyOf(decl: string): string {
+  const at = LOGIN_CODE.indexOf(decl);
+  expect(at, `no such component: ${decl}`).toBeGreaterThan(0);
+  let i = at + decl.length;
+  let parens = 0;
+  for (; i < LOGIN_CODE.length; i++) {
+    const c = LOGIN_CODE[i];
+    if (c === "(") parens++;
+    else if (c === ")") parens--;
+    else if (c === "{" && parens === 0) break;
+  }
+  let depth = 0;
+  for (let j = i; j < LOGIN_CODE.length; j++) {
+    if (LOGIN_CODE[j] === "{") depth++;
+    else if (LOGIN_CODE[j] === "}") {
+      depth--;
+      if (depth === 0) {
+        const body = LOGIN_CODE.slice(i, j + 1);
+        expect(body.length, decl).toBeGreaterThan(80);
+        return body;
+      }
+    }
+  }
+  throw new Error(`unterminated component: ${decl}`);
+}
+
+/** The `maskedNumberForUser` body, bounded by the next declaration rather than by prose. */
+function maskedReader(): string {
+  const at = ROUTERS.indexOf("async function maskedNumberForUser");
+  expect(at).toBeGreaterThan(0);
+  const body = ROUTERS.slice(at, ROUTERS.indexOf("\n}", at) + 2);
+  expect(body.length).toBeGreaterThan(60);
+  return body;
+}
 
 describe("#121 — the number is echoed back, and it is MASKED", () => {
   it("keeps only the leading group", () => {
@@ -62,11 +101,18 @@ describe("#121 — the number is echoed back, and it is MASKED", () => {
   });
 
   it("the read fails to null rather than breaking a sign-in", () => {
-    const fn = ROUTERS.slice(
-      ROUTERS.indexOf("async function maskedNumberForUser"),
-      ROUTERS.indexOf("* Offline-message email"),
-    );
-    expect(fn).toMatch(/catch \{\s*\n\s*return null;/);
+    expect(maskedReader()).toMatch(/catch \{\s*\n\s*return null;/);
+  });
+
+  it("the reader actually MASKS — it does not just carry the word in its name", () => {
+    /* ADDED (v2.106.5) because the mutation run found this gap and it is a privacy one:
+       every assertion above was satisfied by the call site naming `maskedNumberForUser`,
+       so replacing that function's body with the raw number SURVIVED — the probe would
+       have handed anybody who knows an email address a dialable number while the suite
+       stayed green. Naming a masker is not masking. */
+    const fn = maskedReader();
+    expect(fn).toMatch(/return maskNumber\(/);
+    expect(fn).not.toMatch(/return \(await getIdentityByUserId\([^)]*\)\)\?\.number/);
   });
 });
 
@@ -96,14 +142,61 @@ describe("#121 — an existing address cannot be registered again", () => {
   });
 
   it("shows the masked number, and only for an address that HAS an account", () => {
-    expect(choose).toMatch(/!unreg && p\.numberHint/);
-    expect(choose).toMatch(/YOUR RELAY ID/);
+    /* REWRITTEN (v2.106.4): this froze the row's markup INSIDE `ChooseStep`, i.e. it
+       pinned the one place the row happened to live — and that was the defect. See the
+       describe below: `submitEmail` SKIPS `choose` for a passcode account, so the group
+       of returning users most likely to be affected never saw their number while this
+       assertion stayed green. The row is now one component and the property is that
+       `choose` passes NO number for an unregistered address. */
+    expect(choose).toMatch(/<IdentityHint/);
+    expect(choose).toMatch(/numberHint=\{unreg \? null : p\.numberHint\}/);
+  });
+});
+
+/**
+ * #121, the half that was missing — and the reason a source pin could not find it.
+ *
+ * The identity row rendered ONLY inside `ChooseStep`, while `submitEmail` deliberately
+ * routes a passcode account straight to `pin` (the fastest real path). So the owner's
+ * "once you put your email ID it will show you your number" held for accounts WITHOUT a
+ * passcode and silently failed for the ones WITH one. Driven in a real browser per branch:
+ * pin / choose / code all show it, and an unregistered address shows none — 9/9.
+ */
+describe("#121 — the number appears on EVERY post-email step, from ONE component", () => {
+  const hints = (LOGIN.match(/<IdentityHint/g) ?? []).length;
+
+  it("the row is a shared component, not a copy per step", () => {
+    // A copy per step is how one of them comes to be left out — which is exactly what
+    // happened, in the direction of the step that had no copy at all.
+    expect(LOGIN_CODE).toMatch(/function IdentityHint\(/);
+    expect((LOGIN_CODE.match(/function IdentityHint\(/g) ?? []).length).toBe(1);
+    expect(hints).toBeGreaterThanOrEqual(4);
+  });
+
+  it("the PASSCODE step carries it — the step that skips `choose`", () => {
+    const pin = fnBodyOf("function PinStep");
+    expect(pin).toMatch(/<IdentityHint[\s\S]*?numberHint=\{p\.numberHint\}/);
+  });
+
+  it("the CODE step and the device WAIT carry it too", () => {
+    for (const fn of ["function CodeStep", "function WaitingStep"]) {
+      expect(fnBodyOf(fn), fn).toMatch(/<IdentityHint/);
+    }
+  });
+
+  it("the number stays MASKED, and the narrowing is stated", () => {
+    /* `loginProbe` is reachable by anybody who knows an address, so printing all six
+       digits here would build an unauthenticated email -> dialable-number lookup:
+       somebody with your email could then call you without ever being given your number.
+       The leading group is what recognition needs and is not an address. */
+    expect(LOGIN_CODE).not.toMatch(/numberHint\?\.replace/);
+    expect(LOGIN).toMatch(/unauthenticated email → dialable-number lookup/);
   });
 
   it("the number is LTR and bidi-isolated", () => {
-    const block = choose.slice(choose.indexOf("YOUR RELAY ID"));
-    expect(block).toMatch(/dir="ltr"/);
-    expect(block).toMatch(/unicodeBidi: "isolate"/);
+    const row = fnBodyOf("function IdentityHint");
+    expect(row).toMatch(/dir="ltr"/);
+    expect(row).toMatch(/unicodeBidi: "isolate"/);
   });
 });
 

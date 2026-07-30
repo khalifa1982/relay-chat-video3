@@ -11278,6 +11278,59 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.5 — your number appears on EVERY sign-in step (2026-07-30)
+
+Owner, twice in one message: *"Once you put your email ID, your number will automatically
+show up, even before you click log in. So, we will know that this is your ID and your
+number."*
+
+v2.105.26 built that row and it worked — inside `choose`, and **only** inside `choose`.
+`submitEmail` deliberately routes an account that has a 4-digit passcode straight to `pin`,
+because that is the fastest real path. So **the group most likely to be returning — people
+with a passcode set — never saw their number at all.** The ask held for accounts without a
+passcode and silently failed for the ones with one.
+
+**A SOURCE PIN COULD NOT HAVE FOUND THIS, and the pin that existed proves it**: it asserted
+the row's markup where the row happened to live, so it stayed green while a whole branch
+had no row. What finds it is driving the page per branch — **9/9** in headless Chromium
+against the real built bundle (pin / choose / code, plus an unregistered address), with each
+branch asserting the STEP'S OWN LABEL first so a check cannot claim a step it never reached.
+
+- **ONE COMPONENT, NOT A COPY PER STEP.** `IdentityHint` renders on `choose`, `pin`, the
+  code entry and the device wait. A copy per step is precisely how one comes to be left
+  out — in the direction that already happened.
+- An **UNREGISTERED** address passes NO number rather than reserving space for a value that
+  is never coming; the probe correctly returns none.
+- Two sentences stop repeating the address the row above them already shows.
+
+**THE NUMBER STAYS MASKED (`777-•••`)**, restated rather than quietly widened to "fully
+satisfy" the ask: `loginProbe` is reachable by anybody who knows an address, so printing all
+six digits would build an unauthenticated **email → dialable-number lookup** — somebody with
+your email could then call you without ever having been given your number. The leading group
+is what recognition needs and is not an address. The residual (three digits narrow an
+enumeration for somebody who also knows your display name) is bounded, throttled, and
+reversible on request.
+
+**THE MUTATION RUN FOUND A REAL PRIVACY GAP IN THE EXISTING SUITE — the finding worth the
+most here.** Every assertion about masking was satisfied by the CALL SITE naming
+`maskedNumberForUser`, so replacing that function's body with the raw number **SURVIVED**:
+the probe would have handed out dialable numbers with the suite green. Naming a masker is
+not masking. The reader is now pinned to route through `maskNumber` and forbidden from
+returning the bare number.
+
+**One pre-existing pin rewritten to the property**: it froze the row's markup inside
+`ChooseStep`, i.e. it pinned the one location that was the defect. It now asserts the shared
+component plus the rule that `choose` passes no number for an unregistered address.
+
+`server/loginBatch.test.ts` → 38; **all 7 tripwires verified by MUTATION** from byte-exact
+copies, sources byte-identical afterwards, no survivors and no aborts.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: the four branches are driven in a real browser
+against the real bundle, but nobody has signed in on a phone and watched their own number
+appear.
+
+No schema change, no new dependency, no new env var. 4145 tests.
+
 ## v2.106.4 — redesign phase 2b (6/6): the other five screens, and the accent app-wide (2026-07-30)
 
 Owner: *"why you didnt fit all designs into the app"* — a fair question. I had been phasing
