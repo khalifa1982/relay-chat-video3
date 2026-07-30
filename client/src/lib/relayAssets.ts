@@ -677,7 +677,13 @@ export const RELAY_CSS = `
    template inline; these rules just style those states. */
 .relay-root .relay-tile{cursor:pointer}
 .relay-root .relay-tile.is-spotlight{box-shadow:inset 0 0 0 2px var(--accent)}
-.relay-root .relay-tile.speaking{outline:2px solid var(--relay-online,#22c55e);outline-offset:-2px}
+/* Board 2a: "speaking tile = accent border + inner glow".
+   THE HUE MOVE IS A VOCABULARY FIX, not decoration. Green currently means BOTH "online"
+   (the presence LEDs, via --relay-online) and "speaking" — one colour carrying two facts on
+   a screen where both are visible at once. Speaking moves to the ACCENT, which is what
+   "active" already means on the control bar's .on state after v2.106.6, so green is left
+   meaning exactly one thing. Same argument v2.99.86 used to move DND off green. */
+.relay-root .relay-tile.speaking{outline:2px solid var(--accent);outline-offset:-2px}
 .relay-root .relay-tile.screen video{object-fit:contain;background:#000}
 /* Colourful "I'm talking" sound-wave under the avatar/name (cam-off speakers):
    five rainbow bars that bounce like an equaliser. Hidden unless .speaking. */
@@ -720,7 +726,7 @@ export const RELAY_CSS = `
    The glow is edge-only, but painting it over the menu/maximize buttons would
    tint them green in the corner where they live. */
 .relay-root .relay-tile .spk-glow{position:absolute;inset:0;z-index:3;pointer-events:none;
-  border-radius:inherit;opacity:0;box-shadow:inset 0 0 22px 0 rgba(34,197,94,.30)}
+  border-radius:inherit;opacity:0;box-shadow:inset 0 0 22px 0 rgba(var(--accent-rgb),.30)}
 .relay-root .relay-tile.speaking .spk-glow{opacity:1}
 @media (prefers-reduced-motion: no-preference){
   .relay-root .relay-tile.speaking .spk-glow{animation:relaySpeakPulse 1.4s ease-in-out infinite}

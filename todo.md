@@ -11278,6 +11278,51 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.9 — board 2a: the speaking tile takes the accent; PHASE 3 CLOSED (2026-07-30)
+
+**The hue move is a vocabulary fix rather than a restyle.** Green meant BOTH *online* (the
+presence LEDs, via `--relay-online`) and *speaking* — two different facts on one colour, on a
+screen where both are visible at once. Speaking is now the ACCENT, which is what "active"
+already means on the control bar's `.on` state after v2.106.6, so green is left meaning
+exactly one thing. The same argument v2.99.86 used to move DND off green.
+
+The inner glow moves with the border, because a tile outlined in one hue and lit in another
+reads as a rendering fault.
+
+**The glow's SHAPE is untouched, deliberately**: it stays a static `box-shadow` on an overlay
+with only its OPACITY animated. v2.99.84 measured 14 repainting animations over a live call
+grid and removed all of them, and a tile's backdrop is live video, so nothing behind it can
+ever be cached.
+
+**Two board frames are CONFIRMED rather than rebuilt, and saying which is the point:**
+- **2b's "live waveform bars"** are the speaking tile's own sound-wave, shipped long ago and
+  made compositor-only in v2.99.84 (`scaleY` off a bottom origin, where it used to animate
+  `height`). Pinned, not rewritten — and the bars stay a RAINBOW, because that is a
+  deliberate earlier choice and the board says only "live waveform bars", so there is
+  nothing here it actually overrules.
+- **2a's "2×4 grid fits up to 8" is deliberately not taken as a literal.** The mesh caps a
+  call at 6 and the SFU at 10, so a hard four-column grid would break a 10-way call — that
+  number describes the frame's own mock, not this app's caps. The columns stay derived from
+  the live participant count, and a mutation hardcoding 4 bites.
+
+**One pre-existing pin rewritten to the property**: v2.99.84's own guard froze the glow's
+exact GREEN literal, so it went red the moment the accent arrived — while saying nothing about
+what it exists for, which is that the glow is a static box-shadow whose opacity is the only
+thing that moves. The colour is free to change; the shape is not.
+
+`client/src/lib/callBarRedesign.test.ts` → 26; **all 6 tripwires verified by MUTATION**,
+sources byte-identical afterwards.
+
+**PHASE 3 IS CLOSED**: the standard bar (v2.106.6), the accent across every call surface
+(v2.106.7), the matrix dial (v2.106.8) and the conference/voice tiles (here) — with 1g and 2b
+confirmed as already-shipped rather than churned.
+
+**NOT VERIFIED ON A CALL, said plainly, and it applies to all four releases**: everything is
+measured against the real exported stylesheet and markup, but nobody has been in a call and
+watched a speaking tile light up.
+
+No schema change, no new dependency, no new env var. 4171 tests.
+
 ## v2.106.8 — board 3a: the outgoing number resolves matrix-style (2026-07-30)
 
 Board 3a draws the dialled number as six mono TILES that scramble and settle onto the real

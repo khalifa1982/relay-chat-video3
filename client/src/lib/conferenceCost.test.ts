@@ -188,7 +188,14 @@ describe("the per-frame paint cost of the grid", () => {
     // relaySpeakPulse used to animate the TILE's own box-shadow — a full-tile
     // repaint per frame, over live video, six times over at the cap.
     expect(RELAY_CSS).toMatch(/@keyframes relaySpeakPulse\{0%,100%\{opacity:0\}50%\{opacity:1\}\}/);
-    expect(RELAY_CSS).toMatch(/\.spk-glow\{[^}]*box-shadow:inset 0 0 22px 0 rgba\(34,197,94,\.30\)/);
+    /* REWRITTEN (v2.106.9): this froze the glow's exact GREEN literal, so it broke the
+       moment board 2a moved the speaking state to the cycling accent — while saying
+       nothing about the property it exists for, which is that the glow is a STATIC
+       box-shadow on an overlay and only its OPACITY moves. The colour is free to change;
+       the shape is not. */
+    expect(RELAY_CSS).toMatch(/\.spk-glow\{[^}]*box-shadow:inset 0 0 22px 0 rgba\(/);
+    const glow = RELAY_CSS.match(/\.spk-glow\{[^}]*\}/)![0];
+    expect(glow).not.toMatch(/animation/);
   });
 
   it("the glow overlay sits BELOW the interactive chips", () => {

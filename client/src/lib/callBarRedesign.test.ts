@@ -307,3 +307,50 @@ describe("board 1g — CONFIRMED, not rebuilt", () => {
     expect(Number(delay![1])).toBeGreaterThan(Number(dur![1]) * 0.3);
   });
 });
+
+describe("board 2a/2b — the conference grid and the voice call", () => {
+  it("a SPEAKING tile is the accent border plus an inner glow", () => {
+    /* Board 2a. And the hue move is a VOCABULARY fix rather than decoration: green meant
+       both "online" (the presence LEDs) and "speaking", two facts on one colour on a screen
+       where both are visible at once. Speaking is now the accent — which is what "active"
+       already means on the control bar after v2.106.6 — so green means exactly one thing.
+       The same argument v2.99.86 used to move DND off green. */
+    expect(rule(".relay-root .relay-tile.speaking{")).toMatch(/outline:2px solid var\(--accent\)/);
+    const glow = rule(".relay-root .relay-tile .spk-glow{");
+    expect(glow).toMatch(/box-shadow:inset [^;}]*rgba\(var\(--accent-rgb\)/);
+    // The glow must follow the border, or the tile is outlined in one hue and lit in another.
+    expect(glow).not.toMatch(/34,197,94/);
+  });
+
+  it("the glow is an OVERLAY animating opacity, never an animated box-shadow", () => {
+    /* v2.99.84 measured 14 repainting animations over a live call grid and removed all of
+       them; the glow's box-shadow is static and only its opacity moves, which is compositor
+       work. A tile's backdrop is live video, so nothing behind it can ever be cached. */
+    const kf = CSS_CODE.slice(CSS_CODE.indexOf("@keyframes relaySpeakPulse"));
+    expect(kf.slice(0, kf.indexOf("}\n") + 1)).not.toMatch(/box-shadow/);
+  });
+
+  it("the grid's column count is COMPUTED, not the board's fixed 2x4", () => {
+    /* Board 2a draws a 2x4 grid "fits up to 8". Deliberately not taken as a literal: the
+       mesh caps a call at 6 and the SFU at 10, so a hard four-column grid would break a
+       10-way call — the frame's number describes its own mock, not this app's caps. The
+       columns stay derived from the live participant count. */
+    expect(CLIENT_CODE).toMatch(/gridTemplateColumns = "repeat\(" \+ cols/);
+    expect(CSS_CODE).not.toMatch(/#videoGrid\{[^}]*grid-template-columns:repeat\(4/);
+  });
+
+  it("board 2b's live waveform already exists — CONFIRMED, not rebuilt", () => {
+    /* The voice call's "live waveform bars" are the speaking tile's own sound-wave, shipped
+       and then made compositor-only in v2.99.84 (scaleY off a bottom origin, where it used
+       to animate `height`). Pinned rather than rewritten. The bars stay a RAINBOW: that is a
+       deliberate earlier choice and the board says only "live waveform bars", so there is
+       nothing here it actually overrules. */
+    expect(rule(".relay-root .relay-tile .sound-wave{")).toMatch(/display:none/);
+    expect(CSS_CODE).toMatch(/\.relay-tile\.speaking \.sound-wave\{display:flex\}/);
+    const kf = CSS_CODE.slice(CSS_CODE.indexOf("@keyframes relayWave"));
+    const body = kf.slice(0, kf.indexOf("}\n") + 1);
+    expect(body).toMatch(/transform:scaleY/);
+    expect(body).not.toMatch(/height/);
+  });
+});
+
