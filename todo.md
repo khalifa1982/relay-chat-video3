@@ -11278,6 +11278,46 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.20 — board 3d: the New group sheet (2026-07-30)
+- [x] **The segmented Direct/Group control** becomes the board's inset well
+      (rgba(0,0,0,.32), radius 13, padding 5) whose SELECTED half is the cycling accent
+      — the same "you are here" language as the tab bar's pill (v2.106.2). **Both halves
+      converted**: a half-converted control puts a raised grey tile beside a cycling
+      accent one and the two visibly disagree about what "selected" means.
+- [x] **Section labels** take the board's mono 10px / .2em voice, shared with the History
+      day headers and the Contacts A–Z letters.
+- [x] **GROUP NAME gets the accent focus ring** (border .45 + a 3px .12 halo) on
+      `focus-within` rather than permanently — an always-lit field stops meaning "you are
+      typing here".
+- [x] **A picked member is an ACCENT chip**, not a neutral grey pill: these are choices
+      the person has made.
+- [x] **The CTA counts YOU** — "Create group · 4 members" for three picked plus yourself.
+      A count reading 3 for a group of 4 is wrong about the thing it names.
+- [x] **Every accent is an inline style**, never a runtime-composed Tailwind class, which
+      the JIT cannot see and which renders unstyled.
+- [x] **The check circle is OPT-IN via a prop**, not added to every row. `SuggestList` is
+      shared with the DM field, where tapping a row OPENS a thread rather than selecting
+      a member — a tick there would promise a multi-select that does not exist.
+- [x] **A PRE-EXISTING TEST DEFECT, surfaced only by this change, and the mechanism is
+      new to this repo's collection.** `statusReply.test.ts` anchored on "Replied to your
+      STATUS" — text v2.101.0 renamed to "story" — so `indexOf` returned **-1**, and
+      `slice(-1 - 900)` is `slice(-901)`: **the last 901 characters**. The window was the
+      tail of the file and matched an unrelated `[unicode-bidi:isolate]` in
+      `SuggestList`; it had never read the chip. A negative index does not throw, it
+      silently reads from the other end. Invisible for nineteen releases until board 3d's
+      insertion pushed that span past the 901-character mark.
+- [x] **Fixing the anchor was not enough**: the chip has TWO isolated spans, so a
+      region-wide match still survived removing the isolation from either — proven by
+      mutation. Now pinned on the LABEL'S OWN span, and it bites for the first time.
+- [x] `server/newGroupFrame.test.ts` (12). **All 7 tripwires verified by MUTATION** off a
+      confirmed-green baseline, sources byte-identical; one re-run against a unique anchor
+      after the mutator correctly ABORTED on a needle occurring twice.
+- [x] **Not verified on a device**: nobody has created a group on a phone.
+- [x] **Also running, not yet landed**: a five-frame build (2e, 2f, 2h, 2i, 4j) in
+      isolated worktrees with an independent reviewer per patch, and a 14-cluster
+      design-vs-built audit whose findings answer "the contact is not showing".
+- [x] No schema change, no new dependency, no new env var. 4368 tests.
+
 ## v2.106.19 — the reported dialer row, plus a real bug in v2.106.14 (2026-07-30)
 - [x] **OWNER REPORT: "in the main page under the dial up pad. The bottoms is not on one
       line."** CONFIRMED BY MEASUREMENT at 320/360/375/390/430 against the real built

@@ -4440,7 +4440,10 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
       {open && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={resetAll}>
           <div
-            className="w-full max-w-sm rounded-2xl bg-card border border-border p-5 shadow-2xl"
+            /* Board 3d: the sheet's material is the shared `.rsheet` recipe (v2.106.10),
+               which is dark-scoped and declares NOTHING in light — so `bg-card` stays as
+               the light-theme surface underneath rather than being replaced. */
+            className="rsheet w-full max-w-sm rounded-2xl bg-card border border-border p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
@@ -4451,14 +4454,38 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
             </div>
 
             {/* Direct / Group toggle */}
-            <div role="group" aria-label="Conversation type" className="grid grid-cols-2 gap-1 rounded-xl bg-muted/50 p-1 mb-4">
+            {/* Board 3d's segmented control: an inset well (rgba(0,0,0,.32), radius 13,
+                padding 5) whose SELECTED half is the cycling accent — the same "you are
+                here" language as the tab bar's pill (v2.106.2), so one idea of selection
+                covers the app. Inline rather than a composed Tailwind class because a
+                runtime-built colour class is invisible to the JIT and renders unstyled. */}
+            <div
+              role="group"
+              aria-label="Conversation type"
+              className="grid grid-cols-2 gap-[7px] rounded-[13px] p-[5px] mb-4 border"
+              style={{ background: "rgba(0,0,0,.32)", borderColor: "rgba(255,255,255,.08)" }}
+            >
               <button
                 type="button"
                 aria-pressed={mode === "dm"}
                 onClick={() => setMode("dm")}
                 className={
-                  "flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-colors " +
-                  (mode === "dm" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
+                  "flex items-center justify-center gap-1.5 rounded-[9px] py-[9px] text-[13px] transition-colors " +
+                  (mode === "dm" ? "font-bold border" : "font-semibold text-muted-foreground hover:text-foreground")
+                }
+                style={
+                  mode === "dm"
+                    ? {
+                        /* Literal fallbacks, never `var(--rb, var(--rb))`: a
+                           self-referencing custom property is a CYCLE, resolves to the
+                           guaranteed-invalid value, and the browser DROPS the whole
+                           declaration — leaving the selected half with no fill at all
+                           (the v2.106.7 trap). */
+                        background: "rgba(var(--rb-rgb, 63, 224, 197), 0.20)",
+                        borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.50)",
+                        color: "#f2fffa",
+                      }
+                    : undefined
                 }
               >
                 <MessageSquarePlus className="size-3.5" /> Direct
@@ -4468,8 +4495,17 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                 aria-pressed={mode === "group"}
                 onClick={() => setMode("group")}
                 className={
-                  "flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-colors " +
-                  (mode === "group" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
+                  "flex items-center justify-center gap-1.5 rounded-[9px] py-[9px] text-[13px] transition-colors " +
+                  (mode === "group" ? "font-bold border" : "font-semibold text-muted-foreground hover:text-foreground")
+                }
+                style={
+                  mode === "group"
+                    ? {
+                        background: "rgba(var(--rb-rgb, 63, 224, 197), 0.20)",
+                        borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.50)",
+                        color: "#f2fffa",
+                      }
+                    : undefined
                 }
               >
                 <Users className="size-3.5" /> Group
@@ -4507,7 +4543,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                   </div>
                 </div>
 
-                <label className="text-xs uppercase tracking-widest text-muted-foreground mb-2 block">
+                <label className="mb-2 block font-mono text-[10px] uppercase tracking-[.2em] text-muted-foreground">
                   RELAY number
                 </label>
                 <div className="flex gap-2">
@@ -4542,16 +4578,25 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
               </>
             ) : (
               <>
-                <label className="text-xs uppercase tracking-widest text-muted-foreground mb-2 block">
+                <label className="mb-2 block font-mono text-[10px] uppercase tracking-[.2em] text-muted-foreground">
                   Group name
                 </label>
-                <Input
-                  value={groupTitle}
-                  onChange={(e) => setGroupTitle(e.target.value.slice(0, 128))}
-                  placeholder="e.g. Weekend Trip"
-                  className="mb-4"
-                />
-                <label className="text-xs uppercase tracking-widest text-muted-foreground mb-2 block">
+                {/* Board 3d draws this field with an ACCENT focus ring (border .45 plus
+                    a 3px .12 halo) — it is the one field on the sheet that MUST be
+                    filled, so the frame gives it the emphasis. Applied on focus-within
+                    rather than permanently: an always-lit field stops meaning "you are
+                    typing here". Literal fallbacks, never a self-referencing
+                    `var(--rb, var(--rb))`, which is a cycle the browser drops entirely
+                    (the v2.106.7 trap). */}
+                <div className="mb-4 rounded-[13px] transition-shadow focus-within:shadow-[0_0_0_3px_rgba(var(--rb-rgb,63,224,197),0.12)]">
+                  <Input
+                    value={groupTitle}
+                    onChange={(e) => setGroupTitle(e.target.value.slice(0, 128))}
+                    placeholder="e.g. Weekend Trip"
+                    className="rounded-[13px]"
+                  />
+                </div>
+                <label className="mb-2 block font-mono text-[10px] uppercase tracking-[.2em] text-muted-foreground">
                   Add members by number
                 </label>
                 <div className="flex gap-2">
@@ -4578,6 +4623,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                   contacts={contactsQ.data ?? []}
                   query={groupInput}
                   busy={false}
+                  selectable
                   // Already-added members are withheld: a suggestion that does
                   // nothing when tapped reads as broken.
                   exclude={groupNumbers}
@@ -4586,7 +4632,19 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                 {groupNumbers.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mt-3">
                     {groupNumbers.map((n) => (
-                      <span key={n} className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-xs font-mono">
+                      /* Board 3d: a selected member is an ACCENT chip (fill .14, border
+                         .4, 10.5px/700 in the accent) rather than a neutral grey pill —
+                         these are choices the person has made, and the accent is what
+                         "selected" means everywhere else in this app now. */
+                      <span
+                        key={n}
+                        className="inline-flex items-center gap-1 rounded-[16px] border px-2.5 py-[5px] font-mono text-[10.5px] font-bold"
+                        style={{
+                          background: "rgba(var(--rb-rgb, 63, 224, 197), 0.14)",
+                          borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.40)",
+                          color: "var(--rb, #3FE0C5)",
+                        }}
+                      >
                         {n.slice(0, 3)} {n.slice(3)}
                         <button
                           type="button"
@@ -4606,7 +4664,14 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                   disabled={pending || groupTitle.trim().length === 0 || groupNumbers.length === 0}
                 >
                   <Users className="size-4 mr-1.5" />
-                  {createGroup.isPending ? "Creating…" : `Create group${groupNumbers.length ? ` (${groupNumbers.length + 1})` : ""}`}
+                  {/* Board 3d: "Create group · 4 members". The COUNT INCLUDES YOU,
+                      because you are in the group you are creating — a count reading 3
+                      for a group of 4 would be wrong about the thing it names. */}
+                  {createGroup.isPending
+                    ? "Creating…"
+                    : groupNumbers.length
+                      ? `Create group · ${groupNumbers.length + 1} members`
+                      : "Create group"}
                 </Button>
               </>
             )}
@@ -4636,12 +4701,22 @@ function SuggestList({
   query,
   busy,
   exclude,
+  selectable,
   onPick,
 }: {
   contacts: Array<{ number: string; displayName?: string | null; blocked?: boolean | null; favorite?: boolean | null; isOnline?: boolean | null; avatarUrl?: string | null; idle?: boolean | null }>;
   query: string;
   busy: boolean;
   exclude?: string[];
+  /**
+   * Board 3d draws the group picker's rows with an accent CHECK CIRCLE on the right.
+   *
+   * OPT-IN RATHER THAN ON EVERY ROW, because this list is SHARED with the DM field,
+   * where tapping a row OPENS a thread rather than selecting a member — a tick there
+   * would promise a multi-select that does not exist. One list, two meanings, and the
+   * caller says which.
+   */
+  selectable?: boolean;
   onPick: (number: string) => void;
 }) {
   const skip = new Set(exclude ?? []);
@@ -4689,6 +4764,19 @@ function SuggestList({
                   {c.number.slice(0, 3)}-{c.number.slice(3)}
                 </span>
               </span>
+              {selectable && (
+                /* Empty until tapped — an already-added contact is WITHHELD from this
+                   list entirely (a suggestion that does nothing when tapped reads as
+                   broken), so a filled tick could never be reached here. It is the
+                   affordance saying "tapping adds", not a state. */
+                <span
+                  aria-hidden
+                  className="grid size-5 shrink-0 place-items-center rounded-full border"
+                  style={{ borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.45)" }}
+                >
+                  <Plus className="size-3" style={{ color: "var(--rb, #3FE0C5)" }} />
+                </span>
+              )}
             </button>
           </li>
         );

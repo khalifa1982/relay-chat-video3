@@ -375,10 +375,34 @@ describe("the recipient sees WHAT the reply was about", () => {
   });
 
   it("isolates the label from an RTL excerpt", () => {
-    // The chip concatenates a Latin label with a possibly-Arabic excerpt; without
-    // isolation the excerpt reorders the phrase (the PinTag lesson, v2.99.77).
-    const chip = MESSAGES.slice(MESSAGES.indexOf("Replied to your status") - 900);
-    expect(chip).toMatch(/\[unicode-bidi:isolate\]/);
+    /* The chip concatenates a Latin label with a possibly-Arabic excerpt; without
+       isolation the excerpt reorders the phrase (the PinTag lesson, v2.99.77).
+
+       THIS PIN WAS PASSING FOR THE WRONG REASON, and the mechanism is worth naming.
+       It anchored on "Replied to your STATUS" — text that v2.101.0 renamed to
+       "story", so `indexOf` returned **-1**. `slice(-1 - 900)` is `slice(-901)`,
+       which in JavaScript means "the LAST 901 characters", so the window was the
+       tail of the file and it matched an unrelated `[unicode-bidi:isolate]` down in
+       `SuggestList`. It never read the chip at all. A negative index does not throw;
+       it silently reads from the other end — the inverted-anchor trap with a new
+       twist, and it only surfaced when board 3d's insertion pushed that unrelated
+       span past the 901-character mark.
+
+       Now anchored on text that EXISTS, bounded by the chip's own end, and asserting
+       the window is real before asserting anything about it. */
+    const at = MESSAGES.indexOf("Replied to your story");
+    expect(at, "the chip's label must exist — a stale needle makes this vacuous").toBeGreaterThan(0);
+    const end = MESSAGES.indexOf("{m.replyToId != null &&", at);
+    expect(end).toBeGreaterThan(at);
+    const chip = MESSAGES.slice(at - 600, end);
+    expect(chip).toContain("Replied to your story");
+    /* PINNED ON THE LABEL'S OWN SPAN, not on the region containing one. The chip has
+       TWO isolated spans (the label and the story-kind), so a region-wide match
+       survived removing the isolation from either — proven by mutation. The property
+       is that the span CARRYING the Latin phrase is the isolated one. */
+    const label = MESSAGES.slice(MESSAGES.lastIndexOf("<span", at), at);
+    expect(label).toMatch(/\[unicode-bidi:isolate\]/);
+    expect(label).toMatch(/dir="ltr"/);
   });
 });
 
