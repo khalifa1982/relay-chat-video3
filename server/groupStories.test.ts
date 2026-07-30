@@ -506,11 +506,18 @@ describe("v2.105.6 — the ring, and the composer", () => {
   it("the viewer names the AUTHOR of a group slide", () => {
     // A group reel legitimately mixes authors; without this a slide would be
     // attributed to the group and there would be no way to tell who wrote it.
-    const hdr = STATUS.slice(STATUS.indexOf("{/* header */}"));
-    expect(hdr.slice(0, 1600)).toMatch(
-      /group\.subject\.kind === "group" && item\.author/,
-    );
-    expect(hdr.slice(0, 1600)).toMatch(/item\.mine \? "You" : item\.author\.displayName/);
+    // BOUNDED BY THE REGION'S OWN END (v2.106.13), not by a fixed character count.
+    // This sliced 1600 characters from the anchor, so it broke the moment board 2c's
+    // slide counter was added ABOVE the author line — the recurring fixed-slice
+    // fragility (v2.99.78), which fails on correct code and says nothing about the
+    // property.
+    const from = STATUS.indexOf("{/* header */}");
+    expect(from).toBeGreaterThan(-1);
+    const to = STATUS.indexOf("{/* body */}", from);
+    expect(to).toBeGreaterThan(from); // the window is real, not an accidental ""
+    const hdr = STATUS.slice(from, to);
+    expect(hdr).toMatch(/group\.subject\.kind === "group" && item\.author/);
+    expect(hdr).toMatch(/item\.mine \? "You" : item\.author\.displayName/);
   });
 
   it("a reply is addressed to the SLIDE'S author, not to the group", () => {
