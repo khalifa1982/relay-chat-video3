@@ -1,0 +1,17 @@
+{
+  "name": "relay-voip-node",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "RELAY mediasoup media-node agent. Runs ON a media node, NOT on the app fleet. Deliberately a separate package: the app is bundled with esbuild --packages=external and each app instance runs `pnpm install --frozen-lockfile` on every deploy, so a root mediasoup dependency would make every app box compile a C++ worker it never runs.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node agent.mjs"
+  },
+  "dependencies": {
+    "mediasoup": "^3.19.3",
+    "ioredis": "^5.4.1"
+  }
+}

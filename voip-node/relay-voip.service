@@ -1,0 +1,67 @@
+# RELAY mediasoup media node.
+#
+# Install to /etc/systemd/system/relay-voip.service on a MEDIA node (never on an app
+# instance — see ../voip-node/README.md for why they are separate machines).
+#
+# TWO THINGS HERE ARE LOAD-BEARING RATHER THAN BOILERPLATE:
+#
+#  1. `Restart=always` with a short backoff. The agent deliberately EXITS when a mediasoup
+#     worker dies (`worker.on("died") → process.exit(1)`) instead of limping on with a
+#     worker short. A dead worker means its routers are gone, so the rooms pinned to them
+#     cannot be renegotiated — the honest move is to go away, let the registry TTL expire
+#     (15s) so the app stops assigning rooms here, and let clients take the rejoin path
+#     they already have. A process that stayed up would keep advertising capacity it does
+#     not have, which is the failure nobody can diagnose.
+#
+#  2. NO `PrivateNetwork`, and NO port hardening beyond what the SG already does. The whole
+#     point of a media node is that 40000–49999/udp reaches this host directly. Anything
+#     that puts a translation layer between the kernel and those ports breaks ICE.
+#
+# It does NOT run as root: media needs high ports, not privileged ones.
+
+[Unit]
+Description=RELAY mediasoup media node
+Documentation=https://github.com/khalifa1982/relay-chat-video3/blob/main/voip-node/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=relay
+Group=relay
+WorkingDirectory=/opt/relay-voip
+
+# The secrets live here, not in this unit and not in the repo:
+#   VOIP_NODE_SECRET   shared HMAC secret for the signaling→node API
+#   REDIS_URL          the same ElastiCache URL the app fleet uses
+# Optional: VOIP_API_PORT (4443), RTC_MIN_PORT (40000), RTC_MAX_PORT (49999)
+EnvironmentFile=/etc/relay-voip/env
+
+ExecStart=/usr/bin/node /opt/relay-voip/agent.mjs
+
+# SIGTERM is handled: the agent deregisters from the registry before exiting, so a planned
+# restart takes the node out of rotation immediately instead of waiting out the TTL.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+Restart=always
+RestartSec=2s
+# A crash loop must not hammer Redis or mask a real fault as "it keeps coming back".
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+# mediasoup runs one C++ worker per core plus the Node process; the default file limit is
+# not enough once a node is holding several rooms' worth of transports.
+LimitNOFILE=65536
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=relay-voip
+
+[Install]
+WantedBy=multi-user.target

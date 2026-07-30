@@ -11278,6 +11278,153 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.28 — mediasoup becomes the primary media transport: the registry and the node agent (2026-07-30)
+
+The owner, having stood up two mediasoup nodes in Mumbai: *"do it asap .. inplace of
+livekit ... make livekit fallback option"*.
+
+**THIS IS INCREMENT 1 OF SEVERAL, AND SAYING SO PLAINLY MATTERS MORE THAN USUAL: NO CALL
+CHANGES TRANSPORT YET.** What ships is the part that decides *which* node a room goes to and
+*which* transport a call uses, plus the agent that runs on a media node — all of it dormant,
+because nothing calls it. The signaling exchange and the browser adapter come next, and every
+increment must leave mesh and LiveKit calling byte-identical while mediasoup is unconfigured.
+
+**THE DECISIVE CONSTRAINT WAS A PACKAGING ONE, AND IT SHAPED THE WHOLE DIRECTORY LAYOUT.**
+The server bundle is built with `esbuild --packages=external`, and `deploy.yml` has every app
+instance run `pnpm install --frozen-lockfile` on **every** deploy. So a root `mediasoup`
+dependency would make each app box fetch or compile a ~9.7 MB C++ worker binary it never
+executes, on every release. The agent therefore gets its **own package** (`voip-node/`), and
+that is pinned in both directions: `mediasoup` must be absent from the root `package.json` and
+present in the agent's, and the release tar must not contain `voip-node`.
+
+**THE NODES' PUBLIC IPs ARE AUTO-ASSIGNED, NOT ELASTIC — so a configured host list is not
+merely inelegant, it is a value that goes silently wrong.** The account hit its EIP quota (an
+increase is pending), and an auto-assigned IP changes on stop/start. A stale entry in a config
+file would point media at an address nobody is listening on, and a call that never connects
+with nothing in any log saying why. So each node **self-reports** its current address from
+IMDSv2 and signaling reads a registry; when the quota lands, Elastic IPs attach with no code
+change, because nothing was ever written down. Nothing in this repo hardcodes a node IP.
+
+**MEDIA CANNOT SIT BEHIND THE LOAD BALANCER**, and that is why the shape is what it is: media
+is a live UDP flow that must reach the *exact* host holding that room's router, so a balancer
+would spray packets across hosts and break the stream — true of every SFU, LiveKit included.
+Signaling keeps one endpoint (the existing ALB); the media plane fans out beneath it, one
+public IP per node, each room **pinned** to one node. No `PipeTransport`, no room splitting,
+no MCU, no Auto Scaling group, and coturn plus `/api/relay/ice` are untouched.
+
+**THE LOAD SIGNAL IS CONSUMERS PER CORE, DELIBERATELY NOT `cpuLoad`, AND THE DISTINCTION IS
+THE WHOLE OF THE CHOICE.** cpuLoad is the real constraint but it is a noisy lagging sample, so
+ranking on it makes selection **flap** between nodes as two samples cross — which on a
+per-room assignment means consecutive rooms bouncing for no reason. Consumers per core is
+monotonic in the work actually asked of the node and moves only when somebody really joined or
+left. cpuLoad keeps a job, and a better-suited one: it **excludes** a saturated node outright
+(`NODE_CPU_CEILING = 0.85`) rather than ranking it last, because mediasoup is CPU-bound and a
+saturated node does not degrade gracefully — it drops frames for every room it *already*
+holds, so adding one more punishes people already in a call. Per *core* rather than absolute,
+so a bigger node correctly attracts more rooms.
+
+**ZONE PREFERENCE IS A TIEBREAK, NOT AN OVERRIDE**, and the threshold is explicit rather than
+implied: it applies only when two nodes are within a quarter of a consumer per core of each
+other. Above that gap load wins, because a room placed in the right zone on a node carrying
+twice as much work is a worse call than a room one zone away. A stable final tiebreak on
+`instanceId` stops an idle two-node fleet alternating arbitrarily on every room.
+
+**A CLOCK THAT HAS RUN BACKWARDS READS AS STALE, NOT AS INFINITELY FRESH**, because the
+failure that matters is believing a dead node is alive. Freshness is judged on the record's own
+`updatedAt` rather than on Redis key expiry alone — a key can be present and stale (a
+partition, or a TTL refreshed by something other than a real heartbeat), and "the key exists"
+is a weaker claim than "the node said this recently". The two mechanisms cover each other: the
+TTL makes a crashed node disappear with nothing having to notice the death, and `isNodeFresh`
+makes a record that outlives its usefulness unusable.
+
+**THE TRANSPORT CHOICE CANNOT RETURN "NOTHING", AND THAT IS THE POINT RATHER THAN A
+CONVENIENCE.** It decides whether a call can be placed, and the rule this repo keeps
+re-learning is that such a decision must **fail open**: a Redis hiccup, an unconfigured SFU or
+a saturated fleet must degrade a call's *quality*, never remove the ability to make it. So the
+order is mediasoup → LiveKit → mesh, with the mesh last precisely because it depends on no
+infrastructure at all. `forceLivekit` exists for staged rollout and A/B, because the two
+transports have to be comparable on the same account with numbers — the only way the owner's
+"video degrades during the call" report gets an answer rather than an opinion. `mediasoupEnabled`
+is a fleet-wide kill switch that needs no deploy. mediasoup is **not** given a higher cap than
+LiveKit (both 10, mesh 6) on purpose: the nodes are 2-core and the real ceiling has to come
+from load-testing the actual subscription pattern rather than from a number chosen in advance.
+
+**THE AGENT'S OWN CHOICES, EACH FOR A REASON THE OWNER'S COMPLAINT NAMES.** Simulcast on
+publish with server-side per-consumer layer switching, so a weak *receiver* drops to a lower
+spatial layer while the sender keeps publishing all three — one bad connection no longer drags
+everybody's quality down, which is the mechanism behind "starts fine, degrades mid-call". VP8
+and H.264 only, never VP9/AV1 by default, for mobile decode. Opus at 32 kbps with `ptime: 20`,
+DTX and inband FEC, plus an `audioLevelObserver` per room. Consumers start **paused** and the
+client resumes when its receiving element is ready, or the first packets arrive before anything
+can decode them and the join looks like a frozen tile. `maxIncomingBitrate` honoured at
+1.5 Mbps.
+
+**A DEAD WORKER MAKES THE AGENT EXIT RATHER THAN LIMP ON**, and the systemd unit's
+`Restart=always` is load-bearing rather than boilerplate: a dead worker means its routers are
+gone, so the rooms pinned to them cannot be renegotiated. The honest move is to go away, let
+the 15s registry TTL stop the app assigning rooms here, and let clients take the rejoin path
+they already have. A process that stayed up would keep advertising capacity it does not have,
+which is the failure nobody can diagnose. SIGTERM deregisters, so a *planned* restart leaves
+rotation immediately instead of waiting out the TTL; a crash needs no equivalent.
+
+**THE PARITY TEST IS THE LOAD-BEARING GUARD, AND IT EXISTS BECAUSE THIS REPO HAS A RECORDED
+PRODUCTION CASE OF EXACTLY THIS DRIFTING.** The agent is plain `.mjs` run by bare node on a
+media node; the registry is TypeScript inside the app bundle on a different machine — two
+implementations of one rule, in two languages. v2.99.71 is the precedent: `turn-check.mjs` vs
+`iceServers()` diverged and the checker would have reported two relays permanently DOWN
+forever. No string check catches the *next* divergence, so the fix there was comparing actual
+**output**, and that is what happens here: the agent's real `buildNodeRecord` is fed through
+the app's real `decodeNode`. If it goes red, the agent is publishing something the app will
+silently refuse, which presents as "the SFU has no nodes" with nothing in any log saying why.
+The same release also records the reason `record.mjs` is split from `agent.mjs`: importing
+`turn-check.mjs` used to run a health check and `process.exit(0)`, killing the test runner, so
+the record shape lives in a module that is importable and side-effect-free — and a test forbids
+the `mediasoup` import, `process.exit` and any `listen(` from ever appearing in it.
+
+**A MIS-SAMPLED COUNTER CANNOT TAKE A NODE OUT OF SERVICE**: a node absent from the registry
+costs its entire capacity, so the agent clamps and floors its counters rather than publishing a
+record the app refuses. **`cpuLoad` is deliberately NOT clamped**, because reporting the truth
+is the agent's job and deciding what is too hot is the app's — clamping to the ceiling here
+would hide saturation.
+
+**A DEFECT IN MY OWN TEST, failing on CORRECT code**: the assertion forbidding `process.exit`
+in `record.mjs` matched that file's own header sentence *explaining* why it must not — the
+prose-anchor trap, in the very test written to guard against a trap. It now runs on
+`codeOnly()` output, with a companion assertion that the real file *does* contain the phrase in
+prose, so the strip is doing work rather than hiding a defect.
+
+**AND A DEFECT IN MY OWN MUTATION HARNESS, reported rather than counted as a result**: the
+first run of the "record.mjs imports mediasoup" mutation came back SURVIVED with **30 tests
+instead of 38** — the parity file had failed to *load*, which vitest reports on the `Test
+Files` line and not on the `Tests` line, so grepping the latter alone reads a suite that broke
+outright as a pass. That is the v2.106.6 trap (an unparseable file reports "no tests", not a
+failure). The harness now reads both lines and also fails a mutation that changes the test
+*count*; re-run, it bit.
+
+- [x] `server/voipRegistry.ts` — the pure core: record validation, freshness, usability,
+      per-core load, node selection, transport precedence, caps, and an injected-client read
+      path that fails to `[]`.
+- [x] `server/voipRegistry.test.ts` (30) — driven, not pinned, because every claim here is
+      about what a *set* of records resolves to. Includes: garbage dropped whole, `01.2.3.4`
+      and `256.1.1.1` refused, a backwards clock reading stale, three heartbeats fitting
+      inside the TTL, load beating zone once the gap is real, selection never returning a
+      stale node even when it is the least loaded, and an exhaustive enumeration of the
+      transport precedence yielding exactly the three transports.
+- [x] `voip-node/` — its own package: `agent.mjs` (workers, routers, transports, the HMAC
+      API, the heartbeat), `record.mjs` (the shared record shape, importable and side-effect
+      free), `relay-voip.service`, and a `README.md` runbook stating what is deliberately
+      absent and why.
+- [x] `server/voipNodeParity.test.ts` (8) — the two sides' actual output compared, plus the
+      packaging guards.
+- [x] **All 15 tripwires verified by MUTATION** off a confirmed-GREEN baseline, from
+      byte-exact backups, the mutator aborting unless its target occurs exactly once;
+      `package.json`, `deploy.yml` and `voipRegistry.ts` byte-identical afterwards.
+- [x] **NOT VERIFIED AGAINST A NODE, said plainly**: the agent is syntax-checked and its
+      record is proven acceptable to the app, but nothing has been deployed, no worker has
+      started under systemd, and no media has flowed. There is no mediasoup here to run it
+      against, which is exactly why the record contract is a test rather than a hope.
+- [x] No schema change, no new app dependency, no new required env var. 4608 tests.
+
 ## v2.106.27 — the app was painting its own background over its own content (2026-07-30)
 
 The owner, twice: *"there's a problem with the profile section when you click at
