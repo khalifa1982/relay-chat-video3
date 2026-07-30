@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { RELAY_CSS, RELAY_MARKUP } from "./relayAssets";
 
 /**
@@ -86,10 +88,20 @@ describe("relay call UI regression guards", () => {
   });
 
   it("the stylesheet contains no backtick — it IS a template literal", () => {
-    // This has broken the build twice (v2.99.16, and again while writing v2.99.82):
-    // a backtick inside a CSS comment terminates the literal. `pnpm check` catches
-    // it, but only as a confusing cascade of syntax errors 300 lines away, so name
-    // the real rule here.
+    /* This has broken the build FOUR times (v2.99.16, v2.99.82, v2.105.24, and again while
+       writing v2.106.6): a backtick inside a CSS comment terminates the literal.
+
+       SAID PLAINLY, THIS ASSERTION CANNOT CATCH IT, and pretending otherwise is worse than
+       leaving it out. A terminated literal simply ends EARLY, so the parsed value can never
+       contain a backtick — this passed cleanly on a file that would not compile, all four
+       times. And a source-read guard cannot live in THIS file either: it imports the
+       module, so when the trap fires the file fails to parse and no test in it runs at all
+       (verified — vitest reports "no tests", not a failure of this check).
+
+       The real detector is `pnpm check`, which `pnpm verify` runs BEFORE the suite. The
+       source-level guard that CAN report it lives in `callBarRedesign.test.ts`, which reads
+       this file as text and imports nothing from it. This line stays as a cheap check that
+       the parsed value is clean. */
     expect(RELAY_CSS).not.toContain("`");
   });
   it("tiles carry a device + speed info chip", () => {

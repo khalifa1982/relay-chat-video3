@@ -11278,6 +11278,95 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.6 — redesign phase 3: the standard call bar (2026-07-30)
+
+The board's rule is one material across every call surface — glass circles, ACTIVE on the
+cycling accent — so this is a single block that reaches the incoming ring, the outgoing
+dial, 1:1 video, voice and the conference grid at once.
+
+**THE FINDING WORTH FAR MORE THAN THE RESTYLE IS A PRE-EXISTING DEFECT, LIVE SINCE v2.99.4,
+THAT ONLY MEASURING COULD SURFACE.** The per-control tints were ID-scoped, and **an ID is
+compared before ANY number of classes** — so `#micBtn .ctrl-ic` (0,1,2) outranked
+`.ctrl.off .ctrl-ic` (0,0,4) whatever the declaration order, and **the muted-mic red chip
+never rendered**. A muted mic showed a slashed glyph and a red LABEL over a chip still
+filled cheerful green: the chip saying *fine* while the icon said *muted*, on the one
+control where being wrong is dangerous rather than ugly. The comment above those rules
+claimed "state overrides win over the per-button tints" and was false. Confirmed in a
+browser before anything was changed — two rival rules, one ID, one class: the ID won.
+
+**The fix is structural rather than an override.** The chip's fill now lives in exactly ONE
+place, and the per-control hue moved from `color` to a `--ctrl-hue` custom property the base
+rule reads — so `color` is only ever declared by class-level rules and state wins by ORDER.
+The same trap bites one level down (an ID rule setting `color` blocks the ACTIVE state's
+dark-on-accent glyph, and a mid-tone hue on a bright fill is unreadable) and is closed by
+the same change.
+
+**Nothing the owner asked for is taken back, and two board items are declined for that
+reason:**
+- The board says "standard 6-button call bar — NEVER REDUCED", and **v2.99.39 REMOVED
+  controls at the owner's explicit request**. The bar is RESTYLED; the control SET is
+  untouched — the only reading that cannot cost them something they asked for. The set is
+  enumerated in a test against the MARKUP, so a 12th control cannot arrive by reading "six"
+  as a licence.
+- The **labels and per-control hues STAY** (v2.99.4, in the owner's own words), and a label
+  is the only thing a screen reader has here. The CHIP takes the board's uniform glass; the
+  GLYPH keeps its hue — the same split the Dialer's action row and Profile's hub tiles use.
+- The end button stays a **CIRCLE** rather than the board's 56×50 pill, because v2.96.3 made
+  it round after the owner reported the pill "read as a blob".
+
+**The blur is desktop-only, measured rather than cautious**: this bar sits over LIVE VIDEO,
+where v2.99.84 counted 36 `backdrop-filter` layers over a call grid and removed all of them
+on phones. Phones get an opaque chip of the same tone.
+
+**Measured, 8/8**, because none of it is answerable from source — the override's effect
+depends on the cascade (v2.99.84 measured its own override doing NOTHING while reading as
+correct), the phone rule depends on a media query matching, and "does `.off` still beat
+`.on`" is now about rule order. Headless Chromium against the real exported stylesheet and
+markup at 390 and 1280.
+
+**The backtick trap bit for the fourth time** (v2.99.16, v2.99.82, v2.105.24): backticks in
+my own CSS comments terminated the template literal. **And the guard that exists for it
+cannot report it**, which is recorded plainly rather than left as false comfort:
+`relayAssets.test.ts` asserts against the IMPORTED `RELAY_CSS`, and a terminated literal
+ends EARLY — the parsed value can never contain a backtick, so that assertion passed cleanly
+on a file that would not compile, all four times. A source-read guard cannot live in that
+file either, because it imports the module: when the trap fires the file fails to parse and
+vitest reports "no tests" rather than a failure (verified). The real guard now lives in
+`callBarRedesign.test.ts`, which reads the file as TEXT and imports nothing from it.
+
+**Four defects in my own work, all caught by something failing rather than by reading:**
+- A harness passing a two-parameter function as a STRING to `page.evaluate`, which treats a
+  string as an expression and drops the argument (`undefined.bg`, twice).
+- An assertion demanding a SOLID accent fill when the board specifies `rgba(...,.85)`.
+- The **prose-anchor trap INVERTED for the third recorded time**: a pin anchored on the
+  comment text "THE STANDARD CALL BAR" in comment-STRIPPED source, so `indexOf` returned −1
+  and the slice ran the whole stylesheet. It failed on correct code, which is why it was
+  caught.
+- My enumeration was incomplete — `statsBtn` (the v2.105.21 quality readout) is a real
+  control I had not listed, so the set assertion failed on correct markup. Enumerated now,
+  which makes that list the ACTUAL control set rather than my recollection of it.
+
+`client/src/lib/callBarRedesign.test.ts` (11); **all 13 tripwires verified by MUTATION** from
+byte-exact copies off a confirmed-GREEN baseline, sources byte-identical afterwards.
+
+**One survivor was a bad mutation of mine, reported rather than counted**: it ADDED a copy of
+`.off` above `.on` while leaving the original below, so the last declaration still won and
+the change was behaviourally equivalent. Re-run as a genuine MOVE, it bit.
+
+**Two pre-existing pins rewritten to the property**: one froze the hue as a `color`
+declaration inside an ID rule — i.e. it froze the very shape that was the bug — and one froze
+the ACTIVE fill as the fixed cyan this release replaces with the cycling accent.
+
+**NOT VERIFIED ON A CALL, said plainly**: no second browser here, so the cascade, the states
+and the blur are measured against the real stylesheet, but nobody has muted a mic mid-call
+and watched the chip go red.
+
+**Still to come in phase 3**: the per-frame call layouts (1g's two staggered ping rings, 2b's
+live waveform, 3a's matrix digits, 2a's 2×4 conference grid). This release is the shared bar
+they all sit on.
+
+No schema change, no new dependency, no new env var. 4156 tests.
+
 ## v2.106.5 — your number appears on EVERY sign-in step (2026-07-30)
 
 Owner, twice in one message: *"Once you put your email ID, your number will automatically

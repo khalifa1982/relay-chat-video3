@@ -848,7 +848,7 @@ export const RELAY_CSS = `
 .relay-root .ctrl{width:auto;height:auto;min-width:52px;border-radius:14px;background:none;border:none;
   color:var(--text);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px;padding:0;
   transition:transform .16s cubic-bezier(0.23,1,0.32,1);position:relative;font-family:inherit}
-.relay-root .ctrl .ctrl-ic{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;position:relative;
+.relay-root .ctrl .ctrl-ic{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;position:relative;color:var(--ctrl-hue,var(--text));
   background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);
   transition:background .16s,border-color .16s,box-shadow .16s;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
@@ -857,19 +857,40 @@ export const RELAY_CSS = `
 .relay-root .ctrl:active{transform:scale(.94)}
 .relay-root .ctrl-lbl{font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--text2,#9aa);line-height:1;white-space:nowrap}
 /* Distinct color identity per control (owner: "all these icons different
-   colors with a very nice shape"). Chip tint + icon + label share the hue. */
-.relay-root #micBtn .ctrl-ic{color:#34d399;background:rgba(52,211,153,.13);border-color:rgba(52,211,153,.3)}
-.relay-root #camBtn .ctrl-ic{color:#38bdf8;background:rgba(56,189,248,.13);border-color:rgba(56,189,248,.3)}
-.relay-root #flipCamBtn .ctrl-ic{color:#a78bfa;background:rgba(167,139,250,.13);border-color:rgba(167,139,250,.3)}
-.relay-root #screenBtn .ctrl-ic{color:#fbbf24;background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.3)}
-.relay-root #qualityBtn .ctrl-ic{color:#f472b6;background:rgba(244,114,182,.12);border-color:rgba(244,114,182,.3)}
-.relay-root #audioBtn .ctrl-ic{color:#fb923c;background:rgba(251,146,60,.13);border-color:rgba(251,146,60,.3)}
-.relay-root #pipBtn .ctrl-ic{color:#818cf8;background:rgba(129,140,248,.13);border-color:rgba(129,140,248,.3)}
-.relay-root #filterBtn .ctrl-ic{color:#e879f9;background:rgba(232,121,249,.12);border-color:rgba(232,121,249,.3)}
-.relay-root #addBtn .ctrl-ic{color:var(--accent);background:rgba(63,224,197,.13);border-color:rgba(63,224,197,.3)}
-.relay-root #hostBtn .ctrl-ic{color:#facc15;background:rgba(250,204,21,.12);border-color:rgba(250,204,21,.3)}
-.relay-root #chatBtn .ctrl-ic{color:#a3e635;background:rgba(163,230,53,.12);border-color:rgba(163,230,53,.3)}
-/* State overrides win over the per-button tints. */
+   colors with a very nice shape"). The hue is on the GLYPH ONLY.
+   ---------------------------------------------------------------------------
+   THESE RULES USED TO SET THE CHIP'S FILL TOO, AND THAT WAS A REAL BUG — found by
+   measuring rather than reading, and it had been live since v2.99.4. An ID is
+   compared BEFORE any number of classes, so #micBtn .ctrl-ic (0,1,2) outranks
+   .ctrl.off .ctrl-ic (0,0,4) whatever the order: the MUTED-mic red chip never
+   rendered. A muted mic showed a slashed glyph and a red LABEL over a chip still
+   filled cheerful green — the chip saying "fine" while the icon said "muted", on
+   the one control where being wrong matters most. The comment that used to sit
+   here claimed "state overrides win over the per-button tints"; it was false.
+   Confirmed directly in a browser before changing anything: with both rules
+   present the ID one wins.
+   The chip fill now lives in exactly ONE place (.ctrl .ctrl-ic plus the state
+   classes), so state can reach it and the board's uniform glass applies.
+
+   AND THE HUE IS A CUSTOM PROPERTY RATHER THAN A COLOR, for the same reason one level
+   down: an ID rule setting color blocks the ACTIVE state's dark-on-accent glyph
+   exactly as it blocked the red chip, and a mid-tone hue on a bright accent fill is
+   unreadable. Declaring --ctrl-hue here and reading it in the base rule means color
+   is only ever set by class-level rules, so state wins by ORDER and the trap is gone
+   by construction rather than by being worked around. */
+.relay-root #micBtn{--ctrl-hue:#34d399}
+.relay-root #camBtn{--ctrl-hue:#38bdf8}
+.relay-root #flipCamBtn{--ctrl-hue:#a78bfa}
+.relay-root #screenBtn{--ctrl-hue:#fbbf24}
+.relay-root #qualityBtn{--ctrl-hue:#f472b6}
+.relay-root #audioBtn{--ctrl-hue:#fb923c}
+.relay-root #pipBtn{--ctrl-hue:#818cf8}
+.relay-root #filterBtn{--ctrl-hue:#e879f9}
+.relay-root #addBtn{--ctrl-hue:var(--accent)}
+.relay-root #hostBtn{--ctrl-hue:#facc15}
+.relay-root #chatBtn{--ctrl-hue:#a3e635}
+/* State overrides — which NOW actually win, since the ID rules above no longer
+   claim the chip's fill. */
 .relay-root .ctrl.off .ctrl-ic{background:rgba(255,92,114,.18);border-color:rgba(255,92,114,.4);color:var(--danger)}
 .relay-root .ctrl.off .ctrl-lbl{color:var(--danger)}
 .relay-root .ctrl-text .ctrl-ic{font-family:"JetBrains Mono",monospace;font-weight:800;font-size:13px;letter-spacing:.04em}
@@ -1355,5 +1376,50 @@ export const RELAY_CSS = `
   .relay-root .relay-tile .tile-menu-btn,
   .relay-root .relay-tile .tile-max-btn,
   .relay-root .relay-tile .tile-addc{backdrop-filter:none;-webkit-backdrop-filter:none;background:rgba(8,9,12,.90)}}
+
+/* ── THE STANDARD CALL BAR, design_handoff_relay_app (phase 3) ───────────────────────
+   The board's rule is a "standard call bar, NEVER REDUCED": one material across every
+   call surface, glass circles with the ACTIVE state on the cycling accent.
+
+   TWO THINGS THE BOARD ASKS FOR ARE DELIBERATELY NOT TAKEN, and both are cases where it
+   contradicts something the owner asked for IN THEIR OWN WORDS. A visual decision of mine
+   is superseded by the board; an explicit request is not.
+
+     1. THE CONTROL SET DOES NOT CHANGE. The board lists six controls and says never
+        reduce them; v2.99.39 REMOVED controls from this bar at the owner's explicit
+        request. Restyling satisfies the board's intent (one consistent bar) without
+        taking back anything they asked to be rid of — the reading that cannot cost them
+        something. The set is whatever the markup declares; this block only restyles.
+     2. THE LABELS STAY, and so do the per-control hues — on the GLYPH. v2.99.4 is the
+        owner asking for exactly that ("all these icons different colors with a very nice
+        shape", every button saying what it does), and a label is also the only thing a
+        screen reader can use here. So the CHIP becomes the board's uniform glass and the
+        glyph keeps its hue: the same primary/secondary split the Dialer's action row and
+        Profile's hub tiles use. The end button stays a CIRCLE rather than the board's
+        56x50 pill, because v2.96.3 made it round after the owner reported the pill
+        "read as a blob".
+
+   THE BLUR IS DESKTOP-ONLY, and that is measured rather than cautious: this bar sits over
+   LIVE VIDEO, where v2.99.84 counted 36 backdrop-filter layers over a call grid and
+   removed all of them on phones (nothing behind a blur can ever be cached when the
+   backdrop changes every frame). Phones get an opaque chip of the same tone, so the look
+   survives and the cost does not.
+
+   Declared LAST on purpose. These overrides carry the same specificity as the per-button
+   tints above, so order decides — and v2.99.84 measured its own override doing NOTHING
+   for exactly this reason while reading as correct. */
+.relay-root .ctrl .ctrl-ic{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.16)}
+@media (min-width:769px){
+  .relay-root .ctrl .ctrl-ic{backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}}
+@media (max-width:768px){
+  .relay-root .ctrl .ctrl-ic{background:rgba(46,50,58,.92)}}
+/* ACTIVE = solid accent with dark text. #04211a is the board's on-accent value, a
+   near-black green measured legible across all twelve palette hues where plain white
+   fails on the yellow and lime entries. .on is set by the same JS as before. */
+.relay-root .ctrl.on .ctrl-ic{background:rgba(var(--rb-rgb),.85);border-color:var(--rb);color:#04211a}
+.relay-root .ctrl.on .ctrl-lbl{color:var(--rb)}
+/* OFF stays red and outranks the accent — a muted mic reporting "active" would be the
+   single most dangerous thing this bar could say. */
+.relay-root .ctrl.off .ctrl-ic{background:rgba(255,92,114,.20);border-color:rgba(255,92,114,.45);color:var(--danger)}
 
 `;

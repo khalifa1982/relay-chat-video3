@@ -34,17 +34,25 @@ describe("control bar: labeled colored chips (v2.99.4)", () => {
     expect(RELAY_CSS).toMatch(/\.ctrl\.off \.lbl-on\{display:none\}/);
     expect(RELAY_CSS).toMatch(/\.ctrl\.off \.lbl-off\{display:inline\}/);
   });
-  it("each control has a distinct color identity on its chip", () => {
-    // Spot-check a spread of the 12 per-id tints.
-    expect(RELAY_CSS).toMatch(/#micBtn \.ctrl-ic\{color:#34d399/);
-    expect(RELAY_CSS).toMatch(/#camBtn \.ctrl-ic\{color:#38bdf8/);
-    expect(RELAY_CSS).toMatch(/#audioBtn \.ctrl-ic\{color:#fb923c/);
-    expect(RELAY_CSS).toMatch(/#filterBtn \.ctrl-ic\{color:#e879f9/);
-    expect(RELAY_CSS).toMatch(/#hostBtn \.ctrl-ic\{color:#facc15/);
+  it("each control keeps its distinct colour identity", () => {
+    /* REWRITTEN (v2.106.6). This froze the hue as a `color` DECLARATION inside an ID
+       rule — and that shape was itself the bug: an ID is compared before any number of
+       classes, so an ID rule owning `color` (or the chip's fill) makes the `.off` and
+       `.on` states unreachable. The muted-mic red chip never rendered for four releases
+       because of it. The property here is only that each control HAS its own hue; it now
+       arrives as `--ctrl-hue`, which the base rule reads, so state can win by order. */
+    expect(RELAY_CSS).toMatch(/#micBtn\{--ctrl-hue:#34d399/);
+    expect(RELAY_CSS).toMatch(/#camBtn\{--ctrl-hue:#38bdf8/);
+    expect(RELAY_CSS).toMatch(/#audioBtn\{--ctrl-hue:#fb923c/);
+    expect(RELAY_CSS).toMatch(/#filterBtn\{--ctrl-hue:#e879f9/);
+    expect(RELAY_CSS).toMatch(/#hostBtn\{--ctrl-hue:#facc15/);
+    expect(RELAY_CSS).toMatch(/\.ctrl \.ctrl-ic\{[^}]*color:var\(--ctrl-hue/);
   });
   it("state classes restyle the CHIP (the button itself is now a transparent column)", () => {
     expect(RELAY_CSS).toMatch(/\.ctrl\.off \.ctrl-ic\{background:rgba\(255,92,114/);
-    expect(RELAY_CSS).toMatch(/\.ctrl\.on \.ctrl-ic\{background:rgba\(63,224,197/);
+    /* The ACTIVE fill is the cycling accent now (board phase 3) rather than the fixed
+       cyan this used to freeze; the property is that ACTIVE has its own fill at all. */
+    expect(RELAY_CSS).toMatch(/\.ctrl\.on \.ctrl-ic\{background:rgba\((?:63,224,197|var\(--rb-rgb\))/);
     expect(RELAY_CSS).toMatch(/\.ctrl\.voiced:not\(\.off\) \.ctrl-ic\{animation:relayMicVoiced/);
   });
   it("the HD/SD text lives in #qualityTxt so updateQualityBtn never wipes the label", () => {
