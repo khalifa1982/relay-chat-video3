@@ -374,6 +374,10 @@ export const RELAY_CSS = `
      stays two-tone while the board's ONE accent is the only hue on screen. */
   --accent:var(--rb,#3FE0C5); --accent-rgb:var(--rb-rgb,63,224,197);
   --accent2:rgba(var(--accent-rgb),.55); --danger:#FF5C72; --warn:#FFB454;
+  /* --warn-rgb is --warn's own channels, for the rules that need it at an alpha
+     (board 5c's readout border). Same reason --accent-rgb exists: rgba() cannot
+     take a hex. A test cross-checks the two so they can never drift apart. */
+  --warn-rgb:255,180,84;
   --grad:linear-gradient(135deg,var(--accent),var(--accent2));
   position:fixed; inset:0; z-index:1; background:var(--bg); color:var(--text);
   font-family:"Hanken Grotesk",sans-serif; -webkit-font-smoothing:antialiased;
@@ -600,6 +604,13 @@ export const RELAY_CSS = `
 .relay-root #call.pre-connect .dial-card{display:flex;animation:relayFade .3s ease both}
 .relay-root #call.pre-connect .call-main .grid{display:none}
 .relay-root #call.pre-connect .ctrl-bar .ctrl{display:none}
+/* …and the quality readout with them (board 5c). It is a SIBLING of .ctrl-bar
+   rather than a .ctrl, so the rule above never reached it — and Stats is a
+   REMEMBERED preference, so anybody who has ever switched it on saw a
+   "measuring…" pill floating above End Call for the whole ring. It can report
+   nothing useful before a call connects (there is no candidate pair yet), and
+   board 3a says this screen shows End Call only. */
+.relay-root #call.pre-connect .call-qual{display:none}
 /* GRID, not flex (v2.98.3): .ctrl centers its glyph with display:grid +
    place-items:center. This un-hide rule used display:flex, and flexbox has
    no justify-items — the handset fell back to flex-start and sat pinned to
@@ -874,6 +885,27 @@ export const RELAY_CSS = `
   text-overflow:ellipsis;font:600 11px/1.5 'IBM Plex Mono',ui-monospace,monospace;
   letter-spacing:.02em;color:rgba(255,255,255,.82);background:rgba(12,14,18,.92);
   border:1px solid rgba(255,255,255,.10);border-radius:999px;padding:4px 12px}
+/* board 5c — the readout wears a HUE for its state, set by renderCallQuality as
+   one of three complete literal class strings.
+   ACCENT TEXT on the existing opaque fill, never an accent FILL: this is a
+   readout, and filling it would make it read as a second .ctrl.on chip sitting
+   above the control bar. Accent text on a dark card measured 6.23:1 worst case
+   across all twelve palette hues in v2.106.4, so it clears AA at 11px.
+   The fill stays OPAQUE and there is still no backdrop-filter — this sits over
+   live video, where nothing behind a blur can ever be cached.
+   is-good is deliberately NOT applied for a verdict of "ok" alone: an empty
+   summary is "ok" too (absence is not evidence of a bad call), and a bright pill
+   asserting a healthy call on zero evidence would be worse than a plain one.
+   callQualityTone owns that rule. */
+.relay-root .call-qual.is-good{color:var(--accent);
+  border-color:rgba(var(--accent-rgb),.38)}
+/* The bad state reuses the call surface's OWN warning hue rather than inventing
+   one, and deliberately not --danger: red on this bar already means MUTED MIC
+   (.ctrl.off), so a red pill 8px above a red mic chip would read as a mic fault.
+   ONE warn state covers both "relayed" and "poor" — the leading ⚠ / ▲ glyph
+   already says which, so the colour only has to say that something is off. */
+.relay-root .call-qual.is-warn{color:var(--warn);
+  border-color:rgba(var(--warn-rgb),.34)}
 /* v2.99.4 (owner spec): each control is a COLUMN — a colored round icon chip
    (.ctrl-ic) with a small text LABEL underneath (.ctrl-lbl) — so every button
    says what it does. State classes (.on/.off) stay on the BUTTON (JS

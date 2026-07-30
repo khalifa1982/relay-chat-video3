@@ -1,9 +1,83 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, Check, Mic, PhoneMissed, Send, Square, X } from "lucide-react";
+import { Bell, Check, Mic, Pause, PhoneMissed, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { RoleBadge } from "./VerifiedBadge";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
+
+/* ============================================================================
+   BOARD 2g — VOICEMAIL (with 5h's "VOICEMAIL — RECORDING (MAX 60S)" panel)
+   ============================================================================
+
+   WHAT THIS SCREEN ACTUALLY IS, established by reading before building. The
+   handoff README's Screens list (line 71) describes an INBOX LIST — "rows:
+   avatar, name+badge, waveform + duration, play button accent, transcript
+   preview 2 lines, mono time". The BOARD's own frame is different: `2g
+   Voicemail`, subtitle "No answer · leave a message", drawn as a 96px peer
+   avatar over "Marcus is unavailable", a red recording chip, a 14-bar live
+   waveform, and a bottom row of Discard (glass X) · a red pinging MICROPHONE ·
+   Send (accent). That is precisely what this component already was: the card the
+   CALLER sees after an unanswered dial.
+
+   The two disagree, and the disagreement is already recorded — MISSING-FRAMES.md
+   and CLAUDE.md (v2.106.11) both note that the README's Screens list and the
+   board's own frame labels swap 2f/2g, and that THE BOARD IS THE SOURCE OF
+   TRUTH. So the inbox-row description is the stale half of a known collision,
+   and the frame to build is this one. Board 5h supplies the missing state as a
+   "VOICEMAIL — RECORDING (MAX 60S)" panel whose mono readout is "0:23 / 1:00" —
+   the exact format this card renders.
+
+   THE INBOX LIST IS DECLINED BECAUSE THERE IS NO SURFACE FOR IT, said plainly:
+   a received voicemail is an ordinary DM audio message carrying
+   `meta:{voicemail:true}`. There is no voicemail screen, route, list query or
+   anything that enumerates voicemails across threads — building one is a
+   FEATURE (a query, a route, a tab entry, a read model), not a frame. Worth
+   noting that the row's parts already exist where voicemails actually live:
+   `Messages.tsx` draws the uppercase "Voicemail" label and `VoiceNotePlayer`
+   already carries board 2f's ACCENT play button (shipped v2.106.18), a duration
+   and a mono clock.
+
+   THE 2-LINE TRANSCRIPT PREVIEW IS REFUSED OUTRIGHT. This app has no speech
+   transcription anywhere — a sweep of client/, server/ and shared/ finds exactly
+   one mention, in an unrelated test comment. A preview would therefore have to
+   be invented at render time, i.e. a lie printed under somebody's name about
+   words they said, which is the worst possible thing to fabricate because a
+   wrong quotation is read as a quotation. If the owner wants it, it is a
+   transcription service plus a column plus a cost decision.
+
+   FOUR MORE BOARD/5h STRINGS DECLINED, each because it states something this app
+   does not do:
+     - "No answer after 30 seconds" — the no-answer backstop is 65_000ms
+       (`relayClient.ts`). `reasonLine` below already answers correctly for all
+       three real reasons and is pinned by `v29911OfflineCall.test.ts`.
+     - "it's delivered encrypted, like everything else" — message bodies and
+       attachments have no end-to-end encryption here (the storage proxy READS
+       the bytes and streams them through the app server since v2.99.14, which
+       end-to-end would preclude). The existing copy, which says the voice
+       message lands in the chat and raises a "Voicemail" alert, is verifiable.
+     - "They hear your greeting first" — there is no greeting feature.
+     - "sending declines the call" — this card is only ever mounted AFTER a dial
+       has ended (`phase === "idle"` in RelayEngine), so there is no live call
+       left to decline.
+
+   `relay-v2` ON THIS WRAPPER, and deliberately NOT `dark`. The shipped surface
+   utilities are scoped `.relay-v2 X` (`.rcta`) or `.dark.relay-v2 X`
+   (`.rsheet`), and `<html>` carries `relay-v2` from AppShell plus `dark` only in
+   the dark theme. Carrying `relay-v2` here makes `.rcta` work regardless of how
+   this overlay is reached; adding `dark` too would force a DARK sheet in the
+   LIGHT theme, which is exactly what v2.106.10 avoided when it made `.rsheet`
+   dark-scoped so the light theme stays byte-identical. `PasscodeGate` can carry
+   both only because that screen was already unconditionally dark; this card is
+   not — it has always been `bg-card`, i.e. light in the light theme.
+
+   `.rscrim` IS DELIBERATELY NOT USED ON THE BACKDROP, and that is a reading of
+   the CSS rather than a preference: `.rscrim` is a radial gradient that is fully
+   TRANSPARENT for the inner 50% — it exists to sit over the background canvas.
+   Putting it on a modal backdrop would let the app show straight through the
+   middle of the screen, i.e. remove the dimming this card needs. The existing
+   `bg-black/70 backdrop-blur-sm` stays.
+   ========================================================================== */
 
 export interface FailedDialInfo {
   pin: string;
@@ -14,10 +88,298 @@ export interface FailedDialInfo {
 /** Voicemail cap — carrier-style 60 seconds. */
 export const VOICEMAIL_MAX_MS = 60_000;
 
-function reasonLine(reason: string): string {
+/** The cycling accent, with a LITERAL fallback. `var(--rb, var(--rb))` is a
+ *  custom-property CYCLE: it resolves to the guaranteed-invalid value and the
+ *  browser DROPS the whole declaration, leaving no colour at all (v2.106.7). */
+const ACCENT = "var(--rb, #3FE0C5)";
+
+/* Exported as TEST SEAMS. A source pin cannot tell you whether the readout the
+   recipient's sender sees actually counts up to the cap, or whether the three
+   refusal reasons still read as three different honest sentences. */
+export function fmtClock(totalSec: number): string {
+  const s = Math.max(0, Math.floor(totalSec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** "1:00" — DERIVED from the cap, so the readout and the recorder's own ceiling
+ *  cannot disagree. A literal here would go stale the moment the cap moves. */
+export const CAP_LABEL = fmtClock(VOICEMAIL_MAX_MS / 1000);
+
+export function reasonLine(reason: string): string {
   if (reason === "peer-rejected") return "They declined your call.";
   if (reason === "server-error:offline") return "They're offline right now.";
   return "They didn't answer.";
+}
+
+function initialsOf(label: string): string {
+  const parts = label.trim().split(/\s+/).slice(0, 2);
+  return parts.map((p) => p[0]?.toUpperCase() ?? "").join("") || "?";
+}
+
+/**
+ * The callee's face (board 2g's 96px avatar, scaled to this compact card).
+ *
+ * DELIBERATELY NOT `PeerAvatar`, and the reason is structural rather than
+ * stylistic: `PeerOverlays` imports `useRelayEngine`, which is a `const` export
+ * of `RelayEngine` — and `RelayEngine` imports THIS file. Reusing PeerAvatar
+ * would close the cycle RelayEngine → VoicemailPrompt → PeerOverlays →
+ * RelayEngine with a const-initialised binding inside it, which is a TDZ hazard
+ * in exactly the entry chunk that must never fail to evaluate. It would also
+ * draw PeerAvatar's unseen-STORY ring on a decorative, non-clickable avatar —
+ * a ring that means "tap me" everywhere else in the app.
+ *
+ * A photo that 403s/404s degrades to the initials disc, never the browser's
+ * broken-image glyph (the `PeerAvatar` rule, kept).
+ */
+function CalleeAvatar({
+  label,
+  avatarUrl,
+  size = 64,
+}: {
+  label: string;
+  avatarUrl: string | null;
+  size?: number;
+}) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const showPhoto = !!avatarUrl && failedUrl !== avatarUrl;
+  return (
+    <span className="relative inline-grid shrink-0 place-items-center">
+      {showPhoto ? (
+        <img
+          src={avatarUrl!}
+          alt=""
+          style={{ width: size, height: size }}
+          className="rounded-full border border-border/60 bg-muted/40 object-cover"
+          onError={() => setFailedUrl(avatarUrl!)}
+        />
+      ) : (
+        <span
+          style={{ width: size, height: size, fontSize: Math.max(13, size * 0.34) }}
+          className="grid place-items-center rounded-full bg-primary/15 font-bold text-primary"
+        >
+          {initialsOf(label)}
+        </span>
+      )}
+      {/* The "this call didn't connect" marker, kept from the header tile this
+          avatar replaces — destructive, because a missed call is the fact the
+          card exists to report. */}
+      <span
+        aria-hidden
+        className="absolute -bottom-0.5 -right-0.5 grid size-6 place-items-center rounded-full border-2 border-card bg-destructive text-destructive-foreground"
+      >
+        <PhoneMissed className="size-3" />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Board 2g / 5h — the live recording panel.
+ *
+ * WHAT WAS MISSING, and it is genuinely new function rather than a restyle:
+ * "Stop & send" was the ONLY exit from a live recording (the header X dismissed
+ * the whole card), so a misfire, a cough or a change of mind had no way out
+ * except sending the note and unsending it afterwards. That is exactly the gap
+ * v2.99.72 fixed for the Messages composer and left unfixed on this second
+ * surface. Discard now calls the existing `rec.cancel()`, which resolves `done`
+ * null — the take is genuinely gone and the mic genuinely released — and
+ * pause/resume route through the same shared handle.
+ *
+ * THE WAVEFORM IS REAL: `rec.level()` is RMS off a WebAudio analyser tapped from
+ * the same MediaStream the recorder encodes, which is the whole reason v2.99.72
+ * built it. A decorative animation would look identical while telling you
+ * nothing, which was the owner's original complaint.
+ *
+ * The bars, the clock and the elapsed-vs-cap rail are written IMPERATIVELY from
+ * ONE rAF loop, transform-only. A state update per frame would re-render this
+ * card every frame (the v2.99.67 cost class), and animating width rather than
+ * transform is what the standing keyframe guard exists to catch.
+ */
+function RecordPanel({
+  get,
+  paused,
+  onTogglePause,
+  onDiscard,
+  onSend,
+}: {
+  /** Getter, not the handle: the recorder is replaced on each new take. */
+  get: () => VoiceRecording | null;
+  paused: boolean;
+  onTogglePause: () => void;
+  onDiscard: () => void;
+  onSend: () => void;
+}) {
+  const BARS = 24;
+  const barsRef = useRef<Array<HTMLSpanElement | null>>([]);
+  const clockRef = useRef<HTMLSpanElement | null>(null);
+  const fillRef = useRef<HTMLSpanElement | null>(null);
+  const histRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    let raf = 0;
+    let last = 0;
+    const loop = (t: number) => {
+      raf = requestAnimationFrame(loop);
+      // ~20 samples/sec. Faster buys nothing at this bar width and costs battery
+      // on a phone, which is a lesson this project has already paid for once.
+      if (t - last < 50) return;
+      last = t;
+      const rec = get();
+      const lvl = rec && !paused ? rec.level() : 0;
+      const hist = histRef.current;
+      hist.push(lvl);
+      if (hist.length > BARS) hist.shift();
+      for (let i = 0; i < BARS; i++) {
+        const el = barsRef.current[i];
+        if (!el) continue;
+        // Newest sample on the RIGHT, so the wave scrolls the way people read.
+        const v = hist[hist.length - BARS + i] ?? 0;
+        el.style.transform = `scaleY(${0.12 + Math.min(1, v) * 0.88})`;
+      }
+      // `elapsedMs()` EXCLUDES paused time, so the clock and the rail both
+      // describe the audio the recipient will actually hear. A wall-clock
+      // `Date.now() - startedAt` — which is what this card used to do — over-
+      // reports a paused take and would push the rail past a cap it never hit.
+      const ms = rec ? rec.elapsedMs() : 0;
+      if (clockRef.current) clockRef.current.textContent = fmtClock(ms / 1000);
+      if (fillRef.current) {
+        // BOUNDED to 1: a cap overrun must not render a fill wider than its rail.
+        const frac = Math.max(0, Math.min(1, ms / VOICEMAIL_MAX_MS));
+        fillRef.current.style.transform = `scaleX(${frac})`;
+      }
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [get, paused]);
+
+  return (
+    <div className="space-y-3.5">
+      {/* Board 5h's section label, in the board's mono 10px / .26em voice —
+          the same voice the History day headers and the Contacts A–Z letters
+          already use. */}
+      <div className="text-center font-mono text-[10px] font-semibold uppercase tracking-[0.26em] text-muted-foreground">
+        Voicemail — recording (max {Math.round(VOICEMAIL_MAX_MS / 1000)}s)
+      </div>
+
+      <div className="flex items-center gap-2.5 rounded-2xl border border-destructive/35 bg-destructive/10 px-3 py-2.5">
+        {/* The dot stays RED. Red-means-recording is a convention older than this
+            app and does not collide with destructive here, because the only
+            destructive control in the panel is the Discard button, which is a
+            bordered glass chip rather than a filled red one. */}
+        <span
+          aria-hidden
+          className={
+            "size-2 shrink-0 rounded-full " +
+            (paused ? "bg-muted-foreground" : "bg-destructive motion-safe:animate-pulse")
+          }
+        />
+        <span className="shrink-0 font-mono text-xs font-semibold tabular-nums">
+          <span ref={clockRef}>0:00</span> / {CAP_LABEL}
+        </span>
+        {/* The wave. aria-hidden because a screen reader gains nothing from 24
+            bars — the state is announced by the buttons and the clock. */}
+        <span
+          aria-hidden
+          className="flex h-6 min-w-0 flex-1 items-center gap-[2px] overflow-hidden"
+        >
+          {Array.from({ length: BARS }, (_, i) => (
+            <span
+              key={i}
+              ref={(el) => {
+                barsRef.current[i] = el;
+              }}
+              className="h-6 w-full min-w-[2px] origin-center rounded-full"
+              style={{
+                transform: "scaleY(0.12)",
+                /* The ACCENT, matching the composer's 4d recording bar so the
+                   app's two recording surfaces cannot come to disagree about
+                   which colour "active" is. Never `--relay-online`: green means
+                   ONLINE and nothing else (v2.106.18). */
+                background: paused
+                  ? "rgba(var(--rb-rgb, 63, 224, 197), 0.28)"
+                  : "var(--rb, #3FE0C5)",
+              }}
+            />
+          ))}
+        </span>
+        {/* Board 5h's 26px pause circle. Reads the recorder's OWN state back
+            rather than assuming, because an engine without MediaRecorder.pause
+            leaves the recorder running — which is why `voiceNote.ts` exposes
+            `state()` at all. */}
+        <button
+          type="button"
+          onClick={onTogglePause}
+          aria-label={paused ? "Resume recording" : "Pause recording"}
+          title={paused ? "Resume" : "Pause"}
+          className="grid size-[26px] shrink-0 place-items-center rounded-full bg-foreground/10 text-foreground transition active:scale-95"
+        >
+          {paused ? <Mic className="size-3" /> : <Pause className="size-3" />}
+        </button>
+      </div>
+
+      {/* Elapsed-vs-cap rail (board 5h). Compositor-only: the fill is a scaleX
+          transform off a left origin, never an animated width. */}
+      <span aria-hidden className="block h-[3px] w-full overflow-hidden rounded-full bg-foreground/15">
+        <span
+          ref={fillRef}
+          className="block h-full w-full origin-left bg-destructive"
+          style={{ transform: "scaleX(0)" }}
+        />
+      </span>
+
+      {/* Board 2g's bottom row: Discard · the recording indicator · Send. */}
+      <div className="flex items-end justify-center gap-8 pt-1">
+        <button
+          type="button"
+          onClick={onDiscard}
+          aria-label="Discard this recording"
+          title="Discard this recording"
+          className="flex flex-col items-center gap-1.5 transition active:scale-95"
+        >
+          <span className="grid size-[54px] place-items-center rounded-full border border-border bg-foreground/[0.07] text-foreground">
+            <X className="size-5" />
+          </span>
+          <span className="text-[10.5px] text-muted-foreground">Discard</span>
+        </button>
+
+        {/* The centre of board 2g is a red pinging MICROPHONE — an indicator,
+            not a control. It is deliberately NOT a second stop button: in this
+            app stopping IS sending (`rec.done` uploads the moment the recorder
+            stops), so two controls would either do one thing twice or leave one
+            silently doing nothing. */}
+        <div className="flex flex-col items-center gap-1.5">
+          <span aria-hidden className="relative grid size-[66px] place-items-center">
+            {!paused && (
+              <span
+                className="absolute inset-0 rounded-full bg-destructive motion-safe:[animation:relayPing_1.8s_cubic-bezier(0,0,.2,1)_infinite]"
+              />
+            )}
+            <span className="absolute inset-0 grid place-items-center rounded-full bg-destructive text-destructive-foreground">
+              <Mic className="size-6" />
+            </span>
+          </span>
+          <span className="text-[10.5px] font-semibold text-destructive">
+            {paused ? "Paused" : "Recording"}
+          </span>
+        </div>
+
+        <button
+          type="button"
+          onClick={onSend}
+          aria-label="Send voicemail"
+          title="Send this voice message"
+          className="flex flex-col items-center gap-1.5 transition active:scale-95"
+        >
+          <span className="rcta grid size-[54px] place-items-center rounded-full">
+            <Send className="size-5" />
+          </span>
+          <span className="text-[10.5px] font-semibold" style={{ color: ACCENT }}>
+            Send
+          </span>
+        </button>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -33,8 +395,23 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
   const sendMessage = trpc.messages.send.useMutation();
   const watchOnline = trpc.directory.watchOnline.useMutation();
 
+  /* The callee's face + tier badge (board 2g / the README row's "avatar,
+     name+badge" — the one item common to BOTH readings of the frame).
+     `directory.lookup` already returns avatarUrl, displayName and the
+     three-tier role for a number, so this is a gap rather than new data.
+
+     PURELY ADDITIVE: no photo, no badge and no name on failure or while in
+     flight, and never a blocking state. This endpoint is `directoryGate`-
+     limited and can legitimately refuse, and a decoration must never be the
+     reason somebody cannot leave a voicemail (the v2.105.26 rule that a masked
+     -number hint fails to null rather than breaking a sign-in). */
+  const peer = trpc.directory.lookup.useQuery(
+    { number: info.pin },
+    { enabled: /^\d{6}$/.test(info.pin), staleTime: 60_000, retry: false },
+  );
+
   const [recState, setRecState] = useState<"idle" | "recording" | "sending" | "sent">("idle");
-  const [elapsedMs, setElapsedMs] = useState(0);
+  const [paused, setPaused] = useState(false);
   const [watched, setWatched] = useState(false);
   // Text-message composer (v2.99.11): the offline card lets you drop a quick
   // written message into the DM thread without leaving the call flow.
@@ -54,14 +431,6 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
     };
   }, []);
 
-  // Elapsed ticker while recording (also proves the 60s cap visually).
-  useEffect(() => {
-    if (recState !== "recording") return;
-    const started = Date.now();
-    const t = setInterval(() => setElapsedMs(Date.now() - started), 250);
-    return () => clearInterval(t);
-  }, [recState]);
-
   // Unmount safety: never leave the mic live.
   useEffect(() => {
     return () => {
@@ -70,7 +439,7 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
     };
   }, []);
 
-  const who = info.name || info.pin;
+  const who = info.name || peer.data?.displayName || info.pin;
 
   async function beginRecording() {
     if (!recorderSupported()) {
@@ -81,11 +450,13 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
       const rec = await startVoiceRecording({ maxMs: VOICEMAIL_MAX_MS });
       if (!aliveRef.current) { rec.cancel(); return; }
       recRef.current = rec;
-      setElapsedMs(0);
+      setPaused(false);
       setRecState("recording");
       void rec.done.then(async (result) => {
         recRef.current = null;
+        setPaused(false);
         if (!result) {
+          // Cancelled (Discard) or empty: back to the idle card, nothing sent.
           setRecState("idle");
           return;
         }
@@ -122,8 +493,24 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
     }
   }
 
+  /** Send = stop the recorder; `rec.done` uploads and posts it. */
   function stopRecording() {
     recRef.current?.stop();
+  }
+
+  /** Discard the take. `cancel()` resolves `done` null, so nothing is sent and
+   *  the mic is released by the same path a normal stop uses. */
+  function discardRecording() {
+    recRef.current?.cancel();
+  }
+
+  function togglePause() {
+    const rec = recRef.current;
+    if (!rec) return;
+    if (rec.state() === "recording") rec.pause();
+    else rec.resume();
+    // Read the recorder's own state BACK rather than assuming the call took.
+    setPaused(rec.state() === "paused");
   }
 
   async function sendText() {
@@ -152,25 +539,14 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
     }
   }
 
-  const secs = Math.min(60, Math.floor(elapsedMs / 1000));
-
   return (
     <div
-      className="fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
+      className="relay-v2 fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
       role="alertdialog"
       aria-label={`Call to ${who} didn't connect`}
     >
-      <div className="w-[min(94vw,400px)] rounded-3xl border border-border bg-card p-6 shadow-2xl">
-        <div className="mb-4 flex items-start justify-between gap-2">
-          <div className="flex items-center gap-3">
-            <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-destructive/15 text-destructive">
-              <PhoneMissed className="size-5" />
-            </span>
-            <div>
-              <div className="font-semibold leading-tight">{who}</div>
-              <div className="text-sm text-muted-foreground">{reasonLine(info.reason)}</div>
-            </div>
-          </div>
+      <div className="rsheet w-[min(94vw,400px)] rounded-3xl border border-border bg-card p-5 shadow-2xl">
+        <div className="flex justify-end">
           <button
             type="button"
             onClick={onClose}
@@ -181,29 +557,36 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
           </button>
         </div>
 
-        {recState === "recording" ? (
-          <div className="space-y-3">
-            <div className="flex items-center justify-center gap-2 text-sm">
-              <span className="size-2.5 animate-pulse rounded-full bg-red-500" />
-              <span className="font-mono">
-                0:{String(secs).padStart(2, "0")} / 1:00
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={stopRecording}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-destructive px-4 py-3 font-semibold text-destructive-foreground active:scale-[0.98] transition-transform"
-            >
-              <Square className="size-4" /> Stop &amp; send
-            </button>
-            <p className="text-center text-xs text-muted-foreground">
-              Recording stops automatically at 60 seconds.
-            </p>
+        {/* Board 2g's hierarchy: avatar · title · explainer, centred. The
+            explainer stays `reasonLine`, because this app knows which of three
+            things happened and already says so honestly. */}
+        <div className="mb-4 flex flex-col items-center px-2 text-center">
+          <CalleeAvatar label={who} avatarUrl={peer.data?.avatarUrl ?? null} />
+          <div className="mt-3 flex items-center justify-center gap-1.5">
+            <span className="text-[17px] font-bold leading-tight">{who}</span>
+            <RoleBadge role={peer.data?.role ?? null} size={14} />
           </div>
+          <div className="mt-1 text-xs text-muted-foreground">{reasonLine(info.reason)}</div>
+        </div>
+
+        {recState === "recording" ? (
+          <RecordPanel
+            get={() => recRef.current}
+            paused={paused}
+            onTogglePause={togglePause}
+            onDiscard={discardRecording}
+            onSend={stopRecording}
+          />
         ) : recState === "sending" ? (
           <div className="py-3 text-center text-sm text-muted-foreground">Sending voicemail…</div>
         ) : recState === "sent" ? (
-          <div className="flex items-center justify-center gap-2 py-3 text-sm text-[color:var(--relay-online,#06d6a0)]">
+          /* The ACCENT, not `--relay-online`: green means ONLINE and nothing
+             else in this app, and a "sent" tick is not a presence statement
+             (the v2.106.18 call, one surface later). */
+          <div
+            className="flex items-center justify-center gap-2 py-3 text-sm"
+            style={{ color: ACCENT }}
+          >
             <Check className="size-4" /> Voicemail sent
           </div>
         ) : (
@@ -225,7 +608,7 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
                 onClick={sendText}
                 disabled={!text.trim() || textState !== "idle"}
                 aria-label="Send message"
-                className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground disabled:opacity-40 active:scale-95 transition-transform"
+                className="rcta grid size-9 shrink-0 place-items-center rounded-xl transition-transform active:scale-95 disabled:opacity-40"
               >
                 {textState === "sent" ? <Check className="size-4" /> : <Send className="size-4" />}
               </button>
@@ -233,7 +616,7 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
             <button
               type="button"
               onClick={beginRecording}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 font-semibold text-primary-foreground active:scale-[0.98] transition-transform"
+              className="rcta flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 font-semibold transition-transform active:scale-[0.98]"
             >
               <Mic className="size-4" /> Leave a voice message
             </button>
@@ -241,11 +624,11 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
               type="button"
               onClick={requestWatch}
               disabled={watched || watchOnline.isPending}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-border bg-muted/30 px-4 py-3 text-sm font-medium text-foreground hover:bg-muted/60 disabled:opacity-60 active:scale-[0.98] transition-transform"
+              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-border bg-muted/30 px-4 py-3 text-sm font-medium text-foreground transition-transform hover:bg-muted/60 active:scale-[0.98] disabled:opacity-60"
             >
               {watched ? (
                 <>
-                  <Check className="size-4 text-[color:var(--relay-online,#06d6a0)]" /> You'll be alerted when they're online
+                  <Check className="size-4" style={{ color: ACCENT }} /> You'll be alerted when they're online
                 </>
               ) : (
                 <>

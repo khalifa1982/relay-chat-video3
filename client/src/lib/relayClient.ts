@@ -4322,11 +4322,26 @@ export function startRelay(root: HTMLElement): RelayHandle {
   try { statsShown = localStorage.getItem("relay_call_stats") === "1"; } catch { /* private mode */ }
   let qualPrev: import("./callStats").ByteSample | null = null;
 
-  function renderCallQuality(text: string) {
+  /**
+   * Write the readout. `tone` picks the board-5c hue and defaults to neutral, so
+   * a caller with nothing measured yet ("measuring…") cannot accidentally claim a
+   * healthy call.
+   *
+   * The class is one of THREE COMPLETE LITERAL STRINGS, never composed: a
+   * runtime-assembled class name is invisible to every grep and every build step,
+   * and a rule for a class nobody sets renders nothing with all tests green.
+   */
+  function renderCallQuality(
+    text: string,
+    tone: import("./callStats").QualityTone = "neutral",
+  ) {
     const el = document.getElementById("callQual");
     if (!el) return;
     el.style.display = statsShown ? "" : "none";
-    if (statsShown) el.textContent = text;
+    if (!statsShown) return;
+    el.textContent = text;
+    el.className =
+      tone === "good" ? "call-qual is-good" : tone === "warn" ? "call-qual is-warn" : "call-qual";
   }
 
   /** Gather every leg's stats report — mesh peer connections AND LiveKit tracks —
@@ -4334,7 +4349,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
    *  produce comparable numbers. That comparability is the whole point. */
   async function collectCallQuality() {
     if (!statsShown || !inCall) return;
-    const { entriesOf, summarizeStats, formatCallStats, callStatsVerdict } = await import("./callStats");
+    const { entriesOf, summarizeStats, formatCallStats, callStatsVerdict, callQualityTone } =
+      await import("./callStats");
     const reports: import("./callStats").StatEntry[][] = [];
     for (const pin in peers) {
       try { reports.push(entriesOf(await peers[pin].pc.getStats())); }
@@ -4370,7 +4386,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const { stats, sample } = summarizeStats(reports, { prev: qualPrev, nowMs: Date.now() });
       qualPrev = sample;
       const v = callStatsVerdict(stats);
-      renderCallQuality((v === "relay" ? "⚠ " : v === "poor" ? "▲ " : "") + formatCallStats(stats));
+      renderCallQuality(
+        (v === "relay" ? "⚠ " : v === "poor" ? "▲ " : "") + formatCallStats(stats),
+        callQualityTone(stats),
+      );
     } catch { /* the readout is decoration — never let it disturb a call */ }
   }
 

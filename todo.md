@@ -11278,6 +11278,55 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.23 — 2g voicemail, 5a party lines, 5c quality readout (2026-07-30)
+
+Three frames, and the first three patches in this build that **arrived with their own
+tests** — the previous five did not, and saying so is the point: the instruction was
+made explicit and it took.
+
+**2g VOICEMAIL (the board's own label; this file's table has 2f/2g swapped and the BOARD
+wins).** The card the caller sees after an unanswered dial, plus the recording state.
+
+**5a PARTY LINES** — one of the four screens that existed in the app with no frame. The
+line's own 6-digit number renders `dir="ltr"` and bidi-ISOLATED, because an RTL title
+sitting beside it would otherwise reorder the digits.
+
+**5c CALL QUALITY READOUT.** The one-line readout above the control bar now takes a tone:
+accent when the call is healthy, a warning hue when a value is bad, neutral while nothing
+has been measured — so a caller with no data yet cannot be told the call is fine. Three
+CONSTRAINTS were kept because each is measured rather than stylistic: it stays
+`position:absolute; bottom:100%` so it can never become a flex ITEM of `.controls` and
+push a chip off a 320px screen; `pointer-events:none` so it cannot swallow a tap meant for
+hang-up; and NO `backdrop-filter`, because it sits over live video. The class is one of
+THREE COMPLETE LITERAL strings, never composed — a runtime-assembled class name is
+invisible to the JIT and renders unstyled.
+
+**THE TONE IS A PURE FUNCTION IN `callStats.ts`, NOT A TERNARY IN THE RENDERER**, which is
+what makes it testable without a browser: `callQualityTone(stats)` sits beside
+`summarizeStats`, and the renderer's `tone` parameter DEFAULTS to neutral so a caller that
+forgets it degrades to "nothing claimed" rather than to "healthy".
+
+**ATTRIBUTION CHECKED BEFORE ACCUSING.** A trap sweep over all five touched files flagged
+presence-green and repainting keyframes in `relayAssets.ts` and `relayClient.ts`. Diffing
+the ADDED lines only shows every one of those is PRE-EXISTING — the only green in the new
+lines is comments explaining why the accent was used instead, and no new keyframes were
+added at all. Blaming a patch for code it did not write is its own kind of false finding.
+
+`client/src/app/voicemailFrame.test.ts` + `client/src/pages/app/partyLinesFrame.test.ts` +
+`client/src/lib/callQualityTone.test.ts` (78 tests across the three), with
+`server/partyLines.test.ts` and `client/src/lib/callStats.test.ts` extended.
+**SPOT-CHECKED BY MUTATION rather than taken on trust**, and said plainly as a spot-check
+rather than a full sweep: gutting `callQualityTone` fails 6, and removing the party-line
+number's bidi isolation fails 1. Two further mutations ABORTED on needles that legitimately
+occur many times in those files and are reported as aborts rather than as results.
+
+**NOT VERIFIED ON A DEVICE OR IN A CALL, said plainly**: nobody has left a voicemail,
+opened a party line, or watched the quality readout change colour mid-call.
+
+**1h IS NOW UNBLOCKED** — it shares `relayAssets.ts` with 5c, which has landed.
+
+No schema change, no new dependency, no new env var. 4507 tests.
+
 ## v2.106.22 — boards 2h, 2i, 4j, and one row's timestamp taking down the address book (2026-07-30)
 
 Three more frames applied serially, plus the closest thing yet to an answer on the

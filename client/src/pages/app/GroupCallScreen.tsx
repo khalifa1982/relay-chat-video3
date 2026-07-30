@@ -1,12 +1,38 @@
 import { useMemo, useState } from "react";
-import { X, Users, Plus, Check, Video, Phone, Search, Radio, Copy, Share2, Trash2, ChevronDown } from "lucide-react";
+import {
+  X,
+  Users,
+  Plus,
+  Check,
+  Video,
+  Phone,
+  Search,
+  Radio,
+  Copy,
+  Share2,
+  Trash2,
+  ChevronDown,
+  SlidersHorizontal,
+} from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { presenceDot } from "@/app/presenceDot";
 import { matchQuery } from "@/app/searchMatch";
+import { formatPin } from "@/app/TopBar";
+import { formatElapsedSince } from "@shared/profileFields";
 
 function initials(name: string): string {
   const p = name.trim().split(/\s+/).slice(0, 2);
@@ -104,7 +130,7 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Party lines (v2.89): dialable room numbers you own. */}
-        <PartyLinesSection />
+        <PartyLinesSection onJoined={onClose} />
 
         {/* Selected chips */}
         {selectedArr.length > 0 && (
@@ -265,20 +291,46 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
   );
 }
 
-function fmtNum(n: string): string {
-  return n.length === 6 ? `${n.slice(0, 3)} ${n.slice(3)}` : n;
-}
-
 /**
- * Party lines (v2.89): create a dialable ROOM number, list the ones you own
- * (with live head-counts), copy/share the dial-in, delete. Collapsed by
- * default so the group-call picker stays clean. Sharing reuses the /i/<pin>
- * invite-link pattern — opening the link auto-dials the line.
+ * Party lines (v2.89; board 5a in v2.106.22): create a dialable ROOM number,
+ * list the ones you own (with live head-counts), JOIN one, copy/share the
+ * dial-in, delete. Collapsed by default so the group-call picker stays clean.
+ * Sharing reuses the /i/<pin> invite-link pattern — opening the link auto-dials
+ * the line.
+ *
+ * BOARD 5a, AND THE THREE ITEMS DELIBERATELY NOT TAKEN — each of them would be a
+ * UI asserting a mechanism that does not exist:
+ *
+ *  - "PIN required to join" + the gold lock. There is NO party-line passcode
+ *    anywhere: `party_lines` has no pin column and `joinPartyLine` performs no
+ *    admission check beyond having an identity, so anyone who dials the number
+ *    lands in the room. A lock glyph on this screen would tell the owner their
+ *    line is gated when it is wide open, which is worse than saying nothing. It
+ *    also cannot be borrowed from the v2.105.20 group lock, which is explicitly
+ *    a PER-DEVICE privacy screen over content the device already holds rather
+ *    than server-enforced admission.
+ *  - "· hosted by you". `joinPartyLine` sets `hostPin: null` on purpose — "a
+ *    party line has no host (its owner may never dial in)" — so as a statement
+ *    about the live call it is false, and as a statement about ownership it is
+ *    vacuous, because `partyLines.list` is owner-scoped and EVERY row here is
+ *    already yours.
+ *  - "Quiet — last used Tue". There is no `lastUsedAt` column and nothing writes
+ *    one; the subline reports the line's CREATION age instead, which is a fact
+ *    the query already carries.
+ *
+ * `liveCount: 0` also means "the registry was unreadable" (no signaling node,
+ * empty Redis mirror), so nothing below ever asserts a line is EMPTY — the same
+ * refusal v2.105.25 made on the sibling invite screen.
  */
-function PartyLinesSection() {
+function PartyLinesSection({ onJoined }: { onJoined: () => void }) {
+  const engine = useRelayEngine();
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
+  /** Which row's manage card is expanded (in flow, below the list). */
+  const [manageId, setManageId] = useState<number | null>(null);
+  /** The row a delete confirmation is open for. */
+  const [deleting, setDeleting] = useState<{ id: number; title: string; number: string } | null>(null);
   const lines = trpc.partyLines.list.useQuery(undefined, {
     enabled: open,
     refetchInterval: open ? 15_000 : false, // keep "N on the line" fresh
@@ -287,13 +339,14 @@ function PartyLinesSection() {
     onSuccess: (line) => {
       utils.partyLines.list.invalidate();
       setTitle("");
-      toast.success(`Party line created — its number is ${fmtNum(line.number)}`);
+      toast.success(`Party line created — its number is ${formatPin(line.number)}`);
     },
     onError: (err) => toast.error(err.message || "Couldn't create the party line."),
   });
   const removeLine = trpc.partyLines.remove.useMutation({
     onSuccess: () => {
       utils.partyLines.list.invalidate();
+      setManageId(null);
       toast.success("Party line deleted");
     },
     onError: (err) => toast.error(err.message || "Couldn't delete the party line."),
@@ -301,7 +354,7 @@ function PartyLinesSection() {
 
   function shareLine(l: { title: string; number: string }) {
     const url = `${window.location.origin}/i/${l.number}`;
-    const text = `Join "${l.title}" on RELAY — dial ${fmtNum(l.number)}`;
+    const text = `Join "${l.title}" on RELAY — dial ${formatPin(l.number)}`;
     if (typeof navigator !== "undefined" && navigator.share) {
       navigator.share({ title: text, text, url }).catch(() => {});
     } else {
@@ -313,9 +366,38 @@ function PartyLinesSection() {
   }
   function copyLine(l: { title: string; number: string }) {
     navigator.clipboard
-      ?.writeText(`${l.title} — dial ${fmtNum(l.number)} on RELAY or open ${window.location.origin}/i/${l.number}`)
+      ?.writeText(`${l.title} — dial ${formatPin(l.number)} on RELAY or open ${window.location.origin}/i/${l.number}`)
       .then(() => toast.success("Dial-in copied"))
       .catch(() => toast.error("Couldn't copy"));
+  }
+
+  const rows = lines.data ?? [];
+  /** The cap the server already reports; no second copy of the number 10. */
+  const maxLines = rows[0]?.max ?? MAX_PARTY_LINES_FALLBACK;
+  const atOwnerCap = rows.length >= maxLines;
+  /**
+   * Joining is a real dial, so it is only offered when the engine can perform
+   * one — `programmaticDial` requires `!inCall` and would otherwise return
+   * false, i.e. a control whose handler silently does nothing (v2.103.3). The
+   * gate is the RENDER condition, never an early return in the handler.
+   */
+  const canJoin = engine.ready && engine.phase === "idle";
+  /**
+   * A party line's cap counts EVERYONE who dials in, the caller included — so it
+   * is the transport's own room cap and deliberately NOT the picker's
+   * MAX_PARTICIPANTS, which is cap−1 because it counts invitees.
+   */
+  const lineCap = engine.maxParticipants;
+  const managed = manageId == null ? null : rows.find((r) => r.id === manageId) ?? null;
+  const now = Date.now();
+
+  function joinLine(l: { number: string; title: string }) {
+    // The same call the Dialer's own party-line Join makes. Nothing rings.
+    // CLOSING THE PICKER ON SUCCESS is not cosmetic: `start()` does it for a
+    // group dial, and without it the user lands in a live call with this modal
+    // still over the top of it.
+    const ok = engine.dial(l.number, { voice: true, displayName: l.title });
+    if (ok) onJoined();
   }
 
   return (
@@ -326,77 +408,235 @@ function PartyLinesSection() {
         aria-expanded={open}
         className="flex w-full items-center gap-2 px-4 py-2.5 text-left hover:bg-muted/30 transition-colors"
       >
-        <Radio className="size-4 text-violet-400" />
+        <Radio className="size-4 text-muted-foreground" />
         <span className="flex-1 text-sm font-medium">Party lines</span>
         <span className="text-xs text-muted-foreground">{open ? "Hide" : "Manage"}</span>
         <ChevronDown className={"size-4 text-muted-foreground transition-transform " + (open ? "rotate-180" : "")} />
       </button>
       {open && (
         <div className="space-y-2 px-4 pb-3">
+          {/* The board's mono caption. The cap is read from the live transport,
+              never the frame's literal 10 — the party-line room cap is
+              `livekitConfig().enabled ? 10 : 6`, so a hardcoded 10 is a false
+              claim about capacity on a mesh fleet (the v2.106.9 argument). */}
+          <p className="font-mono text-[9.5px] uppercase tracking-[0.18em] text-muted-foreground">
+            Dial the number — you drop straight in · up to {lineCap}
+          </p>
           <p className="text-xs text-muted-foreground">
             A party line is a room with its own 6-digit number — anyone who dials it
             lands in the same call. No ringing, no invites: just share the number.
           </p>
-          <div className="flex gap-2">
-            <Input
-              value={title}
-              onChange={(e) => setTitle(e.target.value.slice(0, 64))}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && title.trim()) createLine.mutate({ title: title.trim() });
-              }}
-              placeholder="Line name (e.g. Family room)"
-            />
-            <Button
-              type="button"
-              onClick={() => createLine.mutate({ title: title.trim() })}
-              disabled={!title.trim() || createLine.isPending}
-            >
-              {createLine.isPending ? "Creating…" : "Create"}
-            </Button>
-          </div>
+          {atOwnerCap ? (
+            // Rule 5: at the cap the field is ABSENT rather than a button that
+            // always refuses. `max` was already on the wire and read by nothing,
+            // so before this you typed a name and got a server refusal.
+            <p className="text-xs text-muted-foreground">
+              You have all {maxLines} party lines — delete one to make room.
+            </p>
+          ) : (
+            <div className="flex gap-2">
+              <Input
+                value={title}
+                onChange={(e) => setTitle(e.target.value.slice(0, 64))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && title.trim()) createLine.mutate({ title: title.trim() });
+                }}
+                placeholder="Line name (e.g. Family room)"
+              />
+              <Button
+                type="button"
+                className="rcta shrink-0"
+                onClick={() => createLine.mutate({ title: title.trim() })}
+                disabled={!title.trim() || createLine.isPending}
+              >
+                {createLine.isPending ? "Creating…" : "New line"}
+              </Button>
+            </div>
+          )}
           {lines.isLoading ? (
             <div className="py-1 text-xs text-muted-foreground">Loading…</div>
-          ) : (lines.data?.length ?? 0) === 0 ? (
+          ) : rows.length === 0 ? (
             <div className="py-1 text-xs text-muted-foreground">No party lines yet.</div>
           ) : (
-            (lines.data ?? []).map((l) => (
-              <div
-                key={l.id}
-                className="flex items-center gap-1.5 rounded-xl border border-border/60 px-3 py-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{l.title}</div>
-                  <div className="font-mono text-xs text-muted-foreground">
-                    {fmtNum(l.number)}
-                    {l.liveCount > 0 ? (
-                      <span className="ml-1.5 font-sans font-medium text-[color:var(--relay-online)]">
-                        · {l.liveCount} on the line
-                      </span>
-                    ) : null}
+            rows.map((l) => {
+              const live = l.liveCount > 0;
+              return (
+                // A DIV holding buttons: nested buttons are invalid HTML, the
+                // rule this repo follows on thread rows, call tiles and the
+                // v2.106.12 device row.
+                // FLEX-WRAP + a floor on the text column, rather than letting
+                // the text column be squeezed: MEASURED at 320px, the subline
+                // needs 119px and a non-wrapping row gave it 63, so "Live · 4 on
+                // the line" broke over THREE lines and the row grew to 94px. The
+                // actions move to a second line instead, which keeps the number
+                // pill, the subline and every 44px hit target intact — the
+                // v2.106.19 lesson: fix the geometry by construction rather than
+                // by nudging one value until it looks right.
+                <div
+                  key={l.id}
+                  className="rglass flex flex-wrap items-center gap-[11px] rounded-[15px] px-3 py-2.5"
+                  // A LITERAL fallback, never a self-referencing one: a custom-
+                  // property CYCLE resolves to the guaranteed-invalid value and
+                  // the browser DROPS the declaration, so a live row would have
+                  // no border at all rather than a plain one (the v2.106.7 trap).
+                  style={
+                    live
+                      ? { borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.35)" }
+                      : undefined
+                  }
+                >
+                  {/* The number is the row's identity and must never truncate.
+                      `dir="ltr"` + bidi isolation so an Arabic line title cannot
+                      reorder the digits. */}
+                  <span
+                    dir="ltr"
+                    className="rchip-accent shrink-0 rounded-[12px] px-2 py-1 text-center font-mono text-[13px] font-semibold [unicode-bidi:isolate]"
+                    style={{ minWidth: 64 }}
+                  >
+                    {formatPin(l.number)}
+                  </span>
+                  <div className="min-w-[120px] flex-1 basis-0">
+                    <div className="truncate text-[13.5px] font-bold" dir="auto">
+                      {l.title}
+                    </div>
+                    {live ? (
+                      // ACCENT, not `--relay-online`: green means ONLINE and
+                      // nothing else in this app (it is what every presence LED
+                      // is drawn with, which is why v2.99.86/v2.106.9/v2.106.11
+                      // each moved something off it), and a live ROOM is ACTIVE.
+                      // It was also 12px text in the LED green, which fails AA
+                      // at text sizes — the reason `--relay-green-text` exists.
+                      <div
+                        className="flex items-center gap-1.5 text-[11.5px] font-medium"
+                        style={{ color: "var(--rb, #3FE0C5)" }}
+                      >
+                        <span
+                          aria-hidden
+                          className="size-1.5 shrink-0 rounded-full motion-safe:animate-pulse"
+                          style={{ background: "var(--rb, #3FE0C5)" }}
+                        />
+                        Live · {l.liveCount} on the line
+                      </div>
+                    ) : (
+                      <div className="text-[11.5px] text-muted-foreground">
+                        {createdAgo(l.createdAt, now)}
+                      </div>
+                    )}
+                  </div>
+                  {/* One group so the two controls stay together and stay
+                      right-aligned on whichever line they land on. */}
+                  <div className="ms-auto flex shrink-0 items-center gap-2">
+                    {canJoin && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={live ? "default" : "secondary"}
+                        className={"h-11 px-3" + (live ? " rcta" : "")}
+                        aria-label={`Join ${l.title}`}
+                        onClick={() => joinLine(l)}
+                      >
+                        Join
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="size-11"
+                      aria-label={`Manage ${l.title}`}
+                      aria-expanded={manageId === l.id}
+                      onClick={() => setManageId((v) => (v === l.id ? null : l.id))}
+                    >
+                      <SlidersHorizontal className="size-4" />
+                    </Button>
                   </div>
                 </div>
-                <Button size="icon" variant="ghost" className="size-8" aria-label={`Copy dial-in for ${l.title}`} title="Copy dial-in" onClick={() => copyLine(l)}>
-                  <Copy className="size-4" />
-                </Button>
-                <Button size="icon" variant="ghost" className="size-8" aria-label={`Share ${l.title}`} title="Share invite link" onClick={() => shareLine(l)}>
-                  <Share2 className="size-4" />
+              );
+            })
+          )}
+          {managed && (
+            // IN FLOW rather than a portalled dialog — the frame's own structure
+            // AND the safer one: this section already lives inside a `fixed`
+            // modal, and an absolutely-positioned card over a row that can sit
+            // at either edge needs measuring and clamping (the class that
+            // clipped the ⋮ menu in v2.99.0). Paired with the theme tokens
+            // because `.rsheet` is dark-scoped and declares nothing in light.
+            <div className="rsheet space-y-2 rounded-[15px] border border-border bg-card p-3">
+              <div className="text-[11px] font-bold" dir="auto">
+                Manage “{managed.title}”
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="h-11"
+                  onClick={() => copyLine(managed)}
+                >
+                  <Copy className="size-4" /> Copy dial-in
                 </Button>
                 <Button
-                  size="icon"
-                  variant="ghost"
-                  className="size-8 text-muted-foreground hover:text-destructive"
-                  aria-label={`Delete ${l.title}`}
-                  title="Delete this party line"
-                  disabled={removeLine.isPending}
-                  onClick={() => removeLine.mutate({ id: l.id })}
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="h-11"
+                  onClick={() => shareLine(managed)}
                 >
-                  <Trash2 className="size-4" />
+                  <Share2 className="size-4" /> Share number
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  className="h-11"
+                  disabled={removeLine.isPending}
+                  onClick={() => setDeleting({ id: managed.id, title: managed.title, number: managed.number })}
+                >
+                  <Trash2 className="size-4" /> Delete
                 </Button>
               </div>
-            ))
+            </div>
           )}
         </div>
       )}
+      <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this party line?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Anyone on the line right now keeps talking, and {deleting ? formatPin(deleting.number) : "the number"}{" "}
+              stops resolving for new dials. That number won't come back — it's retired for good.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              destructive
+              onClick={() => {
+                if (deleting) removeLine.mutate({ id: deleting.id });
+                setDeleting(null);
+              }}
+            >
+              Delete line
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
+}
+
+/** Last-resort cap label when the list is empty, so the copy is never blank. */
+const MAX_PARTY_LINES_FALLBACK = 10;
+
+/**
+ * "Created 3h ago", reusing the app's ONE duration formatter rather than rolling
+ * another (v2.106.12). Renders nothing for a missing value or a clock that has
+ * gone backwards, which `formatElapsedSince` already answers as "".
+ */
+function createdAgo(createdAt: Date | string | number | null | undefined, nowMs: number): string {
+  if (createdAt == null) return "";
+  const ms = createdAt instanceof Date ? createdAt.getTime() : new Date(createdAt).getTime();
+  const ago = formatElapsedSince(ms, nowMs);
+  return ago ? `Created ${ago} ago` : "";
 }

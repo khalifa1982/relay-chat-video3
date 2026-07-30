@@ -22,33 +22,32 @@ Paste this into Claude Design. It lists only what is **not yet built to its own 
 > shipped with 2h, and **5g Group info — controls** (invite audience · permissions · group
 > ID & status · manage) shipped with 2i.
 >
-> **DONE — 31 of 42.** The twelve below, plus 2c story viewer · 2d notification center ·
+> **DONE — 34 of 42.** The twelve below, plus 2c story viewer · 2d notification center ·
 > 2e register sheet · **2f passcode lock** · 2h admin console · 2i group info · 3b contact
 > categories · 3c group conversation · 3d new group · 4a peer profile tags · 4c message
 > actions/reactions · 4d voice-note recording · 4e media viewer · 4g guest restore ·
-> 4j video message · 4k system alerts, plus **5e lock & auth states**, **5f** and **5g**.
+> 4j video message · 4k system alerts · **2g voicemail** · **5a party lines** ·
+> **5c call quality readout**, plus **5e lock & auth states**, **5f** and **5g**.
 > Both blocked data models from `DATA-CONTRACTS.md` exist (`shared/contactTags.ts`,
 > `shared/reactions.ts` + the `message_reactions` table).
 >
-> **OUTSTANDING — 11, of which 9 are in flight right now:**
+> **OUTSTANDING — 8, of which 6 are in flight right now:**
 >
 > | frame | title | state |
 > |---|---|---|
 > | 1h | In-call · video | **partial** — bar, accent and tiles done; the frame's own chrome is not |
 > | 5h | Sheet states | **partial** — device approval, empty inbox and story→group done; the voicemail-recording state is not |
 > | 1j | Desktop — Messages | in flight |
-> | 2g | Voicemail | in flight |
-> | 4b | Story composer | in flight |
+> > | 4b | Story composer | in flight |
 > | 4h | Group invite | in flight |
 > | 4i | Locked group | in flight |
-> | 5a | Party lines | in flight |
-> | 5b | Rejoin a live call | in flight |
-> | 5c | Call quality readout | in flight |
-> | 5d | Sign-in method switcher | in flight |
+> > | 5b | Rejoin a live call | in flight |
+> > | 5d | Sign-in method switcher | in flight |
 >
-> **1h IS DELIBERATELY LAST**: it edits `lib/relayAssets.ts`, which 5c also edits, so
-> building both at once would make them collide and waste one. 5h completes when voicemail
-> lands, because its missing quarter IS the voicemail recording state.
+> **1h IS NOW UNBLOCKED**: it edits `lib/relayAssets.ts`, which 5c also edits — 5c has
+> landed, so 1h can be built next without a collision. 5h's missing quarter was the voicemail
+> recording state, which the 2g patch built — so 5h should now be re-checked and is
+> likely complete.
 >
 > **HOW TO COUNT THIS CORRECTLY NEXT TIME**: grep the board HTML, not this file's notes —
 > `grep -ohE 'href=.#[1-5][a-k]' relay-app-redesign-standalone.html | sort -u`.

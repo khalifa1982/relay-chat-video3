@@ -96,7 +96,14 @@ describe("client surfaces", () => {
     expect(DIALER).toMatch(/previewIsLine \? "Join" : "Voice Call"/);
   });
   it("GroupCallScreen manages lines: create with a title, list with live counts, share via /i/<pin>, delete", () => {
-    expect(GROUP_SCREEN).toMatch(/function PartyLinesSection\(\)/);
+    // v2.106.22 (board 5a): this froze the empty PARAMETER LIST, which was never
+    // the property — the section now takes an `onJoined` so its new Join button
+    // can close the picker on success. What the pin stands for is that the
+    // section lives HERE and is actually MOUNTED, which is strictly stronger
+    // than the definition alone: a component defined and never rendered would
+    // have satisfied the old match.
+    expect(GROUP_SCREEN).toMatch(/function PartyLinesSection\(/);
+    expect(GROUP_SCREEN).toMatch(/<PartyLinesSection[\s/>]/);
     expect(GROUP_SCREEN).toMatch(/trpc\.partyLines\.create\.useMutation/);
     expect(GROUP_SCREEN).toMatch(/trpc\.partyLines\.list\.useQuery/);
     expect(GROUP_SCREEN).toMatch(/trpc\.partyLines\.remove\.useMutation/);
