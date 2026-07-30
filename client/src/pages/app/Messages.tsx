@@ -93,6 +93,7 @@ import { VideoRecordSheet } from "@/app/VideoRecordSheet";
 import { GroupInfoSheet } from "@/app/GroupInfoSheet";
 import { SwipeRow, type SwipeAction } from "@/app/SwipeRow";
 import { linkify } from "@/lib/linkify";
+import { mentionQueryAt, rankMentionMatches, applyMention } from "@shared/mentions";
 import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useThreadMuted, isThreadMuted, setThreadMuted, onMutedChange } from "@/app/mutedThreads";
@@ -1008,6 +1009,62 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     return m;
   }, [infoQuery.data]);
   /**
+   * Board 3c — who an @mention can resolve to.
+   *
+   * GROUPS ONLY, and that is not an omission: a DM has exactly one other person in
+   * it, so there is nobody a mention could disambiguate and highlighting one would
+   * be decoration. Empty for a 1:1, which makes `linkify` byte-identical to its
+   * pre-3c output there.
+   *
+   * MYSELF INCLUDED, because being mentioned is exactly the case worth rendering —
+   * a group where the one name that never highlights is your own would be the wrong
+   * way round.
+   */
+  /**
+   * Board 3c — "5 members · 3 online" in the group header.
+   *
+   * READ THROUGH `directory.presenceMany`, which is the ONE reader every other
+   * surface uses, rather than a second presence rule here. That funnel already
+   * applies the guest-privacy suppression (v2.95) and the idle/online distinction
+   * (v2.99.92) — re-deriving would be how a header comes to disagree with the LEDs
+   * on the very same people, which is the divergence v2.99.95 was about.
+   *
+   * MYSELF EXCLUDED FROM THE COUNT, because "3 online" is about who else is here:
+   * you are reading the screen, so counting yourself tells nobody anything and
+   * makes an empty group read as "1 online".
+   */
+  const memberNumbers = useMemo(
+    () =>
+      isGroup
+        ? (infoQuery.data?.members ?? [])
+            .filter((mem) => !mem.isMe && /^\d{6}$/.test(mem.number))
+            .map((mem) => mem.number)
+        : [],
+    [isGroup, infoQuery.data]
+  );
+  const memberPresence = trpc.directory.presenceMany.useQuery(
+    { numbers: memberNumbers },
+    { enabled: memberNumbers.length > 0, staleTime: 20_000, refetchInterval: 30_000 }
+  );
+  /* Rendered only once a real answer has arrived: "0 online" while the query is in
+     flight is a claim about a group, and a wrong one. Undefined renders nothing at
+     all, which is the honest degraded state. */
+  const membersOnline = useMemo(() => {
+    const rows = memberPresence.data;
+    if (!rows) return undefined;
+    return rows.filter((r) => r.isOnline).length;
+  }, [memberPresence.data]);
+  const mentionRoster = useMemo(
+    () =>
+      isGroup
+        ? (infoQuery.data?.members ?? []).map((mem) => ({
+            id: mem.id,
+            name: mem.displayName || mem.number,
+          }))
+        : [],
+    [isGroup, infoQuery.data]
+  );
+  /**
    * The same roster, keeping the two fields `nameById` was throwing away (v2.103.3).
    *
    * Owner: "each user's message shows a small clickable thumbnail of their profile
@@ -1732,6 +1789,48 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     setText((s) => s + e);
   }
 
+  /* Board 3c — the @mention autocomplete. Only ever open in a GROUP: a DM has one
+     other person in it, so there is nobody to disambiguate. */
+  const composerRef = useRef<HTMLInputElement | null>(null);
+  const [mentionQuery, setMentionQuery] = useState<{ query: string; start: number } | null>(null);
+  const mentionMatches = useMemo(
+    () =>
+      mentionQuery && mentionRoster.length
+        ? rankMentionMatches(mentionQuery.query, mentionRoster)
+        : [],
+    [mentionQuery, mentionRoster]
+  );
+  /** Re-read the token at the caret after any edit or caret move. */
+  function syncMentionQuery(el: HTMLInputElement | null) {
+    if (!isGroup || !el) {
+      setMentionQuery(null);
+      return;
+    }
+    setMentionQuery(mentionQueryAt(el.value, el.selectionStart ?? el.value.length));
+  }
+  /**
+   * Complete the mention being typed.
+   *
+   * THE CARET IS RESTORED IMPERATIVELY AFTER THE STATE WRITE, because React
+   * re-renders a controlled input with the caret at the END — so inserting a mention
+   * mid-sentence would jump the cursor past everything the user had already written.
+   * The `requestAnimationFrame` waits for that render rather than fighting it.
+   */
+  function pickMention(member: { id: number; name: string }) {
+    const el = composerRef.current;
+    if (!el) return;
+    const applied = applyMention(el.value, el.selectionStart ?? el.value.length, member);
+    if (!applied) return;
+    setText(applied.text);
+    setMentionQuery(null);
+    requestAnimationFrame(() => {
+      const cur = composerRef.current;
+      if (!cur) return;
+      cur.focus();
+      cur.setSelectionRange(applied.caret, applied.caret);
+    });
+  }
+
   // ── voice-note recording ──
   // The MediaRecorder plumbing (Safari-safe MIME probing, mic release, cap)
   // lives in the SHARED client/src/lib/voiceNote.ts since v2.88 — the same
@@ -1999,7 +2098,23 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             {typers.length > 0 ? (
               <span className="text-[color:var(--relay-online)] font-medium animate-pulse">typing…</span>
             ) : isGroup ? (
-              <span className="text-muted-foreground">{`${thread?.memberCount ?? infoQuery.data?.members.length ?? ""} members`}</span>
+              <span className="text-muted-foreground">
+                {`${thread?.memberCount ?? infoQuery.data?.members.length ?? ""} members`}
+                {/* Board 3c. Withheld entirely when nobody else is online, rather
+                    than shown as a zero: "0 online" spends a line saying nothing,
+                    and the member count above it already carries the group's size.
+                    Green because it is PRESENCE — the one thing green means in this
+                    app — using the AA-measured text token rather than the LED hue,
+                    which fails contrast at this size (v2.99.86). */}
+                {membersOnline != null && membersOnline > 0 && (
+                  <>
+                    <span className="text-muted-foreground/40"> · </span>
+                    <span className="text-[color:var(--relay-green-text)] font-medium">
+                      {membersOnline} online
+                    </span>
+                  </>
+                )}
+              </span>
             ) : thread?.peerIsOnline && thread?.peerIdle ? (
               // Backgrounded (v2.99.92) — "away", not "online", and not the
               // "last seen 3s ago" that minimising used to produce.
@@ -2156,7 +2271,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                           />
                         )}
                         {m.body && (
-                          <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body)}</div>
+                          <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body, mentionRoster, !!mine)}</div>
                         )}
                         <div className={"text-[10px] mt-1 " + "text-white/70"}>
                           {formatTime(m.createdAt)}
@@ -2648,6 +2763,31 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             </button>
           </div>
         )}
+        {/* Board 3c — the @mention picker, IN FLOW above the composer. Not floating,
+            for the same reason the reaction row is not: an absolutely-positioned list
+            over a composer that sits above the tab bar and the on-screen keyboard needs
+            measuring and clamping, and gets it wrong on exactly the phone it matters
+            on. `onMouseDown` with preventDefault rather than `onClick`, because a
+            click fires AFTER blur — and blur closes the picker, so the row would
+            unmount from under the tap. */}
+        {mentionMatches.length > 0 && (
+          <div className="mb-2 flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {mentionMatches.map((mem) => (
+              <button
+                key={mem.id}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  pickMention(mem);
+                }}
+                className="shrink-0 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-xs font-medium transition hover:bg-muted/60 active:scale-95 motion-reduce:transition-none"
+              >
+                <span style={{ color: "var(--rb, #3FE0C5)" }}>@</span>
+                {mem.name}
+              </button>
+            ))}
+          </div>
+        )}
         {/* The shared, categorised, searchable picker (v2.99.80). This was a
             hand-written 32-glyph grid; the catalogue behind the new component
             carries ~1,100 across ten categories and is the SAME one the status
@@ -2789,13 +2929,31 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           />
           <input ref={fileRef} type="file" className="hidden" onChange={handleFile} />
           <Input
+            ref={composerRef}
             value={text}
             onChange={(e) => {
               setText(e.target.value);
+              syncMentionQuery(e.target);
               if (e.target.value.trim()) notifyTyping();
             }}
+            onSelect={(e) => syncMentionQuery(e.currentTarget)}
+            onBlur={() => setMentionQuery(null)}
             onKeyDown={(e) => {
+              /* Enter completes the top match while the picker is open, rather than
+                 sending — otherwise typing "@da" and pressing Enter sends a fragment
+                 to a group instead of finishing the name. Escape closes it without
+                 clearing the draft. */
+              if (mentionMatches.length && e.key === "Escape") {
+                e.preventDefault();
+                setMentionQuery(null);
+                return;
+              }
               if (e.key === "Enter" && !e.shiftKey) {
+                if (mentionMatches.length) {
+                  e.preventDefault();
+                  pickMention(mentionMatches[0]);
+                  return;
+                }
                 e.preventDefault();
                 send();
               }
