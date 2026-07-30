@@ -768,6 +768,54 @@ export function startRelay(root: HTMLElement): RelayHandle {
       .catch(() => { /* same — decoration only */ });
   }
 
+  /* Board 3a: the dialled number as MONO TILES that scramble matrix-style and settle onto
+   * the real digit with an accent glow.
+   *
+   * ONLY ON A FRESH DIAL, and that is the whole reason this takes a flag. `showDialCard`
+   * re-runs DURING a single dial — the `ringing` ack carries the callee's real name — so a
+   * scramble on every call would re-scramble a number that has already settled, one second
+   * into the call, which reads as a glitch rather than as an effect. On a repaint the tiles
+   * are written straight to their settled state.
+   *
+   * The timers are tracked and cleared, or leaving the screen mid-scramble leaves an
+   * interval writing into detached nodes for the rest of the session.
+   */
+  let dialScrambleTimers: ReturnType<typeof setTimeout>[] = [];
+  function stopDialScramble(): void {
+    for (const t of dialScrambleTimers) clearTimeout(t);
+    dialScrambleTimers = [];
+  }
+  function paintDialDigits(text: string, animate: boolean): void {
+    const host = $("dcNum");
+    if (!host) return;
+    stopDialScramble();
+    host.textContent = "";
+    const chars = text.split("");
+    chars.forEach((ch, i) => {
+      const cell = document.createElement("span");
+      const isDigit = /\d/.test(ch);
+      cell.className = isDigit ? "dc-dig" : "dc-dig sep";
+      // A separator is never scrambled: it is punctuation, not a digit being resolved.
+      if (!animate || !isDigit) {
+        cell.textContent = ch;
+        if (isDigit) cell.classList.add("set");
+      } else {
+        cell.textContent = String(Math.floor(Math.random() * 10));
+        // Staggered left to right, so the number RESOLVES rather than all landing at once.
+        const flicks = 4 + i;
+        let n = 0;
+        const step = () => {
+          if (n >= flicks) { cell.textContent = ch; cell.classList.add("set"); return; }
+          cell.textContent = String(Math.floor(Math.random() * 10));
+          n++;
+          dialScrambleTimers.push(setTimeout(step, 140));
+        };
+        dialScrambleTimers.push(setTimeout(step, 140));
+      }
+      host.appendChild(cell);
+    });
+  }
+
   function showDialCard() {
     $("call")?.classList.add("pre-connect");
     const d = outgoingDial; if (!d) return;
@@ -777,7 +825,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const fresh = dcPin !== d.pin;
     if (fresh) { dcPin = d.pin; resetDialIdentity(); }
     const av = $("dcAv"); if (av) av.textContent = d.group ? "👥" : (d.name ? initials(d.name) : "#");
-    const num = $("dcNum"); if (num) num.textContent = d.group || d.pin.length !== 6 ? d.pin : d.pin.slice(0, 3) + "-" + d.pin.slice(3);
+    paintDialDigits(d.group || d.pin.length !== 6 ? d.pin : d.pin.slice(0, 3) + "-" + d.pin.slice(3), fresh);
     const nm = $("dcName"); if (nm) { nm.textContent = d.name || ""; nm.style.display = d.name ? "" : "none"; }
     const md = $("dcMode");
     if (md) {
@@ -792,6 +840,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (fresh && !d.group) enrichDialCard(d.pin);
   }
   function exitPreConnect() {
+    stopDialScramble();
     outgoingDial = null;
     // Forget which pin the card showed, so dialling the same person again re-fetches
     // rather than trusting rows painted before this call happened — their status and the

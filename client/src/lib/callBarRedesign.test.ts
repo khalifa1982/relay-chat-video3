@@ -40,6 +40,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const SRC = readFileSync(resolve(process.cwd(), "client/src/lib/relayAssets.ts"), "utf8");
+const CLIENT = readFileSync(resolve(process.cwd(), "client/src/lib/relayClient.ts"), "utf8");
+const CLIENT_CODE = CLIENT.replace(/\/\*[\s\S]*?\*\//g, "")
+  .split("\n").filter((l) => !/^\s*(\/\/|\*)/.test(l)).join("\n");
 
 /** A named template literal's raw interior, straight out of the source text. */
 function literal(name: string): string {
@@ -227,5 +230,80 @@ describe("the whole call UI follows the ONE accent", () => {
       const allowed = lit === "#3FE0C5" || lit === "63,224,197" ? 1 : 0;
       expect(hits, lit).toBe(allowed);
     }
+  });
+});
+
+describe("board 3a — the outgoing number as matrix digits", () => {
+  it("the number is CELLS, not one text node", () => {
+    /* A proportional glyph would make the row jitter sideways as each digit lands on a
+       different width — the number would appear to breathe while it resolves. Measured at
+       0.0px variance across the six cells. */
+    expect(CLIENT_CODE).toMatch(/function paintDialDigits\(/);
+    expect(rule(".relay-root .dial-card .dc-dig{")).toMatch(/min-width:\.62em/);
+    expect(rule('.relay-root .dial-card .dc-num{font-family:"JetBrains Mono"')).toMatch(/display:flex/);
+  });
+
+  it("a settled digit takes the accent glow, and the glow follows the CYCLING accent", () => {
+    const set = rule(".relay-root .dial-card .dc-dig.set{");
+    expect(set).toMatch(/text-shadow:0 0 14px rgba\(var\(--accent-rgb\)/);
+  });
+
+  it("a SEPARATOR is never scrambled — it is punctuation, not a digit", () => {
+    expect(CLIENT_CODE).toMatch(/if \(!animate \|\| !isDigit\)/);
+  });
+
+  it("a mid-dial REPAINT does not re-scramble", () => {
+    /* THE ONE THING THAT WOULD READ AS A GLITCH RATHER THAN AN EFFECT. `showDialCard`
+       re-runs during a single dial — the `ringing` ack carries the callee's real name — so
+       scrambling unconditionally would re-scramble a number that had already settled, a
+       second into the call. The `fresh` flag is what the paint is gated on. */
+    expect(CLIENT_CODE).toMatch(/paintDialDigits\([\s\S]{0,140}?, fresh\);/);
+  });
+
+  it("leaving the screen clears the timers", () => {
+    // Otherwise an interval writes into detached nodes for the rest of the session.
+    const at = CLIENT_CODE.indexOf("function exitPreConnect()");
+    expect(at).toBeGreaterThan(0);
+    expect(CLIENT_CODE.slice(at, at + 200)).toMatch(/stopDialScramble\(\)/);
+  });
+
+  it("the row heartbeat is TRANSFORM only and inside the reduced-motion gate", () => {
+    /* v2.99.84's rule: an animated box-shadow or width repaints every frame. And the house
+       rule that all decorative motion sits behind prefers-reduced-motion — the settled state
+       is a plain declaration, so a reduced-motion viewer still sees the resolved number with
+       its glow, just without movement. */
+    const kf = CSS_CODE.slice(CSS_CODE.indexOf("@keyframes relayDialBeat"));
+    const body = kf.slice(0, kf.indexOf("}\n") + 1);
+    expect(body).toMatch(/transform:scale/);
+    expect(body).not.toMatch(/box-shadow|width|height|filter|opacity/);
+    const beatAt = CSS_CODE.indexOf(".relay-root .dial-card .dc-num{animation:relayDialBeat");
+    expect(beatAt, "the heartbeat rule must exist").toBeGreaterThan(0);
+    /* BOTH spellings are in this file — `prefers-reduced-motion:no-preference` and the
+       spaced form — and my first version looked only for the spaced one, so it failed on
+       correct code. Match either. */
+    const gates = [...CSS_CODE.matchAll(/prefers-reduced-motion:\s*no-preference/g)]
+      .map((m) => m.index ?? -1).filter((i) => i >= 0 && i < beatAt);
+    const gateAt = gates.length ? gates[gates.length - 1] : -1;
+    expect(gateAt, "the heartbeat must sit inside a reduced-motion gate").toBeGreaterThan(0);
+    // …and inside THAT block, not merely after some earlier one.
+    expect(CSS_CODE.slice(gateAt, beatAt)).not.toMatch(/\n\}/);
+  });
+});
+
+describe("board 1g — CONFIRMED, not rebuilt", () => {
+  it("the incoming avatar already has two STAGGERED ping rings", () => {
+    /* The board asks for "two staggered ping rings (2.2s)" and v2.97.0 already shipped
+       exactly that shape — two `.ring-halo` elements on `relayHalo` (scale 1 -> 1.5, opacity
+       .85 -> 0), the second delayed by half the cycle. Confirmed with a pin rather than
+       churned for a 0.3s difference in duration: the property is TWO rings, staggered. */
+    const markup = literal("RELAY_MARKUP");
+    expect((markup.match(/class="ring-halo/g) ?? []).length).toBe(2);
+    expect(CSS_CODE).toMatch(/@keyframes relayHalo\{0%\{transform:scale\(1\)/);
+    expect(CSS_CODE).toMatch(/\.ring-halo\{animation:relayHalo [\d.]+s/);
+    const delay = CSS_CODE.match(/\.ring-halo\.h2\{animation-delay:([\d.]+)s\}/);
+    const dur = CSS_CODE.match(/\.ring-halo\{animation:relayHalo ([\d.]+)s/);
+    expect(delay, "the second ring must be staggered").toBeTruthy();
+    // Staggered by about half the cycle, so the two rings never expand together.
+    expect(Number(delay![1])).toBeGreaterThan(Number(dur![1]) * 0.3);
   });
 });

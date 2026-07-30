@@ -11278,6 +11278,71 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.8 — board 3a: the outgoing number resolves matrix-style (2026-07-30)
+
+Board 3a draws the dialled number as six mono TILES that scramble and settle onto the real
+digit with an accent glow, the whole row heartbeating. `#dcNum` is now a flex row of cells
+written by `paintDialDigits` rather than one text node.
+
+- **The cells are fixed-width by construction**, which is a layout decision rather than a
+  style one: a proportional glyph makes each digit land on a different width, so the row
+  would visibly breathe SIDEWAYS while it resolved. Measured at 0.0px variance across six.
+- **The one thing that would read as a glitch rather than an effect is gated on a flag.**
+  `showDialCard` re-runs DURING a single dial — the `ringing` ack carries the callee's real
+  name — so scrambling unconditionally would re-scramble a number that had already settled a
+  second into the call. The paint takes `fresh`; a repaint writes the settled state directly.
+- **A separator is never scrambled** — it is punctuation, not a digit being resolved.
+- **The timers are tracked and cleared by `exitPreConnect`**, or an interval writes into
+  detached nodes for the rest of the session.
+- **The heartbeat rides the ROW on a TRANSFORM** — one animation instead of seven,
+  compositor work rather than a repaint (the v2.99.84 rule) — inside the existing
+  reduced-motion gate, so a viewer who asked for less motion still sees the resolved number
+  with its glow and no movement.
+
+**Board 1g is CONFIRMED, not rebuilt, and saying so is the point.** It asks for "two
+staggered ping rings (2.2s)" and v2.97.0 already shipped exactly that shape — two
+`.ring-halo` elements on `relayHalo`, the second delayed by half the cycle. Pinned (two
+rings, staggered, the halo keyframe) rather than churned for a 0.3s difference in duration.
+
+**Driven, not asserted — 12/12.** The real painter is lifted verbatim out of
+`relayClient.ts` into a page carrying the real stylesheet and run on a clock, because a
+source pin can tell you the function exists and cannot tell you whether the number ever
+ARRIVES at the digits that were dialled — the only thing that matters, since a scramble that
+never settles is a number nobody can read.
+
+**A vacuous measurement of my own, caught by reading the number rather than the verdict**:
+the equal-width check first reported "0.0px" and PASSED — the dial card lives inside `#call`,
+which the app hides until a call starts, so every cell measured zero and "all equal" was true
+of all-zeros. The harness now forces the surface visible and ABORTS unless the cells have a
+real width; re-measured, 25.5px each.
+
+**The ES5 iteration trap bit again** (TS2802, recorded in v2.99.72 and v2.99.98): spreading a
+STRING needs `downlevelIteration`, so `[...text]` became `split("")` — which would break a
+surrogate pair, stated rather than assumed, because this only ever receives six digits and
+one dash.
+
+**Three defects in my own test, all failing on CORRECT code:**
+- `rule(".dc-num{")` matched the reduced-motion COPY of that selector, which sits EARLIER in
+  the file than the base rule.
+- A `[^)]*` argument pattern could not span the call's own parens — the argument is a ternary
+  full of `.slice(...)`.
+- A reduced-motion gate assertion looked only for the SPACED spelling, when both
+  `prefers-reduced-motion:no-preference` and the spaced form are in this file.
+
+**Two mutations aborted on my own needles rather than recording a false result** — `, fresh);`
+also occurs at the `enrichDialCard` call, and the painter's declaration carries its
+TypeScript annotations — and both bit once re-anchored.
+
+`client/src/lib/callBarRedesign.test.ts` → 22; **all 12 tripwires verified by MUTATION**,
+sources byte-identical afterwards.
+
+**NOT VERIFIED ON A CALL, said plainly**: the scramble is driven on a real clock in a real
+browser, but nobody has dialled a number on a phone and watched it resolve.
+
+**Still to come in phase 3**: 2b's live waveform and 2a's 2×4 conference grid.
+
+No schema change, no new dependency, no new env var. 4167 tests.
+
 ## v2.106.7 — the whole call UI breathes with the accent (2026-07-30)
 
 The call surfaces carry their own private theme (`.relay-root` declares `--accent:#3FE0C5`),

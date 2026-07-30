@@ -565,11 +565,16 @@ export const RELAY_CSS = `
   .relay-root .rc-voice::after,.relay-root .rc-video::after{animation:relayRipple 1.6s ease-out infinite}
   .relay-root .rc-video::after{animation-delay:.4s}
   .relay-root .rc-decline{animation:relayNudge 2.6s ease-in-out infinite}
+  /* Board 3a: the number row heartbeats while the call is being placed. TRANSFORM only,
+     so it is compositor-work rather than a repaint (the v2.99.84 rule), and it rides the
+     ROW rather than each cell — one animation instead of seven. */
+  .relay-root .dial-card .dc-num{animation:relayDialBeat 1.9s ease-in-out infinite}
 }
 @keyframes relayOrbit{to{transform:rotate(360deg)}}
 @keyframes relayHalo{0%{transform:scale(1);opacity:.85}100%{transform:scale(1.5);opacity:0}}
 @keyframes relayBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
 @keyframes relayRipple{0%{transform:scale(1);opacity:.8}100%{transform:scale(1.45);opacity:0}}
+@keyframes relayDialBeat{0%,100%{transform:scale(1)}12%{transform:scale(1.16)}26%{transform:scale(1.02)}40%{transform:scale(1.09)}56%{transform:scale(1)}}
 @keyframes relayNudge{0%,86%,100%{transform:rotate(0)}90%{transform:rotate(-7deg)}94%{transform:rotate(7deg)}98%{transform:rotate(-4deg)}}
 
 .relay-root #call{flex-direction:column}
@@ -612,7 +617,20 @@ export const RELAY_CSS = `
    geometry — nothing below it moves when the lookup resolves. */
 .relay-root .dial-card .dc-av-img{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;object-fit:cover;border:1px solid var(--border);box-shadow:0 18px 50px rgba(0,0,0,.45)}
 /* clamp, so a 34px number cannot force a horizontal overflow at 320px */
-.relay-root .dial-card .dc-num{font-family:"JetBrains Mono",monospace;font-size:clamp(26px,8.5vw,34px);font-weight:700;letter-spacing:.08em;color:var(--text)}
+/* Board 3a: the dialled number as MONO TILES, scrambling matrix-style and settling onto
+   the real digit with an accent glow, the whole row heartbeating.
+   The row is a FLEX line of fixed-width cells rather than one text node, because a
+   proportional glyph would make the row jitter as each digit lands on a different width —
+   the number would appear to breathe sideways while it resolves.
+   BOTH animations are inside the reduced-motion gate below (house rule), and the settled
+   state is a plain declaration, so a reduced-motion viewer sees the resolved number with
+   its glow and no movement at all. */
+.relay-root .dial-card .dc-num{font-family:"JetBrains Mono",monospace;font-size:clamp(26px,8.5vw,34px);font-weight:700;letter-spacing:.08em;color:var(--text);
+  display:flex;align-items:baseline;justify-content:center;gap:2px}
+.relay-root .dial-card .dc-dig{display:inline-block;min-width:.62em;text-align:center;color:var(--muted);
+  transition:color .18s,text-shadow .18s}
+.relay-root .dial-card .dc-dig.sep{min-width:auto;color:var(--faint)}
+.relay-root .dial-card .dc-dig.set{color:var(--text);text-shadow:0 0 14px rgba(var(--accent-rgb),.75)}
 .relay-root .dial-card .dc-who{display:flex;align-items:center;justify-content:center;gap:6px;max-width:100%;min-width:0}
 /* The name may shrink and truncate; the badge beside it may not (v2.103.3's gutter rule:
    the thing that must stay legible is the one that does not shrink). */
