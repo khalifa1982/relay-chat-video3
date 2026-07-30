@@ -370,8 +370,20 @@ export const contacts = mysqlTable(
     website: varchar("website", { length: 256 }),
     birthday: varchar("birthday", { length: 32 }),
     /** Contact group: "vip" | "family" | "friend" | "team" | null (v2.82).
-     *  Additive nullable column applied by the boot migrator. */
+     *  Additive nullable column applied by the boot migrator.
+     *
+     *  SINCE v2.106.14 THIS IS A DERIVED MIRROR of `tags[0]`, not an independent
+     *  field. It stays on the wire because a client on the previous bundle is
+     *  still reading it during a rolling deploy; `shared/contactTags.ts` owns the
+     *  one expression that computes it. */
     category: varchar("category", { length: 16 }),
+    /** Contact tags — 0..n of vip/family/friend/team, comma-separated, ORDERED
+     *  (the first is the row chip). DATA-CONTRACTS.md §1, board 3b/4a.
+     *
+     *  Additive and nullable, so every pre-v2.106.14 row needs NO backfill: a row
+     *  with a `category` and no `tags` reads as `[category]`, which is what it
+     *  always meant. 63 chars fits all four plus separators with room spare. */
+    tags: varchar("tags", { length: 64 }),
     /** Owner has BLOCKED this number: their calls are auto-declined on this
      *  device and their 1:1 messages to the owner are rejected (v2.82). */
     blocked: boolean("blocked"),

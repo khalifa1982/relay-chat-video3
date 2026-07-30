@@ -11278,6 +11278,64 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.14 — `contact.tags` from the owner's data contract (2026-07-30)
+
+`design_handoff_relay_app/DATA-CONTRACTS.md` §1, the store behind board 3b and 4a.
+
+**It's a widening, not a new field — which is why there's no backfill.** `contacts.category`
+has existed since v2.82 as one of vip/family/friend/team or NULL. The contract asks for
+`tags: ContactTag[]`, 0..n. The store already had the idea; what changes is the arity. So a
+row with a category and no tags reads as `[category]` — exactly what it always meant — and
+every pre-release contact lands in the right section on first render with nothing run against
+the database.
+
+- **`category` is kept as a derived mirror of `tags[0]`.** It's on the wire, so a client on
+  the previous bundle is still reading it mid-deploy. **One writer computes both columns**
+  (`contactTagColumns`) — two writers is how the column and the list come to disagree.
+- The parser **fails to empty** and **drops unknowns** rather than rejecting, so a row from a
+  future build carrying a fifth tag still shows the four this build understands. Order is the
+  user's, because the contract makes the first tag the row chip.
+
+**A real bug I wrote, caught by the test written for exactly it.** VIP is a chip, not a
+section — and I keyed "Other" on `tags.length === 0`, so a contact tagged **only** `vip`
+qualified for nothing and **vanished from the contacts screen**. "Other" means *in no
+section*, not untagged.
+
+**Wiring the derivation fixed a second, older behaviour.** The section rule was
+`c.category === cat && !c.favourite`, which **hid a favourited contact from their own
+category** — star somebody and they left Family. The contract says a contact appears in every
+section it qualifies for: membership, not a partition, which is what already made ONLINE
+cross-cutting (v2.99.97).
+
+**Two mutation survivors, both real gaps in my own tests**, reported rather than patched over:
+- Setting `category: null` inside the writer left every assertion green — they pinned that the
+  function is *called* and that the values object doesn't assign the column separately, neither
+  of which says what it *returns*. Fixed by exporting it as a test seam and driving it.
+- The Contacts wiring had **no client-side pin at all**, so dropping the duplicate-section
+  guard rendered Favorites twice with nothing failing.
+
+Both re-run; both now bite.
+
+**A harness bug of mine**, reported rather than counted: a bad `sed` left the mutator pointing
+at a path vitest couldn't match, so the first four mutations reported SURVIVED with **empty
+output** — not a result at all. The mutator now aborts when the suite produces no result line.
+
+**Two defects in my own test, both failing on correct code**: a file-wide needle for
+`category: input.category` matched the legitimate *read* inside the writer; and a sweep for the
+old partition matched the row menu and the edit dialog, which are single-select **pickers**
+rather than the section logic.
+
+**The limit that follows from that, said plainly: the pickers are still single-select, so the
+UI can only assign ONE tag today.** Multi-tag assignment is 4a's editable chips — next.
+
+`server/contactTags.test.ts` (37), driven behaviourally because every claim is about what a row
+*resolves* to. **All 10 tripwires verified by mutation** off a confirmed-green baseline.
+
+**Not verified against a database**: no MySQL here, so the column and the migrator entry are
+proven by reading and pinned, but nobody has tagged a contact and watched the sections change.
+
+One additive nullable column, no new dependency, no new env var. 4256 tests.
+
 ## v2.106.13 — board 4e + 2c: the fullscreen viewer keeps the context the bubble had (2026-07-30)
 
 **The media viewer was bytes on black.** A close button, a download, nothing else — so a

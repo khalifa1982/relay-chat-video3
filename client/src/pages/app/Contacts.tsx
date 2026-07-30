@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { contactTagsOf, sectionsFor } from "@shared/contactTags";
 import { useLocation } from "wouter";
 import {
   Phone,
@@ -221,12 +222,38 @@ export default function ContactsPage() {
       out.push({ key: "online", label: "Online", icon: Radio, tint: "text-[color:var(--relay-online,#06d6a0)]", rows: online, allActive: true });
     const favorites = filtered.filter((c) => c.favourite);
     if (favorites.length) out.push({ key: "fav", label: "Favorites", icon: Star, tint: "text-amber-400", rows: favorites });
-    for (const cat of CATEGORY_ORDER) {
-      const rows = filtered.filter((c) => c.category === cat && !c.favourite);
-      if (rows.length) out.push({ key: cat, ...CATEGORY_META[cat], rows });
+    /* DATA-CONTRACTS §1 (board 3b), and it changes TWO real behaviours rather
+       than restyling anything.
+       (1) VIP IS A CHIP, NOT A SECTION. It used to have its own heading; the
+           contract makes it a gold chip on whichever row already appears, so
+           `SECTION_TAGS` excludes it.
+       (2) A CONTACT APPEARS IN EVERY SECTION IT QUALIFIES FOR. The old rule was
+           `c.category === cat && !c.favourite`, which HID a favourited contact
+           from their own category — you starred somebody and they left Family.
+           Membership, not a partition, which is what already made ONLINE
+           cross-cutting (v2.99.97).
+       The derivation itself lives in `shared/contactTags.ts` so the section list,
+       its counts and 4a's chips cannot come to disagree about who is in what. */
+    for (const { key, contacts: rows } of sectionsFor(
+      filtered.map((c) => ({
+        number: c.number,
+        tags: contactTagsOf({ tags: (c as { tags?: string[] }).tags?.join(",") ?? null, category: c.category ?? null }),
+        favourite: c.favourite,
+        online: isActiveContact(c),
+      }))
+    )) {
+      // ONLINE and FAVORITES are already pushed above with their own icons and
+      // tints; taking them from here too would render each section twice.
+      if (key === "online" || key === "favorites") continue;
+      const rowsByNumber = new Set(rows.map((r) => r.number));
+      const real = filtered.filter((c) => rowsByNumber.has(c.number));
+      if (!real.length) continue;
+      if (key === "other") {
+        out.push({ key: "other", label: "All contacts", icon: UsersIcon, tint: "text-muted-foreground", rows: real });
+      } else {
+        out.push({ key, ...CATEGORY_META[key as Category], rows: real });
+      }
     }
-    const other = filtered.filter((c) => !c.favourite && !c.category);
-    if (other.length) out.push({ key: "other", label: "All contacts", icon: UsersIcon, tint: "text-muted-foreground", rows: other });
     return out;
   }, [filtered]);
 
