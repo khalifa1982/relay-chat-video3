@@ -41,6 +41,9 @@ import { useRelayEngine } from "@/app/RelayEngine";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
 import { matchQuery } from "@/app/searchMatch";
+// #117 — the paging primitives, kept pure so the ordering and de-duplication can be
+// tested without a database or a browser.
+import { mergeHistoryPages, oldestCursor, pageLooksFull, HISTORY_PAGE } from "@/app/historyPages";
 
 /**
  * One person's live reachability, as this screen understands it (v2.99.95).
@@ -406,10 +409,76 @@ export default function HistoryPage() {
     refetchIntervalInBackground: false,
   });
 
+  /* ── #117 — REACHING PAST THE NEWEST PAGE ────────────────────────────────
+     Both payloads are capped at 100 rows, so search and per-person grouping could
+     only ever see the most recent 100 calls (flagged in v2.99.96 and v2.99.98).
+
+     THE POLLED QUERIES ABOVE ARE UNTOUCHED, and that is the design. They refetch
+     every 30s for every open History tab, so raising their page size would multiply
+     that traffic for everybody to serve a search almost nobody runs — the same trade
+     v2.102.2 refused for the thread list's aggregate. Older pages are fetched only
+     when asked for, and then KEPT: they are held here rather than in the query cache
+     precisely so the 30s poll never re-fetches them. Paging is therefore O(1) on the
+     polling cost no matter how far back somebody has gone. */
+  const [olderCalls, setOlderCalls] = useState<CallRow[][]>([]);
+  const [olderConfs, setOlderConfs] = useState<ConfRow[][]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  // Both windows are reset when the log is cleared or the identity changes — a kept
+  // page would otherwise survive a "Clear history" and reappear under it.
+  useEffect(() => {
+    setOlderCalls([]);
+    setOlderConfs([]);
+  }, [me?.id]);
+
+  const callRows = useMemo(
+    () => mergeHistoryPages<CallRow>(oneToOne.data ?? [], olderCalls),
+    [oneToOne.data, olderCalls],
+  );
+  const confRows = useMemo(
+    () => mergeHistoryPages<ConfRow>(conferences.data ?? [], olderConfs),
+    [conferences.data, olderConfs],
+  );
+  /* More to load when EITHER newest page came back full. Derived rather than
+     server-reported: both procedures return a bare ARRAY, and switching them to
+     `{rows, hasMore}` would break every client mid-rolling-deploy (an older bundle
+     gets an object where it expects an array and renders an empty log). */
+  const mayHaveOlder =
+    pageLooksFull(oneToOne.data, HISTORY_PAGE) ||
+    pageLooksFull(conferences.data, HISTORY_PAGE) ||
+    olderCalls.some((p) => p.length >= HISTORY_PAGE) ||
+    olderConfs.some((p) => p.length >= HISTORY_PAGE);
+
+  async function loadOlder() {
+    if (loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      // Each side pages on ITS OWN cursor: the two logs are different tables with
+      // unrelated ids, so one shared cursor would skip rows in whichever is denser.
+      const [calls, confs] = await Promise.all([
+        utils.calls.history.fetch({ before: oldestCursor(callRows) ?? undefined }),
+        utils.calls.conferenceHistory.fetch({ before: oldestCursor(confRows) ?? undefined }),
+      ]);
+      if (calls.length) setOlderCalls((p) => [...p, calls as CallRow[]]);
+      if (confs.length) setOlderConfs((p) => [...p, confs as ConfRow[]]);
+      if (!calls.length && !confs.length) toast.info("That's the whole call log.");
+    } catch {
+      // A silently-failed tap is the worst case (v2.88) — say why nothing loaded.
+      toast.error("Couldn't load older calls — try again.");
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
+
   // "Clear History": per-user soft clear on the server (the other parties keep
   // their own logs), then refresh everything the log feeds.
   const clearHistory = trpc.calls.clearHistory.useMutation({
     onSuccess: () => {
+      /* #117 — DROP THE KEPT OLDER PAGES TOO. They live in component state precisely
+         so the 30s poll never re-fetches them, which also means invalidating the
+         queries cannot reach them: without this, "Clear history" would empty the newest
+         page and leave every older page on screen underneath it. */
+      setOlderCalls([]);
+      setOlderConfs([]);
       utils.calls.history.invalidate();
       utils.calls.conferenceHistory.invalidate();
       utils.calls.missedSummary.invalidate();
@@ -419,9 +488,12 @@ export default function HistoryPage() {
   // AlertDialog confirm (v2.88 — native confirm() is gone app-wide).
   const [confirmClear, setConfirmClear] = useState(false);
 
+  /* #117 — built from the MERGED windows, not the raw queries. That one change is what
+     makes search, the filter counts and per-person grouping reach as far back as the
+     reader has loaded, because all three are derived from `items`. */
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
-    for (const c of (conferences.data ?? []) as ConfRow[]) {
+    for (const c of confRows) {
       out.push({
         kind: "conf",
         key: "conf-" + c.id,
@@ -432,7 +504,7 @@ export default function HistoryPage() {
         conf: c,
       });
     }
-    for (const c of (oneToOne.data ?? []) as CallRow[]) {
+    for (const c of callRows) {
       if (!isSoloRow(c)) continue;
       out.push({
         kind: "solo",
@@ -444,7 +516,7 @@ export default function HistoryPage() {
     }
     out.sort((a, b) => b.at - a.at);
     return out;
-  }, [conferences.data, oneToOne.data]);
+  }, [confRows, callRows]);
 
   const counts = useMemo(
     () => ({
@@ -973,6 +1045,32 @@ export default function HistoryPage() {
                   </div>
                 );
               })}
+            </div>
+          )}
+          {/* #117 — LOAD OLDER CALLS.
+              The affordance that makes search and grouping reach past the newest page.
+              Rendered only when there may BE more (the newest page came back full), so
+              a short log never shows a control that would do nothing — the v2.103.3
+              rule: a button that looks live and always refuses is worse than one that
+              is not there.
+              It sits below BOTH list branches, outside the grouped/flat conditional, so
+              paging works the same whichever view is open. */}
+          {mayHaveOlder && visible.length > 0 && (
+            <div className="px-4 py-5 text-center">
+              <button
+                type="button"
+                onClick={() => void loadOlder()}
+                disabled={loadingOlder}
+                className="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted/50 disabled:opacity-60"
+              >
+                {loadingOlder ? "Loading older calls…" : "Load older calls"}
+              </button>
+              {/* Say what the reach currently IS, so the counts above are read for what
+                  they are — a figure over what is loaded, not a lifetime total. */}
+              <div className="mt-2 text-[11px] text-muted-foreground">
+                {items.length} {items.length === 1 ? "call" : "calls"} loaded · search and
+                grouping cover these
+              </div>
             </div>
           )}
         </div>

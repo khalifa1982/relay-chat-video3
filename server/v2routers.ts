@@ -3301,6 +3301,35 @@ export const v2AttachmentsRouter = router({
 
 /* ── calls router (history + start log) ───────────────────────── */
 
+/**
+ * #117 — HOW FAR BACK THE CALL LOG REACHES.
+ *
+ * Both call payloads were hard-capped at 100 rows with no way past them, so search and
+ * per-person grouping could only ever see the most recent 100 calls — an older call was
+ * unfindable however good the matcher was (v2.99.96, v2.99.98 both flagged it).
+ *
+ * THE PAGE SIZE IS UNCHANGED AT 100, DELIBERATELY. Both queries are POLLED every 30s by
+ * every open History tab, so raising the default would multiply that traffic for
+ * everybody to serve a search almost nobody runs — the same trade v2.102.2 refused for
+ * the thread list's groupwise-max. Reaching further is an explicit act instead: the
+ * client asks for an older page and keeps it, and the poll still only ever refreshes
+ * the newest page.
+ */
+const HISTORY_PAGE = 100;
+
+/**
+ * A CURSOR, never an offset — see `listCallHistory` for why offsets are wrong on a table
+ * that grows at the top. Optional and `.optional()` as a whole, so a client that sends
+ * no input at all (every build before this one) is byte-identical to before.
+ *
+ * `.int().positive()` because ids are positive integers: a garbage cursor must be
+ * refused by the schema rather than reaching SQL as a `lt(id, NaN)` that quietly
+ * matches nothing and reads as "no older calls".
+ */
+const HistoryPageInput = z
+  .object({ before: z.number().int().positive().optional() })
+  .optional();
+
 export const v2CallsRouter = router({
   /**
    * When did I last call this person, or they me? (v2.105.24)
@@ -3338,10 +3367,10 @@ export const v2CallsRouter = router({
       return { at: last?.at ?? null, answered: last?.answered ?? false };
     }),
 
-  history: publicProcedure.query(async ({ ctx }) => {
+  history: publicProcedure.input(HistoryPageInput).query(async ({ ctx, input }) => {
     const me = requireIdentity(ctx);
     const clearedAt = await getHistoryClearedAt(me.id);
-    const rows = await listCallHistory(me.id, 100, clearedAt);
+    const rows = await listCallHistory(me.id, HISTORY_PAGE, clearedAt, input?.before ?? null);
     // join the "other" identity for each row for friendly display
     const otherIds = Array.from(
       new Set(
@@ -3383,10 +3412,10 @@ export const v2CallsRouter = router({
 
   /** Multi-party CONFERENCE history — every answered call (2..10 parties) this
    *  identity took part in, with the full roster (name + PIN) and duration. */
-  conferenceHistory: publicProcedure.query(async ({ ctx }) => {
+  conferenceHistory: publicProcedure.input(HistoryPageInput).query(async ({ ctx, input }) => {
     const me = requireIdentity(ctx);
     const clearedAt = await getHistoryClearedAt(me.id);
-    const rows = await listConferenceHistory(me.id, 100, clearedAt);
+    const rows = await listConferenceHistory(me.id, HISTORY_PAGE, clearedAt, input?.before ?? null);
     // Party lines (v2.89): pl- rooms carry the line's number as dialedNumber —
     // resolve their titles in ONE batched query so History can label them.
     const lineNumbers = Array.from(

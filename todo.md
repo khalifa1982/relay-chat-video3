@@ -11278,6 +11278,85 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.1 — the call log reaches past its newest page (2026-07-30)
+
+#117, the last of the three items I owed. Both call payloads were hard-capped at 100 rows with no way past
+them, so search and per-person grouping could only ever see the most recent 100 calls — an older call was
+unfindable however good the matcher was (flagged in v2.99.96 and again in v2.99.98).
+
+**THE COST IS WHERE THE DESIGN WENT, because the note was right that this is a paging change with its own
+cost. THE POLLED PAGE SIZE IS UNCHANGED AT 100.** Both queries refetch every 30s for every open History
+tab, so raising the default would multiply that traffic for everybody to serve a search almost nobody runs
+— the same trade v2.102.2 refused for the thread list's groupwise-max. Reaching further is an explicit act
+instead.
+
+**OLDER PAGES ARE KEPT OUTSIDE THE QUERY CACHE, and that placement is the whole point**: they live in
+component state, so the 30s poll never re-fetches them. Paging therefore stays **O(1) on the polling cost**
+however far back somebody has gone — the alternative (`useInfiniteQuery`) refetches every loaded page on
+each interval, which is exactly the cost this avoids.
+
+**THE CURSOR IS AN ID, NEVER AN OFFSET**, and that is not a preference: this table grows at the TOP, so an
+offset silently SKIPS a row whenever a call ends between two pages — precisely the row somebody was paging
+to find. It also costs nothing extra, because the ordering index IS the id.
+
+**THE CONFERENCE CURSOR IS APPLIED TO THE PARTICIPANT QUERY, NOT THE CONFERENCE ONE**, and that is the
+subtlety worth recording: the LIMIT applies to my participant rows rather than to conferences, so filtering
+the second query would page NOTHING — the first would still hand back the newest `limit` participants every
+time and the second would merely show fewer of them. It is also the only cursor the client can express,
+since it only ever sees conference ids. A mutation that moves it to the other query bites.
+
+**EACH LOG PAGES ON ITS OWN CURSOR**: two unrelated tables with unrelated ids, so one shared cursor would
+skip rows in whichever log is denser.
+
+**THE RETURN STAYS A BARE ARRAY**, so `hasMore` is derived from the newest page coming back FULL. Switching
+to `{rows, hasMore}` would hand an older bundle an object where it expects an array — an empty call log for
+the ~60s of a rolling deploy. The additive reading costs one over-optimistic case (a final page that is
+exactly full, whose "load older" then returns nothing and settles it), which is cosmetic and
+self-correcting.
+
+**THE MERGE DE-DUPLICATES BY ID, and that is load-bearing rather than defensive**: the newest page refetches
+every 30s while older pages are frozen, so a call ending between fetches shifts what "the newest 100"
+contains and React would render two rows with the same key. The **newest page wins** a collision, because
+an older page is a snapshot that may hold a stale copy. Rows are re-sorted at the end rather than trusted
+from concatenation order, since pages are fetched independently and a late one must not put an older call
+above a newer.
+
+**CLEAR HISTORY DROPS THE KEPT PAGES TOO** — invalidating the queries cannot reach component state, so
+without it clearing would empty the newest page and leave every older page on screen underneath it. Same
+for an identity change.
+
+**THE CONTROL IS ABSENT WHEN THERE IS NOTHING MORE, not disabled** (the v2.103.3 rule), it cannot fire
+twice concurrently, and a failed load says so rather than doing nothing visible (v2.88).
+
+`server/historyPaging.test.ts` (27), the merge/cursor/fullness primitives driven behaviourally because
+ordering and de-duplication are invisible in a source pin; **all 18 tripwires verified by MUTATION** from
+byte-exact backups off a confirmed-GREEN baseline, sources byte-identical afterwards.
+
+**ONE PRE-EXISTING PIN REWRITTEN TO THE PROPERTY**: `History.test.ts` froze the literal
+`listCallHistory(me.id, 100, clearedAt)` — the hardcoded page size AND the exact three-argument list — so it
+broke the moment a cursor joined it while saying nothing about what it is for, that both queries pass the
+per-user cleared mark so paging can never route around "Clear history". It now asserts that through the
+named constant, which is **stricter** than the literal was: it also forbids the two queries disagreeing
+about the page size.
+
+**ONE DEFECT IN MY OWN TEST**: I matched the literal `calls loaded`, which is not in the source — the JSX is
+`{… ? "call" : "calls"} loaded`, so an interpolation splits it.
+
+**NOT VERIFIED AGAINST A DATABASE, said plainly**: no MySQL here, so the cursors are proven correct by
+reading and pinned, but nobody has paged back through a real hundred-call log. No schema change, no new
+dependency, no new env var. 4070 tests.
+
+- [x] `server/v2db.ts` — `listCallHistory` / `listConferenceHistory` take a `before` cursor; the
+      conference one applies it to the PARTICIPANT query, where the LIMIT actually bites.
+- [x] `server/v2routers.ts` — `HISTORY_PAGE = 100` (one constant, both procedures) and an optional
+      `HistoryPageInput` whose `.int().positive()` refuses a garbage cursor before it reaches SQL.
+- [x] `client/src/app/historyPages.ts` — `mergeHistoryPages` / `oldestCursor` / `pageLooksFull`, pure so
+      the ordering and de-duplication are testable without a database or a browser.
+- [x] `client/src/pages/app/History.tsx` — older pages accumulate in state, `items` is built from the
+      merged windows (which is what extends search, counts and grouping), Clear-history drops them, and a
+      "Load older calls" control appears only when there may be more.
+- [x] `server/historyPaging.test.ts` — 27 tests. 18 tripwires mutation-verified.
+
 ## v2.106.0 — app-wide redesign, phase 1: the cycling accent (2026-07-30)
 
 Owner: *"Implement design_handoff_relay_app/README.md — recreate the designs in client/src using our

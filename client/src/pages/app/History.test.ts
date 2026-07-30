@@ -127,9 +127,17 @@ describe("History rows — color coding + full metadata", () => {
 
 describe("Clear History — server side (per-user soft clear)", () => {
   it("calls.clearHistory mutation exists and both list queries respect the cleared mark", () => {
+    /* REWRITTEN in #117 to the PROPERTY. This froze the literal
+       `listCallHistory(me.id, 100, clearedAt)` — the hardcoded page size AND the exact
+       three-argument list — so it broke the moment paging added a cursor, while saying
+       nothing about what it is actually for: that BOTH queries pass the per-user cleared
+       mark, so paging can never become a way around "Clear history".
+       The page size is now asserted through the named constant, which is stricter than
+       the literal was: it also forbids the two queries silently disagreeing about it. */
     expect(ROUTERS).toMatch(/clearHistory: publicProcedure\.mutation/);
-    expect(ROUTERS).toMatch(/listCallHistory\(me\.id, 100, clearedAt\)/);
-    expect(ROUTERS).toMatch(/listConferenceHistory\(me\.id, 100, clearedAt\)/);
+    expect(ROUTERS).toMatch(/listCallHistory\(me\.id, HISTORY_PAGE, clearedAt[,)]/);
+    expect(ROUTERS).toMatch(/listConferenceHistory\(me\.id, HISTORY_PAGE, clearedAt[,)]/);
+    expect(ROUTERS).toMatch(/const HISTORY_PAGE = 100;/);
   });
 
   it("clearCallHistory stamps BOTH historyClearedAt and missedCallsSeenAt (no lingering badges)", () => {
