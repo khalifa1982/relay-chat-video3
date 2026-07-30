@@ -4,10 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-patchedDependencies:
-  react-native-callkeep@4.3.16:
-    hash: om6pjb7ntguwlg7kz3hzzfxeta
-    path: patches/react-native-callkeep@4.3.16.patch
 
 importers:
 
