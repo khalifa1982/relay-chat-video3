@@ -4,6 +4,16 @@ Paste this into Claude Design. It lists only what is **not yet built to its own 
 
 ## Status (34 frames)
 
+> **Updated 2026-07-30 (v2.106.18).** Nine more frames are now built: 2c story viewer ·
+> 2d notification center · 3b contact categories · 3c group conversation · 4a peer profile
+> tags · 4c message actions/reactions · 4d voice-note recording · 4e media viewer ·
+> 4g guest restore. The two blocked data models from `DATA-CONTRACTS.md` are both built
+> (`shared/contactTags.ts`, `shared/reactions.ts` + the `message_reactions` table).
+>
+> Still outstanding: **2e** register sheet · **2f** voicemail · **2g** passcode lock ·
+> **2h** admin console · **2i** group info · **3d** new group · **4j** video message ·
+> plus the 5a–5h state frames.
+
 - **Built to the frame (12):** 1a Dialer · 1b History · 1c Messages · 1d Conversation · 1e Contacts · 1f Profile · 1g Incoming call · 1i Desktop dialer · 2a Group call · 2b Voice call · 3a Matrix calling · 4f Share my number
 - **Partial (1):** 1h In-call video
 - **System only, layout still needed (21):** everything below

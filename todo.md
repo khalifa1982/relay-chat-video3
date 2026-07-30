@@ -11278,6 +11278,41 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.18 — boards 4d + 2f: the presence green stops meaning three things (2026-07-30)
+- [x] **Mostly a FINDING, not a build, and saying so is the point.** The voice-note
+      recording bar already had the pulsing red dot, mono timer, live waveform, discard
+      left, accent send right and pause/resume. Measuring it against the board's own
+      rules is what turned something up.
+- [x] **The waveform was painted with `--relay-online`** — the presence green, which in
+      this app means ONLINE and nothing else. It is what every LED is drawn with, which
+      is why v2.99.86 moved DND off it, v2.106.9 the speaking tile and v2.106.11 the push
+      banner. A green waveform is a fourth meaning for the one colour that has to carry
+      exactly one. Recording is ACTIVE — what the accent means after v2.106.6.
+- [x] **The voice-note play button had the same problem** on a received bubble. Board 2f
+      asks for an accent play button, and a play control is not a presence statement.
+- [x] **The dot stays red**: red-means-recording is older than this app and does not
+      collide with destructive here, because the only destructive control in the bar is
+      the discard button, which is a filled chip rather than a hairline.
+- [x] **Both fallbacks are literals**, never `var(--rb, var(--rb))` — a cycle resolves to
+      the guaranteed-invalid value and the browser drops the declaration (v2.106.7).
+- [x] **The real deliverable is a STANDING GUARD.** This violation has been found four
+      times in four releases, always by measuring rather than reading — so a sweep now
+      reads every line in `Messages.tsx` mentioning `--relay-online` and requires each to
+      be about presence.
+- [x] **`typing…` is deliberately allowed**, and the exception is stated rather than
+      hidden: typing implies online, occupies the presence slot in the same header, and
+      is a stronger presence statement rather than a different kind of fact.
+- [x] **One board item declined with its reason**: 4d asks for "‹ slide to cancel", and
+      the bar already has an explicit discard button — more discoverable, a real hit
+      target, and it works for a screen reader. The gesture would be a second way to do
+      one thing, and the harder one to find.
+- [x] **`MISSING-FRAMES.md` updated for the owner**: nine more frames built (2c, 2d, 3b,
+      3c, 4a, 4c, 4d, 4e, 4g), both blocked data models now exist. Outstanding: 2e, 2f,
+      2g, 2h, 2i, 3d, 4j and the 5a–5h state frames.
+- [x] `server/mentions.test.ts` → 41. **Not verified on a device**: nobody has recorded a
+      voice note on a phone and watched the bars.
+- [x] No schema change, no new dependency, no new env var. 4349 tests.
+
 ## v2.106.17 — board 3c: @mentions + the group header's online count (2026-07-30)
 - [x] **A mention must RESOLVE against the roster, not match any `@word`.** The tempting
       rule `/@(\w+)/` is wrong twice over: it lights up "email me @ 5pm" and "@here",
