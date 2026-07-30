@@ -322,3 +322,64 @@ describe("the Contacts list reads the shared derivation, not its own copy", () =
     expect(UI).toMatch(/if \(key === "online" \|\| key === "favorites"\) continue;/);
   });
 });
+
+describe("board 3b — the filter chips", () => {
+  const UI = codeOnly(readFileSync(resolve(process.cwd(), "client/src/pages/app/Contacts.tsx"), "utf8"));
+
+  it("single-select, with null meaning All", () => {
+    expect(UI).toMatch(/const \[tagFilter, setTagFilter\] = useState<ContactTag \| null>\(null\)/);
+    expect(UI).toMatch(/onClick=\{\(\) => setTagFilter\(null\)\}/);
+    // Tapping the lit chip clears it, so All is reachable without aiming at it.
+    expect(UI).toMatch(/setTagFilter\(on \? null : t\)/);
+  });
+
+  it("narrows the INPUT, so sections and counts cannot disagree with it", () => {
+    // Filtering per-section is how a header comes to state a number its own rows
+    // do not add up to.
+    const at = UI.indexOf("const filtered = useMemo");
+    const end = UI.indexOf("}, [contacts.data, search, tagFilter]);", at);
+    expect(end).toBeGreaterThan(at);
+    expect(UI.slice(at, end)).toMatch(/!tagFilter \|\|/);
+  });
+
+  it("the lit chip wears the TAG's colour, applied inline", () => {
+    // A runtime-composed Tailwind class is invisible to the JIT and renders
+    // unstyled — the trap recorded for the old tab accents.
+    expect(UI).toMatch(/background: TAG_COLOR\[t\] \+ "22"/);
+    expect(UI).not.toMatch(/bg-\[\$\{/);
+  });
+
+  it("rows carry their tag chips, resolved through the shared reader", () => {
+    expect(UI).toMatch(/background: TAG_COLOR\[t\] \+ "21"/);
+    expect(UI).toMatch(/contactTagsOf\(\{ tags: c\.tags\?\.join\(","\) \?\? null/);
+  });
+});
+
+describe("board 4a — the profile chips are the only multi-tag editor", () => {
+  const UI = codeOnly(readFileSync(resolve(process.cwd(), "client/src/app/PeerOverlays.tsx"), "utf8"));
+
+  it("assignment toggles through the shared rule", () => {
+    expect(UI).toMatch(/tags: toggleContactTag\(myTags, t\)/);
+  });
+
+  it("offered ONLY for a saved contact", () => {
+    // Tags live on the owner's contact row; for an unsaved number there is
+    // nowhere to put them, so the chips would be a control that does nothing.
+    expect(UI).toMatch(/\{saved && \(/);
+  });
+
+  it("its own mutation, so the Add-to-contacts toast cannot describe a tag edit", () => {
+    expect(UI).toMatch(/const tagWrite = trpc\.contacts\.upsert\.useMutation\(/);
+    const at = UI.indexOf("const tagWrite =");
+    const block = UI.slice(at, UI.indexOf("});", at));
+    expect(block).not.toMatch(/Added to your contacts/);
+    // Silent on success — the chip lighting up is the feedback; only failure needs
+    // words, and a silent failure would leave a label that looks saved and is not.
+    expect(block).toMatch(/onError:/);
+  });
+
+  it("says out loud that the labels are private", () => {
+    // Nobody should assign "VIP" believing the other person is told.
+    expect(UI).toMatch(/Only you see these/);
+  });
+});
