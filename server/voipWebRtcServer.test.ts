@@ -167,3 +167,122 @@ describe("an address change EXITS rather than carrying on with a stale announcem
     expect(code, "a hardcoded minute is what this replaced").not.toMatch(/\}, 60_000\)\.unref/);
   });
 });
+
+/* ─────────────────────────────────────────────────────────────────────────────────────
+ * THE STATS ENDPOINT MUST NOT HAND OUT PARTICIPANTS' IP ADDRESSES.
+ *
+ * mediasoup's `WebRtcTransportStat.iceSelectedTuple` is a `TransportTuple`, and `TransportTuple`
+ * carries `remoteIp` and `remotePort` — read off the declarations, not the docs. So `stats({roomId})`
+ * returning the raw report is a per-room IP-disclosure primitive: every participant's real address,
+ * together, to whatever asks. The in-call quality readout is exactly what the coming increments wire
+ * to this, and a readout that forwards what it is handed lets one participant locate another.
+ *
+ * The class is already ruled out in this app: v2.99.20 restricted `avatarUrl` to our own storage
+ * because a remote image URL became "a remote-fetch primitive aimed at other users", harvesting IP
+ * and User-Agent from a call nobody answered. An SFU stat handing the address over is the same thing
+ * with fewer steps.
+ *
+ * DRIVEN rather than pinned, because the strip is a pure function and whether an address survives it
+ * is exactly what a source assertion cannot answer. The function is re-declared here from the source
+ * — the agent cannot be imported, since importing it starts mediasoup workers and binds a port — and
+ * a companion assertion pins that the real file still contains this exact body, so the copy cannot
+ * drift away from the thing it claims to test.
+ * ────────────────────────────────────────────────────────────────────────────────────── */
+describe("a transport stat never carries an address off the node", () => {
+  /** Lifted verbatim from `agent.mjs`; the assertion below proves it is still verbatim. */
+  function sanitizeTransportStat(stat: unknown): unknown {
+    if (!stat || typeof stat !== "object") return stat;
+    const { iceSelectedTuple, ...rest } = stat as Record<string, unknown>;
+    if (!iceSelectedTuple || typeof iceSelectedTuple !== "object") return rest;
+    return { ...rest, iceSelectedTuple: { protocol: (iceSelectedTuple as Record<string, unknown>).protocol } };
+  }
+
+  /** A real mediasoup transport stat, with every field the tuple type declares. */
+  const realStat = () => ({
+    type: "webrtc-transport",
+    transportId: "t-1",
+    iceRole: "controlled",
+    iceState: "completed",
+    dtlsState: "connected",
+    bytesReceived: 123456,
+    bytesSent: 98765,
+    rtpBytesReceived: 120000,
+    rtpPacketsReceived: 900,
+    iceSelectedTuple: {
+      localIp: "10.0.1.192",
+      localAddress: "10.0.1.192",
+      localPort: 40000,
+      remoteIp: "203.0.113.77",
+      remotePort: 54321,
+      protocol: "udp",
+    },
+  });
+
+  it("the participant's REMOTE address is gone", () => {
+    const out = JSON.stringify(sanitizeTransportStat(realStat()));
+    expect(out, "the participant's IP must not survive").not.toContain("203.0.113.77");
+    expect(out, "nor their port, which narrows a NAT mapping").not.toContain("54321");
+  });
+
+  it("the NODE's own private address is gone too", () => {
+    /* Not a participant's secret, but there is no reason to publish the private address or the
+       server's port to anything downstream either. */
+    const out = JSON.stringify(sanitizeTransportStat(realStat()));
+    expect(out).not.toContain("10.0.1.192");
+    expect(out).not.toContain("40000");
+  });
+
+  it("`protocol` SURVIVES, because that is what a readout actually needs", () => {
+    /* It says whether a call fell back to TCP — the one genuinely useful field of the tuple, and
+       it identifies nobody. Stripping the whole tuple would take the answer with the address. */
+    const out = sanitizeTransportStat(realStat()) as { iceSelectedTuple?: { protocol?: string } };
+    expect(out.iceSelectedTuple?.protocol).toBe("udp");
+  });
+
+  it("everything the readout reads is untouched", () => {
+    const out = sanitizeTransportStat(realStat()) as Record<string, unknown>;
+    for (const k of [
+      "type",
+      "transportId",
+      "iceState",
+      "dtlsState",
+      "bytesReceived",
+      "bytesSent",
+      "rtpPacketsReceived",
+    ]) {
+      expect(out[k], `${k} must survive`).toEqual((realStat() as Record<string, unknown>)[k]);
+    }
+  });
+
+  it("a stat with NO selected tuple is handled, not crashed on", () => {
+    /* `iceSelectedTuple` is optional — absent before ICE completes, which is exactly when a
+       readout is most likely to poll. */
+    const { iceSelectedTuple: _drop, ...noTuple } = realStat();
+    expect(() => sanitizeTransportStat(noTuple)).not.toThrow();
+    expect(sanitizeTransportStat(noTuple)).toEqual(noTuple);
+    for (const junk of [null, undefined, 0, "", "stat", []]) {
+      expect(() => sanitizeTransportStat(junk)).not.toThrow();
+    }
+  });
+
+  it("the handler MAPS the array — getStats() returns one per transport, not one object", () => {
+    /* Sanitizing the array itself would strip nothing and leave every address in place, which is
+       the shape of a fix that reads as done. */
+    const handler = code.slice(code.indexOf("async stats({ roomId })"));
+    const body = handler.slice(0, handler.indexOf("\n  },"));
+    expect(body).toMatch(/Array\.isArray\(raw\) \? raw\.map\(sanitizeTransportStat\)/);
+    expect(body, "and the raw report must never be pushed straight through").not.toMatch(
+      /stats: raw[,}]/,
+    );
+    expect(body).not.toMatch(/stats: await t\.getStats\(\)/);
+  });
+
+  it("the copy above is still verbatim from the agent — or it tests nothing", () => {
+    /* The one weakness of re-declaring a function in a test is that the original can change
+       underneath it. Pinning the real body closes that. */
+    expect(code).toMatch(/const \{ iceSelectedTuple, \.\.\.rest \} = stat;/);
+    expect(code).toMatch(
+      /return \{ \.\.\.rest, iceSelectedTuple: \{ protocol: iceSelectedTuple\.protocol \} \};/,
+    );
+  });
+});

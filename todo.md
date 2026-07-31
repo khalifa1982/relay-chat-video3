@@ -11278,6 +11278,67 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.36 — the node's stats endpoint was handing out participants' IP addresses (2026-07-31)
+
+The removal plan listed three type questions I hadn't answered, and one was a live security question
+rather than a design detail: *does `WebRtcTransport.getStats()` include `iceSelectedTuple.remoteIp`?*
+
+**It does.** `WebRtcTransportStat.iceSelectedTuple` is a `TransportTuple`, and `TransportTuple`
+carries `remoteIp` and `remotePort` — each participant's real public address. The agent's
+`stats({roomId})` returned the raw report for **every transport in the room**, so one call handed out
+every participant's address together.
+
+### Why it mattered now rather than later
+
+The in-call quality readout is exactly what the coming increments wire to this, and a readout that
+forwards what it is handed makes one participant able to locate another. **This app already ruled the
+class out once**: v2.99.20 restricted `avatarUrl` to our own storage because a remote image URL had
+become *"a remote-fetch primitive aimed at other users"* — harvesting IP and User-Agent from a call
+nobody answered, *"squarely against this app's no-tracing goal"*. An SFU stat handing the address
+over directly is the same thing with fewer steps.
+
+### The fix
+
+- **Stripped at the source**, not in whatever forwards it: a filter in the caller is one a later
+  caller can forget, and this way the address never leaves the node.
+- **`protocol` is kept** — the one field of the tuple a readout genuinely needs (it says whether a
+  call fell back to TCP) and it identifies nobody. Stripping the whole tuple would take the answer
+  away with the address.
+- The node's own `localIp`/`localPort` go too. Not a participant's secret, but no reason to publish
+  the private address downstream.
+- **The array is mapped, not sanitized.** `getStats()` returns one stat *per transport*, so handing
+  the array to the strip would strip nothing and leave every address in place — the shape of a fix
+  that reads as done. A mutation doing exactly that bites.
+
+### A second security consequence, delivered by v2.106.35 as a side effect
+
+With per-transport listen, each transport took a port out of the worker's 10,000-port range, so a
+leaked transport was a denial-of-service clock — the plan asked how fast. Sharing one `WebRtcServer`
+per core removes the per-transport port entirely; a leak now costs memory and router CPU and can no
+longer make a node unable to accept calls.
+
+### Verification
+
+**Driven rather than pinned**, which is the point: the strip is a pure function and whether an
+address survives it is exactly what a source assertion cannot answer. The function is re-declared in
+the test against a real mediasoup stat carrying every field the tuple type declares, with a companion
+assertion pinning that the agent's body is still verbatim — the one weakness of a re-declared
+function being the original changing underneath it.
+
+`server/voipWebRtcServer.test.ts` → 20. **4 of 5 tripwires verified by mutation**, `agent.mjs`
+byte-identical afterwards.
+
+**The fifth is a non-defect, reported rather than counted as a gap:** dropping the
+`typeof !== "object"` guard is behaviourally equivalent — for a tuple-less stat `return stat` and
+`return rest` are deep-equal, and every shape that could carry an address (a string, an array, a
+falsy value) was checked and none leaks either way. The guard is kept, because relying on that
+equivalence would make the function correct only by reasoning about what mediasoup can return rather
+than by construction — the call v2.99.49 made about `s3Config`'s unreachable conjunct.
+
+**A syntax error of my own, caught by `node --check` rather than by review:** I inserted the function
+declaration inside the handlers object literal, which does not parse. Reverted and placed at module
+scope. 4745 tests.
+
 ## v2.106.35 — one WebRtcServer per core, and the types forced a decision (2026-07-31)
 
 The media node moves off the deprecated per-transport listen. Every transport in a room is created

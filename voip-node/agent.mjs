@@ -146,6 +146,35 @@ async function deregister() {
   }
 }
 
+/**
+ * Strip the ADDRESSES out of one transport stat, keeping everything a readout uses.
+ *
+ * THIS IS A DISCLOSURE FIX, NOT TIDYING, and it is about code in this file. mediasoup's
+ * `WebRtcTransportStat.iceSelectedTuple` is a `TransportTuple`, and `TransportTuple` carries
+ * `remoteIp` and `remotePort` — **the participant's own public address** — so a `stats({roomId})`
+ * returning the raw report hands out every participant's IP together, per room. The in-call
+ * quality readout is exactly what the coming increments wire to this, and a readout that forwards
+ * what it is given makes one participant able to locate another.
+ *
+ * That class is already ruled out here: v2.99.20 restricted `avatarUrl` to our own storage
+ * precisely because a remote image URL became "a remote-fetch primitive aimed at other users",
+ * harvesting IP and User-Agent from a call nobody answered — squarely against this app's
+ * no-tracing goal. An SFU stat handing the address over directly is the same thing with fewer
+ * steps.
+ *
+ * STRIPPED AT THE SOURCE rather than in whatever forwards it, because a filter in the caller is
+ * one a later caller can forget, and this way the address never leaves the node at all.
+ * `protocol` is KEPT: it is the one field of the tuple a readout genuinely needs, since it says
+ * whether a call fell back to TCP, and it identifies nobody. The node's own `localIp`/`localPort`
+ * go too — not a participant's secret, but no reason to publish the private address either.
+ */
+function sanitizeTransportStat(stat) {
+  if (!stat || typeof stat !== "object") return stat;
+  const { iceSelectedTuple, ...rest } = stat;
+  if (!iceSelectedTuple || typeof iceSelectedTuple !== "object") return rest;
+  return { ...rest, iceSelectedTuple: { protocol: iceSelectedTuple.protocol } };
+}
+
 // ── IMDSv2 ───────────────────────────────────────────────────────────────────────
 /**
  * Read this instance's own identity from instance metadata.
@@ -453,7 +482,14 @@ const HANDLERS = {
     const out = [];
     for (const t of room.transports.values()) {
       try {
-        out.push({ id: t.id, stats: await t.getStats() });
+        const raw = await t.getStats();
+        /* `getStats()` returns an ARRAY of stats per transport, so map rather than sanitizing
+           one object — handing the array through unmapped is how the strip comes to cover the
+           first entry only. */
+        out.push({
+          id: t.id,
+          stats: Array.isArray(raw) ? raw.map(sanitizeTransportStat) : sanitizeTransportStat(raw),
+        });
       } catch {
         /* a closing transport is not an error */
       }

@@ -147,6 +147,24 @@ Narrowing it to the two server ports is possible and **not** done here, because 
 is still what a future non-WebRTC transport (plain RTP, a recorder) would draw from, and a rule
 that has to be widened again under time pressure is worse than one that is generous now.
 
+## Two security consequences of the WebRtcServer conversion
+
+**1. `stats({roomId})` was a per-room IP-disclosure primitive, and is not now.**
+`WebRtcTransportStat.iceSelectedTuple` is a `TransportTuple`, which carries `remoteIp` and
+`remotePort` — **each participant's real public address**. Returning the raw report handed every
+participant's address out together, per room, and the in-call quality readout is exactly what the
+coming increments wire to this. The addresses are now stripped **at the source** (`protocol` is
+kept, since it is what says whether a call fell back to TCP and identifies nobody), so no future
+caller can forward what it never received. This app already ruled the class out once: v2.99.20
+restricted `avatarUrl` to our own storage because a remote image URL became "a remote-fetch
+primitive aimed at other users", harvesting IP and User-Agent from a call nobody answered.
+
+**2. A leaked transport can no longer exhaust the port range.** With per-transport
+`listenInfos`/`listenIps`, each transport took a UDP (and with TCP enabled, a TCP) port out of the
+worker's 10,000-port range, so a leak was a denial-of-service clock. Sharing one server per core
+removes the per-transport port entirely — the ports are allocated once at boot. A leak still costs
+memory and router CPU; it can no longer make the node unable to accept calls.
+
 ## Four API facts, read off mediasoup's own declarations rather than the docs
 
 Three planning decisions rested on documentation. These are the answers from the installed
