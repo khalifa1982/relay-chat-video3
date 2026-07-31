@@ -579,3 +579,72 @@ describe("no workflow can deploy to or write to a mediasoup media node", () => {
     ).toMatch(/\/opt\/relay-voip/);
   });
 });
+
+/**
+ * v2.106.48 — `create-account` adds two FREE-TEXT inputs on the path that executes a
+ * command string on production EC2. That class has bitten this file three times
+ * (SES_EMAIL/DOMAIN, then `region`, then the recover inputs), so both get the
+ * established base64-on-runner / decode-on-instance treatment, and it was replayed
+ * empirically against 8 hostile payloads (0 executed, each arriving as ONE literal
+ * argument) before shipping.
+ */
+describe("admin-tool create-account inputs cannot break out of the remote command", () => {
+  // The region must START at the env block (which sits BEFORE the `run:` script, so
+  // an "ADMIN TOOL" anchor misses every ADM_* assignment) and it must be sliced from
+  // the ADMIN-TOOL step specifically — `recover-identity` also builds a
+  // `CMDLINE="cd /home/relay/app …"`, so a whole-file indexOf finds THAT one first.
+  const stepStart = OPS.indexOf("ADM_OP: ${{ inputs.admin_op }}");
+  const stepEnd = OPS.indexOf('echo \\"ADMIN_EXIT=', stepStart);
+  const step = OPS.slice(stepStart, stepEnd);
+
+  it("both new free-text values are base64'd on the runner", () => {
+    expect(step).toMatch(/ADM_PIN_B64=\$\(printf %s "\$ADM_PIN" \| base64 -w0\)/);
+    expect(step).toMatch(/ADM_NAME_B64=\$\(printf %s "\$ADM_NAME" \| base64 -w0\)/);
+  });
+
+  it("the command line interpolates ONLY the encoded forms, never the raw values", () => {
+    const line = step.slice(step.indexOf("CMDLINE="));
+    expect(line).toContain("$ADM_PIN_B64");
+    expect(line).toContain("$ADM_NAME_B64");
+    // The raw shell variables must not reach the string that runs on the instance.
+    expect(line).not.toMatch(/\$ADM_PIN[^_]/);
+    expect(line).not.toMatch(/\$ADM_NAME[^_]/);
+  });
+
+  it("the op is whitelisted and the passcode shape is checked before anything runs", () => {
+    expect(step).toMatch(/whois\|grant-admin\|revoke-admin\|set-number\|create-account\) : ;;/);
+    expect(step).toMatch(/\[0-9\]\[0-9\]\[0-9\]\[0-9\]\) : ;;/);
+    expect(step).toMatch(/create-account needs BOTH admin_email and admin_pin/);
+  });
+
+  it("EVERY free-text admin input on this path is encoded — the guard against a sixth", () => {
+    // Enumerated from the assignments themselves rather than a hand-kept list, so
+    // the input somebody adds next is covered instead of exempt.
+    const assigns = step.match(/ADM_[A-Z]+: \$\{\{ inputs\.[a-z_]+ \}\}/g) || [];
+    expect(assigns.length).toBeGreaterThanOrEqual(6);
+    const line = step.slice(step.indexOf("CMDLINE="));
+    // CLOSED-SET VALUES ARE EXEMPT, and the exemption is named rather than the rule
+    // relaxed (v2.99.76 recorded this decision): `admin_op` is a `choice` that the
+    // step re-whitelists with its own `case`, and the two booleans are compared
+    // against the literal "true" and never interpolated at all. Everything that is
+    // FREE TEXT must be encoded.
+    const CLOSED = ["ADM_OP", "ADM_APPLY", "ADM_ALLOW_RESERVED"];
+    // Prove the exemption is earned rather than asserted: the op really is
+    // whitelisted, so a value outside the set cannot reach the command line.
+    expect(step).toMatch(/whois\|grant-admin\|revoke-admin\|set-number\|create-account\) : ;;/);
+    expect(step).toMatch(/\*\) echo "::error::unknown admin_op/);
+    let checked = 0;
+    for (const a of assigns) {
+      const v = a.split(":")[0]; // e.g. ADM_PIN
+      if (CLOSED.includes(v)) continue;
+      // A free-text value is either absent from the command line, or present ONLY
+      // in its base64 form.
+      if (line.includes(v)) {
+        expect(line, `${v} must reach the instance base64-encoded`).toContain(`${v}_B64`);
+        checked++;
+      }
+    }
+    // Non-vacuity: the sweep must actually have examined the free-text values.
+    expect(checked).toBeGreaterThanOrEqual(4);
+  });
+});

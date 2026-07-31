@@ -54,6 +54,8 @@
  * the server is up, and tell the person to reopen the app if it is urgent.
  */
 import mysql from "mysql2/promise";
+import crypto from "node:crypto";
+import { hashLoginPin } from "./pinHash.mjs";
 
 const args = Object.fromEntries(
   process.argv.slice(2).flatMap((a, i, arr) =>
@@ -72,9 +74,11 @@ const number = norm(args.number);
 const to = norm(args.to);
 const RESERVED_PREFIXES = ["000", "111"];
 
-const OPS = ["grant-admin", "revoke-admin", "set-number", "whois"];
+const pin = typeof args.pin === "string" ? args.pin.trim() : "";
+const displayName = typeof args.name === "string" ? args.name.trim() : "";
+const OPS = ["grant-admin", "revoke-admin", "set-number", "whois", "create-account"];
 if (!OPS.includes(OP)) {
-  console.error(`usage: --op <${OPS.join("|")}> [--email <addr>] [--number <6 digits>] [--to <6 digits>] [--allow-reserved] [--apply]`);
+  console.error(`usage: --op <${OPS.join("|")}> [--email <addr>] [--number <6 digits>] [--to <6 digits>] [--pin <4 digits>] [--name <display name>] [--allow-reserved] [--apply]`);
   process.exit(2);
 }
 if (!process.env.DATABASE_URL) {
@@ -128,6 +132,139 @@ try {
         console.log(
           `identity ${r.id}  ${fmt(r.number)}  ${JSON.stringify(r.displayName)}  user=${r.userId ?? "-"}  ${r.email ?? "-"}  role=${r.role ?? "-"}`,
         );
+      }
+    }
+  }
+
+  /* ── create-account ────────────────────────────────────────────────────────
+     A registered, email-verified account with a 4-digit passcode, created WITHOUT
+     an email round trip.
+
+     WHY THIS CANNOT BE DONE THROUGH THE APP. Registration mints an OTP and mails
+     it (v2.105.19 removed the bypass that used to skip that, deliberately), so an
+     address that cannot receive mail — a demo or test address — can never complete
+     it. That is not a gap to route around in the app: proving the address is the
+     point of the flow. It is a legitimate BACKEND operation, which is what this
+     script is for.
+
+     WHAT IT DOES NOT DO, on purpose:
+       - It never grants admin. Use `--op grant-admin` afterwards, as a separate,
+         visible decision.
+       - It refuses an address that already has an account, upholding the
+         one-address-one-account invariant (v2.99.49 M50/F3). Two rows for one
+         email is how a later sign-in lands on the wrong account.
+       - It never prints the passcode. The person who set it already knows it, and
+         this output goes to a CI log.
+     ────────────────────────────────────────────────────────────────────────── */
+  if (OP === "create-account") {
+    if (!email || !email.includes("@")) {
+      console.error("create-account needs --email <addr>");
+      exit = 2;
+    } else if (!/^\d{4}$/.test(pin)) {
+      console.error("create-account needs --pin <exactly 4 digits> (what the app's passcode screen accepts)");
+      exit = 2;
+    } else if (number && !/^\d{6}$/.test(number)) {
+      console.error("--number must be exactly 6 digits");
+      exit = 2;
+    } else if (
+      !(await preflight([
+        "users.id", "users.openId", "users.email", "users.loginMethod", "users.role",
+        "users.emailVerified", "users.loginPinHash", "users.preferPinLogin",
+        "identities.id", "identities.number", "identities.displayName",
+        "identities.userId", "identities.verified",
+        "number_reservations.number", "number_reservations.claimedAt",
+      ]))
+    ) {
+      exit = 3;
+    } else {
+      const clash = await one(`SELECT id, email FROM users WHERE email = ? LIMIT 1`, [email]);
+      if (clash) {
+        console.error(`REFUSED: ${email} already has an account (user ${clash.id}).`);
+        console.error("Two user rows for one address is how a later sign-in lands on the wrong one.");
+        exit = 4;
+      } else {
+        // Pick the number. An explicit --number is honoured when free; otherwise we
+        // search, skipping the prefixes the server's own allocator skips so this
+        // path cannot hand out something self-service would refuse.
+        const taken = async (n) =>
+          !!(await one(`SELECT 1 x FROM identities WHERE number = ? LIMIT 1`, [n])) ||
+          !!(await one(`SELECT 1 x FROM party_lines WHERE number = ? LIMIT 1`, [n])) ||
+          !!(await one(`SELECT 1 x FROM number_reservations WHERE number = ? LIMIT 1`, [n]));
+        const reservedPrefix = (n) => RESERVED_PREFIXES.some((p) => n.startsWith(p));
+        let chosen = "";
+        if (number) {
+          if (reservedPrefix(number) && args["allow-reserved"] !== true) {
+            console.error(`${fmt(number)} starts with a reserved prefix — pass --allow-reserved to use it anyway`);
+            exit = 4;
+          } else if (await taken(number)) {
+            console.error(`${fmt(number)} is already taken`);
+            exit = 4;
+          } else {
+            chosen = number;
+          }
+        } else {
+          for (let i = 0; i < 40 && !chosen; i++) {
+            // crypto.randomInt, not Math.random: v2.99.20 #9 replaced the weak RNG
+            // in the server's allocator and a second allocator must not reintroduce it.
+            const cand = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
+            if (reservedPrefix(cand)) continue;
+            if (!(await taken(cand))) chosen = cand;
+          }
+          if (!chosen) {
+            console.error("could not find a free 6-digit number in 40 attempts");
+            exit = 4;
+          }
+        }
+        if (exit === 0) {
+          const name = displayName || email.split("@")[0];
+          console.log(`create ${email}  number=${fmt(chosen)}  name=${JSON.stringify(name)}  passcode=**** (4 digits, not printed)`);
+          if (!APPLY) {
+            console.log("DRY RUN — re-run with --apply to write this.");
+          } else {
+            // Reserve first, OUTSIDE the transaction, so a lost race costs nothing —
+            // the same ordering set-number uses above.
+            try {
+              await q(`INSERT INTO number_reservations (number) VALUES (?)`, [chosen]);
+            } catch (e) {
+              if (e?.errno === 1062 || e?.code === "ER_DUP_ENTRY") {
+                console.error(`${fmt(chosen)} was reserved by another allocation in flight`);
+                exit = 4;
+              }
+              // Any other error: fall through and let the unique index decide,
+              // exactly as the server's allocator fails open here.
+            }
+            if (exit === 0) {
+              // ONE transaction: a users row with no identity is an account with no
+              // number, which no screen in the app can repair.
+              await db.beginTransaction();
+              try {
+                const openId = `local:${crypto.randomBytes(16).toString("hex")}`;
+                const ins = await q(
+                  `INSERT INTO users (openId, name, email, loginMethod, role, emailVerified, loginPinHash, preferPinLogin)
+                   VALUES (?, ?, ?, 'otp', 'user', 1, ?, 1)`,
+                  [openId, name, email, hashLoginPin(pin)],
+                );
+                const userId = ins.insertId;
+                await q(
+                  `INSERT INTO identities (number, displayName, userId, verified) VALUES (?, ?, ?, 1)`,
+                  [chosen, name, userId],
+                );
+                await db.commit();
+                await q(
+                  `UPDATE number_reservations SET claimedAt = NOW() WHERE number = ? AND claimedAt IS NULL`,
+                  [chosen],
+                );
+                console.log(`OK — user ${userId}, number ${fmt(chosen)}`);
+                console.log("Sign in at /app with the email, then the 4-digit passcode.");
+                console.log("This account is NOT an admin. Use --op grant-admin if that is wanted.");
+              } catch (e) {
+                await db.rollback();
+                console.error(`FAILED, rolled back: ${e?.message || e}`);
+                exit = 5;
+              }
+            }
+          }
+        }
       }
     }
   }

@@ -99,7 +99,7 @@ on:
         type: choice
         required: false
         default: whois
-        options: [whois, grant-admin, revoke-admin, set-number]
+        options: [whois, grant-admin, revoke-admin, set-number, create-account]
       admin_email:
         description: "admin-tool: the account email (grant-admin / revoke-admin / whois)"
         type: string
@@ -115,8 +115,18 @@ on:
         type: string
         required: false
         default: ""
+      admin_pin:
+        description: "admin-tool create-account only: the 4-digit sign-in passcode. NOT for a real person's credential — this input is visible in run metadata, so use it for demo/test accounts only."
+        type: string
+        required: false
+        default: ""
+      admin_name:
+        description: "admin-tool create-account only: display name (defaults to the part of the email before the @)"
+        type: string
+        required: false
+        default: ""
       admin_allow_reserved:
-        description: "admin-tool set-number only: allow a RESERVED 000/111 prefix. Off by default; the random allocator and self-service always refuse them regardless."
+        description: "admin-tool set-number / create-account: allow a RESERVED 000/111 prefix. Off by default; the random allocator and self-service always refuse them regardless."
         type: boolean
         required: false
         default: false
@@ -1316,6 +1326,8 @@ jobs:
           ADM_TO: ${{ inputs.admin_to }}
           ADM_APPLY: ${{ inputs.admin_apply }}
           ADM_ALLOW_RESERVED: ${{ inputs.admin_allow_reserved }}
+          ADM_PIN: ${{ inputs.admin_pin }}
+          ADM_NAME: ${{ inputs.admin_name }}
         run: |
           set -uo pipefail
           echo "=================================================================="
@@ -1331,7 +1343,7 @@ jobs:
           # exists for the BOOTSTRAP (nobody holds the admin role yet) and for
           # direct backend repair.
           case "$ADM_OP" in
-            whois|grant-admin|revoke-admin|set-number) : ;;
+            whois|grant-admin|revoke-admin|set-number|create-account) : ;;
             *) echo "::error::unknown admin_op '$ADM_OP'"; exit 1 ;;
           esac
           for V in "$ADM_NUM" "$ADM_TO"; do
@@ -1344,6 +1356,16 @@ jobs:
           if [ "$ADM_OP" = "set-number" ] && { [ -z "$ADM_NUM" ] || [ -z "$ADM_TO" ]; }; then
             echo "::error::set-number needs BOTH admin_number (current) and admin_to (new)."
             exit 1
+          fi
+          if [ "$ADM_OP" = "create-account" ]; then
+            if [ -z "$ADM_EMAIL" ] || [ -z "$ADM_PIN" ]; then
+              echo "::error::create-account needs BOTH admin_email and admin_pin (4 digits)."
+              exit 1
+            fi
+            case "$ADM_PIN" in
+              [0-9][0-9][0-9][0-9]) : ;;
+              *) echo "::error::admin_pin must be exactly 4 digits." ; exit 1 ;;
+            esac
           fi
           if { [ "$ADM_OP" = "grant-admin" ] || [ "$ADM_OP" = "revoke-admin" ]; } && [ -z "$ADM_EMAIL" ]; then
             echo "::error::$ADM_OP needs admin_email."
@@ -1358,6 +1380,8 @@ jobs:
           ADM_EMAIL_B64=$(printf %s "$ADM_EMAIL" | base64 -w0)
           ADM_NUM_B64=$(printf %s "$ADM_NUM" | base64 -w0)
           ADM_TO_B64=$(printf %s "$ADM_TO" | base64 -w0)
+          ADM_PIN_B64=$(printf %s "$ADM_PIN" | base64 -w0)
+          ADM_NAME_B64=$(printf %s "$ADM_NAME" | base64 -w0)
           FLAG=""
           if [ "$ADM_APPLY" = "true" ]; then
             FLAG=" --apply"
@@ -1382,7 +1406,7 @@ jobs:
           fi
           echo "Running on $IID"
           # ONE instance: this is a database mutation, so it runs exactly once.
-          CMDLINE="cd /home/relay/app 2>/dev/null || cd /home/relay; set -a; . /home/relay/.env 2>/dev/null; set +a; node scripts/admin-tool.mjs --op \"$ADM_OP\" --email \"\$(echo $ADM_EMAIL_B64 | base64 -d)\" --number \"\$(echo $ADM_NUM_B64 | base64 -d)\" --to \"\$(echo $ADM_TO_B64 | base64 -d)\"${FLAG}; echo \"ADMIN_EXIT=\$?\""
+          CMDLINE="cd /home/relay/app 2>/dev/null || cd /home/relay; set -a; . /home/relay/.env 2>/dev/null; set +a; node scripts/admin-tool.mjs --op \"$ADM_OP\" --email \"\$(echo $ADM_EMAIL_B64 | base64 -d)\" --number \"\$(echo $ADM_NUM_B64 | base64 -d)\" --to \"\$(echo $ADM_TO_B64 | base64 -d)\" --pin \"\$(echo $ADM_PIN_B64 | base64 -d)\" --name \"\$(echo $ADM_NAME_B64 | base64 -d)\"${FLAG}; echo \"ADMIN_EXIT=\$?\""
           PARAMS=$(jq -n --arg g "$MEDIA_NODE_GUARD" --arg c "$CMDLINE" '{commands:[$g,$c]}')
           CMD=$(aws ssm send-command --instance-ids "$IID" \
             --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 0 \

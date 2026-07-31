@@ -11278,6 +11278,103 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.49 — an account whose address can never receive a code (2026-07-31)
+
+The owner, mid-session: *"i want you to create an account ( any pin i dont care ) and use
+this email id demo@demo.demo and this is the passcode .. 1122"*.
+
+**IT CANNOT BE DONE THROUGH THE APP, AND THAT IS NOT A GAP TO ROUTE AROUND.** Registration
+mints an OTP and mails it — v2.105.19 REMOVED the bypass that used to skip that,
+deliberately, because proving the address IS the flow — so `demo@demo.demo` can never
+complete it. Re-adding a bypass for convenience would undo a security decision made six
+releases ago for a demo account. Creating it in the BACKEND is the honest answer, and
+`scripts/admin-tool.mjs` is what exists for exactly that ("the case where nobody holds the
+admin role yet — the bootstrap — and direct backend repair").
+
+**THE LOAD-BEARING PART IS THE PARITY TEST, NOT THE OPERATION.** The passcode hash now has
+TWO implementations: the real `hashPassword` in `server/authCrypto.ts` (TypeScript, in the
+server bundle) and a new `scripts/pinHash.mjs` (plain `.mjs`, run by bare node on an EC2
+instance, because `admin-tool.mjs` cannot import the bundle). That is the shape this repo
+has watched rot before — v2.99.71's `turn-check.mjs` disagreed with `iceServers()` and
+would have reported two live relays permanently DOWN. If these two disagree the failure is
+silent and cruel: the account is created, the operator is told OK, and the passcode simply
+never works on the sign-in screen with nothing anywhere saying why. So the test does NOT
+compare constants or strings — it feeds the script's output to the **REAL `verifyPassword`**
+and requires it to verify, requires seven wrong passcodes to fail, and round-trips in both
+directions so neither side is the odd one out. The self-describing `scrypt$N$salt$hash`
+format is what makes that possible: the verifier reads its own parameters out of the string.
+
+**THE HASHER IS ITS OWN FILE FOR A REASON THAT ALREADY HAS A PRECEDENT**: `admin-tool.mjs`
+opens a MySQL connection at module scope and runs top-level await, so importing it from a
+test would try to reach a database — the same reason v2.106.28 split `record.mjs` out of
+`agent.mjs`. The new module is asserted to import nothing but `node:crypto`, to read no
+env and to call no `process.exit`, so it stays importable.
+
+**WHAT THE OPERATION DELIBERATELY DOES NOT DO.** It never grants admin — that stays a
+separate, visible `--op grant-admin`, and a mutation writing `'admin'` bites. It REFUSES an
+address that already has an account, upholding one-address-one-account (v2.99.49 M50/F3),
+because two rows for one email is how a later sign-in lands on the wrong one. It never
+prints the passcode: the person who set it already knows it and this output goes to a CI
+log. It writes the `users` row and the `identities` row in ONE transaction, because a users
+row with no identity is an account with no number that no screen in the app can repair. It
+reserves the number in the shared ledger and then stamps `claimedAt`, because identities
+and party_lines share one number space with no unique index spanning both (v2.102.0) and
+the reaper's predicate is `claimedAt IS NULL` — an unstamped reservation could later be
+recycled out from under the account. Freeness is checked against BOTH tables AND the
+ledger, the search uses `crypto.randomInt` rather than `Math.random` (v2.99.20 #9 replaced
+the weak RNG in the server's allocator and a second allocator must not reintroduce it), and
+the reserved 000/111 prefixes are honoured unless explicitly overridden — the same rule as
+self-service (v2.105.8): never handed out by accident, assignable on purpose. DRY RUN by
+default, like every other write in the tool, with the verdict read from the printed
+`ADMIN_EXIT=` marker rather than the SSM status.
+
+**TWO NEW FREE-TEXT WORKFLOW INPUTS, AND THAT CLASS HAS BITTEN THIS FILE THREE TIMES**
+(SES_EMAIL/DOMAIN, then `region`, then the recover inputs). Both get the established
+base64-on-runner / decode-on-instance treatment, and it is **proven empirically rather than
+asserted**: the step's own construction was replayed with 8 hostile payloads (quote +
+semicolon, double-quote break, `$( )`, backticks, `&&`, `|`, an embedded newline, bare `;`)
+against a stub `node` with a SENTINEL FILE as the detector — **0 executed, each value
+arriving as ONE literal argument, and the stub confirmed to have run in all 8**, because a
+harness that reports safe because nothing happened is the v2.99.70 mistake. The passcode
+input is documented as demo/test only, since a `workflow_dispatch` input is visible in run
+metadata.
+
+**A HARNESS BUG OF MY OWN, reported rather than counted as a finding**: the first replay
+reported the newline payload as arriving in 6 arguments. It had not — I was counting LINES
+of a `printf '%s\n'` dump, and a value containing a newline legitimately prints as several.
+The sentinel was never created in any case, so safety always held; re-run with a
+NUL-separated dump, 8/8 arrive as one literal argument.
+
+**THE NEW SWEEP FLAGGED CORRECT CODE, AND THE FIX WAS TO NAME THE EXEMPTION RATHER THAN
+RELAX THE RULE**: "every free-text admin input is encoded" correctly flagged `ADM_OP`, which
+is a closed `choice` the step re-whitelists with its own `case` (v2.99.76 recorded that
+decision). The three closed-set values are exempted by name, the whitelist is asserted so
+the exemption is EARNED rather than claimed, and a non-vacuity check requires the sweep to
+have actually examined at least four free-text values.
+
+**FOUR MORE OF MY OWN ASSERTIONS WERE WRONG ABOUT THE FILE**, each caught by failing on
+correct source: `role[^)]*'user'` cannot span the closing paren of the SQL column list;
+`WF` is not what that test file calls the workflow source (it is `OPS`) — which made the
+file fail to LOAD and report **"no tests"**, the v2.106.6 trap, caught only because the
+count changed; `indexOf("CMDLINE=\"cd /home/relay/app")` finds `recover-identity`'s command
+first, not admin-tool's; and an "ADMIN TOOL" anchor starts AFTER the `env:` block, so it
+missed every `ADM_*` assignment the sweep exists to enumerate.
+
+`server/adminToolCreate.test.ts` (16) + `server/awsOps.test.ts` → 53; **10 tripwires
+verified by MUTATION** off a confirmed-GREEN baseline from byte-exact backups, the mutator
+aborting unless its target occurs exactly once, all three sources byte-identical afterwards
+— including both values sent raw into the remote command, the hasher's scheme name and key
+length changed out from under the real verifier, the role written as admin, the
+duplicate-email refusal removed, the reservation left unclaimed and the CSPRNG replaced.
+**TWO ABORTED at 0 occurrences** on needles of mine that missed the YAML's `\$` escaping,
+and both bit once corrected.
+
+**NOT RUN AGAINST THE FLEET, said plainly.** No account has been created: this sandbox has
+no route to the database and no AWS credentials, and the operation is dry-run by default
+regardless. The owner (or anyone with the deploy role) runs it from Actions →
+`aws-ops.yml` on **`ref: main`** — dry run first, then `admin_apply`. No schema change, no
+new dependency, no new env var. 4915 tests.
+
 ## v2.106.48 — every call connected and carried nothing, and the two-party drive reproduced it (2026-07-31)
 
 The owner: *"I tested the calls, and still i can't calling I can't"*, narrowed by two
