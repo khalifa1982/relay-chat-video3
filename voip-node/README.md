@@ -132,6 +132,58 @@ so the second case cannot happen silently, but check `journalctl` first.
 The registry is the app's only read path; there is no health endpoint to poll. A node that
 stops heartbeating disappears from selection within `NODE_TTL_MS` (15s) on its own.
 
+## Four API facts, read off mediasoup's own declarations rather than the docs
+
+Three planning decisions rested on documentation. These are the answers from the installed
+`.d.ts`, so they can be relied on.
+
+**1. `announcedAddress` is IMMUTABLE per transport.** It appears only inside
+`TransportListenInfo` — a creation option — and there is no setter on `Transport`, `WebRtcServer`
+or anywhere else in the type surface. Consequence: **an Elastic IP attached to a running node
+cannot be picked up by transports that already exist.** Live calls on that node keep announcing
+the old address and their media stops arriving; new rooms are fine once the agent's cached
+address refreshes.
+
+That refresh is now on `NODE_TTL_MS` rather than 60s, and the reason is worth stating: **the app
+cannot detect a stale cache.** This agent is the sole source of the address, so a stale value is
+published in the heartbeat too — the app's `assignmentStillValid` compares the address it was
+given against the address the node reports, both are the same stale value, they agree, and
+nothing looks wrong. There is no second opinion to disagree with. Reading IMDS at
+transport-creation time was rejected: that puts a round trip on the call-setup path.
+
+**So when the EIP quota lands, attach during a maintenance window, or accept that calls in
+progress on that node break.**
+
+**2. `listenInfos` and `webRtcServer` are still mutually exclusive** in 3.23 as in 3.19 —
+`Either<Either<listenInfos, listenIps>, webRtcServer>`. `listenIps` and `announcedIp` are both
+`@deprecated`. A conversion must supply **two** `listenInfos` entries (udp *and* tcp) or it
+silently ships UDP-only.
+
+**3. `createWebRtcServer` is on `Worker`, not `Router`,** and `Router` does not expose its
+worker. A room must therefore record the `{router, webRtcServer}` pair rather than deriving one
+from the other.
+
+**4. `producer.replaceTrack({track})` exists on the client**, so one video producer per
+participant can carry camera *or* screen — which matches how RELAY's screen share already works
+(`replaceVideoEverywhere` swaps the track on the existing publication) and avoids two video
+consumers racing one tile.
+
+### `mediasoup-client` is deliberately NOT a dependency yet
+
+It was installed to answer fact 4 above and then removed. Nothing imports it, so it was an unused
+package that would be installed on both app boxes on every deploy and shipped in no bundle — and
+this repo removed six such packages in one release (v2.99.54) and hand-writes its SMTP client, S3
+signer, FCM sender and GIF encoder rather than take a dependency at all. It comes back in the
+increment that actually imports it, code-split, and the fact it was installed to establish is
+already written down above.
+
+### Versions are pinned EXACTLY, and the range was already lying
+
+The live nodes were installed at **mediasoup 3.19.3**. A fresh `pnpm install` against `^3.19.3`
+today resolves to **3.23.2** — four minor versions apart, with a compiled C++ worker per install
+and nothing that would surface the difference until a call behaved differently on one box. The
+deprecations above landed inside that range, which is exactly the drift a caret hides.
+
 ## What is deliberately NOT here
 
 - **No `PipeTransport`.** A room is pinned to one node and is never split. Cross-node piping

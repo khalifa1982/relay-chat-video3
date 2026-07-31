@@ -11,7 +11,8 @@
     "start": "node agent.mjs"
   },
   "dependencies": {
-    "mediasoup": "^3.19.3",
-    "ioredis": "^5.4.1"
-  }
+    "mediasoup": "3.19.3",
+    "ioredis": "5.4.1"
+  },
+  "comment_pins": "EXACT versions, not ranges. The two live nodes were installed at mediasoup 3.19.3; a fresh `pnpm install` against ^3.19.3 today resolves to 3.23.2, so the range alone meant a rebuilt node would silently differ from the running ones by four minor versions \u2014 and the C++ worker is compiled per install, so nothing would surface the difference until a call behaved differently on one box. mediasoup's own API has moved inside that range (listenIps and announcedIp are @deprecated in favour of listenInfos and announcedAddress), which is exactly the kind of drift a range hides."
 }

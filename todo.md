@@ -11278,6 +11278,62 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.34 — four mediasoup API facts, read off the declarations (2026-07-31)
+
+Three planning decisions rested on documentation. The packages are one `pnpm add` away, so these
+are the answers from the installed `.d.ts`.
+
+**1. `announcedAddress` is IMMUTABLE per transport.** It appears only inside
+`TransportListenInfo` — a creation option — with no setter anywhere in the type surface.
+
+**An Elastic IP attached to a RUNNING node therefore cannot be picked up by transports that already
+exist**: live calls on that node keep announcing the old address and their media stops arriving.
+This matters now, because the EIP quota increase is pending and attaching them is the next
+infrastructure step. **It has to be a maintenance window, or calls in progress break.**
+
+And the app *cannot detect* a stale address, which is the part worth recording: the agent is the
+sole source of that value, so a stale cache is published in the heartbeat too —
+`assignmentStillValid` compares the address it was given against the address the node reports, both
+are the same stale value, they agree, and nothing looks wrong. No second opinion exists to disagree
+with, so the only defence is reading it often enough. The re-read moves 60s → `NODE_TTL_MS`, which
+bounds the window to the one interval the app already reasons in. Reading IMDS at
+transport-creation time was rejected: that puts a round trip on the call-setup path.
+
+*A concern of mine that was unfounded, said rather than quietly "fixed":* I expected the agent to
+have cached its address at boot and never re-read it. It already re-reads on a timer and
+`createWebRtcTransport` reads the live value at call time — the code was right, only the interval
+was worth changing.
+
+**2. `listenInfos` and `webRtcServer` are still mutually exclusive** in 3.23 as in 3.19
+(`Either<Either<listenInfos, listenIps>, webRtcServer>`); `listenIps` and `announcedIp` are both
+`@deprecated`. A conversion must supply **two** entries — udp *and* tcp — or it silently ships
+UDP-only.
+
+**3. `createWebRtcServer` is on `Worker`, not `Router`,** and `Router` does not expose its worker,
+so a room must record the `{router, webRtcServer}` pair.
+
+**4. `producer.replaceTrack({track})` exists on the client**, so one video producer per participant
+can carry camera or screen — matching how RELAY's screen share already works
+(`replaceVideoEverywhere` swaps the track on the existing publication) rather than racing two video
+consumers over one tile.
+
+### The versions were already lying
+
+The live nodes were installed at **3.19.3**; a fresh install against `^3.19.3` today resolves to
+**3.23.2**. Four minor versions apart, a C++ worker compiled per install, and nothing that would
+surface the difference until a call behaved differently on one box. The deprecations above landed
+inside that range — precisely the drift a caret hides. Both dependencies are now pinned exactly.
+
+### `mediasoup-client` was installed, used, and removed again
+
+Deliberately, against the plan that said to keep it. Nothing imports it, so it was an unused package
+that would be installed on both app boxes on every deploy and shipped in no bundle — and this repo
+removed six of those in one release (v2.99.54) and hand-writes its SMTP client, S3 signer, FCM
+sender and GIF encoder rather than take a dependency at all. It returns in the increment that
+actually imports it; the fact it was installed to establish survives its removal.
+
+4722 tests.
+
 ## v2.106.33 — the media nodes could have stopped every deploy (2026-07-31)
 
 The 28-agent LiveKit-removal plan flagged this as *"check before the next deploy, not after"*, and it

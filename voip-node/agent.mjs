@@ -490,7 +490,23 @@ async function main() {
   }
   /* RE-READ THE IP ON A TIMER, because it is auto-assigned and changes on stop/start. A
      changed IP is published on the next heartbeat, so NEW rooms get the new address; rooms
-     already running were already broken by the restart and take the rejoin path. */
+     already running were already broken by the restart and take the rejoin path.
+     ── WHY THIS INTERVAL IS THE TTL AND NOT A MINUTE ────────────────────────────────
+     `announcedAddress` is IMMUTABLE per transport — confirmed against mediasoup's own
+     declarations, where it appears only as a creation option with no setter anywhere — so a
+     transport created while this cache is stale announces the WRONG address for its whole life
+     and that room's media never arrives.
+     THE APP CANNOT CATCH IT, and that is the reason to care: this agent is the SOLE source of
+     the address, so a stale cache is published in the heartbeat too. The app's
+     `assignmentStillValid` compares the address it was given against the address the node
+     reports — and both are the same stale value, so they AGREE and nothing looks wrong. There
+     is no second opinion to disagree with.
+     A stop/start needs none of this (the process restarts and `readSelf()` runs fresh at boot).
+     The case this window exists for is an ELASTIC IP being attached to a RUNNING node, which is
+     exactly what happens when the pending EIP quota lands. Reading at transport-creation time
+     was considered and rejected: that puts an IMDS round trip on the call-setup path, where
+     latency is a per-operation cost. The TTL is the natural bound instead — the window can then
+     never exceed the one interval the app already reasons about. */
   setInterval(async () => {
     try {
       const now = await readSelf();
@@ -501,7 +517,7 @@ async function main() {
     } catch {
       /* keep the last known good */
     }
-  }, 60_000).unref();
+  }, NODE_TTL_MS).unref();
 
   const shutdown = async () => {
     console.log("[voip] shutting down");
