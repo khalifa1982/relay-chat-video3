@@ -295,3 +295,95 @@ There is no phone and no MySQL in the build sandbox. So: no group has been locke
 been opened on a phone, nobody has watched a party-line roster fill up before joining it, and no
 minimised app has been called and watched to ring. Everything is proven by test and by reading; the
 device pass is yours.
+
+---
+
+## §N — THE mediasoup CUTOVER: THE VERIFIED GAP LIST  (written 2026-07-31, after v2.106.59)
+
+**How this was built.** A six-dimension audit ran over the four instruction docs the owner
+re-uploaded, each dimension read against CURRENT SOURCE and each finding required to name the file,
+the line and why it is not shipped. Three of its audio findings were then independently REFUTED by
+verifiers — because v2.106.57 closed them one commit earlier, at exactly the sites they named. What
+survives is below, with the shipped items pruned.
+
+**Why it is written down.** The cutover is the single largest remaining piece of work in the plan and
+it cannot be verified from this sandbox (no reachable mediasoup node, no `mediasoup-client`). A list
+that has been checked against source is worth more than re-deriving it later, and the two structural
+blockers in it are not obvious.
+
+**THE TWO STRUCTURAL BLOCKERS, stated first because they change the order of the work.**
+
+1. **There is no transport adapter pattern in the client. There never was one.** The mediasoup doc
+   §1 says "Transport adapter pattern already exists in the codebase — mediasoup becomes an
+   additional adapter, not a replacement of the abstraction." That premise is false: `startRelay` is
+   a single ~6,540-line closure with ~280 nested functions, so a transport cannot be a separate
+   file without a real module boundary being created first. The deleted hosted-SFU path was
+   branches inside that closure, not an adapter.
+2. **The party size / group-ness problem is solved (v2.106.59) but the ROOM still carries no
+   transport.** `PersistedRoom` has no `transport`/`voip` field, so a chosen assignment cannot
+   survive a leader change — `transportForHydratedRoom` can only ever answer "mesh". That is
+   correct-by-design today and becomes a gap the moment a room is really placed on a node.
+
+
+### mediasoup client adapter + transport-abstraction seam (doc section 3 and the "point a client at mediasoup or mesh by flag" constraint)
+
+- **The doc's premise is false: there is NO transport adapter pattern in the client. There never was one.**  _(large)_
+- **There is no mediasoup client anywhere — not the dependency, not a module, not an import.**  _(large)_
+- **relayClient.ts has no module boundary at all: startRelay is a single 6,540-line closure with 280 nested functions, so a transport cannot be a separate file.**  _(large)_
+- **No flag path exists from server to client — the wire protocol carries no transport field and the client reads no selector.**  _(medium)_
+- **The stats COLLECTOR is mesh-only, so the section-3 "both transports" requirement is half-shipped: the shape is agnostic, the collection is not.**  _(small)_
+- **The rescue harness the doc cites as already-existing was deleted with the SFU.**  _(medium)_
+
+
+### mediasoup SFU server/signaling layer (doc §2.1, 2.2, 2.3, 2.4, 2.6)
+
+- ~~Nothing in the signaling path selects a node — `planRoomTransport` has zero callers~~ —
+  **PARTLY CLOSED by v2.106.59**: `relay.ts` now calls it once, through `planDialTransport`, for
+  the group-saturation refusal. It reads the decision and does not yet ACT on the assignment, so
+  the remaining gap is narrower: the plan's `voip` is computed and discarded.  _(medium)_
+- **RoomMeta and PersistedRoom carry no node assignment, so transportForHydratedRoom can only ever answer "mesh"**  _(medium)_
+- **No client handshake relay: none of the node's 11 ops is reachable from a signaling message**  _(large)_
+- **No producer registry and no newProducer fan-out — consume() requires a producerId nobody publishes**  _(large)_
+- **No transport is advertised to the client on any frame** — and note the client half now exists
+  in one direction only: v2.106.59 put `parties` on the invite, so the wire is no longer
+  completely one-way.  _(small)_
+- **No pauseConsumer op, so "forward only the loudest 4–8 speakers" cannot be actuated**  _(small)_
+- **No per-participant teardown: only whole-room close, and the node records no owner for a transport**  _(medium)_
+- **Nothing calls closeRoom when a room ends**  _(small)_
+- **No ICE-restart op on the node**  _(small)_
+- **Transports are created without SCTP, so the SFU path has no data channel — in-call chat has no equivalent**  _(medium)_
+- **stats returns transport stats only — no producer or consumer stats**  _(small)_
+- **No layer-switching decision or reporting exists — setPreferredLayers has no caller and no feedback**  _(medium)_
+- **Simulcast encodings are passed through unvalidated; the only bitrate ceiling is per-transport, not per-layer**  _(small)_
+- **No node→app event channel at all — everything asynchronous is discarded or poll-only**  _(large)_
+- **ICE servers cannot be zone-ordered: iceServers() takes no AZ and no per-relay AZ is configured anywhere**  _(medium)_
+- **No AZ is known for the initiating participant, so rankNodes' preferAz has no producer**  _(small)_
+- **No node-failure detection or room reassignment for a media reason**  _(medium)_
+- **The participant cap is one number; transportCap() is unused**  _(small)_
+
+
+### Voice/video mode API (doc: "one call system, two media profiles")
+
+- **video → voice downgrade does not exist** — nothing stops the camera track while keeping audio.
+- **Mode is not tracked as call state**, so there is no in-call mode indicator and nothing to toggle.
+- **No UI control for a mode switch** — the only in-call video affordance is enable/disable.
+- **No named `upgradeToVideo` / `downgradeToVoice`**, and the upgrade is unreachable programmatically.
+- **Two dial entries rather than the doc's one**, and the option shape is an inverted optional boolean
+  (`{voice:true}` rather than `{mode:'video'}`).
+- **The incoming side's mode choice is not on the web handle**, while the native engine exposes it.
+
+**Note on that last set:** the doc's `startCall(peerOrRoom, {mode})` shape is a rename of behaviour
+that mostly exists (v2.106.44 made voice mode real and measured). What genuinely does not exist is the
+DOWNGRADE and the mode as observable state. The rename should ride the cutover rather than precede it,
+since the doc's own requirement is that the API "behave identically on both transports" — which cannot
+be checked while there is only one.
+
+### What the cutover needs that this sandbox cannot supply
+
+- A reachable media node, to exercise the handshake at all. `voip-node/` has no `node_modules` here,
+  so the agent cannot even typecheck locally.
+- `mediasoup-client` installed — deliberately removed in v2.106.34 because nothing imported it, and it
+  returns in the increment that actually does.
+- The `relayClient.ts` module boundary (blocker 1 above), which is a refactor of the live call path and
+  should not share a release with anything else.
+
