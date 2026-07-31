@@ -3922,6 +3922,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let statsShown = false;
   try { statsShown = localStorage.getItem("relay_call_stats") === "1"; } catch { /* private mode */ }
   let qualPrev: import("./callStats").ByteSample | null = null;
+  /** Last thermal signature written to the diag log, so a 2s poller logs a CHANGE
+   *  rather than a line every tick. */
+  let qualLastSig = "";
 
   /**
    * Write the readout. `tone` picks the board-5c hue and defaults to neutral, so
@@ -3950,7 +3953,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
    *  directly comparable to these, or "is this one worse?" has no answer. */
   async function collectCallQuality() {
     if (!statsShown || !inCall) return;
-    const { entriesOf, summarizeStats, formatCallStats, callStatsVerdict, callQualityTone } =
+    const { entriesOf, summarizeStats, formatCallStats, formatCallDetail, callStatsVerdict, callQualityTone } =
       await import("./callStats");
     const reports: import("./callStats").StatEntry[][] = [];
     for (const pin in peers) {
@@ -3961,10 +3964,27 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const { stats, sample } = summarizeStats(reports, { prev: qualPrev, nowMs: Date.now() });
       qualPrev = sample;
       const v = callStatsVerdict(stats);
+      /* TWO LINES, joined with a newline and rendered by `white-space: pre-line`:
+         line 1 is how the call is GOING, line 2 what it is MADE OF. The detail line
+         is omitted entirely when it has nothing to say, so an ordinary reading stays
+         a one-line pill. `textContent`, never innerHTML — `encoderImplementation`
+         and the codec name are browser-supplied strings and there is no reason to
+         hand any of them to a parser. */
+      const detail = formatCallDetail(stats);
       renderCallQuality(
-        (v === "relay" ? "⚠ " : v === "poor" ? "▲ " : "") + formatCallStats(stats),
+        (v === "relay" ? "⚠ " : v === "poor" ? "▲ " : "") + formatCallStats(stats) +
+          (detail ? "\n" + detail : ""),
         callQualityTone(stats),
       );
+      /* THE DOC ASKS FOR THE THERMAL FIELDS IN THE DEBUG LOG AS WELL AS ON SCREEN
+         ("add these three fields to the call debug logging"), and the log is what
+         survives being copied out of a session. Logged only when it CHANGES, or a
+         2s poller would bury every other line in the diag buffer. */
+      const sig = `${stats.encoder ?? "-"}|${stats.limitedBy ?? "-"}|${stats.up?.fps ?? "-"}`;
+      if (sig !== qualLastSig) {
+        qualLastSig = sig;
+        diag(`enc=${stats.encoder ?? "none"} limited=${stats.limitedBy ?? "none"} fps=${stats.up?.fps ?? "-"}`);
+      }
     } catch { /* the readout is decoration — never let it disturb a call */ }
   }
 

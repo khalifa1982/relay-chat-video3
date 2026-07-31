@@ -11278,6 +11278,108 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.58 — the readout says WHAT and WHERE, not only how bad (2026-07-31)
+
+The mediasoup doc's §3 closes with "Also finish the in-call stats readout … ICE candidate
+type … It is the only instrument that can explain the 'becomes slow' complaint, and it
+must work on both transports so the two can be compared with numbers rather than
+impressions." A six-dimension audit of the four docs verified four of its named fields
+missing and one aggregation rule hiding the thing it was meant to surface.
+
+- [x] **ICE CANDIDATE TYPE WAS CAPTURED AND THROWN AWAY.** `candidateType` was read only
+      to set a boolean — `if (… === "relay") anyRelay = true` — so `host` (same LAN) and
+      `srflx` (NAT-traversed direct) both rendered as the single word "direct", which are
+      different situations to be in. Now reported, WORST-CASE across legs by distance from
+      ideal (host < prflx < srflx < relay), and **`path` is DERIVED from it** so the relay
+      rule lives in one place rather than two that can drift. An UNRECOGNISED type is
+      ignored rather than ranked, which is what makes the derivation byte-identical to the
+      flag it replaced: a future candidate kind cannot read as relay and cry wolf.
+- [x] **THE TRANSPORT PROTOCOL WAS CAPTURED NOWHERE**, so a call relayed over TURN/TCP:443
+      was indistinguishable from TURN/UDP:3478 while their latency is not — and the doc's
+      own verification 1 asks to "confirm media flows over UDP". **IT HAS TO COME FROM THE
+      CANDIDATE, NOT THE PAIR**: the spec puts no `protocol` on a `candidate-pair`, so
+      reading it there returns undefined and renders nothing while looking implemented.
+      Resolved through the same two-pass `byId` index the candidate type needs, and pinned
+      by a test that puts the field in the WRONG place and requires null.
+- [x] **THE NEGOTIATED CODEC WAS UNAVAILABLE, so v2.106.56's H.264 preference and
+      v2.106.57's Opus profile both had NO direct pass/fail signal in the readout they
+      were measured for.** `mimeType` lives on the `codec` entry an rtp entry names by
+      `codecId` — another byId resolution — and **the codec's own mimeType decides which
+      kind it is**, so no `kind` guess is involved at all: an entry reads "audio/opus" or
+      "video/H264" and is self-describing.
+- [x] **AND A REAL VOICE CALL FOUND THE DEFECT THAT NO UNIT TEST WOULD HAVE**: the first
+      version reported **`↑VP8` on a call with no camera**. Under mutual consent the
+      offerer negotiates a video m-line with a NULL TRACK for the slot the camera would
+      later fill (v2.106.51), so Chromium reports an outbound video stream with a codec and
+      zero frames — and a readout claiming VP8 on a voice call is the exact false
+      impression this release exists to remove, the opposite of the doc's "confirm no
+      camera track is published". A video codec is now reported only with FRAMES, gated on
+      the same evidence `up` uses so the codec line and the resolution line can never
+      disagree about whether video is live. **Re-measured: voice reads `host/udp · ↑opus`
+      with `outVideoPackets: 0`; video reads `host/udp · ↑opus · ↑VP8 · enc libvpx` with
+      551.**
+- [x] **`bandwidth` WAS CAPTURED AND INVISIBLE, AND IT IS THE OWNER'S OWN COMPLAINT IN ONE
+      WORD.** `qualityLimitationReason` was stored for any reason and rendered only for
+      `"cpu"`, so the literal "starts fine and then degrades" signal never reached the
+      screen. Now surfaced whatever it says — and it FIRED on a real video call. `cpu`
+      remains the only one that makes the verdict POOR: bandwidth is a network condition,
+      not a thermal one.
+- [x] **THE RAW ENCODER NAME IS ON SCREEN**, which the thermal doc calls the pass/fail
+      signal ("must flip software → hardware"). It was on the record object under a comment
+      claiming it was "for the debug log and the harness" — and the audit proved NEITHER
+      read it. It now renders, AND goes to the debug log the doc asks for, logged on CHANGE
+      rather than every tick or a 2s poller buries every other line in the buffer.
+- [x] **LOSS WAS THE INCONSISTENT SIBLING.** Jitter has always been worst-case ("one smooth
+      leg does not make a choppy call smooth") while loss POOLED every leg into one ratio —
+      so on a 5-way mesh call a peer losing 20% reads as 4% behind four clean peers, and
+      that peer's call is bad. `lossWorstPct` is computed per leg (audio and video pooled
+      WITHIN a leg, which is one peer's loss) and verdicted. **The `LOSS_MIN_PACKETS` floor
+      is load-bearing rather than cautious**: these counters are cumulative from the leg's
+      own start, so a peer who joined two seconds ago legitimately reads 1 received / 1
+      lost — 50% — and without it a newcomer would spike the whole call to "poor" for one
+      tick. Under-evidenced legs still feed the POOLED figure, so nothing is discarded, and
+      a 1:1 call is unchanged by construction.
+- [x] **TWO LINES, BECAUSE ONE WOULD HAVE TRUNCATED THE DIAGNOSIS.** The chip was
+      `white-space:nowrap` + `text-overflow:ellipsis`, so every field added clipped the END
+      of the line — which is exactly where the thermal words sit. `formatCallDetail` is a
+      SEPARATE function rather than an append: the two lines answer different questions
+      (how the call is GOING / what it is MADE OF), and a mutation that folds them together
+      bites. It renders EMPTY when there is nothing distinctive, so an ordinary reading
+      stays one line. Written with `textContent` and `white-space:pre-line`, never
+      innerHTML — the encoder name and the codec are browser-supplied strings and there is
+      no reason to hand either to a parser.
+- [x] **THE MEASUREMENT FOUND A SECOND DEFECT I WOULD HAVE SHIPPED, and max-width could not
+      have fixed it.** At 320px the pill came out **160px wide and 175px tall** — eight
+      lines — while `max-width:min(96vw,520px)` said 307px. For an absolutely-positioned box
+      with `left:50%` and auto width the shrink-to-fit AVAILABLE width is only what remains
+      to the containing block's right edge, i.e. HALF of it, and `max-width` cannot widen a
+      box the available space has already squeezed. Spanning the block (`left:0;right:0`)
+      and centring with auto margins measured **307×76 at 320px** and **374×60 at 390px**,
+      with desktop UNCHANGED at 520×60 — and no clipping, inside the viewport, no sideways
+      page scroll at any width. It also drops the transform, and with it the class of
+      hazard that mis-centred the video-consent card in v2.99.54.
+- [x] **THE ACTIVE SIMULCAST LAYER IS DEFERRED, WITH THE REASON, because a sender-side
+      reading would ASSERT THE OPPOSITE of what the doc wants made visible**: on mediasoup
+      the active layer is a per-CONSUMER decision made server-side, so the publisher's own
+      `getStats()` reports the top layer it is still sending while a weak receiver is being
+      served the low one. The honest source is `consumer.getStats()` on the node, and there
+      is no client to request it. On the mesh it would also always say the same thing —
+      v2.106.57 measured `scalabilityMode: "L1T1"` on a real call.
+- [x] **22 of 22 tripwires verified by MUTATION** off a confirmed-GREEN baseline from
+      byte-exact backups, the mutator aborting unless its target occurs exactly once, all
+      three sources byte-identical afterwards.
+- [x] **ONE SURVIVED AND IT WAS THE CENTRING FIX I HAD JUST MEASURED** — the pin-the-
+      presence-not-the-property class: the CSS assertions covered wrapping, position and
+      hit-testing and said NOTHING about the centring mechanism, so reverting to
+      `left:50%` + a transform put the pill back to 175px tall with every test green. Now
+      pinned structurally with the measured numbers as the recorded reason, and re-verified.
+- [x] **AND THE BACKTICK TRAP BIT FOR THE FIFTH RECORDED TIME**, in a CSS comment inside a
+      template literal — reported by `pnpm check` as ten syntax errors on one line. The
+      existing guard (RELAY_CSS contains no backtick) is a runtime assertion on the PARSED
+      value, which a terminated literal can never contain, so it cannot report this; the
+      typecheck is what catches it and did.
+- [x] No schema change, no new dependency, no new env var. 4998 tests.
+
 ## v2.106.57 — the voice-mode audio profile, negotiated (2026-07-31)
 
 Four docs re-uploaded. THREE were already shipped and the diffs prove it: the thermal doc
