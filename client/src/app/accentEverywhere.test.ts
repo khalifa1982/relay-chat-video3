@@ -220,20 +220,24 @@ describe("1b History", () => {
 });
 
 describe("1c Messages / 1d Conversation", () => {
-  it("a READ receipt takes the accent and DELIVERED stays grey", () => {
-    // "accent = read, grey = delivered" (board 1c) — the state change the owner asked
-    // to see at a glance, now in the app's one accent rather than a fixed blue.
+  it("a READ receipt is visually distinct from DELIVERED, from ONE expression", () => {
     const at = MESSAGES_CODE.indexOf("function Receipt(");
     expect(at).toBeGreaterThan(0);
     const body = MESSAGES_CODE.slice(at, at + 1200);
-    /* ONE expression decides the colour, both arms named — so a change that collapses
-       read and delivered into one appearance fails, which a pin on the read arm alone
-       does NOT catch: the first cut set a grey class and overrode it inline for read, and
-       the mutation run showed the class could be deleted with no visible change. */
-    expect(body).toMatch(
-      /const tickStyle = \{ color: read \? "var\(--rb\)" : "rgba\(255, ?255, ?255, ?0\.7\)" \}/
-    );
-    expect(body).not.toMatch(/#4db6ff/);
+    /* REWRITTEN (v2.106.40). This asserted the accent, which was right on a CARD and wrong
+       here: measured on the own bubble's own pale stop the accent read 1.34:1 against
+       delivered's 1.77:1, so the accent made the MORE important state the FAINTER one. The
+       accent is still this app's read-vs-delivered vocabulary everywhere it sits on a card
+       (the thread row, Message info); the bubble is the one surface it cannot be seen on, so
+       the strength ordering is what this pins and `deliveryReceipts.test.ts` owns the arms.
+       ONE expression decides the colour, both arms named — so a change that collapses read
+       and delivered into one appearance fails, which a pin on the read arm alone does NOT
+       catch: the first cut set a grey class and overrode it inline for read, and the
+       mutation run showed the class could be deleted with no visible change. */
+    const m = body.match(/const tickStyle = \{ color: read \? (".+?") : (".+?") \}/);
+    expect(m).toBeTruthy();
+    expect((m as RegExpMatchArray)[1]).not.toBe((m as RegExpMatchArray)[2]);
+    expect(body, "the pre-accent fixed blue must not come back either").not.toMatch(/#4db6ff/);
   });
 
   it("the day divider is mono/.26em AND still opaque and above the bubbles", () => {

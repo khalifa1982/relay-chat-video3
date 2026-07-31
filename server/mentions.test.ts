@@ -309,18 +309,24 @@ describe("green means ONLINE, and only online", () => {
     expect(bar).not.toMatch(/relay-online/);
   });
 
-  it("the voice-note play button is the accent (board 2f)", () => {
+  it("the voice-note play button is not the presence green (board 2f)", () => {
     const at = UI.indexOf('aria-label={playing ? "Pause" : "Play voice note"}');
     expect(at).toBeGreaterThan(0);
     const btn = UI.slice(at, at + 900);
-    /* REWRITTEN in v2.106.31: this froze the INLINE `rgba(var(--rb-rgb),0.16)` fill, and
-       that hand-rolled recipe was missing the light-theme text colour `.rchip-accent`
-       carries — measured 1.46:1 on the light card against AA's 4.5, versus 5.14:1 with the
-       class. THE PROPERTY is that the button is the ACCENT rather than the presence green;
-       which accent recipe delivers it is not the property, and freezing the inline one
-       forbade the fix. */
-    expect(btn).toMatch(/rchip-accent/);
+    /* REWRITTEN TWICE, and the second rewrite is the more interesting one.
+       v2.106.31 replaced a frozen inline `rgba(var(--rb-rgb),0.16)` fill with `.rchip-accent`
+       — right for a control on a CARD, and wrong here: this button sits on a SATURATED
+       BUBBLE, where that card recipe measures 1.16:1 at worst and fails AA on 30 of the 36
+       bubble surfaces the app can draw. So requiring the class froze a defect, exactly as
+       the inline fill had.
+       THE PROPERTY THIS FILE STANDS FOR is the vocabulary one and nothing more: green means
+       ONLINE, so a play control must not be painted in it. Which treatment is legible on a
+       bubble is a MEASURED question and is pinned in `conversationFrame.test.ts`, against
+       the real `bubbleGlyphColor`. */
     expect(btn).not.toMatch(/relay-online/);
+    expect(btn, "the presence green's own hex must not arrive by literal either").not.toMatch(
+      /#22c55e/i,
+    );
   });
 
   it("every REMAINING use of the presence green is about presence", () => {

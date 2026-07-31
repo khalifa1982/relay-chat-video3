@@ -27,6 +27,7 @@ import {
   resetDeliveryReports,
   alreadyReported,
 } from "./useDeliveryReceipts";
+import { codeOnly } from "../../../server/testing/codeOnly";
 
 const here = path.resolve(__dirname);
 const root = path.resolve(here, "..", "..", "..");
@@ -233,23 +234,39 @@ describe("the receipt reaches the sender live", () => {
 describe("what the sender sees on the bubble", () => {
   const fn = MSG.slice(MSG.indexOf("function Receipt("), MSG.indexOf("/** Three-dot context menu"));
 
-  it("one tick sent, two ticks delivered, two ACCENT ticks read", () => {
+  it("one tick sent, two ticks delivered, and READ is the MORE visible of the two", () => {
     expect(fn).toMatch(/const read = status === "read";/);
     expect(fn).toMatch(/const twoTicks = read \|\| status === "delivered";/);
-    /* REWRITTEN (v2.106.4): this froze the literal `text-[#4db6ff]`, i.e. it forbade the
-       read tick ever following the app's own accent while saying nothing about the
-       property — that READ is visually distinct from DELIVERED, which is the state change
-       the owner asked to see at a glance. The board's rule is "accent = read, grey =
-       delivered", so read now takes `var(--rb)`. BOTH arms come from ONE expression, which
-       is what makes this bite: an earlier cut set a grey class and overrode it inline for
-       read, and the mutation run showed the class could be deleted with no visible change
-       at all, because an inline style beats it. */
-    expect(fn).toMatch(
-      /const tickStyle = \{ color: read \? "var\(--rb\)" : "rgba\(255, ?255, ?255, ?0\.7\)" \}/
+    /* REWRITTEN TWICE, and each rewrite replaced a frozen literal with the property one
+       step closer to what the owner actually asked to see.
+       v2.99.74 froze `text-[#4db6ff]` — it forbade the accent. v2.106.4 froze
+       `var(--rb)` — it forbade fixing the accent. THE PROPERTY IS ONLY THIS: the two
+       states must be distinguishable, and read must be the more prominent, because read is
+       the state the owner said they wanted at a glance.
+       WHY THE ACCENT HAD TO GO, measured on the own bubble's own pale gradient stop
+       (#fb923c), which is the worst surface a tick can land on:
+         read = accent 1.34:1   vs   delivered = white 70% 1.77:1
+       i.e. the vocabulary was not merely faint, it was INVERTED. Read is now solid white
+       (2.26:1) against delivered at 55% (1.57:1).
+       The ORDERING is what this asserts, and it is asserted by ALPHA rather than by the two
+       literals, so a later retune is free while an inversion bites. ONE expression decides
+       it, deliberately: an earlier cut set a grey class and overrode it inline for read, and
+       the mutation run showed the class could be deleted with nothing changing, because an
+       inline style beats it (v2.105.17). */
+    const m = fn.match(/const tickStyle = \{ color: read \? (".+?") : (".+?") \}/);
+    expect(m, "one expression, both arms named").toBeTruthy();
+    const [, readArm, deliveredArm] = m as RegExpMatchArray;
+    expect(readArm).not.toBe(deliveredArm);
+    const alpha = (css: string) => {
+      const rgba = /rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*([\d.]+)\s*\)/.exec(css);
+      return rgba ? Number(rgba[1]) : 1;
+    };
+    expect(alpha(readArm), "read must not be fainter than delivered").toBeGreaterThan(
+      alpha(deliveredArm),
     );
     expect(fn).toMatch(/<CheckCheck /);
     expect(fn).toMatch(/<Check /);
-    // `read` must imply two ticks — a blue single tick is a state that does not exist.
+    // `read` must imply two ticks — a read single tick is a state that does not exist.
     expect(fn).toMatch(/twoTicks \? \(\s*\n?\s*<CheckCheck/);
   });
 
@@ -277,11 +294,15 @@ describe("what the sender sees on the bubble", () => {
     // file entirely — a second, older tick renderer surviving anywhere is the way this
     // regresses.
     expect(MSG).not.toMatch(/\? "✓✓" : "✓"/);
-    // Checked against CODE, not the whole file: two comments legitimately mention the
-    // old glyphs while describing the history, and matching those would make this pass
-    // or fail on prose rather than on behaviour.
-    const codeLines = MSG.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
-    expect(codeLines.filter((l) => l.includes("✓✓"))).toEqual([]);
+    /* Checked against CODE, not the whole file: several comments legitimately mention the
+       old glyphs while describing the history, and matching those would make this pass or
+       fail on prose rather than on behaviour.
+       THE FILTER WAS ITS OWN VERSION OF THAT TRAP and it fired: it dropped lines beginning
+       with `//`, `*` or `/*`, but a block comment whose CONTINUATION lines begin with an
+       ordinary word is not dropped by any of those — so a new comment recording the measured
+       tick contrast turned this red on correct code. It now uses the shared `codeOnly`,
+       which strips comment SPANS rather than guessing from how a line starts. */
+    expect(codeOnly(MSG).split("\n").filter((l) => l.includes("✓✓"))).toEqual([]);
     // Both live message renderers — the ordinary bubble and the bubble-less emoji
     // row. The search-results panel deliberately has none: it lists hits, not the
     // live conversation.

@@ -157,7 +157,23 @@ describe("Messages.tsx — v2.71 iMessage-grade chat UI", () => {
     expect(SRC).toMatch(/emojiOnly/);
   });
   it("the conversation header carries the live status line (typing > online > last seen)", () => {
-    expect(SRC).toMatch(/typers\.length > 0 \? \(/);
+    /* REWRITTEN (v2.106.40). This froze the exact condition `typers.length > 0 ? (`, so
+       narrowing the header's typing arm to a 1:1 turned it red while saying nothing about the
+       precedence it stands for. In a GROUP the arm fired at the same time as `TypingLine`
+       AND dropped "5 members · 3 online" the moment anybody typed — so a group header lost
+       its own size to repeat something already on screen, and `TypingLine` is the better of
+       the two because it names WHO and colours them per person.
+       THE PROPERTY is the ORDERING: typing outranks presence, and last-seen is the fallback
+       when neither. */
+    const at = SRC.indexOf("{typers.length > 0");
+    expect(at).toBeGreaterThan(-1);
+    const line = SRC.slice(at, at + 1800);
+    expect(line, "typing is the first arm").toMatch(/^\{typers\.length > 0[^?]*\? \(/);
+    expect(line.indexOf("typing…")).toBeGreaterThan(-1);
+    expect(
+      line.indexOf("typing…") < line.indexOf("last seen"),
+      "presence/last-seen is a LATER arm, so typing wins",
+    ).toBe(true);
     expect(SRC).toMatch(/last seen \{timeAgo\(thread\.peerLastSeenAt\)\}/);
   });
   it("the message ⋮ menu opens toward the screen INTERIOR, never off the edge (v2.99.0)", () => {

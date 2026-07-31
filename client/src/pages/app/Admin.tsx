@@ -125,33 +125,18 @@ const DANGER_HAIRLINE = "color-mix(in oklab, var(--destructive) 55%, transparent
 /* 2h's stat tiles and person rows are the board's glass surface, so they use the
    SHIPPED `.rglass` utility (its recipe IS the board's: a white 5%→1.5% gradient
    with an inset top highlight) rather than a second copy of it.
-   ────────────────────────────────────────────────────────────────────────────
-   TWO VALUES ARE SUPPLIED INLINE, and both are theme TOKENS rather than literals:
 
-     * `borderColor: var(--border)`. `.rglass` is not dark-scoped and its hairline is
-       white at 9% — invisible on the light card this app still defaults to, which
-       would leave a searched list of people with no row boundaries at all in the
-       theme most people see. In `.dark.relay-v2` the token is `oklch(1 0 0 / 7%)`,
-       i.e. exactly the board's own `rgba(255,255,255,.07)` row hairline, so dark
-       loses nothing.
-     * `backgroundColor: var(--card)`. `.rglass` sets `background` as a SHORTHAND,
-       which resets the colour to transparent, so in light the row would show the
-       page through it. Naming the card token puts an opaque base under the gradient
-       in both themes — a dark card with a white sheen in dark, an ordinary card in
-       light.
+   THE TWO INLINE TOKENS THAT USED TO LIVE HERE HAVE MOVED INTO THE RECIPE. They were an
+   opaque `--card` base and a `--border` hairline, both needed because `.rglass` declared
+   dark-only values on an un-dark-scoped rule — so in the light theme a card showed the
+   page through it and a row had no boundary. Patching it here fixed this ONE of five call
+   sites and left the other four broken, which is the shape of defect this repo keeps
+   re-learning; the fix now reaches every consumer, including the next one.
 
-   Inline because both would otherwise LOSE: `.rglass` lives unlayered in index.css,
-   so a Tailwind `border-*` / `bg-*` utility cannot override its shorthand.
-
-   MEASURED, not assumed: the first cut of this wrote the board's gradient as a
-   `dark:bg-[linear-gradient(…)]` arbitrary value, and grepping the BUILT stylesheet
-   showed Tailwind emitted nothing for it — a nested-paren value the scanner does not
-   take, i.e. the unstyled-class trap this repo has recorded three times, caught here
-   only because the output was checked rather than the source read. */
-const GLASS_SURFACE: CSSProperties = {
-  backgroundColor: "var(--card)",
-  borderColor: "var(--border)",
-};
+   MEASURED, and worth keeping: the first cut of this wrote the board's gradient as a
+   `dark:bg-[linear-gradient(…)]` arbitrary value, and grepping the BUILT stylesheet showed
+   Tailwind emitted nothing for it — a nested-paren value the scanner does not take, i.e.
+   the unstyled-class trap, caught only because the output was checked. */
 const STAT_TILE = "rglass rounded-[13px] border px-1.5 py-2.5 text-center";
 const PERSON_ROW = "rglass rounded-[15px] border p-2.5";
 /**
@@ -246,7 +231,7 @@ function StatTiles() {
   return (
     <dl className="grid grid-cols-4 gap-2">
       {cells.map((c) => (
-        <div key={c.label} className={STAT_TILE} style={GLASS_SURFACE}>
+        <div key={c.label} className={STAT_TILE}>
           <dd className="flex items-center justify-center gap-1 overflow-hidden whitespace-nowrap font-mono text-[clamp(0.9rem,4vw,1.125rem)] font-semibold leading-none tabular-nums">
             {c.value === null ? "—" : c.value.toLocaleString("en-US")}
             {c.live && c.value !== null && (
@@ -445,7 +430,7 @@ export default function Admin() {
                as the search changes). */
             const hue = GROUP_PALETTE[peerPaletteIndex(r.id)];
             return (
-              <li key={r.id} className={PERSON_ROW} style={GLASS_SURFACE}>
+              <li key={r.id} className={PERSON_ROW}>
                 {/* A DIV, not a button: this row CONTAINS buttons (the ⋮ menu) and
                     nested buttons are invalid HTML. */}
                 <div className="flex items-start gap-2.5">

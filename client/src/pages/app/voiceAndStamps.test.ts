@@ -59,7 +59,12 @@ describe("1 — the play control actually moves", () => {
     // simply never read, which is why the bubble showed "· · ·".
     expect(player).toMatch(/durationMs\?: number \| null;/);
     expect(player).toMatch(/typeof durationMs === "number" && durationMs > 0 \? durationMs \/ 1000 : 0/);
-    expect(MSG).toMatch(/<VoiceNotePlayer url=\{url\} mine=\{mine\} durationMs=\{durationMs\} \/>/);
+    /* RE-ANCHORED (v2.106.40): this froze the player's WHOLE prop list, so board 1d adding a
+       `glyph` prop broke it while saying nothing about the property — that the stored duration
+       reaches the player, and that it comes from the attachment row rather than a probe. */
+    const mount = MSG.match(/<VoiceNotePlayer [^>]*\/>/);
+    expect(mount).toBeTruthy();
+    expect((mount as RegExpMatchArray)[0]).toMatch(/durationMs=\{durationMs\}/);
     expect(MSG).toMatch(/durationMs=\{m\.attachment\.durationMs \?\? null\}/);
   });
 

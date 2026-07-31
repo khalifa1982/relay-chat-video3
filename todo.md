@@ -11278,6 +11278,73 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.40 — board 1d: the play triangle nobody could see, and a tick vocabulary that was inverted (2026-07-31)
+
+Continuing the owner's *"You should check all my new designs and match it to the exsisting one"* on the
+conversation screen. Two of these are visible in their own screenshot and invisible in the source, because
+both are CONTRAST rather than layout.
+
+- [x] **The voice-note play control was a CARD recipe on a SATURATED BUBBLE.** `.rchip-accent` was measured
+      on `--card`. Measured across all 36 bubble surfaces the app can draw (own orange, peer blue, the 16
+      group hues, both gradient stops of each): **1.16:1 at worst, failing AA on 30 of 36**. The owner's
+      screenshot is six voice notes deep, so the primary control of what they were looking at was the
+      hardest thing on it to see. Fixed as a solid WHITE disc whose glyph is the bubble's OWN dark gradient
+      stop — legible on every hue by construction, **4.92:1 at worst** — plus a `ring-1 ring-black/10`
+      hairline, because a white disc on the orange's pale end is only 1.92:1 against it. New
+      `bubbleGlyphColor()` beside the palette; `mine` wins over the group branch, or my own bubble borrows a
+      stranger's hue (proven by mutation).
+- [x] **The ✓✓ was inverted, not merely faint.** Read = accent **1.34:1**, delivered = white 70% **1.77:1**
+      on the orange bubble's pale stop — the state the owner asked to see at a glance was the fainter one.
+      Read is now solid white (2.26:1), delivered white 55% (1.57:1), so the distinction rides opacity on a
+      surface built for white text. Said plainly: neither clears AA and neither can on a mid-tone fill; a
+      tick is a small indicator beside a label that names the state in words, and every alternative measured
+      worse. The accent stays the read-vs-delivered vocabulary everywhere it sits on a card.
+- [x] **The waveform (18 bars) replaces the progress track INSIDE the same element**, so `role="slider"`,
+      its aria values and `onClick={seek}` survive — losing them would remove the only way a screen reader
+      has to report or move the position.
+- [x] **The text field was the smallest thing in the row the screen is for**: 190px at 390px against the
+      board's 274. The attach clip moves INSIDE the field, recovering its whole 42px cell without removing a
+      control — **190px → 232px**, re-measured across the same 12 combinations as v2.106.38, still `gap=0`,
+      `belowNav=false`, `offscreen=false` in all twelve. Logical properties (`pe-`/`end-`), because this app
+      renders Arabic and the owner's own thread has an Arabic message in it.
+- [x] **Removed a claim the app cannot keep.** Every media viewer said *"Media is end-to-end encrypted"*
+      while `messages.body` is plain `text` and `server/v2db.ts` runs `like(messages.body, '%…%')`. Now
+      *"Encrypted in transit · stays in the app"*, which is what the v2.99.14 streaming proxy delivers.
+      Board 1d's centre chip asks for a second such claim; it is DECLINED, with the schema and the query
+      pinned as the reason.
+- [x] **`.rglass` painted nothing in the light theme**, and `Admin.tsx` had patched it at ONE of five call
+      sites. `background` as a SHORTHAND reset `background-color` to transparent; the hairline was white at
+      9%, invisible on light. Now `background-color: var(--card)` + `background-image:` +
+      `border: 1px solid var(--border)`; dark is unchanged, the four other consumers get the fix, and the
+      local `GLASS_SURFACE` workaround is deleted.
+- [x] **The 1:1 header's voice chip was `#22c55e` — the Registered badge's exact green, rendered ~40px to
+      its left.** One green, two meanings, side by side in the owner's screenshot. Now `.rchip-accent`, with
+      video before call per the board.
+- [x] **Typing was announced twice in a group** (the header arm and `TypingLine`) and the header arm also
+      dropped "5 members · 3 online" the moment anybody typed. The header arm now yields, because
+      `TypingLine` names WHO and colours them per person.
+- [x] Both bubble timestamp rows take the board's mono 9px, matching the day divider on the same screen.
+
+`client/src/app/conversationFrame.test.ts` (15). **All 18 tripwires verified by MUTATION** off a
+confirmed-green baseline from byte-exact backups, the mutator aborting unless its target occurs exactly
+once, sources byte-identical afterwards — including the card recipe reinstated on the bubble, the tick
+ordering inverted, the physical-property spelling and the end-to-end claim restored verbatim. One aborted
+at 0 occurrences on a needle of mine and bit once re-anchored.
+
+**Nine pre-existing pins rewritten to the property**, and the pattern is worth stating: three froze a tick
+colour, one froze the card recipe on the bubble, two located the attach control by its POSITION, one froze
+the player's whole prop list (so adding `glyph` broke it), one froze the header's exact typing condition,
+and one anchored on the untrue sentence. **And one filter was its own prose trap, which fired**:
+`deliveryReceipts.test.ts` forbade the old `✓✓` glyphs in CODE by dropping lines that START with `//`, `*`
+or `/*` — a block comment whose continuation lines begin with an ordinary word is dropped by none of those,
+so a new comment recording the measured contrast turned it red on correct code; it now uses the shared
+`codeOnly`, which strips comment SPANS.
+
+**Not verified on a device**, said plainly: every number is a contrast ratio computed from pixels painted in
+a real browser or a width measured against the real built stylesheet, but nobody has played a voice note on
+the owner's phone — and this is on a branch, so it changes nothing they can see until PR #128 merges, which
+they asked me to hold. No schema change, no new dependency, no new env var. 4792 tests.
+
 ## v2.106.39 — the scroll listener I added did nothing, and a third unguarded read (2026-07-31)
 
 Both found by the design run's synthesis reading v2.106.38, both verified before being touched.

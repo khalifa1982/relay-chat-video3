@@ -67,11 +67,19 @@ describe("1 — last seen carries the time on every dated branch", () => {
 });
 
 describe("2a — one + replaces the media and paperclip buttons", () => {
-  it("the composer row has a single attach control", () => {
-    const row = MESSAGES.slice(MESSAGES.indexOf('<div className="flex items-end gap-1.5">'));
-    const composer = row.slice(0, row.indexOf("<Input"));
-    expect(composer).toMatch(/<Plus className=/);
-    // The two icons it replaced must no longer be buttons in the row.
+  it("the composer has a single attach control", () => {
+    /* RE-ANCHORED (v2.106.40). This sliced from the composer row's opening div to `<Input`,
+       which located the control by its POSITION BESIDE THE FIELD — so board 1d moving it
+       INSIDE the field turned it red while saying nothing about the property. THE PROPERTY
+       is that there is exactly ONE attach affordance and the two icons it replaced are not
+       buttons anywhere in the composer, wherever the one control now sits. */
+    const composer = MESSAGES.slice(
+      MESSAGES.indexOf('<div className="flex items-end gap-1.5">'),
+      MESSAGES.indexOf('aria-label={recording ? "Stop" : "Record"}'),
+    );
+    expect(composer.length).toBeGreaterThan(500);
+    expect((composer.match(/<Plus className=/g) ?? []).length, "exactly one").toBe(1);
+    // The two icons it replaced must no longer be buttons in the composer.
     expect(composer).not.toMatch(/<ImageIcon className="size-5"/);
     expect(composer).not.toMatch(/<Paperclip className="size-5"/);
   });
@@ -94,10 +102,12 @@ describe("2a — one + replaces the media and paperclip buttons", () => {
   it("the + is a plain toggle — it no longer depends on recorder support", () => {
     // It used to open the menu only when a recorder existed and otherwise jump
     // straight to the library, which would now hide "Attach file" entirely.
-    const composer = MESSAGES.slice(MESSAGES.indexOf('<div className="flex items-end gap-1.5">'));
-    expect(composer.slice(0, composer.indexOf("<Input"))).toMatch(
-      /onClick=\{\(\) => setAttachMenuOpen\(\(v\) => !v\)\}/
+    const composer = MESSAGES.slice(
+      MESSAGES.indexOf('<div className="flex items-end gap-1.5">'),
+      MESSAGES.indexOf('aria-label={recording ? "Stop" : "Record"}'),
     );
+    expect(composer.length).toBeGreaterThan(500);
+    expect(composer).toMatch(/onClick=\{\(\) => setAttachMenuOpen\(\(v\) => !v\)\}/);
   });
 });
 

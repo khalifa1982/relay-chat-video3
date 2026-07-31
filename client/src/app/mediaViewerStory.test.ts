@@ -60,11 +60,17 @@ describe("board 4e — the fullscreen media viewer carries its context", () => {
   });
 
   it("the encryption footer cannot swallow the tap that closes the viewer", () => {
-    // The whole backdrop is the close target, so any full-width overlay on top of it
-    // has to be inert or it becomes a dead zone.
-    const at = src.indexOf("Media is end-to-end encrypted");
+    /* The whole backdrop is the close target, so any full-width overlay on top of it has to
+       be inert or it becomes a dead zone.
+       RE-ANCHORED (v2.106.40): this located the footer by its COPY, and the copy said
+       "Media is end-to-end encrypted" — a claim the app cannot keep, since `messages.body` is
+       plain `text` and the server runs a SQL `LIKE` over it. The property here is the
+       INERTNESS, not the sentence, so it now anchors on the word the footer will always
+       carry and asserts the honest wording separately. */
+    const at = src.indexOf("Encrypted in transit");
     expect(at).toBeGreaterThan(-1);
     expect(src.slice(Math.max(0, at - 400), at)).toMatch(/pointer-events-none/);
+    expect(src, "and it must not claim end-to-end").not.toMatch(/end-to-end/i);
   });
 
   it("the media is shorter than the viewport so the caption has room", () => {
