@@ -11278,6 +11278,76 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.51 — mesh remote audio was never played out on a call with no video (2026-07-31)
+
+**THE FOURTH INDEPENDENT WAY A CALL COULD CARRY NOTHING**, found by measurement an hour after
+v2.106.48-50 deployed, and the one that would have bitten the fallback those releases added.
+
+**MEASURED FIRST.** A real two-browser mesh VOICE call: inbound `totalAudioEnergy` **exactly 0 on
+both sides, 6 runs of 6**, while ~508 audio packets/side/direction arrived with 0 loss and
+candidate-pair `succeeded`. The same counter reads 2.3-3.5 on a mesh VIDEO call. That counter is the
+energy of audio actually PLAYED OUT, so zero while packets arrive = received audio never rendered.
+
+**THE THREE COMFORTABLE EXPLANATIONS, EXCLUDED BY A CONTROL WITH NO RELAY CODE IN IT**
+(`scratchpad/energy-control.mjs`) — a bare two-PC loopback, same browser, same fake mic:
+audio-only **2.01**, element `visibility:hidden` **1.99**, `--mute-audio` FORCED **1.87**. So the
+counter works for audio-only here, muting does not zero it, and hiding the element does not either.
+(My first attempt at that control crashed because `about:blank` is not a secure context and
+`navigator.mediaDevices` was undefined — it failed LOUDLY, which mattered: a silent 0 would have
+"confirmed" the artifact theory on a broken harness.)
+
+**MECHANISM.** `attachRemote` gave the tile's `<video>` the whole stream, and `collectAudioEls`'
+own comment said so: *"mesh remote `<video>`s (audio rides the video element)"*. On a voice call
+that stream also carries a video track that never delivers a frame (the offerer always negotiates a
+null-track video m-line for the mutual-consent slot). A `<video>` cannot reach HAVE_METADATA without
+dimensions and a frameless track supplies none, so the element parked at `readyState 0`
+(`emptied -> play -> waiting`), its `play()` promise never settled, and the audio beside it was
+never played. Isolated three ways: strip the frameless track -> 2.64-2.77 with `currentTime`
+advancing in real time; turn both cameras on mid-call via the app's OWN buttons with no patch ->
+0 -> 1.09/1.33 and the element completes to `playing`; hand the same audio to a plain `<audio>` ->
+2.50-2.61 while the engine's `<video>` stays stuck. **Neither nominated suspect was involved** —
+killing the WebAudio metering tap and no-op'ing `setSinkId` both left energy at 0.0000.
+
+**NEVER ONLY ABOUT VOICE MODE.** The trigger is NO INCOMING VIDEO FRAMES, so it equally covered
+every 1:1 video dial answered with the plain Answer button (v2.81: no camera transmits until
+consent — measured at 0.0000) and any group participant with their camera off. **And the SFU path is
+structurally immune** (it attaches per track), so this bites through the MESH — exactly where
+v2.106.48's new fallback lands a call. A release written because the SFU was unusable was routing
+calls onto a transport whose voice calls had no sound.
+
+**FIX** — the shape the same file already uses on the other transport: each mesh peer gets its own
+`<audio>` (`PeerEntry.audioEl`) appended to the tile so it is IN the document (a detached element is
+not a reliable playout path on Android Chrome), and the `<video>` gets `getVideoTracks()` only.
+- The frameless consent track STILL reaches the video element, deliberately: a mid-call camera-on
+  arrives by `replaceTrack` on that same track object with no new `ontrack`, so filtering it would
+  mean the camera never appears.
+- `collectAudioEls` is the load-bearing edit, not the new element: it is the ONLY route to remote
+  audio, so the output-device picker, `armAudioUnlock`'s tap-to-recover and the forced-loudspeaker
+  route all reach it through that one function.
+- The msid-less merge accumulator moved onto `PeerEntry.remoteStream`; it read the tile `<video>`'s
+  `srcObject`, which would now quietly DROP the peer's audio — the very bug that path was written to
+  prevent, one layer along.
+- `releasePeerAudio` is ONE helper for BOTH teardown paths (active and held), because a detached
+  element with a live `srcObject` can keep playing in Chrome.
+
+**VERIFIED BY DRIVING REAL CALLS**: mesh voice 0.0000/0.0000 -> **2.677 / 2.728** (512/511 packets,
+`audioBothWays` true); mesh video unchanged and correct at **2.293 / 2.474** audio AND 283/374 video
+packets. **10 of 10 tripwires mutation-verified** off a confirmed-green baseline from byte-exact
+backups, aborting unless the target occurs exactly once, source byte-identical afterwards.
+
+**A PRE-EXISTING PIN HAD FROZEN THE DEFECT — the seventh time this session.**
+`androidAudioCamera.test.ts` required the literal `v.srcObject = stream;[\s\S]*?void v.play()`,
+i.e. it mandated the line that made every voice call silent, under a title about preventing silence.
+Rewritten to the property.
+
+**LIMITS, plainly**: Blink only (Chromium 141 = Android Chrome's engine); iOS Safari untested, no
+WebKit build available here — the mechanism is spec-plausible rather than a Chromium quirk, but that
+is an argument, not a measurement. And this proves RTP is now PLAYED, not that it is AUDIBLE: there
+is no audio output device here, and nobody has heard a call on the owner's phone.
+
+`client/src/lib/meshAudioPlayout.test.ts` (10). No schema change, no new dependency, no new env var.
+4931 tests.
+
 ## v2.106.50 — remote audio was gated behind a video tile existing (2026-07-31)
 
 Found by the root-cause run reading the subscribe side, and it is the third independent

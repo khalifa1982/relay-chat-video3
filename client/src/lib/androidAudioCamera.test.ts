@@ -12,10 +12,27 @@ const CLIENT = fs.readFileSync(path.resolve(__dirname, "relayClient.ts"), "utf8"
 const PIPE = fs.readFileSync(path.resolve(__dirname, "mediaPipeline.ts"), "utf8");
 
 describe("Android incoming-audio fixes", () => {
-  it("mesh remote <video> explicitly calls play() (Android autoplay-with-audio gate)", () => {
-    // attachRemote must play() the element after srcObject, with a one-tap unlock
-    // fallback — without play() the remote element stays paused and audio is silent.
-    expect(CLIENT).toMatch(/v\.srcObject = stream;[\s\S]*?void v\.play\(\)\.catch\(\(\) => armAudioUnlock\(\)\)/);
+  it("every remote element attachRemote sets up gets an explicit play() with the one-tap unlock", () => {
+    // THE PROPERTY: Android gates an unmuted element's autoplay until an explicit
+    // play(), so a remote element that is never played stays silent. Each element
+    // attachRemote points at a stream must therefore be played, with
+    // armAudioUnlock() as the rejection fallback.
+    //
+    // REWRITTEN in v2.106.51. This assertion used to require the literal
+    // `v.srcObject = stream;` — i.e. it FROZE THE DEFECT: handing the tile <video>
+    // the whole stream is precisely what made every voice call silent (a <video>
+    // cannot start playback until its video track delivers a frame, so the audio
+    // beside it was never played out). Pinning that line would have forbidden the
+    // fix while claiming to protect against silence.
+    const at = CLIENT.indexOf("function attachRemote(");
+    expect(at).toBeGreaterThan(0);
+    const body = CLIENT.slice(at, CLIENT.indexOf("\n  function ", at + 10));
+    expect(body.length).toBeGreaterThan(400); // the slice is real, not empty
+    // Audio: its OWN element, played, with the unlock fallback.
+    expect(body).toMatch(/ae\.srcObject = new MediaStream\(audioTracks\);/);
+    expect(body).toMatch(/void ae\.play\(\)\.catch\(\(\) => armAudioUnlock\(\)\)/);
+    // Video: the tile element, played, with the unlock fallback.
+    expect(body).toMatch(/void v\.play\(\)\.catch\(\(\) => armAudioUnlock\(\)\)/);
     expect(CLIENT).toMatch(/function armAudioUnlock/);
   });
 

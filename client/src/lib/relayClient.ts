@@ -84,6 +84,17 @@ interface PeerEntry {
    *  upgrades the generic "connecting…" placeholder to a named "Waiting for
    *  X…" so a slow/stuck first connect doesn't look identical to a normal one. */
   slowT?: ReturnType<typeof setTimeout> | null;
+  /** This peer's remote audio, on its OWN <audio> element (v2.106.51).
+   *  It must never ride the tile's <video>: a <video> cannot begin playback
+   *  until its video track delivers a frame, so on a call where no camera is
+   *  transmitting the element parks at readyState 0 and the audio attached
+   *  beside it is never played out. See attachRemote for the measurement. */
+  audioEl?: HTMLAudioElement | null;
+  /** The full remote stream as accumulated from every ontrack for this peer
+   *  (audio + video). The msid-less merge path needs an accumulator, and it
+   *  used to read one back off the tile <video>'s srcObject — which stops
+   *  being the whole picture once audio lives on its own element. */
+  remoteStream?: MediaStream | null;
 }
 interface PendingRing { from: string; fromName: string; roomId: string; flag?: string; video?: boolean; at?: number; }
 interface Recent { id: string; name: string; }
@@ -1700,11 +1711,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function toggleQuality() { void setVideoQuality(videoQuality === "high" ? "low" : "high"); }
 
   // ---------- audio output routing (speaker / earpiece / headset / Bluetooth) ----------
-  /** Every remote-audio-producing element: mesh remote <video>s (audio rides the
-   *  video element) + SFU detached <audio>s. */
+  /** Every remote-audio-producing element: each mesh peer's own <audio> +
+   *  SFU detached <audio>s.
+   *
+   *  THIS FUNCTION IS THE ONLY ROUTE TO REMOTE AUDIO, so anything added here
+   *  has to be added here or three shipped features silently stop covering it:
+   *  the output-device picker (applyAudioSink), armAudioUnlock's tap-to-recover,
+   *  and the forced-loudspeaker route all reach remote audio ONLY through this.
+   *  Mesh audio moved off the tile <video> in v2.106.51; the <video>s are still
+   *  collected because they still need play() re-kicked for VIDEO autoplay, and
+   *  routeElToLoudspeaker skips any element whose stream has no audio track. */
   function collectAudioEls(): HTMLMediaElement[] {
     const els: HTMLMediaElement[] = [];
     for (const pin in peers) {
+      const a = peers[pin].audioEl as HTMLMediaElement | null | undefined;
+      if (a) els.push(a);
       const v = peers[pin].el?.querySelector("video") as HTMLMediaElement | null;
       if (v) els.push(v);
     }
@@ -4993,8 +5014,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // srcObject and with it the peer's ALREADY-ATTACHED AUDIO — one
       // camera-less participant silently killed their own audio for everyone.
       // Merge the bare track into the tile's existing stream instead.
-      const cur = (peers[pin]?.el?.querySelector("video") as HTMLVideoElement | null)
-        ?.srcObject as MediaStream | null;
+      // Accumulate onto the entry's own record of the remote stream. This used
+      // to read the tile <video>'s srcObject as the accumulator, which stopped
+      // being the whole picture in v2.106.51 when audio moved to its own
+      // element — the <video> now holds video tracks only, so merging onto it
+      // would have quietly dropped this peer's audio.
+      const cur = peers[pin]?.remoteStream || null;
       const merged = cur || new MediaStream();
       try { if (e.track) merged.addTrack(e.track); } catch { /* dup add — fine */ }
       attachRemote(pin, merged);
@@ -5140,6 +5165,23 @@ export function startRelay(root: HTMLElement): RelayHandle {
       try { p.pc.setConfiguration(iceConfig as RTCConfiguration); } catch { /* */ }
     });
   }
+  /** Stop and drop a peer's own <audio> (v2.106.51).
+   *
+   *  Removing the tile takes the element out of the DOM with it, but a detached
+   *  media element with a live srcObject can KEEP PLAYING in Chrome — so a
+   *  departed peer could still be heard. Closing the pc ends their tracks, which
+   *  covers it in practice; this makes it true by construction instead. ONE
+   *  helper because there are TWO teardown paths (active and held) and a rule
+   *  living at each call site is a rule one of them eventually forgets. */
+  function releasePeerAudio(e: PeerEntry) {
+    const ae = e.audioEl;
+    e.remoteStream = null;
+    if (!ae) return;
+    try { ae.pause(); } catch { /* */ }
+    try { ae.srcObject = null; } catch { /* */ }
+    try { ae.remove(); } catch { /* */ }
+    e.audioEl = null;
+  }
   function removePeer(pin: string, quiet = false) {
     // A genuine departure clears any "they put us on hold" state for the pin
     // (quiet rebuilds — ICE-restart re-offers — keep it; the peer isn't gone).
@@ -5155,6 +5197,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (h.graceT) { clearTimeout(h.graceT); h.graceT = null; }
       if (h.restartT) { clearTimeout(h.restartT); h.restartT = null; }
       try { h.pc.close(); } catch { /* */ }
+      releasePeerAudio(h);
       if (h.el && h.el.parentNode) h.el.parentNode.removeChild(h.el);
       delete heldPeers[pin];
       if (Object.keys(heldPeers).length === 0) { heldRoomId = null; heldLabel = null; updateHeldBar(); }
@@ -5167,6 +5210,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (e.restartT) { clearTimeout(e.restartT); e.restartT = null; }
     if (e.slowT) { clearTimeout(e.slowT); e.slowT = null; }
     try { e.pc.close(); } catch { /* */ }
+    releasePeerAudio(e);
     if (e.el) e.el.remove();
     delete peers[pin];
     unregisterMeshAnalyser(pin);
@@ -5713,15 +5757,60 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!entry.el) return;
     entry.gotStream = true;
     clearSlowConnect(entry);
+    entry.remoteStream = stream;
     const v = entry.el.querySelector("video") as HTMLVideoElement | null;
-    if (v) {
-      v.srcObject = stream;
-      void applyAudioSink(v);
+    // ── AUDIO GETS ITS OWN ELEMENT. THIS IS NOT A TIDY-UP. ───────────────────
+    // Audio used to ride the tile's <video> (`v.srcObject = stream`), and that
+    // made every voice call SILENT. Measured, in this browser, 6 runs of 6:
+    // inbound totalAudioEnergy EXACTLY 0 while ~508 audio packets/side arrived
+    // with 0 loss; the same counter reads 2.3-3.5 on a call with video.
+    //
+    // WHY: the offerer always negotiates a null-track video m-line for the
+    // mutual-consent slot (see createPeer), so on a voice call the remote
+    // stream carries a video track that will never deliver a frame. A <video>
+    // cannot reach HAVE_METADATA without dimensions, and a frameless track
+    // supplies none — so the element parks at readyState 0 with the trace
+    // `emptied -> play -> waiting`, its play() promise NEVER SETTLES, and the
+    // audio sitting in the same stream is never played out. Confirmed with a
+    // zero-RELAY-code loopback: audio-only -> a <video> plays; audio + a
+    // sendrecv video transceiver with NO track -> the <video> stalls exactly
+    // like this; the SAME stream handed to an <audio> plays.
+    //
+    // The trigger is "no incoming video frames", so this was NEVER only about
+    // voice mode: it also covered every 1:1 video dial before consent (v2.81
+    // means no camera transmits yet) and any group participant with their
+    // camera off. And it bites hardest via the mesh, which is exactly where
+    // v2.106.48's new SFU fallback lands a call.
+    //
+    // The SFU path already got this right — it attaches per track (see
+    // TrackSubscribed) — so this makes the two transports agree.
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length) {
+      let ae = entry.audioEl;
+      if (!ae) {
+        ae = document.createElement("audio");
+        ae.autoplay = true;
+        ae.style.display = "none";
+        // A child of the tile, so peer teardown removes it with the tile. It is
+        // IN the document deliberately: a detached element is not a reliable
+        // playout path on Android Chrome (the reason the SFU path inserts too).
+        entry.el.appendChild(ae);
+        entry.audioEl = ae;
+      }
+      ae.srcObject = new MediaStream(audioTracks);
+      void applyAudioSink(ae);
       // Android Chrome gates an unmuted element's autoplay until an explicit
-      // play() — without this the remote <video> stays PAUSED and INCOMING AUDIO
-      // is silent (outgoing is unaffected). Mirrors the LiveKit video path. iOS
-      // treats this as a no-op, so it's safe there. If play() is rejected (no
-      // user gesture yet), arm a one-tap recovery so audio is never stuck silent.
+      // play(). If play() is rejected (no user gesture yet), arm a one-tap
+      // recovery so incoming audio is never stuck silent.
+      void ae.play().catch(() => armAudioUnlock());
+      if (loudspeakerOn) routeElToLoudspeaker(ae);
+    }
+    if (v) {
+      // VIDEO ONLY. Handing it the audio too is the defect above; and it must
+      // still receive the frameless consent track, because a mid-call camera-on
+      // arrives by replaceTrack on that same track object (no new ontrack), so
+      // dropping it here would mean the camera never appears.
+      v.srcObject = new MediaStream(stream.getVideoTracks());
       void v.play().catch(() => armAudioUnlock());
     }
     const c = entry.el.querySelector(".connecting") as HTMLElement | null;
