@@ -51,6 +51,15 @@ export interface StatEntry {
   framesPerSecond?: number;
   bytesSent?: number;
   bytesReceived?: number;
+  /* THE THERMAL PAIR (v2.106.56). `encoderImplementation` names the encoder the
+     browser actually chose — a value containing "libvpx"/"openh264" is SOFTWARE
+     (the phone's CPU), while "VideoToolbox"/"ExternalEncoder"/"MediaFoundation"
+     is the hardware block. `qualityLimitationReason === "cpu"` is the
+     throttling itself, reported by the sender. Both are standard
+     `outbound-rtp` fields, so they read identically on the mesh and on
+     mediasoup. */
+  encoderImplementation?: string;
+  qualityLimitationReason?: string;
 }
 
 /**
@@ -105,6 +114,24 @@ export interface CallStats {
   kbpsDown: number | null;
   /** How many peer connections / tracks this summary covers. */
   legs: number;
+  /**
+   * WHERE our video is being encoded, verbatim from the browser. Null when we are
+   * publishing no video (a voice call) or the UA does not report it.
+   *
+   * This is the pass/fail signal for the H.264 preference: on an iPhone it must
+   * read a hardware encoder. VP8 has no hardware encoder there, so a software
+   * value on a video call means the phone is burning CPU for the call's duration.
+   */
+  encoder: string | null;
+  /** True when the encoder names a known SOFTWARE implementation. Null = unknown. */
+  encoderSoftware: boolean | null;
+  /**
+   * The sender's own reason for degrading quality. `"cpu"` is the thermal-throttle
+   * smoking gun — the device could not keep up, which is exactly what a hot phone
+   * looks like from inside the page. WORST-CASE across legs, like `path`: one
+   * cpu-limited leg is a cpu-limited call.
+   */
+  limitedBy: string | null;
 }
 
 /** Byte counters plus the moment they were read, so the next call can difference them. */
@@ -138,6 +165,8 @@ export function summarizeStats(
   let sawPair = false;
   let up: CallStats["up"] = null;
   let down: CallStats["down"] = null;
+  let encoder: string | null = null;
+  let limitedBy: string | null = null;
   let bytesSent = 0;
   let bytesReceived = 0;
   let legs = 0;
@@ -189,6 +218,21 @@ export function summarizeStats(
 
       if (e.type === "outbound-rtp") {
         bytesSent += num(e.bytesSent) ?? 0;
+        /* VIDEO ONLY, and the guard matters: an audio outbound-rtp reports no
+           encoder and no limitation, so folding it in would let a voice leg
+           overwrite a real video reading with nulls. A frame size is the test
+           that works even when `kind` is absent (older UAs spell it
+           `mediaType`), because only video has one. */
+        const isVideo = e.kind === "video" || e.mediaType === "video" ||
+                        (num(e.frameWidth) ?? 0) > 0;
+        if (isVideo) {
+          const impl = typeof e.encoderImplementation === "string" ? e.encoderImplementation : null;
+          if (impl) encoder = impl;
+          const lim = typeof e.qualityLimitationReason === "string" ? e.qualityLimitationReason : null;
+          /* "none" is the healthy value and must not shadow a real reason from
+             another leg — worst-case wins, and cpu outranks everything. */
+          if (lim && lim !== "none" && (limitedBy === null || lim === "cpu")) limitedBy = lim;
+        }
         const w = num(e.frameWidth);
         const h = num(e.frameHeight);
         // LARGEST, not last: with simulcast a publisher reports one outbound-rtp per
@@ -234,9 +278,32 @@ export function summarizeStats(
       kbpsUp,
       kbpsDown,
       legs,
+      encoder,
+      encoderSoftware: encoder === null ? null : isSoftwareEncoder(encoder),
+      limitedBy,
     },
     sample,
   };
+}
+
+/**
+ * Is this encoder name a SOFTWARE implementation?
+ *
+ * Matched on the software names rather than the hardware ones, deliberately: the
+ * hardware list is open-ended and vendor-specific (VideoToolbox, MediaFoundation,
+ * ExternalEncoder, NVENC, …), so an unrecognised value would read as "software"
+ * and cry wolf on a perfectly good call. The software encoders are a short, stable,
+ * well-known set. An unknown name is therefore NOT reported as software — it
+ * reports as not-software, which is the quiet direction to be wrong in.
+ *
+ * Chromium prefixes its own with "libvpx"/"libaom"/"OpenH264"; a value may also be
+ * decorated, e.g. "SimulcastEncoderAdapter (libvpx, libvpx)", so it is a substring
+ * test rather than an equality one.
+ */
+export function isSoftwareEncoder(impl: string): boolean {
+  const v = impl.toLowerCase();
+  return v.includes("libvpx") || v.includes("libaom") || v.includes("openh264") ||
+         v.includes("ffmpeg") || v.includes("x264");
 }
 
 /** One line, for the in-call chip. Every field is omitted rather than shown empty,
@@ -253,6 +320,12 @@ export function formatCallStats(s: CallStats): string {
   if (s.kbpsUp !== null) parts.push(`↑${s.kbpsUp}kbps`);
   if (s.down) parts.push(`↓${s.down.w}×${s.down.h}${s.down.fps !== null ? `@${Math.round(s.down.fps)}` : ""}`);
   if (s.kbpsDown !== null) parts.push(`↓${s.kbpsDown}kbps`);
+  /* THE THERMAL READOUT. Only the BAD cases are surfaced in the chip: a hardware
+     encoder is the expectation, so naming it every call would be noise, while
+     "sw encode" and "cpu limited" are the two words that explain a hot phone. The
+     raw `encoder` string stays on the object for the debug log and the harness. */
+  if (s.encoderSoftware === true) parts.push("sw encode");
+  if (s.limitedBy === "cpu") parts.push("cpu limited");
   return parts.length ? parts.join(" · ") : "measuring…";
 }
 
@@ -266,6 +339,14 @@ export function formatCallStats(s: CallStats): string {
  */
 export function callStatsVerdict(s: CallStats): "relay" | "poor" | "ok" {
   if (s.path === "relay") return "relay";
+  /* A CPU-LIMITED SENDER IS A POOR CALL EVEN WHEN THE NETWORK NUMBERS ARE PERFECT,
+     and that is the whole point of reading it: thermal throttling degrades the
+     picture with a 1ms RTT and zero loss, so every other threshold here says the
+     call is fine while the person is watching it fall apart. Software encoding
+     ALONE is deliberately NOT poor — it is a warning sign about heat over time,
+     not a statement about this instant, and a desktop encoding VP8 in software is
+     perfectly healthy. */
+  if (s.limitedBy === "cpu") return "poor";
   if ((s.rttMs ?? 0) > 300) return "poor";
   if ((s.lossPct ?? 0) > 5) return "poor";
   if ((s.jitterMs ?? 0) > 50) return "poor";

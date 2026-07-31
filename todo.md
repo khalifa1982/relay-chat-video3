@@ -11278,6 +11278,105 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.56 — where the video is encoded (2026-07-31)
+
+Owner doc: the phone becomes very hot after 20–30 min of a call, very likely also the
+long-standing "video degrades mid-call" complaint — heat → throttling → the encoder
+starves. Servers were exonerated with measurements earlier; this is the device side.
+
+- [x] **THE AUDIT CHANGED THE SCOPE, AND THREE OF THE FIVE ITEMS WERE ALREADY TRUE.**
+      Measured before touching anything: **single encoding** — the mesh publishes with
+      plain `addTrack` and never supplies `sendEncodings`, so `encodingsPerSender: 1`.
+      The doc's "2–3 simultaneous copies" was a behaviour of the DELETED hosted-SFU
+      client, whose SDK defaults simulcast on. **Voice mode** already opens no camera
+      (v2.106.44 makes the constraint literally `video: false`). **contentHint=motion
+      and degradationPreference=balanced** are both already present and pinned. No
+      brightness forcing exists to remove. Those are reported as confirmed rather than
+      rebuilt, and each is now pinned so it cannot regress.
+- [x] **AND ITS HEADLINE FIX TARGETED A PATH THAT DOES NOT EXIST.** The doc says "all in
+      the mediasoup client path" with `sendTransport.produce({codec: h264})`; there is
+      no mediasoup client — `client/src/lib/` has no such module and nothing imports
+      `mediasoup-client`. **Every call today is the MESH.** So the fix goes where the
+      calls are: `setCodecPreferences` on the video transceiver. Same decision one
+      layer up when the cutover lands.
+- [x] **THE DEFECT IS REAL AND LIVE, and the mechanism is sharper than the doc states.**
+      Nothing pins a codec anywhere, so the stack default applies — and MEASURED in
+      this repo's Chromium, a default offer lists **VP8 first**. An answerer normally
+      adopts the OFFERER's order, so an iPhone answering a Chrome desktop encodes VP8
+      **in software** (iPhones have no VP8 hardware encoder), while H.264 goes to
+      VideoToolbox and is nearly free. That asymmetry is why the heat was situational
+      rather than constant.
+- [x] **APPLIED ON BOTH SIDES**, and the answerer half is the one that matters: pinning
+      only our own offers would leave exactly the Chrome→iPhone case that burns the
+      phone. `preferHardwareVideoCodec` runs in `createPeer` and again before
+      `createAnswer`.
+- [x] **IT REORDERS AND NEVER RESTRICTS, and that is measured rather than argued.** A
+      list containing only H.264 fails to negotiate video at all against a peer that
+      has none — a dead tile instead of a warm phone, which is worse than the bug.
+      Proven on a real peer connection with VP9 standing in for H.264 (this build has
+      **0 H.264 variants**, so H.264 itself cannot be moved here): reordering gives
+      `VP9, VP8, AV1, …` with every codec kept, while the RESTRICTING version gives
+      **`["VP9"]` alone**. Baseline + `packetization-mode=1` (`42e01f`) ranks first
+      among the H.264 variants, because that is what iPhone hardware encodes — a
+      high-profile entry first could land the phone back in software.
+- [x] **A BUILD WITH NO H.264 IS A NO-OP, not a throw and not an empty list.**
+      `setCodecPreferences([])` RESETS preferences and a list missing required entries
+      raises `InvalidModificationError`, so the absent case returns before touching any
+      transceiver — measured: order unchanged, nothing thrown.
+- [x] **THE APP BACKGROUND WAS PAINTING BEHIND EVERY CALL, and this is the one with a
+      number attached.** `RelayBackground`'s rAF gated only on `document.hidden` and
+      reduced motion; it is mounted by the app SHELL and the call UI is a fixed overlay
+      over it, so a full-screen animated scene kept compositing at 30fps behind a live
+      call, entirely invisible. **DRIVEN against the real engine: 204,073 canvas fill
+      operations in 1.5s (~136k/s) → 0 while the call flag is set → 204,073 again after
+      it clears**, so it genuinely resumes rather than dying (the loop is re-armed
+      BEFORE the gate — returning first is the v2.99.67 bug, which here would mean the
+      background never comes back).
+- [x] **THE FLAG IS OWNED BY THE ONE SCREEN SWITCHER.** Paired to `enterCallUI` and a
+      teardown instead, the two could drift and either leak it — freezing the
+      background for the session — or miss a path and keep painting. In `show()` it
+      cannot mean anything but which screen is active, and it covers the PRE-CONNECT
+      dial card too, which is equally full-screen. `destroy()` clears it as well,
+      because `<html>` outlives the engine.
+- [x] **THE TWO SIGNALS THAT PROVE THE FIX NOW REACH THE READOUT.** `framesPerSecond`
+      was already captured; `encoderImplementation` and `qualityLimitationReason` — the
+      actual pass/fail signals — were not. Both are standard `outbound-rtp` fields, so
+      they read identically on the mesh and under mediasoup. **`isSoftwareEncoder`
+      matches the SOFTWARE names, not the hardware ones**, deliberately: the hardware
+      list is open-ended and vendor-specific, so an unrecognised value would read as
+      software and cry wolf on a healthy call.
+- [x] **A CPU-LIMITED SENDER IS NOW A POOR CALL, and software encoding alone is NOT.**
+      Thermal throttling degrades the picture at 1ms RTT with zero loss, so every
+      network threshold says the call is fine while the person watches it fall apart —
+      that is why it earns its own verdict. Software encoding is a warning about heat
+      over TIME, not a statement about this instant, and a desktop encoding VP8 in
+      software is perfectly healthy.
+- [x] **VIDEO-ONLY GUARD ON THE READ**: a voice `outbound-rtp` reports no encoder and no
+      limitation, so folding it in would blank a real video reading — the shape of a
+      bug that presents as "the telemetry does not work" on exactly the calls that have
+      video.
+- [x] **17 of 17 tripwires verified by MUTATION** off a confirmed-GREEN baseline from
+      byte-exact backups, all three sources byte-identical afterwards.
+- [x] **TWO SURVIVED, both real gaps in my own tests, and the first is a trap this repo
+      has recorded before**: `CODE.slice(CODE.indexOf(x))` with `x` ABSENT is
+      `slice(-1)` — the last character of the file, non-empty — so my "the offerer
+      applies it" pin passed with the call deleted. The v2.99.78 negative-index trap,
+      reproduced in the test written to catch it. The second: the audio-leg case built
+      an audio entry carrying NO fields, so the `if (impl)` guard covered for the
+      missing kind check and deleting it changed nothing; the entry now carries values
+      and the guard is load-bearing. Both fixed and re-verified.
+- [x] **A PRE-EXISTING PIN WENT STALE, the fixed-slice fragility again**: `v2971Hold`
+      sliced a FIXED 400 characters from `destroy() {` and required `stopHoldMusic()`
+      inside it, so a comment added above the target broke it while saying nothing
+      about the property. Re-bounded by the function's own end, with a non-empty
+      assertion, and re-verified to bite.
+- [x] **NOT VERIFIED ON A PHONE, said plainly.** There is no iPhone here and no WebKit
+      build, so the one measurement that would settle it — `encoderImplementation`
+      flipping software → hardware on a real handset — is the owner's own verification
+      step and remains undone. What is proven: the reorder moves the SDP, the no-H264
+      path is safe, the background stops, and the two fields flow end to end.
+- [x] No schema change, no new dependency, no new env var. 4943 tests.
+
 ## v2.106.55 — the last SFU branch, in the store app (2026-07-31)
 
 Owner, quoting my own paragraph about not having done it back at me, prefixed with "Fix t":

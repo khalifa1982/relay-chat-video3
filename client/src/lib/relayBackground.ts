@@ -382,6 +382,16 @@ export function initRelayBackground(
     const dt = Math.min(50, now - last);
     last = now;
     if (typeof document !== "undefined" && document.hidden) return;
+    /* A LIVE CALL OWNS THE PHONE'S CPU, so stop painting for its duration. This
+     * canvas is mounted by the app SHELL and the call UI is a fixed overlay on
+     * top of it — the shell never unmounts — so without this gate a full-screen
+     * animated scene keeps compositing at 30fps BEHIND a call, entirely invisible,
+     * on the one screen where every spare cycle belongs to the video encoder.
+     * Same shape as the hidden-tab gate above (re-armed first, so it RESUMES the
+     * moment the call ends rather than dying), and read off the document because
+     * the engine is raw DOM while this is React — a flag they can both see beats
+     * threading state between them. */
+    if (typeof document !== "undefined" && document.documentElement.dataset.relayInCall === "1") return;
     acc += dt;
     if (acc < FRAME_MS) return;
     const step = acc;

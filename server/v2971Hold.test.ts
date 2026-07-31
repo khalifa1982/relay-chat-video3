@@ -99,8 +99,18 @@ describe("held 1:1 must NOT drop (v2.97.1)", () => {
   });
   it("being-held state dies with the call (cleanup + destroy)", () => {
     expect(CLIENT).toMatch(/peersHoldingUs\.clear\(\);\s*\n\s*cancelSoloEndGrace\(\);\s*\n\s*stopHoldMusic\(\);/);
-    const destroy = CLIENT.slice(CLIENT.indexOf("destroy() {"));
-    expect(destroy.slice(0, 400)).toMatch(/stopHoldMusic\(\);/);
+    /* BOUNDED BY destroy()'s OWN END, not by a fixed 400 characters. The old
+       window went stale the moment a line was added above its target — which is
+       exactly what happened when v2.106.56 put a comment there — so it failed on
+       correct source while saying nothing about the property, that a teardown
+       stops the hold music. (The v2.99.78 fixed-slice fragility.) */
+    const at = CLIENT.indexOf("    destroy() {");
+    expect(at, "destroy() must exist").toBeGreaterThan(0);
+    const after = CLIENT.slice(at);
+    const end = after.indexOf("\n    },");
+    const destroy = after.slice(0, end > 0 ? end : after.length);
+    expect(destroy.length, "the destroy slice must be real").toBeGreaterThan(200);
+    expect(destroy).toMatch(/stopHoldMusic\(\);/);
   });
 });
 

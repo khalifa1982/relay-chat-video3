@@ -939,6 +939,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
   const show = (s: string) => {
     root.querySelectorAll(".relay-screen").forEach(x => x.classList.remove("active"));
     $(s)?.classList.add("active");
+    /* PUBLISH "the call surface is on screen" for the app shell's background
+     * canvas, which pauses its rAF while this is set (relayBackground.ts).
+     * SET AND CLEARED IN THE ONE SWITCHER on purpose: paired to enterCallUI and a
+     * teardown instead, the two could drift and either leak the flag — freezing
+     * the background for the rest of the session — or miss a path and keep the
+     * canvas painting through a call. Here the flag cannot mean anything other
+     * than which screen is active. It covers the PRE-CONNECT dial card too, which
+     * is also full-screen and also wants the CPU. */
+    try {
+      const el = document.documentElement;
+      if (s === "call") el.dataset.relayInCall = "1";
+      else delete el.dataset.relayInCall;
+    } catch { /* non-DOM host — the canvas simply keeps its old behaviour */ }
   };
   const initials = (n: string | null) => (n || "?").trim().slice(0, 2).toUpperCase() || "?";
   const escapeHtml = (s: string) =>
@@ -3995,6 +4008,64 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // largest CPU lever left on this path, and it also fixes the audio half of the
   // same report: a thermally throttled phone starves its AUDIO encoder too, which
   // is heard as choppy, unclear sound. Capping video is what protects voice.
+  /* ASK FOR H.264 BEFORE VP8 ON EVERY VIDEO m-LINE — the biggest remaining
+   * thermal lever, and a different one from applyMeshVideoCaps below (that caps
+   * how MUCH we encode; this decides WHERE it is encoded).
+   *
+   * An iPhone has NO VP8 hardware encoder, so a VP8 call encodes on the CPU for
+   * its whole duration, while H.264 goes to the dedicated VideoToolbox encoder
+   * and is nearly free. Nothing in this codebase pinned a codec, so the stack
+   * default applied — and MEASURED, Chromium offers VP8 FIRST. Since an answerer
+   * normally adopts the OFFERER's order, a Chrome desktop dialling an iPhone
+   * handed the phone software VP8. That asymmetry is why the heat was situational.
+   *
+   * IT REORDERS AND MUST NEVER RESTRICT. Passing a list that omits VP8 would make
+   * us fail to negotiate video at all with a peer that has no H.264 — a dead tile
+   * instead of a warm phone, which is worse. So every other codec is kept, just
+   * after H.264. Empty/absent H.264 (this repo's own headless Chromium ships
+   * none — measured `h264Variants: 0`) is a NO-OP rather than a throw: an empty
+   * array resets preferences and a list missing required entries raises
+   * InvalidModificationError.
+   *
+   * BASELINE, packetization-mode=1 FIRST among the H.264 variants (`42e01f` /
+   * `42001f`), because that is the profile iPhone hardware actually encodes; a
+   * high-profile entry first could land us back in software on the very device
+   * this exists for. */
+  function preferHardwareVideoCodec(pc: RTCPeerConnection) {
+    try {
+      const caps = (window.RTCRtpSender as unknown as {
+        getCapabilities?: (k: string) => { codecs: RTCRtpCodec[] } | null;
+      }).getCapabilities?.("video");
+      const all = caps?.codecs;
+      if (!all || !all.length) return;
+      const isH264 = (c: RTCRtpCodec) => (c.mimeType || "").toLowerCase() === "video/h264";
+      const h264 = all.filter(isH264);
+      if (!h264.length) return;   // no hardware path to prefer — leave the default alone
+      const baselineFirst = h264.slice().sort((a, b) => rankH264(a) - rankH264(b));
+      const ordered = baselineFirst.concat(all.filter(c => !isH264(c)));
+      pc.getTransceivers().forEach(tr => {
+        const kind = tr.sender?.track?.kind || tr.receiver?.track?.kind;
+        if (kind && kind !== "video") return;
+        try {
+          (tr as unknown as { setCodecPreferences?: (c: RTCRtpCodec[]) => void })
+            .setCodecPreferences?.(ordered);
+        }
+        catch { /* older UA, or a codec set it will not accept — keep the default */ }
+      });
+      diag("codec pref: h264-first (" + h264.length + " variant" + (h264.length === 1 ? "" : "s") + ")");
+    } catch { /* never let a preference tweak cost us the call */ }
+  }
+  /** Lower is better: baseline + packetization-mode=1 is what iPhone encodes in HW. */
+  function rankH264(c: RTCRtpCodec): number {
+    const f = (c.sdpFmtpLine || "").toLowerCase();
+    const pm1 = f.includes("packetization-mode=1");
+    const baseline = f.includes("profile-level-id=42e01f") || f.includes("profile-level-id=42001f");
+    if (baseline && pm1) return 0;
+    if (baseline) return 1;
+    if (pm1) return 2;
+    return 3;
+  }
+
   function applyMeshVideoCaps() {
     const n = Object.keys(peers).length;
     const maxBitrate = n <= 1 ? 1_200_000 : n <= 3 ? 700_000 : 350_000;
@@ -4099,6 +4170,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // in onSignal before the answer is created.
       else if (initiator) pc.addTransceiver("video", { direction: "sendrecv" });
     }
+    // THE THERMAL FIX: ask for H.264 before VP8 on every video m-line.
+    preferHardwareVideoCodec(pc);
     // Party-size-scaled encoder caps (see applyMeshVideoCaps). Deferred a tick
     // so the freshly-added senders are queryable.
     setTimeout(applyMeshVideoCaps, 0);
@@ -4240,6 +4313,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
               try { tr.direction = "sendrecv"; } catch { /* older UAs — best effort */ }
             }
           });
+          // THE ANSWERER HALF OF THE THERMAL FIX, and it is the half that matters
+          // most: the OFFERER's preference order is what an answerer normally
+          // adopts, so a Chrome desktop calling an iPhone would otherwise hand the
+          // phone VP8 (measured: Chromium offers VP8 first) and the phone would
+          // encode it in SOFTWARE. Re-stating our own preference before the answer
+          // is what lets the phone answer in H.264.
+          preferHardwareVideoCodec(peer.pc);
           const answer = await peer.pc.createAnswer();
           await peer.pc.setLocalDescription(answer);
           sendWS({ type: "signal", to: from, data: { sdp: peer.pc.localDescription } });
@@ -6602,6 +6682,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     },
     destroy() {
       destroyed = true;
+      /* The in-call flag lives on <html>, which OUTLIVES this engine — so a
+       * teardown while the call surface is showing (sign-out, route change) would
+       * leave the shell's background canvas frozen for the rest of the session.
+       * Not a drift risk of the kind show() guards against: this is an
+       * unconditional cleanup, not a second conditional owner. */
+      try { delete document.documentElement.dataset.relayInCall; } catch { /* */ }
       stopHoldMusic();
       cancelSoloEndGrace();
       cancelEndActiveFallback();
