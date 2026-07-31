@@ -11278,6 +11278,149 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.48 — every call connected and carried nothing, and the two-party drive reproduced it (2026-07-31)
+
+The owner: *"I tested the calls, and still i can't calling I can't"*, narrowed by two
+questions to **"Connects but no audio"** on **"Every single call"**, then, unprompted,
+*"Also inspect that no video active"*. Zero media, BOTH directions, EVERY call, every
+device — which rules out the audio-routing layer I had prioritised (a sink or a
+loudspeaker-force bug cannot make VIDEO disappear) and points at media establishment.
+
+**REPRODUCED, IN TWO REAL BROWSERS, WHICH IS THE TEST NOBODY HAD EVER RUN ON THIS
+CODEBASE.** Signaling is perfect (the full protocol completes in 376ms). On the **MESH** a
+real voice call connects and carries audio BOTH WAYS, 2/2 runs — ~1315 packets / 30,815
+bytes inbound, rtt 6ms, candidate-pair `succeeded`, and 0 video packets, which is CORRECT
+for a voice call under v2.106.44's voice mode. On the **SFU** — the transport production
+actually uses — the call rings, is answered, `peer-joined` arrives, and then: **47
+`refresh-livekit` retries, 21 RTCPeerConnections every one stuck at `conn=new ice=new
+gather=new`, zero candidates, zero tracks, zero bytes**, torn down 14.2s after the answer
+with `leave reason=livekit-join-timeout`. The 14.2s matches `armLkWatchdog` exactly
+(4.5s + 3×4s), confirming the mechanism rather than a coincidence.
+
+**SAID PLAINLY AND FIRST: THAT REPRODUCTION INDUCED THE FAILURE by pointing `LIVEKIT_URL`
+at a dead port.** It proves what the DEPLOYED CODE DOES when the SFU is unreachable; it
+does NOT prove production's SFU is unreachable. This sandbox's proxy refuses
+`your-chat.io` (CONNECT 403) and there are no AWS credentials, so the one reading that
+would turn this into a confirmed root cause could not be taken.
+
+**THE STRUCTURAL DEFECT IS CERTAIN EITHER WAY: THERE WAS NO RUNTIME FALLBACK FROM A DEAD
+SFU TO THE MESH.** `onPeerJoined` opens `if (livekitEnabled) return;` BEFORE `createPeer`,
+so when the fleet advertises LiveKit the client never builds a peer connection at all —
+an unusable SFU does not degrade calling, it REMOVES it, for everybody, on every call,
+while our own signaling keeps working perfectly. `grep -cE 'fallbackToMesh|sfuUnusable'`
+on the deployed build: **0**. `server/voipRegistry.ts` already states the ladder for the
+SERVER's transport choice — mediasoup → LiveKit → mesh, *"the mesh last precisely because
+it depends on no infrastructure"* — and this is that ladder at RUNTIME, the half that was
+missing, because the server can only ever choose a transport it BELIEVES works. The
+fallback replaces a `hangUp()` and nothing else, so it can only improve the outcome, and
+it refuses honestly when the mesh genuinely cannot serve the call (nobody else present, or
+more parties than the mesh's own cap).
+
+**THE GAP A REAL DRIVE FOUND IN MY OWN FIX, which no source pin would have caught.** My
+first fallback keyed its roster on `lkParticipantTiles` — and those exist only once
+LiveKit media has ARRIVED, which is exactly what has failed. On the SFU path
+`onPeerJoined` returns before creating anything, so at the moment the callee answers the
+CALLER's tile map is **EMPTY**: the fallback would have found nobody, returned false and
+ended the call — the very outcome it exists to prevent, shipping while looking correct. It
+now reads a `sigRoster` filled from the `room`/`joined`/`peer-joined` frames, which are
+authoritative on BOTH transports and arrive whether or not any media does; recorded BEFORE
+the SFU early return, dropped on `peer-left`, and cleared on hang-up so a later fallback
+can never dial a stranger.
+
+**TOTAL MEDIA FAILURE WAS RECORDED AS SUCCESS.** `joinLivekit` ran
+`lkConnected = true; clearLkWatchdog();` UNCONDITIONALLY after `room.connect()` — but the
+publish block above it is `const send = processedStream || localStream; if (send) { … }`,
+a silent no-op when `send` is falsy, and `publishSafe` failing twice merely toasts and
+falls through. Either way the room was up, NOTHING was published in either kind, the flag
+claimed our media was live and the only thing watching was switched off. The comment on
+`lkConnected` already promised *"true only AFTER a successful room.connect()+publish"* — a
+promise the code did not keep. **THE MICROPHONE IS THE TEST, deliberately not the camera**:
+audio is the one unconditional publication, while a 1:1 caller legitimately publishes no
+video before consent (v2.81) and a voice call has no camera track at all, so gating on
+video would refuse to call correct calls connected. The watchdog now **retries the PUBLISH
+before re-minting a token**, because a fresh token authorizes JOINING and we have already
+joined — and `joinLivekit`'s own `if (lkRoom) return` makes a re-minted token a complete
+no-op. The give-up message NAMES the cause, since telling somebody the media server is
+unreachable when their own device refused to send its microphone sends them to check their
+network instead of their microphone.
+
+**AND THE SFU JOIN TOKEN WENT TO THE WRONG DEVICE — a second, independent, deterministic
+total-media failure.** Almost everything in the signaling registry is addressed by PIN and
+`reg.clients.get(pin)` holds exactly ONE socket, but a number can hold SEVERAL devices and
+`MULTI_DEVICE_RING: "1"` is baked into `ecosystem.config.cjs`, so it is LIVE on the fleet.
+The register handler makes the LATEST REGISTRATION primary — which has nothing to do with
+which device its owner is calling from; an SSE reconnect on an idle laptop is enough to
+take primary from the phone in your hand. `pushLivekitToken` addressed the NUMBER while
+all twelve of its call sites sit directly after a
+`safeSend(<specific socket>, { room | joined | rejoin | resumed })`, and that asymmetry is
+visible on adjacent lines. So whenever the dialling device was not the primary, the room
+frame went to the right device and its join token went to a DIFFERENT one: `joinLivekit`
+returns early at "waiting for token", nothing is published and nothing is subscribed,
+while ring, accept, roster and the in-call UI all succeed — and the idle device silently
+discards a token for a room it is not in. **The `accept` handler has promoted the answering
+device since v2.99.5; the CALLER side was simply left out.** Both halves are fixed: the
+dialling device claims primary (guarded, so it yields to a primary that is mid-call — that
+is a second-line situation where stealing it would break the live call — and bumping no
+epoch, because that would abort the very dial being placed), and the token's target socket
+is now a **REQUIRED** parameter. Required rather than defaulted, and the opposite call from
+v2.106.44's `wantVideo`: there a default was right because the change could only NARROW
+what was opened, whereas a default here would preserve the bug at any site somebody
+forgets, and the cost of forgetting is a call that carries nothing.
+
+**FOUR CAP COPIES BECAME ONE.** `livekitEnabled ? 10 : 6` existed at three sites and
+`fallbackToMesh` is a fourth reader that MUST agree with the cap the group picker showed
+the user — a fallback that builds a party the mesh cannot carry half-connects and reads as
+our bug. Now `MESH_MAX` / `SFU_MAX` / `transportMax()`.
+
+`client/src/lib/mediaUpOrHonest.test.ts` (21) + `server/multiDeviceTokenRouting.test.ts`
+(15, **BEHAVIOURAL** against the real registry and the real `handleMessage`, because which
+SOCKET a frame lands on is exactly what a source pin cannot answer and is the whole bug).
+**31 tripwires verified by MUTATION** off confirmed-GREEN baselines from byte-exact
+backups, the mutator aborting unless its target occurs exactly once, both sources
+byte-identical afterwards — including the original unconditional `lkConnected`, the
+original by-pin token addressing, and the tile-keyed roster all reinstated verbatim.
+
+**THREE SURVIVORS ON THE FIRST SERVER RUN, ALL REAL GAPS IN MY OWN TESTS AND ALL THE SAME
+CLASS — one fix MASKING the other.** Reinstating the original by-pin token addressing
+SURVIVED every behavioural test, because `claimPrimaryForCall` makes the dialling device
+the primary, so `reg.clients.get(pin).socket` and the named socket are the SAME object on
+every reachable path. The tests measured the promotion and said nothing about the
+addressing. A fourth survivor was the same shape one attribute along: swapping
+`conn.socket` for **`self.socket`** in `refresh-livekit` — and `self` IS
+`reg.clients.get(conn.pin)`, the primary record under another name — which is now
+forbidden by name, with the reason recorded, because no behaviour can separate them once
+the dial has promoted the device. Both fixes are KEPT and that is not defence-in-depth
+theatre: the promotion repairs the reported failure, the required parameter makes the
+invariant hold BY CONSTRUCTION at the ten other sites and at whichever site is added next
+— a twelfth site is how this arose.
+
+**ONE BAD MUTATION OF MY OWN, reported rather than counted**: my first attempt at the
+`lkConnected` gate replaced it with `if (false) … else if (false)`, which REMOVES the gate
+rather than reinstating the original unconditional shape; the honest reinstatement then
+ABORTED at 0 occurrences because my needle omitted a comment line, and bit once corrected.
+**FOUR OF MY OWN ASSERTIONS WERE WRONG ABOUT THE CODE**, each caught by failing on correct
+source: a file-wide ban on a defaulted socket matched a legitimate
+`const socket: RelaySocket = {` elsewhere; a `/[Ss]ocket\)$/` check written
+case-sensitively could not match `callerSocket`; my own simplified `fnBody` took the first
+`{` after the anchor, which for `function claimPrimaryForCall(` is its inline PARAMETER
+TYPE (the trap this repo has hit at v2.105.9, v2.105.27 and v2.106.4); and I asserted that
+with the multi-device flag OFF the latest registration becomes primary, when in fact a
+second device requesting a taken pin is given a FRESH number — which is the v2.99.5 report
+itself, and means the whole misrouting class cannot arise there.
+
+**THREE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY.** Two froze the cap literal, i.e.
+they forbade the consolidation while saying nothing about the rule; the third sliced a
+FIXED 600 characters from `case "peer-left"` and went stale the moment a line was added
+above its target — the v2.99.78 fragility again — and is now bounded by the case's own end
+with an assertion that the slice is real.
+
+**NOT VERIFIED ON THE OWNER'S DEVICES, said plainly.** Nobody has placed a call from their
+phone against a fixed build; production still serves v2.106.42. What is proven: the mesh
+carries audio both ways in this build, the SFU failure path is unrecoverable in the
+deployed code and is now recoverable, total media failure can no longer be recorded as
+success, and the join token can no longer be delivered to a device that is not in the
+call. No schema change, no new dependency, no new env var. 4899 tests.
+
 ## v2.106.47 — the mediasoup worker was never built, and my own deploy gate could not see it (2026-07-31)
 
 A 20-agent map of the cutover was commissioned to plan the media path. Its FIRST finding is a

@@ -641,7 +641,7 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
         livekit: lk0.enabled,
         livekitUrl: lk0.url,
       });
-      pushLivekitToken(reg, pin, rid);
+      pushLivekitToken(reg, pin, rid, socket);
       return;
     }
     // ALONE (stale solo dial room) or only ghosts left. Don't drop the user
@@ -669,7 +669,7 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
     livekit: lk.enabled,
     livekitUrl: lk.url,
   });
-  pushLivekitToken(reg, pin, rid);
+  pushLivekitToken(reg, pin, rid, socket);
 }
 
 /**
@@ -700,7 +700,7 @@ function admitToRoom(reg: RelayRegistry, pin: string, roomId: string): void {
   meta.roster.set(pin, joiner.name);
   meta.lastActiveAt = Date.now();
   const lk = livekitConfig();
-  pushLivekitToken(reg, pin, roomId);
+  pushLivekitToken(reg, pin, roomId, joiner.socket);
   safeSend(joiner.socket, {
     type: "joined",
     roomId,
@@ -987,20 +987,93 @@ export async function mintLivekitToken(
 }
 
 /**
- * Fire-and-forget: mint a LiveKit join token for `pin` in `roomId` and push it
- * over that client's SSE channel as a `livekit-token` message. No-op when
- * LiveKit isn't configured. The JWT is never logged. Authorization is implicit:
- * the caller only ever passes pins/rooms derived from trusted registry state.
+ * THE DEVICE THAT PLACES OR ANSWERS A CALL BECOMES THE NUMBER'S PRIMARY.
+ *
+ * WHY. Almost everything in this registry is addressed by PIN, and `reg.clients.get(pin)`
+ * holds exactly ONE socket — the `signal` relay (`reg.clients.get(to)`), the `peer-joined`
+ * fan-out, moderation and, until this release, the SFU join token all route through it.
+ * But a number can hold SEVERAL devices (`reg.devices`; MULTI_DEVICE_RING is baked on in
+ * ecosystem.config.cjs), and the register handler makes the LATEST REGISTRATION primary —
+ * which has nothing whatever to do with which device its owner is calling from. An SSE
+ * reconnect on an idle laptop is enough to take primary from the phone in your hand.
+ *
+ * So a call placed or answered from a non-primary device had its in-call traffic delivered
+ * to a DIFFERENT device: no media in either direction, deterministically, while ring,
+ * accept, roster and the in-call UI all succeeded. Fixing the token alone would leave the
+ * mesh half of that intact, which matters now that a failed SFU falls back to it.
+ *
+ * SAFE BY THE SAME CONDITION THE REGISTER HANDLER ALREADY USES: we take over only when the
+ * existing primary is IDLE (`!prev.roomId`). If it is in a call it stays primary and this
+ * is a no-op — hijacking a live call's routing is precisely what that handler's
+ * `keepPrimary` rule exists to prevent, and this must not undo it from the other side.
+ *
+ * NO EPOCH IS BUMPED, deliberately. The register handler bumps both epochs when it takes
+ * over primary, to abort a dial resolver captured against the old socket. An idle primary
+ * has no in-flight dial to abort, and bumping here would abort the very dial we are in the
+ * middle of placing.
+ *
+ * THE `accept` HANDLER HAS DONE THIS SINCE v2.99.5 and the CALLER side was simply left out
+ * — that asymmetry is the defect. Its version is deliberately UNCONDITIONAL where this one
+ * is guarded, and the difference is right: an accepting device is joining a call and must
+ * own the routing whatever the old primary was doing (its own hold/drop branch handles a
+ * prior room), whereas dialling from a second device while the first is mid-call is a
+ * second-line situation where stealing primary would break the live call on the other
+ * device. So this one yields and the dial proceeds unchanged.
  */
-function pushLivekitToken(reg: RelayRegistry, pin: string, roomId: string) {
+function claimPrimaryForCall(
+  reg: RelayRegistry,
+  conn: { socket: RelaySocket; pin: string | null; cid?: string },
+): void {
+  if (!multiDeviceEnabled()) return; // flag off ⇒ one device ⇒ register already did this
+  const pin = conn.pin;
+  if (!pin) return;
+  const prev = reg.clients.get(pin);
+  if (!prev || prev.roomId) return;        // no record, or the primary is mid-call
+  if (prev.socket === conn.socket) return; // already us
+  prev.socket = conn.socket;
+  if (conn.cid) prev.cid = conn.cid;
+}
+
+/**
+ * Fire-and-forget: mint a LiveKit join token for `pin` in `roomId` and push it to the
+ * NAMED SOCKET as a `livekit-token` message. No-op when LiveKit isn't configured. The JWT
+ * is never logged. Authorization is implicit: the caller only ever passes pins/rooms
+ * derived from trusted registry state.
+ *
+ * `socket` IS REQUIRED, AND THAT IS THE POINT. This used to address the NUMBER —
+ * `reg.clients.get(pin).socket` — while every one of its twelve call sites sits directly
+ * after a `safeSend(<some specific socket>, { room | joined | rejoin | resumed })`. One
+ * number can hold SEVERAL devices (`reg.devices`, and MULTI_DEVICE_RING is baked on in
+ * ecosystem.config.cjs), and `reg.clients` holds exactly ONE of them: the register
+ * handler makes the LATEST registration primary unless the previous primary is already in
+ * a call. So whenever the device placing or answering the call was not the primary, the
+ * room frame went to the right device and its join token went to a DIFFERENT one.
+ *
+ * That is total, deterministic media failure on every call for anyone signed in on two
+ * devices: `joinLivekit` returns early at "waiting for token", so nothing is published and
+ * nothing is subscribed, while our own signaling — ring, accept, roster, the in-call UI —
+ * all succeed. It presents as "the call connects and there is no audio and no video", in
+ * both directions, and the idle device silently discards a token for a room it is not in.
+ *
+ * A required parameter rather than a defaulted one, deliberately, and the opposite call
+ * from v2.106.44's `wantVideo`: there a default was right because the change could only
+ * ever NARROW what was opened, whereas a default here would preserve this bug at any site
+ * somebody forgets — and the cost of forgetting is a call that carries nothing. Required
+ * makes each missed site a compile error instead.
+ *
+ * THE INVARIANT: the token and the room frame that authorizes it go to the SAME device.
+ */
+function pushLivekitToken(reg: RelayRegistry, pin: string, roomId: string, socket: RelaySocket) {
   const lk = livekitConfig();
   if (!lk.enabled) return;
   const client = reg.clients.get(pin);
   if (!client) return;
   mintLivekitToken(pin, client.name || "Guest", roomId)
     .then(token => {
-      const c = reg.clients.get(pin);
-      if (c) safeSend(c.socket, { type: "livekit-token", roomId, token, url: lk.url });
+      // Still a live number (the mint is async), but the token goes to the SOCKET the
+      // caller named — never to whichever device happens to be primary by the time we
+      // resolve. See the header above for why that distinction is the whole point.
+      if (reg.clients.has(pin)) safeSend(socket, { type: "livekit-token", roomId, token, url: lk.url });
     })
     .catch(e => console.warn("[relay] livekit token mint failed:", e));
 }
@@ -1541,7 +1614,7 @@ function promoteHeldRoom(
     livekit: lk.enabled,
     livekitUrl: lk.url,
   });
-  pushLivekitToken(reg, pin, heldRid);
+  pushLivekitToken(reg, pin, heldRid, conn.socket);
   return true;
 }
 
@@ -1687,7 +1760,7 @@ function joinPartyLine(
     livekit: lk.enabled,
     livekitUrl: lk.url,
   });
-  pushLivekitToken(reg, callerPin, rid);
+  pushLivekitToken(reg, callerPin, rid, socket);
   members.forEach(m => {
     const o = reg.clients.get(m.pin);
     if (o) {
@@ -2057,6 +2130,10 @@ export function handleMessage(
         });
         break;
       }
+      // Multi-device: make THIS device the number's primary before anything routes by pin
+      // (the token, the mesh signal relay, peer-joined). No-op when the existing primary
+      // is mid-call, or when the flag is off. See claimPrimaryForCall.
+      claimPrimaryForCall(reg, conn);
       const callerPin = conn.pin;
       const callerSocket = conn.socket;
       const wantVideo = !!msg.video;
@@ -2114,7 +2191,7 @@ export function handleMessage(
             safeSend(callerSocket, { type: "room", roomId: rid, selfRole: "host", hostPin: callerPin, cap: mintRoomCap(rid, callerPin, "host") });
             // On the LiveKit path, the caller joins the SFU room immediately (alone)
             // so the callee connects near-instantly the moment they accept.
-            pushLivekitToken(reg, callerPin, rid);
+            pushLivekitToken(reg, callerPin, rid, callerSocket);
           }
           // Whether the room is new or growing, make sure the caller is in the roster.
           rosterTouch(reg, me.roomId!, callerPin, me.name);
@@ -2550,7 +2627,7 @@ export function handleMessage(
       // On the LiveKit path, the newcomer joins the SFU room; LiveKit's own
       // ParticipantConnected/TrackSubscribed events drive peer discovery, so the
       // mesh peer-joined/offer dance is skipped client-side.
-      pushLivekitToken(reg, conn.pin, roomId);
+      pushLivekitToken(reg, conn.pin, roomId, conn.socket);
       const lk = livekitConfig();
       // Newcomer learns existing members and will offer to each (only one
       // side ever offers, which avoids SDP glare in the mesh). Fresh ICE
@@ -2835,7 +2912,7 @@ export function handleMessage(
         livekit: lkr.enabled,
         livekitUrl: lkr.url,
       });
-      pushLivekitToken(reg, selfPin, rid);
+      pushLivekitToken(reg, selfPin, rid, conn.socket);
       // Tell whoever is already back that this peer returned, so the mesh
       // re-links without waiting for anybody's timeout.
       others.forEach(m => {
@@ -2862,7 +2939,7 @@ export function handleMessage(
       // Client lost or never received its SFU token (mint failure / dropped SSE
       // frame / connect failure). Re-mint for its CURRENT room, derived from
       // trusted server state — never a client-supplied room name.
-      if (self.roomId) pushLivekitToken(reg, conn.pin, self.roomId);
+      if (self.roomId) pushLivekitToken(reg, conn.pin, self.roomId, conn.socket);
       break;
     }
 
@@ -3021,7 +3098,7 @@ export function handleMessage(
         livekit: lk.enabled,
         livekitUrl: lk.url,
       });
-      pushLivekitToken(reg, conn.pin, heldRid);
+      pushLivekitToken(reg, conn.pin, heldRid, conn.socket);
       break;
     }
 
@@ -3104,7 +3181,7 @@ export function handleMessage(
             livekit: lkm.enabled,
             livekitUrl: lkm.url,
           });
-          pushLivekitToken(reg, p, activeRid);
+          pushLivekitToken(reg, p, activeRid, pc.socket);
         }
         broadcastToRoom(reg, activeRid, {
           type: "peer-joined",
