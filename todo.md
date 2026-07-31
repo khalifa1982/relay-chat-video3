@@ -11294,6 +11294,7 @@ Owner: *"when you slide on a message or group, the back buttons above the cover 
 - [x] **19/19 tripwires bite by mutation**, byte-exact restore. Four were first misreported as aborts by my own count-guard (`"(44)".isdigit()` is false) — fixed and re-run, all four bit.
 - [x] Two pre-existing pins rewritten to the property; both had frozen exactly what the owner asked to change (the full-swipe conjuncts, and `backdrop-blur-md`).
 - [ ] **Not verified on a phone** — a touch pointer's click behaviour is the one thing that differs from the Chromium mouse drag measured here.
+- [x] **CI caught a defect in my own test that the local gate cannot**: it resolved the repo root from a literal `/home/user/...`, so `pnpm verify` was green and the runner failed with an ENOENT. Fixed to `resolve(__dirname, "../../..")` and added a standing sweep in `repoHygiene.test.ts`, mutation-verified. That sweep flagged correct code twice on its first run — its own comment (prose trap) and `voipDeploy.test.ts` asserting the fleet's real `/home/relay/.env` — so it strips comments and is scoped to a literal that is READ FROM rather than any absolute path.
 
 ## v2.106.59 — a group call is refused when the media pool is full, never meshed (2026-07-31)
 

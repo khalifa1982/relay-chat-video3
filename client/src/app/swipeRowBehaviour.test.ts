@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { codeOnly } from "../../../server/testing/codeOnly";
 import { trayWidth } from "./SwipeRow";
 
@@ -28,7 +28,12 @@ import { trayWidth } from "./SwipeRow";
  * mechanisms that verification rests on.
  */
 
-const ROOT = "/home/user/relay-chat-video3";
+/* DERIVED FROM THIS FILE'S OWN LOCATION, never a hardcoded absolute path. An absolute
+   sandbox path passes locally and can NEVER pass in CI, where the checkout lives at
+   `/home/runner/work/…` — which is exactly how the first version of this file went out
+   green on my machine and red on the runner with an ENOENT. Every sibling test in this
+   repo resolves the root the same way. */
+const ROOT = resolve(__dirname, "../../..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 const SWIPE_PATH = "client/src/app/SwipeRow.tsx";
 const SWIPE = read(SWIPE_PATH);
