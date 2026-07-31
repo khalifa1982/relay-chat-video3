@@ -11278,6 +11278,95 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.57 — the voice-mode audio profile, negotiated (2026-07-31)
+
+Four docs re-uploaded. THREE were already shipped and the diffs prove it: the thermal doc
+is BYTE-IDENTICAL to the one v2.106.56 answered, and the node-scaling doc differs from the
+version v2.106.54 answered in exactly one way — it now RATIFIES the mesh fallback I had
+deviated to and recorded. This release takes the one measured gap from the fourth.
+
+- [x] **THE DOC'S OWN STEP 2 IS NOW SATISFIED WITH NUMBERS.** The mediasoup doc gates the
+      cutover on "one real call with the stats readout open… do not start the mediasoup
+      cutover until this reading exists". Driven, two browsers, real guest identities,
+      the built server against a real database — **VOICE**: RTT 1ms, 0 loss, 0 jitter,
+      candidate type `host`, 748 audio packets in, playout energy 4.06/3.62, connected
+      ~600ms after the answer. **VIDEO**: 640×360 @ 19fps, RTT 1ms, 0 loss, jitter 1ms,
+      606/459 packets and 222/295 frames decoded both ways.
+- [x] **AND THE READOUT SETTLED THE SIMULCAST QUESTION OUTRIGHT**: the outbound video
+      reports **`scalabilityMode: "L1T1"`** and `rid: null` — one spatial layer, one
+      temporal layer. The thermal doc's "the phone encodes 2–3 copies simultaneously" was
+      a behaviour of the DELETED hosted-SFU client, whose SDK defaults simulcast on. On
+      the mesh there is exactly one encoding, measured on a real call rather than argued.
+      `encoderImplementation: "libvpx"` confirms software encoding empirically, and
+      `qualityLimitationReason: "bandwidth"` (not `cpu`) confirms v2.106.56's new
+      cpu-limited verdict is not firing spuriously.
+- [x] **THE AUDIO GAP WAS TWO OF FIVE PARAMETERS, NOT FIVE.** The voice/video doc asks for
+      Opus / 24–32 kbps / DTX / FEC / ptime 20. A real call already reported
+      **`useinbandfec=1`** and **`targetBitrate: 32000`** — FEC and the bitrate band are
+      Chromium defaults and needed nothing. Genuinely absent: `usedtx=1` and any `ptime`.
+      Measuring first is what stopped this being a five-part change where two parts would
+      have been re-implementing a default.
+- [x] **THE OBVIOUS MECHANISM WAS RULED OUT BY MEASUREMENT, AND IT FAILS SILENTLY.**
+      `RTCRtpSender.setParameters` with `encodings[0].dtx = "enabled"` is **ACCEPTED
+      WITHOUT THROWING** and then dropped — the key is ABSENT when read straight back and
+      the encoding key set is unchanged. An API-level version of this would have read as
+      done and changed nothing, which is the class this repo keeps removing. SDP is the
+      only mechanism that works here, so that is what shipped, with the measurement
+      recorded in the code so nobody reaches for the API again.
+- [x] **DTX IS A RECEIVER PREFERENCE, so BOTH sides must ask.** `usedtx=1` in our SDP
+      tells the PEER to use DTX when sending to us; our code runs on both ends, so tuning
+      the offer AND the answer is what turns it on in both directions. Verified on a real
+      loopback: both peers' outbound codec reads
+      `maxaveragebitrate=32000;minptime=10;usedtx=1;useinbandfec=1`, with `a=ptime:20` in
+      both local descriptions.
+- [x] **MEASURED EFFECT ON REAL CALLS: audio packets 750 → 443 and 749 → 432** over the
+      same 12-second window, with **playout energy essentially unchanged** (4.062 → 4.053
+      and 3.617 → 3.779) — fewer packets for the same audible audio, which is less radio
+      time, less battery and less encoder work. Said honestly: DTX and the pinned 20ms
+      ptime landed together, so the ~42% is their COMBINED effect and is not attributed to
+      either alone. RTT unchanged at 1ms, `audioBothWays` true.
+- [x] **VIDEO IS UNAFFECTED, which is the regression that mattered**: 606/606 and 459/459
+      video packets before and after, frames 222→223 and 295→295 (noise), and the audio
+      profile is IDENTICAL on a video call — the doc is explicit that audio is the same in
+      both modes, and a `wantVideo` condition reaching the tuner is forbidden by test.
+- [x] **IT FAILS TOWARD THE UNTOUCHED ORIGINAL, and that is the whole safety argument**:
+      this sits on the offer AND answer of EVERY call, so a regex that misfires breaks
+      calling outright. No recognisable Opus fmtp ⇒ the SDP is returned BYTE-IDENTICAL;
+      anything thrown ⇒ the original. Verified against garbage SDP, empty SDP, null,
+      undefined, a PCMU-only m-line, and an SDP that already carries its own `usedtx` and
+      `ptime` (left alone — theirs, not ours). **IDEMPOTENT**, because ICE restart and the
+      consent upgrade both re-run it.
+- [x] **ONE FUNNEL.** There were THREE `setLocalDescription` sites (offer, answer,
+      ICE-restart offer) and three is three chances to forget — including whichever is
+      added next. `setLocalTuned` is now the only caller, asserted by counting
+      `.setLocalDescription(` in the whole file at exactly ONE.
+- [x] **11 of 11 tripwires verified by MUTATION** off a confirmed-GREEN baseline from a
+      byte-exact backup, source byte-identical afterwards.
+- [x] **THREE SURVIVED FIRST TIME, AND TWO SHARED ONE CAUSE THAT INDICTS MY TEST DESIGN**:
+      eight of the thirteen tests drive a RE-DECLARED COPY of the function (a source pin
+      cannot answer "does garbage SDP come back byte-identical"), so a source-only change
+      reaches none of them — the copy is trustworthy ONLY while the parity pin is
+      COMPLETE, and mine enumerated a few lines, letting "ptime no longer added" and "FEC
+      dropped" both survive. **THE PIN TOOK THREE ATTEMPTS AND EACH FAILURE TAUGHT
+      SOMETHING**: enumerating lines was incomplete; comparing the statement SET failed on
+      CORRECT source because the shipped ptime replacement spans three lines; and
+      comparing `String(fn)` to the source ALSO failed on correct source, because that is
+      the TRANSPILED runtime form with types erased by esbuild and can never be
+      byte-compared against TypeScript. It now reads BOTH texts from disk and compares
+      them whitespace-free. The third survivor was a BAD MUTATION of mine — it inserted
+      the banned `.dtx =` as a COMMENT, which the comment-stripped source correctly does
+      not flag; re-run as real code, it bit.
+- [x] **THE FOUR DOCS' PUBLIC IPs CONTRADICT EACH OTHER AND THE REPO, and nothing breaks**:
+      the mediasoup doc's table says 13.235.222.153 / 13.200.190.17, its own architecture
+      diagram forty lines later says 13.201.44.153 / 13.203.219.67, and
+      `voip-node/README.md` records 13.207.213.126 / 13.203.36.154 — three pairs for the
+      same two instances. Instance ids and private IPs agree everywhere, so the nodes'
+      identity is settled. This is harmless precisely because **nothing in the repo
+      hardcodes them**: the agent reads IMDSv2 and publishes to the registry. Flagged
+      rather than resolved by picking one — the runbook table is the only thing affected
+      and it is for humans checking a node by hand.
+- [x] No schema change, no new dependency, no new env var. 4956 tests.
+
 ## v2.106.56 — where the video is encoded (2026-07-31)
 
 Owner doc: the phone becomes very hot after 20–30 min of a call, very likely also the
