@@ -286,3 +286,96 @@ describe("a transport stat never carries an address off the node", () => {
     );
   });
 });
+
+/**
+ * v2.106.46 — PRIVATE FOR CONTROL, PUBLIC FOR MEDIA.
+ *
+ * The owner opened the network path and stated the rule from the infrastructure side: signaling
+ * reaches the nodes over their PRIVATE addresses on 4443 (the app fleet's security group to the
+ * SFU group), while transports ANNOUNCE the PUBLIC addresses to clients for media. Crossing
+ * those is how a node becomes unreachable in one direction while looking perfectly healthy in
+ * the other — so both halves are pinned here, in the file that already reads the agent.
+ */
+describe("the signaling API is private by construction, not by firewall", () => {
+  it("binds the node's PRIVATE address, never 0.0.0.0", () => {
+    /* Binding every interface WORKS — the security group only permits 4443 from the app
+       fleet's group — but it leaves that group as the ONLY thing keeping an HMAC-gated
+       internal API off the public internet. Binding the private IP makes the rule structural:
+       a group widened to 0.0.0.0/4443 by mistake still cannot reach a listener the kernel is
+       not accepting on. */
+    const body = fnBody(code, "startApi");
+    expect(body).toMatch(/server\.listen\(API_PORT, apiBind\b/);
+    expect(body, "0.0.0.0 would put the API on the public interface").not.toMatch(
+      /server\.listen\([^)]*"0\.0\.0\.0"/,
+    );
+    expect(body).toMatch(/const apiBind = self\.privateIp \|\| "127\.0\.0\.1"/);
+  });
+
+  it("self is resolved BEFORE the API listens — the ordering is now load-bearing", () => {
+    /* It was not before: binding 0.0.0.0 needed nothing from `self`. Reordering these would
+       silently bind loopback and the fleet's first signaling call would hang, which is exactly
+       the wasted debugging cycle the owner's own network fix was meant to avoid. */
+    // The CALL, not the declaration: `indexOf("startApi()")` also matches
+    // `function startApi()`, which sits 100 lines earlier — so the first draft of this
+    // compared the wrong thing and failed on correct source, which is how it was caught.
+    const resolved = code.indexOf("self = await readSelf()");
+    const listens = code.indexOf("= startApi()");
+    expect(resolved, "readSelf must be assigned to self").toBeGreaterThan(-1);
+    expect(listens, "startApi must be CALLED").toBeGreaterThan(-1);
+    expect(resolved, "self must be resolved first").toBeLessThan(listens);
+  });
+
+  it("failing shut on an unknown address is consistent with the app refusing the node", () => {
+    /* With IMDS unreachable the bind falls back to loopback, so the API is unreachable from
+       the fleet. That is not a new hazard: such a node also reports an EMPTY publicIp, and
+       decodeNode's isIpv4 refuses the record, so the app never selects it. A node that cannot
+       learn its own address is already useless. */
+    expect(code, "the IMDS fallback must still yield a loopback private address").toMatch(
+      /privateIp: process\.env\.PRIVATE_IP \|\| "127\.0\.0\.1"/,
+    );
+    const reg = readFileSync(resolve(__dirname, "voipRegistry.ts"), "utf8");
+    expect(reg, "and the app must refuse a record with no valid public address").toMatch(
+      /if \(!isIpv4\(o\.publicIp\) \|\| !isIpv4\(o\.privateIp\)\) return null/,
+    );
+  });
+
+  it("MEDIA is the other way round: listen private, announce public", () => {
+    // The complement of the rule above, and the half that decides whether a client's ICE
+    // candidates point anywhere reachable.
+    const src = fnBody(code, "startWorkers");
+    expect(src).toMatch(/protocol: "udp", ip: self\.privateIp, announcedAddress: self\.publicIp/);
+    expect(src).toMatch(/protocol: "tcp", ip: self\.privateIp, announcedAddress: self\.publicIp/);
+    // Swapping them would announce an address clients cannot route to while the node looks up.
+    expect(src).not.toMatch(/ip: self\.publicIp, announcedAddress: self\.privateIp/);
+  });
+
+  it("the app addresses the node over its PRIVATE ip, and only ever there", () => {
+    const sig = readFileSync(resolve(__dirname, "mediasoupSignaling.ts"), "utf8");
+    expect(sig).toMatch(/return `http:\/\/\$\{node\.privateIp\}:\$\{port\}\//);
+    // Reaching for publicIp here is the crossing the owner's rule forbids: it would leave the
+    // internal API dependent on a public route that the security group deliberately does not
+    // open, and the failure would be a timeout with nothing saying why.
+    const fn = sig.slice(sig.indexOf("export function nodeApiUrl"));
+    expect(fn.slice(0, fn.indexOf("\n}")), "nodeApiUrl must not use publicIp").not.toMatch(
+      /publicIp/,
+    );
+  });
+
+  it("the 4443 port is ONE value, cross-checked across the two implementations", () => {
+    /* Two implementations of one constant in two languages is the class this repo has been
+       bitten by repeatedly (v2.99.71's turn checker, v2.105.11's token classifier). Diverge
+       here and signaling posts to a port nothing is listening on — a timeout with nothing in
+       any log pointing at the cause. The agent is plain .mjs on another machine, so no import
+       can unify them; this comparison is the only thing that can. */
+    const sig = readFileSync(resolve(__dirname, "mediasoupSignaling.ts"), "utf8");
+    const appPort = /export const VOIP_API_PORT = (\d+)/.exec(sig)?.[1];
+    const agentPort = /const API_PORT = Number\(process\.env\.VOIP_API_PORT \|\| (\d+)\)/.exec(
+      code,
+    )?.[1];
+    expect(appPort, "the app must declare the port").toBeTruthy();
+    expect(agentPort, "the agent must default the port").toBeTruthy();
+    expect(agentPort, "the two must agree").toBe(appPort);
+    // Both read the same env var name, so an operator override moves both together.
+    expect(code).toMatch(/process\.env\.VOIP_API_PORT/);
+  });
+});

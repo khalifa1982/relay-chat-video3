@@ -804,6 +804,31 @@ function ContactRow({
             <span className="font-semibold truncate">{c.displayName || c.number}</span>
             {c.favourite && <Star className="size-3 shrink-0 text-amber-400 fill-amber-400" />}
             <RoleBadge role={roleFromFlags(c.role, c.verified)} size={14} />
+            {/* THE PIN SITS AFTER THE BADGE, ON LINE 1 (owner, with a screenshot of the
+                deployed row): *"Move the pin for contact from below the name to after the
+                badge and coloured green — because last seen doesn't show fully, so keep it
+                visible now."*
+                THEIR REASON IS THE MEASUREMENT. On line 2 the PIN was `shrink-0` and the
+                presence text was the only thing that could shrink, so at 375px the presence
+                line got ~67px of the ~110 that "last seen 3h ago" needs and every row read
+                "last seen …". Moving the PIN up hands line 2 the PIN's whole cell, and the
+                presence line is then the only occupant of the space between the indent and
+                the buttons.
+                GREEN IS THE APP'S EXISTING WORD FOR "A RELAY NUMBER", not a new meaning: the
+                top bar has rendered the viewer's OWN number in this exact token since
+                v2.99.86, which is where the token came from — the LED hue measures 4.46:1 as
+                small text and FAILS AA, so `--relay-green-text` (5.92:1 light / 9.27:1 dark)
+                exists precisely for a number at this size. So a contact's number now matches
+                the reader's own.
+                `dir="ltr"` + bidi isolation stays, and matters more here than it did on line
+                2: this row's display name may be Arabic — the owner's own directory has
+                several — and an RTL name would otherwise reorder the digit groups (v2.99.77). */}
+            <span
+              className="shrink-0 font-mono text-[12px] tabular-nums text-[color:var(--relay-green-text)] [unicode-bidi:isolate]"
+              dir="ltr"
+            >
+              {c.number.length === 6 ? c.number.slice(0, 3) + "-" + c.number.slice(3) : c.number}
+            </span>
             {c.blocked && <Ban className="size-3.5 shrink-0 text-[#ff8d84]" />}
             {/* BOARD 3b — the tag chip. `.rtag-<tag>` carries the board's 13% fill and
                 45% hairline plus a MEASURED light-theme text colour (the raw pastel is
@@ -844,19 +869,14 @@ function ContactRow({
       </button>
       </div>
 
-      {/* LINE 2 — the PIN, the presence line and the quick actions.
-          `dir="ltr"` + bidi isolation on the PIN, because an Arabic display name above
-          it resolves the row to RTL and would otherwise reorder the digit groups
-          (v2.99.77). The presence text CAN shrink; the buttons cannot, so the actions
-          are `shrink-0` and `ms-auto` pins them to the trailing edge in both
-          directions. */}
+      {/* LINE 2 — the presence line and the quick actions.
+          THE PIN MOVED UP TO LINE 1 (owner's screenshot: every row read "last seen …").
+          It was `shrink-0` here while the presence text was the only shrinkable thing, so
+          the PIN's cell was taken out of the presence line's budget at every width — and
+          the presence line is the one thing on line 2 that has something to say. Now it
+          owns the whole span between the indent and the buttons; the buttons stay
+          `shrink-0` and `ms-auto` pins them to the trailing edge in both directions. */}
       <div className="flex items-center gap-2 ps-[54px]">
-        <span
-          className="shrink-0 font-mono text-xs text-muted-foreground [unicode-bidi:isolate]"
-          dir="ltr"
-        >
-          {c.number.length === 6 ? c.number.slice(0, 3) + "-" + c.number.slice(3) : c.number}
-        </span>
         <span className="min-w-0 truncate text-xs text-muted-foreground">
           {c.blocked ? (
             <span className="text-[#ff8d84]">blocked</span>

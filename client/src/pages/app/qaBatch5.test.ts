@@ -23,7 +23,10 @@ describe("v2.99.27 QA M19/L7 — group-call picker reserves the caller's slot + 
     expect(PICKER).toMatch(/const MAX_PARTICIPANTS = Math\.max\(1, engine\.maxParticipants - 1\)/);
   });
   it("programmaticGroupDial clamps to (cap − 1) too", () => {
-    expect(ENGINE).toMatch(/const cap = \(livekitEnabled \? 10 : 6\) - 1;/);
+    // The property is "one fewer than the transport cap", not the arithmetic's old
+    // spelling — v2.106.48 routes every cap site through `transportMax()`.
+    expect(ENGINE).toMatch(/const cap = transportMax\(\) - 1;/);
+    expect(ENGINE).toMatch(/function transportMax\(\): number \{ return livekitEnabled \? SFU_MAX : MESH_MAX; \}/);
   });
   it("the picker rejects the caller's own number (toggle + addManual)", () => {
     expect(PICKER).toMatch(/if \(number === engine\.pin\) return;/);

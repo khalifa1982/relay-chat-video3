@@ -47,17 +47,59 @@ describe("the row is two lines, so the name gets the width", () => {
     expect(li, "a single-line row is what cut the name in half").not.toMatch(/flex items-center gap-3 px/);
   });
 
-  it("line 1 holds the avatar and the name, and line 2 the PIN, presence and actions", () => {
-    // Ordering by index, because the whole point is which line each thing is on.
+  it("line 1 holds the avatar, name, badge and PIN; line 2 the presence line and actions", () => {
+    /* Ordering by index, because the whole point is which line each thing is on.
+       THE PIN MOVED TO LINE 1 in v2.106.43, and the owner's reason was arithmetic: on line 2
+       it was `shrink-0` while the presence text was the only shrinkable thing, so at 375px
+       the presence line got 72px of the 99 that "last seen 3h ago" needs and every row read
+       "last seen …". */
     const l1 = SRC.indexOf('<div className="flex items-center gap-3">');
     const name = SRC.indexOf("{c.displayName || c.number}");
-    const l2 = SRC.indexOf('<div className="flex items-center gap-2 ps-[54px]">');
+    const badge = SRC.indexOf("<RoleBadge role={roleFromFlags(c.role, c.verified)}");
     const pin = SRC.indexOf('{c.number.length === 6 ? c.number.slice(0, 3)');
+    const l2 = SRC.indexOf('<div className="flex items-center gap-2 ps-[54px]">');
+    const seen = SRC.indexOf("last seen {relativeTime(c.lastSeenAt)}");
     const acts = SRC.indexOf('aria-label="Voice call"');
-    for (const [n, i] of Object.entries({ l1, name, l2, pin, acts })) expect(i, n).toBeGreaterThan(-1);
+    for (const [n, i] of Object.entries({ l1, name, badge, pin, l2, seen, acts }))
+      expect(i, n).toBeGreaterThan(-1);
     expect(l1 < name, "the name is on line 1").toBe(true);
-    expect(name < l2, "line 2 comes after the name").toBe(true);
-    expect(l2 < pin && pin < acts, "the PIN and the actions are both on line 2").toBe(true);
+    expect(name < badge && badge < pin, "the PIN comes AFTER the badge — the owner's words").toBe(true);
+    expect(pin < l2, "…and therefore on line 1, above the second row").toBe(true);
+    expect(l2 < seen && seen < acts, "line 2 is the presence line then the actions").toBe(true);
+  });
+
+  it("the PIN is the ONE thing rendered once, and it is not still on line 2", () => {
+    /* A move that leaves a copy behind is the shape that reads as done and is not: the row
+       would show the number twice and line 2 would get none of its cell back. */
+    expect((SRC.match(/\{c\.number\.length === 6 \? c\.number\.slice\(0, 3\)/g) ?? []).length).toBe(1);
+    const line2 = SRC.slice(SRC.indexOf('<div className="flex items-center gap-2 ps-[54px]">'));
+    expect(line2, "line 2 no longer holds a mono number").not.toMatch(/shrink-0 font-mono/);
+  });
+
+  it("the PIN wears the app's own AA-measured green, not the LED hue", () => {
+    /* GREEN IS NOT A NEW MEANING HERE. The top bar has rendered the viewer's OWN number in
+       this exact token since v2.99.86 — which is where the token came from: the LED green
+       measures 4.46:1 as small text and FAILS AA, so `--relay-green-text` exists for a number
+       at this size (measured here again: 5.92:1 light / 9.27:1 dark). A contact's number now
+       matches the reader's own. */
+    const at = SRC.indexOf('{c.number.length === 6 ? c.number.slice(0, 3)');
+    const el = SRC.slice(SRC.lastIndexOf("<span", at), at);
+    expect(el).toMatch(/text-\[color:var\(--relay-green-text\)\]/);
+    expect(el, "the LED hue fails AA at this size").not.toMatch(/var\(--relay-online\)/);
+    expect(CSS, "and the token really is the darker sibling").toMatch(
+      /--relay-green-text:\s*oklch\(0\.4[0-9]/,
+    );
+  });
+
+  it("the presence line is now the only occupant of its span", () => {
+    // Which is the whole fix: nothing `shrink-0` sits between the indent and the buttons.
+    const l2 = SRC.slice(
+      SRC.indexOf('<div className="flex items-center gap-2 ps-[54px]">'),
+      SRC.indexOf('<div className="ms-auto flex items-center gap-1.5 shrink-0">'),
+    );
+    expect(l2.length).toBeGreaterThan(200);
+    expect(l2).toMatch(/className="min-w-0 truncate text-xs text-muted-foreground"/);
+    expect(l2, "nothing unshrinkable may come back in front of it").not.toMatch(/shrink-0/);
   });
 
   it("the name can shrink and the things beside it cannot", () => {
@@ -85,16 +127,23 @@ describe("the row is two lines, so the name gets the width", () => {
     expect(l2, "the presence line is the only shrinkable thing on line 2").toMatch(
       /className="min-w-0 truncate text-xs text-muted-foreground"/,
     );
-    expect(l2, "…and the PIN is not").toMatch(/className="shrink-0 font-mono/);
+    /* The second half of this used to read "…and the PIN is not [shrinkable]", which was
+       correct while the PIN lived here and is exactly what the owner asked to change: it was
+       `shrink-0` in front of the only shrinkable thing, so it took its cell out of the
+       presence line's budget at every width. The PIN's own properties are pinned above, at
+       its new home on line 1. */
   });
 
-  it("the PIN keeps its LTR isolation now that it sits under a possibly-RTL name", () => {
-    /* v2.99.77: a 6-digit number inside an RTL paragraph has its groups reordered. Measured
-       on a real Arabic row: dir=ltr, unicode-bidi=isolate, text "737-582". */
-    const at = SRC.indexOf('className="shrink-0 font-mono');
-    const el = SRC.slice(at, at + 260);
+  it("the PIN keeps its LTR isolation, which matters more beside a possibly-RTL name", () => {
+    /* v2.99.77: a 6-digit number inside an RTL paragraph has its groups reordered. It now sits
+       INLINE with the display name rather than on the line below it, so an Arabic name is a
+       direct neighbour. Measured on a real Arabic row after the move: dir=ltr,
+       unicode-bidi=isolate, text "737-582", positioned after the badge. */
+    const at = SRC.indexOf('{c.number.length === 6 ? c.number.slice(0, 3)');
+    const el = SRC.slice(SRC.lastIndexOf("<span", at), at);
     expect(el).toMatch(/\[unicode-bidi:isolate\]/);
     expect(el).toMatch(/dir="ltr"/);
+    expect(el, "and it cannot be squeezed by the name beside it").toMatch(/shrink-0/);
   });
 });
 

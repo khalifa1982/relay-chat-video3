@@ -11278,6 +11278,634 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.50 — remote audio was gated behind a video tile existing (2026-07-31)
+
+Found by the root-cause run reading the subscribe side, and it is the third independent
+way a call could carry a live inbound audio track and produce no sound.
+
+`TrackSubscribed` did `const el = lkParticipantTiles[…]; if (!el) return;` and only THEN
+branched on the track kind — so **one guard covered both branches**. But remote audio plays
+from a **DETACHED** element (`track.attach()` with no argument) and needs no tile at all;
+the tile is the render target for VIDEO only. So whenever `addLkTile` had not produced one
+the track ARRIVED and was then silently dropped: an inbound audio track, subscribed and
+flowing, with nothing playing it, and nothing anywhere saying so.
+
+The guard now sits INSIDE the video branch, where the tile genuinely is the thing being
+written to, and the one line in the audio path that wants a tile — the placeholder flip
+that keeps a camera visible when audio subscribes first — is guarded rather than dropped: a
+missing tile costs a placeholder, never the sound. `markEstablished()` already ran before
+either branch, so a tile-less call still connects; that ordering is pinned so the fix
+cannot be undone by moving it.
+
+**HOW REACHABLE IS IT, said honestly**: `addLkTile` is called on the line directly above
+and dedups, so in the ordinary case the tile is there. What makes this worth fixing is the
+failure DIRECTION — every path that can leave the map empty (a grid not yet mounted, a
+dedup or cap early-return, a tile removed between events) took the sound with it, and this
+release exists because "the call connects and there is no audio" was unfalsifiable from the
+UI. Audio should not be able to fail for a reason that belongs to video.
+
+`client/src/lib/mediaUpOrHonest.test.ts` → 24; **2 tripwires verified by MUTATION** off a
+confirmed-GREEN baseline including the original shared guard reinstated verbatim, source
+byte-identical afterwards.
+
+**AND `fnBody` COULD NOT FIND THIS HANDLER, which is the v2.106.2 distinction again**: it
+seeds paren depth from the anchor and waits for a `{` with parens CLOSED, which is right
+for `function f(…) {` and wrong for a CALLBACK, whose body sits inside the call's still-open
+paren — so all three new assertions failed on correct source with `indexOf` at −1. A
+callback-aware slice does it, with the reason recorded in place so the next person does not
+re-derive it. No schema change, no new dependency, no new env var. 4921 tests.
+
+## v2.106.49 — an account whose address can never receive a code (2026-07-31)
+
+The owner, mid-session: *"i want you to create an account ( any pin i dont care ) and use
+this email id demo@demo.demo and this is the passcode .. 1122"*.
+
+**IT CANNOT BE DONE THROUGH THE APP, AND THAT IS NOT A GAP TO ROUTE AROUND.** Registration
+mints an OTP and mails it — v2.105.19 REMOVED the bypass that used to skip that,
+deliberately, because proving the address IS the flow — so `demo@demo.demo` can never
+complete it. Re-adding a bypass for convenience would undo a security decision made six
+releases ago for a demo account. Creating it in the BACKEND is the honest answer, and
+`scripts/admin-tool.mjs` is what exists for exactly that ("the case where nobody holds the
+admin role yet — the bootstrap — and direct backend repair").
+
+**THE LOAD-BEARING PART IS THE PARITY TEST, NOT THE OPERATION.** The passcode hash now has
+TWO implementations: the real `hashPassword` in `server/authCrypto.ts` (TypeScript, in the
+server bundle) and a new `scripts/pinHash.mjs` (plain `.mjs`, run by bare node on an EC2
+instance, because `admin-tool.mjs` cannot import the bundle). That is the shape this repo
+has watched rot before — v2.99.71's `turn-check.mjs` disagreed with `iceServers()` and
+would have reported two live relays permanently DOWN. If these two disagree the failure is
+silent and cruel: the account is created, the operator is told OK, and the passcode simply
+never works on the sign-in screen with nothing anywhere saying why. So the test does NOT
+compare constants or strings — it feeds the script's output to the **REAL `verifyPassword`**
+and requires it to verify, requires seven wrong passcodes to fail, and round-trips in both
+directions so neither side is the odd one out. The self-describing `scrypt$N$salt$hash`
+format is what makes that possible: the verifier reads its own parameters out of the string.
+
+**THE HASHER IS ITS OWN FILE FOR A REASON THAT ALREADY HAS A PRECEDENT**: `admin-tool.mjs`
+opens a MySQL connection at module scope and runs top-level await, so importing it from a
+test would try to reach a database — the same reason v2.106.28 split `record.mjs` out of
+`agent.mjs`. The new module is asserted to import nothing but `node:crypto`, to read no
+env and to call no `process.exit`, so it stays importable.
+
+**WHAT THE OPERATION DELIBERATELY DOES NOT DO.** It never grants admin — that stays a
+separate, visible `--op grant-admin`, and a mutation writing `'admin'` bites. It REFUSES an
+address that already has an account, upholding one-address-one-account (v2.99.49 M50/F3),
+because two rows for one email is how a later sign-in lands on the wrong one. It never
+prints the passcode: the person who set it already knows it and this output goes to a CI
+log. It writes the `users` row and the `identities` row in ONE transaction, because a users
+row with no identity is an account with no number that no screen in the app can repair. It
+reserves the number in the shared ledger and then stamps `claimedAt`, because identities
+and party_lines share one number space with no unique index spanning both (v2.102.0) and
+the reaper's predicate is `claimedAt IS NULL` — an unstamped reservation could later be
+recycled out from under the account. Freeness is checked against BOTH tables AND the
+ledger, the search uses `crypto.randomInt` rather than `Math.random` (v2.99.20 #9 replaced
+the weak RNG in the server's allocator and a second allocator must not reintroduce it), and
+the reserved 000/111 prefixes are honoured unless explicitly overridden — the same rule as
+self-service (v2.105.8): never handed out by accident, assignable on purpose. DRY RUN by
+default, like every other write in the tool, with the verdict read from the printed
+`ADMIN_EXIT=` marker rather than the SSM status.
+
+**TWO NEW FREE-TEXT WORKFLOW INPUTS, AND THAT CLASS HAS BITTEN THIS FILE THREE TIMES**
+(SES_EMAIL/DOMAIN, then `region`, then the recover inputs). Both get the established
+base64-on-runner / decode-on-instance treatment, and it is **proven empirically rather than
+asserted**: the step's own construction was replayed with 8 hostile payloads (quote +
+semicolon, double-quote break, `$( )`, backticks, `&&`, `|`, an embedded newline, bare `;`)
+against a stub `node` with a SENTINEL FILE as the detector — **0 executed, each value
+arriving as ONE literal argument, and the stub confirmed to have run in all 8**, because a
+harness that reports safe because nothing happened is the v2.99.70 mistake. The passcode
+input is documented as demo/test only, since a `workflow_dispatch` input is visible in run
+metadata.
+
+**A HARNESS BUG OF MY OWN, reported rather than counted as a finding**: the first replay
+reported the newline payload as arriving in 6 arguments. It had not — I was counting LINES
+of a `printf '%s\n'` dump, and a value containing a newline legitimately prints as several.
+The sentinel was never created in any case, so safety always held; re-run with a
+NUL-separated dump, 8/8 arrive as one literal argument.
+
+**THE NEW SWEEP FLAGGED CORRECT CODE, AND THE FIX WAS TO NAME THE EXEMPTION RATHER THAN
+RELAX THE RULE**: "every free-text admin input is encoded" correctly flagged `ADM_OP`, which
+is a closed `choice` the step re-whitelists with its own `case` (v2.99.76 recorded that
+decision). The three closed-set values are exempted by name, the whitelist is asserted so
+the exemption is EARNED rather than claimed, and a non-vacuity check requires the sweep to
+have actually examined at least four free-text values.
+
+**FOUR MORE OF MY OWN ASSERTIONS WERE WRONG ABOUT THE FILE**, each caught by failing on
+correct source: `role[^)]*'user'` cannot span the closing paren of the SQL column list;
+`WF` is not what that test file calls the workflow source (it is `OPS`) — which made the
+file fail to LOAD and report **"no tests"**, the v2.106.6 trap, caught only because the
+count changed; `indexOf("CMDLINE=\"cd /home/relay/app")` finds `recover-identity`'s command
+first, not admin-tool's; and an "ADMIN TOOL" anchor starts AFTER the `env:` block, so it
+missed every `ADM_*` assignment the sweep exists to enumerate.
+
+`server/adminToolCreate.test.ts` (16) + `server/awsOps.test.ts` → 53; **10 tripwires
+verified by MUTATION** off a confirmed-GREEN baseline from byte-exact backups, the mutator
+aborting unless its target occurs exactly once, all three sources byte-identical afterwards
+— including both values sent raw into the remote command, the hasher's scheme name and key
+length changed out from under the real verifier, the role written as admin, the
+duplicate-email refusal removed, the reservation left unclaimed and the CSPRNG replaced.
+**TWO ABORTED at 0 occurrences** on needles of mine that missed the YAML's `\$` escaping,
+and both bit once corrected.
+
+**NOT RUN AGAINST THE FLEET, said plainly.** No account has been created: this sandbox has
+no route to the database and no AWS credentials, and the operation is dry-run by default
+regardless. The owner (or anyone with the deploy role) runs it from Actions →
+`aws-ops.yml` on **`ref: main`** — dry run first, then `admin_apply`. No schema change, no
+new dependency, no new env var. 4915 tests.
+
+## v2.106.48 — every call connected and carried nothing, and the two-party drive reproduced it (2026-07-31)
+
+The owner: *"I tested the calls, and still i can't calling I can't"*, narrowed by two
+questions to **"Connects but no audio"** on **"Every single call"**, then, unprompted,
+*"Also inspect that no video active"*. Zero media, BOTH directions, EVERY call, every
+device — which rules out the audio-routing layer I had prioritised (a sink or a
+loudspeaker-force bug cannot make VIDEO disappear) and points at media establishment.
+
+**REPRODUCED, IN TWO REAL BROWSERS, WHICH IS THE TEST NOBODY HAD EVER RUN ON THIS
+CODEBASE.** Signaling is perfect (the full protocol completes in 376ms). On the **MESH** a
+real voice call connects and carries audio BOTH WAYS, 2/2 runs — ~1315 packets / 30,815
+bytes inbound, rtt 6ms, candidate-pair `succeeded`, and 0 video packets, which is CORRECT
+for a voice call under v2.106.44's voice mode. On the **SFU** — the transport production
+actually uses — the call rings, is answered, `peer-joined` arrives, and then: **47
+`refresh-livekit` retries, 21 RTCPeerConnections every one stuck at `conn=new ice=new
+gather=new`, zero candidates, zero tracks, zero bytes**, torn down 14.2s after the answer
+with `leave reason=livekit-join-timeout`. The 14.2s matches `armLkWatchdog` exactly
+(4.5s + 3×4s), confirming the mechanism rather than a coincidence.
+
+**SAID PLAINLY AND FIRST: THAT REPRODUCTION INDUCED THE FAILURE by pointing `LIVEKIT_URL`
+at a dead port.** It proves what the DEPLOYED CODE DOES when the SFU is unreachable; it
+does NOT prove production's SFU is unreachable. This sandbox's proxy refuses
+`your-chat.io` (CONNECT 403) and there are no AWS credentials, so the one reading that
+would turn this into a confirmed root cause could not be taken.
+
+**THE STRUCTURAL DEFECT IS CERTAIN EITHER WAY: THERE WAS NO RUNTIME FALLBACK FROM A DEAD
+SFU TO THE MESH.** `onPeerJoined` opens `if (livekitEnabled) return;` BEFORE `createPeer`,
+so when the fleet advertises LiveKit the client never builds a peer connection at all —
+an unusable SFU does not degrade calling, it REMOVES it, for everybody, on every call,
+while our own signaling keeps working perfectly. `grep -cE 'fallbackToMesh|sfuUnusable'`
+on the deployed build: **0**. `server/voipRegistry.ts` already states the ladder for the
+SERVER's transport choice — mediasoup → LiveKit → mesh, *"the mesh last precisely because
+it depends on no infrastructure"* — and this is that ladder at RUNTIME, the half that was
+missing, because the server can only ever choose a transport it BELIEVES works. The
+fallback replaces a `hangUp()` and nothing else, so it can only improve the outcome, and
+it refuses honestly when the mesh genuinely cannot serve the call (nobody else present, or
+more parties than the mesh's own cap).
+
+**THE GAP A REAL DRIVE FOUND IN MY OWN FIX, which no source pin would have caught.** My
+first fallback keyed its roster on `lkParticipantTiles` — and those exist only once
+LiveKit media has ARRIVED, which is exactly what has failed. On the SFU path
+`onPeerJoined` returns before creating anything, so at the moment the callee answers the
+CALLER's tile map is **EMPTY**: the fallback would have found nobody, returned false and
+ended the call — the very outcome it exists to prevent, shipping while looking correct. It
+now reads a `sigRoster` filled from the `room`/`joined`/`peer-joined` frames, which are
+authoritative on BOTH transports and arrive whether or not any media does; recorded BEFORE
+the SFU early return, dropped on `peer-left`, and cleared on hang-up so a later fallback
+can never dial a stranger.
+
+**TOTAL MEDIA FAILURE WAS RECORDED AS SUCCESS.** `joinLivekit` ran
+`lkConnected = true; clearLkWatchdog();` UNCONDITIONALLY after `room.connect()` — but the
+publish block above it is `const send = processedStream || localStream; if (send) { … }`,
+a silent no-op when `send` is falsy, and `publishSafe` failing twice merely toasts and
+falls through. Either way the room was up, NOTHING was published in either kind, the flag
+claimed our media was live and the only thing watching was switched off. The comment on
+`lkConnected` already promised *"true only AFTER a successful room.connect()+publish"* — a
+promise the code did not keep. **THE MICROPHONE IS THE TEST, deliberately not the camera**:
+audio is the one unconditional publication, while a 1:1 caller legitimately publishes no
+video before consent (v2.81) and a voice call has no camera track at all, so gating on
+video would refuse to call correct calls connected. The watchdog now **retries the PUBLISH
+before re-minting a token**, because a fresh token authorizes JOINING and we have already
+joined — and `joinLivekit`'s own `if (lkRoom) return` makes a re-minted token a complete
+no-op. The give-up message NAMES the cause, since telling somebody the media server is
+unreachable when their own device refused to send its microphone sends them to check their
+network instead of their microphone.
+
+**AND THE SFU JOIN TOKEN WENT TO THE WRONG DEVICE — a second, independent, deterministic
+total-media failure.** Almost everything in the signaling registry is addressed by PIN and
+`reg.clients.get(pin)` holds exactly ONE socket, but a number can hold SEVERAL devices and
+`MULTI_DEVICE_RING: "1"` is baked into `ecosystem.config.cjs`, so it is LIVE on the fleet.
+The register handler makes the LATEST REGISTRATION primary — which has nothing to do with
+which device its owner is calling from; an SSE reconnect on an idle laptop is enough to
+take primary from the phone in your hand. `pushLivekitToken` addressed the NUMBER while
+all twelve of its call sites sit directly after a
+`safeSend(<specific socket>, { room | joined | rejoin | resumed })`, and that asymmetry is
+visible on adjacent lines. So whenever the dialling device was not the primary, the room
+frame went to the right device and its join token went to a DIFFERENT one: `joinLivekit`
+returns early at "waiting for token", nothing is published and nothing is subscribed,
+while ring, accept, roster and the in-call UI all succeed — and the idle device silently
+discards a token for a room it is not in. **The `accept` handler has promoted the answering
+device since v2.99.5; the CALLER side was simply left out.** Both halves are fixed: the
+dialling device claims primary (guarded, so it yields to a primary that is mid-call — that
+is a second-line situation where stealing it would break the live call — and bumping no
+epoch, because that would abort the very dial being placed), and the token's target socket
+is now a **REQUIRED** parameter. Required rather than defaulted, and the opposite call from
+v2.106.44's `wantVideo`: there a default was right because the change could only NARROW
+what was opened, whereas a default here would preserve the bug at any site somebody
+forgets, and the cost of forgetting is a call that carries nothing.
+
+**FOUR CAP COPIES BECAME ONE.** `livekitEnabled ? 10 : 6` existed at three sites and
+`fallbackToMesh` is a fourth reader that MUST agree with the cap the group picker showed
+the user — a fallback that builds a party the mesh cannot carry half-connects and reads as
+our bug. Now `MESH_MAX` / `SFU_MAX` / `transportMax()`.
+
+`client/src/lib/mediaUpOrHonest.test.ts` (21) + `server/multiDeviceTokenRouting.test.ts`
+(15, **BEHAVIOURAL** against the real registry and the real `handleMessage`, because which
+SOCKET a frame lands on is exactly what a source pin cannot answer and is the whole bug).
+**31 tripwires verified by MUTATION** off confirmed-GREEN baselines from byte-exact
+backups, the mutator aborting unless its target occurs exactly once, both sources
+byte-identical afterwards — including the original unconditional `lkConnected`, the
+original by-pin token addressing, and the tile-keyed roster all reinstated verbatim.
+
+**THREE SURVIVORS ON THE FIRST SERVER RUN, ALL REAL GAPS IN MY OWN TESTS AND ALL THE SAME
+CLASS — one fix MASKING the other.** Reinstating the original by-pin token addressing
+SURVIVED every behavioural test, because `claimPrimaryForCall` makes the dialling device
+the primary, so `reg.clients.get(pin).socket` and the named socket are the SAME object on
+every reachable path. The tests measured the promotion and said nothing about the
+addressing. A fourth survivor was the same shape one attribute along: swapping
+`conn.socket` for **`self.socket`** in `refresh-livekit` — and `self` IS
+`reg.clients.get(conn.pin)`, the primary record under another name — which is now
+forbidden by name, with the reason recorded, because no behaviour can separate them once
+the dial has promoted the device. Both fixes are KEPT and that is not defence-in-depth
+theatre: the promotion repairs the reported failure, the required parameter makes the
+invariant hold BY CONSTRUCTION at the ten other sites and at whichever site is added next
+— a twelfth site is how this arose.
+
+**ONE BAD MUTATION OF MY OWN, reported rather than counted**: my first attempt at the
+`lkConnected` gate replaced it with `if (false) … else if (false)`, which REMOVES the gate
+rather than reinstating the original unconditional shape; the honest reinstatement then
+ABORTED at 0 occurrences because my needle omitted a comment line, and bit once corrected.
+**FOUR OF MY OWN ASSERTIONS WERE WRONG ABOUT THE CODE**, each caught by failing on correct
+source: a file-wide ban on a defaulted socket matched a legitimate
+`const socket: RelaySocket = {` elsewhere; a `/[Ss]ocket\)$/` check written
+case-sensitively could not match `callerSocket`; my own simplified `fnBody` took the first
+`{` after the anchor, which for `function claimPrimaryForCall(` is its inline PARAMETER
+TYPE (the trap this repo has hit at v2.105.9, v2.105.27 and v2.106.4); and I asserted that
+with the multi-device flag OFF the latest registration becomes primary, when in fact a
+second device requesting a taken pin is given a FRESH number — which is the v2.99.5 report
+itself, and means the whole misrouting class cannot arise there.
+
+**THREE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY.** Two froze the cap literal, i.e.
+they forbade the consolidation while saying nothing about the rule; the third sliced a
+FIXED 600 characters from `case "peer-left"` and went stale the moment a line was added
+above its target — the v2.99.78 fragility again — and is now bounded by the case's own end
+with an assertion that the slice is real.
+
+**NOT VERIFIED ON THE OWNER'S DEVICES, said plainly.** Nobody has placed a call from their
+phone against a fixed build; production still serves v2.106.42. What is proven: the mesh
+carries audio both ways in this build, the SFU failure path is unrecoverable in the
+deployed code and is now recoverable, total media failure can no longer be recorded as
+success, and the join token can no longer be delivered to a device that is not in the
+call. No schema change, no new dependency, no new env var. 4899 tests.
+
+## v2.106.47 — the mediasoup worker was never built, and my own deploy gate could not see it (2026-07-31)
+
+A 20-agent map of the cutover was commissioned to plan the media path. Its FIRST finding is a
+blocker that stops the agent starting at all — and the second half of it is a defect in the deploy
+script I shipped two hours earlier.
+
+- [x] **`pnpm install --frozen-lockfile` IN `voip-node/` SHIPS NO WORKER, AND EXITS 0.** pnpm 10
+      blocks dependency lifecycle scripts by default and mediasoup resolves its worker BINARY from
+      postinstall, so the install "succeeds" while writing no `mediasoup-worker` — and the agent
+      then dies in `createWorker()` at startup. **PROVEN EMPIRICALLY, both ways, in a scratch
+      install** rather than argued from pnpm's documented behaviour: without
+      `onlyBuiltDependencies` pnpm prints `Ignored build scripts: mediasoup@3.19.3`, records
+      `pendingBuilds: ["mediasoup@3.19.3"]` and finishes in **2.8s** (itself proof nothing was
+      built); with it, the postinstall fetches a host-validated prebuilt worker, `pendingBuilds` is
+      empty and a 9,733,832-byte executable appears at
+      `node_modules/mediasoup/worker/out/Release/mediasoup-worker`.
+- [x] **AND MY OWN GATE WOULD HAVE REPORTED SUCCESS OVER IT.** v2.106.45's install gate was
+      `[ ! -d /opt/relay-voip/node_modules/mediasoup ]` — a DIRECTORY test, which an install whose
+      build was BLOCKED satisfies, because the directory is there and only the binary is missing.
+      So on a node in exactly that state it printed *"dependencies unchanged — skipping the C++
+      worker rebuild"* and reported `VOIP_EXIT=0` over a node that cannot start a worker. **A
+      successful deploy over a broken node is the one outcome that script exists to prevent**, and
+      it is the class its own test file is named for.
+- [x] **THE GATE NOW KEYS ON THE BINARY**, honouring `MEDIASOUP_WORKER_BIN` because mediasoup
+      itself does — an operator who has placed the binary elsewhere must not be forced into a
+      reinstall.
+- [x] **AND THE BINARY IS VERIFIED UNCONDITIONALLY, on the SKIP path too and whatever the install
+      claimed.** `pnpm install` exits 0 while printing "Ignored build scripts", so its exit code is
+      not evidence the worker exists; without a check after BOTH branches, a future pnpm change
+      that re-blocks the build would put us straight back to a green deploy over a dead node. The
+      refusal prints the expected path and the `pendingBuilds` line, so the cause is legible rather
+      than requiring somebody to already know this.
+- [x] **`onlyBuiltDependencies` LISTS ONLY mediasoup**, and that narrowness is the point: the
+      setting exists to stop arbitrary transitive postinstalls running, so widening it to every
+      dependency would trade a real supply-chain protection for convenience. Pinned as an exact
+      list, with the agent's dependency set (`ioredis`, `mediasoup`) pinned beside it.
+- [x] **A CLAIM OF MY OWN CORRECTED IN THREE PLACES.** I had written that mediasoup's worker is
+      "compiled per install". It is more precisely a HOST-SPECIFIC binary *resolved* per install —
+      a prebuilt one validated against the host when a match exists (1.8s), a source build
+      otherwise. The reasoning that rests on it is unchanged and still correct (the binary belongs
+      to the box, so `node_modules` must never be shipped), but the mechanism was imprecise and
+      the imprecision made the install look slower and more fragile than it is.
+
+`server/voipDeploy.test.ts` → 27. **6 of 7 tripwires verified by MUTATION** off a confirmed-green
+baseline from byte-exact backups, both sources byte-identical afterwards — including the original
+directory gate reinstated verbatim, the unconditional verification deleted, `MEDIASOUP_WORKER_BIN`
+dropped, `onlyBuiltDependencies` removed, and the allow-list widened.
+
+**ONE WAS A BAD MUTATION OF MINE, reported rather than counted**: "the verification moves after the
+restart" only replaced a trailing `echo`, so the verification block never moved and the mutation
+never created the defect it named. Re-run as a genuine deletion-and-relocation, it bit.
+
+**AND ONE PRE-EXISTING PIN WAS MINE FROM TWO HOURS EARLIER, freezing the defect**: it asserted the
+gate's exact expression *including* the `-d` directory test, so it would have forbidden this fix
+while saying nothing about the rule. Rewritten to the property — the install runs when the manifest
+moved OR the built artifact is absent — with which artifact counts pinned separately.
+
+**AN OBSERVATION I CANNOT EXPLAIN, recorded rather than glossed**: `voip-node/node_modules`
+existed when the finding was made and had been deleted by the time I re-checked minutes later. It
+is gitignored, disk was not short (24G free), and something in the 20-agent run removed it. The
+finding does not depend on it — the empirical reproduction above was run from a clean scratch copy
+of just `package.json` + `pnpm-lock.yaml`.
+
+**OWNER-SIDE, AND NOW SHARPER THAN BEFORE**: the two live nodes were hand-installed at mediasoup
+3.19.3, and this defect predates them — so **assume their worker is missing until the dry run says
+otherwise**. `voip-deploy` with `voip_apply: false` now reports exactly that, and the apply path
+refuses rather than restarting a node whose worker is not there. No schema change, no new
+dependency, no new env var. 4862 tests.
+
+## v2.106.46 — private for control, public for media — made structural (2026-07-31)
+
+The owner opened the app-fleet → SFU security-group path (TCP 4443 + ICMP, private) and handed over
+the ground truth, with two hard rules from the infrastructure side. Checking those rules against the
+code produced one large correction and two real gaps.
+
+- [x] **THE CORRECTION, and it is good news rather than a criticism.** Their note says "the node
+      agent (mediasoup workers + Redis self-registration + the 4443 signaling API) is step one; it
+      does not exist." It DOES exist — `voip-node/agent.mjs`, 677 lines — and it already implements
+      **both** of their rules: `listenInfos` carry `ip: self.privateIp` with
+      `announcedAddress: self.publicIp` (listen private, announce public), `nodeApiUrl()` builds from
+      `node.privateIp` (control over the private path), and IMDSv2 is read at boot AND re-read on a
+      timer, with the process EXITING on a public-IP change because `announcedAddress` is immutable
+      per transport — so a changed address would otherwise leave every transport announcing one that
+      no longer reaches it while the heartbeat looked perfect. Nothing is hardcoded anywhere.
+- [x] **GAP 1 — the signaling API bound `0.0.0.0`, so the security group was the ONLY thing keeping
+      it off the public internet.** It works: the group permits 4443 only from the app fleet's group.
+      But their rule says bind the private IP, and binding it makes the rule STRUCTURAL — a group
+      widened to `0.0.0.0/4443` by mistake still cannot reach a listener the kernel is not accepting
+      on. Now `self.privateIp || "127.0.0.1"`.
+- [x] **The loopback fallback fails shut, and that is consistent rather than a new hazard**: with
+      IMDS unreachable the API is unreachable from the fleet — but such a node also reports an empty
+      `publicIp`, which `decodeNode`'s `isIpv4` refuses, so the app never selects it. A node that
+      cannot learn its own address is already useless. Both halves pinned together.
+- [x] **The ordering became load-bearing where it was not.** `self = await readSelf()` runs before
+      `startApi()`; binding `0.0.0.0` needed nothing from `self`, so a reorder was previously
+      harmless and would now silently bind loopback — the fleet's first signaling call would hang,
+      which is exactly the wasted debugging cycle the owner's network fix was meant to avoid.
+- [x] **GAP 2 — the `4443` constant lives in TWO implementations in two languages with no parity
+      check.** The app's `mediasoupSignaling.ts` and the agent's `.mjs` on another machine, so no
+      import can unify them. This is the class the repo has been bitten by twice (v2.99.71's TURN
+      checker, v2.105.11's token classifier), and diverging here means signaling posts to a port
+      nothing is listening on: a timeout with nothing in any log pointing at the cause. A test now
+      compares the two values, and pins that both read the same env-var name so an operator override
+      moves them together.
+- [x] **The runbook records the STABLE identifiers only** — instance ids, AZs, security-group ids —
+      plus the fact that a `no-ping` before the rule was opened would have read as "the code is
+      wrong" rather than "the firewall is shut", which is worth remembering if it hangs again.
+- [x] **A contradiction of my own, caught and removed rather than shipped**: my first draft added a
+      second node table saying the IPs are "deliberately not written down", while the file has
+      carried them since v2.106.28 with the correct caveat that they are for humans checking a node
+      by hand. Two positions in one document is worse than either; the duplicate went and only the
+      genuinely new information stayed.
+
+`server/voipWebRtcServer.test.ts` → 26. **All 7 tripwires verified by MUTATION** off a
+confirmed-green baseline from byte-exact backups, both sources byte-identical afterwards —
+including the API rebound to `0.0.0.0`, bound to the PUBLIC address, `self` never resolved before
+the listen, the media listen/announce SWAPPED, and each side of the port constant moved
+independently.
+
+**Two of my own assertions were wrong about the code, both caught by failing on correct source**:
+`indexOf("startApi()")` also matches `function startApi()` 100 lines earlier, so the ordering check
+compared the declaration rather than the call; and I guessed a function name that does not exist
+(`createWebRtcServerFor` — the listen infos are built in `startWorkers`).
+
+**NOT VERIFIED AGAINST A NODE**: no AWS credentials and no route to the fleet from here, so the
+bind change is proven by reading and by `node --check`, not by a socket. No schema change, no new
+dependency, no new env var. 4855 tests.
+
+## v2.106.45 — the mediasoup media agent becomes deployable (2026-07-31)
+
+Owner: **"Start the mediasoup now"** — which overrides their own document's ordering (it gated
+the cutover behind a diagnostic call), so that is said rather than glossed. Starting it turned
+up a hard blocker before a line of the media path could be written.
+
+- [x] **THE AGENT HAS NO DEPLOY PATH AT ALL, and that was invisible.** `voip-node/` is
+      deliberately EXCLUDED from the app release tar — it carries a mediasoup dependency whose
+      C++ worker is compiled per install and which no app instance ever runs, and
+      `voipNodeParity.test.ts` pins that exclusion. The consequence nobody had drawn: `deploy.yml`
+      therefore **structurally cannot reach a media node**, so the agent's own README documented
+      a fully MANUAL file copy — and the agent has changed in FOUR releases since the nodes were
+      built (v2.106.32's registry hardening, v2.106.35's per-core `WebRtcServer` conversion,
+      v2.106.36's stats IP strip). Every one of those was a hand-copy somebody had to remember,
+      which is how a node ends up running code nothing in the repo matches with no way to tell
+      from the outside. `grep -rln voip-node .github/ scripts/` returned NOTHING.
+- [x] **New `voip-deploy` action in `aws-ops.yml`.** Dry run by DEFAULT: it reports each node's
+      service state, the installed agent's checksum, the mediasoup version, whether the env file
+      is present, and writes nothing. `voip_apply=true` then installs, one node at a time.
+- [x] **TARGETING IS THE SAFETY PROPERTY, NOT A GUARD.** Every other action here targets
+      `tag:Name=relay-app` and carries `MEDIA_NODE_GUARD` to SKIP a media node in the set. This
+      one is the mirror image — it targets `tag:Name=relay-voip`, so it can never select an app
+      box, because an app box does not carry that tag. A guard can be forgotten; a tag filter
+      cannot. **And that makes it the recorded exemption from v2.106.33's guard sweep** rather
+      than the one that was missed: it is exempt precisely because the guard exists to skip media
+      nodes and this action exists to write to them.
+- [x] **THE REMOTE GUARD REFUSES LOUDLY RATHER THAN SKIPPING, and the asymmetry is the point.**
+      For an app action a media node in the target set costs nothing, so a silent `exit 0` is
+      right. Here an APP SERVER in the target set means somebody has tagged a production web host
+      as a media node, and installing a systemd unit onto it is not something to do quietly — so
+      it is a NON-ZERO marker, which the caller turns into a failed run. It keys on `/home/relay`,
+      evidence the host itself carries, so unlike a tag list it cannot go stale.
+- [x] **IT NEVER WRITES `/etc/relay-voip/env`.** `VOIP_NODE_SECRET` and `REDIS_URL` are real
+      secrets and a `workflow_dispatch` input is visible in run metadata, so they stay a human
+      step. It reports the file's PRESENCE (a line count, never a value) and with it missing
+      installs the files, leaves the service stopped and says exactly what to do. The one input
+      the action takes is a boolean, and a test forbids a `voip_*` string input.
+- [x] **THE REMOTE SCRIPT IS A CHECKED-IN FILE** (`voip-node/deploy-remote.sh`), not a heredoc:
+      embedded in a YAML block scalar it would be quoted three times over (YAML, the runner's
+      shell, the SSM JSON) and could be neither syntax-checked nor tested. Its inputs ride as
+      EARLIER `commands` elements, because SSM concatenates every element into one shell script —
+      the same mechanism `MEDIA_NODE_GUARD` already uses — so nothing is substituted into the
+      script body, which is the shape that makes a payload re-parseable by the caller's shell.
+- [x] **FOUR WAYS A DEPLOY TOOL CAN REPORT SUCCESS OVER A BROKEN NODE, each closed**: the payload
+      is CHECKSUMMED before it is extracted (a truncated archive unpacked over a working agent and
+      then restarted is the worst outcome available here); every module is `node --check`ed BEFORE
+      any restart (a syntax error would otherwise surface as a crash-looping unit whose journal
+      nobody reads until a call fails — a mistake already made once in `agent.mjs`); the unit is
+      PROVEN active afterwards with its journal printed on failure, because a deploy that installs
+      and leaves the service dead is worse than none; and the verdict is read from the printed
+      `VOIP_EXIT=0` marker on EVERY invocation, never the SSM status (v2.99.46) and never
+      `CommandInvocations[0]` (v2.105.5 — on a TWO-node fleet the per-box failures are exactly
+      the ones worth catching, so a healthy sibling must not be able to hide a broken node).
+- [x] **THE C++ WORKER IS BUILT ON THE BOX, NEVER SHIPPED**: the payload excludes `node_modules`,
+      and the install runs `--frozen-lockfile` because the versions are pinned EXACTLY rather than
+      as ranges — a plain install resolves newer ones and the difference is invisible until a call
+      behaves differently on ONE node. **And the install is SKIPPED when the manifest is
+      unchanged**, fingerprinted BEFORE the extract: a mediasoup rebuild takes minutes, so
+      re-running it for an `agent.mjs` one-liner would time the SSM command out and leave the node
+      mid-install.
+- [x] `--max-concurrency 1 --max-errors 0`: today the nodes hold no rooms so it makes no
+      difference, but the moment they do, restarting both at once takes every call on the fleet
+      with it, and a node that fails must STOP the rollout rather than break the second one too.
+
+`server/voipDeploy.test.ts` (20), including a DRIVEN `bash -n` check because a source pin cannot
+tell you whether a shell script runs and a syntax error here is a crash-looping unit. **All 20
+tripwires verified by MUTATION** off a confirmed-green baseline from byte-exact backups, the
+mutator aborting unless its target occurs exactly once, all three sources byte-identical
+afterwards — including the app tag targeted instead, the refusal deleted, the refusal turned into
+a silent skip, the env file written, its contents printed, the write made the default, the extract
+moved ahead of the checksum, the restart moved ahead of the syntax check, `CommandInvocations[0]`
+restored, `--frozen-lockfile` dropped, a range version, and a secret added as a string input.
+
+**STILL OWNER-SIDE, and it is now the only thing standing between this and a running node**: tag
+the two media instances `relay-voip`, and put `VOIP_NODE_SECRET` + `REDIS_URL` into
+`/etc/relay-voip/env` on each. The action fails loudly with the exact `create-tags` command until
+the first is done, and installs-but-does-not-start until the second is.
+
+**NOT VERIFIED AGAINST A NODE, said plainly**: this sandbox has no AWS credentials and no route to
+the fleet, so nothing has been sent, no agent installed and no worker started. What is proven is
+that the script parses, that it cannot select or write to an app box, that it cannot write a
+secret, and that every failure path refuses before restarting anything. No schema change, no new
+dependency, no new env var. 4849 tests.
+
+## v2.106.44 — a voice call no longer opens the camera (2026-07-31)
+
+The owner's instruction, verbatim: voice and video are two explicit **modes of the SAME call
+path**, "differing only by the media profile applied" — and for voice mode, "**Publish:**
+microphone only. Do **not** acquire or publish a camera track." Their sequence puts the
+mediasoup cutover AFTER a diagnostic call, so nothing here touches the audio path or the
+transport: this is the media profile only.
+
+- [x] **The defect, and it was hiding behind a rule that held.** `acquireRawStream` requested
+      `video` UNCONDITIONALLY and a voice dial then called `setCam(false)` — whose own comment
+      admitted "the track is already published, just disabled". So the letter of the v2.81
+      mutual-consent rule was kept (nothing transmits) while a voice call still (1) lit the OS
+      camera indicator, (2) encoded frames it would never send — the "phone becomes very hot"
+      class v2.99.84 measured — and (3) on a camera-less desktop took the no-camera FALLBACK and
+      toasted *"No camera found — joining with audio only"* on a call where none was ever wanted,
+      i.e. a warning about a device the call had no use for.
+- [x] **`wantVideo` DEFAULTS TO TRUE, and that is what makes it one commit.** Every caller not
+      taught the mode is byte-identical, so the change can only ever NARROW what is opened,
+      never widen it. A required parameter would have turned each missed site into a compile
+      error rather than the historical behaviour.
+- [x] **Every site that KNOWS the mode passes it, and nothing calls it bare any more** —
+      `programmaticDial`/`programmaticGroupDial` from their own `voice` option, the raw dialer
+      and add-person from the live `camOn`, rejoin from the snapshot, and the answer path from
+      the RING. A bare `ensureMedia()` is forbidden by test, because a mode-blind caller is
+      exactly how a camera comes back on a voice call.
+- [x] **ANSWERING derives the mode from the ring, not only from the button.** A voice DIAL
+      answered with the plain Answer button is still voice — under mutual consent our camera may
+      not transmit until a video-request is accepted, so opening one would capture frames that
+      cannot legally be sent. `wantVideo = !!(r.video && !opts?.voice)`.
+- [x] **The camera STATE is still stood down, and the old guard could no longer do it.** It read
+      `opts?.voice && localStream && getVideoTracks().length > 0` — it REQUIRED the very track a
+      voice call no longer has, so left alone it would now SKIP, leaving a lit camera button, a
+      video-looking self tile and a publish gate reading `camOn === true` over a camera nobody
+      opened. It is unconditional now, and it runs BEFORE `enterCallUI` because `addSelfTile`
+      reads `camOn` at creation — which is what puts the avatar on the tile.
+- [x] **VOICE → VIDEO still works with no camera at start, verified rather than assumed**:
+      `reacquireCameraForPublish` builds a fresh stream from the EXISTING audio tracks, and both
+      transports already reacquire when enabling with no live track (`setCam` on the mesh,
+      `syncLivekitVideoPublication` on the SFU). Pinned at all four points, because without them
+      the owner's mid-call upgrade would be a button that silently does nothing.
+- [x] **A VIDEO call after a VOICE call in one session gets a camera.** The cached-stream reuse
+      keyed on the MIC alone, so the second call would be handed the audio-only stream and read
+      as "my camera is never recognized". It now ADDS one — and deliberately does NOT tear down
+      the working mic to get there, because a re-prompt can fail (device busy) and that would
+      cost the call its audio to chase a camera.
+- [x] **Concurrent callers wanting DIFFERENT modes cannot start two acquisitions.** Sharing one
+      in-flight promise is what stops an orphaned stream (v2.99.36), but a voice acquisition in
+      flight cannot satisfy a video caller — so the video caller WAITS for it and re-runs (which
+      then takes the add-a-camera branch) rather than running a second `getUserMedia` beside it.
+- [x] **Voice mode never blames a missing CAMERA.** The request WAS audio-only, so retrying
+      identical constraints could only fail identically; the fallback branch and its camera
+      toast stay reachable for video, and voice gets the honest mic message.
+- [x] **The AUDIO profile is untouched and shared**, which is both the owner's constraint and
+      what keeps this from interfering with the unresolved no-audio diagnosis: one
+      `AUDIO_CONSTRAINTS` (echo cancellation, noise suppression, AGC, mono), and the mode flag
+      is forbidden from reaching it.
+- [x] **`primeMedia` is deliberately left warming BOTH permissions** — it acquires and
+      immediately RELEASES (v2.99.36), so it holds nothing, and narrowing it to audio would make
+      the first video call prompt for the camera mid-dial, which is the one thing it exists to
+      prevent.
+
+`client/src/lib/voiceMode.test.ts` (12); **all 21 tripwires verified by MUTATION** off a
+confirmed-green baseline from a byte-exact backup, the mutator aborting unless its target occurs
+exactly once, source byte-identical afterwards — including the original unconditional constraint
+reinstated verbatim, the old track-requiring guard restored, the answer path made mode-blind, the
+audio profile made mode-dependent, and the upgrade path made to drop the audio track.
+
+**ONE SURVIVED AND IT WAS A REAL GAP IN MY OWN TEST**, the pin-the-name-not-the-rule class: the
+rejoin assertion required `ensureMedia(rejoinWantsVideo)` to appear, so replacing the derivation
+with a constant `true` stayed green while a voice call's rejoin would reopen the camera. It now
+pins the derivation itself AND that both the first attempt and its retry carry it. One mutation
+correctly ABORTED at two occurrences rather than recording a result about the wrong one.
+
+**Four pre-existing pins rewritten to the property**, and the pattern in them is worth stating:
+two (`callProgress`, `incomingRing`) froze the exact track-requiring guard — i.e. they forbade
+the fix while saying nothing about the rule — one (`iosPermTip`) froze the one-line
+`if (audioLive) return outStream();` so it broke the moment that branch grew a body, and one
+(`mediaRelease`) froze `if (ensureMediaInFlight) return ensureMediaInFlight`, forbidding the
+mode-aware wait. A fifth was narrowed rather than relaxed: `not.toMatch(/await ensureMedia\(\)/)`
+would have let `ensureMedia(true)` slip into `primeMedia`, so it now matches the CALL.
+
+**NOT VERIFIED ON A DEVICE, said plainly** — whether a camera opens is a property of the
+getUserMedia constraints and there is no camera (and no `navigator`) in the test environment, so
+these are source pins by necessity. The behavioural check is step 1 of the owner's own
+verification list, on a phone. **AND THE MEDIASOUP CUTOVER IS STILL NOT STARTED**, per their
+explicit ordering: it waits on one real call with the stats readout, which needs a device and a
+second party. No schema change, no new dependency, no new env var. 4829 tests.
+
+## v2.106.43 — the contact PIN moves up so "last seen" shows in full (2026-07-31)
+
+Owner, with a screenshot of the just-deployed row: *"Move the pin for contact from below the
+name to after the badge and coloured green — why? because last seen doesn't show fully so keep
+it visible now."* Their screenshot shows every offline row reading `last seen …`, and their
+diagnosis was the arithmetic one.
+
+- [x] **The cause was the PIN's `shrink-0` on line 2.** The presence text was the only
+      shrinkable thing on that line, so the PIN's cell came out of its budget at every width.
+      Measured at their device width (375px, from the screenshot's 1125px at DPR 3): the
+      presence line got **72px of the 99** that `last seen 3h ago` needs.
+- [x] **Moved to line 1, after the badge.** Line 2 now owns the whole span between the indent
+      and the buttons — re-measured, `last seen 3h ago` is **not truncated at 375, 390 or
+      430** (99 needed, 99 given), in both themes.
+- [x] **320px is still 27px short**, said rather than glossed: four 34px controls plus the
+      indent leave 72px there. Every current iPhone is 375 or wider.
+- [x] **Green is not a new meaning** — which is why it does not collide with v2.106.42 moving a
+      pinned-thread marker OFF green one release earlier. That was a pin (not presence, not a
+      number). A 6-digit RELAY number in green is the app's own convention: the top bar has
+      rendered the viewer's own number in this exact token since v2.99.86, which is where the
+      token came from — the LED hue is 4.46:1 as small text and FAILS AA, so
+      `--relay-green-text` (5.92:1 light / 9.27:1 dark) exists for a number at this size. The
+      LED hue is forbidden here by test.
+- [x] **The cost, with numbers rather than buried**: the PIN is `shrink-0` on line 1, so the
+      name loses its cell — at 375px it goes **228px → 173px**, and a 21-character name
+      truncates by 55px where two releases ago it fitted. That is the trade the owner chose,
+      their reason is sound (a truncated *value* tells you nothing, a truncated *name* still
+      identifies the person), and it is recorded so it can be reversed knowingly.
+- [x] The bidi rule matters MORE after the move, not less: the PIN now sits inline with the
+      display name, so an Arabic name is a direct neighbour. Verified on a real Arabic row that
+      `dir=ltr`, `unicode-bidi: isolate` and the digit groups survive.
+
+`client/src/app/contactsRowFrame.test.ts` → 17. **All 7 tripwires verified by MUTATION** off a
+confirmed-green baseline, source byte-identical afterwards — including the PIN deleted, moved
+before the badge, given the LED hue, stripped of its isolation, made shrinkable, duplicated onto
+line 2, and the presence line made unshrinkable. A move that leaves a copy behind is pinned
+against specifically: that shape reads as done while the row prints the number twice AND line 2
+gets none of its cell back.
+
+**Three pre-existing pins rewritten to the property, two of them mine from one release
+earlier** — v2.106.41 asserted the PIN was `shrink-0` on line 2, i.e. it froze the defect within
+a release of shipping it. The v2.99.66 pair had frozen an arrangement now chosen twice in
+opposite directions; they assert the surviving property instead (the PIN and the presence line
+are distinct elements, never one concatenated run), and the describe is renamed, because a test
+whose title states the opposite of the code is worse than no title.
+
+**Deploy confirmed visually**: the screenshot is v2.106.42's two-line row running on the owner's
+phone — the first direct evidence the merge and rolling deploy reached the device. Not verified
+on a device for THIS change: measured in a real browser at 320/375/390/430 in both themes. No
+schema change, no new dependency, no new env var. 4817 tests.
+
 ## v2.106.42 — board 1c: the unread state was the least readable thing in the row (2026-07-31)
 
 The third screen of the owner's "check all my new designs and match it to the existing one" —

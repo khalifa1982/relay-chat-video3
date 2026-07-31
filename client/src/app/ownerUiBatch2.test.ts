@@ -260,36 +260,51 @@ describe("4 — the away auto-reply is opt-in", () => {
   });
 });
 
-describe("5 — contacts put last seen below the pin", () => {
+/* Was "5 — contacts put last seen below the pin". v2.99.66 put the PIN above the presence
+   line because they had shared one line and every row wrapped mid-phrase; v2.106.43 REVERSED
+   the order at the owner's request, because after the two-line split the PIN was `shrink-0`
+   in front of the only shrinkable thing and the presence line read "last seen …" at every
+   width. The arrangement is theirs to choose; what these two guard is the property that
+   survives either arrangement. */
+describe("5 — contacts keep the pin and the presence line apart, and every state renders", () => {
   /* RE-ANCHORED (v2.106.41). Both of these sliced 1400 characters from the COMMENT "PIN on
      its own line" — the prose-anchor trap, and board 1e moved the PIN onto its own LINE 2
      (measured: the single-line row left the name 119px of the 228 it needs), so the anchor
      went with it. The property survives the move: the PIN is its own element, LTR-isolated,
      never glued to the presence text with a middot, and every presence state still renders.
      Anchored on the PIN'S OWN CODE now, which no comment can move. */
-  const pinRow = () => {
-    const at = CONTACTS.indexOf("{c.number.length === 6 ? c.number.slice(0, 3)");
-    expect(at, "the PIN element").toBeGreaterThan(-1);
-    return CONTACTS.slice(at - 400, at + 1400);
+  /** The presence line's own element, wherever in the row it now sits. */
+  const presenceEl = () => {
+    const at = CONTACTS.indexOf("last seen {relativeTime(c.lastSeenAt)}");
+    expect(at, "the presence line").toBeGreaterThan(-1);
+    return CONTACTS.slice(CONTACTS.lastIndexOf("<span", CONTACTS.lastIndexOf("{c.blocked ?", at)), at + 200);
   };
 
-  it("the pin and the presence line are separate elements", () => {
-    const row = pinRow();
-    const pin = row.indexOf('dir="ltr"');
-    expect(pin, "LTR-isolated, so an RTL name cannot reorder it").toBeGreaterThan(-1);
-    expect(row).toMatch(/\[unicode-bidi:isolate\]/);
-    // …and the presence line is a LATER, separate element.
-    expect(row.indexOf("last seen {relativeTime(c.lastSeenAt)}")).toBeGreaterThan(pin);
-    // The old shape joined them on one line with a middot; that must be gone.
-    expect(row).not.toMatch(/<> · last seen/);
+  it("the pin and the presence line are separate elements, never one joined string", () => {
+    /* The defect v2.99.66 fixed was that they SHARED a line and wrapped mid-phrase, so what
+       must never come back is the two being concatenated into one run. Which line each sits on
+       is the owner's call and has now changed twice; that they are distinct elements has not. */
+    const pinAt = CONTACTS.indexOf("{c.number.length === 6 ? c.number.slice(0, 3)");
+    const seenAt = CONTACTS.indexOf("last seen {relativeTime(c.lastSeenAt)}");
+    expect(pinAt).toBeGreaterThan(-1);
+    expect(seenAt).toBeGreaterThan(-1);
+    // Distinct elements: there is a tag boundary between them, whichever order they are in.
+    const between = CONTACTS.slice(Math.min(pinAt, seenAt), Math.max(pinAt, seenAt));
+    expect(between, "a real element boundary separates them").toMatch(/<\/span>/);
+    // The PIN is still LTR-isolated, which is what stops an RTL name reordering its groups.
+    const pinSpan = CONTACTS.slice(CONTACTS.lastIndexOf("<span", pinAt), pinAt);
+    expect(pinSpan).toMatch(/dir="ltr"/);
+    expect(pinSpan).toMatch(/\[unicode-bidi:isolate\]/);
+    // The pre-v2.99.66 shape glued them with a middot; that must stay gone.
+    expect(CONTACTS).not.toMatch(/<> · last seen/);
   });
 
   it("keeps the blocked / on-a-call / online states it had", () => {
-    const row = pinRow();
+    const el = presenceEl();
     for (const state of ["blocked", "on a call", "online"]) {
-      expect(row, `${state} still rendered`).toContain(state);
+      expect(el, `${state} still rendered`).toContain(state);
     }
     // Presence hidden still renders nothing at all.
-    expect(row).toMatch(/c\.presenceHidden \? null/);
+    expect(el).toMatch(/c\.presenceHidden \? null/);
   });
 });

@@ -61,9 +61,16 @@ describe("held 1:1 must NOT drop (v2.97.1)", () => {
     expect(back).toMatch(/ensurePlaceholderTile\(pin, nm\);/);
   });
   it("a REAL leave clears the hold state so a holder's full hang-up still ends the call", () => {
-    const pl = CLIENT.slice(CLIENT.indexOf('case "peer-left"'));
-    expect(pl.slice(0, 600)).toMatch(/peersHoldingUs\.delete\(goneP\);/);
-    expect(pl.slice(0, 600)).toMatch(/if \(livekitEnabled && lkParticipantTiles\[goneP\]\) removeLkTile\(goneP\);/);
+    // Bounded by the CASE's own end rather than a fixed character count: a fixed
+    // window silently goes stale the moment a line is added above the target (it did
+    // — v2.106.48 inserted `sigRoster.delete(goneP)` here), and then the assertion
+    // fails for a reason that has nothing to do with the property.
+    const at = CLIENT.indexOf('case "peer-left"');
+    expect(at).toBeGreaterThan(0);
+    const pl = CLIENT.slice(at, CLIENT.indexOf("\n      }", at));
+    expect(pl.length, "the case slice must be real").toBeGreaterThan(80);
+    expect(pl).toMatch(/peersHoldingUs\.delete\(goneP\);/);
+    expect(pl).toMatch(/if \(livekitEnabled && lkParticipantTiles\[goneP\]\) removeLkTile\(goneP\);/);
   });
   it("being-held state dies with the call (cleanup + destroy)", () => {
     expect(CLIENT).toMatch(/peersHoldingUs\.clear\(\);\s*\n\s*cancelSoloEndGrace\(\);\s*\n\s*stopHoldMusic\(\);/);

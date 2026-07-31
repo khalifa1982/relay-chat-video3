@@ -546,8 +546,28 @@ function startApi() {
       }
     });
   });
-  server.listen(API_PORT, "0.0.0.0", () =>
-    console.log(`[voip] internal API on :${API_PORT} (HMAC required)`),
+  /* BOUND TO THE PRIVATE ADDRESS, NOT 0.0.0.0.
+   *
+   * This used to bind every interface, which WORKS — the security group only permits 4443
+   * from the app fleet's group — but it left that group as the ONLY thing keeping an
+   * HMAC-gated internal API off the public internet. Binding the private IP makes the
+   * private-for-control rule STRUCTURAL: a security group widened to 0.0.0.0/4443 by
+   * mistake still could not reach this listener, because the kernel is not accepting there.
+   *
+   * FAILING SHUT HERE IS CONSISTENT RATHER THAN A NEW HAZARD. With IMDS unreachable
+   * `privateIp` falls back to loopback, so the API would be unreachable from the fleet —
+   * but such a node also has an EMPTY `publicIp`, which `decodeNode`'s `isIpv4` refuses, so
+   * the app never selects it anyway. A node that cannot learn its own address is already
+   * useless; this does not make it more so.
+   *
+   * Media is deliberately the other way round: the transports LISTEN on this same private
+   * address and ANNOUNCE the public one (see createWebRtcTransport). Private for control,
+   * public for media — crossing them is how a node becomes unreachable in one direction
+   * while looking healthy in the other.
+   */
+  const apiBind = self.privateIp || "127.0.0.1";
+  server.listen(API_PORT, apiBind, () =>
+    console.log(`[voip] internal API on ${apiBind}:${API_PORT} (HMAC required, VPC-private)`),
   );
   return server;
 }

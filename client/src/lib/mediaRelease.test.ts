@@ -62,8 +62,10 @@ describe("B — the camera/mic are no longer held while idle", () => {
   it("primeMedia warms the PERMISSION and releases the devices immediately", () => {
     const fn = ENGINE.slice(ENGINE.indexOf("async function primeMedia()"), ENGINE.indexOf("async function primeMedia()") + 1400);
     expect(fn).toMatch(/probe\.getTracks\(\)\.forEach\(t => t\.stop\(\)\)/);
-    // and it no longer keeps a stream by calling ensureMedia()
-    expect(fn).not.toMatch(/await ensureMedia\(\)/);
+    // and it no longer keeps a stream by calling ensureMedia. Matched on the
+    // CALL rather than the exact empty argument list (v2.106.44 gave it a mode
+    // parameter, so `ensureMedia()` alone would let `ensureMedia(true)` slip in).
+    expect(fn).not.toMatch(/ensureMedia\(/);
   });
   it("there is ONE release helper, used by hang-up and by engine teardown", () => {
     expect(ENGINE).toMatch(/function releaseLocalMedia\(reason: string\)/);
@@ -88,8 +90,23 @@ describe("C — an acquisition that lands after the call ended is discarded", ()
     expect(ENGINE).toMatch(/return destroyed \|\| gen !== mediaGen/);
   });
   it("concurrent ensureMedia callers share ONE acquisition (no orphaned loser)", () => {
+    // REWRITTEN v2.106.44 to the PROPERTY. This froze the exact one-liner
+    // `if (ensureMediaInFlight) return ensureMediaInFlight`, which forbade the
+    // mode-aware wait a voice/video split needs while saying nothing about the
+    // rule: no caller may start a SECOND acquisition while one is in flight.
     expect(ENGINE).toMatch(/let ensureMediaInFlight: Promise<MediaStream> \| null = null/);
-    expect(ENGINE).toMatch(/if \(ensureMediaInFlight\) return ensureMediaInFlight/);
+    const i = ENGINE.indexOf("function ensureMedia(");
+    expect(i, "ensureMedia must exist").toBeGreaterThan(0);
+    const fn = ENGINE.slice(i, ENGINE.indexOf("async function ensureMediaInner(", i));
+    expect(fn.length, "the slice must be real").toBeGreaterThan(120);
+    // Every path out of the gate either RETURNS the in-flight promise or CHAINS
+    // off it — never runs ensureMediaInner beside it.
+    expect(fn).toMatch(/if \(ensureMediaInFlight[^\n]*\) return ensureMediaInFlight/);
+    expect(fn).toMatch(/ensureMediaInFlight\s*\n?\s*\.catch/);
+    // ensureMediaInner is called from exactly ONE place, and it is the place
+    // that also records the in-flight promise.
+    expect(fn.match(/ensureMediaInner\(/g)?.length, "one call site").toBe(1);
+    expect(fn).toMatch(/const p = ensureMediaInner\([\s\S]{0,200}ensureMediaInFlight = p/);
   });
   it("each acquire-after-await path checks staleness and stops the fresh stream", () => {
     for (const gen of ["genF", "genP", "genR"]) {

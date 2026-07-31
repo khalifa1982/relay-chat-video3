@@ -304,8 +304,18 @@ describe("the ops action that runs it", () => {
     // free text: GitHub restricts a `choice`, and the step whitelists it again.
     const opInput = WORKFLOW.slice(WORKFLOW.indexOf("      admin_op:"), WORKFLOW.indexOf("      admin_email:"));
     expect(opInput).toMatch(/type: choice/);
-    expect(opInput).toMatch(/options: \[whois, grant-admin, revoke-admin, set-number\]/);
-    expect(step).toMatch(/whois\|grant-admin\|revoke-admin\|set-number\) : ;;/);
+    // THE PROPERTY IS THE CLOSED SET, NOT ITS MEMBERSHIP. This froze the exact list,
+    // so adding a legitimate operation broke it while saying nothing about the rule —
+    // which is that every option the workflow OFFERS is also re-whitelisted by the
+    // step, so the one unencoded value can never be something the script has not
+    // vetted. Asserted as that correspondence, both ways, so it cannot go stale on
+    // the next operation and cannot pass while the two lists diverge.
+    const offered = (opInput.match(/options: \[([^\]]+)\]/)?.[1] ?? "")
+      .split(",").map(o => o.trim()).filter(Boolean);
+    expect(offered.length).toBeGreaterThanOrEqual(4);
+    const caseLine = step.match(/^\s*([a-z|-]+)\) : ;;$/m)?.[1] ?? "";
+    const whitelisted = caseLine.split("|").filter(Boolean);
+    expect([...whitelisted].sort()).toEqual([...offered].sort());
     expect(step).toMatch(/unknown admin_op/);
   });
 

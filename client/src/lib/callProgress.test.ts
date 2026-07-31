@@ -112,7 +112,17 @@ describe("pre-connect dial screen (dedicated calling card)", () => {
 
 describe("voice-first video defaults", () => {
   it("a Voice Dial starts with the camera OFF (tap-to-enable in-call)", () => {
-    expect(CLIENT).toMatch(/if \(opts\?\.voice && localStream && localStream\.getVideoTracks\(\)\.length > 0\) \{\s*\n\s*setCam\(false\);/);
+    // REWRITTEN v2.106.44 to the PROPERTY. This froze the exact guard
+    // `opts?.voice && localStream && localStream.getVideoTracks().length > 0`,
+    // which REQUIRED a video track to exist — precisely what a voice call no
+    // longer has now that it opens no camera at all. Frozen, it forbade the fix
+    // and would have left a lit camera button over a camera nobody opened.
+    // The property is: a voice dial stands the camera state down, and it does
+    // so UNCONDITIONALLY rather than only when a track happens to be there.
+    expect(CLIENT).toMatch(/if \(opts\?\.voice\) setCam\(false\)/);
+    expect(CLIENT).not.toMatch(/opts\?\.voice && localStream && localStream\.getVideoTracks\(\)\.length > 0/);
+    // …and no camera is acquired for it in the first place.
+    expect(CLIENT).toMatch(/ensureMedia\(!opts\?\.voice\)/);
   });
 
   it("SFU voice calls never publish a video track at all (and 1:1 video needs mutual consent)", () => {

@@ -55,7 +55,14 @@ describe("incoming-call overlay — rich caller card", () => {
     expect(CLIENT).toMatch(/acceptInvite\(opts\?: \{ voice\?: boolean \}\)/);
     expect(CLIENT).toMatch(/acceptInvite\(\{ voice: true \}\)/);
     // Voice answer mirrors the voice-dial rule: camera off, upgradeable in-call.
-    expect(CLIENT).toMatch(/if \(opts\?\.voice && localStream && localStream\.getVideoTracks\(\)\.length > 0\) \{\s*\n\s*setCam\(false\);\s*\n\s*\}/);
+    // REWRITTEN v2.106.44 to the PROPERTY — this froze the exact guard, which
+    // required a video track to EXIST and so forbade a voice answer opening no
+    // camera at all. What matters is that the camera state is stood down, and
+    // that the mode is derived from the ring rather than the button alone (a
+    // voice DIAL answered with the plain Answer button is still voice).
+    expect(CLIENT).toMatch(/const wantVideo = !!\(r\.video && !opts\?\.voice\)/);
+    expect(CLIENT).toMatch(/if \(!wantVideo\) setCam\(false\)/);
+    expect(CLIENT).not.toMatch(/opts\?\.voice && localStream && localStream\.getVideoTracks\(\)\.length > 0/);
   });
 
   it("Decline is a round red glossy button with its own animation (v2.97)", () => {

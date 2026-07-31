@@ -42,10 +42,17 @@ describe("multi-call engine fixes (source-pinned)", () => {
   });
 
   it("§4b: group dial clamps to the transport cap (mesh 6 / SFU 10)", () => {
-    expect(engine).toMatch(/const cap = livekitEnabled \? 10 : 6;/);
+    // The cap comes from ONE definition (v2.106.48 consolidated three copies of
+    // `livekitEnabled ? 10 : 6`, because fallbackToMesh became a fourth reader and a
+    // fallback that disagrees with the cap the user was shown is its own bug). So the
+    // property is the VALUES and the single source, not the expression's old spelling.
+    expect(engine).toMatch(/const MESH_MAX = 6;/);
+    expect(engine).toMatch(/const SFU_MAX = 10;/);
+    expect(engine).toMatch(/function transportMax\(\): number \{ return livekitEnabled \? SFU_MAX : MESH_MAX; \}/);
+    expect(engine).toMatch(/const cap = transportMax\(\);/);
     expect(engine).toMatch(/deduped\.slice\(0, cap\)/);
-    // The handle exposes the cap for the picker.
-    expect(engine).toMatch(/maxParticipants\(\) \{ return livekitEnabled \? 10 : 6; \}/);
+    // The handle still exposes the cap for the picker, through the same definition.
+    expect(engine).toMatch(/maxParticipants\(\) \{ return transportMax\(\); \}/);
   });
 });
 
