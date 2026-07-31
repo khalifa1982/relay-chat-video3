@@ -889,6 +889,40 @@ function Row({ ok, label, detail }: { ok: boolean; label: string; detail?: strin
  * exists to be able to see — and because the frame's gold warning treatment belongs
  * on a card that reports REAL failures rather than on an invented count.
  */
+/**
+ * WHAT THE POOL ROW SAYS, and each line names the action its reason calls for.
+ *
+ * Deliberately NOT one "pool unhealthy" sentence: an empty registry and a saturated fleet
+ * are the same empty list and opposite jobs, and telling somebody to add a node when the
+ * agent is not running has them launch a second box that also fails to register.
+ */
+function poolDetail(p: {
+  configured: boolean;
+  reason: string;
+  total: number;
+  eligible: number;
+  saturated: number;
+  drainingCount: number;
+}): string {
+  if (!p.configured) return "Needs REDIS_URL. Every call is on the mesh, which is the current design.";
+  switch (p.reason) {
+    case "ok":
+      return `Rooms are being distributed by load.${p.drainingCount ? ` ${p.drainingCount} draining.` : ""}`;
+    case "no-nodes":
+      return "Nothing has registered — check the node agent is running and can reach Redis. Not a capacity problem.";
+    case "all-stale":
+      return `All ${p.total} registered but not heartbeating. Check the agents and their clocks.`;
+    case "all-draining":
+      return "Every node is being retired. Clear the drain flag, or add a node.";
+    case "all-excluded":
+      return "Nodes heartbeat but fail signaling — a wrong VOIP_NODE_SECRET does exactly this.";
+    case "all-saturated":
+      return `${p.saturated} node(s) at their CPU or room ceiling. THIS is the signal to add a node.`;
+    default:
+      return "Mediasoup is switched off for this fleet; calls use the mesh.";
+  }
+}
+
 function MediaCheck() {
   const q = trpc.admin.mediaDiagnostics.useQuery(undefined, { staleTime: 30_000 });
   if (q.isLoading) {
@@ -913,7 +947,7 @@ function MediaCheck() {
       </p>
     );
   }
-  const { transport, turn } = q.data;
+  const { transport, turn, voipPool } = q.data;
   return (
     <div
       className="rsheet space-y-2 rounded-[20px] border bg-card p-4"
@@ -940,7 +974,43 @@ function MediaCheck() {
           }
         />
         <Row ok={turn.secretSet} label="TURN secret set" detail="Credentials are minted per call, never shown." />
+        {/* THE CAPACITY ROW, AND ITS `ok` IS NOT "are there nodes".
+            An unconfigured pool is the fleet's normal state today, so drawing that red
+            would make this card cry wolf on every load — the thing that teaches an
+            operator to stop reading it. It is a fault only when a pool EXISTS and has
+            nothing to give, which is the condition somebody has to act on. */}
+        <Row
+          ok={!voipPool.configured || voipPool.reason === "ok" || voipPool.reason === "disabled"}
+          label={
+            !voipPool.configured
+              ? "Media node pool: not configured"
+              : `Media nodes: ${voipPool.eligible} of ${voipPool.total} accepting rooms`
+          }
+          detail={poolDetail(voipPool)}
+        />
       </ul>
+      {voipPool.nodes.length > 0 && (
+        <ul className="space-y-1 text-[10.5px] text-muted-foreground">
+          {voipPool.nodes.map((n) => (
+            <li key={n.instanceId} className="flex flex-wrap items-baseline gap-x-2">
+              <span className="font-mono" dir="ltr">
+                {n.instanceId}
+              </span>
+              <span>{n.az}</span>
+              {/* dir=ltr + isolation: an address must not be reordered by an RTL locale. */}
+              <span className="font-mono [unicode-bidi:isolate]" dir="ltr">
+                {n.publicIp}
+              </span>
+              <span>
+                {n.routers} room{n.routers === 1 ? "" : "s"} · {n.consumers} consumers ·{" "}
+                {Math.round(n.cpuLoad * 100)}% cpu/core
+              </span>
+              {n.draining && <span className="font-semibold text-destructive">draining</span>}
+              {n.ageMs > 15_000 && <span className="font-semibold text-destructive">stale</span>}
+            </li>
+          ))}
+        </ul>
+      )}
       <p className="text-[10.5px] leading-relaxed text-muted-foreground">
         In a call, tap <span className="font-semibold">Stats</span> in the control bar for live
         round-trip, packet loss, and whether media is going through a relay.

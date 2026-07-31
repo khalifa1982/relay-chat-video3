@@ -62,7 +62,34 @@ describe("the record the agent publishes is one the app accepts", () => {
       consumers: 11,
       cpuLoad: 0.34,
       updatedAt: NOW,
+      /* THE PARITY THAT MATTERS FOR A NEW FIELD: the agent always publishes `draining` as a
+         real boolean and the app always decodes it as one, so the two never disagree about
+         what an absent value meant. A field the agent emits and the app drops would silently
+         make drain-then-retire a no-op. */
+      draining: false,
     });
+  });
+
+  it("a DRAINING record round-trips as draining — parity in both states", () => {
+    /* FOUND BY MUTATION: asserting only the default (`false`) is satisfied by an agent that
+       publishes a hardcoded `false`, which makes retiring a node a silent no-op from the
+       agent's end while the app's decoder looks perfectly correct. The parity claim is that
+       the two agree in BOTH states, so both states have to be driven.
+
+       This is the exact divergence class this file exists for (v2.99.71): two
+       implementations of one rule, in two languages, on two machines, where nothing fails
+       when they stop meaning the same thing. */
+    const on = decodeNode(JSON.stringify(buildNodeRecord({ ...REAL, draining: true })));
+    expect(on?.draining, "the agent said draining and the app must hear it").toBe(true);
+
+    const off = decodeNode(JSON.stringify(buildNodeRecord({ ...REAL, draining: false })));
+    expect(off?.draining).toBe(false);
+
+    // And the agent must not invent draining from a value that is not the boolean true.
+    for (const junk of ["false", "", 0, null, undefined]) {
+      const rec = buildNodeRecord({ ...REAL, draining: junk as never });
+      expect(decodeNode(JSON.stringify(rec))?.draining, String(junk)).toBe(false);
+    }
   });
 
   it("both real nodes' records are accepted, as measured by the infrastructure brief", () => {

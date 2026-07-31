@@ -21,7 +21,8 @@ import {
   heartbeatVoipNode,
   isIpv4,
   isNodeFresh,
-  isNodeUsable,
+  isNodeEligible,
+  isNodeLive,
   NODE_CLOCK_SKEW_MS,
   NODE_CPU_CEILING,
   NODE_HEARTBEAT_MS,
@@ -66,7 +67,10 @@ const B = (over: Partial<VoipNode> = {}): VoipNode => ({
 
 describe("a node record is validated because it decides where media goes", () => {
   it("round-trips a real record", () => {
-    expect(decodeNode(encodeNode(A()))).toEqual(A());
+    /* `draining` is NORMALISED to a real boolean on the way in, so a record built without
+       it round-trips as `false` rather than as absent — which is what lets every reader
+       treat it as a boolean without re-deciding what missing means. */
+    expect(decodeNode(encodeNode(A()))).toEqual({ ...A(), draining: false });
   });
 
   it("a garbage or truncated record is dropped WHOLE, never partially applied", () => {
@@ -149,12 +153,24 @@ describe("freshness is judged on the node's own timestamp", () => {
     expect(NODE_HEARTBEAT_MS * 3).toBeLessThanOrEqual(NODE_TTL_MS);
   });
 
-  it("a saturated node is UNUSABLE even while fresh", () => {
-    // Two independent reasons to skip a node, and they must not collapse into one.
+  it("a saturated node takes NO NEW ROOM even while fresh", () => {
+    // Two independent reasons to withhold new work, and they must not collapse into one.
     const hot = A({ cpuLoad: NODE_CPU_CEILING });
     expect(isNodeFresh(hot, NOW)).toBe(true);
-    expect(isNodeUsable(hot, NOW)).toBe(false);
-    expect(isNodeUsable(A({ cpuLoad: NODE_CPU_CEILING - 0.01 }), NOW)).toBe(true);
+    expect(isNodeEligible(hot, NOW)).toBe(false);
+    expect(isNodeEligible(A({ cpuLoad: NODE_CPU_CEILING - 0.01 }), NOW)).toBe(true);
+  });
+
+  it("…but it is still LIVE, so the rooms it already holds are not evicted", () => {
+    /* THIS PAIR IS THE POINT, and one shared predicate used to answer both. `cpuLoad` over
+       the ceiling means "give it nothing more", never "it has stopped working" — and the
+       router ceiling is reached precisely BECAUSE it is holding live rooms, so answering the
+       liveness question with the admission answer evicted the calls the ceiling protects. */
+    const hot = A({ cpuLoad: NODE_CPU_CEILING });
+    expect(isNodeLive(hot, NOW)).toBe(true);
+    expect(isNodeLive(A({ routers: 9_999 }), NOW)).toBe(true);
+    // Liveness is freshness and nothing else, so a dead node is still dead.
+    expect(isNodeLive(A({ updatedAt: NOW - 60_000 }), NOW)).toBe(false);
   });
 });
 

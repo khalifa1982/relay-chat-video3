@@ -474,13 +474,37 @@ describe("/api/health says which media transport the fleet is on (v2.105.20)", (
     // `registered` signaling frame, so finding out required opening a call. It is the
     // biggest lever on call CPU and latency (the mesh runs N-1 encoders per phone),
     // so it belongs beside `redisBus` and `cluster`.
-    /* A LITERAL now (v2.106.53), because there is nothing left to read: the mesh is
-       what every call uses. It stays REPORTED rather than being dropped — a health
+    /* THIS FROZE THE EXACT LITERAL `media: { mesh: true }` and broke the moment the
+       media block legitimately grew a pool summary — a pin of mine from earlier the
+       same day, freezing a shape rather than the rule it stands for, which is the
+       class this repo keeps paying for.
+       THE PROPERTY: the media block reports the mesh as the transport every call
+       uses, and it stays REPORTED rather than being dropped, because a health
        endpoint that stops answering a question is worse than one that answers it
-       plainly, and an operator reading this needs to know the fleet is on the mesh
-       rather than merely that it is not on something else. */
-    expect(CORE).toMatch(/media: \{ mesh: true \}/);
+       plainly. What is inside it beyond that is free to grow. */
+    expect(CORE).toMatch(/mesh: true/);
+    expect(CORE).toMatch(/media: [({]/);
     expect(CORE).toMatch(/import \{ attachRelay \} from "\.\.\/relay"/);
+  });
+
+  it("the media-node pool is COUNTS, never an address — the unauthenticated line", () => {
+    /* v2.105.22 drew this line for the SFU URL and the reasoning is unchanged: a node's
+       public IP is not secret (a client in a call is told it), but the fleet's media
+       topology is not something an anonymous caller needs. Counts are enough to alert on;
+       the per-node detail lives behind `requireAdmin` in `admin.mediaDiagnostics`.
+
+       Scoped to the media block rather than the whole handler, so this cannot be satisfied
+       by the absence of a field somewhere else in the response. */
+    const at = CORE.indexOf("      media: (");
+    expect(at, "the media block must exist").toBeGreaterThan(-1);
+    const block = codeOnly(CORE.slice(at, CORE.indexOf("      })(),", at)));
+    expect(block).toMatch(/nodes: p\.total/);
+    expect(block).toMatch(/saturated:/);
+    for (const leak of ["publicIp", "privateIp", "instanceId", "\\baz\\b"]) {
+      expect(block, `${leak} must not reach an unauthenticated response`).not.toMatch(
+        new RegExp(leak),
+      );
+    }
   });
 
   it("a BOOLEAN only — never the URL, never the key", () => {

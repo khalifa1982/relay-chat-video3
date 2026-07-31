@@ -76,6 +76,10 @@ describe("planning a room's transport composes the two halves so they cannot dis
     expect(p.voip).toEqual({
       instanceId: A().instanceId,
       publicIp: A().publicIp,
+      /* BOTH PLANES, each named for its own: the client is told `publicIp` for media and the
+         app posts signaling to `privateIp`. Recording only the public one leaves a later
+         signaling caller nothing else to reach the node by, so it would be used. */
+      privateIp: A().privateIp,
       az: A().az,
       assignedAt: NOW,
     });
@@ -236,11 +240,33 @@ describe("an existing assignment is re-validated on the ONE thing that can betra
     expect(assignmentStillValid(live, [A({ updatedAt: NOW - 60_000 })], NOW)).toBe(false);
   });
 
-  it("a SATURATED node invalidates it too", () => {
-    /* Deliberately the same `isNodeUsable` the selection uses. Two definitions of "can this
-       node take work" is how a room gets kept on a node the selector would refuse. */
-    expect(assignmentStillValid(live, [A({ cpuLoad: NODE_CPU_CEILING })], NOW)).toBe(false);
-    expect(assignmentStillValid(live, [A({ routers: NODE_MAX_ROUTERS })], NOW)).toBe(false);
+  it("a SATURATED node KEEPS its rooms — admission is not liveness", () => {
+    /* THIS ASSERTION USED TO SAY THE OPPOSITE, and it froze a real defect with a comment
+       arguing for it: "deliberately the same `isNodeUsable` the selection uses. Two
+       definitions of 'can this node take work' is how a room gets kept on a node the
+       selector would refuse."
+
+       That reasoning is correct about ADMISSION and wrong here, because this function asks a
+       different question. `routers >= NODE_MAX_ROUTERS` means the node is holding forty LIVE
+       rooms — the ceiling is reached BECAUSE they exist — so answering "is this room still
+       on a good node?" with the admission answer declared all forty invalid, i.e. the
+       ceiling evicting exactly the calls it was added to protect, at the moment the node is
+       busiest. Same for the CPU ceiling. It was latent only because nothing calls this yet.
+
+       The property is: withhold NEW work from a full node, and never take away work it is
+       already doing. */
+    expect(assignmentStillValid(live, [A({ cpuLoad: NODE_CPU_CEILING })], NOW)).toBe(true);
+    expect(assignmentStillValid(live, [A({ routers: NODE_MAX_ROUTERS })], NOW)).toBe(true);
+    // …and the other half of the same property, so this cannot rot into "always valid".
+    expect(selectVoipNode([A({ cpuLoad: NODE_CPU_CEILING })], { nowMs: NOW })).toBeNull();
+    expect(selectVoipNode([A({ routers: NODE_MAX_ROUTERS })], { nowMs: NOW })).toBeNull();
+  });
+
+  it("a DRAINING node keeps its rooms too, which is the whole point of draining", () => {
+    /* If this returned false, marking a node draining would tear down the live calls that
+       draining exists to let finish — the feature destroying its own purpose. */
+    expect(assignmentStillValid(live, [A({ draining: true })], NOW)).toBe(true);
+    expect(selectVoipNode([A({ draining: true })], { nowMs: NOW })).toBeNull();
   });
 
   it("a node a few milliseconds ahead of us keeps its rooms", () => {
@@ -253,6 +279,7 @@ describe("an assignment read back off the wire is validated field by field", () 
   const good: VoipAssignment = {
     instanceId: "i-062022390e558ce74",
     publicIp: "192.0.2.10",
+    privateIp: "198.51.100.10",
     az: "ap-south-1a",
     assignedAt: NOW,
   };
@@ -277,6 +304,18 @@ describe("an assignment read back off the wire is validated field by field", () 
       { ...good, publicIp: "256.1.1.1" },
       { ...good, publicIp: "" },
       { ...good, az: "" },
+      /* THE PRIVATE ADDRESS IS AS LOAD-BEARING AS THE PUBLIC ONE, and its cases were
+         missing — found by mutation, where dropping the check entirely survived the whole
+         suite. An assignment that validates without it hands the next signaling caller
+         `undefined` for the address it must POST to, and the only other address in the
+         record is the one reserved for media, so that is what gets used: the two planes
+         crossed by an omission rather than a decision. */
+      { ...good, privateIp: undefined },
+      { ...good, privateIp: "" },
+      { ...good, privateIp: "not-an-ip" },
+      { ...good, privateIp: "10.0.1" },
+      { ...good, privateIp: "256.1.1.1" },
+      { ...good, privateIp: 5 },
       { ...good, assignedAt: 0 },
       { ...good, assignedAt: -1 },
       { ...good, assignedAt: Number.NaN },

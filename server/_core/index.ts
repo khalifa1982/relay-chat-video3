@@ -36,7 +36,8 @@ import { sendEmail, wrapEmailDocument } from "../email";
 import { createRateLimiter, clientIpOf } from "../rateLimit";
 import { registerLocalAuth } from "../authLocal";
 import { appBaseUrl } from "../appUrl";
-import { INSTANCE_ID, busStrict, busAuthStats } from "../redisBus";
+import { INSTANCE_ID, busStrict, busAuthStats, busCommandClient } from "../redisBus";
+import { poolState, startVoipPool } from "../voipPool";
 import { clusterEnabled } from "../relayCluster";
 import { registerDomainMigration } from "../domainMigration";
 
@@ -551,14 +552,39 @@ async function startServer() {
        * than being dropped, because a health endpoint that stops answering a
        * question is worse than one that answers it plainly: an operator reading
        * this needs to know the fleet is on the mesh, not merely that it is not on
-       * something else. `mediasoup` will join it here when a room can be pinned to
-       * one of our own nodes; until then it is honestly absent rather than false,
-       * since a `false` would imply the wiring exists and is off.
+       * something else.
        *
-       * BOOLEANS ONLY, never a URL and never a key — the same discipline as
-       * `redisBus: Boolean(REDIS_URL)` above.
+       * THE POOL IS COUNTS ONLY, AND THAT IS A DELIBERATE LINE (v2.105.22 drew it
+       * for the SFU URL and the reasoning is unchanged): this endpoint is
+       * UNAUTHENTICATED, so it reports how many nodes there are and whether the
+       * pool is saturated — enough to alert on — and never an address, a zone or an
+       * instance id. Publishing the media topology to anonymous callers is not
+       * something an uptime check needs. The per-node detail lives behind the admin
+       * gate in `admin.mediaDiagnostics`.
+       *
+       * `saturated` IS THE ONE AN ALERT SHOULD WATCH, and it is deliberately not
+       * "nodes === 0": an empty pool means the agent is not running, which is a
+       * different problem with a different fix, so the two are separate fields
+       * rather than one "unhealthy" boolean that sends an operator the wrong way.
+       *
+       * BOOLEANS AND COUNTS ONLY, never a URL and never a key — the same discipline
+       * as `redisBus: Boolean(REDIS_URL)` above.
        */
-      media: { mesh: true },
+      media: (() => {
+        const p = poolState();
+        return {
+          mesh: true,
+          voipPool: {
+            configured: p.configured,
+            nodes: p.total,
+            live: p.live.length,
+            eligible: p.eligible.length,
+            draining: p.draining,
+            saturated: p.reason === "all-saturated",
+            reason: p.reason,
+          },
+        };
+      })(),
     });
   });
   // v2.0 attachment upload (multipart-friendly JSON body)
@@ -588,6 +614,16 @@ async function startServer() {
   await ensureSchemaExtensions().catch((err) => {
     console.warn("[v2 schema ensure]", err);
   });
+
+  /* MEDIA-NODE POOL — the refresh timer that makes adding a node an infrastructure step.
+   *
+   * Dormant without `REDIS_URL`: `busCommandClient()` is null, `startVoipPool` returns
+   * immediately, and `poolSnapshot()` stays empty, so every call takes the mesh exactly as
+   * it does with no pool at all. With Redis it reads the registry on the node heartbeat
+   * cadence and warns when the pool has nothing to offer — naming which of the five
+   * reasons it is, because "add a node" and "your agent is not running" need different
+   * actions from whoever reads the log. */
+  startVoipPool(busCommandClient());
 
   // Stale-presence sweep — once a minute, flip users whose heartbeat
   // expired to offline. For EACH reaped user, broadcast an offline SSE event to

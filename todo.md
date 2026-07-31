@@ -11278,6 +11278,87 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.54 — adding a media node becomes an infrastructure step (2026-07-31)
+
+Owner doc: when nodes are added later, the app must use them with **no code change and no
+redeploy**. Not about adding capacity now — about making "add a node" cost no engineering
+time at the moment of need.
+
+- [x] **THE AUDIT CAME FIRST AND CHANGED THE SCOPE.** The doc opens *"it does not exist yet —
+      verified: Redis holds only `relay:leader`"*. The KEYS are absent because the agents are
+      not running; the CODE mostly exists — `voipRegistry.ts` (594 lines) + `voip-node/`
+      already do self-registration (TTL 15s / beat 5s, IMDSv2 address, never hardcoded),
+      load ranking on consumers-per-core, an AZ tiebreak with an explicit threshold, and
+      `planRoomTransport` composing selection with the transport so they cannot disagree.
+      All DORMANT: nothing in `relay.ts` or the client imports it. Same correction as
+      v2.106.46, where a doc said the node agent did not exist and it was 677 lines.
+- [x] **FOUR GENUINE GAPS, so those are what this builds.**
+- [x] **(1) DRAINING did not exist, and the trap is which predicate it belongs to.**
+      `touch /etc/relay-voip/draining` and a node takes no new rooms while its live calls run
+      to their end. A FILE rather than an env var deliberately: changing an env var means
+      restarting the agent, and restarting is the precise thing draining exists to avoid.
+      Checked per heartbeat, logged on the TRANSITION only, fails toward SERVING.
+- [x] **(2) SATURATION WAS SILENT AND INDISTINGUISHABLE FROM AN EMPTY POOL.** `rankNodes`
+      returned `[]` for five different situations. Logging "add a node" on an empty registry
+      sends an operator to launch a second box that also fails to register — the v2.105.10
+      false-alarm class. New `PoolReason` funnel names the stage that ate the last candidate
+      (`no-nodes` / `all-stale` / `all-draining` / `all-excluded` / `all-saturated`), each
+      with its own message and its own action. ONE filter feeds both the selector and the
+      warning, or the two come to disagree about whether the pool is full.
+- [x] **(3) NOTHING WAS OBSERVABLE.** New `server/voipPool.ts` reads the registry on the node
+      heartbeat cadence, caches it for the synchronous dial path, and reports. Counts on
+      `/api/health` (UNAUTHENTICATED, so counts only — the line v2.105.22 drew for the SFU
+      URL); per-node detail behind `requireAdmin`. Warning on transition + a 5-minute
+      cooldown, and RECOVERY logged too so the story has an end.
+- [x] **(4) THE ASSIGNMENT CARRIED NO PRIVATE ADDRESS.** The rule is signaling over private,
+      public for media announcement only. An assignment recording just the public IP leaves
+      the next signaling caller nothing else to reach the node by, so it would be used —
+      the two planes crossed by omission rather than decision.
+- [x] **A LATENT DEFECT THE AUDIT FOUND IN CODE ALREADY WRITTEN, and it is the sharpest thing
+      here.** `assignmentStillValid` — "is this room's node still good?" — called
+      `isNodeUsable`, which includes the two ADMISSION ceilings. `routers >= 40` means the
+      node holds forty LIVE rooms, so it declared all forty invalid: the ceiling evicting
+      exactly the calls it was added to protect, at the moment the node is busiest. Latent
+      only because nothing calls it yet. Split into `isNodeLive` (freshness) and
+      `isNodeEligible` (freshness + draining + ceilings) — two questions, two predicates.
+- [x] **A PRE-EXISTING TEST PINNED THAT DEFECT** with a comment arguing for it (*"deliberately
+      the same `isNodeUsable` the selection uses"*). That reasoning is right about admission
+      and wrong about liveness. Rewritten to the property, and made STRONGER: it now asserts
+      both halves — a full node keeps its rooms AND takes no new one.
+- [x] **THE POOL DEGRADES RATHER THAN MISLEADS**: dormant with no `REDIS_URL`; a Redis blip
+      keeps the last known list instead of dumping every call onto the mesh; a persistent
+      outage lets it age out; and the freshness check runs at USE time with the caller's
+      clock, so a stale cache degrades to the mesh and never to "send media to a dead box".
+- [x] **ONE DEVIATION FROM THE DOC, STATED RATHER THAN QUIETLY IMPLEMENTED**: it says three
+      times that saturation should fall back to the hosted SFU. That account was cancelled
+      and the code deleted in v2.106.53 on the owner's own instruction, so the fallback is
+      the MESH. The later instruction wins.
+- [x] **SCOPE, said plainly**: this is the mechanism and its observability. Wiring the
+      selector into the live call path is the mediasoup cutover (client adapter, transport
+      negotiation, produce/consume) and stays there. Nothing in `relay.ts` calls this yet.
+- [x] `server/voipScaling.test.ts` (37) drives the doc's own five verification steps against
+      a fake Redis with the REAL reader and selector — a source pin cannot tell you whether a
+      third node becomes eligible without a deploy, which is the whole feature.
+      **17 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+      backups, the mutator aborting unless its target occurs exactly once, all three sources
+      byte-identical afterwards.
+- [x] **THREE SURVIVORS, ALL REAL GAPS IN MY OWN TESTS, each fixed then re-verified.** Every
+      draining test built its node IN MEMORY, so `decodeNode` hardcoding `draining: false` —
+      which makes the feature a total silent no-op — passed all of them; now driven through
+      the whole agent → JSON → Redis → decode → select path. The mirror direction survived
+      too (the AGENT publishing a hardcoded false), so the parity test now asserts BOTH
+      states rather than only the default — the v2.99.71 two-languages class. And dropping
+      the `privateIp` check from the wire validator survived, because its refusal cases had
+      no private-address entries at all.
+- [x] **ONE MORE PIN OF MINE FROZE A SHAPE**, from earlier the same day: it asserted the
+      literal `media: { mesh: true }` and broke the moment the media block grew. Rewritten to
+      the property, plus a NEW sweep that the pool summary on the unauthenticated endpoint
+      carries no address, zone or instance id — mutation-verified by leaking node IPs into it.
+- [x] `voip-node/README.md` gains the scaling and drain runbook, including the table of which
+      log line means add a node and which means fix the agent.
+- [x] `pnpm verify` EXIT=0 — 277 files, 4918 passed / 1 skipped. No schema change, no new
+      dependency, no new required env var (`VOIP_DRAIN_FILE` is an optional path override).
+
 ## v2.106.53 — the hosted SFU is deleted (2026-07-31)
 
 Owner, stated twice: *"Remove completely … I cancel my account … I will only rely on media soup, which

@@ -44,6 +44,7 @@
  * signed room capability already lives (`server/roomCapability.ts`).
  */
 import { createServer } from "node:http";
+import { existsSync } from "node:fs";
 import { cpus, loadavg } from "node:os";
 import * as mediasoup from "mediasoup";
 import Redis from "ioredis";
@@ -573,14 +574,47 @@ function startApi() {
 }
 
 // ── registry heartbeat ───────────────────────────────────────────────────────────
+/** Last drain state we printed, so the log records transitions rather than every beat. */
+let lastDrainLogged = false;
+
 function countConsumers() {
   let n = 0;
   for (const r of rooms.values()) n += r.consumers.size;
   return n;
 }
 
+/**
+ * DRAINING: A FILE, CHECKED EVERY BEAT — and the mechanism is the decision.
+ *
+ * `touch /etc/relay-voip/draining` and this node stops receiving NEW rooms within one
+ * heartbeat while every call it is already carrying runs to its natural end. `rm` puts it
+ * back in rotation, equally without a restart.
+ *
+ * IT IS DELIBERATELY NOT AN ENV VAR. Changing one means restarting the agent, and
+ * restarting is the precise thing draining exists to avoid — a node holding live calls
+ * cannot be told to stop taking work by killing it. A file also survives the agent
+ * restarting for some unrelated reason, so a half-finished retirement is not silently
+ * undone by systemd.
+ *
+ * NOT AN HTTP ENDPOINT EITHER: that is authenticated surface on the media plane, for an
+ * operation an operator performs by hand on the box perhaps twice a year.
+ *
+ * FAILS TOWARD SERVING. Any error reads as not draining, because the cost of guessing wrong
+ * that way is one room landing somewhere it need not have, while guessing the other way
+ * removes a healthy node from a two-node fleet over an unreadable file.
+ */
+const DRAIN_FILE = process.env.VOIP_DRAIN_FILE || "/etc/relay-voip/draining";
+function isDraining() {
+  try {
+    return existsSync(DRAIN_FILE);
+  } catch {
+    return false;
+  }
+}
+
 async function heartbeat() {
   if (!redis) return;
+  const draining = isDraining();
   const rec = buildNodeRecord({
     ...self,
     cores: cpus().length,
@@ -591,7 +625,19 @@ async function heartbeat() {
     // different on a 2-core box than on an 8-core one.
     cpuLoad: loadavg()[0] / Math.max(1, cpus().length),
     nowMs: Date.now(),
+    draining,
   });
+  /* Logged on the TRANSITION only. An operator who drains a node and then watches the
+     journal needs to see it took effect; a line every five seconds for the hours it takes
+     the last call to end would bury everything else in the log. */
+  if (draining !== lastDrainLogged) {
+    lastDrainLogged = draining;
+    console.log(
+      draining
+        ? `[voip] DRAINING — no new rooms; ${rooms.size} room(s) still served until they end`
+        : "[voip] draining cleared — accepting new rooms again",
+    );
+  }
   try {
     await redis.set(nodeKey(self.instanceId), JSON.stringify(rec), "PX", NODE_TTL_MS);
     await redis.sadd(NODE_INDEX_KEY, self.instanceId);

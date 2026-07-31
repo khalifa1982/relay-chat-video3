@@ -54,6 +54,21 @@ export interface VoipNode {
   cpuLoad: number;
   /** The node's own clock when it last reported. Freshness is judged on THIS. */
   updatedAt: number;
+  /**
+   * The node is being RETIRED: it takes no NEW rooms and keeps serving the ones it has.
+   *
+   * OPTIONAL, and an absent field means NOT draining — the safe reading, because the
+   * failure directions are wildly asymmetric. Reading absent as draining would take a
+   * node running a slightly older agent silently out of service and halve a two-node
+   * fleet's capacity with nothing saying why; reading it as serving costs, at worst, one
+   * room landing on a node somebody meant to retire, which the next heartbeat corrects.
+   *
+   * THE WHOLE POINT IS THAT IT IS NOT A SECOND WAY TO BE DEAD. A draining node is alive
+   * and carrying live calls. `isNodeEligible` must skip it and `isNodeLive` must NOT —
+   * see the two-predicate split below, which is the part of this that is easy to get
+   * backwards and expensive when you do.
+   */
+  draining?: boolean;
 }
 
 export const NODE_KEY_PREFIX = "relay:voip:node:";
@@ -161,6 +176,12 @@ export function decodeNode(raw: string | null | undefined): VoipNode | null {
     consumers: o.consumers,
     cpuLoad: o.cpuLoad,
     updatedAt: o.updatedAt,
+    /* STRICTLY `=== true`, so every other shape a field can arrive in — absent, null, the
+       STRING "false", 0 — means serving. An older agent publishes no field at all, and the
+       expensive mistake would be reading that as "retire this node": it would quietly halve
+       a two-node fleet the moment one box lagged a deploy. A truthy-ish check would also
+       make the string "false" mean draining, which is how a shell-written flag betrays you. */
+    draining: o.draining === true,
   };
 }
 
@@ -193,15 +214,110 @@ export function isNodeFresh(n: VoipNode, nowMs: number, ttlMs = NODE_TTL_MS): bo
   return age >= -NODE_CLOCK_SKEW_MS && age <= ttlMs;
 }
 
-/** Fresh AND not saturated: the two independent reasons to skip a node. */
-export function isNodeUsable(n: VoipNode, nowMs: number, ttlMs = NODE_TTL_MS): boolean {
+/**
+ * TWO QUESTIONS, TWO PREDICATES — and conflating them was a real defect.
+ *
+ * "Can this node take a NEW room?" and "is this node still serving the rooms it HAS?" are
+ * different questions with different answers, and a single `isNodeUsable` answering both
+ * inverted the guarantee the ceilings exist for:
+ *
+ *   `routers >= NODE_MAX_ROUTERS` means the node is holding forty LIVE rooms. Asked as an
+ *   admission question the answer is "no more" — correct. Asked as a liveness question the
+ *   same value declared all forty of those rooms invalid, i.e. the ceiling evicting exactly
+ *   the calls it was added to protect, at the moment the node is busiest. Same for
+ *   `cpuLoad >= NODE_CPU_CEILING`.
+ *
+ * It was latent only because nothing calls `assignmentStillValid` yet, and a PRE-EXISTING
+ * TEST PINNED IT with a comment arguing that one shared predicate was the safer choice
+ * ("two definitions of 'can this node take work' is how a room gets kept on a node the
+ * selector would refuse"). That reasoning is right about admission and wrong here: the
+ * question is not whether the node would take work, it is whether it is still doing the
+ * work it already has.
+ *
+ * So: LIVENESS is freshness and nothing else. ELIGIBILITY is freshness plus every reason
+ * to withhold new work. Draining is deliberately only in the second one.
+ */
+export function isNodeLive(n: VoipNode, nowMs: number, ttlMs = NODE_TTL_MS): boolean {
+  return isNodeFresh(n, nowMs, ttlMs);
+}
+
+/** Fresh, not being retired, and under both ceilings: may receive a NEW room. */
+export function isNodeEligible(n: VoipNode, nowMs: number, ttlMs = NODE_TTL_MS): boolean {
   return (
     isNodeFresh(n, nowMs, ttlMs) &&
+    n.draining !== true &&
     n.cpuLoad < NODE_CPU_CEILING &&
     // EXCLUDED rather than ranked last, for the same reason as the CPU ceiling: a node at
     // its room ceiling does not degrade gracefully, it degrades for everybody already on it.
     n.routers < NODE_MAX_ROUTERS
   );
+}
+
+/**
+ * WHY THE POOL HAS NOTHING TO OFFER — the stage of the funnel that ate the last candidate.
+ *
+ * `rankNodes` returning an empty list is FIVE different situations, and they need five
+ * different human responses. Collapsing them into "the pool is saturated, add a node" is
+ * the failure this repo recorded at v2.105.10: a standing false alarm is what hides a real
+ * one. An empty registry almost always means the AGENT IS NOT RUNNING, and telling an
+ * operator to add capacity then sends them to buy a second broken thing.
+ */
+export type PoolReason =
+  | "ok"
+  /** Kill switch, or this call opted out. Not a capacity statement at all. */
+  | "disabled"
+  /** Nothing has ever registered. Check the agent, not the capacity. */
+  | "no-nodes"
+  /** Registered, but nobody is heartbeating. The agents are broken or partitioned. */
+  | "all-stale"
+  /** Every node is deliberately being retired. Somebody did this on purpose. */
+  | "all-draining"
+  /** Every node is answering badly (wrong secret, wedged) however healthy it looks. */
+  | "all-excluded"
+  /** THE ONE THAT MEANS ADD A NODE. Live, willing, and over its ceilings. */
+  | "all-saturated";
+
+export interface NodePartition {
+  reason: PoolReason;
+  /** Survivors of the whole funnel, unsorted. */
+  eligible: VoipNode[];
+  /** Fresh — the pool that is actually alive, whatever its load. */
+  live: VoipNode[];
+  total: number;
+  draining: number;
+  /** Live, undrained, unexcluded, and over a ceiling. The capacity number that matters. */
+  saturated: number;
+}
+
+/**
+ * THE ONE FILTER, so "which nodes did we consider" cannot drift from "why did we refuse".
+ *
+ * Each stage names the reason it is responsible for, so the reason is never a guess about
+ * the pool's state — it is the stage where the candidates ran out.
+ */
+export function partitionNodes(
+  nodes: VoipNode[],
+  opts: { nowMs: number; ttlMs?: number; excludeInstanceIds?: Iterable<string> | null },
+): NodePartition {
+  const excluded = new Set(opts.excludeInstanceIds ?? []);
+  const total = nodes.length;
+  const live = nodes.filter((n) => isNodeLive(n, opts.nowMs, opts.ttlMs));
+  const undrained = live.filter((n) => n.draining !== true);
+  const included = undrained.filter((n) => !excluded.has(n.instanceId));
+  const eligible = included.filter((n) => isNodeEligible(n, opts.nowMs, opts.ttlMs));
+  const base = {
+    eligible,
+    live,
+    total,
+    draining: live.length - undrained.length,
+    saturated: included.length - eligible.length,
+  };
+  if (eligible.length > 0) return { ...base, reason: "ok" };
+  if (total === 0) return { ...base, reason: "no-nodes" };
+  if (live.length === 0) return { ...base, reason: "all-stale" };
+  if (undrained.length === 0) return { ...base, reason: "all-draining" };
+  if (included.length === 0) return { ...base, reason: "all-excluded" };
+  return { ...base, reason: "all-saturated" };
 }
 
 /**
@@ -255,16 +371,18 @@ export function rankNodes(
     const v = p instanceof Map ? p.get(id) : p[id];
     return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
   };
-  /* THE FAIL-OPEN LINK THE DESIGN REVIEW FOUND MISSING. Without it a node whose shared
-     secret is wrong (or which has wedged) keeps looking perfectly healthy in the registry —
-     it heartbeats happily — while refusing every operation, so `planRoomTransport` keeps
-     choosing it and every call fails with no degradation. `mediasoupSignaling` reports such
-     nodes and they are excluded here, which is what makes the fallback to the mesh actually
-     happen. */
-  const excluded = new Set(opts.excludeInstanceIds ?? []);
-  const usable = nodes.filter(
-    (n) => !excluded.has(n.instanceId) && isNodeUsable(n, opts.nowMs, opts.ttlMs),
-  );
+  /* THE FAIL-OPEN LINK THE DESIGN REVIEW FOUND MISSING is inside `partitionNodes` now, and
+     the reason it matters is unchanged: a node whose shared secret is wrong (or which has
+     wedged) keeps looking perfectly healthy in the registry — it heartbeats happily — while
+     refusing every operation, so selection keeps choosing it and every call fails with no
+     degradation. `mediasoupSignaling` reports such nodes and they are excluded, which is
+     what makes the fallback to the mesh actually happen.
+
+     THE FILTER IS NOT REPEATED HERE, deliberately. Two copies of "which nodes may take a
+     room" is how the selector and the saturation warning come to disagree about whether the
+     pool is full — and then the warning is either crying wolf or silent, both of which are
+     worse than not having it. */
+  const usable = partitionNodes(nodes, opts).eligible;
   if (usable.length === 0) return [];
   return [...usable].sort((a, b) => {
     const la = nodeLoadScore(a, pendingFor(a.instanceId));
@@ -348,7 +466,18 @@ export function chooseCallTransport(opts: {
  */
 export interface VoipAssignment {
   instanceId: string;
+  /** What the CLIENT is told to send media to. */
   publicIp: string;
+  /**
+   * What the APP posts signaling to — and carrying it is what keeps the two planes apart.
+   *
+   * The rule is signaling over the private address, public for media announcement only. A
+   * room's assignment that recorded the public IP alone would leave the next signaling
+   * caller with nothing to reach the node by except the address meant for media, and it
+   * would be used, because it is the only one there. So both are recorded and each is
+   * named for the plane it belongs to.
+   */
+  privateIp: string;
   az: string;
   assignedAt: number;
 }
@@ -356,7 +485,14 @@ export interface VoipAssignment {
 export function isVoipAssignment(v: unknown): v is VoipAssignment {
   if (!v || typeof v !== "object") return false;
   const o = v as Record<string, unknown>;
-  return isStr(o.instanceId) && isIpv4(o.publicIp) && isStr(o.az) && isNum(o.assignedAt) && o.assignedAt > 0;
+  return (
+    isStr(o.instanceId) &&
+    isIpv4(o.publicIp) &&
+    isIpv4(o.privateIp) &&
+    isStr(o.az) &&
+    isNum(o.assignedAt) &&
+    o.assignedAt > 0
+  );
 }
 
 /**
@@ -379,7 +515,11 @@ export function assignmentStillValid(
   const n = nodes.find((x) => x.instanceId === a.instanceId);
   if (!n) return false;
   if (n.publicIp !== a.publicIp) return false;
-  return isNodeUsable(n, nowMs, ttlMs);
+  /* LIVENESS, NOT ELIGIBILITY — this asks whether the room's node is still there, not
+     whether it would accept another room. It used to ask the second question, which meant
+     a node at its router ceiling invalidated every one of the forty live rooms that put it
+     there, and a DRAINING node would now lose the calls draining exists to preserve. */
+  return isNodeLive(n, nowMs, ttlMs);
 }
 
 /**
@@ -401,27 +541,40 @@ export function planRoomTransport(opts: {
   preferAz?: string | null;
   pending?: Record<string, number> | Map<string, number> | null;
   excludeInstanceIds?: Iterable<string> | null;
-}): { transport: CallTransport; voip: VoipAssignment | null } {
-  const node =
-    opts.mediasoupEnabled === false || opts.forceMesh
-      ? null
-      : selectVoipNode(opts.nodes, {
-          nowMs: opts.nowMs,
-          preferAz: opts.preferAz ?? null,
-          pending: opts.pending ?? null,
-          excludeInstanceIds: opts.excludeInstanceIds ?? null,
-        });
+}): { transport: CallTransport; voip: VoipAssignment | null; reason: PoolReason } {
+  const off = opts.mediasoupEnabled === false || opts.forceMesh;
+  const node = off
+    ? null
+    : selectVoipNode(opts.nodes, {
+        nowMs: opts.nowMs,
+        preferAz: opts.preferAz ?? null,
+        pending: opts.pending ?? null,
+        excludeInstanceIds: opts.excludeInstanceIds ?? null,
+      });
+  /* THE REASON RIDES ALONG rather than being re-derived by whoever wants to log it, because
+     re-deriving it means running the funnel a second time against a node list that may have
+     been refreshed in between — and then the warning describes a different pool from the one
+     the room was actually placed against. */
+  const reason: PoolReason = off
+    ? "disabled"
+    : partitionNodes(opts.nodes, {
+        nowMs: opts.nowMs,
+        ttlMs: undefined,
+        excludeInstanceIds: opts.excludeInstanceIds ?? null,
+      }).reason;
   const transport = chooseCallTransport({
     mediasoupNode: node,
     forceMesh: opts.forceMesh,
     mediasoupEnabled: opts.mediasoupEnabled,
   });
-  if (transport !== "mediasoup" || !node) return { transport, voip: null };
+  if (transport !== "mediasoup" || !node) return { transport, voip: null, reason };
   return {
     transport,
+    reason,
     voip: {
       instanceId: node.instanceId,
       publicIp: node.publicIp,
+      privateIp: node.privateIp,
       az: node.az,
       assignedAt: opts.nowMs,
     },

@@ -228,6 +228,71 @@ so the second case cannot happen silently, but check `journalctl` first.
 The registry is the app's only read path; there is no health endpoint to poll. A node that
 stops heartbeating disappears from selection within `NODE_TTL_MS` (15s) on its own.
 
+## Scaling: adding a node is an infrastructure step, and that is the whole design
+
+There is **no host list anywhere in the app**. Selection reads the registry, so:
+
+```
+launch a node  →  it reads its own address from IMDSv2  →  it registers itself
+               →  the next room can be assigned to it
+```
+
+No deploy, no config edit, no restart of anything. A node that registered a moment ago is
+eligible within one refresh (~5s — the app caches the registry on the node heartbeat cadence,
+because room creation is synchronous and must never wait on a Redis round trip).
+
+**Adding capacity does NOT make a single call faster.** One call's latency is distance plus
+its weakest link. More nodes raise **concurrency** — how many simultaneous rooms the fleet
+carries. Load-test first; the signal to add one is below.
+
+### Knowing when to add one
+
+The app logs the reason its pool has nothing to offer, and the five reasons are deliberately
+distinct because they call for different actions:
+
+| log line | what it means | what to do |
+|---|---|---|
+| `MEDIA POOL SATURATED` | live nodes at their CPU or room ceiling | **add a node** |
+| `NO MEDIA NODE REGISTERED` | nothing is in the registry | start the agent / check Redis |
+| `ALL … STALE` | registered, not heartbeating | check the agents and their clocks |
+| `ALL … DRAINING` | somebody retired them all | clear a drain flag, or add a node |
+| `ALL … EXCLUDED` | heartbeating but failing signaling | wrong `VOIP_NODE_SECRET` |
+
+Only the first is a capacity problem. Being told to add a node when the agent is not running
+would have you launch a second box that also fails to register, which is why these are never
+collapsed into one "unhealthy" message.
+
+Counts are also on `GET /api/health` (`media.voipPool`, unauthenticated so counts only), and
+the per-node detail — address, zone, rooms, consumers, CPU, age — is in the admin panel's
+**Call media** card.
+
+### Retiring a node without cutting live calls
+
+```bash
+# stop taking NEW rooms; existing calls run to their natural end
+sudo touch /etc/relay-voip/draining
+
+# watch them drain — `routers` is the live room count on this node
+journalctl -u relay-voip -f          # logs the transition, not every beat
+redis-cli -u "$REDIS_URL" get relay:voip:node:<instance-id>
+
+# once routers is 0, stopping is safe
+sudo systemctl stop relay-voip
+
+# changed your mind? back in rotation within one heartbeat, no restart
+sudo rm /etc/relay-voip/draining
+```
+
+A **file** rather than an env var on purpose: changing an env var means restarting the agent,
+and restarting is the precise thing draining exists to avoid — you cannot tell a node holding
+live calls to stop taking work by killing it. The flag also survives the agent restarting for
+some unrelated reason, so a half-finished retirement is not silently undone by systemd.
+Override the path with `VOIP_DRAIN_FILE`. Any error reading it means **not draining**, because
+losing a healthy node from a two-node fleet over an unreadable file is the worse mistake.
+
+A draining node is **alive**, not dead: it keeps serving its rooms and its existing
+assignments stay valid. Only new-room selection skips it.
+
 ## Ports: one pair per core, taken from the bottom of the range
 
 Each worker gets ONE `WebRtcServer` bound to `RTC_MIN_PORT + i`, listening on both UDP and TCP,

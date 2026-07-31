@@ -227,6 +227,7 @@ import { createRateLimiter, clientIpOf, trustedProxyHops } from "./rateLimit";
 // when it's an API-tier instance behind the scale-out ALB (REDIS_URL set, no
 // local relay clients). Single-instance deploys are byte-identical.
 import { pinsInCallAsync, partyLineLiveCountsAsync, liveRoomFor, partyLineRosterFor, iceServers } from "./relay";
+import { poolState } from "./voipPool";
 
 /**
  * #121 — the leading group of an account's 6-digit number, for the sign-in screen
@@ -5808,6 +5809,48 @@ export const v2AdminRouter = router({
        * only rung that needs no infrastructure to be true.
        */
       transport: "mesh" as const,
+      /**
+       * THE MEDIA-NODE POOL, per node — so saturation is observable BEFORE it bites.
+       *
+       * Behind `requireAdmin` and not on `/api/health`, which is unauthenticated: that one
+       * gets counts, this one gets addresses and instance ids. Same line v2.105.22 drew
+       * when it kept the SFU URL out of health — a node's public IP is not secret (a client
+       * in a call is told it) but the fleet's media topology is not something an anonymous
+       * caller needs.
+       *
+       * `reason` is what an operator should read first: it names WHICH stage of the funnel
+       * emptied the pool, so "add a node" is distinguishable from "the agent is not
+       * running", which are the same empty list and completely different jobs.
+       */
+      voipPool: (() => {
+        const p = poolState();
+        const now = Date.now();
+        return {
+          configured: p.configured,
+          reason: p.reason,
+          ageMs: p.ageMs,
+          total: p.total,
+          eligible: p.eligible.length,
+          saturated: p.saturated,
+          drainingCount: p.draining,
+          /** Per node. No secret exists in a node record, so this is the whole thing. */
+          nodes: p.live.map((n) => ({
+            instanceId: n.instanceId,
+            az: n.az,
+            publicIp: n.publicIp,
+            privateIp: n.privateIp,
+            cores: n.cores,
+            routers: n.routers,
+            consumers: n.consumers,
+            cpuLoad: Math.round(n.cpuLoad * 100) / 100,
+            draining: n.draining === true,
+            /* Freshness as the READER sees it, since that is what selection acts on — a
+               record can be present and too old to believe, and an operator staring at a
+               node that "is in the registry" needs to see that distinction. */
+            ageMs: now - n.updatedAt,
+          })),
+        };
+      })(),
       /** What clients are told about relays — url shapes only, never a credential. */
       turn: {
         stun: urls.filter((u) => u.startsWith("stun:")).length,

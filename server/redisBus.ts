@@ -77,6 +77,14 @@ export interface RedisCommandClient {
   hset(key: string, ...fieldValues: (string | number)[]): Promise<unknown>;
   hdel(key: string, ...fields: string[]): Promise<unknown>;
   hmget(key: string, ...fields: string[]): Promise<(string | null)[]>;
+  /* THE PLAIN KEY COMMANDS, declared so the media-node registry can satisfy its own
+     `VoipRegistryClient` from THIS connection rather than opening a third one to the same
+     Redis. ioredis has had all four all along — only the interface was narrow, and a cast
+     would have hidden the day that stopped being true. */
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, mode: "PX", ttlMs: number): Promise<unknown>;
+  mget(keys: string[]): Promise<(string | null)[]>;
+  del(key: string): Promise<unknown>;
 }
 export interface RedisSubscriberClient {
   subscribe(...channels: string[]): Promise<unknown>;
@@ -115,6 +123,18 @@ function getPub(): RedisCommandClient | null {
   if (!busEnabled()) return null;
   pubClient = makeRedis("pub");
   return pubClient;
+}
+
+/**
+ * The command connection, for the media-node registry.
+ *
+ * Exposed rather than letting `voipPool` construct its own: one Redis connection per
+ * process is the existing arrangement and a second would double the connection count on
+ * an ElastiCache node for reads that are four commands wide. Null when the bus is
+ * unconfigured, which is exactly what keeps the pool dormant without `REDIS_URL`.
+ */
+export function busCommandClient(): RedisCommandClient | null {
+  return getPub();
 }
 
 function getSub(): RedisSubscriberClient | null {
