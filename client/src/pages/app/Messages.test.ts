@@ -70,8 +70,12 @@ describe("Messages.tsx — messaging overhaul", () => {
   it("groups consecutive same-sender messages (tail only on the last bubble)", () => {
     expect(SRC).toMatch(/sameAsPrev/);
     expect(SRC).toMatch(/lastOfGroup/);
-    // the rounded tail is conditional on being the last of a run
-    expect(SRC).toMatch(/lastOfGroup \? "rounded-br-sm"/);
+    /* The rounded tail is conditional on being the last of a run — which is the property, and
+       the RADIUS is not. This froze `rounded-br-sm` (Tailwind's 2px); board 1d/3c specify a
+       5px notch, so the literal moved in v2.106.62 while the grouping rule it stands for did
+       not. Matched on the shape of the conditional instead. */
+    expect(SRC).toMatch(/lastOfGroup \? "rounded-br-\[?[\w.]+\]?"/);
+    expect(SRC).toMatch(/lastOfGroup \? "rounded-bl-\[?[\w.]+\]?"/);
   });
 
   it("supports in-conversation message search via trpc.messages.search", () => {

@@ -196,10 +196,20 @@ describe("the renderer", () => {
     expect(at).toBeGreaterThan(L.indexOf("i % 2 === 1"));
   });
 
-  it("my OWN message gets weight but not the accent", () => {
-    // The outgoing bubble is orange, and a bright accent span on it is the one
-    // combination that does not read.
-    expect(L).toMatch(/style=\{mine \? undefined : \{ color: "var\(--rb, #3FE0C5\)" \}\}/);
+  it("EVERY message's mention is the accent, mine included", () => {
+    /* REWRITTEN v2.106.62. This froze `style={mine ? undefined : …}` — the branch, not the
+       rule — and the reason it gave ("the outgoing bubble is orange, and a bright accent span
+       on it is the one combination that does not read") was true of the SOLID `#fb923c` the
+       app used to fill an own bubble with. The board fills it `rgba(245,140,60,.17)` and puts
+       its own `@Marcus` in `var(--rb)` on exactly that. Re-measured across all 12 accent
+       hues, worst case: 1.06:1 on the old solid fill, 5.44:1 mobile / 4.82:1 desktop on the
+       board's. So the branch is gone and the parameter with it.
+
+       THE PROPERTY: one accent for every mention, and no per-message exception — a `mine`
+       conditional reaching this colour again is the regression, so it is forbidden by name
+       rather than merely absent. */
+    expect(L).toMatch(/style=\{\{ color: "var\(--rb, #3FE0C5\)" \}\}/);
+    expect(L, "no per-message exception to the accent").not.toMatch(/mine/);
     // A literal fallback, never a self-reference: `var(--rb, var(--rb))` is a
     // custom-property CYCLE and the browser drops the declaration (v2.106.7).
     expect(L).not.toMatch(/var\(--rb[a-z-]*,\s*var\(--rb/);

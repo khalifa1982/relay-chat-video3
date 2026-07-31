@@ -20,6 +20,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  BRAND_GRADIENT,
   GROUP_BUBBLE_STYLE,
   GROUP_PALETTE,
   OWN_BUBBLE_STYLE,
@@ -45,26 +46,64 @@ function codeOnly(src: string): string {
     .join("\n");
 }
 
+/** The alpha of an `rgba(...)`, or 1 for anything opaque. */
+function alphaOf(css: string): number {
+  const m = /rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*([\d.]+)\s*\)/.exec(css);
+  return m ? Number(m[1]) : 1;
+}
+
 describe("the colour rule", () => {
-  it("mine is orange, everywhere", () => {
+  it("mine is ORANGE and TRANSLUCENT, everywhere — never the accent", () => {
+    /* REWRITTEN v2.106.62. This froze `#fb923c`, i.e. the SOLID gradient the app chose for
+       itself, and the reason recorded beside it was wrong about the board: v2.106.40 held
+       that "the board draws the outgoing bubble as a translucent ACCENT tint" and treated the
+       owner's orange request as overriding it. Frames 1d and 3c both fill it
+       `rgba(245,140,60,.17)` — orange. There was never a conflict, only a difference of
+       WEIGHT, and freezing the solid literal is what hid that.
+
+       THE PROPERTY IS THREE THINGS, and the third is the one that stops the misreading
+       coming back: it is one object whatever the thread kind, it is the board's orange at
+       the board's weight (translucent, so the accent-coloured tick and mention on top of it
+       can be seen), and it is NOT the accent — somebody "correcting" this to
+       `rgba(var(--rb-rgb),…)` would be re-introducing exactly the error being undone. */
     expect(
       bubbleStyleFor({ mine: true, isGroup: false, senderIdentityId: 7 })
     ).toBe(OWN_BUBBLE_STYLE);
     expect(
       bubbleStyleFor({ mine: true, isGroup: true, senderIdentityId: 7 })
     ).toBe(OWN_BUBBLE_STYLE);
-    expect(String(OWN_BUBBLE_STYLE.background)).toContain("#fb923c");
+    const fill = String(OWN_BUBBLE_STYLE.backgroundColor);
+    expect(fill, "the board's own orange channels").toContain("245,140,60");
+    expect(alphaOf(fill), "translucent, so the accent reads on top of it").toBeLessThan(0.5);
+    expect(fill, "orange, NOT the accent — that was the misreading").not.toMatch(/--rb/);
+    // The SEND BUTTONS keep the solid gradient: a translucent primary action reads disabled.
+    expect(String(BRAND_GRADIENT)).toContain("#fb923c");
   });
 
-  it("the other side of a 1:1 is BLUE, and never hashed", () => {
-    // The owner asked for blue specifically. A two-person thread has no ambiguity
-    // to resolve, so it must not depend on an id-derived hue that could differ.
+  it("a 1:1 peer is the board's glass with the owner's BLUE on the edge, never hashed", () => {
+    /* REWRITTEN v2.106.62. This froze `#3b82f6` as the FILL. The board uses the same neutral
+       glass for a 1:1 peer as for a group member — byte-identical markup in frames 1d and 3c
+       — so "match the board exactly" and the owner's earlier "the other side should be blue"
+       genuinely conflicted. Put to them, they chose neutral glass PLUS a blue edge, so the
+       blue moved from the fill to the border rather than being deleted.
+
+       Two properties: it is never id-hashed (a two-person thread has no ambiguity to
+       resolve), and the blue survives SOMEWHERE — on the border, with the fill matching a
+       group member's exactly. */
     for (const id of [1, 2, 3, 40, 999, 123456]) {
       expect(
         bubbleStyleFor({ mine: false, isGroup: false, senderIdentityId: id })
       ).toBe(PEER_BUBBLE_STYLE);
     }
-    expect(String(PEER_BUBBLE_STYLE.background)).toContain("#3b82f6");
+    expect(
+      String(PEER_BUBBLE_STYLE.background),
+      "the board's neutral glass, identical to a group member's",
+    ).toBe(String(GROUP_BUBBLE_STYLE.background));
+    expect(
+      String(PEER_BUBBLE_STYLE.borderColor),
+      "the owner's blue, kept as the edge",
+    ).toMatch(/59\s*,\s*130\s*,\s*246/);
+    expect(String(GROUP_BUBBLE_STYLE.borderColor)).not.toMatch(/59\s*,\s*130\s*,\s*246/);
   });
 
   it("in a group each member gets their own colour", () => {

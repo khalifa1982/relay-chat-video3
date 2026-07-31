@@ -99,13 +99,22 @@ describe("the voice note is the board's waveform, and its control can be seen", 
 });
 
 describe("read is more visible than delivered, not less", () => {
-  it("read is solid white and delivered is translucent white", () => {
-    const m = MSG.match(/const tickStyle = \{[^}]+\}/);
+  it("read is the accent and delivered is a FAINTER translucent white", () => {
+    /* REWRITTEN (v2.106.62). This froze `#fff` / `.55` and forbade `var(--rb)` on the strength
+       of a measurement taken against the app's SOLID `#fb923c` own bubble (1.34:1). The board
+       fills that bubble `rgba(245,140,60,.17)` and draws its own ✓✓ in `var(--rb)`; re-measured
+       there the accent is 5.44:1 mobile / 4.82:1 desktop, and white at 55% is 5.77/5.44 — i.e.
+       keeping 55% while read moved back to the accent would have re-inverted the pair.
+
+       THE PROPERTY IS THE ORDERING, stated so it survives a retune: read is the accent, and
+       delivered's alpha stays below where the measurement says it starts competing. */
+    const m = MSG.match(/const tickStyle = \{[\s\S]{0,200}?\n\s*\}/);
     expect(m).toBeTruthy();
     const expr = (m as RegExpMatchArray)[0];
-    expect(expr).toMatch(/read \? "#fff"/);
-    expect(expr).toMatch(/rgba\(255,255,255,0?\.55\)/);
-    expect(expr, "the accent measured 1.34:1 on the orange bubble").not.toMatch(/var\(--rb\)/);
+    expect(expr, "read is the app's accent read-vocabulary").toMatch(/read \? "var\(--rb[, )]/);
+    const alpha = /rgba\(255,\s*255,\s*255,\s*([\d.]+)\)/.exec(expr);
+    expect(alpha, "delivered is a translucent white").toBeTruthy();
+    expect(Number((alpha as RegExpExecArray)[1])).toBeLessThan(0.5);
   });
 
   it("ONE expression decides it, so the colour cannot be set twice", () => {
@@ -117,15 +126,28 @@ describe("read is more visible than delivered, not less", () => {
 
 describe("board 1d's smaller type and spacing rules", () => {
   it("bubble timestamps are mono, like the day divider on the same screen", () => {
-    /* Counted on the CLASS rather than on the whole class string: one of the two rows is a
-       CONCATENATION (`{"… " + "text-white/70"}`), so a `[^"]*` window cannot span it — my
-       first version of this assertion failed on correct code for that reason. */
-    const rows = MSG.match(/font-mono text-\[9px\]/g) ?? [];
-    expect(rows.length, "the conversation bubble AND the search-result bubble").toBe(2);
-    // both really are timestamp rows on an own/peer bubble, not something else that is mono
-    for (const anchor of ['font-mono text-[9px] mt-1 " + "text-white/70"', "font-mono text-[9px] leading-none"]) {
-      expect(MSG, anchor).toContain(anchor);
-    }
+    /* REWRITTEN (v2.106.62). This froze `font-mono text-[9px]` at a count of exactly two and
+       then anchored on the literal class strings of both rows — including
+       `" + "text-white/70"`, the flat colour the board replaces with `#7d8f8a` received /
+       `#9fb0ab` own. Board 1d/3c set the stamp at 8.5px, so both the size and the colour moved
+       and the pin broke on all three counts while saying nothing about the rule.
+
+       THE PROPERTY: the two bubble stamps — the conversation's and the search result's — are
+       the SAME small mono treatment, so they cannot drift. Widening the first rewrite to any
+       `text-[Npx]` matched twelve unrelated mono classes in this file (PIN tags, group ids),
+       so the stamps are located by the element they sit in rather than by their size, and the
+       two are then compared to each other. That comparison immediately earned its keep: it
+       caught the search-result stamp still on the pre-board `text-white/70` at 9px after the
+       conversation one had moved. Exact values belong to `conversationFidelity.test.ts`. */
+    // `[^"]*` BEFORE the mono class too: the conversation stamp's class string opens with
+    // `flex justify-end …`, so anchoring the capture at `font-mono` found only one of the two.
+    const stamps = [...MSG.matchAll(/className="([^"]*font-mono text-\[[\d.]+px\][^"]*)"\s*\n\s*style=\{\{ color: mine \? "(#[0-9a-f]{6})" : "(#[0-9a-f]{6})" \}\}/gi)];
+    expect(stamps.length, "the conversation bubble AND the search-result bubble").toBe(2);
+    const [a, b] = stamps;
+    const px = (s: RegExpMatchArray) => Number(/\[([\d.]+)px\]/.exec(s[1])![1]);
+    expect(px(a), "a timestamp is small type").toBeLessThanOrEqual(10);
+    expect(px(a), "both stamps are the same size").toBe(px(b));
+    expect([a[2], a[3]], "and the same per-side colours").toEqual([b[2], b[3]]);
   });
 
   it("the attach clip is INSIDE the field, with logical properties for RTL", () => {

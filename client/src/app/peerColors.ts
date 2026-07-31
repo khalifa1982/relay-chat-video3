@@ -35,22 +35,71 @@ import type { CSSProperties } from "react";
  */
 export const BRAND_GRADIENT = "linear-gradient(135deg,#fb923c,#c2410c)";
 
-/** Mine, everywhere: the orange the owner already has and asked to keep. */
+/**
+ * MINE — the orange the owner asked for, at the board's own weight (v2.106.62).
+ *
+ * A CORRECTION TO MYSELF, and it is the reason this changed. v2.106.40 recorded, twice
+ * and in two files, that *"the board draws the outgoing bubble as a translucent ACCENT
+ * tint, but the owner asked for orange"* — and treated that as a conflict where the
+ * owner's words win. Read off the board's own markup, frame 3c's outgoing bubble is
+ * `rgba(245,140,60,.17)` with a `rgba(245,140,60,.45)` border. **245,140,60 is orange.**
+ * Every accent surface on that board is spelled `rgba(var(--rb-rgb), …)`; this one is not.
+ *
+ * So there was never a conflict to resolve: the board and the owner agree on orange, and
+ * the only thing that differed was WEIGHT — a solid saturated gradient here versus a
+ * translucent tint there. The owner's ask ("when he post mind bubble is orange") is
+ * satisfied either way, so the board's weight is what to take.
+ *
+ * AND THE MISREADING HAD A REAL COST BEYOND THE FILL, which is what makes this worth
+ * recording rather than quietly patching: v2.106.40 measured the ✓✓ ticks against the
+ * SOLID `#fb923c`, correctly concluded the accent was unreadable on it (1.34:1), and moved
+ * read/delivered onto white. That measurement was right about the surface it was taken on
+ * and the surface was the wrong one. On a 17% orange over a near-black page the effective
+ * background is far darker, which is exactly why the board can draw its tick and its
+ * `@mention` in the accent. Both are re-measured on THIS fill in `messagingColors.test.ts`
+ * rather than assumed to have flipped.
+ *
+ * `BRAND_GRADIENT` is untouched and still solid: it is the two SEND BUTTONS, where a
+ * translucent fill would make the app's primary action look disabled.
+ */
 export const OWN_BUBBLE_STYLE: CSSProperties = {
-  background: BRAND_GRADIENT,
-  color: "#fff",
-  borderColor: "rgba(255,255,255,.18)",
+  // Split into colour + image rather than the `background` shorthand. There is no image
+  // here today, but the shorthand is what reset `background-color` to transparent in the
+  // v2.106.40 `.rglass` defect, and a later gradient added on top of a shorthand is how
+  // that returns.
+  backgroundColor: "rgba(245,140,60,.17)",
+  color: "#f2fffa",
+  borderColor: "rgba(245,140,60,.45)",
 };
 
 /**
- * The other side of a 1:1, named rather than drawn from the palette. The owner
- * asked for blue specifically, and a two-person thread has no ambiguity to
- * resolve — so it must not depend on a hash that could hand out a different hue.
+ * The other side of a 1:1 — the board's neutral surface carrying a BLUE EDGE (v2.106.62).
+ *
+ * THE BOARD AND AN EXPLICIT OWNER REQUEST GENUINELY CONFLICTED HERE, so it was put to them
+ * rather than resolved in either direction. Frames 1d and 3c use the SAME neutral glass for
+ * every received bubble — a 1:1 peer's and a group member's are byte-identical markup — so
+ * "match the board exactly" means the 1:1 blue disappears. But the owner asked for that blue
+ * in their own words in v2.99.85 (*"the other side should be blue"*), and an answer given
+ * about GROUP bubbles is not licence to delete a second, separate request.
+ *
+ * Offered the three readings, they chose **neutral glass plus a blue edge**: the board's
+ * surface, with the colour they named surviving as the border rather than the fill. So the
+ * fill is the board's verbatim and only `borderColor` differs from a group member's.
+ *
+ * `.45` mirrors the own bubble's `rgba(245,140,60,.45)` exactly, which makes the three
+ * surfaces one system rather than three decisions — mine an orange edge, a 1:1 peer a blue
+ * edge, a group member the board's neutral edge, all on the same glass.
+ *
+ * SAID PLAINLY: a 1:1 received bubble renders NO name label (there is only one other person
+ * in the thread), so the border is the whole of the blue in a conversation. The chat header's
+ * title is deliberately NOT tinted — the board draws it `#eafff6`, and recolouring it would
+ * break frame 1d's header to satisfy a bubble decision.
  */
 export const PEER_BUBBLE_STYLE: CSSProperties = {
-  background: "linear-gradient(135deg,#3b82f6,#1d4ed8)",
-  color: "#fff",
-  borderColor: "rgba(255,255,255,.18)",
+  background:
+    "linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.03))",
+  color: "#eef7f3",
+  borderColor: "rgba(59,130,246,.45)",
 };
 
 /**
@@ -208,10 +257,12 @@ export function senderAvatarStyle(opts: {
  * saturated bubble it measured 1.16:1 at worst and failed on 30 of those 36. A recipe is
  * only valid on the surface it was measured against.
  *
- * Still correct after v2.106.61 moved the group bubble to neutral glass: the measurement
- * was of the GLYPH on the WHITE DISC, which has not changed, and the disc now sits on a
- * lighter surface than any it was measured against. What it no longer does is borrow the
- * bubble's own colour — it borrows the SENDER's, which is the same person either way.
+ * Still correct after v2.106.61 moved the group bubble to neutral glass and v2.106.62 moved
+ * the other two to translucent tints: the measurement was of the GLYPH on the WHITE DISC,
+ * which has not changed, and every surface the disc now sits on is LIGHTER than the
+ * saturated fills it was measured against — so the white disc reads at least as well as it
+ * did. What these values no longer do is borrow the bubble's own fill; they borrow the
+ * SENDER's colour, which is the same person either way.
  */
 export function bubbleGlyphColor(opts: {
   mine: boolean;

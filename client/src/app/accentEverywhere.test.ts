@@ -224,33 +224,48 @@ describe("1c Messages / 1d Conversation", () => {
     const at = MESSAGES_CODE.indexOf("function Receipt(");
     expect(at).toBeGreaterThan(0);
     const body = MESSAGES_CODE.slice(at, at + 1200);
-    /* REWRITTEN (v2.106.40). This asserted the accent, which was right on a CARD and wrong
-       here: measured on the own bubble's own pale stop the accent read 1.34:1 against
-       delivered's 1.77:1, so the accent made the MORE important state the FAINTER one. The
-       accent is still this app's read-vs-delivered vocabulary everywhere it sits on a card
-       (the thread row, Message info); the bubble is the one surface it cannot be seen on, so
-       the strength ordering is what this pins and `deliveryReceipts.test.ts` owns the arms.
-       ONE expression decides the colour, both arms named — so a change that collapses read
-       and delivered into one appearance fails, which a pin on the read arm alone does NOT
-       catch: the first cut set a grey class and overrode it inline for read, and the
-       mutation run showed the class could be deleted with no visible change. */
-    const m = body.match(/const tickStyle = \{ color: read \? (".+?") : (".+?") \}/);
+    /* REWRITTEN TWICE. v2.106.40 asserted the accent was ABSENT here, measured at 1.34:1 on
+       the own bubble's pale stop. v2.106.62 put the accent back, because that measurement was
+       taken on the app's own SOLID `#fb923c` and the board fills an outgoing bubble
+       `rgba(245,140,60,.17)` — re-measured there the accent is 5.44:1 mobile / 4.82:1 desktop.
+       So neither the presence nor the absence of the accent is the property.
+
+       WHAT THIS FILE OWNS is only that ONE expression decides the colour and that both arms
+       are NAMED, so a change collapsing read and delivered into one appearance fails — which
+       a pin on either arm alone does NOT catch: the first cut set a grey class and overrode it
+       inline for read, and the mutation run showed the class could be deleted with no visible
+       change. `deliveryReceipts.test.ts` owns which colour each arm is and the measured
+       ordering between them. */
+    const m = body.match(/const tickStyle = \{\s*color: read \? (".+?") : (".+?"),?\s*\}/);
     expect(m).toBeTruthy();
     expect((m as RegExpMatchArray)[1]).not.toBe((m as RegExpMatchArray)[2]);
     expect(body, "the pre-accent fixed blue must not come back either").not.toMatch(/#4db6ff/);
   });
 
-  it("the day divider is mono/.26em AND still opaque and above the bubbles", () => {
-    /* The sticky rule from v2.105.3: bubbles pass BEHIND this pill, so a translucent
-       fill makes text slide through it unreadably, and z-10 is what keeps it above the
-       thread while staying below the lightbox (z-20) and the search overlay (z-90). */
-      const at = MESSAGES_CODE.indexOf("{day.label}");
+  it("the day divider is mono and tracked out, AND still opaque and above the bubbles", () => {
+    /* The sticky rule from v2.105.3: bubbles pass BEHIND this pill, so a translucent fill
+       makes text slide through it unreadably, and z-10 is what keeps it above the thread while
+       staying below the search overlay (z-20) and the lightbox (z-[90]).
+
+       REWRITTEN (v2.106.62). This froze `bg-muted` and `.26em`. Board 3c draws the divider as
+       BARE mono 9px at `.22em` with no pill at all — which it can, being a static mock with
+       nothing scrolling behind it. The resolution keeps a backing (it must) but matches the
+       SCROLLER'S OWN surface so it reads as bare text, which means the mechanism moved from
+       `bg-muted` to `bg-background md:bg-card`.
+
+       So the property is OPACITY, not which token: an alpha-modified fill is the defect, and
+       any of the app's opaque surface tokens satisfies the rule. The exact tracking belongs to
+       `conversationFidelity.test.ts`, which owns the board's values. */
+    const at = MESSAGES_CODE.indexOf("{day.label}");
     expect(at).toBeGreaterThan(0);
     const region = MESSAGES_CODE.slice(MESSAGES_CODE.lastIndexOf("sticky top-0", at), at);
     expect(region).toMatch(/z-10/);
-    expect(region).toMatch(/bg-muted(?!\/)/);
+    expect(region, "an opaque surface token").toMatch(/bg-(?:muted|background|card|popover)\b/);
+    expect(region, "never alpha-modified — bubbles pass behind it").not.toMatch(
+      /bg-(?:muted|background|card|popover)\/\d/,
+    );
     expect(region).toMatch(/font-mono/);
-    expect(region).toMatch(/letterSpacing: "\.26em"/);
+    expect(region, "tracked out, so it reads as a divider").toMatch(/letterSpacing: "\.\d+em"/);
   });
 
   it("both send buttons are the accent CTA, with no hardcoded gradient left", () => {

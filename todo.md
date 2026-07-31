@@ -11278,6 +11278,100 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.62 — @mentions had never rendered in a chat; the own bubble was the wrong weight (2026-07-31)
+
+Owner: *"you didn't match it 100%; you matched it about 60%… do it exactly how I did it there."*
+Continuing on the screen they named. Every value below is read off the board's own markup.
+
+- [x] **@mentions reach a conversation at last.** `Messages.tsx` had exactly two `linkify`
+      call sites; the one that renders a chat passed no roster. `content()` is the ordinary
+      path (`if (!expiring) return content(m.body, m.attachment)`), so its bare
+      `linkify(body)` was every non-expiring message — the only site passing `mentionRoster`
+      was the search-results list. Board 3c's accent `@mention` has therefore been invisible
+      since v2.106.17 built the resolver, the shared `findMentions` and the composer picker.
+      The new pin is a SWEEP over every `linkify(` occurrence, because "the roster is passed
+      somewhere" is exactly what was true while the bug shipped.
+- [x] **The own bubble takes the board's weight — and this corrects my own note, in two
+      files.** v2.106.40 recorded that *"the board draws the outgoing bubble as a translucent
+      ACCENT tint"*. Frames 1d AND 3c fill it `rgba(245,140,60,.17)` with a
+      `rgba(245,140,60,.45)` border. 245,140,60 is orange; every accent surface on that board
+      is `rgba(var(--rb-rgb), …)` and this one is not. The board and the owner agreed all
+      along; only the weight differed.
+- [x] **The ✓✓ and the `@mention` go back on the accent, re-measured on the right surface.**
+      v2.106.40 measured against the SOLID `#fb923c` and was right about it. Composited in a
+      real browser across all 12 accent hues, worst case (mobile `--background` / desktop
+      `--card`): accent on the old solid fill **1.06:1**; accent on the board's .17 tint
+      **5.44 / 4.82:1**; white 55% **5.77 / 5.44:1**; white 45% **4.35 / 4.13:1**. So read is
+      the accent and delivered drops to **45%** — the load-bearing half, since at 55%
+      delivered would outrank read and reinstate the inversion v2.106.40 existed to fix. The
+      `mine ? undefined :` branch in `linkify.tsx` and its parameter are deleted, not left as
+      a no-op.
+- [x] **The 1:1 peer bubble — a second real conflict, put to the owner.** Frames 1d and 3c
+      use byte-identical neutral glass for a 1:1 peer and a group member, so matching the
+      board means deleting the blue asked for by name in v2.99.85. Offered three readings the
+      owner chose **neutral glass plus a blue edge**: the fill is the board's verbatim and
+      only `borderColor` differs, at `.45` mirroring the own bubble's orange edge. A 1:1
+      received bubble renders no name label, so the border is the whole of the blue; the chat
+      header's title stays `#eafff6` rather than being recoloured to satisfy a bubble.
+- [x] **Board 3c's reply quote** — `margin-top:4px · padding:6px 9px · radius 9px ·
+      rgba(var(--rb-rgb),.08) · border-left 2.5px solid var(--rb)`, the quoted person's name
+      at 9.5px/700 in THEIR OWN hue via the same `nameColorFor` the sender label uses, one
+      line and ellipsised, logical `ps-` padding for RTL. Mine keeps the white treatment: the
+      board only ever draws a quote on a received bubble, and an accent panel with an accent
+      border inside an orange bubble is two tints competing for the same pixels.
+- [x] **The tail notch is the board's 5px**, not Tailwind v4's 2px `rounded-bl-sm`. Still only
+      on the last bubble of a run — a deliberate deviation, since the board's frames show
+      single messages and tailing every bubble stops a run reading as one run.
+- [x] **The day divider**, the one place the board could not be taken literally: 3c draws bare
+      mono 9px / `.22em` / `#68797c` with no pill, which a static mock can. This header is
+      STICKY and bubbles pass behind it (v2.105.3). Resolved with a backing that MATCHES the
+      scroller's own surface (`bg-background md:bg-card`), so it reads as bare text and still
+      occludes; ring and shadow gone. Colour is **`#708285`** because the board's own literal
+      measures 4.46:1 on mobile but **4.13:1** on our desktop `--card` — sub-AA on a surface
+      the board never drew.
+- [x] **My own new pin found a real inconsistency mid-release**: it requires the conversation
+      stamp and the search-result stamp to be the same treatment, and caught that I had moved
+      the first to mono 8.5px with `#7d8f8a`/`#9fb0ab` and left the second on the pre-board
+      flat `text-white/70` at 9px.
+- [x] **Verified by DRIVING the real built bundle** at 390px in dark with stubbed tRPC, reading
+      back COMPUTED values: received glass + `rgba(255,255,255,.11)` at radius
+      `16px 16px 16px 5px`; own `rgba(245,140,60,.17)` + `.45` at `16px 16px 5px 16px`; both
+      stamps 8.5px mono `#7d8f8a` / `#9fb0ab`; the quote at `rgba(61,201,231,.08)` with an
+      accent left border, its name `#fca5a5` (the QUOTED person's hue, not the sender's) over
+      nowrap/ellipsis `#9fb0ab`; the `@Marcus Chen` mention painting `rgb(61,201,231)` w600 on
+      my own bubble — the feature rendering in a chat for the first time; divider 9px mono,
+      1.98px tracking, `#708285`, backed by `oklch(0.12 0.008 245)` = `--background`. Zero page
+      errors. The harness ABORTED once on its own bug (a `presenceMany` stub returning an
+      object where the app filters an array) rather than measuring an error boundary. One
+      honest discrepancy: Chromium computes the quote's border-left as 2px where the class
+      declares the board's 2.5px — value rounding, not a missed value.
+- [x] 15 of 15 tripwires verified by MUTATION off a confirmed-GREEN baseline from byte-exact
+      backups; the mutator aborts unless its target occurs exactly once and treats a changed
+      test TOTAL as a failure (an unparseable file reports "no tests", not a failure). All
+      three sources byte-identical afterwards.
+
+**Deferred, with the reason rather than silently:**
+- [ ] Board 3c's **"seen by 4"** is NOT buildable honestly today: `messages.status` is ONE
+      shared row and v2.99.74 recorded that in a group `read` means AT LEAST ONE member.
+      There is no per-participant receipt table, so any count would be invented.
+- [ ] The **verified badge beside a sender's name** needs a `role` on `conversationInfo`'s
+      member list, which carries only `{name, number, avatarUrl}`.
+- [ ] The 3c **header** (video neutral / call accent / member line in the accent), the
+      **composer** mic, and the **typing pill** — to the design audit's verified list.
+
+**Four of my own assertions were wrong about the code**, each caught by failing on CORRECT
+source: a single-line pattern for a ternary prettier breaks over three lines; a window
+anchored AT `font-mono text-[8.5px]` when `justify-end` sits earlier in the same class
+string; a widened `text-[Npx]` sweep that matched twelve unrelated mono classes; and a
+capture anchored at `font-mono` when the conversation stamp's class opens `flex justify-end`.
+
+**Six pre-existing pins rewritten to the property**, every one having frozen a literal whose
+stated reason this release corrects: two froze the tick's `#fff`/`.55` arms on the
+wrong-surface measurement, two froze `bg-muted` on the day divider (the property is OPACITY,
+not which token), one froze `rounded-br-sm` (the property is that the tail is conditional on
+being last of a run), and one froze `font-mono text-[9px]` at a count of two plus both rows'
+exact class strings.
+
 ## v2.106.61 — a group person's colour moves off the bubble onto their name and face (2026-07-31)
 
 Owner: *"you matched it about 60% ... for example, inside the message, where different people participate in the messages with different bubble colors"* — the one screen they named.

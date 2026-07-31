@@ -2439,9 +2439,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                           />
                         )}
                         {m.body && (
-                          <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body, mentionRoster, !!mine)}</div>
+                          <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body, mentionRoster)}</div>
                         )}
-                        <div className={"font-mono text-[9px] mt-1 " + "text-white/70"}>
+                        {/* The SAME stamp treatment as the conversation bubble (v2.106.62).
+                            Found by this release's own pin: I moved the conversation stamp to
+                            the board's mono 8.5px with per-side colours and left this one on
+                            the old flat `text-white/70` at 9px — so a search result and the
+                            message it points at rendered their time two different ways. */}
+                        <div
+                          className="font-mono text-[8.5px] mt-1"
+                          style={{ color: mine ? "#9fb0ab" : "#7d8f8a" }}
+                        >
                           {formatTime(m.createdAt)}
                         </div>
                       </div>
@@ -2492,12 +2500,36 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   through it, which is invisible while the pill is in the flow and
                   obvious the moment it starts overlapping content. */}
               <div className="sticky top-0 z-10 flex justify-center py-1.5">
-                {/* Board 1d: "day headers (mono, .26em)". Uppercased and tracked out,
-                    which is what makes it read as a divider rather than as content.
-                    Still OPAQUE and still z-10 — see the note above. */}
+                {/* BOARD 3c'S DIVIDER IS BARE TEXT, and reconciling that with STICKY is the
+                    whole of this (v2.106.62). The board draws `mono 9px / .22em / #68797c`
+                    with no pill at all; this shipped as a `bg-muted` pill with a ring and a
+                    shadow at 10px / .26em, which reads as a chip of content rather than a
+                    divider.
+
+                    IT CANNOT SIMPLY LOSE THE BACKING. The board's frame is a static mock, so
+                    it never had to solve what v2.105.3 solved here: this header is STICKY, and
+                    bubbles scroll behind it — bare letters with a transparent background have
+                    message text sliding through them, which is exactly the defect that release
+                    made the pill opaque to fix.
+
+                    SO THE BACKING MATCHES THE SCROLL CONTAINER'S OWN SURFACE rather than
+                    contrasting with it: `bg-background md:bg-card` is character-for-character
+                    what the scroller sets, so the pill is invisible against it and READS as
+                    the board's bare text while still occluding what passes underneath. The
+                    ring and the shadow go, because those are what made it a chip.
+
+                    Still z-10: above the bubbles, below the search overlay (z-20) and the
+                    lightbox (z-[90]) — a date pill over an opened photo would be absurd. */}
                 <span
-                  className="rounded-full bg-muted px-3 py-1 font-mono text-[10px] font-semibold uppercase text-muted-foreground shadow-sm ring-1 ring-border/60"
-                  style={{ letterSpacing: ".26em" }}
+                  className="rounded-full bg-background md:bg-card px-2.5 py-0.5 font-mono text-[9px] font-semibold uppercase"
+                  /* `#708285`, not the board's `#68797c` — the closest value to the board's
+                     that clears AA on BOTH of our scroll surfaces. Measured: the board's own
+                     hue is 4.46:1 on our mobile `--background` (fine — that is essentially
+                     the surface the board drew it on) but only 4.13:1 on the DESKTOP `--card`,
+                     which is lighter and which the board never drew. One step lighter gives
+                     5.05 / 4.67, so the colour moves as little as possible from what was
+                     specified while being legible on the surface we actually have. */
+                  style={{ letterSpacing: ".22em", color: "#708285" }}
                 >
                   {day.label}
                 </span>
@@ -2525,7 +2557,20 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               dayKey(next.createdAt) === dayKey(m.createdAt) &&
               new Date(next.createdAt).getTime() - new Date(m.createdAt).getTime() < GROUP_MS;
             const lastOfGroup = !sameAsNext;
-            const tail = mine ? (lastOfGroup ? "rounded-br-sm" : "") : (lastOfGroup ? "rounded-bl-sm" : "");
+            /* THE TAIL CORNER IS THE BOARD'S 5px, not Tailwind's `rounded-*-sm` (v2.106.62).
+               Frames 1d and 3c both spell it out: `16px 16px 16px 5px` for a received bubble
+               and `16px 16px 5px 16px` for mine — a small notch on the side the speaker is
+               on. In Tailwind v4 `rounded-bl-sm` is 2px, which at bubble scale is close
+               enough to a square corner to read as one, so the "shaped" the owner keeps
+               asking for was not actually there.
+
+               ONLY THE LAST BUBBLE OF A RUN GETS IT, which is a deliberate deviation: the
+               board's frames show single messages, so they cannot say what a stacked run
+               should do, and tailing every bubble is what makes a run stop reading as one
+               run. */
+            const tail = mine
+              ? (lastOfGroup ? "rounded-br-[5px]" : "")
+              : (lastOfGroup ? "rounded-bl-[5px]" : "");
             return (
               <div key={m.id}>
                 {/* Board 4c — the quick row, ABOVE the bubble it is about. In flow
@@ -2670,19 +2715,76 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       )}
                     </div>
                   )}
-                  {m.replyToId != null && (
-                    <div
-                      className={
-                        "mb-1 rounded-lg border-l-2 pl-2 py-0.5 text-[11px] leading-tight " +
-                        (mine
-                          ? "border-white/50 bg-white/15 text-white/90"
-                          : "border-foreground/30 bg-foreground/10 text-foreground/80")
-                      }
-                    >
-                      <span className="font-semibold">{senderLabel(msgById.get(m.replyToId)?.senderIdentityId ?? -1)}</span>
-                      <span className="opacity-80"> · {previewOf(msgById.get(m.replyToId))}</span>
-                    </div>
-                  )}
+                  {m.replyToId != null && (() => {
+                    /* BOARD 3c'S REPLY QUOTE — an accent-tinted panel with an accent left
+                       border, and the quoted person's name in THEIR OWN hue:
+
+                         margin-top:4px; padding:6px 9px; border-radius:9px;
+                         background: rgba(var(--rb-rgb),.08);
+                         border-left: 2.5px solid var(--rb);
+                         name  9.5px/700 in the ORIGINAL sender's colour
+                         text 10.5px #9fb0ab, one line, ellipsised
+
+                       THIS IS WHAT v2.106.61 EXISTED TO UNLOCK, and `peerColors.ts` says so:
+                       on a saturated per-person fill an accent panel cannot read, because the
+                       accent would be competing with a different strong hue in every bubble.
+                       A neutral surface is what lets one accent mean one thing everywhere.
+
+                       THE NAME CARRIES THE COLOUR, which is the point of the quote rather than
+                       decoration — it answers "whose message is this replying to" before you
+                       read a word, from the SAME `nameColorFor` the sender label and the
+                       typing line use, so a quote can never disagree with the bubble it
+                       quotes about who that person is.
+
+                       ONE LINE, ELLIPSISED, deliberately: a quote that wraps to three lines
+                       stops being a reference and becomes a second message. The board sets
+                       `white-space:nowrap` for exactly that.
+
+                       MINE KEEPS THE WHITE TREATMENT. The accent on a translucent orange is
+                       readable (that is why the mention and the tick moved onto it this
+                       release), but an accent-tinted panel with an accent border INSIDE an
+                       orange bubble is two tints fighting for the same few pixels, and the
+                       board only ever draws a quote on a received bubble — so it has nothing
+                       to say about this case and white is what already worked. */
+                    const quoted = msgById.get(m.replyToId);
+                    const quotedId = quoted?.senderIdentityId ?? -1;
+                    return (
+                      <div
+                        className={
+                          "mb-1 rounded-[9px] py-1 ps-2 pe-2.5 leading-tight " +
+                          (mine ? "border-l-[2.5px] border-white/50 bg-white/15" : "border-l-[2.5px]")
+                        }
+                        style={
+                          mine
+                            ? undefined
+                            : {
+                                // A LITERAL fallback, never `var(--rb, var(--rb))` — that is a
+                                // custom-property cycle and the browser drops the whole
+                                // declaration, leaving a panel with no tint at all (v2.106.7).
+                                backgroundColor: "rgba(var(--rb-rgb, 63,224,197),.08)",
+                                borderLeftColor: "var(--rb, #3FE0C5)",
+                              }
+                        }
+                      >
+                        <div
+                          className="text-[9.5px] font-semibold"
+                          style={
+                            mine
+                              ? { color: "rgba(255,255,255,.9)" }
+                              : { color: nameColorFor({ isGroup, senderIdentityId: quotedId }) }
+                          }
+                        >
+                          {senderLabel(quotedId)}
+                        </div>
+                        <div
+                          className="overflow-hidden text-ellipsis whitespace-nowrap text-[10.5px]"
+                          style={{ color: mine ? "rgba(255,255,255,.75)" : "#9fb0ab" }}
+                        >
+                          {previewOf(quoted)}
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {/* Voicemail label (v2.88): an audio message recorded after a
                       failed call carries meta.voicemail — say so, phone-style. */}
                   {(m.meta as { voicemail?: boolean } | null)?.voicemail && (
@@ -2743,7 +2845,16 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             onOpen={openMedia(m)}
                           />
                         )}
-                        {body && <div className="whitespace-pre-wrap leading-relaxed">{linkify(body)}</div>}
+                        {/* THE MENTION ROSTER HAS TO BE PASSED HERE, and until v2.106.62 it
+                            was not — which meant board 3c's accent `@mention` had NEVER
+                            rendered in a conversation. `content()` is the ordinary path
+                            (`if (!expiring) return content(m.body, m.attachment)` below), so
+                            this bare `linkify(body)` was every non-expiring message; the only
+                            call site that DID pass the roster is the search-results list,
+                            i.e. the one place almost nobody looks. v2.106.17 built the
+                            resolver, the composer picker and the shared `findMentions`, and
+                            the single render that matters got no arguments. */}
+                        {body && <div className="whitespace-pre-wrap leading-relaxed">{linkify(body, mentionRoster)}</div>}
                       </>
                     );
                     if (!expiring) return content(m.body, m.attachment);
@@ -2803,10 +2914,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   {/* WhatsApp-style meta: tiny time + ticks, tucked bottom-right.
                       Receipt owns its own mine/status guard, so there is no outer
                       condition here to fall out of step with it. */}
+                  {/* Board 1d/3c: `IBM Plex Mono` 8.5px, right-aligned, `#7d8f8a` inside a
+                      received bubble and `#9fb0ab` inside mine — the own bubble's tint is
+                      warmer, so its stamp needs to sit a step lighter to read the same. Both
+                      replace a flat `text-white/70`, which was chosen when every bubble was a
+                      saturated fill and is now brighter than the board's on the glass. */}
                   <div
-                    className={
-                      "flex justify-end items-center gap-1 font-mono text-[9px] leading-none mt-0.5 -mb-0.5 text-white/70"
-                    }
+                    className="flex justify-end items-center gap-1 font-mono text-[8.5px] leading-none mt-0.5 -mb-0.5"
+                    style={{ color: mine ? "#9fb0ab" : "#7d8f8a" }}
                   >
                     {formatTime(m.createdAt)}
                     <Receipt status={m.status} mine={!!mine} />
@@ -3489,36 +3604,44 @@ function Receipt({ status, mine }: { status?: string | null; mine: boolean }) {
      read, grey = delivered", so READ now takes the cycling accent rather than a fixed
      blue — the state change the owner asked to see at a glance, in the app's one accent.
 
-     THE OWN BUBBLE STAYS ORANGE, deliberately: the board draws the outgoing bubble as a
-     translucent accent tint, but the owner asked for orange own-bubbles in their own words
-     in v2.99.85 ("when he post mind bubble is orange"), and an explicit request is not
-     something a later visual spec overrides.
+     READ IS THE ACCENT AGAIN (v2.106.62), AND THE REASON IT LEFT WAS A MEASUREMENT ON THE
+     WRONG SURFACE — a correction to the paragraph that used to sit here.
 
-     AND THAT IS EXACTLY WHY THE ACCENT IS WRONG HERE — a correction to my own claim above,
-     which said "a bright accent tick on the orange fill is high contrast". It is not.
-     MEASURED against the orange bubble's own pale gradient stop (#fb923c), which is the
-     worst case a tick can land on:
+     It said the board "draws the outgoing bubble as a translucent ACCENT tint" and treated
+     that as something the owner's orange request overrode. Read off the board's own markup,
+     frames 1d and 3c both fill the outgoing bubble `rgba(245,140,60,.17)` — orange, not the
+     accent — and draw the ✓✓ in `var(--rb)` on it. So there was no conflict, and the app's
+     SOLID `#fb923c` gradient was its own choice. v2.106.40 then measured the tick against
+     that solid fill and correctly found the accent invisible on it. Right number, wrong
+     surface.
 
-       read = accent            1.34:1      <- the state that matters most
-       delivered = white 70%    1.77:1      <- MORE visible than read
+     RE-MEASURED on the board's fill, worst case across all 12 accent hues (mobile
+     `--background` / desktop `--card`):
 
-     So the vocabulary was not merely faint, it was INVERTED: the more important state was
-     the fainter one, which is why the ✓✓ in the owner's screenshot is hard to pick out at
-     all. Read is now solid WHITE (2.26:1) and delivered white at 55% (1.57:1), so the
-     distinction rides opacity on a surface built for white text and read is the more
-     visible of the two.
-     SAID PLAINLY: neither clears AA's 4.5, and neither can on a mid-tone fill — but a tick
-     is a small state indicator rather than body text, it sits beside a label that names the
-     state in words, and every alternative measured worse. The accent stays the app's
-     read-vs-delivered vocabulary everywhere it sits on a CARD (the thread row, Message
-     info); it is only on a saturated bubble that it cannot be seen.
+       accent on the OLD solid #fb923c            1.06:1     <- the old finding, confirmed
+       accent on the board's .17 tint       5.44 / 4.82:1     <- clears AA
+       white                                     16.4:1
+       white 55%                            5.77 / 5.44:1
+       white 45%                            4.35 / 4.13:1
+
+     So read = the accent and delivered = white at **45%**, not 55%. That alpha is the whole
+     point of re-measuring rather than just flipping read back: at 55% delivered (5.77/5.44)
+     would OUTRANK read (5.44/4.82) and reinstate the exact inversion v2.106.40 existed to
+     fix — the more important state being the fainter one. At 45% there is a real gap, so
+     read is unambiguously the louder of the two AND the app's read-vs-delivered vocabulary
+     is the same accent here as it already is on a card (the thread row, Message info).
 
      ONE mechanism, deliberately. The first cut set a grey CLASS and then overrode it with
      an inline colour for the read case — and the mutation run showed the class could be
      deleted with no visible change at all, because an inline `style` beats it. Two
      individually-removable mechanisms are dead weight that reads as load-bearing
-     (v2.105.17), so the colour is decided in exactly one expression. */
-  const tickStyle = { color: read ? "#fff" : "rgba(255,255,255,0.55)" };
+     (v2.105.17), so the colour is decided in exactly one expression.
+
+     A LITERAL fallback, never `var(--rb, var(--rb))`: that is a custom-property cycle and
+     the browser drops the declaration, leaving the tick with no colour (v2.106.7). */
+  const tickStyle = {
+    color: read ? "var(--rb, #3FE0C5)" : "rgba(255,255,255,0.45)",
+  };
   const label = failed
     ? "Not sent"
     : read

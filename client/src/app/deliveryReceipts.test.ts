@@ -243,27 +243,43 @@ describe("what the sender sees on the bubble", () => {
        `var(--rb)` — it forbade fixing the accent. THE PROPERTY IS ONLY THIS: the two
        states must be distinguishable, and read must be the more prominent, because read is
        the state the owner said they wanted at a glance.
-       WHY THE ACCENT HAD TO GO, measured on the own bubble's own pale gradient stop
-       (#fb923c), which is the worst surface a tick can land on:
-         read = accent 1.34:1   vs   delivered = white 70% 1.77:1
-       i.e. the vocabulary was not merely faint, it was INVERTED. Read is now solid white
-       (2.26:1) against delivered at 55% (1.57:1).
-       The ORDERING is what this asserts, and it is asserted by ALPHA rather than by the two
-       literals, so a later retune is free while an inversion bites. ONE expression decides
-       it, deliberately: an earlier cut set a grey class and overrode it inline for read, and
-       the mutation run showed the class could be deleted with nothing changing, because an
-       inline style beats it (v2.105.17). */
-    const m = fn.match(/const tickStyle = \{ color: read \? (".+?") : (".+?") \}/);
+       REWRITTEN A THIRD TIME (v2.106.62), and this one was a MEASUREMENT ON THE WRONG
+       SURFACE rather than a frozen literal. v2.106.40 measured the accent at 1.34:1 against
+       the own bubble's SOLID `#fb923c` — correct for that fill, and that fill was the app's
+       own invention. The board fills an outgoing bubble `rgba(245,140,60,.17)` and draws its
+       ✓✓ in `var(--rb)` on it. Re-measured across all 12 accent hues, worst case
+       (mobile `--background` / desktop `--card`):
+         accent on the old solid #fb923c        1.06:1
+         accent on the board's .17 tint   5.44 / 4.82:1
+         white 55%                        5.77 / 5.44:1
+         white 45%                        4.35 / 4.13:1
+       So read returns to the accent and delivered drops to 45%.
+       THE 45% IS THE LOAD-BEARING HALF: at 55% delivered would OUTRANK read and reinstate
+       the very inversion the previous rewrite existed to fix, so the bound is asserted, not
+       just the difference. An ALPHA COMPARISON alone is no longer sufficient either — the
+       read arm is now a CSS variable whose alpha reads as 1 whatever hue it resolves to, so
+       "1 > 0.45" would hold even if the two arms were swapped for something inverted. The
+       property is stated directly instead: read is the accent, delivered is a translucent
+       white, and its alpha is bounded below where the measurement says it starts competing.
+       ONE expression decides it, deliberately: an earlier cut set a grey class and overrode
+       it inline for read, and the mutation run showed the class could be deleted with nothing
+       changing, because an inline style beats it (v2.105.17). */
+    const m = fn.match(/const tickStyle = \{\s*color: read \? (".+?") : (".+?"),?\s*\}/);
     expect(m, "one expression, both arms named").toBeTruthy();
     const [, readArm, deliveredArm] = m as RegExpMatchArray;
     expect(readArm).not.toBe(deliveredArm);
+    expect(readArm, "read is the app's accent read-vocabulary").toMatch(/var\(--rb[, )]/);
+    // Never `var(--rb, var(--rb))` — a custom-property cycle drops the declaration (v2.106.7).
+    expect(readArm).not.toMatch(/var\(--rb[a-z-]*,\s*var\(--rb/);
+    expect(deliveredArm, "delivered is a translucent white").toMatch(/rgba\(255,\s*255,\s*255/);
     const alpha = (css: string) => {
       const rgba = /rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*([\d.]+)\s*\)/.exec(css);
       return rgba ? Number(rgba[1]) : 1;
     };
-    expect(alpha(readArm), "read must not be fainter than delivered").toBeGreaterThan(
+    expect(
       alpha(deliveredArm),
-    );
+      "delivered must stay below where it starts outranking the accent (measured: .5 ties, .55 wins)",
+    ).toBeLessThan(0.5);
     expect(fn).toMatch(/<CheckCheck /);
     expect(fn).toMatch(/<Check /);
     // `read` must imply two ticks — a read single tick is a state that does not exist.
