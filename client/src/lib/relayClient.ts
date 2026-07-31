@@ -3874,8 +3874,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // UI (room.connect() alone can't — the caller connects while ringing).
       if (!establishedOnce) markEstablished();
       const el = lkParticipantTiles[participant.identity];
-      if (!el) return;
+      // AUDIO MUST NOT DEPEND ON A VIDEO TILE EXISTING. This used to be a shared
+      // `if (!el) return;` guarding BOTH branches — but remote audio plays from a
+      // DETACHED element and needs no tile at all, so whenever `addLkTile` had not
+      // produced one (it dedups and can early-return, and the grid may not be
+      // mounted yet) the track ARRIVED and was then silently dropped: a call with a
+      // live inbound audio track and no sound, which is unfalsifiable from the UI.
+      // The tile is the render target for VIDEO only, so the guard belongs there.
       if (track.kind === TrackEnum.Kind.Video) {
+        if (!el) return;
         const vEl = el.querySelector("video") as HTMLVideoElement | null;
         if (vEl) track.attach(vEl);
         bindLkPlaceholder(el, true);
@@ -3921,7 +3928,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // participant is ALSO publishing camera video — audio commonly
         // subscribes first, and marking audio-only here is what stalls their
         // camera on the SFU. Keep video visible when a video publication exists.
-        bindLkPlaceholder(el, lkHasVideo(participant));
+        // Guarded, because this is now the ONLY line in the audio path that wants a
+        // tile — and a missing tile must cost a placeholder, never the sound.
+        if (el) bindLkPlaceholder(el, lkHasVideo(participant));
       }
     });
     room.on(RoomEventEnum.TrackUnsubscribed, (track, _pub, participant) => {

@@ -11278,6 +11278,43 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.50 — remote audio was gated behind a video tile existing (2026-07-31)
+
+Found by the root-cause run reading the subscribe side, and it is the third independent
+way a call could carry a live inbound audio track and produce no sound.
+
+`TrackSubscribed` did `const el = lkParticipantTiles[…]; if (!el) return;` and only THEN
+branched on the track kind — so **one guard covered both branches**. But remote audio plays
+from a **DETACHED** element (`track.attach()` with no argument) and needs no tile at all;
+the tile is the render target for VIDEO only. So whenever `addLkTile` had not produced one
+the track ARRIVED and was then silently dropped: an inbound audio track, subscribed and
+flowing, with nothing playing it, and nothing anywhere saying so.
+
+The guard now sits INSIDE the video branch, where the tile genuinely is the thing being
+written to, and the one line in the audio path that wants a tile — the placeholder flip
+that keeps a camera visible when audio subscribes first — is guarded rather than dropped: a
+missing tile costs a placeholder, never the sound. `markEstablished()` already ran before
+either branch, so a tile-less call still connects; that ordering is pinned so the fix
+cannot be undone by moving it.
+
+**HOW REACHABLE IS IT, said honestly**: `addLkTile` is called on the line directly above
+and dedups, so in the ordinary case the tile is there. What makes this worth fixing is the
+failure DIRECTION — every path that can leave the map empty (a grid not yet mounted, a
+dedup or cap early-return, a tile removed between events) took the sound with it, and this
+release exists because "the call connects and there is no audio" was unfalsifiable from the
+UI. Audio should not be able to fail for a reason that belongs to video.
+
+`client/src/lib/mediaUpOrHonest.test.ts` → 24; **2 tripwires verified by MUTATION** off a
+confirmed-GREEN baseline including the original shared guard reinstated verbatim, source
+byte-identical afterwards.
+
+**AND `fnBody` COULD NOT FIND THIS HANDLER, which is the v2.106.2 distinction again**: it
+seeds paren depth from the anchor and waits for a `{` with parens CLOSED, which is right
+for `function f(…) {` and wrong for a CALLBACK, whose body sits inside the call's still-open
+paren — so all three new assertions failed on correct source with `indexOf` at −1. A
+callback-aware slice does it, with the reason recorded in place so the next person does not
+re-derive it. No schema change, no new dependency, no new env var. 4921 tests.
+
 ## v2.106.49 — an account whose address can never receive a code (2026-07-31)
 
 The owner, mid-session: *"i want you to create an account ( any pin i dont care ) and use

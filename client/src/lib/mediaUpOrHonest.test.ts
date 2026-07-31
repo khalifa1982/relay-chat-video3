@@ -296,3 +296,60 @@ describe("a broken SFU cannot take calling away", () => {
     expect(branch).toMatch(/if \(m\.iceServers && m\.iceServers\.length\) iceConfig = buildIceConfig\(m\.iceServers\);/);
   });
 });
+
+describe("remote audio does not depend on a video tile existing", () => {
+  /**
+   * The TrackSubscribed CALLBACK body. `fnBody` cannot find this one: it seeds paren
+   * depth from the anchor and waits for a `{` with parens CLOSED, which is right for
+   * `function f(…) {` but wrong for a callback, whose body sits INSIDE the call's
+   * still-open paren. CLAUDE.md records that exact distinction from v2.106.2 — one
+   * rule cannot locate both — so this brace-matches from the arrow's own `{`.
+   */
+  const sub = () => {
+    const anchor = "room.on(RoomEventEnum.TrackSubscribed, (track, _pub, participant) => {";
+    const at = CODE.indexOf(anchor);
+    expect(at, "the TrackSubscribed handler must exist").toBeGreaterThan(0);
+    let i = at + anchor.length - 1; // sit ON the opening brace
+    let depth = 0;
+    for (; i < CODE.length; i++) {
+      if (CODE[i] === "{") depth++;
+      else if (CODE[i] === "}") { depth--; if (depth === 0) break; }
+    }
+    const body = CODE.slice(at, i + 1);
+    expect(body.length, "the handler slice must be real").toBeGreaterThan(200);
+    return body;
+  };
+
+  it("the tile guard sits INSIDE the video branch, not above both", () => {
+    // It used to be a shared `if (!el) return;`. Remote audio plays from a DETACHED
+    // element and needs no tile, so with no tile the track ARRIVED and was silently
+    // dropped — a call carrying live inbound audio with no sound.
+    const body = sub();
+    const vidAt = body.indexOf("if (track.kind === TrackEnum.Kind.Video) {");
+    const guardAt = body.indexOf("if (!el) return;");
+    expect(vidAt).toBeGreaterThan(0);
+    expect(guardAt).toBeGreaterThan(vidAt);
+    // …and there is exactly ONE such guard, so it cannot also be above.
+    expect((body.match(/if \(!el\) return;/g) || []).length).toBe(1);
+  });
+
+  it("the audio branch attaches and plays with no tile in the path", () => {
+    const body = sub();
+    const audioAt = body.indexOf("else if (track.kind === TrackEnum.Kind.Audio)");
+    expect(audioAt).toBeGreaterThan(0);
+    const audio = body.slice(audioAt);
+    expect(audio).toMatch(/const audioEl = track\.attach\(\)/);
+    expect(audio).toMatch(/lkAudioEls\.push\(audioEl\)/);
+    expect(audio).toMatch(/applyAudioSink\(audioEl\)/);
+    // The ONLY tile use left in this branch is guarded.
+    expect(audio).toMatch(/if \(el\) bindLkPlaceholder\(el, lkHasVideo\(participant\)\);/);
+    expect(audio).not.toMatch(/[^(]el\.querySelector/);
+  });
+
+  it("markEstablished still runs before either branch, so a tile-less call still connects", () => {
+    const body = sub();
+    const markAt = body.indexOf("markEstablished()");
+    expect(markAt).toBeGreaterThan(0);
+    expect(markAt).toBeLessThan(body.indexOf("if (track.kind === TrackEnum.Kind.Video)"));
+  });
+});
