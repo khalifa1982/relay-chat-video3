@@ -33,6 +33,19 @@ describe("iOS permission tip — one-time pointer to Safari's permanent Allow", 
   });
 
   it("ensureMedia still reuses a live stream — the app never double-prompts within a session (v2.80: reuse now checks the mic is actually ALIVE first)", () => {
-    expect(SRC).toMatch(/const audioLive = localStream\.getAudioTracks\(\)\.some\(t => t\.readyState === "live"\);\s*\n\s*if \(audioLive\) return outStream\(\);/);
+    // REWRITTEN v2.106.44 to the PROPERTY. This froze the exact one-liner
+    // `if (audioLive) return outStream();`, so it broke the moment the branch
+    // grew a body (voice-then-video adds a camera to the cached stream) while
+    // saying nothing about what it exists to protect: a LIVE cached mic is
+    // handed straight back, so the OS never prompts twice in one session.
+    const i = SRC.indexOf("const audioLive = localStream.getAudioTracks()");
+    expect(i, "the aliveness check must exist").toBeGreaterThan(0);
+    const branch = SRC.slice(i, SRC.indexOf("diag(\"cached media is dead", i));
+    expect(branch.length, "the slice must be real").toBeGreaterThan(40);
+    expect(branch).toMatch(/if \(audioLive\)/);
+    expect(branch).toMatch(/return outStream\(\)/);
+    // …and it must NOT re-request the microphone on the way there.
+    expect(branch).not.toMatch(/audio: AUDIO_CONSTRAINTS/);
+    expect(branch).not.toMatch(/acquireRawStream\(/);
   });
 });

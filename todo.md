@@ -11278,6 +11278,94 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.44 — a voice call no longer opens the camera (2026-07-31)
+
+The owner's instruction, verbatim: voice and video are two explicit **modes of the SAME call
+path**, "differing only by the media profile applied" — and for voice mode, "**Publish:**
+microphone only. Do **not** acquire or publish a camera track." Their sequence puts the
+mediasoup cutover AFTER a diagnostic call, so nothing here touches the audio path or the
+transport: this is the media profile only.
+
+- [x] **The defect, and it was hiding behind a rule that held.** `acquireRawStream` requested
+      `video` UNCONDITIONALLY and a voice dial then called `setCam(false)` — whose own comment
+      admitted "the track is already published, just disabled". So the letter of the v2.81
+      mutual-consent rule was kept (nothing transmits) while a voice call still (1) lit the OS
+      camera indicator, (2) encoded frames it would never send — the "phone becomes very hot"
+      class v2.99.84 measured — and (3) on a camera-less desktop took the no-camera FALLBACK and
+      toasted *"No camera found — joining with audio only"* on a call where none was ever wanted,
+      i.e. a warning about a device the call had no use for.
+- [x] **`wantVideo` DEFAULTS TO TRUE, and that is what makes it one commit.** Every caller not
+      taught the mode is byte-identical, so the change can only ever NARROW what is opened,
+      never widen it. A required parameter would have turned each missed site into a compile
+      error rather than the historical behaviour.
+- [x] **Every site that KNOWS the mode passes it, and nothing calls it bare any more** —
+      `programmaticDial`/`programmaticGroupDial` from their own `voice` option, the raw dialer
+      and add-person from the live `camOn`, rejoin from the snapshot, and the answer path from
+      the RING. A bare `ensureMedia()` is forbidden by test, because a mode-blind caller is
+      exactly how a camera comes back on a voice call.
+- [x] **ANSWERING derives the mode from the ring, not only from the button.** A voice DIAL
+      answered with the plain Answer button is still voice — under mutual consent our camera may
+      not transmit until a video-request is accepted, so opening one would capture frames that
+      cannot legally be sent. `wantVideo = !!(r.video && !opts?.voice)`.
+- [x] **The camera STATE is still stood down, and the old guard could no longer do it.** It read
+      `opts?.voice && localStream && getVideoTracks().length > 0` — it REQUIRED the very track a
+      voice call no longer has, so left alone it would now SKIP, leaving a lit camera button, a
+      video-looking self tile and a publish gate reading `camOn === true` over a camera nobody
+      opened. It is unconditional now, and it runs BEFORE `enterCallUI` because `addSelfTile`
+      reads `camOn` at creation — which is what puts the avatar on the tile.
+- [x] **VOICE → VIDEO still works with no camera at start, verified rather than assumed**:
+      `reacquireCameraForPublish` builds a fresh stream from the EXISTING audio tracks, and both
+      transports already reacquire when enabling with no live track (`setCam` on the mesh,
+      `syncLivekitVideoPublication` on the SFU). Pinned at all four points, because without them
+      the owner's mid-call upgrade would be a button that silently does nothing.
+- [x] **A VIDEO call after a VOICE call in one session gets a camera.** The cached-stream reuse
+      keyed on the MIC alone, so the second call would be handed the audio-only stream and read
+      as "my camera is never recognized". It now ADDS one — and deliberately does NOT tear down
+      the working mic to get there, because a re-prompt can fail (device busy) and that would
+      cost the call its audio to chase a camera.
+- [x] **Concurrent callers wanting DIFFERENT modes cannot start two acquisitions.** Sharing one
+      in-flight promise is what stops an orphaned stream (v2.99.36), but a voice acquisition in
+      flight cannot satisfy a video caller — so the video caller WAITS for it and re-runs (which
+      then takes the add-a-camera branch) rather than running a second `getUserMedia` beside it.
+- [x] **Voice mode never blames a missing CAMERA.** The request WAS audio-only, so retrying
+      identical constraints could only fail identically; the fallback branch and its camera
+      toast stay reachable for video, and voice gets the honest mic message.
+- [x] **The AUDIO profile is untouched and shared**, which is both the owner's constraint and
+      what keeps this from interfering with the unresolved no-audio diagnosis: one
+      `AUDIO_CONSTRAINTS` (echo cancellation, noise suppression, AGC, mono), and the mode flag
+      is forbidden from reaching it.
+- [x] **`primeMedia` is deliberately left warming BOTH permissions** — it acquires and
+      immediately RELEASES (v2.99.36), so it holds nothing, and narrowing it to audio would make
+      the first video call prompt for the camera mid-dial, which is the one thing it exists to
+      prevent.
+
+`client/src/lib/voiceMode.test.ts` (12); **all 21 tripwires verified by MUTATION** off a
+confirmed-green baseline from a byte-exact backup, the mutator aborting unless its target occurs
+exactly once, source byte-identical afterwards — including the original unconditional constraint
+reinstated verbatim, the old track-requiring guard restored, the answer path made mode-blind, the
+audio profile made mode-dependent, and the upgrade path made to drop the audio track.
+
+**ONE SURVIVED AND IT WAS A REAL GAP IN MY OWN TEST**, the pin-the-name-not-the-rule class: the
+rejoin assertion required `ensureMedia(rejoinWantsVideo)` to appear, so replacing the derivation
+with a constant `true` stayed green while a voice call's rejoin would reopen the camera. It now
+pins the derivation itself AND that both the first attempt and its retry carry it. One mutation
+correctly ABORTED at two occurrences rather than recording a result about the wrong one.
+
+**Four pre-existing pins rewritten to the property**, and the pattern in them is worth stating:
+two (`callProgress`, `incomingRing`) froze the exact track-requiring guard — i.e. they forbade
+the fix while saying nothing about the rule — one (`iosPermTip`) froze the one-line
+`if (audioLive) return outStream();` so it broke the moment that branch grew a body, and one
+(`mediaRelease`) froze `if (ensureMediaInFlight) return ensureMediaInFlight`, forbidding the
+mode-aware wait. A fifth was narrowed rather than relaxed: `not.toMatch(/await ensureMedia\(\)/)`
+would have let `ensureMedia(true)` slip into `primeMedia`, so it now matches the CALL.
+
+**NOT VERIFIED ON A DEVICE, said plainly** — whether a camera opens is a property of the
+getUserMedia constraints and there is no camera (and no `navigator`) in the test environment, so
+these are source pins by necessity. The behavioural check is step 1 of the owner's own
+verification list, on a phone. **AND THE MEDIASOUP CUTOVER IS STILL NOT STARTED**, per their
+explicit ordering: it waits on one real call with the stats readout, which needs a device and a
+second party. No schema change, no new dependency, no new env var. 4829 tests.
+
 ## v2.106.43 — the contact PIN moves up so "last seen" shows in full (2026-07-31)
 
 Owner, with a screenshot of the just-deployed row: *"Move the pin for contact from below the

@@ -1487,10 +1487,25 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // already the problem. Clarity is unaffected; only redundant channels go.
     channelCount: { ideal: 1 },
   };
-  async function acquireRawStream(useFacingMode: "user" | "environment"): Promise<MediaStream> {
+  async function acquireRawStream(
+    useFacingMode: "user" | "environment",
+    wantVideo = true,
+  ): Promise<MediaStream> {
+    /* VOICE MODE NEVER OPENS THE CAMERA (`wantVideo: false`).
+       This used to request `video` unconditionally and then DISABLE the track, which honoured
+       the letter of the v2.81 mutual-consent rule (nothing is published) while breaking its
+       spirit and costing three real things: the OS camera indicator lights up during a VOICE
+       call, the device captures frames it will never send (the "phone becomes very hot"
+       class), and a camera-less desktop took the no-camera fallback and toasted "No camera
+       found — joining with audio only" on a call where no camera was ever wanted.
+       `wantVideo` DEFAULTS TO TRUE, deliberately: every caller that has not been taught the
+       mode is byte-identical to before, so this can only ever narrow what is opened.
+       Voice → video still works with no camera at start, because `reacquireCameraForPublish`
+       builds a fresh stream from the EXISTING audio tracks and only needs `localStream` to
+       exist — verified rather than assumed. */
     const s = await navigator.mediaDevices.getUserMedia({
       audio: AUDIO_CONSTRAINTS,
-      video: { ...qualityVideo(videoQuality), facingMode: useFacingMode },
+      video: wantVideo ? { ...qualityVideo(videoQuality), facingMode: useFacingMode } : false,
     });
     // Hint the encoder that camera content is motion (prioritize frame rate /
     // smoothness over per-frame detail on a constrained link). Plain property
@@ -2112,17 +2127,31 @@ export function startRelay(root: HTMLElement): RelayHandle {
   /** In-flight ensureMedia, so concurrent callers SHARE one acquisition instead
    *  of each running getUserMedia and orphaning the loser's stream. */
   let ensureMediaInFlight: Promise<MediaStream> | null = null;
+  /** What the in-flight acquisition is opening, so a VIDEO caller is never
+   *  handed a VOICE caller's audio-only result (see below). */
+  let ensureMediaInFlightWantsVideo = true;
 
-  function ensureMedia(): Promise<MediaStream> {
-    if (ensureMediaInFlight) return ensureMediaInFlight;
-    const p = ensureMediaInner().finally(() => {
+  function ensureMedia(wantVideo = true): Promise<MediaStream> {
+    // Share the in-flight acquisition only when it opens AT LEAST what this
+    // caller needs. A voice acquisition in flight cannot satisfy a video
+    // caller, and starting a second getUserMedia concurrently is exactly the
+    // orphan-a-stream bug the sharing exists to prevent — so we WAIT for it and
+    // then run again, which takes the add-a-camera branch below.
+    if (ensureMediaInFlight && (!wantVideo || ensureMediaInFlightWantsVideo)) return ensureMediaInFlight;
+    if (ensureMediaInFlight) {
+      return ensureMediaInFlight
+        .catch(() => { /* its failure is its caller's problem, not ours */ })
+        .then(() => ensureMedia(wantVideo));
+    }
+    ensureMediaInFlightWantsVideo = wantVideo;
+    const p = ensureMediaInner(wantVideo).finally(() => {
       if (ensureMediaInFlight === p) ensureMediaInFlight = null;
     });
     ensureMediaInFlight = p;
     return p;
   }
 
-  async function ensureMediaInner(): Promise<MediaStream> {
+  async function ensureMediaInner(wantVideo: boolean): Promise<MediaStream> {
     const gen = mediaGen;
     // Reuse a live camera/mic — don't re-prompt. But only if the cached MIC is
     // actually ALIVE: tracks can die BETWEEN calls (phone-call interrupt,
@@ -2130,7 +2159,24 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // meant joining the next call permanently one-way muted.
     if (localStream) {
       const audioLive = localStream.getAudioTracks().some(t => t.readyState === "live");
-      if (audioLive) return outStream();
+      if (audioLive) {
+        // VOICE-THEN-VIDEO in one session: the cached stream may hold no camera
+        // at all (a voice call opens none), so a video call must ADD one rather
+        // than be handed the audio-only stream — which would look exactly like
+        // "my camera is never recognized". The mic is deliberately NOT torn
+        // down to get there: it is working, and a re-prompt could fail (device
+        // busy) and cost the call its audio to chase a camera.
+        if (wantVideo && !localStream.getVideoTracks().some(t => t.readyState === "live")) {
+          const added = await reacquireCameraForPublish();
+          if (mediaStale(gen)) throw new Error("media-released-during-acquire");
+          if (!added) {
+            camOn = false;
+            $("camBtn")?.classList.add("off");
+            toast("No camera found — joining with audio only. Tap the camera button to retry once it's available.");
+          }
+        }
+        return outStream();
+      }
       diag("cached media is dead — reacquiring fresh");
       try { localStream.getTracks().forEach(t => t.stop()); } catch { /* */ }
       localStream = null;
@@ -2138,13 +2184,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
       processedStream = null;
     }
     try {
-      const raw = await acquireRawStream(facingMode);
+      const raw = await acquireRawStream(facingMode, wantVideo);
       // The call may have ended (or the engine been destroyed) while the OS
       // prompt / acquisition was in flight — never install an orphan.
       if (mediaStale(gen)) { stopStream(raw); throw new Error("media-released-during-acquire"); }
       localStream = raw;
     } catch (firstErr) {
       if ((firstErr as Error)?.message === "media-released-during-acquire") throw firstErr;
+      // In VOICE mode the request above WAS audio-only, so retrying the same
+      // constraints could only fail the same way — and calling the result a
+      // "no camera" fallback would be a false claim about a call that never
+      // wanted one. Go straight to the honest mic message.
+      if (!wantVideo) {
+        toast("Mic blocked. Allow microphone access in your browser, then retry.", true);
+        throw firstErr;
+      }
       try {
         const audioOnly = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
         if (mediaStale(gen)) { stopStream(audioOnly); throw new Error("media-released-during-acquire"); }
@@ -2568,7 +2622,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (dialed === me.pin) { toast("That's your own number.", true); return; }
     if (peers[dialed]) { toast("You're already connected to them.", true); return; }
     loudspeakerPrime(); // dial tap gesture — before ensureMedia consumes it
-    try { await ensureMedia(); } catch { return; }
+    // The raw dialer's mode IS the camera toggle's current state, so it decides
+    // whether a camera is opened at all.
+    try { await ensureMedia(camOn); } catch { return; }
     const target = dialed; dialed = ""; refreshDisplay(); closeAddPad();
     if (!inCall) {
       inCall = true;
@@ -2605,14 +2661,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!me.pin) return false; // not registered yet — caller should retry
     if (target === me.pin) { toast("That's your own number.", true); return false; }
     if (peers[target]) { toast("You're already connected to them.", true); return false; }
-    try { await ensureMedia(); } catch { return false; }
-    // Voice call: start with the camera OFF (the existing camera-toggle path).
-    // The other side sees an audio-only tile; tapping the camera button upgrades
-    // to video instantly (no renegotiation — the track is already published,
-    // just disabled). Purely additive: a normal video call is unchanged.
-    if (opts?.voice && localStream && localStream.getVideoTracks().length > 0) {
-      setCam(false);
-    }
+    try { await ensureMedia(!opts?.voice); } catch { return false; }
+    // VOICE mode: no camera was opened at all (see acquireRawStream), and the
+    // camera STATE is still flipped off so the button, the self tile and the
+    // publish gate all agree with what is being captured. This used to be
+    // conditional on a video track EXISTING — which is precisely what a voice
+    // call no longer has, so the condition would now skip and leave a lit
+    // camera button over a camera nobody opened.
+    if (opts?.voice) setCam(false);
     if (!inCall) {
       inCall = true;
       videoOfferPending = !opts?.voice; videoOfferedForRoom = null; // M37 — a video dial offers video
@@ -2653,8 +2709,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       toast(`This server supports up to ${cap + 1} on a call — ringing the first ${cap}.`, true);
     }
     if (clean.length === 0) return false;
-    try { await ensureMedia(); } catch { return false; }
-    if (opts?.voice && localStream && localStream.getVideoTracks().length > 0) setCam(false);
+    try { await ensureMedia(!opts?.voice); } catch { return false; }
+    if (opts?.voice) setCam(false);
     const alreadyInRoom = inCall && !!roomId;
     callIsGroup = true; // conferences bypass the 1:1 video-consent gate
     if (!inCall) {
@@ -3354,13 +3410,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // getUserMedia await consumes/outlives the transient activation (phones
     // apply the remembered speaker state at establishment).
     loudspeakerPrime();
-    try { await ensureMedia(); } catch { sendWS({ type: "reject", to: r.from }); emitPhase("idle"); return; }
+    // A camera is opened only when this is a VIDEO call we are answering AS
+    // video. Answering a video dial with the Voice button, or answering a voice
+    // dial at all, is voice mode — and under the v2.81 mutual-consent rule our
+    // camera may not transmit in either case until a video-request is accepted,
+    // so opening one would capture frames that cannot legally be sent.
+    const wantVideo = !!(r.video && !opts?.voice);
+    try { await ensureMedia(wantVideo); } catch { sendWS({ type: "reject", to: r.from }); emitPhase("idle"); return; }
     // "Answer as Voice": camera stays OFF (same rule as a voice DIAL — the
     // SFU publishes no video at all while camOn is false; tapping the camera
-    // button mid-call upgrades to video instantly).
-    if (opts?.voice && localStream && localStream.getVideoTracks().length > 0) {
-      setCam(false);
-    }
+    // button mid-call upgrades to video, reacquiring if none was opened).
+    if (!wantVideo) setCam(false);
     // Mutual-consent: answering a VIDEO-dialed call with the Video button IS
     // the consent — mark it before media publishes. The reply to the caller is
     // sent AFTER the `accept` below (the server relays video-* by the sender's
@@ -3495,10 +3555,17 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // must NOT drop us from the call — retry once before giving up. (ensureMedia
     // already falls back to audio-only if only the camera is unavailable.)
     let gotMedia = false;
-    try { await ensureMedia(); gotMedia = true; }
+    // The snapshot records the mode the call was in before the reload, so a
+    // VOICE call rejoins without opening a camera. With NO snapshot this is a
+    // server-driven rejoin whose mode we cannot know, so it reads as video —
+    // the historical behaviour, and the recoverable direction, since a camera
+    // opened for what turns out to be a voice call is stood down below while a
+    // camera never opened would leave a video call with a black tile.
+    const rejoinWantsVideo = pendingRejoin ? pendingRejoin.camOn : true;
+    try { await ensureMedia(rejoinWantsVideo); gotMedia = true; }
     catch {
       await new Promise(r => setTimeout(r, 600));
-      try { await ensureMedia(); gotMedia = true; } catch { /* truly hopeless */ }
+      try { await ensureMedia(rejoinWantsVideo); gotMedia = true; } catch { /* truly hopeless */ }
     }
     if (!gotMedia) {
       // We genuinely can't get a mic — leave so the server drops our membership
@@ -6732,7 +6799,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const n = livekitEnabled ? Object.keys(lkParticipantTiles).length : Object.keys(peers).length;
     if (n >= cap - 1) { toast(`Call is full (${cap} people max).`, true); return; }
     addInviting = true;
-    try { await ensureMedia(); } catch { addInviting = false; return; }
+    // Already in a call: the mode is whatever this call is in, so adding a
+    // person must not open a camera a voice call deliberately never opened.
+    try { await ensureMedia(camOn); } catch { addInviting = false; return; }
     // Online → the server rings them in; offline → error{offline}; unknown →
     // error{nonexistent} (v2.99.11 split the two). The generic handler toasts
     // the message either way and the pad closes itself. Arm the offline guard so
