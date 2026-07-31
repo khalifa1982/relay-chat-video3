@@ -590,7 +590,10 @@ export default function MessagesPage({
                       </span>
                       <span className="text-[11px] text-muted-foreground">{cat.rows.length}</span>
                       {catUnread && (
-                        <span className="size-2 rounded-full" style={{ background: "#fb923c" }} />
+                        /* The section's own unread pip, same accent as the row counts under
+                           it — two colours for one state is how a header comes to disagree
+                           with its rows. `bg-primary`, not the 2.26:1 orange literal. */
+                        <span className="size-2 rounded-full bg-primary" />
                       )}
                     </button>
                     {open &&
@@ -810,9 +813,21 @@ export default function MessagesPage({
                                     the top, so this only has to say why. `ms-auto` moves
                                     here so the timestamp still ends the line. */}
                                 {t.pinned && (
+                                  /* NOT GREEN. Green means ONLINE in this app — it is what
+                                     every presence LED is drawn with, and it is why v2.99.86
+                                     moved DND off it, v2.106.9 the speaking tile, v2.106.11
+                                     the push banner and v2.106.18 the voice waveform. A pin
+                                     is not a presence statement, so it was a further meaning
+                                     for the one colour that has to carry exactly one.
+                                     NOT the accent either, deliberately: the accent now means
+                                     UNREAD in this row (see the count and the timestamp
+                                     below), and a pinned-but-READ thread must not read as
+                                     unread. The pin's real effect is the SORT — it is already
+                                     at the top — so this only has to say why, which is a
+                                     quiet job. Measured: 6.00:1 light, 6.55:1 dark. */
                                   <Pin
                                     aria-label="Pinned"
-                                    className="ms-auto size-3.5 shrink-0 -rotate-45 text-[color:var(--relay-green-text)]"
+                                    className="ms-auto size-3.5 shrink-0 -rotate-45 text-muted-foreground"
                                   />
                                 )}
                                 {t.lastMessageAt && (
@@ -821,7 +836,21 @@ export default function MessagesPage({
                                     className={
                                       (t.pinned ? "shrink-0 pl-1.5 " : "ms-auto shrink-0 pl-1 ") +
                                       "text-[11.5px] tabular-nums [unicode-bidi:isolate] " +
-                                      (unread ? "font-semibold text-[#fb923c]" : "text-muted-foreground")
+                                      /* Board 1c: unread is the ACCENT. `text-primary`, not
+                                         the hardcoded `#fb923c` — measured 2.26:1 on the light
+                                         card against AA's 4.5, i.e. the timestamp of an UNREAD
+                                         thread was the least readable thing in the row in the
+                                         theme the app defaults to (dark was fine at 8.30, which
+                                         is why it survived: the board is a dark design and the
+                                         app ships light). `text-primary` measures 4.85:1 light
+                                         and 11.16:1 dark, and v2.106.4 repointed `--primary` at
+                                         `--rb` inside `.dark.relay-v2`, so dark keeps the
+                                         cycling accent and only light becomes readable.
+                                         AND THE ORANGE MEANT SOMETHING ELSE: the owner asked
+                                         for orange on their OWN BUBBLES in their own words
+                                         (v2.99.85), so spending it on "unread" put two meanings
+                                         on one colour. */
+                                      (unread ? "font-semibold text-primary" : "text-muted-foreground")
                                     }
                                   >
                                     {timeAgo(t.lastMessageAt)}
@@ -881,7 +910,7 @@ export default function MessagesPage({
                                 {unread && (
                                   /* Colour + weight, not a heavy pill (the reference's
                                      "2 New Chats" treatment). */
-                                  <span className="shrink-0 font-semibold text-[13px] text-[#fb923c]">
+                                  <span className="shrink-0 font-semibold text-[13px] text-primary">
                                     {t.unreadCount > 99 ? "99+" : t.unreadCount} new
                                   </span>
                                 )}
@@ -890,9 +919,13 @@ export default function MessagesPage({
                                     claim about a message that may not exist. Withheld
                                     when a real count is already shown. */}
                                 {!unread && t.manualUnread && (
+                                  /* Same accent as the count it stands in for — and the same
+                                     measurement applies even though this is a FILL rather than
+                                     text: at 2.26:1 the orange dot missed the 3:1 that
+                                     non-text UI needs on the light card too. */
                                   <span
                                     aria-label="Marked unread"
-                                    className="size-2.5 shrink-0 rounded-full bg-[#fb923c]"
+                                    className="size-2.5 shrink-0 rounded-full bg-primary"
                                   />
                                 )}
                               </div>
@@ -4639,12 +4672,13 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
         onClick={() => setOpen(true)}
         aria-label="New message"
         title="New message"
-        className="grid place-items-center w-[34px] h-[34px] rounded-[10px] shrink-0 hover:brightness-110"
-        style={{
-          background: "linear-gradient(160deg,rgba(251,146,60,.3),rgba(251,146,60,.1))",
-          color: "#fb923c",
-          boxShadow: "inset 0 1px 0 rgba(255,255,255,.15)",
-        }}
+        /* BOARD 1c: the compose chip is the ACCENT chip. It was a hand-rolled orange tint
+           carrying an orange GLYPH — accent-on-its-own-tint, the v2.106.31 pattern, and it
+           measured 1.77:1 in light (the tint itself is only 1.28:1 against the card, so the
+           chip barely existed either). `.rchip-accent` is the recipe built for exactly this
+           and it is the ONLY one that carries a per-theme text colour, which an inline style
+           cannot express. */
+        className="rchip-accent grid place-items-center w-[34px] h-[34px] rounded-[10px] shrink-0 hover:brightness-110"
       >
         <MessageSquarePlus className="size-[18px]" />
       </button>

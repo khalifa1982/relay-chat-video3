@@ -330,18 +330,37 @@ describe("green means ONLINE, and only online", () => {
   });
 
   it("every REMAINING use of the presence green is about presence", () => {
-    /* THE STANDING GUARD. This exact violation has now been found four times in
-       four releases, always by measuring rather than by reading — so it gets a
-       sweep rather than a fourth one-off fix.
+    /* THE STANDING GUARD. This exact violation has now been found SIX times in
+       as many releases, always by measuring rather than by reading — so it gets a
+       sweep rather than another one-off fix.
        `typing…` is DELIBERATELY allowed: typing implies online (you cannot type
        from an offline client), it occupies the presence slot in the same header,
        and it is a STRONGER presence statement rather than a different kind of
-       fact. So green is carrying its one meaning there. */
+       fact. So green is carrying its one meaning there.
+
+       WIDENED (v2.106.42) TO BOTH GREEN TOKENS, and that gap is why there was a
+       sixth: this swept `--relay-online` only, and the PIN MARKER on a thread row
+       was painted with `--relay-green-text` — the AA-measured sibling v2.99.86
+       added for small text. Two spellings of one meaning, one of them unguarded,
+       so the guard read as covering the rule while covering half of it. A pinned
+       thread is not an online thread; the marker is muted now, deliberately not
+       the accent, because the accent means UNREAD in that same row. */
     const ALLOWED = [/typing…/, /\bonline\b/, /online now/];
-    const lines = UI.split("\n").filter((l) => l.includes("relay-online"));
-    for (const l of lines) {
+    const GREEN = /relay-online|relay-green-text/;
+    /* THE WINDOW IS THE ELEMENT, NOT THE LINE, and widening the token set is what exposed
+       that: a per-LINE sweep asked whether the className and the word sit on the same
+       source line, which for multi-line JSX they do not — the group header's perfectly
+       correct `{membersOnline} online` lives one line below its own class, and the first
+       run of the widened guard failed on it. A line is not the unit this rule is about. */
+    const all = UI.split("\n");
+    const hits = all
+      .map((l, i) => ({ l, i }))
+      .filter(({ l }) => GREEN.test(l));
+    expect(hits.length, "the sweep must not be vacuous").toBeGreaterThan(0);
+    for (const { l, i } of hits) {
+      const el = all.slice(i, i + 3).join(" ");
       expect(
-        ALLOWED.some((re) => re.test(l)),
+        ALLOWED.some((re) => re.test(el)),
         `presence green used for something that is not presence:\n  ${l.trim()}`
       ).toBe(true);
     }

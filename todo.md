@@ -11278,6 +11278,68 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.42 — board 1c: the unread state was the least readable thing in the row (2026-07-31)
+
+The third screen of the owner's "check all my new designs and match it to the existing one" —
+and the same class as v2.106.38's section headings: a colour that reads perfectly in DARK and
+fails AA in LIGHT, the theme the app defaults to, which is why it survives every review that
+looks at the board.
+
+Measured against the real built stylesheet in both themes, each colour painted into a 1×1
+canvas and composited over the surface it actually sits on:
+
+| surface | shipped | replacement |
+|---|---|---|
+| `#fb923c` on the card, light | **2.26:1 FAIL** | `text-primary` 4.85:1 PASS |
+| `#fb923c` on the card, dark | 8.30:1 | 11.16:1 |
+| orange glyph on its own .3 orange tint, light | **1.77:1 FAIL** | `.rchip-accent` |
+| the .3 tint against the card, light | **1.28:1** | — |
+| `var(--rb)` as text, light | **1.68:1** — worse than the orange | not used |
+
+- [x] **Five sites carried the failing orange**: the unread count, the unread timestamp, the
+      manual-unread dot, the section header's unread pip and the compose chip. All now the
+      accent via `text-primary` / `bg-primary` / `.rchip-accent`.
+- [x] **And the orange already meant something else** — the owner asked for orange on their own
+      BUBBLES by name (v2.99.85), so spending it on "unread" put two meanings on one colour.
+- [x] **`text-primary`, never `var(--rb)`**: the raw accent as text is 1.68:1 in light, worse
+      than what it replaced. v2.106.4 repointed `--primary` at `--rb` inside `.dark.relay-v2`
+      for exactly this, so dark keeps the cycling accent and only light becomes readable. That
+      indirection is pinned from the stylesheet rather than assumed.
+- [x] **The pinned marker is a VOCABULARY fix, not a contrast one.** It was legible and it was
+      green, and green means ONLINE here. Now `muted-foreground` — and deliberately NOT the
+      accent, because the accent means UNREAD in that same row and a pinned-but-read thread
+      must not read as unread. The pin's real effect is the sort; saying why is a quiet job.
+- [x] **The gap that made this the sixth occurrence is in my own standing guard**: it sweeps
+      `--relay-online` only, and the pin used `--relay-green-text` — the AA-measured sibling
+      v2.99.86 added for small text. Two spellings of one meaning, one unguarded, so the guard
+      read as covering the rule while covering half of it. Widened to both, with a non-vacuity
+      assertion.
+- [x] **Widening it failed on CORRECT code, which corrected its granularity**: it was a
+      per-LINE sweep, and the group header's proper `{membersOnline} online` sits one line
+      below its own className. It now reads the ELEMENT, so the violation is caught and the
+      legitimate site passes.
+
+**One audit finding refuted** rather than quietly dropped: Messages.tsx does NOT carry two
+hardcoded story-ring gradients duplicating `.rstoryring` — there is no `conic-gradient` in the
+file at all, because the ring goes through `PeerAvatar`, which already uses the shared class.
+
+**The orange sweep is scoped to the ROW**, with the exemptions named: the own bubble's own
+gradient and the "Direct" section icon's hex (one of four fixed section identities — Direct
+orange / Groups violet / Notes amber, a wayfinding hue rather than a state) are both correct
+and stay.
+
+`client/src/app/threadRowFrame.test.ts` (8). **All 10 tripwires verified by MUTATION** off a
+confirmed-green baseline, all three sources byte-identical afterwards — including each orange
+site reinstated, the pin returned to green, the pin given the accent (the wrong fix), the guard
+narrowed back, and `--primary` unhooked from the accent in dark. One pre-existing pin
+re-anchored (it required `<Pin` to be the very next thing after its gate, so a comment broke
+it). One assertion of my own was too broad and failing it was the point.
+
+**Not verified on a device**: every ratio is computed from pixels painted in a real browser, but
+nobody has looked at their own inbox on the owner's phone — and this is on a branch, so it
+changes nothing they can see until PR #128 merges, which they asked me to hold. No schema
+change, no new dependency, no new env var. 4814 tests.
+
 ## v2.106.41 — board 1e: the contact's name was cut off at every width (2026-07-31)
 
 The owner's *"Also the contacts section is not showing mmso many bugs"*, and the finding is
