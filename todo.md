@@ -11278,6 +11278,74 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.30 — the mic button could lock you out of sending entirely (2026-07-31)
+
+Found by the 36-agent design-vs-built run on the message screens, whose send-path tracer
+read the code rather than the styling. Four of its findings are **certain from the code**
+and all four are fixed here. The first matches the owner's report better than v2.106.29 did.
+
+**(1) THE LOCK-OUT.** `voiceNote.ts`'s `done` promise resolved ONLY inside `rec.onstop`.
+There was no `rec.onerror`, and the duration cap called `rec.stop()` — which itself depends
+on `onstop` firing. A recorder that went inactive without firing it (an iOS call or Siri
+interruption, mic contention with another tab, a MediaRecorder `error`) left the promise
+pending forever.
+
+What that cost is out of all proportion to the cause: `setRecording(false)` lived only in
+that promise's `.finally()`, and while `recording` is true the whole composer is **replaced**
+by the recording bar — no text field, no send button — and **both** of that bar's exits
+called `stop()`, a no-op on an already-inactive recorder. Both ways out were dead; the only
+escape was navigating away. And the mic is the **default primary button while the field is
+empty**, i.e. exactly what somebody taps first.
+
+The resolver is hoisted out and made idempotent, with **four** paths to it — a normal stop,
+a recorder error, an already-inactive recorder, and a hard deadline that trusts the recorder
+for nothing. The cap settles directly instead of asking and hoping. Discard resets the flag
+unconditionally, because relying on one mechanism is how "there is no way out of this
+screen" happened in the first place.
+
+**(2) ONE SHARED MUTATION LET A STUCK VOICE NOTE DISABLE TEXT SENDING.** The text send and
+the fire-and-forget voice send shared `sendMutation`, and Send is disabled on
+`sendMutation.isPending` — so a voice request that never settled left the accent Send button
+drawn, looking live, and permanently dead. Two independent operations must not share one
+in-flight flag.
+
+**(3) THE VOICE NOTE FAILED 100% SILENTLY.** That mutation had no `onError`: upload
+succeeded, send failed, blob discarded, no toast, no retry, an orphaned attachment row.
+`main.tsx` only `console.error`s.
+
+**(4) THE SERVER'S REAL REASON WAS DISCARDED.** `send()` ended in a bare `catch` reporting
+"check your connection" for every failure — and the failures that actually happen there are
+not connection failures: a block ("You can't message this person."), a non-membership, a
+stale `replyToId` rehydrated from a saved draft, an attachment that is not yours, a lost
+identity. All read as a network blip, and **tapping send again never helped**. Being told to
+retry something that can never succeed is precisely "I cannot send messages". Every other
+mutation in the file already surfaced `e.message`.
+
+- [x] `client/src/lib/voiceNote.ts` — one idempotent teardown, four settle paths, a deadline
+      backstop, and a stop that works on an inactive recorder.
+- [x] `client/src/pages/app/Messages.tsx` — a separate voice mutation with its own
+      `onError`, the server's real message on a failed send, and an unconditional Discard.
+- [x] `client/src/lib/voiceNoteSettle.test.ts` (10), **driven** — whether a promise settles
+      is exactly what a source pin cannot answer.
+- [x] **6 of 6 tripwires mutation-verified**, including the original hang reinstated
+      verbatim. **Two survived the first run, both real gaps in my own tests**: the deadline
+      case passed `maxMs: 1_000`, so the CAP settled it and deleting the deadline still
+      passed; and the idempotency case asserted the resolved value, but `Promise.resolve` is
+      itself idempotent, so removing the `settled` guard changed nothing observable — it now
+      counts mic stops and requires exactly one.
+- [x] **Three defects in my own test before that**, each failing on correct code: I drove
+      `recordFromStream`, which lives in `videoNote.ts`; and `pickAudioMime` reads
+      `window.MediaRecorder` while the suite runs in the `node` environment, so stubbing the
+      bare global left the module correctly reporting "not supported".
+- [x] **Two pre-existing pins rewritten, and both had frozen the shape of the defect**: one
+      sliced from `rec.onstop = () => {` and required the teardown INSIDE that handler — the
+      very arrangement that made a missing `onstop` leave the mic open — and the other froze
+      `resolve(null)` in the same place. Both now assert one teardown funnel that every exit
+      reaches, which is stronger than the count they replaced.
+- [x] **NOT VERIFIED ON A DEVICE, said plainly**: the misbehaving recorder is a fake, which
+      is the mechanism, but nobody has had Siri interrupt a real voice note on a phone.
+- [x] No schema change, no new dependency, no new env var. 4646 tests.
+
 ## v2.106.29 — "I cannot send messages": the keyboard was covering the composer (2026-07-31)
 
 The owner: *"I went inside the message screens and I cannot send messages; they do not

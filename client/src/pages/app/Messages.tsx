@@ -1174,11 +1174,27 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
-  const sendMutation = trpc.messages.send.useMutation({
-    onSuccess: () => {
-      utils.messages.list.invalidate({ conversationId });
-      utils.messages.threads.invalidate();
-    },
+  const afterSend = () => {
+    utils.messages.list.invalidate({ conversationId });
+    utils.messages.threads.invalidate();
+  };
+  const sendMutation = trpc.messages.send.useMutation({ onSuccess: afterSend });
+  /* A SECOND HOOK FOR THE VOICE NOTE, AND THE SEPARATION IS THE POINT.
+   *
+   * Both sends used to share `sendMutation`, and the text Send button is disabled on
+   * `sendMutation.isPending`. The voice-note send is FIRE-AND-FORGET, so a voice request
+   * that never settled left `isPending` true forever — after which the accent Send button
+   * was still drawn, still looked live, and was permanently dead with nothing on screen
+   * saying why. Two independent operations must not share one in-flight flag: a stuck
+   * voice note is now a stuck voice note, not a thread you can no longer type in.
+   *
+   * It also gets a REAL onError. It had none — the upload succeeded, the send failed, and
+   * the blob was discarded with no toast and no retry, so a voice note could fail 100%
+   * silently while the user believed it had gone. `main.tsx` only console.errors. */
+  const voiceSendMutation = trpc.messages.send.useMutation({
+    onSuccess: afterSend,
+    onError: (e) =>
+      toast.error(e.message || "Voice note not sent — tap the mic and try again."),
   });
 
   /* ── self-destructing messages (v2.96) ──────────────────────────
@@ -1776,12 +1792,26 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         replyToId: reply?.id ?? null,
         meta: exp != null ? { expire: exp } : undefined,
       });
-    } catch {
+    } catch (e) {
       setText(body);
       if (reply) setReplyingToState(reply);
       if (upload) setPendingUpload(upload);
       if (exp != null) setExpire(exp);
-      toast.error("Message not sent — check your connection and tap send again.");
+      /* THE SERVER'S OWN REASON, not a guess about the network.
+       *
+       * This was a bare `catch` reporting "check your connection" for EVERY failure — and
+       * the failures that actually happen here are not connection failures. "You can't
+       * message this person." (they blocked you), "not a member of this conversation", a
+       * stale `replyToId` rehydrated from a saved draft, an attachment that is not yours,
+       * a lost identity: every one of them read as a network blip, and tapping send again
+       * never helped. Being told to retry something that can never succeed is exactly
+       * "I cannot send messages".
+       *
+       * Every other mutation in this file already surfaces `e.message`; this was the one
+       * that did not. The connection wording survives only as the fallback for an error
+       * that genuinely carries no message. */
+      const why = e instanceof Error ? e.message.trim() : "";
+      toast.error(why || "Message not sent — check your connection and tap send again.");
     }
   }
 
@@ -1867,7 +1897,24 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   function discardRecording() {
     // `cancel()` resolves `done` with null, so the upload never happens — the note is
     // gone rather than sent-and-unsent.
-    recordingRef.current?.cancel();
+    try {
+      recordingRef.current?.cancel();
+    } catch {
+      /* a wedged recorder must not stop Discard from working */
+    }
+    /* DISCARD RETURNS THE COMPOSER UNCONDITIONALLY, WITHOUT WAITING FOR THE RECORDER.
+     *
+     * `setRecording(false)` also runs in the recording promise's `.finally()`, and that is
+     * the normal path — but it can only run once the promise SETTLES, and the whole reason
+     * this was unrecoverable is that the promise could hang. While `recording` is true the
+     * composer is REPLACED by the recording bar, so a recorder that never answered took
+     * the text field and the send button with it and left its own Discard button as a
+     * no-op. `voiceNote.ts` now guarantees the promise settles; this is the belt to that
+     * braces, and it is cheap: setting the flag twice is idempotent, while relying on one
+     * mechanism is how "there is no way out of this screen" happened. */
+    recordingRef.current = null;
+    setRecording(false);
+    setRecPaused(false);
   }
 
   // Safety net: if the conversation unmounts while recording, cancel so the
@@ -1927,7 +1974,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       const json = await uploadAttachment(blob, { filename, mimeType: blob.type, durationMs });
       const exp = expire;
       setExpire(null);
-      sendMutation.mutate({
+      // Its OWN mutation, so a stuck voice send cannot disable the text Send button —
+      // and it reports its own failures, which it never used to.
+      voiceSendMutation.mutate({
         conversationId,
         kind: "audio",
         body: null,

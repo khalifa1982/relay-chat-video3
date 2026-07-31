@@ -112,19 +112,32 @@ describe("2 — recording shows you are talking, and is not a one-way trip to Se
   });
 
   it("releases the WebAudio context on every exit path", () => {
+    /* REWRITTEN in v2.106.30, and it had frozen the shape of a DEFECT. It sliced from
+       `rec.onstop = () => {` and required `releaseAudio();` inside — i.e. it required the
+       teardown to live in the `onstop` HANDLER, which is exactly what made a recorder that
+       never fired `onstop` leave the mic open and the promise pending forever. That handler
+       is now a one-liner delegating to a single `finish()`, so the old anchor no longer
+       exists and the old assertion could not pass on correct code.
+       THE PROPERTY is that there is ONE teardown and every exit reaches it. That is
+       strictly stronger than the old count, and `voiceNoteSettle.test.ts` drives the four
+       exits (stop, cancel, error, deadline) and asserts the mic track really is stopped on
+       each — which a source pin cannot do. */
     expect(VOICE).toMatch(/const releaseAudio = \(\) =>/);
-    // Exactly the reachable paths: `onstop` (which every stop/cancel/cap funnels
-    // through) and the rec.start() throw-guard. NOT the MediaRecorder *construction*
-    // guard — the analyser is built after the recorder, so at that point there is
-    // nothing to release. Asserting a third call here was over-specifying, and the
-    // count is pinned so a future reorder that DOES create the context earlier has to
-    // come back and think about it.
-    expect((VOICE.match(/releaseAudio\(\);/g) || []).length).toBe(2);
-    const onstop = VOICE.slice(VOICE.indexOf("rec.onstop = () => {"), VOICE.indexOf("resolve({"));
-    expect(onstop).toMatch(/releaseAudio\(\);/);
+    // ONE teardown funnel, reached by every settling path.
+    expect(VOICE).toMatch(/const finish = \(/);
+    const finishBody = VOICE.slice(VOICE.indexOf("const finish = ("), VOICE.indexOf("const done = new Promise"));
+    expect(finishBody.length, "the slice must be real").toBeGreaterThan(200);
+    expect(finishBody, "the one teardown must release the analyser").toMatch(/releaseAudio\(\);/);
+    expect(finishBody, "…and the microphone").toMatch(/stream\.getTracks\(\)\.forEach/);
+    // Every exit routes to it rather than tearing down itself.
+    expect(VOICE).toMatch(/rec\.onstop = \(\) => finish\(\)/);
+    expect(VOICE).toMatch(/rec\.onerror = \(\) => finish\(\)/);
+    // …plus the rec.start() throw-guard, which runs BEFORE any handle exists and so
+    // legitimately cleans up on its own.
     const startGuard = VOICE.slice(VOICE.indexOf("    rec.start();"), VOICE.indexOf("if (opts?.maxMs"));
     expect(startGuard).toMatch(/releaseAudio\(\);/);
-    // The analyser really is set up after the recorder, which is why two is enough.
+    // The analyser really is set up after the recorder, which is why the construction
+    // guard has nothing to release.
     expect(VOICE.indexOf("ac = new Ctor();")).toBeGreaterThan(VOICE.indexOf("rec = pick.mimeType"));
   });
 
@@ -145,10 +158,22 @@ describe("2 — recording shows you are talking, and is not a one-way trip to Se
   });
 
   it("discarding really discards — it does not send and unsend", () => {
-    expect(MSG).toMatch(/function discardRecording\(\) \{[\s\S]{0,400}?recordingRef\.current\?\.cancel\(\);/);
-    // cancel() resolves `done` with null, and the upload is inside the non-null branch.
-    expect(VOICE).toMatch(/if \(cancelled \|\| chunks\.length === 0\) \{\s*\n\s*resolve\(null\);/);
+    expect(MSG).toMatch(/function discardRecording\(\) \{[\s\S]{0,700}?recordingRef\.current\?\.cancel\(\);/);
+    /* REWRITTEN in v2.106.30: this froze `resolve(null)` inside the `onstop` handler, and
+       the single teardown now calls a hoisted `settle(null)` — so the literal moved while
+       the property did not. THE PROPERTY is that a cancelled or empty recording resolves
+       NULL, so the upload (which is inside the non-null branch) never happens.
+       `voiceNoteSettle.test.ts` drives it, including the case that used to hang: discarding
+       a recorder that had already gone inactive. */
+    expect(VOICE).toMatch(/if \(opts\?\.discard \|\| cancelled \|\| chunks\.length === 0\) \{\s*\n\s*settle\(null\);/);
     expect(MSG).toMatch(/if \(!result\) return; \/\/ cancelled \/ empty/);
+    /* AND DISCARD NO LONGER DEPENDS ON THE RECORDER ANSWERING. While `recording` is true the
+       composer is replaced by the recording bar, so a promise that never settled took the
+       text field and the send button with it and left Discard itself a no-op — the owner's
+       "I cannot send messages". Discard now returns the composer unconditionally. */
+    const discard = MSG.slice(MSG.indexOf("function discardRecording()"), MSG.indexOf("// Safety net: if the conversation unmounts"));
+    expect(discard.length, "the slice must be real").toBeGreaterThan(200);
+    expect(discard, "Discard must reset the flag itself").toMatch(/setRecording\(false\);/);
   });
 
   it("reads the paused state BACK rather than assuming the pause took", () => {
