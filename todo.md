@@ -11278,6 +11278,58 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.38 — the fleet was serving v2.106.22, and four of the owner's complaints were fixed-but-undeployed (2026-07-31)
+
+Owner, with a screenshot of a DM with no composer at all: *"I told you see tge message section in
+not intagreted to the new design. And even i cant send message / You should check all my new designs
+and match it to the exsisting one / Also the contacts section is not showing mmso many bugs"*
+
+### The finding that is not a code finding
+`origin/main:shared/version.ts` reads **2.106.22**; the branch reads 2.106.37. 26 commits unmerged,
+and `main` auto-deploys on every push — so production was missing all four of these. Verified by
+diffing `origin/main` against the branch, not inferred:
+
+| Report | Live on `main` | Fixed in |
+|---|---|---|
+| "I cannot send messages" | `--relay-vh` from `window.innerHeight`, which does not shrink for the iOS keyboard (composer 385px below it) | v2.106.29 |
+| no composer at all | `voiceNote.ts` with **0** `onerror` handlers — the mic can replace the composer forever | v2.106.30 |
+| empty region showing the star canvas | **0** `relative z-10` in the shell, **3** `ThemeProvider` refs in `App.tsx` | v2.106.27 |
+| "contacts is not showing" | **0** `isError` arms in `Contacts.tsx` → any failed read says "No contacts yet" | v2.106.25 |
+
+PR #128 taken out of draft with a body that leads on those rows. **A deploy problem cannot be fixed
+by a test**, so it is said rather than worked around.
+
+### Measured, and it stopped a speculative rewrite
+The composer layout is SOUND in a real browser: 12 combinations (light/dark × 390/375/320 × ±34px
+home-indicator inset), composer immediately above the tab bar with a **0px gap in all twelve**, page
+scroller never scrolling. Three harness bugs of mine had to be fixed before that number meant
+anything — the theme key is `theme` not `relay_theme` (an earlier run measured dark twice), the tRPC
+stub takes a path not a Request (the app never booted and every reading was `undefined`), and the
+thread locator matched a name the stub does not use (so it measured the search field).
+
+### Fixed here, from a 12-designer audit + an adversarial verifier per cluster
+- **Contacts section headings**: raw accent as text, **1.59:1** on the light card → `text-primary`,
+  **4.59:1**. Dark byte-identical. This is the literal "not showing".
+- **The four tag chips**: **1.53–1.71:1** light / 5.5–6.1:1 dark → **4.65–4.81:1** via four
+  `.rtag-*` recipes with a per-theme override (the darker text is ~2:1 on the dark chip, so one
+  value cannot serve both and an inline style cannot branch).
+- **A presence hiccup took down the whole address book** — `getPresenceForIds` unguarded while both
+  its siblings fail soft.
+- **Both Contacts writers destroyed tags** — `category` alone, coupled to `tags`, so saving a phone
+  number dropped somebody out of their sections. Dialog is now a real multi-select.
+- "All contacts" → "Everyone else" (that bucket excludes favourites and everybody labelled).
+- Composer: flags cleared BEFORE the upload; mic reads `uploading`; a thread change discards the
+  recording; `shrink-0` on the composer and header; the column paints its own surface on mobile.
+- `--relay-vh`: a pinch-zoom no longer reverts to `innerHeight`; the 320 floor no longer exceeds a
+  genuine landscape-with-keyboard viewport.
+
+`client/src/app/cannotSendOrSee.test.ts` (16). All 16 mutation-verified; **one survived** — a real
+gap where a `[\s\S]{0,200}` window matched the NEXT statement's `.catch`. 7 pre-existing pins
+rewritten to the property (each had frozen a literal this release moves, one of them the data-loss
+bug itself). v2.106.31's debt-list staleness guard went red on its own and Contacts came off the list.
+
+**Not verified on a device.** 4776 tests.
+
 ## v2.106.37 — an answered call that never connected had no timeout and no error (2026-07-31)
 
 Owner, with a screenshot: an outgoing voice call to a callee shown **"Online now"** sat on

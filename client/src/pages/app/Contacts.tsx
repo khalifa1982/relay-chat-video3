@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { contactTagsOf, sectionsFor, CONTACT_TAGS, TAG_COLOR, TAG_LABEL, type ContactTag } from "@shared/contactTags";
+import { contactTagsOf, sectionsFor, CONTACT_TAGS, TAG_LABEL, primaryTag, toggleContactTag, type ContactTag } from "@shared/contactTags";
+
 import { useLocation } from "wouter";
 import {
   Phone,
@@ -60,6 +61,15 @@ import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
 import { matchQuery } from "@/app/searchMatch";
+
+/** The four tag recipes in index.css. A STATIC map, never a composed string: the class
+ *  names have to exist literally somewhere the CSS can be found by, and this is that place. */
+const TAG_CLASS: Record<ContactTag, string> = {
+  vip: "rtag-vip",
+  family: "rtag-family",
+  friend: "rtag-friend",
+  team: "rtag-team",
+};
 
 /**
  * Is this contact reachable RIGHT NOW? (v2.99.97)
@@ -197,7 +207,12 @@ export default function ContactsPage() {
     jobTitle?: string;
     website?: string;
     birthday?: string;
-    category?: Category | null;
+    /* THE RESOLVED TAG SET, not the `category` mirror. The dialog used to carry
+       `category` alone and save it alone, which — because `contactUpdateKeys`
+       couples the two columns — re-derived `tags` from that ONE value and
+       destroyed every other label the contact had. Saving a contact's phone
+       number silently dropped them out of their sections. */
+    tags?: ContactTag[];
   } | null>(null);
 
   // Shared by the desktop icon button AND the mobile dropdown menu item, so the
@@ -214,7 +229,7 @@ export default function ContactsPage() {
       jobTitle: c.jobTitle ?? "",
       website: c.website ?? "",
       birthday: c.birthday ?? "",
-      category: c.category ?? null,
+      tags: contactTagsOf({ tags: c.tags?.join(",") ?? null, category: c.category ?? null }),
     });
   }
 
@@ -298,7 +313,12 @@ export default function ContactsPage() {
       const real = filtered.filter((c) => rowsByNumber.has(c.number));
       if (!real.length) continue;
       if (key === "other") {
-        out.push({ key: "other", label: "All contacts", icon: UsersIcon, tint: "text-muted-foreground", rows: real });
+        /* "Everyone else", NOT "All contacts". This bucket is `!favourite && no tags`, so
+           labelling it "All contacts" was a false claim about somebody's own directory —
+           a VIP, a favourite and anybody with a label are all EXCLUDED from it, which is
+           precisely the shape of "many things are not showing there". The key and the
+           shared module already call it "other"; only the label lied. */
+        out.push({ key: "other", label: "Everyone else", icon: UsersIcon, tint: "text-muted-foreground", rows: real });
       } else {
         out.push({ key, ...CATEGORY_META[key as Category], rows: real });
       }
@@ -366,21 +386,19 @@ export default function ContactsPage() {
                  unlike every other selection in the app. These four are fixed
                  identities (the board gives each its own hue and the row chips
                  use it), so lighting them all in one cycling accent would throw
-                 away the thing that makes a tag readable at a glance. Inline,
-                 because a runtime-composed Tailwind class is invisible to the
-                 JIT and comes out unstyled. */
-              style={
-                on
-                  ? {
-                      background: TAG_COLOR[t] + "22",
-                      border: "1px solid " + TAG_COLOR[t] + "73",
-                      color: TAG_COLOR[t],
-                    }
-                  : undefined
-              }
+                 away the thing that makes a tag readable at a glance.
+                 `.rtag-<tag>` rather than an inline style, and that is not tidying:
+                 the label MEASURED 1.53-1.71:1 on the light card against AA's 4.5,
+                 and the readable value differs per theme (the darker light value is
+                 ~2:1 on the dark chip), which an inline style cannot express. The
+                 class list is a LITERAL per tag — a runtime-composed Tailwind class
+                 is invisible to the JIT and comes out unstyled, but these are plain
+                 CSS rules in index.css, so a static lookup is safe. */
               className={
                 "shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold transition " +
-                (on ? "" : "bg-secondary/60 text-muted-foreground hover:text-foreground")
+                (on
+                  ? "rtag " + TAG_CLASS[t]
+                  : "bg-secondary/60 text-muted-foreground hover:text-foreground")
               }
             >
               {TAG_LABEL[t]}
@@ -455,11 +473,17 @@ export default function ContactsPage() {
                 {search ? "No matches" : tagFilter ? "Nothing in this label" : "No contacts yet"}
               </EmptyTitle>
               <EmptyDescription>
-                {search
-                  ? `Nobody matches "${search}".`
-                  : tagFilter
-                    ? `None of your contacts are labelled ${TAG_LABEL[tagFilter]}. Tap All to see everyone.`
-                    : "Save someone's number to call or message them in one tap."}
+                {/* BOTH narrowings can be active at once, and the three-way version blamed
+                    the SEARCH alone — so it never mentioned the lit chip and never offered
+                    the one-tap recovery, leaving somebody retyping a query that was never
+                    the reason. Four cases, one expression. */}
+                {search && tagFilter
+                  ? `Nobody matching "${search}" is labelled ${TAG_LABEL[tagFilter]}. Tap All to search everyone.`
+                  : search
+                    ? `Nobody matches "${search}".`
+                    : tagFilter
+                      ? `None of your contacts are labelled ${TAG_LABEL[tagFilter]}. Tap All to see everyone.`
+                      : "Save someone's number to call or message them in one tap."}
               </EmptyDescription>
             </EmptyHeader>
             {!search && !tagFilter && (
@@ -485,7 +509,12 @@ export default function ContactsPage() {
               // section heading and render nothing at all. That is a large part of
               // "the search doesn't detect 100%": the match was found and then
               // hidden. While a query is active, every section is open.
-              const isCollapsed = !searching && collapsed.has(section.key);
+              /* …and a TAG FILTER narrows exactly the same way, so it needs the same
+                 escape. Without it, tapping "Family" while the Family section happened
+                 to be collapsed rendered a header stating a count above nothing at all,
+                 with no empty state to explain it — the rows were found and then hidden,
+                 which is the same defect one filter along. */
+              const isCollapsed = !searching && !tagFilter && collapsed.has(section.key);
               // v2.99.97 (owner): "mention number of contacts in each category and
               // also mention number of online in each category … it will mention
               // total ten. On beside, it will show green color … to show that is
@@ -506,12 +535,21 @@ export default function ContactsPage() {
                       <ChevronDown className="size-3 shrink-0" strokeWidth={2.4} />
                     )}
                     <SIcon className={"size-3.5 shrink-0 " + section.tint} />
-                    {/* Board 1e: the section letter/label takes the ACCENT, and the
-                        board's .26em mono tracking — it is the strongest wayfinding cue
-                        on a long alphabetical list. */}
+                    {/* Board 1e: the section label takes the ACCENT and the board's .26em
+                        mono tracking — it is the strongest wayfinding cue on a long list.
+
+                        `text-primary`, NOT the raw `var(--rb)` this used to set. The owner's
+                        report was "the contacts section is not showing", and the section
+                        LABELS were the literal answer: measured 1.59:1 on the light card
+                        against AA's 4.5, i.e. ONLINE / FAVORITES / FAMILY / FRIENDS / TEAM
+                        were invisible in the theme the app defaults to. v2.106.4 repointed
+                        `--primary` at `--rb` inside `.dark.relay-v2` for exactly this, so
+                        the DARK look is byte-identical and only light changes (4.59:1).
+                        The heading sits on a plain surface, not on an accent tint, which is
+                        what makes `text-primary` the right half of the v2.106.31 rule. */}
                     <span
-                      className="flex-1 text-left font-mono text-[11px] font-semibold uppercase"
-                      style={{ color: "var(--rb)", letterSpacing: ".26em" }}
+                      className="flex-1 text-left font-mono text-[11px] font-semibold uppercase text-primary"
+                      style={{ letterSpacing: ".26em" }}
                     >
                       {section.label}
                     </span>
@@ -562,8 +600,25 @@ export default function ContactsPage() {
                           onToggleBlock={() =>
                             upsert.mutate({ number: c.number, blocked: !c.blocked })
                           }
+                          /* SEND THE WHOLE FACT, not the mirror. `category` is the derived
+                             mirror of `tags[0]`, and `contactUpdateKeys` couples the two —
+                             so a category-only write re-derived `tags` FROM it and silently
+                             destroyed every tag after the first. Toggle "Family" on a
+                             contact tagged VIP + Family and they lost VIP, left the VIP
+                             section, and their row chip changed, with nothing saying so.
+                             `toggleContactTag` over the RESOLVED list is the same expression
+                             4a's profile chips already use, so both editors now agree. */
                           onSetCategory={(category) =>
-                            upsert.mutate({ number: c.number, category: c.category === category ? null : category })
+                            upsert.mutate({
+                              number: c.number,
+                              tags: toggleContactTag(
+                                contactTagsOf({
+                                  tags: c.tags?.join(",") ?? null,
+                                  category: c.category ?? null,
+                                }),
+                                category,
+                              ),
+                            })
                           }
                         />
                       ))}
@@ -724,25 +779,31 @@ function ContactRow({
             {c.favourite && <Star className="size-3 shrink-0 text-amber-400 fill-amber-400" />}
             <RoleBadge role={roleFromFlags(c.role, c.verified)} size={14} />
             {c.blocked && <Ban className="size-3.5 shrink-0 text-[#ff8d84]" />}
-            {/* BOARD 3b — the tag chips, VIP gold at the board's 13% fill / 45%
-                border. Rendered beside the name rather than on their own line
-                because the row already carries three lines and a fourth would
-                make the list scroll for information that is one glance wide.
-                `shrink-0` so the NAME truncates rather than the chips: the chip
-                is the thing that stops being readable first. */}
-            {contactTagsOf({ tags: c.tags?.join(",") ?? null, category: c.category ?? null }).map((t) => (
-              <span
-                key={t}
-                className="shrink-0 rounded-md px-1.5 py-px text-[9.5px] font-bold uppercase tracking-wider"
-                style={{
-                  background: TAG_COLOR[t] + "21",
-                  border: "1px solid " + TAG_COLOR[t] + "73",
-                  color: TAG_COLOR[t],
-                }}
-              >
-                {TAG_LABEL[t]}
-              </span>
-            ))}
+            {/* BOARD 3b — the tag chip. `.rtag-<tag>` carries the board's 13% fill and
+                45% hairline plus a MEASURED light-theme text colour (the raw pastel is
+                1.53-1.71:1 on a light card).
+
+                THE ROW SHOWS THE PRIMARY TAG ONLY, and that is a layout decision rather
+                than a simplification: the chips are `shrink-0` and the name is the only
+                thing in this row that CAN shrink, so two chips ate the name on a 390px
+                phone — a contact labelled VIP + Family became a pair of chips with no
+                person attached to them. The contract already calls the first tag the row
+                chip; the full set is the profile's business (4a's editable chips). */}
+            {(() => {
+              const first = primaryTag(
+                contactTagsOf({ tags: c.tags?.join(",") ?? null, category: c.category ?? null }),
+              );
+              return first ? (
+                <span
+                  className={
+                    "rtag " + TAG_CLASS[first] +
+                    " shrink-0 !rounded-md px-1.5 py-px text-[9.5px] font-bold uppercase tracking-wider"
+                  }
+                >
+                  {TAG_LABEL[first]}
+                </span>
+              ) : null;
+            })()}
           </div>
           {/* PIN on its own line, presence UNDER it (v2.99.66, owner screenshot).
               They shared a line before, and with a 6-digit PIN plus "last seen
@@ -842,7 +903,14 @@ function ContactRow({
             </DropdownMenuLabel>
             {CATEGORY_ORDER.map((cat) => {
               const CIcon = CATEGORY_META[cat].icon;
-              const active = c.category === cat;
+              /* Ticked from the RESOLVED tags, not the mirror. `category` is only
+                 `tags[0]`, so a contact tagged VIP + Family had Family sitting
+                 unticked in a menu whose row above it was rendering a Family chip
+                 and whose section header the row was sitting under said FAMILY. */
+              const active = contactTagsOf({
+                tags: c.tags?.join(",") ?? null,
+                category: c.category ?? null,
+              }).includes(cat);
               return (
                 <DropdownMenuItem key={cat} onClick={() => onSetCategory(cat)}>
                   <CIcon className={"size-4 " + CATEGORY_META[cat].tint} />
@@ -895,7 +963,9 @@ function AddContactDialog({
     jobTitle?: string;
     website?: string;
     birthday?: string;
-    category?: Category | null;
+    /* The RESOLVED tag list. `category` is only its first slot, and saving through
+       the mirror destroyed the rest (see the state comment on `editing` above). */
+    tags?: ContactTag[];
   };
   onClose: () => void;
   onSave: (values: {
@@ -909,7 +979,7 @@ function AddContactDialog({
     website: string | null;
     birthday: string | null;
     favourite?: boolean;
-    category?: Category | null;
+    tags?: ContactTag[];
   }) => void;
   saving: boolean;
   error: string | null;
@@ -923,7 +993,11 @@ function AddContactDialog({
   const [jobTitle, setJobTitle] = useState(editing.jobTitle ?? "");
   const [website, setWebsite] = useState(editing.website ?? "");
   const [birthday, setBirthday] = useState(editing.birthday ?? "");
-  const [category, setCategory] = useState<Category | null>(editing.category ?? null);
+  /* MULTI-select over the real 0..n model, replacing a single-select picker that could
+     only ever express one label and, on save, wiped the rest. The store has held a list
+     since v2.106.14 and 4a's profile chips already toggle it; this dialog was the one
+     writer still speaking through the mirror. */
+  const [tags, setTags] = useState<ContactTag[]>(editing.tags ?? []);
   const [touchedName, setTouchedName] = useState(
     Boolean(editing.displayName)
   );
@@ -1190,12 +1264,13 @@ function AddContactDialog({
             <div className="flex flex-wrap gap-2">
               {CATEGORY_ORDER.map((cat) => {
                 const CIcon = CATEGORY_META[cat].icon;
-                const active = category === cat;
+                const active = tags.includes(cat);
                 return (
                   <button
                     key={cat}
                     type="button"
-                    onClick={() => setCategory(active ? null : cat)}
+                    aria-pressed={active}
+                    onClick={() => setTags(toggleContactTag(tags, cat))}
                     className={
                       "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors " +
                       (active
@@ -1229,7 +1304,7 @@ function AddContactDialog({
                 jobTitle: jobTitle.trim() || null,
                 website: website.trim() || null,
                 birthday: birthday.trim() || null,
-                category,
+                tags,
               })
             }
             disabled={number.length !== 6 || saving}

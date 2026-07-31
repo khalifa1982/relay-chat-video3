@@ -343,16 +343,37 @@ describe("board 3b — the filter chips", () => {
     expect(UI.slice(at, end)).toMatch(/!tagFilter \|\|/);
   });
 
-  it("the lit chip wears the TAG's colour, applied inline", () => {
-    // A runtime-composed Tailwind class is invisible to the JIT and renders
-    // unstyled — the trap recorded for the old tab accents.
-    expect(UI).toMatch(/background: TAG_COLOR\[t\] \+ "22"/);
+  it("the lit chip wears the TAG's OWN colour, from a recipe that can branch on theme", () => {
+    /* REWRITTEN TO THE PROPERTY, and the property is stronger than the literal was.
+       This froze `background: TAG_COLOR[t] + "22"`, i.e. it REQUIRED the inline style —
+       and an inline style is exactly what cannot express the fix: the chip's label
+       MEASURED 1.53-1.71:1 on the light card, and the readable value differs per theme
+       (the darker light value is ~2:1 on the dark chip). One declaration cannot serve
+       both, so the values had to move into CSS.
+       What the pin exists for is unchanged: the lit chip wears the TAG's identity rather
+       than the cycling accent, and no class name is composed at runtime (invisible to the
+       JIT, renders unstyled — the trap recorded for the old tab accents). */
+    expect(UI, "a static per-tag lookup, never a composed class").toMatch(/TAG_CLASS\[t\]/);
     expect(UI).not.toMatch(/bg-\[\$\{/);
+    // the recipes really exist, and light really overrides — else the class is a no-op
+    const CSS = readFileSync(resolve(process.cwd(), "client/src/index.css"), "utf8");
+    for (const t of ["vip", "family", "friend", "team"]) {
+      expect(CSS, `.rtag-${t} must be defined`).toMatch(
+        new RegExp("\\.relay-v2 \\.rtag-" + t + "\\s*\\{"),
+      );
+      expect(CSS, `.rtag-${t} needs a LIGHT text colour of its own`).toMatch(
+        new RegExp("\\.relay-v2:not\\(\\.dark\\) \\.rtag-" + t + "\\s*\\{[^}]*color"),
+      );
+    }
   });
 
-  it("rows carry their tag chips, resolved through the shared reader", () => {
-    expect(UI).toMatch(/background: TAG_COLOR\[t\] \+ "21"/);
-    expect(UI).toMatch(/contactTagsOf\(\{ tags: c\.tags\?\.join\(","\) \?\? null/);
+  it("the row carries its PRIMARY tag, resolved through the shared reader", () => {
+    /* The row shows ONE chip, and that is a layout decision with a measured cause: the
+       chips are `shrink-0` and the name is the only thing in that row that can shrink, so
+       two chips ate the name on a 390px phone. The contract already calls the first tag
+       the row chip; the full set belongs to 4a's profile chips. */
+    expect(UI).toMatch(/primaryTag\(/);
+    expect(UI).toMatch(/contactTagsOf\(\{[\s\S]{0,80}tags: c\.tags\?\.join\(","\) \?\? null/);
   });
 });
 

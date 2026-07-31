@@ -255,14 +255,26 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
     const set = () => {
       try {
         const vv = window.visualViewport;
-        // The VISIBLE height, not the layout height. Trusted only when the page is not
-        // pinch-ZOOMED: `visualViewport.height` also shrinks under a zoom, and sizing the
-        // shell to a zoomed viewport would shrink the app because somebody magnified it.
-        const visible = vv && vv.scale <= 1.01 ? vv.height : Number.POSITIVE_INFINITY;
-        // The smaller of the two, floored so a transient 0 (or an absurd reading mid
-        // rotation) can never collapse the shell to nothing — failing toward "too tall"
-        // is recoverable by scrolling; failing toward "no height" is a blank app.
-        const h = Math.max(320, Math.round(Math.min(window.innerHeight, visible)));
+        /* The VISIBLE height, not the layout height — and CONVERTED rather than discarded
+         * under a pinch-zoom.
+         *
+         * `visualViewport.height` is expressed in the ZOOMED viewport's own CSS pixels, so
+         * multiplying by `scale` recovers the visible height in LAYOUT pixels, which is the
+         * unit `--relay-vh` is consumed in. The first version bailed to Infinity whenever
+         * `scale > 1.01`, which sounds cautious and is not: bailing falls back to
+         * `window.innerHeight`, the value that does not shrink for the keyboard on iOS —
+         * so a pinch-zoom silently reinstated the exact bug this effect exists to fix, and
+         * a magnified page is precisely when somebody is typing carefully.
+         * At scale 1 this is byte-identical to reading `vv.height`. */
+        const visible = vv ? vv.height * vv.scale : Number.POSITIVE_INFINITY;
+        const measured = Math.round(Math.min(window.innerHeight, visible));
+        /* FLOOR ONLY AN IMPLAUSIBLE READING, not a small-but-real one. A hard 320 floor
+         * makes `--relay-vh` LARGER than the viewport in landscape with the keyboard up —
+         * where ~220px visible is genuine — and being taller than the visible area is how
+         * the composer ends up under the keyboard, i.e. the same failure again. A
+         * non-positive reading is the one that cannot be true, so that is what falls back;
+         * failing toward "too tall" there is still recoverable, while zero is a blank app. */
+        const h = measured > 0 ? measured : Math.max(320, window.innerHeight);
         root.style.setProperty("--relay-vh", h + "px");
       } catch { /* */ }
     };

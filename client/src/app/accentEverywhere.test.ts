@@ -268,9 +268,20 @@ describe("1c Messages / 1d Conversation", () => {
 });
 
 describe("1e Contacts", () => {
-  it("the A-Z section letter takes the accent at .26em", () => {
+  it("the section label takes the accent VOCABULARY at .26em — not the raw variable", () => {
+    /* REWRITTEN TO THE PROPERTY. This froze `color: "var(--rb)"`, which is the DEFECT
+       rather than the design: the raw accent as text measures 1.59:1 on the light card
+       against AA's 4.5, so every section heading (ONLINE / FAVORITES / FAMILY / FRIENDS /
+       TEAM) was invisible in the theme the app defaults to — the literal reading of the
+       owner's "the contacts section is not showing".
+       `text-primary` IS the accent: v2.106.4 repointed `--primary` at `--rb` inside
+       `.dark.relay-v2`, so the dark look is unchanged and only light becomes legible
+       (4.59:1). The board asks for the accent and the .26em mono tracking; both hold. */
     const label = elementWith(CONTACTS_CODE, "{section.label}");
-    expect(label).toMatch(/color: "var\(--rb\)"/);
+    expect(label).toMatch(/text-primary/);
+    expect(label, "the raw variable in a colour position is what failed AA").not.toMatch(
+      /color:\s*"?var\(--rb\)/,
+    );
     expect(label).toMatch(/letterSpacing: "\.26em"/);
     expect(label).toMatch(/font-mono/);
   });

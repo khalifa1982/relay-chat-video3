@@ -940,6 +940,46 @@ body.relay-app-lock {
   color: #04211a;
   box-shadow: 0 10px 30px rgba(var(--rb-rgb), 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.35);
 }
+/* CONTACT TAG CHIPS — board 3b's four fixed label hues, as ONE recipe per tag instead of
+   the two hand-rolled inline copies that used to carry these values (the Contacts filter
+   row and the per-row chip). A copy of a recipe is how the copy misses the fix the
+   original receives, which is exactly what happened here.
+
+   THE FIX IS THE TEXT, and it is the SAME defect v2.106.31 measured on the accent: a chip
+   paints its hue at 13% over the card and then sets the SAME pastel hue as its label, so
+   in LIGHT theme the word sits on a near-white tint of itself. Measured as rendered, over
+   the real `--card` in each theme:
+
+     tag      light TODAY   light FIXED   dark (unchanged)
+     vip      1.53:1        4.74:1        6.13:1
+     family   1.69:1        4.81:1        5.61:1
+     friend   1.67:1        4.65:1        5.64:1
+     team     1.71:1        4.66:1        5.53:1
+
+   Against AA's 4.5 for normal text, all four light values FAILED and all four dark values
+   were fine — which is why it survived: the board is a dark design and the app ships LIGHT.
+
+   THE LIGHT VALUE IS AN OVERRIDE RATHER THAN A REPLACEMENT, and that split is the whole
+   reason this needs CSS at all: the darker same-hue text measures 1.97-2.03:1 on the DARK
+   chip, i.e. worse than what it replaces. One value cannot serve both themes, and an inline
+   `style={{ color }}` cannot branch on one — so the values move out of the JSX.
+
+   The FILL and the HAIRLINE are the board's, untouched: the hue still identifies the label,
+   only the word becomes readable. Each light value is the LIGHTEST same-hue oklch lightness
+   clearing 4.6:1, so the colour moves as little as possible from what was specified. */
+.relay-v2 .rtag {
+  border: 1px solid;
+  border-radius: 9999px;
+}
+.relay-v2 .rtag-vip    { background: #e8c94a21; border-color: #e8c94a73; color: #e8c94a; }
+.relay-v2 .rtag-family { background: #f9a8d421; border-color: #f9a8d473; color: #f9a8d4; }
+.relay-v2 .rtag-friend { background: #93c5fd21; border-color: #93c5fd73; color: #93c5fd; }
+.relay-v2 .rtag-team   { background: #c4b5fd21; border-color: #c4b5fd73; color: #c4b5fd; }
+.relay-v2:not(.dark) .rtag-vip    { color: #896b00; }
+.relay-v2:not(.dark) .rtag-family { color: #9e557f; }
+.relay-v2:not(.dark) .rtag-friend { color: #4372a5; }
+.relay-v2:not(.dark) .rtag-team   { color: #7565a7; }
+
 /* The per-screen scrim between the canvas and the content, so text keeps its contrast
    over whatever the background happens to be doing underneath. */
 .relay-v2 .rscrim {

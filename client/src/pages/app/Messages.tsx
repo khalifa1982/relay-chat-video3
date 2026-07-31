@@ -911,7 +911,15 @@ export default function MessagesPage({
       {/* ── conversation view ────────────────────────────────── */}
       <section
         className={
-          "flex-1 min-w-0 flex-col min-h-0 md:rounded-2xl md:border md:border-border md:bg-card " +
+          /* `bg-background` on MOBILE too, not only `md:bg-card`. Both the message list and the
+             composer are fully opaque (`--background` and `--card` carry no alpha), so any
+             region of this column showing the background CANVAS is by definition a region
+             neither of them is covering — i.e. a layout shortfall, which is what the owner
+             photographed as "a large empty region with stars" where the composer should be.
+             Painting the column's own surface does not fix a shortfall; it makes one look
+             like a gap in the app instead of like the app having stopped, which is the
+             difference between a screenshot that is diagnostic and one that is not. */
+          "flex-1 min-w-0 flex-col min-h-0 bg-background md:rounded-2xl md:border md:border-border md:bg-card " +
           (activeConvoId == null ? "hidden md:flex" : "flex")
         }
       >
@@ -1926,6 +1934,22 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     };
   }, []);
 
+  /* LEAVING A THREAD ENDS THE RECORDING, and the missing sibling of this is 300 lines
+   * above: `pendingUpload` IS reset on a conversation change, for exactly the reason that
+   * an attachment picked in one chat must not be sent to the next one. A recording had no
+   * such reset — so switching threads mid-record left the recording bar sitting over the
+   * NEW conversation with a live mic and a take belonging to the OLD one, and whichever
+   * thread was open when it stopped is where it landed.
+   *
+   * `discardRecording` already cancels the recorder, nulls the ref and clears both flags
+   * unconditionally, so this needs no new mechanism — only the call nobody made. */
+  useEffect(() => {
+    return () => {
+      discardRecording();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
+
   async function startRecording() {
     if (!recorderSupported()) {
       toast.error(
@@ -1944,9 +1968,26 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       setRecPaused(false);
       void rec.done
         .then(async (result) => {
+          /* THE COMPOSER COMES BACK BEFORE THE UPLOAD, NOT AFTER IT — the v2.106.30
+           * lock-out, one step downstream.
+           *
+           * The recording is OVER by the time this runs: the take is in hand and the mic
+           * is released. But `recording` stayed true across the whole upload, and while it
+           * is true the composer is REPLACED by the recording bar — whose three controls
+           * are all disabled mid-upload. So a 60-second voice note on a slow uplink left
+           * the person with no text field, no send and no way out for as long as the
+           * transfer took, and if the transfer hung, indefinitely. Settling the promise
+           * was the fix for the recorder; this is the same rule applied to the step after
+           * it — the bar exists to represent a LIVE recording, so it must not outlive one.
+           *
+           * The `.finally()` below is KEPT and becomes idempotent: these are cheap flag
+           * writes, and relying on one mechanism is how the original lock-out happened. */
+          recordingRef.current = null;
+          setRecording(false);
+          setRecPaused(false);
           if (!result) return; // cancelled / empty
           // uploadBlob() re-throws on failure (it only resets `uploading` in
-          // its own finally) — catch here or `recording` sticks true forever.
+          // its own finally) — catch here or the error escapes into a void handler.
           try {
             await uploadBlob(result.blob, `voice-note.${result.ext}`, result.durationMs);
           } catch {
@@ -2041,7 +2082,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       {/* conversation header — ONE compact bar (the app's top bar is hidden on
           mobile while a chat is open): back, avatar + presence LED, name +
           verified badge, and a live status line (typing… > online > last seen). */}
-      <header className="flex items-center gap-2 px-2 md:px-4 py-2 border-b border-border/70 bg-card/90 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur-md md:rounded-t-2xl">
+      <header className="shrink-0 flex items-center gap-2 px-2 md:px-4 py-2 border-b border-border/70 bg-card/90 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur-md md:rounded-t-2xl">
         <button
           type="button"
           aria-label="Back"
@@ -2777,8 +2818,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           cannot re-render this whole conversation (the v2.99.67 mistake). */}
       <TypingLine typers={typers} isGroup={isGroup} labelFor={senderLabel} />
 
-      {/* composer */}
-      <div className="px-3 md:px-5 py-3 border-t border-border bg-card md:rounded-b-2xl">
+      {/* composer — `shrink-0` is LOAD-BEARING even though it changes nothing today.
+          This row and the header are the two things the conversation column must never
+          give up, and both were surviving only on the flex automatic-minimum-size rule
+          (an item's min-height defaults to its content). That rule stops applying the
+          moment either element becomes a scroll container or takes a `min-h-0` — at which
+          point the list, which legitimately grows, wins and the composer is squeezed to
+          nothing. The owner's report was a missing composer; declaring the intent costs
+          two words and removes the dependency on a default. */}
+      <div className="shrink-0 px-3 md:px-5 py-3 border-t border-border bg-card md:rounded-b-2xl">
         {replyingTo && (
           <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-muted/60 border-l-2 border-[#fb923c] text-sm">
             <Reply className="size-4 shrink-0 text-[#fb923c]" />
@@ -3050,7 +3098,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                  accent — a red stop control tinted with the accent reads as neither. */
               className={"h-11 w-11 rounded-full border-0" + (recording ? "" : " rcta")}
               aria-label={recording ? "Stop" : "Record"}
-              disabled={!recorderSupported()}
+              /* `|| uploading`, matching the gate the text field one row up already has.
+                 Without it, tapping the mic while a photo or file was still uploading
+                 opened the recording bar with a LIVE microphone and all three of its
+                 controls already disabled by that same `uploading` flag — a recording
+                 nobody could stop, discard or send, entered from the button that is the
+                 composer's primary while the field is empty. Stopping is still allowed
+                 once a recording is live, because `recording` is the state that owns the
+                 bar and the upload it would wait on is a different one. */
+              disabled={!recorderSupported() || (!recording && uploading)}
               title={
                 recorderSupported()
                   ? recording

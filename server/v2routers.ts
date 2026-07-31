@@ -1616,10 +1616,26 @@ export const v2ContactsRouter = router({
     // one person was searchable on one screen and not another.
     const liveNameByNumber = new Map(idents.map((i) => [i.number, i.displayName]));
     const ids = idents.map((i) => i.id);
-    const presList = await getPresenceForIds(ids);
-    const presByIdentity = new Map(presList.map((p) => [p.identityId, p]));
+    /* EVERY DECORATION READ ON THIS RESOLVER FAILS SOFT, and these two were the
+     * exceptions. `getRolesByIdentityIds` above already swallows its own failure by
+     * design — it backs a badge — but `getPresenceForIds` has no try/catch of its own,
+     * so one hiccup on the `presence` table threw out of the resolver and the caller
+     * got NOTHING: the whole address book replaced by "We couldn't load your contacts",
+     * which is the owner's "the contacts section is not showing" with a cause nobody
+     * could see from the screen.
+     *
+     * A contact row is worth serving without its green dot. The projection below is
+     * already written for the absent case throughout (`pres?.isOnline ?? false`,
+     * `inCallSet.has(...)`), so an empty answer degrades to "nobody shown as online"
+     * rather than to a broken screen — and that is the correct direction, because a
+     * missing LED costs a glance while a missing directory costs the feature. */
+    const presByIdentity = await getPresenceForIds(ids)
+      .then((rows) => new Map(rows.map((p) => [p.identityId, p])))
+      .catch(() => new Map<number, Awaited<ReturnType<typeof getPresenceForIds>>[number]>());
     // Busy line (v2.88): which saved numbers are on a call right now.
-    const inCallSet = await pinsInCallAsync(idents.map((i) => i.number));
+    const inCallSet = await pinsInCallAsync(idents.map((i) => i.number)).catch(
+      () => new Set<string>(),
+    );
     return rows.map((r) => {
       const ident = idByNumber.get(r.number);
       const pres = ident != null ? presByIdentity.get(ident) : undefined;

@@ -67,7 +67,11 @@ describe("the accent is never the raw variable in a text position", () => {
     "client/src/lib/linkify.tsx",
     "client/src/lib/relayAssets.ts", // always-dark call surfaces — likely fine, needs measuring
     "client/src/pages/app/Admin.tsx",
-    "client/src/pages/app/Contacts.tsx",
+    /* Contacts.tsx is GONE from this list, and the staleness assertion below is what
+       removed it: the section headings and both tag-chip sites were the debt this list
+       recorded, and they are fixed (headings → `text-primary`; chips → the theme-aware
+       `.rtag-*` recipes, whose light colours were measured at 4.65-4.81:1 against the
+       1.53-1.71:1 they replaced). The list may SHRINK freely and may never GROW. */
     "client/src/pages/app/GroupCallScreen.tsx",
   ];
 
@@ -85,8 +89,9 @@ describe("the accent is never the raw variable in a text position", () => {
     }
     const unexpected = [...offenders].filter((f) => !KNOWN_RAW_ACCENT_TEXT.includes(f));
     expect(unexpected, `NEW raw-accent-as-text in: ${unexpected.join(", ")}`).toEqual([]);
-    // The two this release fixed must stay fixed.
+    // Every file taken off this list must stay off it.
     expect(offenders.has("client/src/pages/app/Messages.tsx")).toBe(false);
+    expect(offenders.has("client/src/pages/app/Contacts.tsx")).toBe(false);
     expect(offenders.has("client/src/app/PeerOverlays.tsx")).toBe(false);
   });
 

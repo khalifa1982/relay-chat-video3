@@ -151,6 +151,18 @@ describe("what already worked and must keep working", () => {
   });
 
   it("every section is still collapsible, and a search still forces them open", () => {
-    expect(CONTACTS).toMatch(/const isCollapsed = !searching && collapsed\.has\(section\.key\)/);
+    /* THE PROPERTY, not the expression. This froze the exact one-liner, so it forbade
+       extending the same escape to the TAG FILTER — which narrows identically and had the
+       identical bug: tap "Family" while the Family section happened to be collapsed and
+       the header states a count above nothing, with no empty state to explain it. The rule
+       is that ANY active narrowing forces every section open, and it is now asserted as
+       that rather than as one of its two cases. */
+    expect(CONTACTS).toMatch(/const searching = search\.trim\(\)\.length > 0/);
+    const m = CONTACTS.match(/const isCollapsed = ([^;]+);/);
+    expect(m, "the collapse decision must exist").toBeTruthy();
+    const decision = (m as RegExpMatchArray)[1];
+    expect(decision, "a search forces sections open").toMatch(/!searching/);
+    expect(decision, "…and so does a tag filter").toMatch(/!tagFilter/);
+    expect(decision, "collapse state still applies otherwise").toMatch(/collapsed\.has\(section\.key\)/);
   });
 });
