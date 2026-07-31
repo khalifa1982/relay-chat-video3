@@ -11278,6 +11278,26 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.39 — the scroll listener I added did nothing, and a third unguarded read (2026-07-31)
+
+Both found by the design run's synthesis reading v2.106.38, both verified before being touched.
+
+**The inert listener.** v2.106.29 added a `visualViewport` `scroll` listener whose comment says iOS
+MOVES the viewport as well as resizing it — and `set()` read only height, scale and innerHeight, none
+of which a move changes. `grep -rn offsetTop client/src/` returned **zero**: the handler fired and
+wrote a byte-identical value. That is the same defect v2.106.29 was written to remove, one level
+down, in the fix for it. It is also the mechanism that matches the owner's screenshot: the visible
+band is `[offsetTop, offsetTop + height]` while the scroll-locked shell starts at 0, so without the
+term the shell is short by exactly `offsetTop` — composer below the fold, tab bar (the last child)
+still on screen.
+
+**A third unguarded read.** v2.106.38 wrapped presence and the busy line and left
+`getIdentitiesByNumbers` — a bare `db.select()`, so a rejection took the whole address book. Same
+blast radius, different table, decoration by the same test its siblings passed.
+
+17 tripwires, both new ones mutation-verified. **Not verified on a device**, and the check that would
+settle it: with the keyboard up, `offsetTop > 0` while `--relay-vh === innerHeight`. 4777 tests.
+
 ## v2.106.38 — the fleet was serving v2.106.22, and four of the owner's complaints were fixed-but-undeployed (2026-07-31)
 
 Owner, with a screenshot of a DM with no composer at all: *"I told you see tge message section in

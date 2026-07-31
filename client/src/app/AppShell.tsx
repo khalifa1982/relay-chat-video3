@@ -266,7 +266,25 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
          * so a pinch-zoom silently reinstated the exact bug this effect exists to fix, and
          * a magnified page is precisely when somebody is typing carefully.
          * At scale 1 this is byte-identical to reading `vv.height`. */
-        const visible = vv ? vv.height * vv.scale : Number.POSITIVE_INFINITY;
+        /* `+ vv.offsetTop`, AND THAT TERM IS WHAT MAKES THE `scroll` LISTENER BELOW DO
+         * ANYTHING AT ALL — a defect of mine, in the fix that added the listener.
+         *
+         * That listener carries a comment saying iOS MOVES the visual viewport as well as
+         * resizing it, and that a move with no resize still changes what is on screen.
+         * True — and `set()` read only `vv.height`, `vv.scale` and `window.innerHeight`,
+         * none of which a move changes. So the handler fired and wrote a BYTE-IDENTICAL
+         * value: an inert subscription under a comment claiming it handles the case, which
+         * is exactly the defect v2.106.29 was written to remove, reproduced one level down.
+         * (`grep -rn offsetTop client/src/` returned zero.)
+         *
+         * The visible band is [offsetTop, offsetTop + height] in LAYOUT pixels, and the
+         * scroll-locked shell starts at 0 — so its bottom must reach the band's bottom, not
+         * merely be as tall as the band. Without the term, a moved viewport leaves the shell
+         * short by exactly `offsetTop` and the composer sits below the fold while the tab
+         * bar, the LAST child, can still be on screen: the owner's screenshot.
+         * `offsetTop` is already in layout px per spec; `height` is in the zoomed viewport's
+         * px, which is why only `height` takes the `* scale`. */
+        const visible = vv ? vv.height * vv.scale + vv.offsetTop : Number.POSITIVE_INFINITY;
         const measured = Math.round(Math.min(window.innerHeight, visible));
         /* FLOOR ONLY AN IMPLAUSIBLE READING, not a small-but-real one. A hard 320 floor
          * makes `--relay-vh` LARGER than the viewport in landscape with the keyboard up —

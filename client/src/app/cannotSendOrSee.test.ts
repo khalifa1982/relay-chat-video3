@@ -164,6 +164,21 @@ describe("the measured viewport height cannot revert to the value that caused th
     expect(expr, "the scale must no longer gate it to Infinity").not.toMatch(/scale <= 1\.01/);
   });
 
+  it("a viewport MOVE is read, so the scroll listener is not inert", () => {
+    /* The listener beside `resize` carries a comment saying iOS MOVES the visual viewport
+       and that a move with no resize still changes what is on screen — and `set()` read
+       only height, scale and innerHeight, none of which a move changes. It fired and wrote
+       a byte-identical value. The visible band is [offsetTop, offsetTop + height] and the
+       scroll-locked shell starts at 0, so its bottom must REACH the band's bottom: without
+       the term the shell is short by exactly `offsetTop`, which puts the composer below the
+       fold while the tab bar — the last child — can still be on screen. */
+    expect(SHELL, "the moved quantity must actually be read").toMatch(/vv\.offsetTop/);
+    const m = SHELL.match(/const visible = [^;]+;/);
+    expect((m as RegExpMatchArray)[0]).toMatch(/vv\.height \* vv\.scale \+ vv\.offsetTop/);
+    // and the listener that the term exists for is still subscribed
+    expect(SHELL).toMatch(/vv\?\.addEventListener\("scroll", set\)/);
+  });
+
   it("the floor catches only an IMPLAUSIBLE reading, never a small real one", () => {
     /* A hard 320 floor makes `--relay-vh` LARGER than the viewport in landscape with the
        keyboard up, where ~220px visible is genuine — and being taller than the visible
@@ -214,6 +229,10 @@ describe("contacts can be read", () => {
        SURVIVED, because the regex happily matched its neighbour's catch. A statement
        boundary is what makes the handler provably attached to THIS call. */
     expect(listBody).toMatch(/getPresenceForIds\(ids\)[^;]{0,200}\.catch\(/);
+    /* …and the identity read too, which was missed on the first pass. Same blast radius,
+       different table, and decoration by the same test: every field the row shows comes
+       from `rows`, while this supplies the live avatar, role and verified flag. */
+    expect(listBody).toMatch(/getIdentitiesByNumbers\([^;]{0,120}\.catch\(/);
     expect(listBody).toMatch(/pinsInCallAsync\([^;]{0,120}\.catch\(/);
     expect(listBody, "the bare read is what took the address book down").not.toMatch(
       /const presList = await getPresenceForIds\(ids\);/,

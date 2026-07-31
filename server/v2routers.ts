@@ -1597,7 +1597,18 @@ export const v2ContactsRouter = router({
     const me = requireIdentity(ctx);
     const rows = await listContacts(me.id);
     // Resolve every contact's identity in ONE query (was N+1: one per contact).
-    const idents = await getIdentitiesByNumbers(rows.map((r) => r.number));
+    /* GUARDED for the same reason the presence and busy-line reads below are, and this one
+     * was missed on the first pass — `getIdentitiesByNumbers` is `db.select()` with no
+     * try/catch of its own, so a rejection propagated out of the resolver and the owner's
+     * ENTIRE directory became "We couldn't load your contacts". `identities` is a different
+     * table from `presence`, so it is an independent failure source with identical reach.
+     *
+     * It qualifies by the same test its siblings passed: every field the row itself shows —
+     * displayName, number, favourite, blocked, notes — comes from `rows` (listContacts).
+     * `idents` supplies only the LIVE decorations: the search-only live name, the current
+     * avatar, the role and the verified flag. Losing those costs a photo and a badge.
+     * `listContacts` above stays unguarded deliberately: that read IS the content. */
+    const idents = await getIdentitiesByNumbers(rows.map((r) => r.number)).catch(() => []);
     const idByNumber = new Map(idents.map((i) => [i.number, i.id]));
     // Track which identities are guests (userId == null) for presence privacy.
     const isGuestById = new Map(idents.map((i) => [i.id, i.userId == null]));
