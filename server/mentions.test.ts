@@ -313,7 +313,13 @@ describe("green means ONLINE, and only online", () => {
     const at = UI.indexOf('aria-label={playing ? "Pause" : "Play voice note"}');
     expect(at).toBeGreaterThan(0);
     const btn = UI.slice(at, at + 900);
-    expect(btn).toMatch(/rgba\(var\(--rb-rgb, 63, 224, 197\), 0\.16\)/);
+    /* REWRITTEN in v2.106.31: this froze the INLINE `rgba(var(--rb-rgb),0.16)` fill, and
+       that hand-rolled recipe was missing the light-theme text colour `.rchip-accent`
+       carries — measured 1.46:1 on the light card against AA's 4.5, versus 5.14:1 with the
+       class. THE PROPERTY is that the button is the ACCENT rather than the presence green;
+       which accent recipe delivers it is not the property, and freezing the inline one
+       forbade the fix. */
+    expect(btn).toMatch(/rchip-accent/);
     expect(btn).not.toMatch(/relay-online/);
   });
 

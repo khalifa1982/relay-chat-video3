@@ -11278,6 +11278,71 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.31 — the accent as text fails AA in the theme the app defaults to (2026-07-31)
+
+Working the owner's *"they do not match the new design"* on the message screens. Measured as
+rendered at 390px against the real built stylesheet, not reasoned about:
+
+| | light | dark |
+|---|---|---|
+| raw accent as text, plain card | **1.59** FAIL | 7.12 |
+| raw accent as text, on its own .16 tint | **1.46** FAIL | 5.94 |
+| `text-primary`, plain card | 4.59 PASS | 7.12 |
+| `text-primary`, on the .16 tint | **4.20 STILL FAILS** | 5.94 |
+| `.rchip-accent`, on the .14 tint | 5.17 PASS | 8.59 |
+
+**THE FOURTH ROW IS THE FINDING.** `text-primary` — the fix v2.106.26 used and the one
+anybody would reach for — is NOT sufficient on an accent-tinted surface, because the tint
+darkens the effective background out from under it. A single find-and-replace would have
+shipped as "fixed" with half of it still failing. So the rule has two halves: plain surface →
+`text-primary`; the accent's own tint → `.rchip-accent`, the recipe v2.106.25 built with a
+measured light colour for exactly this.
+
+Dark passes everywhere, which is why it survived: the board is a dark design and the app
+ships light.
+
+**Two of the four sites were hand-rolled duplicates of `.rchip-accent`** carrying its own
+values (a .14 fill, a .40 border) and differing only in missing its light-theme colour. A
+copy of a recipe is how the copy misses the fix the original received.
+
+**The composer's mic and Send were on two different colour systems.** They occupy the same
+position and swap on the first keystroke, and the mic was still the fixed cyan v2.106.7
+retired while Send used `.rcta` — so the hue visibly jumped as you typed. Now `.rcta`
+(10.08:1 light, 9.85:1 dark), and not while recording, when it is the destructive stop.
+
+**And the sweep found a pre-existing app-wide failure this release did not introduce.**
+`PeerAvatar`'s initials fallback was `bg-primary/15 text-primary` — accent text on an accent
+tint — at **3.77:1**. That is every avatar without a photo, on every surface, in the default
+theme. New `.ravatar-fallback` measures 4.98–5.32 light / 8.28–8.59 dark, re-measured as
+rendered. No border: a hairline round an avatar reads as the unseen-story ring.
+
+**The guard is app-wide because the one that existed was not** — v2.106.26 fixed three sites
+and left its assertion reading a single file, so Messages.tsx carried four more and nothing
+looked.
+
+**What the sweep found is reported rather than overclaimed:** raw-accent-as-text is in **ten
+more files** and the retired cyan in **nine more**. Each needs the same per-site judgement —
+is the surface theme-switchable, is the text on a plain background or a tint — so they are
+enumerated as debt in a list that may shrink freely and may never grow, with a companion
+assertion that no entry is stale. `relayAssets.ts` is called out as probably not a defect at
+all: the call surfaces carry their own near-black theme, so accent text there is 7–11:1.
+
+- [x] `client/src/pages/app/Messages.tsx` (4 sites), `client/src/app/PeerOverlays.tsx`,
+      `client/src/index.css` (the new `.ravatar-fallback`).
+- [x] `client/src/app/accentAsText.test.ts` (12), including an assertion that the sweep is
+      not VACUOUS and one that it does not flag a FILL — the accent's correct use.
+- [x] **All 6 tripwires mutation-verified** off a confirmed-GREEN baseline.
+- [x] **Two harness bugs of my own, caught by reading the numbers**: my background walker
+      composited alpha over a WHITE base, so in dark theme it reported a near-white surface
+      and a nonsense 2.48:1; and I first measured the first three `.text-primary` elements
+      anywhere rather than the sites I had changed.
+- [x] **Two pre-existing pins rewritten, both having frozen the inline shape the class
+      replaces** — one froze the play button's fill, the other the chip's
+      `color: var(--rb)`, which IS the defect rather than the design.
+- [x] **STILL OPEN**: the 10 + 9 enumerated files above, and the message screens' remaining
+      design gaps against board frames 1c/1d/1j/3c/4c (the 36-agent audit is mid-flight).
+- [x] No schema change, no new dependency, no new env var. 4658 tests.
+
 ## v2.106.30 — the mic button could lock you out of sending entirely (2026-07-31)
 
 Found by the 36-agent design-vs-built run on the message screens, whose send-path tracer

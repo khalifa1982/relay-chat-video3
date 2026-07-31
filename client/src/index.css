@@ -915,6 +915,23 @@ body.relay-app-lock {
 .relay-v2:not(.dark) .rchip-accent {
   color: var(--relay-green-text);
 }
+/* AVATAR INITIALS, and this needed its OWN rule for the same reason `.rchip-accent` above
+   did — with the difference that the failure here is app-wide rather than on one screen.
+   `PeerAvatar`'s fallback was `bg-primary/15 text-primary`, i.e. accent text on its own
+   faint accent TINT, and the tint darkens the effective background enough that even the
+   theme-aware `--primary` lands under AA: MEASURED as rendered at 390px, the initials
+   computed to **3.77:1** in light theme (dark was fine at 9.29). That is every avatar
+   without a photo, on every surface — thread rows, contacts, History, the chat header, call
+   tiles — in the theme the app DEFAULTS to.
+   NO border, unlike `.rchip-accent`: an avatar is a disc, and a hairline around it reads as
+   a story ring, which already means something else here. */
+.relay-v2 .ravatar-fallback {
+  background: rgba(var(--rb-rgb), 0.15);
+  color: var(--rb);
+}
+.relay-v2:not(.dark) .ravatar-fallback {
+  color: var(--relay-green-text);
+}
 /* Primary CTA: SOLID accent with dark text. `#04211a` is the board's on-accent colour —
    a near-black green that stays legible across all twelve hues, which plain black or
    white would not (white fails on the yellow and lime entries). */

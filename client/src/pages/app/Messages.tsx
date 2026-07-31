@@ -2831,7 +2831,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 }}
                 className="shrink-0 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-xs font-medium transition hover:bg-muted/60 active:scale-95 motion-reduce:transition-none"
               >
-                <span style={{ color: "var(--rb, #3FE0C5)" }}>@</span>
+                {/* `text-primary`, not the raw accent: measured 1.59:1 on the light card
+                    against AA's 4.5, versus 4.59:1 here. v2.106.4 repointed `--primary` at
+                    `--rb` inside `.dark.relay-v2` precisely so accent UI follows the
+                    cycling hue in dark (7.12:1) while light keeps a measured value — so
+                    reaching for the variable directly routes around the infrastructure
+                    built for this. Fills are unaffected; this is only ever about text. */}
+                <span className="text-primary">@</span>
                 {mem.name}
               </button>
             ))}
@@ -3033,8 +3039,16 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               onClick={recording ? stopRecording : startRecording}
               variant={recording ? "destructive" : "default"}
               size="icon"
-              className="h-11 w-11 rounded-full border-0"
-              style={recording ? undefined : { background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)", color: "#08211d" }}
+              /* Board 1d: the mic is the composer's ACCENT circle, and it swaps to Send
+                 when there is text — so the two occupy the SAME position. This was the old
+                 FIXED cyan (`#3FE0C5`/`#6EE7FF`) while Send beside it uses `.rcta`, so the
+                 hue visibly JUMPED the moment you typed a character: one control on the
+                 cycling accent, its twin on a literal the accent replaced in v2.106.7.
+                 `.rcta` carries the board's on-accent `#04211a`, which stays legible across
+                 all twelve hues where white fails on the yellow and lime entries.
+                 While RECORDING the button is `destructive`, so it must NOT also carry the
+                 accent — a red stop control tinted with the accent reads as neither. */
+              className={"h-11 w-11 rounded-full border-0" + (recording ? "" : " rcta")}
               aria-label={recording ? "Stop" : "Record"}
               disabled={!recorderSupported()}
               title={
@@ -3952,7 +3966,7 @@ function VoiceNotePlayer({
         aria-label={playing ? "Pause" : "Play voice note"}
         className={
           "grid size-9 shrink-0 place-items-center rounded-full active:scale-95 transition-transform " +
-          (mine ? "bg-white/20 text-white" : "")
+          (mine ? "bg-white/20 text-white" : "rchip-accent")
         }
         /* Board 2f asks for an ACCENT play button, and the same vocabulary argument
            as the waveform above applies: this was `--relay-online`, and a play
@@ -3960,14 +3974,13 @@ function VoiceNotePlayer({
            that is the only thing it may mean. Literal fallbacks, never a
            self-referencing `var(--rb, var(--rb))`, which is a cycle the browser
            drops (v2.106.7). */
-        style={
-          mine
-            ? undefined
-            : {
-                background: "rgba(var(--rb-rgb, 63, 224, 197), 0.16)",
-                color: "var(--rb, #3FE0C5)",
-              }
-        }
+        /* …and the light theme needs its OWN text colour, which this hand-rolled copy of
+           the accent-chip recipe did not have. MEASURED on the light card: the raw accent
+           on its own faint tint is 1.46:1, and `text-primary` only reaches 4.20 — still
+           under AA — because the tint darkens the effective background. `.rchip-accent`
+           is the recipe that solves exactly this (v2.106.25) and measures 5.14:1 light /
+           8.35:1 dark, so it is used rather than re-derived. */
+        style={undefined}
       >
         {playing ? <Pause className="size-4" /> : <Play className="size-4 translate-x-[1px]" />}
       </button>
@@ -4687,12 +4700,12 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                          "selected" means everywhere else in this app now. */
                       <span
                         key={n}
-                        className="inline-flex items-center gap-1 rounded-[16px] border px-2.5 py-[5px] font-mono text-[10.5px] font-bold"
-                        style={{
-                          background: "rgba(var(--rb-rgb, 63, 224, 197), 0.14)",
-                          borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.40)",
-                          color: "var(--rb, #3FE0C5)",
-                        }}
+                        /* `.rchip-accent` rather than a hand-rolled copy of it: this
+                           carried the class's OWN values (a .14 fill and a .40 border) and
+                           differed only in missing its light-theme text colour — measured
+                           1.47:1 against AA's 4.5, versus 5.17:1 with the class. A duplicate
+                           of a recipe is how the copy misses the fix the original received. */
+                        className="rchip-accent inline-flex items-center gap-1 rounded-[16px] px-2.5 py-[5px] font-mono text-[10.5px] font-bold"
                       >
                         {n.slice(0, 3)} {n.slice(3)}
                         <button
@@ -4789,7 +4802,14 @@ function SuggestList({
                 ) : (
                   <span
                     className="grid size-8 place-items-center rounded-full text-[11px] font-bold"
-                    style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)", color: "#08211d" }}
+                    /* A FILL, which is the accent's correct use (dark glyph on accent
+                       measures 10:1) — but on the FIXED cyan the cycling accent replaced in
+                       v2.106.7, so every other accent surface breathed and this one did not.
+                       The fallback is a LITERAL, never `var(--rb, var(--rb))`: a
+                       self-referencing custom property is a cycle, which resolves to the
+                       guaranteed-invalid value and makes the browser DROP the declaration
+                       entirely — a disc with no fill at all. */
+                    style={{ background: "var(--rb, #3FE0C5)", color: "#04211a" }}
                   >
                     {(c.displayName || c.number).slice(0, 2).toUpperCase()}
                   </span>
@@ -4823,7 +4843,10 @@ function SuggestList({
                   className="grid size-5 shrink-0 place-items-center rounded-full border"
                   style={{ borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.45)" }}
                 >
-                  <Plus className="size-3" style={{ color: "var(--rb, #3FE0C5)" }} />
+                  {/* 1.59:1 on the light card as the raw accent; 4.59:1 as `text-primary`,
+                      which clears both AA text and the 3:1 non-text-contrast bar a glyph
+                      this size is judged against. */}
+                  <Plus className="size-3 text-primary" />
                 </span>
               )}
             </button>
