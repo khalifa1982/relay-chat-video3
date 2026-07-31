@@ -11278,6 +11278,75 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.47 — the mediasoup worker was never built, and my own deploy gate could not see it (2026-07-31)
+
+A 20-agent map of the cutover was commissioned to plan the media path. Its FIRST finding is a
+blocker that stops the agent starting at all — and the second half of it is a defect in the deploy
+script I shipped two hours earlier.
+
+- [x] **`pnpm install --frozen-lockfile` IN `voip-node/` SHIPS NO WORKER, AND EXITS 0.** pnpm 10
+      blocks dependency lifecycle scripts by default and mediasoup resolves its worker BINARY from
+      postinstall, so the install "succeeds" while writing no `mediasoup-worker` — and the agent
+      then dies in `createWorker()` at startup. **PROVEN EMPIRICALLY, both ways, in a scratch
+      install** rather than argued from pnpm's documented behaviour: without
+      `onlyBuiltDependencies` pnpm prints `Ignored build scripts: mediasoup@3.19.3`, records
+      `pendingBuilds: ["mediasoup@3.19.3"]` and finishes in **2.8s** (itself proof nothing was
+      built); with it, the postinstall fetches a host-validated prebuilt worker, `pendingBuilds` is
+      empty and a 9,733,832-byte executable appears at
+      `node_modules/mediasoup/worker/out/Release/mediasoup-worker`.
+- [x] **AND MY OWN GATE WOULD HAVE REPORTED SUCCESS OVER IT.** v2.106.45's install gate was
+      `[ ! -d /opt/relay-voip/node_modules/mediasoup ]` — a DIRECTORY test, which an install whose
+      build was BLOCKED satisfies, because the directory is there and only the binary is missing.
+      So on a node in exactly that state it printed *"dependencies unchanged — skipping the C++
+      worker rebuild"* and reported `VOIP_EXIT=0` over a node that cannot start a worker. **A
+      successful deploy over a broken node is the one outcome that script exists to prevent**, and
+      it is the class its own test file is named for.
+- [x] **THE GATE NOW KEYS ON THE BINARY**, honouring `MEDIASOUP_WORKER_BIN` because mediasoup
+      itself does — an operator who has placed the binary elsewhere must not be forced into a
+      reinstall.
+- [x] **AND THE BINARY IS VERIFIED UNCONDITIONALLY, on the SKIP path too and whatever the install
+      claimed.** `pnpm install` exits 0 while printing "Ignored build scripts", so its exit code is
+      not evidence the worker exists; without a check after BOTH branches, a future pnpm change
+      that re-blocks the build would put us straight back to a green deploy over a dead node. The
+      refusal prints the expected path and the `pendingBuilds` line, so the cause is legible rather
+      than requiring somebody to already know this.
+- [x] **`onlyBuiltDependencies` LISTS ONLY mediasoup**, and that narrowness is the point: the
+      setting exists to stop arbitrary transitive postinstalls running, so widening it to every
+      dependency would trade a real supply-chain protection for convenience. Pinned as an exact
+      list, with the agent's dependency set (`ioredis`, `mediasoup`) pinned beside it.
+- [x] **A CLAIM OF MY OWN CORRECTED IN THREE PLACES.** I had written that mediasoup's worker is
+      "compiled per install". It is more precisely a HOST-SPECIFIC binary *resolved* per install —
+      a prebuilt one validated against the host when a match exists (1.8s), a source build
+      otherwise. The reasoning that rests on it is unchanged and still correct (the binary belongs
+      to the box, so `node_modules` must never be shipped), but the mechanism was imprecise and
+      the imprecision made the install look slower and more fragile than it is.
+
+`server/voipDeploy.test.ts` → 27. **6 of 7 tripwires verified by MUTATION** off a confirmed-green
+baseline from byte-exact backups, both sources byte-identical afterwards — including the original
+directory gate reinstated verbatim, the unconditional verification deleted, `MEDIASOUP_WORKER_BIN`
+dropped, `onlyBuiltDependencies` removed, and the allow-list widened.
+
+**ONE WAS A BAD MUTATION OF MINE, reported rather than counted**: "the verification moves after the
+restart" only replaced a trailing `echo`, so the verification block never moved and the mutation
+never created the defect it named. Re-run as a genuine deletion-and-relocation, it bit.
+
+**AND ONE PRE-EXISTING PIN WAS MINE FROM TWO HOURS EARLIER, freezing the defect**: it asserted the
+gate's exact expression *including* the `-d` directory test, so it would have forbidden this fix
+while saying nothing about the rule. Rewritten to the property — the install runs when the manifest
+moved OR the built artifact is absent — with which artifact counts pinned separately.
+
+**AN OBSERVATION I CANNOT EXPLAIN, recorded rather than glossed**: `voip-node/node_modules`
+existed when the finding was made and had been deleted by the time I re-checked minutes later. It
+is gitignored, disk was not short (24G free), and something in the 20-agent run removed it. The
+finding does not depend on it — the empirical reproduction above was run from a clean scratch copy
+of just `package.json` + `pnpm-lock.yaml`.
+
+**OWNER-SIDE, AND NOW SHARPER THAN BEFORE**: the two live nodes were hand-installed at mediasoup
+3.19.3, and this defect predates them — so **assume their worker is missing until the dry run says
+otherwise**. `voip-deploy` with `voip_apply: false` now reports exactly that, and the apply path
+refuses rather than restarting a node whose worker is not there. No schema change, no new
+dependency, no new env var. 4862 tests.
+
 ## v2.106.46 — private for control, public for media — made structural (2026-07-31)
 
 The owner opened the app-fleet → SFU security-group path (TCP 4443 + ICMP, private) and handed over

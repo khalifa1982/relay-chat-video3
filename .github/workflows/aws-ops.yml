@@ -1424,7 +1424,7 @@ jobs:
           # WHY THIS ACTION EXISTS AT ALL.
           #
           # `voip-node/` is deliberately EXCLUDED from the app release tar — it carries a
-          # mediasoup dependency whose C++ worker is compiled per install and which no app
+          # mediasoup dependency whose worker is a host-specific binary and which no app
           # instance ever runs (voipNodeParity.test.ts pins that exclusion). So deploy.yml
           # structurally cannot reach a media node, and the agent's own README documents a
           # fully MANUAL file copy. The agent has changed in four releases since the nodes

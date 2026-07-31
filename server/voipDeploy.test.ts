@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
  * v2.106.45 — THE MEDIA AGENT BECOMES DEPLOYABLE.
  *
  * `voip-node/` is deliberately EXCLUDED from the app release tar (voipNodeParity.test.ts pins
- * that: it carries a mediasoup dependency whose C++ worker is compiled per install and which
+ * that: it carries a mediasoup dependency whose worker is a host-specific binary, and which
  * no app instance ever runs). The consequence, unnoticed until now, is that `deploy.yml`
  * structurally CANNOT reach a media node — so the agent's own README documents a fully MANUAL
  * file copy, and the agent has changed in four releases since the nodes were built. Every one
@@ -228,7 +228,12 @@ describe("the payload is built correctly", () => {
     expect(REMOTE).toMatch(/install --frozen-lockfile/);
     expect(REMOTE).toMatch(/DEPS_BEFORE=/);
     expect(REMOTE).toMatch(/DEPS_AFTER=/);
-    expect(REMOTE).toMatch(/if \[ "\$DEPS_BEFORE" != "\$DEPS_AFTER" \] \|\| \[ ! -d \/opt\/relay-voip\/node_modules\/mediasoup \]/);
+    // REWRITTEN v2.106.47 to the PROPERTY, and this pin is the cautionary tale: written two
+    // hours earlier, it froze the gate's exact expression INCLUDING the `-d` directory test —
+    // i.e. it froze the defect, and would have forbidden the fix. The property is only that
+    // the install runs when the manifest moved OR the built artifact is absent; which artifact
+    // counts is pinned by the worker-binary describe below.
+    expect(REMOTE).toMatch(/if \[ "\$DEPS_BEFORE" != "\$DEPS_AFTER" \] \|\| \[ ! -x "\$WORKER_BIN" \]/);
     // The fingerprint must be taken BEFORE the extract, or it always compares equal.
     expect(REMOTE.indexOf("DEPS_BEFORE=")).toBeLessThan(REMOTE.indexOf("tar -xzf"));
     // And the pins really are exact in the manifest this ships.
@@ -282,5 +287,81 @@ describe("the remote script itself is sound", () => {
       /tar[^\n]*\bvoip-node\b/,
     );
     expect(path.relative(ROOT, REMOTE_PATH).startsWith("voip-node" + path.sep)).toBe(true);
+  });
+});
+
+/**
+ * v2.106.47 — THE WORKER BINARY, NOT THE PACKAGE DIRECTORY.
+ *
+ * Found by a 20-agent map of the cutover, then PROVEN empirically in a scratch install:
+ * `pnpm install --frozen-lockfile` in `voip-node/` exits 0 while printing
+ * `Ignored build scripts: mediasoup@3.19.3` and finishing in 2.8s — pnpm 10 blocks dependency
+ * lifecycle scripts by default and mediasoup fetches its worker from postinstall. So the
+ * install "succeeds", `pendingBuilds` records the skip, no `mediasoup-worker` is written, and
+ * the agent dies in `createWorker()` at startup.
+ *
+ * v2.106.45's gate was `[ ! -d node_modules/mediasoup ]` — a DIRECTORY test an unbuilt install
+ * satisfies — so on a node in that state it printed "dependencies unchanged" and reported
+ * VOIP_EXIT=0 over a node that cannot start. A successful deploy over a broken node is the one
+ * outcome that script exists to prevent, and it was mine.
+ */
+describe("the mediasoup worker binary is what gets verified", () => {
+  const PKG = JSON.parse(
+    fs.readFileSync(path.join(ROOT, "voip-node", "package.json"), "utf8"),
+  ) as { pnpm?: { onlyBuiltDependencies?: string[] }; dependencies?: Record<string, string> };
+
+  it("the agent package allows mediasoup's build script to run", () => {
+    // Without this, pnpm 10 silently ships no worker. Empirically verified both ways.
+    expect(PKG.pnpm?.onlyBuiltDependencies, "mediasoup must be allowed to build").toContain(
+      "mediasoup",
+    );
+  });
+
+  it("only mediasoup is allowed — this is not a blanket opt-out of pnpm's protection", () => {
+    /* `onlyBuiltDependencies` exists to keep arbitrary transitive postinstalls from running.
+       Widening it to every dependency would trade a real supply-chain protection for
+       convenience, so the list stays exactly the one package that genuinely needs it. */
+    expect(PKG.pnpm?.onlyBuiltDependencies).toEqual(["mediasoup"]);
+    expect(Object.keys(PKG.dependencies ?? {}).sort()).toEqual(["ioredis", "mediasoup"]);
+  });
+
+  it("the install gate keys on the BINARY, never on the package directory", () => {
+    expect(REMOTE).toMatch(/WORKER_BIN="\$\{MEDIASOUP_WORKER_BIN:-[^"]*mediasoup-worker\}"/);
+    expect(REMOTE).toMatch(/\[ ! -x "\$WORKER_BIN" \]/);
+    // The directory test is exactly the defect: an unbuilt install satisfies it.
+    expect(REMOTE, "a -d test on the package dir cannot see a blocked build").not.toMatch(
+      /! -d \/opt\/relay-voip\/node_modules\/mediasoup\b/,
+    );
+  });
+
+  it("the binary is verified on the SKIP path too, and after any install", () => {
+    /* `pnpm install` exits 0 while printing "Ignored build scripts", so its exit code is not
+       evidence the worker exists — and the skip path runs no install at all. The check must
+       therefore sit AFTER the whole if/else, unconditionally. */
+    const gate = REMOTE.indexOf('if [ "$DEPS_BEFORE" != "$DEPS_AFTER" ]');
+    const skipMsg = REMOTE.indexOf("skipping the install");
+    const verify = REMOTE.lastIndexOf('if [ ! -x "$WORKER_BIN" ]');
+    expect(gate).toBeGreaterThan(0);
+    expect(skipMsg).toBeGreaterThan(gate);
+    expect(verify, "the verification must follow BOTH branches").toBeGreaterThan(skipMsg);
+    expect(REMOTE).toMatch(/would die in createWorker\(\)[^"]*Service NOT restarted\.?" 101/);
+  });
+
+  it("a missing worker refuses BEFORE the service is restarted", () => {
+    const verify = REMOTE.lastIndexOf('if [ ! -x "$WORKER_BIN" ]');
+    const restart = REMOTE.indexOf("systemctl restart");
+    expect(verify).toBeLessThan(restart);
+  });
+
+  it("it honours MEDIASOUP_WORKER_BIN, because mediasoup itself does", () => {
+    // An operator who placed the binary elsewhere must not be forced into a reinstall.
+    expect(REMOTE).toMatch(/MEDIASOUP_WORKER_BIN:-/);
+  });
+
+  it("the payload still excludes node_modules — the worker is host-specific", () => {
+    /* mediasoup fetches a prebuilt binary VALIDATED AGAINST THE HOST when one matches, and
+       builds from source otherwise. Either way it belongs to the box, so shipping one built on
+       a GitHub runner is how a node ends up with a binary that does not match its libc. */
+    expect(voipStep()).toMatch(/tar -czf [^\n]*--exclude=node_modules/);
   });
 });

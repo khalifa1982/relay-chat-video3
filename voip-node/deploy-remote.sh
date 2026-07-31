@@ -114,20 +114,45 @@ for f in agent.mjs record.mjs sign.mjs; do
 done
 echo "syntax: all modules parse"
 
-if [ "$DEPS_BEFORE" != "$DEPS_AFTER" ] || [ ! -d /opt/relay-voip/node_modules/mediasoup ]; then
-  echo "dependencies changed (or absent) — installing with the lockfile"
+# THE ARTIFACT THAT MATTERS IS THE WORKER BINARY, NOT THE PACKAGE DIRECTORY.
+#
+# This gate used to be `[ ! -d node_modules/mediasoup ]` — and an install whose build script
+# was BLOCKED satisfies that test, because the directory is there and only the binary is
+# missing. pnpm 10 blocks dependency lifecycle scripts by default and mediasoup fetches its
+# worker from postinstall, so on a node in that state the old gate printed "dependencies
+# unchanged" and reported VOIP_EXIT=0 over a node that cannot start a worker at all: a
+# successful deploy over a broken node, which is the one outcome this script exists to
+# prevent. (`voip-node/package.json`'s `onlyBuiltDependencies` is the other half of the fix.)
+#
+# `MEDIASOUP_WORKER_BIN` is honoured because mediasoup itself honours it — an operator who
+# has placed the binary elsewhere must not be forced into a reinstall.
+WORKER_BIN="${MEDIASOUP_WORKER_BIN:-/opt/relay-voip/node_modules/mediasoup/worker/out/Release/mediasoup-worker}"
+if [ "$DEPS_BEFORE" != "$DEPS_AFTER" ] || [ ! -x "$WORKER_BIN" ]; then
+  echo "dependencies changed, or the worker binary is missing — installing with the lockfile"
   # --frozen-lockfile is load-bearing rather than tidy: the versions are pinned EXACTLY
-  # because the worker is compiled per install, so a plain install on a box without the
-  # lockfile resolves newer ones and the difference is invisible until a call behaves
-  # differently on ONE node.
+  # because the worker is host-specific (a prebuilt binary validated against this host when
+  # one matches, a source build otherwise), so a plain install on a box without the lockfile
+  # resolves newer ones and the difference is invisible until a call behaves differently on
+  # ONE node.
   PNPM=pnpm
   command -v pnpm >/dev/null 2>&1 || PNPM="corepack pnpm"
   ( cd /opt/relay-voip && sudo -u relay env HOME=/opt/relay-voip $PNPM install --frozen-lockfile ) \
     || fail "REFUSED: dependency install failed — service NOT restarted" 98
   echo "install: ok"
 else
-  echo "dependencies unchanged — skipping the C++ worker rebuild"
+  echo "dependencies unchanged and the worker binary is present — skipping the install"
 fi
+
+# VERIFY THE BINARY, ALWAYS — on the skip path too, and whatever the install claimed.
+# `pnpm install` EXITS 0 while printing "Ignored build scripts", so its exit code is not
+# evidence the worker exists. Without this, a future pnpm change that re-blocks the build
+# would put us straight back to a green deploy over a node that dies in createWorker().
+if [ ! -x "$WORKER_BIN" ]; then
+  echo "expected at: $WORKER_BIN"
+  grep -o '"pendingBuilds":[^]]*]' /opt/relay-voip/node_modules/.modules.yaml 2>/dev/null || true
+  fail "REFUSED: the mediasoup worker binary is missing or not executable — the agent would die in createWorker(). Service NOT restarted." 101
+fi
+echo "worker binary: $(ls -l "$WORKER_BIN" | awk '{print $5}') bytes, executable"
 
 install -m 0644 /opt/relay-voip/relay-voip.service /etc/systemd/system/relay-voip.service
 systemctl daemon-reload
