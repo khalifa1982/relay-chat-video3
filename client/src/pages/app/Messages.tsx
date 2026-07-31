@@ -670,9 +670,25 @@ export default function MessagesPage({
                         return (
                           <SwipeRow
                             key={t.conversationId}
+                            /* EVERY STATE IS OPAQUE, and that is a swipe requirement rather
+                               than a style preference (v2.106.60). A dragged row is
+                               `:active` for the whole gesture, so a translucent tint here
+                               made the row see-through exactly while it was sliding —
+                               measured at 35% alpha, with both trays' pucks and the app's
+                               live background canvas reading through the row's own name and
+                               preview text. `bg-background` also used to sit in the SAME
+                               class list as the selected tint, and two `background-color`
+                               utilities of equal specificity are decided by stylesheet
+                               emission order rather than by the order written here, so
+                               which one won was not this file's decision to make; the base
+                               now lives only in the branch that wants it.
+                               The ladder is three opaque steps of the app's own tokens —
+                               rest `--background`, hover `--card`, selected `--muted` —
+                               which is the same subtle lift the alpha tints were reaching
+                               for, minus the transparency. */
                             rowClassName={
-                              "flex items-center gap-3.5 rounded-2xl mx-1.5 my-0.5 px-3 py-3.5 transition-colors bg-background " +
-                              (isActive ? "bg-muted/45" : "hover:bg-muted/25 active:bg-muted/35")
+                              "flex items-center gap-3.5 rounded-2xl mx-1.5 my-0.5 px-3 py-3.5 transition-colors " +
+                              (isActive ? "bg-muted" : "bg-background hover:bg-card")
                             }
                             left={swipeLeftActions(t)}
                             right={swipeRightActions(t)}

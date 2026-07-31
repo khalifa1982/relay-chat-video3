@@ -101,18 +101,55 @@ describe("the gesture cannot break the list it lives in", () => {
     expect(SWIPE).toMatch(/e\.preventDefault\(\);\s*\n\s*e\.stopPropagation\(\);/);
   });
 
-  it("a full swipe commits ONLY when the side has one unambiguous action", () => {
-    // With three buttons there is nothing a full swipe could mean, so it opens instead
-    // of guessing — and guessing here would Delete a chat.
-    expect((SWIPE.match(/&& left\.length === 1/g) || []).length).toBe(1);
-    expect((SWIPE.match(/&& right\.length === 1/g) || []).length).toBe(1);
+  it("no action can be RUN by the gesture — only by a tap on its button", () => {
+    /* REWRITTEN v2.106.60. This asserted the exact `&& left.length === 1` /
+       `&& right.length === 1` conjuncts of the full-swipe-commits shortcut, i.e. it
+       FORBADE the change the owner then asked for — "the bar should stop where you slid
+       it, and you can then click on these buttons" — while saying nothing about the
+       property it was really there for, which is that a swipe must never Delete a chat
+       by itself. That property is now asserted directly, and it is strictly stronger:
+       the old form permitted the shortcut on any one-action side, this permits it
+       nowhere. (The shortcut was also unreachable in practice — no side in the app has
+       exactly one action — so removing it changed nothing today and removed the hazard
+       for whoever adds a one-action side.) */
+    const code = codeOnly(SWIPE);
+    for (const decl of ["const finish = (", "const onPointerMove = (", "const onPointerDown = ("]) {
+      const at = code.indexOf(decl);
+      expect(at, decl).toBeGreaterThan(-1);
+      let d = 0;
+      let end = code.length;
+      const open = code.indexOf("{", code.indexOf(")", at));
+      for (let k = open; k < code.length; k++) {
+        if (code[k] === "{") d++;
+        else if (code[k] === "}") {
+          d--;
+          if (d === 0) {
+            end = k;
+            break;
+          }
+        }
+      }
+      const body = code.slice(open, end);
+      expect(body.length).toBeGreaterThan(80);
+      expect(body, `${decl} must not invoke an action`).not.toMatch(/\.onSelect\(\)/);
+    }
+    // The one caller is a real button's own click handler.
+    expect((code.match(/\.onSelect\(\)/g) || []).length).toBe(1);
+    expect(code).toMatch(/onClick=\{\(\)\s*=>\s*\{\s*settle\(null\);\s*a\.onSelect\(\);/);
   });
 
-  it("the chips are glassy: a tint of the action's own hue over a blur", () => {
-    expect(SWIPE).toMatch(/backdrop-blur-md/);
+  it("the chips are a tint of the action's OWN hue, applied inline", () => {
+    /* REWRITTEN v2.106.60: this required `backdrop-blur-md`, which was a MECHANISM for
+       reading as glass over a see-through tray. The tray has an opaque surface now, so a
+       blur behind it buys nothing and costs paint per puck per row on the app's densest
+       scrolling list (the v2.99.84 rule). What the assertion is for — the chip carries
+       the action's own colour and reads as a lit pane rather than a flat disc — is
+       pinned on the parts that deliver it. */
     // Inline, never a runtime-composed Tailwind class — the JIT cannot see one and it
     // comes out unstyled (the tab-accent trap).
     expect(SWIPE).toMatch(/background: `linear-gradient\(160deg, \$\{a\.color\}f2/);
+    expect(SWIPE).toMatch(/borderColor: `\$\{a\.color\}80`/);
+    expect(SWIPE).toMatch(/inset 0 1px 0 rgba\(255,255,255,\.35\)/);
     expect(codeOnly(SWIPE)).not.toMatch(/bg-\[\$\{/);
   });
 });

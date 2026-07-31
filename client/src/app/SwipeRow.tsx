@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 /**
- * A row you can drag sideways to reveal actions (v2.103.0).
+ * A row you can drag sideways to reveal actions (v2.103.0, reworked v2.106.60).
  *
  * Owner, with two screenshots of the Messages list: drag a thread row LEFT and the
  * right-hand actions appear; drag it RIGHT and the left-hand ones do. Glassy buttons.
@@ -23,6 +23,53 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
  * transform imperatively rather than through React state — a state update per pointer
  * move would re-render the whole thread list on every frame of every drag, which is the
  * mistake v2.99.67 recorded.
+ *
+ * ── v2.106.60: THE SWIPE NOW STAYS WHERE YOU PUT IT ───────────────────────────────────
+ *
+ * The owner, on the shipped behaviour: "when you slide right or left, that bar shouldn't
+ * be transparent; it should only show you the icons, either on the left or the right.
+ * When you remove your hand, the bar should stop where you slid it, and you can then
+ * click on these buttons."
+ *
+ * All three were real and all three were MEASURED by driving a real drag on the real
+ * bundle rather than reasoned about — the first two theories this file's own author
+ * reached for were both wrong:
+ *
+ *   (1) THE TRAY OPENED AND WAS THEN CLOSED BY THE CLICK THAT ENDED THE DRAG. The
+ *       timeline off a real pointer drag reads: pointerup (still dragging) →
+ *       lostpointercapture (transform -228px, tray OPEN) → click → closed. `finish`
+ *       settled it open correctly and `onClickCapture` — which exists so a row dragged
+ *       open does not ALSO register a tap on the row — immediately undid it, because it
+ *       could not tell the click that ends the OPENING gesture from a later tap on an
+ *       already-open row. So a swipe could never stay open at ANY distance: measured at
+ *       60/100/140/180/220/260px, every one sprang back. The thresholds were never
+ *       involved, which is why lowering them would have fixed nothing.
+ *
+ *       Press-and-hold had the same defect one step along: the hold timer settled the
+ *       tray open, then the finger lifting ran `finish`, whose `d.x` is still 0, so it
+ *       closed it again. Both are now flagged on the gesture (`justOpened` / `heldOpen`)
+ *       so the gesture that opened a tray cannot also close it.
+ *
+ *   (2) ONLY THE DRAGGED SIDE'S ICONS ARE REVEALED. Both trays are always mounted, one
+ *       at each edge, and the row covering the other one is all that hid it — so it was
+ *       true only while the row happened to be opaque, which (3) shows it was not. It is
+ *       structural now: a tray is `visibility: hidden` unless the row has actually moved
+ *       to expose it, which also takes its buttons out of hit-testing.
+ *
+ *   (3) THE ROW WAS 35% TRANSPARENT WHILE BEING DRAGGED, so both sides' pucks and the
+ *       app's live background canvas read straight through it — the owner's "the back
+ *       buttons above the cover of the message or group become transparent". Measured:
+ *       `background-color` resolved to `oklab(0.24 … / 0.35)` mid-drag. The cause is in
+ *       the CALLER, not here: a translucent `active:`/`hover:` tint, and `:active` is
+ *       true for the whole duration of a pointer drag. Fixed at the call site (opaque
+ *       tints) and pinned by a sweep, because a future caller cannot be relied on to
+ *       remember and this component cannot see its own row's classes.
+ *
+ * THE TRAY GEOMETRY IS DERIVED RATHER THAN GUESSED. The open offset used to be a flat
+ * `76 * count` while the tray's real width is its padding plus its pucks plus its gaps —
+ * 216px for three actions against an offset of 228, so a full drag over-revealed by 12px
+ * and showed a strip of whatever sits behind the list. `trayWidth` computes it from the
+ * same numbers the classes use, so the reveal is pixel-exact and the two cannot drift.
  */
 
 export interface SwipeAction {
@@ -35,17 +82,26 @@ export interface SwipeAction {
   onSelect: () => void;
 }
 
-/** Past this fraction of a side's width, letting go RUNS the nearest action instead of
- *  just holding the tray open — the shortcut a full swipe is expected to be. */
-const COMMIT_FRACTION = 0.85;
-/** Below this the row springs back: a stray few pixels must not open anything. */
-const OPEN_THRESHOLD = 0.4;
 /** Movement before the gesture is claimed from the scroller. */
 const CLAIM_PX = 10;
 /** Hold this long without moving and the tray opens — the owner's second way in. */
 const HOLD_MS = 450;
-/** Per action, so a side's tray is as wide as what it holds. */
-const ACTION_W = 76;
+
+/* The tray's own geometry, kept beside the classes that must agree with it (`w-[64px]`,
+   `gap-1.5`, `px-1.5`). A FRACTION of the width used to decide whether to open, which
+   made the 3-action side need twice the drag of the 2-action side for the same gesture —
+   part of why the right-hand tray felt broken. It is an absolute distance now: by the
+   time we are here the gesture has already been claimed (past CLAIM_PX and mostly
+   horizontal), so it is deliberate by construction and only needs to be told apart from
+   a drag that came back to where it started. */
+const PUCK_W = 64;
+const TRAY_GAP = 6;
+const TRAY_PAD = 6;
+const OPEN_PX = 24;
+
+export function trayWidth(count: number): number {
+  return count > 0 ? TRAY_PAD * 2 + count * PUCK_W + (count - 1) * TRAY_GAP : 0;
+}
 
 export function SwipeRow({
   left = [],
@@ -64,6 +120,8 @@ export function SwipeRow({
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const sheetRef = useRef<HTMLDivElement | null>(null);
+  const leftTrayRef = useRef<HTMLDivElement | null>(null);
+  const rightTrayRef = useRef<HTMLDivElement | null>(null);
   // `open` is the SETTLED state and the only thing React re-renders on. The live drag
   // never touches it.
   const [open, setOpen] = useState<"left" | "right" | null>(null);
@@ -77,17 +135,30 @@ export function SwipeRow({
     x: 0,
     pointerId: -1,
     holdTimer: 0 as number | ReturnType<typeof setTimeout>,
+    /** The hold timer already settled this gesture — the finger lifting must not re-decide. */
+    heldOpen: false,
+    /** This gesture just opened a tray, so the click that ends it must not close it. */
+    justOpened: false,
   });
 
-  const leftW = left.length * ACTION_W;
-  const rightW = right.length * ACTION_W;
+  const leftW = trayWidth(left.length);
+  const rightW = trayWidth(right.length);
 
-  /** Write the sheet's position without a re-render. */
+  /** Write the sheet's position AND which side is revealed, without a re-render.
+   *
+   *  ONE FUNNEL for both, deliberately: every path that moves the row (the live drag,
+   *  settling, the hold timer) goes through here, so a side can never be left showing
+   *  through from the opposite direction's gesture. */
   const paint = useCallback((x: number, animate: boolean) => {
     const el = sheetRef.current;
-    if (!el) return;
-    el.style.transition = animate ? "transform 220ms cubic-bezier(.22,.61,.36,1)" : "none";
-    el.style.transform = `translate3d(${x}px,0,0)`;
+    if (el) {
+      el.style.transition = animate ? "transform 220ms cubic-bezier(.22,.61,.36,1)" : "none";
+      el.style.transform = `translate3d(${x}px,0,0)`;
+    }
+    // `visibility` rather than opacity: it also removes the hidden side's buttons from
+    // hit-testing, so a tap in the revealed gap can never land on the tray behind the row.
+    if (leftTrayRef.current) leftTrayRef.current.style.visibility = x > 0 ? "visible" : "hidden";
+    if (rightTrayRef.current) rightTrayRef.current.style.visibility = x < 0 ? "visible" : "hidden";
   }, []);
 
   const settle = useCallback(
@@ -126,6 +197,11 @@ export function SwipeRow({
     const d = drag.current;
     d.active = true;
     d.claimed = false;
+    // Cleared here as a backstop: a click always follows its own pointerup, so these are
+    // consumed long before another gesture starts — but a stale flag would silently
+    // swallow the NEXT tap on the row, so it can never be left set.
+    d.heldOpen = false;
+    d.justOpened = false;
     d.startX = e.clientX;
     d.startY = e.clientY;
     d.base = open === "left" ? leftW : open === "right" ? -rightW : 0;
@@ -137,11 +213,16 @@ export function SwipeRow({
     clearHold();
     if (!open) {
       d.holdTimer = setTimeout(() => {
-        if (!drag.current.active || drag.current.claimed) return;
-        settle(right.length > 0 ? "right" : left.length > 0 ? "left" : null);
-        // The gesture is spent: the tray is open, so the finger lifting must not also
-        // be read as a tap on the row.
-        drag.current.claimed = true;
+        const dd = drag.current;
+        if (!dd.active || dd.claimed) return;
+        const side = right.length > 0 ? "right" : left.length > 0 ? "left" : null;
+        if (!side) return;
+        // The gesture is spent: the tray is open, so neither the finger lifting nor the
+        // click that follows it may be read as a decision about this row.
+        dd.claimed = true;
+        dd.heldOpen = true;
+        dd.justOpened = true;
+        settle(side);
       }, HOLD_MS);
     }
   };
@@ -183,39 +264,45 @@ export function SwipeRow({
     if (!d.active || e.pointerId !== d.pointerId) return;
     d.active = false;
     clearHold();
+    // The hold timer already decided this gesture. Re-deciding here would read `d.x`,
+    // which for a hold is still 0, and close the tray the hold had just opened.
+    if (d.heldOpen) return;
     if (!d.claimed) return; // a tap, or a scroll — leave the row alone
 
+    /* STAYS WHERE IT WAS SLID. A full swipe used to RUN the nearest action on a
+       single-action side; that is gone, because the owner's ask is the opposite ("the bar
+       should stop where you slid it, and you can then click on these buttons") and
+       because firing Delete off a gesture with no confirmation is not something to keep
+       for the sake of a shortcut nobody asked for. It was also unreachable in practice —
+       no side in the app has exactly one action — so removing it changes nothing today
+       and removes the hazard for whoever adds a one-action side. */
     const x = d.x;
-    if (x > 0 && leftW > 0) {
-      if (x >= leftW * COMMIT_FRACTION && left.length === 1) {
-        // A full swipe on a single-action side runs it, which is what a full swipe is
-        // for. With several actions there is nothing unambiguous to run, so it opens.
-        settle(null);
-        left[0].onSelect();
-        return;
-      }
-      settle(x >= leftW * OPEN_THRESHOLD ? "left" : null);
-      return;
-    }
-    if (x < 0 && rightW > 0) {
-      if (-x >= rightW * COMMIT_FRACTION && right.length === 1) {
-        settle(null);
-        right[0].onSelect();
-        return;
-      }
-      settle(-x >= rightW * OPEN_THRESHOLD ? "right" : null);
-      return;
-    }
-    settle(null);
+    const side = x >= OPEN_PX && leftW > 0 ? "left" : x <= -OPEN_PX && rightW > 0 ? "right" : null;
+    d.justOpened = side !== null;
+    settle(side);
   };
 
   const tray = (actions: SwipeAction[], side: "left" | "right") => (
     <div
+      ref={side === "left" ? leftTrayRef : rightTrayRef}
       className={
         "absolute inset-y-0 flex items-center gap-1.5 px-1.5 " +
         (side === "left" ? "start-0" : "end-0")
       }
       aria-hidden={open !== side}
+      /* React owns the SETTLED truth and `paint` overrides it during a drag. Both agree
+         at rest, so a re-render while a tray is open cannot hide it, and a re-render
+         while it is closed cannot reveal it. */
+      style={{
+        visibility: open === side ? "visible" : "hidden",
+        /* The board's revealed surface (`rgba(255,255,255,.02)`) over an opaque panel, so
+           the gap the row leaves behind reads as a tray rather than as a hole onto the
+           app's live background canvas. NEVER the `background` shorthand — it resets
+           `background-color` to transparent and the fix silently undoes itself while
+           looking identical in the source (the v2.106.40 `.rglass` trap). */
+        backgroundColor: "var(--card)",
+        backgroundImage: "linear-gradient(rgba(255,255,255,.02),rgba(255,255,255,.02))",
+      }}
     >
       {actions.map((a) => (
         <button
@@ -232,10 +319,14 @@ export function SwipeRow({
         >
           <span
             aria-hidden="true"
-            // GLASSY: a translucent tint of the action's own hue over a blur, with a
-            // hairline of the same hue — so it reads as a lit pane rather than a flat
-            // circle, and the colour survives both themes.
-            className="grid size-11 place-items-center rounded-full border shadow-lg backdrop-blur-md"
+            /* GLOSSY AND SHAPED, to the board's own numbers: a 40px squircle at a 13px
+               radius (it was a 44px circle), a two-stop tint of the action's own hue, a
+               hairline of the same hue and an inner highlight — so it reads as a lit pane
+               rather than a flat disc, and the colour survives both themes.
+               NO `backdrop-blur`: the surface behind it is opaque now, so a blur per puck
+               per row would buy nothing and cost paint on the app's densest scrolling
+               list (the v2.99.84 rule). */
+            className="grid size-10 place-items-center rounded-[13px] border shadow-lg"
             style={{
               background: `linear-gradient(160deg, ${a.color}f2, ${a.color}bf)`,
               borderColor: `${a.color}80`,
@@ -270,8 +361,17 @@ export function SwipeRow({
         onPointerMove={onPointerMove}
         onPointerUp={finish}
         onPointerCancel={finish}
-        // A row dragged open must not also register the tap that closed it.
         onClickCapture={(e) => {
+          /* A row dragged open must not also register the tap that closed it — but the
+             click that ENDS the opening drag is part of that same gesture, and closing on
+             it is what made a swipe impossible to leave open. Swallow it without
+             deciding anything. */
+          if (drag.current.justOpened) {
+            drag.current.justOpened = false;
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
           if (open) {
             e.preventDefault();
             e.stopPropagation();

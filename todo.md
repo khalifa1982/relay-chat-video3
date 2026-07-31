@@ -11278,6 +11278,23 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.60 — the swipe row stays where you slid it, opaque, one side at a time (2026-07-31)
+
+Owner: *"when you slide on a message or group, the back buttons above the cover of the message or group become transparent, which is incorrect. When you slide right or left, that bar shouldn't be transparent; it should only show you the icons, either on the left or the right. When you remove your hand, the bar should stop where you slid it, and you can then click on these buttons: pen, delete, or whatever is mentioned there."*
+
+- [x] **Measured all three on the real bundle before changing anything** — and my first two diagnoses were both wrong. A grep of the built stylesheet said the row's tint had no alpha; a real drag reports `oklab(0.24 … / 0.35)`. A distance sweep then killed the `OPEN_THRESHOLD` theory: 60/100/140/180/220/260px all sprang back.
+- [x] **The tray opened and the CLICK that ends the drag closed it.** Timeline via a `window`-capture listener (React dispatches `onClickCapture` from its root, above the row, and its `stopPropagation` stops the native event too — which is why two earlier "no click" readings were inconclusive): `pointerup` −220 closed → `lostpointercapture` −228 **open** → `click` → closed. `onClickCapture` could not tell the click ending the OPENING gesture from a later tap on an open row.
+- [x] Press-and-hold had the same defect: the hold settled it open, then `finish` re-decided on `d.x = 0` and closed it. Both flagged on the gesture (`justOpened` / `heldOpen`), cleared on the next `pointerdown` so neither can go stale and swallow a real tap.
+- [x] Full-swipe-fires-the-action **deleted** (contradicts the ask, would Delete without confirmation, and was unreachable — no side has exactly one action). Opening is an absolute `OPEN_PX` rather than a fraction, so the 3-action side no longer needs twice the drag.
+- [x] One side at a time, structurally: `paint` is the single funnel for position AND revealed side, using `visibility` so a hidden tray leaves hit-testing; React owns the settled truth in JSX.
+- [x] Transparency fixed at the CALLER (`:active` is true for a whole drag): three opaque steps — rest `--background`, hover `--card`, selected `--muted`. Also removed a same-specificity `bg-background` vs selected-tint rivalry whose winner was decided by stylesheet emission order.
+- [x] `trayWidth` derives the open offset from the classes that draw the tray (was a flat `76 * count` against a real 216px tray, so a full drag over-revealed by 12px).
+- [x] Board spec: puck 40px / 13px radius, revealed surface `rgba(255,255,255,.02)` over an opaque panel via `background-color` + `background-image` (never the shorthand — the v2.106.40 `.rglass` trap). `backdrop-blur` dropped.
+- [x] **Verified 11/11 driving the rebuilt bundle** at 390px dark: opaque mid-drag, correct side each way, stays open at 216px after both a 110px and a 42px swipe, buttons hit-testable, tapping Delete reaches its confirmation, hold stays open, scrolling still works.
+- [x] **19/19 tripwires bite by mutation**, byte-exact restore. Four were first misreported as aborts by my own count-guard (`"(44)".isdigit()` is false) — fixed and re-run, all four bit.
+- [x] Two pre-existing pins rewritten to the property; both had frozen exactly what the owner asked to change (the full-swipe conjuncts, and `backdrop-blur-md`).
+- [ ] **Not verified on a phone** — a touch pointer's click behaviour is the one thing that differs from the Chromium mouse drag measured here.
+
 ## v2.106.59 — a group call is refused when the media pool is full, never meshed (2026-07-31)
 
 The ONE clause that differs between the node-scaling doc the owner re-uploaded and the
