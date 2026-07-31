@@ -11278,6 +11278,65 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.46 — private for control, public for media — made structural (2026-07-31)
+
+The owner opened the app-fleet → SFU security-group path (TCP 4443 + ICMP, private) and handed over
+the ground truth, with two hard rules from the infrastructure side. Checking those rules against the
+code produced one large correction and two real gaps.
+
+- [x] **THE CORRECTION, and it is good news rather than a criticism.** Their note says "the node
+      agent (mediasoup workers + Redis self-registration + the 4443 signaling API) is step one; it
+      does not exist." It DOES exist — `voip-node/agent.mjs`, 677 lines — and it already implements
+      **both** of their rules: `listenInfos` carry `ip: self.privateIp` with
+      `announcedAddress: self.publicIp` (listen private, announce public), `nodeApiUrl()` builds from
+      `node.privateIp` (control over the private path), and IMDSv2 is read at boot AND re-read on a
+      timer, with the process EXITING on a public-IP change because `announcedAddress` is immutable
+      per transport — so a changed address would otherwise leave every transport announcing one that
+      no longer reaches it while the heartbeat looked perfect. Nothing is hardcoded anywhere.
+- [x] **GAP 1 — the signaling API bound `0.0.0.0`, so the security group was the ONLY thing keeping
+      it off the public internet.** It works: the group permits 4443 only from the app fleet's group.
+      But their rule says bind the private IP, and binding it makes the rule STRUCTURAL — a group
+      widened to `0.0.0.0/4443` by mistake still cannot reach a listener the kernel is not accepting
+      on. Now `self.privateIp || "127.0.0.1"`.
+- [x] **The loopback fallback fails shut, and that is consistent rather than a new hazard**: with
+      IMDS unreachable the API is unreachable from the fleet — but such a node also reports an empty
+      `publicIp`, which `decodeNode`'s `isIpv4` refuses, so the app never selects it. A node that
+      cannot learn its own address is already useless. Both halves pinned together.
+- [x] **The ordering became load-bearing where it was not.** `self = await readSelf()` runs before
+      `startApi()`; binding `0.0.0.0` needed nothing from `self`, so a reorder was previously
+      harmless and would now silently bind loopback — the fleet's first signaling call would hang,
+      which is exactly the wasted debugging cycle the owner's network fix was meant to avoid.
+- [x] **GAP 2 — the `4443` constant lives in TWO implementations in two languages with no parity
+      check.** The app's `mediasoupSignaling.ts` and the agent's `.mjs` on another machine, so no
+      import can unify them. This is the class the repo has been bitten by twice (v2.99.71's TURN
+      checker, v2.105.11's token classifier), and diverging here means signaling posts to a port
+      nothing is listening on: a timeout with nothing in any log pointing at the cause. A test now
+      compares the two values, and pins that both read the same env-var name so an operator override
+      moves them together.
+- [x] **The runbook records the STABLE identifiers only** — instance ids, AZs, security-group ids —
+      plus the fact that a `no-ping` before the rule was opened would have read as "the code is
+      wrong" rather than "the firewall is shut", which is worth remembering if it hangs again.
+- [x] **A contradiction of my own, caught and removed rather than shipped**: my first draft added a
+      second node table saying the IPs are "deliberately not written down", while the file has
+      carried them since v2.106.28 with the correct caveat that they are for humans checking a node
+      by hand. Two positions in one document is worse than either; the duplicate went and only the
+      genuinely new information stayed.
+
+`server/voipWebRtcServer.test.ts` → 26. **All 7 tripwires verified by MUTATION** off a
+confirmed-green baseline from byte-exact backups, both sources byte-identical afterwards —
+including the API rebound to `0.0.0.0`, bound to the PUBLIC address, `self` never resolved before
+the listen, the media listen/announce SWAPPED, and each side of the port constant moved
+independently.
+
+**Two of my own assertions were wrong about the code, both caught by failing on correct source**:
+`indexOf("startApi()")` also matches `function startApi()` 100 lines earlier, so the ordering check
+compared the declaration rather than the call; and I guessed a function name that does not exist
+(`createWebRtcServerFor` — the listen infos are built in `startWorkers`).
+
+**NOT VERIFIED AGAINST A NODE**: no AWS credentials and no route to the fleet from here, so the
+bind change is proven by reading and by `node --check`, not by a socket. No schema change, no new
+dependency, no new env var. 4855 tests.
+
 ## v2.106.45 — the mediasoup media agent becomes deployable (2026-07-31)
 
 Owner: **"Start the mediasoup now"** — which overrides their own document's ordering (it gated

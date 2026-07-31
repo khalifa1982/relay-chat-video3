@@ -78,11 +78,51 @@ The coturn probe in `verify` is deliberately unguarded: it selects the relay hos
 `TURN_HOSTS` addresses against SSM-managed IPs, so a media node can never be selected, and it is
 read-only.
 
-**Still worth doing, owner-side:** tag these two instances something of their own (`relay-voip`)
-rather than relying on the guard. The guard makes a mis-tag harmless; a correct tag makes the
-`verify` action's instance table readable, and stops `aws-ops` reporting a media node as part of the
-app fleet. Nothing in the repo records what they are currently named, which is exactly why the
-guard keys on the filesystem instead.
+**Still worth doing, owner-side:** tag these two instances `relay-voip`. The filesystem guard makes
+a mis-tag harmless, but the tag is what `voip-deploy` targets (see Install / update) and what makes
+the `verify` action's instance table readable.
+
+## The network path, and the addressing rule
+
+The node table above is confirmed unchanged as of 2026-07-31, and both nodes are named
+`relay-voip-a` / `relay-voip-b`. What that table does not record, because it is what the
+infrastructure guarantees rather than what a node reports:
+
+**Security groups.** The app fleet (`sg-088733e21425fb412`) reaches the SFU nodes
+(`sg-0e09091ce10623ae5`) on **TCP 4443 and ICMP**, private only — opened and verified reachable
+2026-07-31. Media is **UDP/TCP 40000–49999 on the public interface**. Group ids are stable, unlike
+the addresses, which is why they are written here and the addresses stay a per-boot registry value.
+
+Before that rule was opened, the fleet's probe to the nodes returned `no-ping` — so the first
+signaling call would simply have hung, and the obvious reading would have been "the code is wrong"
+rather than "the firewall is shut". Worth remembering if it ever hangs again.
+
+### Private for control, public for media — and never crossed
+
+| | address | port | who |
+|---|---|---|---|
+| signaling (control) | **private** | 4443 | app fleet → node, HMAC-signed |
+| media (RTP) | **public**, announced to clients | 40000–49999 | browser ↔ node |
+
+Both halves are structural rather than remembered, and `server/voipWebRtcServer.test.ts` pins each:
+
+- the agent's API listens on `self.privateIp`, **not `0.0.0.0`**. Binding every interface works —
+  the security group only permits 4443 from the app's group — but it leaves that group as the *only*
+  thing keeping an internal API off the public internet. Binding the private address means a group
+  widened to `0.0.0.0/4443` by mistake still cannot reach a listener the kernel is not accepting on.
+- the transports do the opposite: `listenInfos` carry `ip: self.privateIp` with
+  `announcedAddress: self.publicIp`. Swapping them announces an address clients cannot route to
+  while every reading on the box looks healthy.
+- `nodeApiUrl()` builds from `node.privateIp` and is forbidden by test from touching `publicIp`.
+- the `4443` constant exists in two implementations in two languages (the app's
+  `mediasoupSignaling.ts`, the agent's `.mjs` on another machine), so no import can unify them — a
+  test compares the two values instead. Diverge, and signaling posts to a port nothing is listening
+  on: a timeout with nothing in any log pointing at the cause.
+
+With IMDS unreachable the bind falls back to loopback, which is unreachable from the fleet — and that
+is consistent rather than a new hazard, because such a node also reports an empty `publicIp` and
+`decodeNode`'s `isIpv4` refuses the record, so the app never selects it. A node that cannot learn its
+own address is already useless.
 
 ## Install / update
 
