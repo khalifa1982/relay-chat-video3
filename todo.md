@@ -11278,6 +11278,104 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.32 — hardening the dormant SFU registry, and a fail-shut defect I shipped four hours earlier (2026-07-31)
+
+A 26-agent design pass over v2.106.28's mediasoup work chose this as **increment zero** because it
+is zero-risk: `grep -rln "voipRegistry|mediasoupSignaling" server/ client/ shared/` returns only
+tests plus the two modules referencing each other, so nothing in `relay.ts` or the client imports
+either, and every function is pure or takes an injected client.
+
+### The defect — a two-machine clock comparison that failed SHUT
+
+`isNodeFresh` was `age >= 0 && age <= ttlMs`, where `updatedAt` is the **node's** clock and `nowMs`
+is the **reader's**. One millisecond of forward skew excluded that node; both nodes skewed forward
+excluded the whole fleet and sent every call to LiveKit with nothing saying why — the exact
+direction the module's own header says must never happen. Two hosts on NTP sit within a few
+milliseconds, which is why it would have looked perfect and then bitten once during a clock step.
+Bounded by `NODE_CLOCK_SKEW_MS` (2s) rather than removed: a timestamp a *minute* ahead is still
+evidence something is broken and must not read as health.
+
+**The pin that existed had frozen the defect.** It asserted only the far-future half, which `>= 0`
+satisfies — so it read as protecting something while the near-future half was fail-shut. Rewritten
+to the property so both halves bite, rather than deleted.
+
+### Three lagging-signal gaps
+
+- `cpuLoad` is `loadavg()[0]`, a **one-minute** average, and `consumers` only rises once people have
+  joined — so fifty dials in three seconds all read one snapshot and land on one node.
+- `routers` moves the instant a room is assigned, which makes it the only fast brake. Now a hard
+  ceiling that **excludes** (`NODE_MAX_ROUTERS`) rather than ranking last, for the same reason the
+  CPU ceiling excludes: a node past its limit degrades for everybody already on it.
+- `nodeLoadScore` takes `pendingRooms` — the app correcting for what it has itself just done, inside
+  one refresh window, with no extra state to keep in sync because the caller already knows what it
+  assigned.
+
+### The composition is the point
+
+`planRoomTransport` picks the node **and** decides the transport in one place, because two callers
+each doing half is how a client is told "mediasoup" while the server holds no assignment, or holds
+an assignment it then routes past. Both are calls that cannot connect and neither is visible in
+either half alone. The invariant is structural — mediasoup always carries a `voip`, everything else
+always `null` — asserted as a property over every combination, with a guard that both branches were
+actually reached.
+
+- `assignmentStillValid` compares the **public IP**, and that check is only possible because the IPs
+  are auto-assigned rather than Elastic: a node whose record is fresh but whose address has changed
+  has been stopped and started, so its workers are new processes and every router the room depended
+  on is gone. The changed address is the only evidence of that.
+- `transportForHydratedRoom` reads an **absent** transport as the pre-feature answer and never as
+  mediasoup. A rolling deploy serves both bundles for ~60s, long enough for real calls to be handed
+  to a node that has never heard of them.
+
+### The fail-open link the review found missing
+
+Give one node the wrong `VOIP_NODE_SECRET` and it heartbeats **happily** — the heartbeat is a Redis
+write it makes about itself, not a request anybody signs — while answering 401 to every operation.
+So the plan keeps selecting it, every call fails, and nothing degrades because the registry says the
+fleet is fine. `mediasoupSignaling` now records outcomes and `planRoomTransport` takes
+`excludeInstanceIds`, and the failures are deliberately **not** equivalent:
+
+| reason | effect | why |
+|---|---|---|
+| `unauthorized` | excludes on the FIRST failure, longest cooldown | a wrong secret needs a human; one is all the evidence there will ever be |
+| `timeout` / `unreachable` | needs THREE | excluding a healthy node halves a two-node fleet, which is worse than the blip |
+| `node-error` / `bad-response` | NEVER excludes | the node answered and the *operation* failed; excluding would let one malformed payload take the fleet out |
+| `unconfigured` | never excludes | not about the node at all |
+
+A success clears the record outright rather than decaying — a node that just answered works. **It may
+exclude every node, deliberately:** if both really are refusing, the right answer is LiveKit or the
+mesh, and a "never exclude the last one" rule would keep routing calls into a fleet that cannot carry
+them. The **call** fails open, not the SFU. Recording is a separate named function
+(`callNodeTracked`) rather than folded into `callNode`, because `callNode` is also how a health probe
+talks to a node, and a probe that changes routing as a side effect of looking is its own bug.
+
+### Verification
+
+`server/voipAssignment.test.ts` (41) + `voipRegistry.test.ts` → 30 + `mediasoupSignaling.test.ts`
+→ 38. **18 tripwires verified by mutation** off a confirmed-green baseline, sources byte-identical
+afterwards.
+
+- **Two survivors were real gaps in my own tests, both the coincidence class.** The mismatched-zone
+  case used two hosts with the match at index 0, and pushing the match first *preserves* that order —
+  so identity and a reorder gave the same answer and dropping the length guard survived (rewritten
+  with three hosts and the match at index 1, where unguarded it answers `["b","a","c"]`). And the
+  exclusion-reason case sat under an assertion whose own `unhealthyNodeIds` call had already **pruned**
+  the expired entry, so the reader answered null because the record was gone rather than because of
+  its own time check.
+- **One survivor is a non-defect, reported rather than counted:** dropping `|| !node` survives the
+  suite and fails `tsc` with three TS18047 errors, and `pnpm verify` typechecks *before* it tests —
+  so that property is guarded by the compiler, which is stronger than an assertion.
+- **One bad mutation of mine, reported rather than counted:** removing an `if` left a dangling
+  `else if`, i.e. a syntax error, so the file failed to *load* and the harness's test-count guard
+  caught it. A broken mutation is not a result; re-run as a genuine change, it bit.
+- The **ES5 iteration trap** bit for the fourth time (v2.99.72, v2.99.98, v2.105.21): `for…of` over a
+  `Map` needs `downlevelIteration` and failed the build with TS2802. Now `.forEach`, with deletions
+  collected rather than made mid-walk.
+
+**Not verified against a node, said plainly:** nothing in the app imports any of this yet, no media
+has flowed, and nobody has watched a call land on a real node. No schema change, no new dependency,
+no new env var. 4716 tests.
+
 ## v2.106.31 — the accent as text fails AA in the theme the app defaults to (2026-07-31)
 
 Working the owner's *"they do not match the new design"* on the message screens. Measured as

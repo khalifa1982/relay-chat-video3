@@ -17,15 +17,25 @@ import { readFileSync } from "node:fs";
 import { signBody, SIG_HEADER, SIG_WINDOW_MS, verifySignature } from "../voip-node/sign.mjs";
 import {
   callNode,
+  callNodeTracked,
   mediasoupConfigured,
   nodeApiUrl,
+  nodeExclusionReason,
+  NODE_FAILURES_BEFORE_EXCLUDE,
   NODE_TIMEOUT_MS,
+  NODE_UNAUTHORIZED_COOLDOWN_MS,
+  NODE_UNREACHABLE_COOLDOWN_MS,
+  recordNodeOutcome,
+  resetNodeHealth,
+  unhealthyNodeIds,
   VOIP_API_PORT,
   voipNodeSecret,
   type FetchLike,
+  type NodeFailure,
+  type NodeHealthStore,
   type NodeOp,
 } from "./mediasoupSignaling";
-import type { VoipNode } from "./voipRegistry";
+import { planRoomTransport, type VoipNode } from "./voipRegistry";
 import { codeOnly } from "./testing/codeOnly";
 
 const SECRET = "test-shared-secret-not-a-real-one";
@@ -376,5 +386,236 @@ describe("the wire details that must not drift", () => {
     process.env.VOIP_NODE_SECRET = "later";
     expect(voipNodeSecret()).toBe("later");
     expect(mediasoupConfigured()).toBe(true);
+  });
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────────────
+ * NODE HEALTH — the link that makes the fallback happen at all.
+ *
+ * THE FAILURE THIS EXISTS FOR IS INVISIBLE FROM THE REGISTRY, and that is the whole point:
+ * give one node the wrong `VOIP_NODE_SECRET` and it heartbeats perfectly — the heartbeat is a
+ * Redis write it makes about ITSELF, not a request anybody signs — while answering 401 to
+ * every operation. Without this, the plan keeps selecting it, every call assigned to it fails,
+ * and nothing anywhere degrades.
+ *
+ * Every case uses its OWN store, because a module-level Map tests cannot isolate is how state
+ * leaks between cases and makes an order-dependent suite.
+ * ────────────────────────────────────────────────────────────────────────────────────── */
+describe("an unhealthy node is set aside so the call can go elsewhere", () => {
+  const fresh = (): NodeHealthStore => new Map();
+  const ID = NODE.instanceId;
+
+  it("UNAUTHORIZED excludes on the FIRST failure — a wrong secret will not heal itself", () => {
+    /* One is all the evidence there is ever going to be: every subsequent op fails
+       identically, so waiting for repeats only costs more calls. */
+    const store = fresh();
+    expect(recordNodeOutcome(ID, { ok: false, reason: "unauthorized" }, { nowMs: NOW, store })).toBe(
+      true,
+    );
+    expect(unhealthyNodeIds({ nowMs: NOW, store }).has(ID)).toBe(true);
+    expect(nodeExclusionReason(ID, { nowMs: NOW, store })).toBe("unauthorized");
+  });
+
+  it("a TIMEOUT needs repeats, so one dropped packet does not halve a two-node fleet", () => {
+    /* The cost of being wrong is asymmetric: excluding a healthy node removes half the SFU
+       capacity, while carrying a broken one for two more ops costs those two calls a fallback
+       they were going to take anyway. */
+    const store = fresh();
+    for (let i = 1; i < NODE_FAILURES_BEFORE_EXCLUDE; i += 1) {
+      expect(
+        recordNodeOutcome(ID, { ok: false, reason: "timeout" }, { nowMs: NOW, store }),
+        `failure ${i} must not exclude`,
+      ).toBe(false);
+      expect(unhealthyNodeIds({ nowMs: NOW, store }).size).toBe(0);
+    }
+    expect(recordNodeOutcome(ID, { ok: false, reason: "timeout" }, { nowMs: NOW, store })).toBe(true);
+    expect(unhealthyNodeIds({ nowMs: NOW, store }).has(ID)).toBe(true);
+  });
+
+  it("`unreachable` counts toward the same budget — both mean 'stopped answering'", () => {
+    const store = fresh();
+    recordNodeOutcome(ID, { ok: false, reason: "timeout" }, { nowMs: NOW, store });
+    recordNodeOutcome(ID, { ok: false, reason: "unreachable" }, { nowMs: NOW, store });
+    expect(recordNodeOutcome(ID, { ok: false, reason: "timeout" }, { nowMs: NOW, store })).toBe(true);
+  });
+
+  it("A NODE-ERROR NEVER EXCLUDES — the node answered, the operation failed", () => {
+    /* The important negative. `node-error` and `bad-response` mean the request reached a
+       working node and it refused the shape, or a room had already gone. Excluding on those
+       would let one malformed payload from the app take the whole fleet out of service. */
+    const store = fresh();
+    for (const reason of ["node-error", "bad-response"] as NodeFailure[]) {
+      for (let i = 0; i < NODE_FAILURES_BEFORE_EXCLUDE + 3; i += 1) {
+        expect(recordNodeOutcome(ID, { ok: false, reason }, { nowMs: NOW, store }), reason).toBe(
+          false,
+        );
+      }
+      expect(unhealthyNodeIds({ nowMs: NOW, store }).size, reason).toBe(0);
+    }
+  });
+
+  it("`unconfigured` never excludes, because it is not about the node", () => {
+    const store = fresh();
+    for (let i = 0; i < 10; i += 1) {
+      recordNodeOutcome(ID, { ok: false, reason: "unconfigured" }, { nowMs: NOW, store });
+    }
+    expect(unhealthyNodeIds({ nowMs: NOW, store }).size).toBe(0);
+  });
+
+  it("A SUCCESS CLEARS THE RECORD OUTRIGHT rather than decrementing", () => {
+    /* A node that just answered is a node that works. A slow decay would go on punishing a
+       node that had already recovered — and on a fleet of two that is capacity nobody
+       needed to lose. */
+    const store = fresh();
+    recordNodeOutcome(ID, { ok: false, reason: "timeout" }, { nowMs: NOW, store });
+    recordNodeOutcome(ID, { ok: false, reason: "timeout" }, { nowMs: NOW, store });
+    recordNodeOutcome(ID, { ok: true }, { nowMs: NOW, store });
+    // Back to a full budget: two more failures must NOT be enough.
+    expect(recordNodeOutcome(ID, { ok: false, reason: "timeout" }, { nowMs: NOW, store })).toBe(false);
+    expect(recordNodeOutcome(ID, { ok: false, reason: "timeout" }, { nowMs: NOW, store })).toBe(false);
+  });
+
+  it("a success clears an EXCLUSION too, so a restarted node comes straight back", () => {
+    const store = fresh();
+    recordNodeOutcome(ID, { ok: false, reason: "unauthorized" }, { nowMs: NOW, store });
+    expect(unhealthyNodeIds({ nowMs: NOW, store }).has(ID)).toBe(true);
+    recordNodeOutcome(ID, { ok: true }, { nowMs: NOW, store });
+    expect(unhealthyNodeIds({ nowMs: NOW, store }).has(ID)).toBe(false);
+  });
+
+  it("THE COOLDOWN EXPIRES — an exclusion is never permanent", () => {
+    /* Without expiry a single bad minute takes a node out until the app restarts, which on a
+       two-node fleet is the SFU switched off by a blip. */
+    const store = fresh();
+    recordNodeOutcome(ID, { ok: false, reason: "unauthorized" }, { nowMs: NOW, store });
+    expect(unhealthyNodeIds({ nowMs: NOW + NODE_UNAUTHORIZED_COOLDOWN_MS - 1, store }).has(ID)).toBe(
+      true,
+    );
+    expect(unhealthyNodeIds({ nowMs: NOW + NODE_UNAUTHORIZED_COOLDOWN_MS + 1, store }).has(ID)).toBe(
+      false,
+    );
+  });
+
+  it("…and the REASON reader has its own time check, not one borrowed from the pruning", () => {
+    /* THIS CASE PASSED FOR THE WRONG REASON and mutation is what showed it. It used to sit
+       under the assertion above, and that assertion's `unhealthyNodeIds` call had ALREADY
+       PRUNED the expired entry — so the reader answered null because the record was gone, and
+       gutting its own `e.until > now` guard changed nothing. On a fresh store the record is
+       still present and only the reader's own check can answer. */
+    const store = fresh();
+    recordNodeOutcome(ID, { ok: false, reason: "unauthorized" }, { nowMs: NOW, store });
+    expect(nodeExclusionReason(ID, { nowMs: NOW, store })).toBe("unauthorized");
+    expect(nodeExclusionReason(ID, { nowMs: NOW + NODE_UNAUTHORIZED_COOLDOWN_MS - 1, store })).toBe(
+      "unauthorized",
+    );
+    expect(
+      nodeExclusionReason(ID, { nowMs: NOW + NODE_UNAUTHORIZED_COOLDOWN_MS + 1, store }),
+      "the record is still in the store — only the reader's own check can answer",
+    ).toBeNull();
+    expect(store.has(ID), "and this case must not have pruned it either").toBe(true);
+  });
+
+  it("a wrong secret is held longer than a node that merely stopped answering", () => {
+    /* Different diagnoses, different waits: a restart is seconds and needs retrying soon; a
+       misconfigured secret needs a human and retrying it fast only wastes calls. */
+    expect(NODE_UNAUTHORIZED_COOLDOWN_MS).toBeGreaterThan(NODE_UNREACHABLE_COOLDOWN_MS);
+    expect(NODE_UNREACHABLE_COOLDOWN_MS).toBeGreaterThan(0);
+  });
+
+  it("reading the set PRUNES expired entries, so it cannot grow without bound", () => {
+    const store = fresh();
+    for (let i = 0; i < 5; i += 1) {
+      recordNodeOutcome(`i-node${i}`, { ok: false, reason: "unauthorized" }, { nowMs: NOW, store });
+    }
+    expect(store.size).toBe(5);
+    unhealthyNodeIds({ nowMs: NOW + NODE_UNAUTHORIZED_COOLDOWN_MS + 1, store });
+    expect(store.size, "a fleet whose nodes come and go must not accumulate").toBe(0);
+  });
+
+  it("IT MAY EXCLUDE EVERY NODE — the CALL fails open, not the SFU", () => {
+    /* Deliberately no "never exclude the last one" rule. If both nodes really are refusing,
+       the right answer is LiveKit or the mesh, and protecting the fleet's membership here
+       would keep routing calls into a fleet that cannot carry them. */
+    const store = fresh();
+    recordNodeOutcome("i-a", { ok: false, reason: "unauthorized" }, { nowMs: NOW, store });
+    recordNodeOutcome("i-b", { ok: false, reason: "unauthorized" }, { nowMs: NOW, store });
+    expect(unhealthyNodeIds({ nowMs: NOW, store }).size).toBe(2);
+  });
+
+  it("nodes are tracked SEPARATELY — one bad node does not condemn its neighbour", () => {
+    const store = fresh();
+    recordNodeOutcome("i-a", { ok: false, reason: "unauthorized" }, { nowMs: NOW, store });
+    expect(unhealthyNodeIds({ nowMs: NOW, store })).toEqual(new Set(["i-a"]));
+  });
+
+  it("the returned set is a COPY, so a caller cannot edit the fleet's health by holding it", () => {
+    const store = fresh();
+    recordNodeOutcome(ID, { ok: false, reason: "unauthorized" }, { nowMs: NOW, store });
+    const s1 = unhealthyNodeIds({ nowMs: NOW, store });
+    s1.clear();
+    expect(unhealthyNodeIds({ nowMs: NOW, store }).has(ID)).toBe(true);
+  });
+
+  it("`callNodeTracked` records, and plain `callNode` deliberately does NOT", async () => {
+    /* A separate NAMED function rather than folding the recording into `callNode`, because
+       `callNode` is also how a health probe or an operator tool talks to a node — and a probe
+       that changes the fleet's routing as a side effect of looking at it is its own bug. */
+    const store = fresh();
+    const refuse: FetchLike = async () => ({ ok: false, status: 401, text: async () => "" });
+
+    await callNode(NODE, "state", {}, { fetchImpl: refuse, secret: SECRET, nowMs: NOW });
+    expect(unhealthyNodeIds({ nowMs: NOW, store }).size, "a probe must not condemn a node").toBe(0);
+
+    const r = await callNodeTracked(NODE, "state", {}, {
+      fetchImpl: refuse,
+      secret: SECRET,
+      nowMs: NOW,
+      store,
+    });
+    expect(r.ok).toBe(false);
+    expect(unhealthyNodeIds({ nowMs: NOW, store }).has(ID)).toBe(true);
+  });
+
+  it("`callNodeTracked` returns exactly what `callNode` returns", async () => {
+    // The tracking is a side effect; wrapping must not change the answer the caller acts on.
+    const store = fresh();
+    const okFetch: FetchLike = async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ ok: true, routers: 2 }),
+    });
+    const bare = await callNode(NODE, "state", {}, { fetchImpl: okFetch, secret: SECRET, nowMs: NOW });
+    const tracked = await callNodeTracked(NODE, "state", {}, {
+      fetchImpl: okFetch,
+      secret: SECRET,
+      nowMs: NOW,
+      store,
+    });
+    expect(tracked).toEqual(bare);
+    expect(unhealthyNodeIds({ nowMs: NOW, store }).size, "a success excludes nothing").toBe(0);
+  });
+
+  it("`resetNodeHealth` clears the store it is handed", () => {
+    const store = fresh();
+    recordNodeOutcome(ID, { ok: false, reason: "unauthorized" }, { nowMs: NOW, store });
+    resetNodeHealth(store);
+    expect(store.size).toBe(0);
+  });
+
+  it("the exclusion set is the SHAPE `planRoomTransport` takes, so the link really connects", () => {
+    /* The two halves are in different modules and this is the seam between them. A Set of
+       instance ids is what `excludeInstanceIds` accepts, and asserting the shape here is what
+       stops the tracker becoming an observation nobody consumes. */
+    const store = fresh();
+    recordNodeOutcome(ID, { ok: false, reason: "unauthorized" }, { nowMs: NOW, store });
+    const excluded = unhealthyNodeIds({ nowMs: NOW, store });
+    const plan = planRoomTransport({
+      nodes: [NODE],
+      nowMs: NOW,
+      livekitEnabled: true,
+      excludeInstanceIds: excluded,
+    });
+    expect(plan.transport, "a refusing node must not keep taking rooms").toBe("livekit");
+    expect(plan.voip).toBeNull();
   });
 });

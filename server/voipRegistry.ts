@@ -57,6 +57,30 @@ export const NODE_INDEX_KEY = "relay:voip:nodes";
 
 /** A record older than this is not trusted to be alive. */
 export const NODE_TTL_MS = 15_000;
+/**
+ * How far a node's clock may run AHEAD of the reader's before its record is disbelieved.
+ *
+ * Not a tolerance for sloppiness — a bound on a comparison between two machines' clocks.
+ * Without it the freshness test failed SHUT on a millisecond of skew (see `isNodeFresh`).
+ */
+export const NODE_CLOCK_SKEW_MS = 2_000;
+/**
+ * A hard ceiling on rooms per node, and it exists because the other two load signals LAG.
+ *
+ * `cpuLoad` is `loadavg()[0]`, a ONE-MINUTE average, and `consumers` only rises after people
+ * have actually joined — so fifty dials in three seconds all read one snapshot and all land
+ * on the same node. `routers` moves the instant a room is assigned, which makes it the only
+ * fast brake available. A starting value: like the CPU ceiling it can only be calibrated by
+ * load-testing the real subscription pattern on a 2-core box.
+ */
+export const NODE_MAX_ROUTERS = 40;
+/**
+ * What a just-assigned room counts for while its participants have not joined yet.
+ *
+ * The app correcting for what it has itself just done, inside one refresh window — with no
+ * extra state to keep in sync, because the caller already knows what it assigned.
+ */
+export const PENDING_CONSUMER_WEIGHT = 2;
 /** How often a node refreshes — three beats inside the TTL, so one lost beat is survivable. */
 export const NODE_HEARTBEAT_MS = 5_000;
 
@@ -151,12 +175,29 @@ export function encodeNode(n: VoipNode): string {
  */
 export function isNodeFresh(n: VoipNode, nowMs: number, ttlMs = NODE_TTL_MS): boolean {
   const age = nowMs - n.updatedAt;
-  return age >= 0 && age <= ttlMs;
+  /* THE LOWER BOUND WAS `>= 0`, AND THAT WAS A FAIL-SHUT DEFECT — the exact direction this
+     file's own header says must never happen.
+     `updatedAt` is the NODE's clock and `nowMs` is the READER's, so they are two machines'
+     clocks compared to the millisecond. ONE millisecond of forward skew on a node excluded
+     it; both nodes skewed forward excluded the WHOLE FLEET, and every call silently went to
+     LiveKit with nothing anywhere saying why. Two hosts running NTP are normally within a
+     few milliseconds, which is precisely why this would have looked fine and then bitten
+     once during a clock step.
+     The recorded intent is KEPT and merely bounded: a timestamp far in the future is still
+     evidence something is wrong and must not read as health. A couple of seconds is skew;
+     a minute is a broken clock. */
+  return age >= -NODE_CLOCK_SKEW_MS && age <= ttlMs;
 }
 
 /** Fresh AND not saturated: the two independent reasons to skip a node. */
 export function isNodeUsable(n: VoipNode, nowMs: number, ttlMs = NODE_TTL_MS): boolean {
-  return isNodeFresh(n, nowMs, ttlMs) && n.cpuLoad < NODE_CPU_CEILING;
+  return (
+    isNodeFresh(n, nowMs, ttlMs) &&
+    n.cpuLoad < NODE_CPU_CEILING &&
+    // EXCLUDED rather than ranked last, for the same reason as the CPU ceiling: a node at
+    // its room ceiling does not degrade gracefully, it degrades for everybody already on it.
+    n.routers < NODE_MAX_ROUTERS
+  );
 }
 
 /**
@@ -173,8 +214,12 @@ export function isNodeUsable(n: VoipNode, nowMs: number, ttlMs = NODE_TTL_MS): b
  * Per CORE rather than absolute, so a bigger node correctly attracts more rooms — the
  * documented scaling path is to grow cores before adding nodes.
  */
-export function nodeLoadScore(n: VoipNode): number {
-  return n.consumers / Math.max(1, n.cores);
+export function nodeLoadScore(n: VoipNode, pendingRooms = 0): number {
+  /* `pendingRooms` is rooms THIS app has just assigned here whose participants have not
+     joined yet, so `consumers` does not know about them. Without it a burst of dials inside
+     one 5s refresh window all rank against the same stale snapshot and pile onto one node.
+     Defaults to 0, so every existing caller is byte-identical. */
+  return (n.consumers + pendingRooms * PENDING_CONSUMER_WEIGHT) / Math.max(1, n.cores);
 }
 
 /**
@@ -188,15 +233,38 @@ export function nodeLoadScore(n: VoipNode): number {
  * Returns null when nothing is usable — the caller falls back to another transport, and
  * `chooseCallTransport` below is where that decision lives.
  */
-export function selectVoipNode(
+export function rankNodes(
   nodes: VoipNode[],
-  opts: { nowMs: number; preferAz?: string | null; ttlMs?: number } = { nowMs: Date.now() },
-): VoipNode | null {
-  const usable = nodes.filter((n) => isNodeUsable(n, opts.nowMs, opts.ttlMs));
-  if (usable.length === 0) return null;
-  const sorted = [...usable].sort((a, b) => {
-    const la = nodeLoadScore(a);
-    const lb = nodeLoadScore(b);
+  opts: {
+    nowMs: number;
+    preferAz?: string | null;
+    ttlMs?: number;
+    /** instanceId -> rooms assigned here that have not filled up yet. */
+    pending?: Record<string, number> | Map<string, number> | null;
+    /** Nodes to skip because they are answering badly, however healthy they LOOK. */
+    excludeInstanceIds?: Iterable<string> | null;
+  },
+): VoipNode[] {
+  const pendingFor = (id: string): number => {
+    const p = opts.pending;
+    if (!p) return 0;
+    const v = p instanceof Map ? p.get(id) : p[id];
+    return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
+  };
+  /* THE FAIL-OPEN LINK THE DESIGN REVIEW FOUND MISSING. Without it a node whose shared
+     secret is wrong (or which has wedged) keeps looking perfectly healthy in the registry —
+     it heartbeats happily — while refusing every operation, so `planRoomTransport` keeps
+     choosing it and every call fails with no degradation. `mediasoupSignaling` reports such
+     nodes and they are excluded here, which is what makes the fallback to LiveKit or the
+     mesh actually happen. */
+  const excluded = new Set(opts.excludeInstanceIds ?? []);
+  const usable = nodes.filter(
+    (n) => !excluded.has(n.instanceId) && isNodeUsable(n, opts.nowMs, opts.ttlMs),
+  );
+  if (usable.length === 0) return [];
+  return [...usable].sort((a, b) => {
+    const la = nodeLoadScore(a, pendingFor(a.instanceId));
+    const lb = nodeLoadScore(b, pendingFor(b.instanceId));
     /* AZ preference applies only when the two nodes are within a QUARTER of a consumer
        per core of each other — close enough that zone locality is the more useful
        tiebreak. Above that gap, load wins: a room placed in the right zone on a node
@@ -211,7 +279,26 @@ export function selectVoipNode(
     // arbitrarily between otherwise identical nodes on every room.
     return a.instanceId < b.instanceId ? -1 : a.instanceId > b.instanceId ? 1 : 0;
   });
-  return sorted[0] ?? null;
+}
+
+/**
+ * Pick the node for a NEW room: the head of the ranking.
+ *
+ * Reduced to one line over `rankNodes` DELIBERATELY. Two functions each carrying a copy of
+ * the ordering is how "which node did we pick" and "which node should we have picked" come
+ * to disagree — the class this repo keeps paying for (v2.99.71, v2.99.77).
+ */
+export function selectVoipNode(
+  nodes: VoipNode[],
+  opts: {
+    nowMs: number;
+    preferAz?: string | null;
+    ttlMs?: number;
+    pending?: Record<string, number> | Map<string, number> | null;
+    excludeInstanceIds?: Iterable<string> | null;
+  } = { nowMs: Date.now() },
+): VoipNode | null {
+  return rankNodes(nodes, opts)[0] ?? null;
 }
 
 /** Which media transport a call should use. */
@@ -250,6 +337,134 @@ export function chooseCallTransport(opts: {
 }
 
 /**
+ * A room's assignment to ONE node, in the form that has to survive a leader change.
+ *
+ * Narrow on purpose: the instance id (stable across an IP change), the public IP the clients
+ * were told to send media to, the zone, and when. NOT the whole node record — a room's
+ * assignment must not carry a snapshot of load that will be stale in five seconds and that
+ * somebody would then be tempted to read.
+ */
+export interface VoipAssignment {
+  instanceId: string;
+  publicIp: string;
+  az: string;
+  assignedAt: number;
+}
+
+export function isVoipAssignment(v: unknown): v is VoipAssignment {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return isStr(o.instanceId) && isIpv4(o.publicIp) && isStr(o.az) && isNum(o.assignedAt) && o.assignedAt > 0;
+}
+
+/**
+ * Is a room's existing assignment still good?
+ *
+ * THE `publicIp` COMPARISON IS THE INTERESTING HALF, and it is only possible because the IPs
+ * are auto-assigned rather than Elastic. A node whose record is FRESH but whose address has
+ * CHANGED has been stopped and started: its mediasoup workers are new processes, so every
+ * router this room depended on is gone even though the heartbeat looks perfect. The changed
+ * address is positive evidence of that, and without this check a room would keep being
+ * treated as live on a node that has no idea it exists.
+ */
+export function assignmentStillValid(
+  a: VoipAssignment | null | undefined,
+  nodes: VoipNode[],
+  nowMs: number,
+  ttlMs = NODE_TTL_MS,
+): boolean {
+  if (!a) return false;
+  const n = nodes.find((x) => x.instanceId === a.instanceId);
+  if (!n) return false;
+  if (n.publicIp !== a.publicIp) return false;
+  return isNodeUsable(n, nowMs, ttlMs);
+}
+
+/**
+ * SELECT AND CHOOSE, COMPOSED IN ONE PLACE.
+ *
+ * The bug class this exists to prevent is the two halves DISAGREEING: a caller that picks a
+ * node and then separately decides a transport can end up telling a client "mediasoup" while
+ * holding no assignment, or holding an assignment it then routes past. Both are calls that
+ * cannot connect, and neither is visible in either function alone.
+ *
+ * So the invariant is structural rather than remembered: `mediasoup` always carries a `voip`,
+ * and anything else always carries `null`.
+ */
+export function planRoomTransport(opts: {
+  nodes: VoipNode[];
+  nowMs: number;
+  livekitEnabled: boolean;
+  mediasoupEnabled?: boolean;
+  forceLivekit?: boolean;
+  preferAz?: string | null;
+  pending?: Record<string, number> | Map<string, number> | null;
+  excludeInstanceIds?: Iterable<string> | null;
+}): { transport: CallTransport; voip: VoipAssignment | null } {
+  const node =
+    opts.mediasoupEnabled === false || opts.forceLivekit
+      ? null
+      : selectVoipNode(opts.nodes, {
+          nowMs: opts.nowMs,
+          preferAz: opts.preferAz ?? null,
+          pending: opts.pending ?? null,
+          excludeInstanceIds: opts.excludeInstanceIds ?? null,
+        });
+  const transport = chooseCallTransport({
+    mediasoupNode: node,
+    livekitEnabled: opts.livekitEnabled,
+    forceLivekit: opts.forceLivekit,
+    mediasoupEnabled: opts.mediasoupEnabled,
+  });
+  if (transport !== "mediasoup" || !node) return { transport, voip: null };
+  return {
+    transport,
+    voip: {
+      instanceId: node.instanceId,
+      publicIp: node.publicIp,
+      az: node.az,
+      assignedAt: opts.nowMs,
+    },
+  };
+}
+
+/**
+ * The transport for a room HYDRATED from a persisted record — the mid-rollout guard.
+ *
+ * An ABSENT `transport` resolves to the PRE-FEATURE answer and never to mediasoup. A record
+ * written by an instance that predates this feature carries no transport and no assignment,
+ * so reading it as mediasoup would hand the room to a node that has never heard of it. A
+ * rolling deploy serves both bundles for about sixty seconds, which is exactly long enough
+ * for that to happen to real calls.
+ */
+export function transportForHydratedRoom(
+  rec: { transport?: unknown } | null | undefined,
+  cfg: { livekitEnabled: boolean },
+): CallTransport {
+  const t = rec?.transport;
+  if (t === "mediasoup" || t === "livekit" || t === "mesh") return t;
+  return cfg.livekitEnabled ? "livekit" : "mesh";
+}
+
+/**
+ * Put the relays in the room's OWN zone first.
+ *
+ * Pure list reordering — nothing here touches coturn or the credential mechanism, which are
+ * untouched by design. A relay in the same availability zone as the room's node is one fewer
+ * cross-zone hop on the path that only exists because the direct one failed.
+ *
+ * STABLE, and identity when it cannot do better: an absent or short `azs`, or a zone nothing
+ * matches, must return the list unchanged rather than reordering on a guess.
+ */
+export function orderRelaysByAz<T>(hosts: T[], azs: (string | null | undefined)[] | null | undefined, preferAz: string | null | undefined): T[] {
+  if (!preferAz || !azs || azs.length !== hosts.length) return hosts.slice();
+  const same: T[] = [];
+  const other: T[] = [];
+  hosts.forEach((h, i) => (azs[i] === preferAz ? same : other).push(h));
+  return same.length === 0 ? hosts.slice() : [...same, ...other];
+}
+
+/**
  * The participant cap for a transport.
  *
  * An SFU decouples a participant's cost from the party size — on the mesh each phone runs
@@ -272,6 +487,12 @@ export function transportCap(t: CallTransport): number {
 export interface VoipRegistryClient {
   smembers(key: string): Promise<string[]>;
   get(key: string): Promise<string | null>;
+  /**
+   * OPTIONAL, and used when present: the per-key `get` loop below is O(N) SEQUENTIAL round
+   * trips, and this read is about to sit on a 5s timer on every app instance. Optional
+   * rather than required so an injected test client (or an older bus wrapper) still works.
+   */
+  mget?(keys: string[]): Promise<(string | null)[]>;
   set(key: string, value: string, mode: "PX", ttlMs: number): Promise<unknown>;
   sadd(key: string, member: string): Promise<unknown>;
   srem(key: string, member: string): Promise<unknown>;
@@ -297,10 +518,20 @@ export async function readVoipNodes(
   try {
     const ids = await client.smembers(NODE_INDEX_KEY);
     const out: VoipNode[] = [];
-    for (const id of ids) {
+    // ONE round trip when the client can do it, falling back to the loop when it cannot.
+    let batched: (string | null)[] | null = null;
+    if (client.mget && ids.length > 0) {
+      try {
+        batched = await client.mget(ids.map((id) => nodeKey(id)));
+      } catch {
+        batched = null; // fall back rather than fail the read
+      }
+    }
+    for (let i = 0; i < ids.length; i += 1) {
+      const id = ids[i];
       let rec: VoipNode | null = null;
       try {
-        rec = decodeNode(await client.get(nodeKey(id)));
+        rec = decodeNode(batched ? batched[i] : await client.get(nodeKey(id)));
       } catch {
         rec = null;
       }

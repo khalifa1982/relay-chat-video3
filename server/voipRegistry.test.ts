@@ -21,6 +21,7 @@ import {
   isIpv4,
   isNodeFresh,
   isNodeUsable,
+  NODE_CLOCK_SKEW_MS,
   NODE_CPU_CEILING,
   NODE_HEARTBEAT_MS,
   NODE_INDEX_KEY,
@@ -101,11 +102,24 @@ describe("freshness is judged on the node's own timestamp", () => {
     expect(isNodeFresh(A({ updatedAt: NOW - NODE_TTL_MS - 1 }), NOW)).toBe(false);
   });
 
-  it("a clock that has run BACKWARDS reads as stale, not as infinitely fresh", () => {
-    /* The failure that matters is believing a dead node is alive — a room assigned to it
-       is a call that cannot connect. A future timestamp is evidence something is wrong,
-       so it must not be evidence of health. */
+  it("A NODE A FEW MILLISECONDS AHEAD IS STILL USABLE, and one far ahead is not", () => {
+    /* THIS PIN USED TO FREEZE A DEFECT, and rewriting it rather than deleting it is the
+       point: it asserted only the far-future half, which the original `age >= 0` satisfied —
+       so it read as protecting something while the near-future half was fail-SHUT.
+       `updatedAt` is the NODE's clock and `nowMs` the READER's, two machines compared to the
+       millisecond. One millisecond of forward skew excluded a node; both nodes skewed forward
+       excluded the whole fleet and sent every call to LiveKit with nothing saying why — the
+       exact direction the module's own header says must never happen.
+       Both halves now bite: a plausible skew is health, a broken clock is not. */
+    expect(isNodeFresh(A({ updatedAt: NOW + 1 }), NOW), "1ms of skew is not a dead node").toBe(true);
+    expect(isNodeFresh(A({ updatedAt: NOW + NODE_CLOCK_SKEW_MS }), NOW)).toBe(true);
+    expect(isNodeFresh(A({ updatedAt: NOW + NODE_CLOCK_SKEW_MS + 1 }), NOW)).toBe(false);
+    // The recorded intent is KEPT: a timestamp far in the future is evidence something is
+    // wrong, so it must never be evidence of health.
     expect(isNodeFresh(A({ updatedAt: NOW + 60_000 }), NOW)).toBe(false);
+    // And the tolerance is a bound on skew, not a licence — it must stay far under the TTL,
+    // or "fresh" would start meaning "the clocks disagree".
+    expect(NODE_CLOCK_SKEW_MS).toBeLessThan(NODE_TTL_MS / 2);
   });
 
   it("the heartbeat fits three times inside the TTL, so one lost beat survives", () => {
