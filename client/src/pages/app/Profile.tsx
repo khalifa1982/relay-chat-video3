@@ -48,6 +48,7 @@ import { CountryFlag } from "@/app/CountryFlag";
 // Two copies of a display rule is how the two surfaces end up disagreeing about
 // the same number — the class this codebase keeps re-learning.
 import { formatPin } from "@/app/TopBar";
+import { PIN_INPUT_MAXLENGTH, capPinInput, pinDigits } from "@/app/pinInput";
 import {
   Drawer,
   DrawerClose,
@@ -938,7 +939,7 @@ function NumberAndFlag({
     onError: (e) => setChooseError(e.message || "Couldn't change your number."),
   });
   // Accept the grouping people naturally type; the server re-validates regardless.
-  const wantedDigits = wanted.replace(/[\s\-.]/g, "");
+  const wantedDigits = pinDigits(wanted);
   const wantedOk = /^\d{6}$/.test(wantedDigits) && !/^(000|111)/.test(wantedDigits);
   const copyNumber = () => copyNumberToClipboard(number);
   // Same /i/<pin> invite link the share sheet + Dialer use, so the launcher
@@ -1049,11 +1050,13 @@ function NumberAndFlag({
               inputMode="numeric"
               autoComplete="off"
               dir="ltr"
-              maxLength={9}
+              maxLength={PIN_INPUT_MAXLENGTH}
               placeholder="777777"
               value={wanted}
               onChange={(e) => {
-                setWanted(e.target.value);
+                // Capped at six digits as you type (v2.106.63) — it was `maxLength={9}`
+                // writing the raw value.
+                setWanted(capPinInput(e.target.value));
                 setChooseError(null);
               }}
               className="w-full rounded-xl border border-border bg-background px-4 py-3 text-center font-mono text-2xl tracking-[0.18em] outline-none focus:border-primary"

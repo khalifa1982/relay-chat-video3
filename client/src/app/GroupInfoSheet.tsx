@@ -11,6 +11,7 @@ import { hasPasscode } from "@/app/passcode";
 import { isGroupLocked, removeGroupLock, setGroupLock, useGroupLocks } from "@/app/groupLock";
 import { GROUP_PALETTE, peerPaletteIndex } from "@/app/peerColors";
 import { presenceDot } from "@/app/presenceDot";
+import { PIN_INPUT_MAXLENGTH, capPinInput, isCompletePin } from "@/app/pinInput";
 
 /* ══ BOARD 2i / 5g / 4h / 4i — the frame's own values, declared once ══════════════
  *
@@ -1040,11 +1041,14 @@ export function GroupInfoSheet({
                       inputMode="numeric"
                       dir="ltr"
                       autoComplete="off"
-                      maxLength={9}
+                      maxLength={PIN_INPUT_MAXLENGTH}
                       placeholder="777777"
                       value={addNumber}
                       onChange={(e) => {
-                        setAddNumber(e.target.value);
+                        // Six digits, capped as you type (v2.106.63). This wrote the raw
+                        // value under `maxLength={9}` — the box the owner reported: "when
+                        // you add inside the group it give you more than six digits".
+                        setAddNumber(capPinInput(e.target.value));
                         setAddError(null);
                       }}
                       aria-label="Add someone to this group by their 6-digit number"
@@ -1052,7 +1056,7 @@ export function GroupInfoSheet({
                     />
                     <button
                       type="button"
-                      disabled={!/^\d{6}$/.test(addNumber.replace(/[\s\-.]/g, "")) || addMember.isPending}
+                      disabled={!isCompletePin(addNumber) || addMember.isPending}
                       onClick={() => addMember.mutate({ conversationId, number: addNumber })}
                       className="rchip-accent min-h-11 rounded-[9px] px-4 text-[12px] font-bold transition disabled:opacity-50"
                     >

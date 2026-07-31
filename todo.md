@@ -11278,6 +11278,82 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.63 — a RELAY number could be typed past six digits, in four boxes (2026-07-31)
+
+Owner, stated twice in one message: *"anywhere in the system for the pin number don't exceed
+six digits such as like when you add inside the group it give you more than six digits you
+need to put a restriction only six digits."*
+
+**THE BOX THEY NAMED IS THE CLEAREST CASE AND THERE WERE FOUR OF THEM.** The group
+add-member input carried `maxLength={9}` and an `onChange` that wrote `e.target.value`
+STRAIGHT through — no digit count, no strip — so nine characters went in and the only
+feedback was a submit button that stayed disabled without saying why. Same shape in
+Profile's choose-number box and BOTH of Admin's (the delete confirmation and set-number).
+Measured on the real bundle before the fix: the attribute really was `9`.
+
+**ONE MODULE RATHER THAN FOUR EDITS, because "anywhere in the system" is a rule.**
+`client/src/app/pinInput.ts` owns `capPinInput` / `pinDigits` / `isCompletePin` /
+`PIN_INPUT_MAXLENGTH`, and the load-bearing part is the SWEEP beside it: the test walks
+every numeric input in the client, identifies a PIN box by what it is FOR (its placeholder,
+label or aria-label names a six-digit number) rather than by which file it sits in, and
+fails on one that is not capped — so the input somebody adds NEXT is covered instead of
+exempt. Four hand-edits is exactly how the fifth forgets.
+
+**LETTERS ARE DROPPED AS TYPED, NEVER FOLDED AWAY, and that is a security decision rather
+than a nicety.** The obvious implementation is `raw.replace(/\D/g, "")`, which reads
+`7a7b7c7d7e7f` as `777777` — a typo becoming a *successful* operation on somebody ELSE's
+number. That is the v2.99.75 reasoning (`normalizeDesiredNumber` on the server) applied at
+the input layer: the field always shows exactly what will be submitted, and the strict
+`/^\d{6}$/` submit gates stay in place regardless, because this is a typing aid and not the
+boundary.
+
+**THE APP'S OWN GROUPING SURVIVES.** `formatPin` renders `777-777`, so refusing the form
+the app just showed you would be the app arguing with itself; spacing and grouping are kept
+while counting as nothing, so `777-777` is complete and `77-77-77-99` still yields six.
+
+**THE BROWSER'S CAP NOW AGREES WITH OURS INSTEAD OF CONTRADICTING IT** — `maxLength` is six
+digits plus one separator. `capPinInput` alone already makes the field behave, which is why
+a stale `maxLength={9}` SURVIVED the first mutation run; it still matters, because a browser
+cap wider than the value means the field visibly accepts a keystroke and then discards it,
+which is the flicker being reported. Pinned as an upper bound, so a retune is free and a
+loosening is not.
+
+**FOUR HAND-ROLLED COPIES OF `replace(/[\s\-.]/g, "")` COLLAPSE INTO `pinDigits`**, and
+they had already drifted in which separators they knew about — the same rule in four places
+is how two of them come to disagree about whether a non-ASCII hyphen is part of a number.
+
+**VERIFIED BY DRIVING THE REAL BUNDLE, not by reading**: at 390px in dark, in the group
+add-member box the owner named — the attribute reads `7`, typing `7777779` leaves `777777`
+(the seventh keystroke does nothing), `777-777` survives as typed and enables Add,
+`7a7b7c7d` yields `7777` with the letters gone rather than folded, a short number keeps Add
+disabled, zero page errors.
+
+**12 of 12 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once, all four sources
+byte-identical afterwards — including the cap deleted, the browser cap reverted to 9,
+non-digits folded away, grouping counted as a digit, each of the four boxes reverted to raw
+individually, and the separator strip reinstated.
+
+**TWO SURVIVED THE FIRST RUN AND BOTH WERE REAL GAPS IN MY OWN TESTS**: `isCompletePin`
+loosened to `>=` survived because every value the fields hand it has already been capped, so
+it can only ever fail SHORT there — it is now driven with an uncapped over-long value, which
+is what a caller hydrating from a draft or a paste handler would supply; and the group
+SUBMIT gate was unasserted, so swapping `isCompletePin(addNumber)` for
+`addNumber.length === 0` left a three-digit number submittable with every other assertion
+green. The cap and the gate are two different rules — one stops a seventh digit, the other
+stops a third being sent — and loosening either while the other holds reads as fixed.
+
+**AND THE PROSE TRAP FIRED IN THE ASSERTION WRITTEN TO CATCH THE REGRESSION IT DESCRIBES**:
+the new `maxLength` sweep flagged two offenders on CORRECT source, both of them my own
+comments quoting the `maxLength={9}` they replaced. It runs on comment-stripped source now,
+via the shared `codeOnly` helper rather than a fourteenth private copy.
+
+**TWO PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, both having frozen one of the four
+duplicated separator strips — `server/identityPurge.test.ts` and `server/chooseNumber.test.ts`
+each asserted the literal `replace(/[\s\-.]/g, "")`, i.e. they forbade the consolidation
+while saying nothing about the rule it stands for. No schema change, no new dependency, no
+new env var. 5082 tests.
+
 ## v2.106.62 — @mentions had never rendered in a chat; the own bubble was the wrong weight (2026-07-31)
 
 Owner: *"you didn't match it 100%; you matched it about 60%… do it exactly how I did it there."*

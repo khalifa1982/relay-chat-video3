@@ -72,6 +72,7 @@ import { RoleBadge, roleLabel } from "@/app/VerifiedBadge";
 import { formatPin } from "@/app/TopBar";
 import { GROUP_PALETTE, peerPaletteIndex } from "@/app/peerColors";
 import { useLiveStats } from "@/app/useLiveStats";
+import { PIN_INPUT_MAXLENGTH, capPinInput, pinDigits } from "@/app/pinInput";
 
 /* ── the board's gold, in one place ───────────────────────────────────────────
    Board rule 5: GOLD (#e8c94a) means admin / owner / locked. Frame 2h spends it on
@@ -345,7 +346,7 @@ export default function Admin() {
     onError: (e) => setError(e.message || "Couldn't change that number."),
   });
 
-  const digits = wanted.replace(/[\s\-.]/g, "");
+  const digits = pinDigits(wanted);
   const ok = /^\d{6}$/.test(digits) && !/^(000|111)/.test(digits);
 
   if (amIAdmin.isLoading) {
@@ -571,11 +572,14 @@ export default function Admin() {
                         inputMode="numeric"
                         dir="ltr"
                         autoComplete="off"
-                        maxLength={9}
+                        maxLength={PIN_INPUT_MAXLENGTH}
                         placeholder={r.number}
                         value={confirmNum}
                         onChange={(e) => {
-                          setConfirmNum(e.target.value);
+                          // Six digits, capped as typed (v2.106.63). The value is
+                          // compared against the number below, so a cap can only ever
+                          // make the confirmation harder to satisfy by accident.
+                          setConfirmNum(capPinInput(e.target.value));
                           setDeleteError(null);
                         }}
                         aria-label={`Type ${r.number} to confirm deleting this person`}
@@ -592,7 +596,7 @@ export default function Admin() {
                         variant="destructive"
                         className="rounded-[11px]"
                         disabled={
-                          confirmNum.replace(/[\s\-.]/g, "") !== r.number || purge.isPending
+                          pinDigits(confirmNum) !== r.number || purge.isPending
                         }
                         onClick={() => purge.mutate({ identityId: r.id })}
                       >
@@ -725,11 +729,12 @@ export default function Admin() {
                         inputMode="numeric"
                         dir="ltr"
                         autoComplete="off"
-                        maxLength={9}
+                        maxLength={PIN_INPUT_MAXLENGTH}
                         placeholder="777777"
                         value={wanted}
                         onChange={(e) => {
-                          setWanted(e.target.value);
+                          // Capped at six digits as you type (v2.106.63).
+                          setWanted(capPinInput(e.target.value));
                           setError(null);
                         }}
                         aria-label={`New number for ${r.displayName || r.number}`}

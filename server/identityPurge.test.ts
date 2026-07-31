@@ -642,7 +642,14 @@ describe("the admin delete", () => {
     // against hesitation but not against acting on the wrong row — which is the
     // mistake that actually happens on a list.
     expect(ADMIN_PAGE).toMatch(/trpc\.admin\.deleteIdentity\.useMutation/);
-    expect(ADMIN_PAGE).toMatch(/confirmNum\.replace\(\/\[\\s\\-\.\]\/g, ""\) !== r\.number/);
+    /* REWRITTEN (v2.106.63). This froze the hand-rolled `replace(/[\s\-.]/g, "")`, which was
+       duplicated at four sites and is now the one shared `pinDigits`. The PROPERTY is that
+       the typed value must EQUAL this row's number, ignoring the grouping the panel itself
+       displays — not which expression strips it. */
+    expect(ADMIN_PAGE).toMatch(/pinDigits\(confirmNum\) !== r\.number/);
+    expect(ADMIN_PAGE, "the confirmation still DECIDES, never a constant").not.toMatch(
+      /disabled=\{(?:false|!true)\b/,
+    );
     expect(ADMIN_PAGE).toMatch(/Delete permanently/);
   });
 
