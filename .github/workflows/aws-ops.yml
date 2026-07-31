@@ -21,6 +21,13 @@
 #                the edge; one value alone cannot. Optionally proves mail delivery
 #                to an address (verify_email), which must run on an instance
 #                because that is where the SMTP credentials are.
+#   voip-deploy — install/update the mediasoup MEDIA AGENT (voip-node/) on the
+#                instances tagged `relay-voip`. deploy.yml deliberately excludes
+#                voip-node/ from the app release tar, so this is the only path
+#                that reaches a media node. Dry run by default. It NEVER writes
+#                /etc/relay-voip/env — VOIP_NODE_SECRET and REDIS_URL are real
+#                secrets and a workflow_dispatch input is visible in run
+#                metadata, so a human places them per voip-node/README.md.
 #   ses        — email delivery ops (v2.97.1: OTP emails only reached verified
 #                addresses = the SES SANDBOX signature). Prints account status
 #                (production access? quota? suppression for ses_email), and:
@@ -65,6 +72,10 @@
 #                a per-box problem cannot hide behind a healthy sibling; the
 #                elbv2:DescribeTargetHealth read is OPTIONAL and degrades to "not
 #                reported" rather than to a false finding. Nothing is mutated.
+#   voip-deploy — sts:GetCallerIdentity, ec2:DescribeInstances, ssm:SendCommand,
+#                ssm:ListCommandInvocations. Targets tag:Name=relay-voip ONLY, so
+#                it cannot select an app instance; the remote script refuses
+#                loudly if it lands on one anyway.
 #   ses        — ses:GetAccount, ses:ListEmailIdentities,
 #                ses:GetSuppressedDestination, ses:CreateEmailIdentity,
 #                ses:PutAccountDetails (all sesv2 API; each step degrades to a
@@ -82,7 +93,7 @@ on:
         type: choice
         required: true
         default: verify
-        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix, recover-identity, admin-tool, live-verify]
+        options: [verify, cloudfront, alb-tune, ses, ses-ssm, iam-grant-ses, env-set, turn-fix, recover-identity, admin-tool, live-verify, voip-deploy]
       admin_op:
         description: "admin-tool only: which operation to run"
         type: choice
@@ -126,6 +137,11 @@ on:
         default: ""
       recover_apply:
         description: "recover-identity only: actually WRITE the change. Off = dry run, which is what you should run first."
+        type: boolean
+        required: false
+        default: false
+      voip_apply:
+        description: "voip-deploy only: actually WRITE the agent onto the relay-voip nodes and restart the service. Off = report each node's current state and change nothing, which is what you should run first."
         type: boolean
         required: false
         default: false
@@ -1389,4 +1405,138 @@ jobs:
           else
             echo "::error::admin-tool did not report ADMIN_EXIT=0 — read the output above."
             exit 1
+          fi
+
+      - name: voip-deploy (checkout) — the agent payload is built from THIS commit
+        if: inputs.action == 'voip-deploy'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: voip-deploy — install/update the mediasoup media agent on the
+          relay-voip nodes (DRY RUN by default)
+        if: inputs.action == 'voip-deploy'
+        env:
+          VOIP_APPLY_IN: ${{ inputs.voip_apply }}
+        run: |
+          set -uo pipefail
+          echo "=================================================================="
+          echo "VOIP-DEPLOY — the mediasoup media agent"
+          echo "=================================================================="
+          # WHY THIS ACTION EXISTS AT ALL.
+          #
+          # `voip-node/` is deliberately EXCLUDED from the app release tar — it carries a
+          # mediasoup dependency whose C++ worker is compiled per install and which no app
+          # instance ever runs (voipNodeParity.test.ts pins that exclusion). So deploy.yml
+          # structurally cannot reach a media node, and the agent's own README documents a
+          # fully MANUAL file copy. The agent has changed in four releases since the nodes
+          # were built — the per-core WebRtcServer conversion and the stats IP strip among
+          # them — so without this, every one of those is a hand-copy somebody has to
+          # remember, which is how a node ends up running code nothing in the repo matches
+          # with no way to tell from the outside.
+          #
+          # TARGETING IS THE SAFETY PROPERTY, NOT THE GUARD.
+          #
+          # Every other action here targets `tag:Name=relay-app` and carries
+          # MEDIA_NODE_GUARD to skip a media node that happens to be in the set. This one is
+          # the mirror image: it targets `tag:Name=relay-voip`, so it can never select an app
+          # box, because an app box does not carry that tag. The remote script's own guard is
+          # belt and braces for a MIS-TAG, and it refuses LOUDLY rather than skipping.
+          IIDS=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=relay-voip" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null)
+          if [ -z "$IIDS" ] || [ "$IIDS" = "None" ]; then
+            echo "::error::no running instance tagged Name=relay-voip."
+            echo ""
+            echo "The media nodes exist but are not tagged — the one owner-side step v2.106.33"
+            echo "named. Tag them and re-run; nothing here guesses at an instance id, because a"
+            echo "hardcoded id is exactly the kind of value that goes silently wrong:"
+            echo ""
+            echo "  aws ec2 create-tags --region $AWS_REGION \\"
+            echo "    --resources i-xxxxxxxxxxxx i-yyyyyyyyyyyy \\"
+            echo "    --tags Key=Name,Value=relay-voip"
+            echo ""
+            echo "Tagging is also what makes them readable in \`verify\` and what stops aws-ops"
+            echo "reporting a media node as part of the app fleet."
+            exit 1
+          fi
+          echo "Media nodes: $IIDS"
+          # The payload is a tarball of voip-node/ WITHOUT node_modules, base64'd on the
+          # runner and decoded on the instance — the same discipline every free-text input
+          # here uses, and it means the nodes need no S3 read permission of their own.
+          # node_modules is excluded because mediasoup's worker is a COMPILED binary: it must
+          # be built on the box by the box's own toolchain, never shipped.
+          tar -czf /tmp/voip-node.tgz --exclude=node_modules --exclude=.git -C . voip-node
+          SZ=$(wc -c < /tmp/voip-node.tgz)
+          B64=$(base64 -w0 /tmp/voip-node.tgz)
+          PAYLOAD_SHA=$(sha256sum /tmp/voip-node.tgz | cut -d' ' -f1)
+          echo "payload: ${SZ} bytes (${#B64} base64), sha256 $PAYLOAD_SHA"
+          # SSM caps all parameters at 100 KB TOGETHER. Refuse rather than send a truncated
+          # archive — the checksum on the far side would catch it, but failing here says why.
+          if [ "${#B64}" -gt 90000 ]; then
+            echo "::error::payload too large for one SSM command (${#B64} > 90000). Stage it via S3 instead."
+            exit 1
+          fi
+          if [ "$VOIP_APPLY_IN" = "true" ]; then
+            APPLY=1
+            echo "MODE: APPLY — files written and the service restarted, ONE node at a time."
+          else
+            APPLY=0
+            echo "MODE: DRY RUN — nothing written. You get each node's CURRENT state, so you can"
+            echo "see what would change. Re-run with voip_apply=true once it looks right."
+          fi
+          # The remote script is a CHECKED-IN FILE (voip-node/deploy-remote.sh), not a heredoc:
+          # a shell script embedded in a YAML block scalar is quoted three times over (YAML,
+          # the runner's shell, the SSM JSON) and cannot be syntax-checked or unit-tested.
+          # Its inputs ride as EARLIER `commands` elements, because SSM concatenates every
+          # element into one shell script — so a plain assignment in an earlier element is in
+          # scope in a later one. That is the same mechanism MEDIA_NODE_GUARD already uses,
+          # and it means nothing is substituted INTO the script.
+          SCRIPT=$(cat voip-node/deploy-remote.sh)
+          PARAMS=$(jq -n \
+            --arg b "$B64" --arg sha "$PAYLOAD_SHA" --arg apply "$APPLY" --arg s "$SCRIPT" \
+            '{commands:[("VOIP_B64=" + $b), ("VOIP_SHA=" + $sha), ("VOIP_APPLY=" + $apply), $s], executionTimeout:["1800"]}')
+          # ONE NODE AT A TIME. Today the nodes hold no rooms so it makes no difference — but
+          # the moment they do, restarting both at once takes every call on the fleet with it,
+          # and `--max-errors 0` means a node that fails STOPS the rollout instead of breaking
+          # the second one too.
+          CMD=$(aws ssm send-command --instance-ids $IIDS \
+            --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 0 \
+            --parameters "$PARAMS" --query 'Command.CommandId' --output text) || {
+              echo "::error::could not start voip-deploy via SSM. Are the media nodes SSM-managed — is the SSM agent running, and do they have an instance profile?"
+              exit 1; }
+          echo "SSM command: $CMD"
+          # Generous on purpose: a FIRST install compiles mediasoup's C++ worker, which is
+          # minutes, and giving up early would report a failure for a deploy still working.
+          for i in $(seq 1 120); do
+            S=$(aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status' --output text)
+            case "$S" in *InProgress*|*Pending*|"") sleep 10 ;; *) break ;; esac
+          done
+          COUNT=$(aws ssm list-command-invocations --command-id "$CMD" --query 'length(CommandInvocations)' --output text)
+          echo "invocations: $COUNT"
+          FAILED=0
+          # EVERY invocation is read, never CommandInvocations[0]. Reading one is the v2.105.5
+          # defect: on a two-node fleet the failures worth catching are the PER-BOX ones, so a
+          # healthy sibling must not be able to hide a broken node.
+          for idx in $(seq 0 $((COUNT - 1))); do
+            IID=$(aws ssm list-command-invocations --command-id "$CMD" --query "CommandInvocations[$idx].InstanceId" --output text)
+            OUT=$(aws ssm list-command-invocations --command-id "$CMD" --details \
+              --query "CommandInvocations[$idx].CommandPlugins[0].Output" --output text)
+            echo "------------------------- $IID -------------------------"
+            echo "$OUT" | head -c 6000
+            if ! echo "$OUT" | grep -q "VOIP_EXIT=0"; then
+              echo "::error::$IID did not report VOIP_EXIT=0"
+              FAILED=1
+            fi
+          done
+          echo "-----------------------------------------------------------------"
+          if [ "$FAILED" != "0" ]; then
+            echo "::error::voip-deploy failed on at least one node — read its output above. A non-zero marker means that node was NOT restarted."
+            exit 1
+          fi
+          if [ "$APPLY" = "1" ]; then
+            echo "voip-deploy applied on every node."
+            echo "Confirm the fleet sees them (run from an APP instance, which can reach Redis):"
+            echo "  redis-cli -u \"\$REDIS_URL\" smembers relay:voip:nodes"
+            echo "A healthy record carries publicIp, az, cores and an updatedAt within 15s."
+          else
+            echo "Dry run complete. Re-run with voip_apply=true to install."
           fi

@@ -11278,6 +11278,90 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.45 — the mediasoup media agent becomes deployable (2026-07-31)
+
+Owner: **"Start the mediasoup now"** — which overrides their own document's ordering (it gated
+the cutover behind a diagnostic call), so that is said rather than glossed. Starting it turned
+up a hard blocker before a line of the media path could be written.
+
+- [x] **THE AGENT HAS NO DEPLOY PATH AT ALL, and that was invisible.** `voip-node/` is
+      deliberately EXCLUDED from the app release tar — it carries a mediasoup dependency whose
+      C++ worker is compiled per install and which no app instance ever runs, and
+      `voipNodeParity.test.ts` pins that exclusion. The consequence nobody had drawn: `deploy.yml`
+      therefore **structurally cannot reach a media node**, so the agent's own README documented
+      a fully MANUAL file copy — and the agent has changed in FOUR releases since the nodes were
+      built (v2.106.32's registry hardening, v2.106.35's per-core `WebRtcServer` conversion,
+      v2.106.36's stats IP strip). Every one of those was a hand-copy somebody had to remember,
+      which is how a node ends up running code nothing in the repo matches with no way to tell
+      from the outside. `grep -rln voip-node .github/ scripts/` returned NOTHING.
+- [x] **New `voip-deploy` action in `aws-ops.yml`.** Dry run by DEFAULT: it reports each node's
+      service state, the installed agent's checksum, the mediasoup version, whether the env file
+      is present, and writes nothing. `voip_apply=true` then installs, one node at a time.
+- [x] **TARGETING IS THE SAFETY PROPERTY, NOT A GUARD.** Every other action here targets
+      `tag:Name=relay-app` and carries `MEDIA_NODE_GUARD` to SKIP a media node in the set. This
+      one is the mirror image — it targets `tag:Name=relay-voip`, so it can never select an app
+      box, because an app box does not carry that tag. A guard can be forgotten; a tag filter
+      cannot. **And that makes it the recorded exemption from v2.106.33's guard sweep** rather
+      than the one that was missed: it is exempt precisely because the guard exists to skip media
+      nodes and this action exists to write to them.
+- [x] **THE REMOTE GUARD REFUSES LOUDLY RATHER THAN SKIPPING, and the asymmetry is the point.**
+      For an app action a media node in the target set costs nothing, so a silent `exit 0` is
+      right. Here an APP SERVER in the target set means somebody has tagged a production web host
+      as a media node, and installing a systemd unit onto it is not something to do quietly — so
+      it is a NON-ZERO marker, which the caller turns into a failed run. It keys on `/home/relay`,
+      evidence the host itself carries, so unlike a tag list it cannot go stale.
+- [x] **IT NEVER WRITES `/etc/relay-voip/env`.** `VOIP_NODE_SECRET` and `REDIS_URL` are real
+      secrets and a `workflow_dispatch` input is visible in run metadata, so they stay a human
+      step. It reports the file's PRESENCE (a line count, never a value) and with it missing
+      installs the files, leaves the service stopped and says exactly what to do. The one input
+      the action takes is a boolean, and a test forbids a `voip_*` string input.
+- [x] **THE REMOTE SCRIPT IS A CHECKED-IN FILE** (`voip-node/deploy-remote.sh`), not a heredoc:
+      embedded in a YAML block scalar it would be quoted three times over (YAML, the runner's
+      shell, the SSM JSON) and could be neither syntax-checked nor tested. Its inputs ride as
+      EARLIER `commands` elements, because SSM concatenates every element into one shell script —
+      the same mechanism `MEDIA_NODE_GUARD` already uses — so nothing is substituted into the
+      script body, which is the shape that makes a payload re-parseable by the caller's shell.
+- [x] **FOUR WAYS A DEPLOY TOOL CAN REPORT SUCCESS OVER A BROKEN NODE, each closed**: the payload
+      is CHECKSUMMED before it is extracted (a truncated archive unpacked over a working agent and
+      then restarted is the worst outcome available here); every module is `node --check`ed BEFORE
+      any restart (a syntax error would otherwise surface as a crash-looping unit whose journal
+      nobody reads until a call fails — a mistake already made once in `agent.mjs`); the unit is
+      PROVEN active afterwards with its journal printed on failure, because a deploy that installs
+      and leaves the service dead is worse than none; and the verdict is read from the printed
+      `VOIP_EXIT=0` marker on EVERY invocation, never the SSM status (v2.99.46) and never
+      `CommandInvocations[0]` (v2.105.5 — on a TWO-node fleet the per-box failures are exactly
+      the ones worth catching, so a healthy sibling must not be able to hide a broken node).
+- [x] **THE C++ WORKER IS BUILT ON THE BOX, NEVER SHIPPED**: the payload excludes `node_modules`,
+      and the install runs `--frozen-lockfile` because the versions are pinned EXACTLY rather than
+      as ranges — a plain install resolves newer ones and the difference is invisible until a call
+      behaves differently on ONE node. **And the install is SKIPPED when the manifest is
+      unchanged**, fingerprinted BEFORE the extract: a mediasoup rebuild takes minutes, so
+      re-running it for an `agent.mjs` one-liner would time the SSM command out and leave the node
+      mid-install.
+- [x] `--max-concurrency 1 --max-errors 0`: today the nodes hold no rooms so it makes no
+      difference, but the moment they do, restarting both at once takes every call on the fleet
+      with it, and a node that fails must STOP the rollout rather than break the second one too.
+
+`server/voipDeploy.test.ts` (20), including a DRIVEN `bash -n` check because a source pin cannot
+tell you whether a shell script runs and a syntax error here is a crash-looping unit. **All 20
+tripwires verified by MUTATION** off a confirmed-green baseline from byte-exact backups, the
+mutator aborting unless its target occurs exactly once, all three sources byte-identical
+afterwards — including the app tag targeted instead, the refusal deleted, the refusal turned into
+a silent skip, the env file written, its contents printed, the write made the default, the extract
+moved ahead of the checksum, the restart moved ahead of the syntax check, `CommandInvocations[0]`
+restored, `--frozen-lockfile` dropped, a range version, and a secret added as a string input.
+
+**STILL OWNER-SIDE, and it is now the only thing standing between this and a running node**: tag
+the two media instances `relay-voip`, and put `VOIP_NODE_SECRET` + `REDIS_URL` into
+`/etc/relay-voip/env` on each. The action fails loudly with the exact `create-tags` command until
+the first is done, and installs-but-does-not-start until the second is.
+
+**NOT VERIFIED AGAINST A NODE, said plainly**: this sandbox has no AWS credentials and no route to
+the fleet, so nothing has been sent, no agent installed and no worker started. What is proven is
+that the script parses, that it cannot select or write to an app box, that it cannot write a
+secret, and that every failure path refuses before restarting anything. No schema change, no new
+dependency, no new env var. 4849 tests.
+
 ## v2.106.44 — a voice call no longer opens the camera (2026-07-31)
 
 The owner's instruction, verbatim: voice and video are two explicit **modes of the SAME call

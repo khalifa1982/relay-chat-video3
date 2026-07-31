@@ -86,8 +86,41 @@ guard keys on the filesystem instead.
 
 ## Install / update
 
-Run on each media node. `/opt/relay-voip` already exists with mediasoup 3.19.3 installed and
-its worker compiled, so an update is the two `.mjs` files plus a restart.
+**Use the `voip-deploy` action** (`.github/workflows/aws-ops.yml`, added v2.106.45). It is the only
+automated path onto a media node: `deploy.yml` deliberately excludes `voip-node/` from the app
+release tar, so before this existed every agent change was a hand-copy somebody had to remember —
+which is how a node ends up running code nothing in the repo matches, with no way to tell from the
+outside.
+
+```
+Actions → AWS ops (your-chat.io) → Run workflow
+  ref:        main            ← REQUIRED. The deploy role's OIDC trust policy is scoped to
+                                 refs/heads/main; any other ref fails with a misleading
+                                 "Not authorized to perform sts:AssumeRoleWithWebIdentity".
+  action:     voip-deploy
+  voip_apply: false           ← run this FIRST. Reports each node's current state — service
+                                 status, the installed agent's checksum, the mediasoup version,
+                                 whether /etc/relay-voip/env is there — and writes nothing.
+  voip_apply: true            ← then this. One node at a time.
+```
+
+It targets `tag:Name=relay-voip`, which is what makes it structurally unable to touch an app box —
+so the nodes must be tagged first (see above), and with no matches it fails loudly with the
+`create-tags` command rather than reporting success over nothing. Before restarting anything it
+verifies the payload's checksum and `node --check`s every module, and afterwards it proves the unit
+came back rather than assuming it did.
+
+**It never writes `/etc/relay-voip/env`** — `VOIP_NODE_SECRET` and `REDIS_URL` are real secrets and
+a `workflow_dispatch` input is visible in run metadata, so those stay a human step (below). With the
+file missing it installs the files, leaves the service stopped, and says so.
+
+`server/voipDeploy.test.ts` pins those properties, including that the remote script parses.
+
+### By hand
+
+Only needed for the first-time env file, or if SSM is unavailable. `/opt/relay-voip` already exists
+with mediasoup 3.19.3 installed and its worker compiled, so an update is the `.mjs` files plus a
+restart.
 
 ```bash
 # 1. copy agent.mjs + record.mjs + package.json into /opt/relay-voip
