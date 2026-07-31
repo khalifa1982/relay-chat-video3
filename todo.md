@@ -11278,6 +11278,95 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.37 — an answered call that never connected had no timeout and no error (2026-07-31)
+
+Owner, with a screenshot: an outgoing voice call to a callee shown **"Online now"** sat on
+**"Securing connection…"** for **00:17**, with the previous attempt 27 seconds earlier recorded as
+"no answer". *"Its not connecting it seems the voice not yet ready"*.
+
+### Said plainly first: this is not the mediasoup work
+
+`grep -rln "voipRegistry|mediasoupSignaling|voip-node"` over `server/ client/ shared/` returns only
+those two modules referencing each other; `relay.ts` and `relayClient.ts` contain **zero**
+references. The new SFU cannot be involved, and attributing it there would have sent me hunting in
+the wrong file.
+
+### What the screenshot proves, before any speculation
+
+`STATUS_LABEL.encrypting` is "Securing connection…", and its only setter is `runConnSequence`, whose
+only caller on an outgoing dial is `onCalleeAnswered()`. **So the callee answered.** And the
+pre-connect dial card was still up, so `markEstablished()` never ran — **no media ever arrived.**
+
+### Why nothing bounded it — two independent guarantees
+
+1. `onCalleeAnswered()` calls `clearDialTimeout()`, cancelling the 65s no-answer backstop. Even had
+   it not, that callback opens `if (!inCall || callAnswered) return;` — it would have declined to
+   fire anyway.
+2. `armLkWatchdog`'s tick opens `if (!inCall || !livekitEnabled || lkConnected) { … return; }`, and
+   on an outgoing dial the caller joins the SFU room **at dial time** — so `lkConnected` is already
+   true when it first ticks at 4.5s. **It retires itself before the callee has even answered.**
+
+So "we are in the room, they answered, and no remote media arrived" was covered by nothing.
+
+### The fix
+
+- **The deadline is armed in the same breath as the cancel.** Arming it anywhere else leaves a
+  window in which the call is bounded by nothing, and that window is the bug.
+- Cleared the instant media is real, and on both teardown paths beside the sibling it takes over
+  from.
+- **It re-checks on fire** rather than trusting a world it last saw 20 seconds ago — a fuse acting
+  on a stale view is how a live call gets torn down by its own timer.
+- **It only ever ends a call that already cannot work**, so it does not violate the fail-open rule
+  this file follows: it never stops a dial being placed.
+- **20s is deliberately generous, and the bounds are pinned.** The SFU family gives up on a room
+  *connection* after ~16.5s (4.5s + 3×4s), so a post-answer media wait must be at least as patient;
+  an unanswered dial keeps its full 65s, because that is a different question.
+
+### The outcome must not be mislabelled — a data-integrity point, not a wording one
+
+Recording it as `no-answer` would write a false history row about somebody who picked up **and**
+would raise the "leave a voice message" card, which is the wrong offer for a person who answered. The
+reason is its own `media-timeout`, deliberately absent from `failDial`'s voicemail-eligible set. A
+mutation that relabels it bites.
+
+### The status was theatre
+
+"Securing connection…" was announced on a **600ms timer** with no relation to any DTLS or ICE state,
+so a stuck call reported a specific-sounding phase it may never have reached and the owner could not
+tell what failed. On the SFU path the claim is simply false — the caller joined the room at dial
+time, so nothing is being secured; we are waiting for the other side's media, which is a different
+problem with a different fix. It now says **"Waiting for their audio…"** there, and still says
+"Securing connection…" on the mesh where a transport really is in that phase. The *state* stays
+`encrypting`, so the styling is not collateral damage.
+
+### One hypothesis of mine, refuted by reading
+
+I suspected an expired TURN credential — signaling-fine-but-media-dead is classically a relay
+problem, and `iceServers()` mints `now + TTL` usernames. Refuted: the client rebuilds its ICE config
+from freshly-minted credentials on every `room`/`joined`/`peer-joined` ack
+(`relayClient.ts:3423-3505, 4810`), so a call cannot inherit a stale one.
+
+### A pre-existing pin had frozen the unbounded shape
+
+`callProgress.test.ts:51` asserted the exact one-liner `if (!establishedOnce) runConnSequence();` —
+it **forbade bounding the call** while saying nothing about the property it stands for. Rewritten to
+the property and made stricter (it now also requires the hand-over to the deadline), then
+re-verified to bite on the original defect.
+
+### Verification
+
+`client/src/lib/stuckConnecting.test.ts` (15). **All 7 tripwires verified by mutation** off a
+confirmed-green baseline — including the original unbounded shape reinstated verbatim, the fuse made
+to act on a stale world, the outcome relabelled as no-answer, and the deadline shortened to 5s.
+Source byte-identical afterwards.
+
+**Not verified on a call, said plainly:** no second browser here, so what is proven is that the state
+is now bounded and named, not that the owner's next call connects.
+
+**The root cause of why the media did not arrive is still open.** A 22-agent adversarial trace of the
+establishment path is mid-flight. This release bounds and names the failure either way — which is
+also what makes the next attempt diagnosable. 4760 tests.
+
 ## v2.106.36 — the node's stats endpoint was handing out participants' IP addresses (2026-07-31)
 
 The removal plan listed three type questions I hadn't answered, and one was a live security question

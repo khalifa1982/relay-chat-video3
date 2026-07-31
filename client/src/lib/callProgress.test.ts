@@ -48,7 +48,23 @@ describe("staged call progress — Calling → Ringing → Connecting → connec
   });
 
   it("answering advances Ringing… to the REAL connecting sequence (both mesh and SFU paths)", () => {
-    expect(CLIENT).toMatch(/function onCalleeAnswered\(\) \{[\s\S]*?if \(!establishedOnce\) runConnSequence\(\);/);
+    /* REWRITTEN TO THE PROPERTY. This froze the exact one-liner
+       `if (!establishedOnce) runConnSequence();` — so it FORBADE bounding the answered-but-silent
+       call (v2.106.37) while saying nothing about what it exists to protect: that answering leaves
+       "Ringing…" and enters the real connecting sequence, on BOTH transports, and only while the
+       call has not already established.
+       It is now stricter than the literal was, because the advance is only safe if something also
+       bounds it: `onCalleeAnswered` cancels the 65s no-answer backstop, so it must hand over to the
+       establishment deadline in the same breath or the call is bounded by nothing at all. */
+    const at = CLIENT.indexOf("function onCalleeAnswered() {");
+    expect(at, "onCalleeAnswered must exist").toBeGreaterThan(-1);
+    const body = CLIENT.slice(at, CLIENT.indexOf("\n  }", at));
+    expect(body, "the advance is gated on not having established").toMatch(/if \(!establishedOnce\)/);
+    expect(body, "…and it enters the real connecting sequence").toMatch(/runConnSequence\(\)/);
+    expect(body, "the 65s backstop is cancelled here").toMatch(/clearDialTimeout\(\)/);
+    expect(body, "so coverage MUST pass to the establishment deadline").toMatch(
+      /armEstablishDeadline\(\)/,
+    );
     const hooks = CLIENT.match(/onCalleeAnswered\(\);/g) || [];
     expect(hooks.length).toBeGreaterThanOrEqual(2); // createPeer (mesh) + addLkTile (SFU)
   });
