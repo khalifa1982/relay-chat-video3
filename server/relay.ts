@@ -23,6 +23,7 @@ import crypto from "crypto";
 import type { Request, Response, Express } from "express";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
 import { createContext } from "./_core/context";
+import { planDialTransport } from "./voipPool";
 
 /**
  * M40: per-CALLER-pin budget for dials to a number with no live connection —
@@ -721,6 +722,21 @@ function deviceRemove(reg: RelayRegistry, pin: string, cid: string) {
 // SSE channels are routinely cut by proxies/Cloud Run; a brief grace lets the
 // client reconnect (same cid) and keep its number, room, and active call.
 export const RELAY_DISCONNECT_GRACE_MS = 30_000;
+
+/**
+ * A COUNT off the wire, or null. Never NaN, never negative, never fractional.
+ *
+ * JSON gives no guarantees about what arrives, and this value feeds a comparison
+ * (`>= GROUP_MIN_PARTIES`) where NaN silently answers false and a fractional or
+ * negative number is nonsense. Returning null rather than a default keeps "the caller
+ * said nothing" and "the caller said something unusable" the same case, which is what
+ * `isGroupParty` already treats as 1:1.
+ */
+function wireCount(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  const n = Math.floor(v);
+  return n > 0 ? n : null;
+}
 
 function safeSend(socket: RelaySocket, obj: unknown) {
   try {
@@ -2016,6 +2032,36 @@ export function handleMessage(
       const callerPin = conn.pin;
       const callerSocket = conn.socket;
       const wantVideo = !!msg.video;
+      /* SERVICE BUSY FOR A GROUP, BEFORE ANYTHING IS SPENT (v2.106.59).
+       *
+       * The owner's node-scaling doc: "Mesh fallback is for 1:1 calls. If group rooms exist
+       * and the pool is saturated, reject with a clear 'service busy' error and fire the
+       * saturation alarm loudly — a large group over mesh is worse than an honest error."
+       * It is right, and for a measured reason: on the mesh each phone runs N−1 encoders and
+       * N−1 decoders (v2.99.84), so a large group there is a hot phone rather than a
+       * lower-quality call.
+       *
+       * FIRST, so a refused call resolves no identity, mints no room, rings nobody and
+       * records no miss — the refusal is the whole outcome.
+       *
+       * `msg.parties` is present ONLY on the invite that CREATES a group dial's room, which
+       * is exactly the moment a transport is chosen. An add-person invite flushed into an
+       * EXISTING call carries none, reads as 1:1 and is therefore never refused — correct,
+       * because that room already has its transport and refusing would break the expansion
+       * of a live call rather than prevent a bad one.
+       *
+       * IT CANNOT FIRE TODAY: `planDialTransport` reads the cached node snapshot, which is
+       * empty without `REDIS_URL` and a registered agent, so `reason` is `no-nodes` and
+       * `refused` is null. The rule goes live with the fleet, not with this deploy. */
+      const dialPlan = planDialTransport({ partySize: wireCount((msg as { parties?: unknown }).parties) });
+      if (dialPlan.refused === "pool-saturated") {
+        safeSend(conn.socket, {
+          type: "error",
+          code: "saturated",
+          message: "Group calling is busy right now — try again in a moment, or call one person.",
+        });
+        break;
+      }
       // Stamp the dial context NOW, synchronously, before any await. The
       // deferred resolver continuation below re-checks these stamps — same
       // state-before-await / re-check-after discipline as onPageCallee.

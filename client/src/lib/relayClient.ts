@@ -1214,7 +1214,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
         const reachErr =
           m.code === "offline" || m.code === "nonexistent" || m.code === "gone" ||
           m.code === "unavailable";
-        const joinErr = m.code === "self" || m.code === "full" || m.code === "forbidden";
+        /* `saturated` (v2.106.59) is the media fleet being FULL for a GROUP call:
+           the owner's node-scaling doc reserves the mesh fallback for 1:1 because a
+           large group over the mesh runs N−1 encoders on every phone, so an honest
+           refusal beats a call nobody can hear. Classified as a JOIN error rather
+           than a reach error, because the failure is ours and not the invitee's —
+           reachErr would raise the leave-a-voice-message card, which is the wrong
+           offer for somebody who is perfectly reachable. CLASSIFYING IT AT ALL is
+           the load-bearing part: an unclassified code reaches neither the fatal
+           branch nor the group-dial promotion, so the caller would sit on
+           "Ringing…" until the 65s backstop and be told nothing. */
+        const joinErr = m.code === "self" || m.code === "full" || m.code === "forbidden" ||
+                        m.code === "saturated";
         // v2.99.36: `nohold` answers an `end-active` whose held room was already
         // gone — there is nothing to resume, so complete the hang-up NOW (that
         // branch skipped hangUp and would otherwise sit here with the camera and
@@ -2633,7 +2644,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
          the room is created once, so the later invites have nothing to seed. It is
          a capability the fleet signed for our own pin, not an assertion, so a
          client that omits or forges it simply gets a call with no co-hosts. */
-      sendWS({ type: "invite", to: first, video: camOn, ...(opts?.seed ? { seed: opts.seed } : {}) });
+      /* THE PARTY SIZE RIDES THE INVITE THAT CREATES THE ROOM, and only that one.
+         The server cannot derive it: a group dial sends its first invite ALONE and
+         flushes the rest off the `room` ack, so at room-creation time the server
+         sees ONE invitee and a room of size 1 whatever the party will become — and
+         it is the room-creation moment that picks the transport. `clean.length` is
+         the invitees; +1 for us, which is what makes "3" mean three people on the
+         call rather than three people invited.
+         A HINT, NOT AN ASSERTION: understating it gets the mesh (today's
+         behaviour), overstating it refuses only our own call. See isGroupParty. */
+      sendWS({
+        type: "invite", to: first, video: camOn, parties: clean.length + 1,
+        ...(opts?.seed ? { seed: opts.seed } : {}),
+      });
     }
     toast("Starting group call (" + clean.length + ")…");
     return true;

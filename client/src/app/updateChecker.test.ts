@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.106.58)", () => {
-    expect(APP_VERSION).toBe("2.106.58");
+  it("is the current release (2.106.59)", () => {
+    expect(APP_VERSION).toBe("2.106.59");
   });
 });
 
@@ -193,8 +193,16 @@ describe("call-routing fixes (v2.50)", () => {
     // pad can hit either code depending on whether the number is a real user);
     // v2.99.47 added `unavailable` (the offline-dial throttle) for the same
     // reason and pushed the guard further down the case, hence the wider window.
-    const errCase = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf('case "error"'));
-    expect(errCase.slice(0, 2400)).toMatch(
+    /* BOUNDED BY THE CASE'S OWN END rather than a fixed character count: the window was
+       2400 chars and v2.106.59's comment for the new `saturated` classification pushed
+       the guard past it, so the pin failed on correct source while saying nothing about
+       the property. The fixed-slice fragility, for the umpteenth time. */
+    const errStart = RELAY_CLIENT.indexOf('case "error"');
+    expect(errStart).toBeGreaterThan(0);
+    const errEnd = RELAY_CLIENT.indexOf('case "ringing"', errStart);
+    const errCase = RELAY_CLIENT.slice(errStart, errEnd > errStart ? errEnd : errStart + 6000);
+    expect(errCase.length).toBeGreaterThan(1000);
+    expect(errCase).toMatch(
       /addInviteOfflineGuard\s*&&\s*\(m\.code === ["']offline["']\s*\|\|\s*m\.code === ["']nonexistent["']/,
     );
   });

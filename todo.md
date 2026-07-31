@@ -11278,6 +11278,104 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.59 — a group call is refused when the media pool is full, never meshed (2026-07-31)
+
+The ONE clause that differs between the node-scaling doc the owner re-uploaded and the
+version v2.106.54 answered: "Mesh fallback is for 1:1 calls. If group rooms exist and the
+pool is saturated, reject with a clear 'service busy' error and fire the saturation alarm
+loudly — a large group over mesh is worse than an honest error." Everything else in that
+doc was already shipped, and v2.106.54's own note records the mesh fallback as a DEVIATION
+it took unilaterally — which this doc now ratifies, adding only the group half.
+
+- [x] **THE DOC IS RIGHT FOR A MEASURED REASON RATHER THAN A PREFERENCE**: on the mesh each
+      phone runs N−1 encoders and N−1 decoders (v2.99.84), so a large group there is not a
+      degraded call, it is a hot phone and a call nobody can hear. An honest refusal genuinely
+      beats it. That is why this is an exception to `chooseCallTransport`'s fail-open rule
+      rather than a softening of it.
+- [x] **THE REFUSAL IS ITS OWN FIELD, NOT A THIRD ARM OF `CallTransport`.** A refusal is not
+      a transport, and widening that union would make every reader handle a case that is not
+      one. `chooseCallTransport` is UNCHANGED and still cannot return nothing; the v2.106.32
+      invariant holds untouched (mediasoup always carries a `voip`, anything else always
+      carries null) and a refused plan still names `mesh` with `voip: null`.
+- [x] **IT IS KEYED ON `all-saturated` SPECIFICALLY, NEVER ON AN EMPTY POOL, and that is the
+      single most important line in the release.** `partitionNodes` distinguishes FIVE ways
+      the eligible list can come back empty (v2.106.54) and only one of them means "the fleet
+      is full". Wiring the reject to `!node` instead would make a node agent that is not
+      running, stale heartbeats, a drained fleet, or a wrong `VOIP_NODE_SECRET` REFUSE every
+      group call outright — the exact false-alarm inversion the PoolReason funnel was built
+      to avoid, and far worse than the mesh it would replace. Each of the five is driven
+      through the real selector and asserted separately; `disabled` and `forceMesh` are
+      likewise not refusals, because an operator who turned mediasoup off asked for the mesh
+      and not for group calling to stop.
+- [x] **THE PARTY SIZE CANNOT BE DERIVED SERVER-SIDE, AND THE AUDIT PROVED ALL THREE
+      CANDIDATES WRONG.** A group dial sends its FIRST invite alone and flushes the rest off
+      the `room` ack, so at room-creation time — the moment a transport is chosen — the server
+      sees one invitee and a room of size 1 whatever the party becomes. `msg.seed` proves a
+      group CONVERSATION call but is absent for an ad-hoc number-picker group; `room.size` is
+      only known later, after the transport exists; and a bare client flag treated as
+      authority would let a caller opt out. So the count RIDES THE INVITE as a HINT, and the
+      direction of trust is the whole safety argument: understating it (or being an older
+      bundle that sends nothing) yields the MESH, i.e. byte-identical to today, so
+      understating buys an attacker nothing; overstating it refuses only the caller's OWN
+      call; and treating a MISSING value as "group" would refuse every 1:1 placed by a
+      not-yet-updated bundle for the ~60 seconds of a rolling deploy.
+- [x] **AN ADD-PERSON INVITE CARRIES NO COUNT, SO GROWING A LIVE CALL IS NEVER REFUSED** —
+      correct rather than incidental: that room already has its transport, and refusing there
+      would break the expansion of a call in progress rather than prevent a bad one.
+- [x] **`+1` FOR THE CALLER**, because `clean` is the invitees and a rule about how many
+      people are ON the call must count the person placing it — a mutation dropping it bites.
+- [x] **THE REFUSAL COMES FIRST, so a refused call spends nothing**: no identity resolved, no
+      room minted, nobody rung, no missed-call row. Asserted by index against both
+      `ensureDialRoom` and `runIdentityInvite`.
+- [x] **CLASSIFYING THE CODE ON THE CLIENT IS LOAD-BEARING, and the audit named the failure
+      it prevents**: an unclassified error code reaches neither the fatal branch nor the
+      group-dial promotion, so the caller would sit on "Ringing…" until the 65s backstop and
+      be told nothing at all. `saturated` is a JOIN error, deliberately NOT a reach error —
+      the failure is ours, not the invitee's, and `reachErr` would raise the leave-a-voice-
+      message card for somebody who is perfectly reachable.
+- [x] **A NEW CODE RATHER THAN REUSING `busy`**, which already means "hang up your current
+      call first to join the party line". One word, two meanings is the collision this repo
+      keeps removing.
+- [x] **THE SATURATION LOG STOPPED CONTRADICTING THE BEHAVIOUR.** It read "so new calls are
+      falling back to the mesh", which after this release is false for exactly the calls a
+      person would notice — in the one place an operator goes to find out what the fleet is
+      doing. It now names both outcomes, because they need different responses: a 1:1 on the
+      mesh is a quality note, a refused group call is somebody who could not make their call.
+      Every OTHER reason's wording is asserted unchanged so no other line starts claiming a
+      refusal.
+- [x] **THE DIAL DECISION IS SYNCHRONOUS BY CONSTRUCTION.** New `planDialTransport` reads the
+      CACHED snapshot — room creation runs inside the signaling handler with no await, and a
+      Redis round trip there would add its latency to every call and its failure modes to
+      call setup. Asserted to contain no `await`, no `async` and no `readVoipNodes`.
+- [x] **IT CANNOT FIRE TODAY, said plainly**: `poolSnapshot()` is empty without `REDIS_URL`
+      and a registered agent, so `reason` is `no-nodes` and `refused` is null — byte-identical
+      to the behaviour before this release. The rule goes live with the fleet, not with this
+      deploy. **AND THIS IS THE FIRST TIME `relay.ts` IMPORTS ANY OF THE voip MODULES** (it
+      previously contained one prose mention and nothing else), which is the seam the
+      mediasoup cutover needs and the reason to put the rule in now rather than remember it
+      later.
+- [x] **12 of 12 tripwires verified by MUTATION** off a confirmed-GREEN baseline from
+      byte-exact backups, the mutator aborting unless its target occurs exactly once, all four
+      sources byte-identical afterwards — including the refusal keyed on a missing node
+      instead of saturation (7 failures), the 1:1 case refused too, an absent count reading as
+      group, the count sent unvalidated, the guard moved after the room, and the log line
+      reverted.
+- [x] **TWO OF MY OWN ASSERTIONS WERE WRONG ABOUT THE CODE, each caught by failing on CORRECT
+      source.** One demanded that every non-saturated warning line mention the mesh, and
+      `all-draining` correctly does not — a drained fleet is an operator action with its own
+      remedy rather than a fallback to describe. The other was **the `fnBody` parameter-object
+      trap for the fifth recorded time** (v2.105.9 / v2.105.27 / v2.106.4 / v2.106.48):
+      `planDialTransport`'s parameter is an inline object type whose closing brace starts a
+      line, so `indexOf("\n}")` sliced off the entire body and the "no await" assertion was
+      reading the signature.
+- [x] **TWO PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, both fallout of adding one field to
+      the invite: `groupCallHost.test.ts` froze the whole one-line `sendWS({...})` including
+      its field list, so it broke the moment `parties` joined it while saying nothing about
+      the rule (that the seed rides only the room-creating invite); and
+      `updateChecker.test.ts` sliced a FIXED 2400 characters from `case "error"`, which this
+      release's comment pushed the guard past — now bounded by the case's own end.
+- [x] No schema change, no new dependency, no new env var. 5025 tests.
+
 ## v2.106.58 — the readout says WHAT and WHERE, not only how bad (2026-07-31)
 
 The mediasoup doc's §3 closes with "Also finish the in-call stats readout … ICE candidate

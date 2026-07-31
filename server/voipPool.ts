@@ -42,6 +42,7 @@
 import {
   NODE_HEARTBEAT_MS,
   partitionNodes,
+  planRoomTransport,
   readVoipNodes,
   type NodePartition,
   type PoolReason,
@@ -172,11 +173,45 @@ export function poolWarningLine(state: PoolState): string {
       return `[voip] ALL ${draining} MEDIA NODE(S) DRAINING — no new rooms will be assigned; existing calls keep running. Clear the drain flag, or add a node.`;
     case "all-excluded":
       return `[voip] ALL ${live.length} LIVE MEDIA NODE(S) EXCLUDED — they heartbeat but are failing signaling (a wrong VOIP_NODE_SECRET does exactly this). Every call is on the mesh.`;
+    /* NO LONGER STATES THE MESH FALLBACK UNCONDITIONALLY (v2.106.59). It used to read
+       "so new calls are falling back to the mesh", and since the owner's node-scaling doc
+       now reserves that fallback for 1:1 while GROUP calls are refused outright, the log
+       line would have contradicted the behaviour — the one place an operator goes to find
+       out what the fleet is doing. The two outcomes are named separately because they need
+       different responses: a 1:1 on the mesh is a quality note, a refused group call is a
+       user who could not make their call. */
     case "all-saturated":
-      return `[voip] MEDIA POOL SATURATED — ${saturated}/${live.length} live node(s) at their CPU or room ceiling, so new calls are falling back to the mesh (6 max). THIS is the signal to add a node.`;
+      return `[voip] MEDIA POOL SATURATED — ${saturated}/${live.length} live node(s) at their CPU or room ceiling. 1:1 calls fall back to the mesh (6 max); GROUP calls are REFUSED with "service busy". THIS is the signal to add a node.`;
     default:
       return `[voip] media pool unusable (${state.reason})`;
   }
+}
+
+/**
+ * THE TRANSPORT DECISION FOR ONE DIAL, off the CACHED snapshot (v2.106.59).
+ *
+ * SYNCHRONOUS BY CONSTRUCTION, which is the whole reason the cache exists: room creation
+ * runs inside the signaling handler with no await, and putting a Redis round trip on the
+ * dial path would add its latency to every call and its failure modes to call setup.
+ *
+ * With no `REDIS_URL`, no registered node, or a pool that has never been read, `poolSnapshot`
+ * is empty, `planRoomTransport` answers `mesh` with `reason: "no-nodes"` and `refused: null` —
+ * i.e. byte-identical to the behaviour before this function existed. That is what makes it
+ * safe to call from the dial path today, while the mediasoup cutover is still unbuilt.
+ */
+export function planDialTransport(opts: {
+  partySize?: number | null;
+  forceMesh?: boolean;
+  preferAz?: string | null;
+  nowMs?: number;
+} = {}): ReturnType<typeof planRoomTransport> {
+  return planRoomTransport({
+    nodes: poolSnapshot(),
+    nowMs: opts.nowMs ?? Date.now(),
+    partySize: opts.partySize ?? null,
+    forceMesh: opts.forceMesh,
+    preferAz: opts.preferAz ?? null,
+  });
 }
 
 /**

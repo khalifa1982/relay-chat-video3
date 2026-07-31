@@ -427,6 +427,47 @@ export function selectVoipNode(
 export type CallTransport = "mediasoup" | "mesh";
 
 /**
+ * Why a call was REFUSED outright rather than degraded.
+ *
+ * Exactly one value today, and it is deliberately a union rather than a boolean so a second
+ * refusal has to be named. The wire code the client classifies is derived from this.
+ */
+export type CallRefusal = "pool-saturated";
+
+/**
+ * The smallest party this refusal can apply to.
+ *
+ * A 1:1 call over the mesh is the transport working as designed (two participants, one
+ * encoder each), which is why the doc scopes the reject to GROUPS. Three is the first size
+ * at which "each phone runs N−1 encoders" starts costing anything.
+ */
+export const GROUP_MIN_PARTIES = 3;
+
+/**
+ * Is this party big enough that the mesh is the wrong answer rather than a worse one?
+ *
+ * READS AN ABSENT OR UNPARSEABLE SIZE AS 1:1, and that direction is the whole safety
+ * argument. The count can only come from the CALLER — a group dial sends its first invite
+ * alone and flushes the rest off the `room` ack, so at room-creation time the server has one
+ * invitee and a room of size 1 whatever the party will become. So:
+ *
+ *  - a client that UNDERSTATES the size (or is an older bundle that sends nothing) gets the
+ *    MESH, which is byte-identical to today's behaviour, so understating buys an attacker
+ *    nothing they did not already have;
+ *  - a client that OVERSTATES it gets its OWN call refused and nobody else's;
+ *  - and treating a MISSING value as "group" would refuse every 1:1 call placed by a
+ *    not-yet-updated bundle for the ~60 seconds of a rolling deploy.
+ *
+ * A hint, then, never an authority — which is the only honest reading of a client-supplied
+ * count, and enough for a rule whose entire job is to protect the caller from a call they
+ * would not enjoy.
+ */
+export function isGroupParty(partySize: unknown): boolean {
+  return typeof partySize === "number" && Number.isFinite(partySize) &&
+         Math.floor(partySize) >= GROUP_MIN_PARTIES;
+}
+
+/**
  * THE PRECEDENCE, IN ONE PLACE.
  *
  * mediasoup when there is a usable node and nothing has opted this call out; else the mesh,
@@ -438,6 +479,18 @@ export type CallTransport = "mediasoup" | "mesh";
  * fleet must degrade the call's QUALITY, never remove the ability to make it. The mesh is
  * always the last resort precisely because it depends on no infrastructure — up to six
  * participants it is a complete answer.
+ *
+ * WITH EXACTLY ONE EXCEPTION, ADDED IN v2.106.59 AND NOT A SOFTENING OF THE ABOVE. The
+ * owner's node-scaling doc now says: "Mesh fallback is for 1:1 calls. If group rooms exist
+ * and the pool is saturated, reject with a clear 'service busy' error and fire the
+ * saturation alarm loudly — a large group over mesh is worse than an honest error." The
+ * reasoning is sound and is a MEASUREMENT rather than a preference: on the mesh each phone
+ * runs N−1 encoders and N−1 decoders (v2.99.84), so a large group over the mesh is not a
+ * degraded call, it is a hot phone and a call nobody can hear. That refusal is expressed as
+ * its OWN field (`refused`) on `planRoomTransport`'s result rather than as a third arm of
+ * `CallTransport`, because a refusal is not a transport — and because every OTHER reason the
+ * pool can be empty must keep meaning "mesh". `chooseCallTransport` itself is therefore
+ * UNCHANGED and still cannot return nothing.
  *
  * THE LADDER USED TO HAVE A MIDDLE RUNG (v2.106.53). It was a hosted SFU, and the owner
  * cancelled that account, so there are now exactly two rungs: our own nodes, or no
@@ -541,7 +594,18 @@ export function planRoomTransport(opts: {
   preferAz?: string | null;
   pending?: Record<string, number> | Map<string, number> | null;
   excludeInstanceIds?: Iterable<string> | null;
-}): { transport: CallTransport; voip: VoipAssignment | null; reason: PoolReason } {
+  /**
+   * How many parties this call is FOR, as the caller reported it. Absent reads as 1:1 —
+   * see `isGroupParty` for why that is the safe direction and not laziness.
+   */
+  partySize?: number | null;
+}): {
+  transport: CallTransport;
+  voip: VoipAssignment | null;
+  reason: PoolReason;
+  /** Non-null ONLY when the call must be refused rather than degraded. */
+  refused: CallRefusal | null;
+} {
   const off = opts.mediasoupEnabled === false || opts.forceMesh;
   const node = off
     ? null
@@ -567,10 +631,23 @@ export function planRoomTransport(opts: {
     forceMesh: opts.forceMesh,
     mediasoupEnabled: opts.mediasoupEnabled,
   });
-  if (transport !== "mediasoup" || !node) return { transport, voip: null, reason };
+  /* THE REFUSAL IS KEYED ON `all-saturated` SPECIFICALLY, NEVER ON AN EMPTY POOL, and that
+     is the load-bearing detail. `partitionNodes` distinguishes five ways the eligible list
+     can come back empty (v2.106.54), and only ONE of them means "the fleet is full": the
+     others are a node agent that is not running, stale heartbeats, a drained fleet, or nodes
+     excluded for answering 401. Wiring the reject to `!node` instead would make a missing
+     agent, a wrong VOIP_NODE_SECRET or a Redis blip REFUSE every group call outright — the
+     exact false-alarm inversion the PoolReason funnel was built to avoid, and a far worse
+     outcome than the mesh it would be replacing.
+     `disabled` is likewise not a refusal: an operator who turned mediasoup off fleet-wide
+     asked for the mesh, they did not ask to stop group calls. */
+  const refused: CallRefusal | null =
+    reason === "all-saturated" && isGroupParty(opts.partySize) ? "pool-saturated" : null;
+  if (transport !== "mediasoup" || !node) return { transport, voip: null, reason, refused };
   return {
     transport,
     reason,
+    refused,
     voip: {
       instanceId: node.instanceId,
       publicIp: node.publicIp,
